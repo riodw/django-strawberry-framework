@@ -12,8 +12,8 @@ error, so ``errors is None`` plus an exact ``data`` match IS the regression
 assertion here; weakening either half to a bare status check discards the
 point of the suite.
 
-Two constraints govern every lazy-load case in this module, and both are
-load-bearing:
+Two constraints govern every no-visibility lazy-load case in this module, and
+both are load-bearing:
 
 * **The targets must have no custom visibility.** Each new arm is gated on
   ``visibility_type is None``, so the relation target type must not declare
@@ -33,16 +33,22 @@ optimizer, or prefetched by the consumer's own root resolver - and
 ``many_resolver`` must read each relation kind under the key Django stored it
 under. The reverse side of ``VenueSponsor.venues``, declared without
 ``related_name``, is keyed by its query name ``venuesponsor`` rather than its
-``venuesponsor_set`` accessor; a miss there hands ``bounded_rows_async`` the
-evaluated prefetch queryset, whose slice is a ``list`` no ``async for`` can
-iterate. The reverse-FK ``repairticket`` targets ``RepairTicketType``, so its
-unplanned consumer prefetch also crosses the visibility arm.
+``venuesponsor_set`` accessor. Its target ``VenueSponsorType`` and the
+reverse-FK ``repairticket``'s target ``RepairTicketType`` both declare
+``get_queryset``, so their unplanned consumer prefetches cross the visibility
+arm.
+
+The withdrawn-row cases target the hooked ``VenueBadgeType`` and
+``VenueSponsorType`` on purpose, planned and lazy-loaded alike: the rows each
+hook hides stay off the async wire through the visibility arms.
 
 The shipped fakeshop mount at ``examples/fakeshop/config/urls.py`` is the SYNC
 view, so -- exactly as ``test_products_visibility_api.py`` does -- this module
 supplies its own ``AsyncDjangoGraphQLView`` mount over the app's registered
 types rather than inventing throwaway ones.
 """
+
+from collections.abc import Callable
 
 import pytest
 import strawberry
@@ -259,10 +265,8 @@ async def test_async_planned_many_side_prefetches_resolve_over_http():
     ``venuesponsor`` (reverse M2M without ``related_name``), ``venues`` (its
     forward side) and ``repairticket`` (reverse FK) as prefetches, so
     ``many_resolver`` must find each one in ``_prefetched_objects_cache`` under
-    the key Django stored it under. Reading the reverse M2M under its accessor
-    ``venuesponsor_set`` misses, and the manager fall-through then hands
-    ``bounded_rows_async`` the prefetched, already-evaluated queryset, whose
-    slice is a ``list`` the ``async for`` cannot iterate.
+    the key Django stored it under: the reverse M2M under its query name
+    ``venuesponsor``, not its accessor ``venuesponsor_set``.
     """
     await sync_to_async(_seed_sponsor_graph)()
 
@@ -291,11 +295,11 @@ async def test_async_consumer_prefetched_many_side_resolves_over_http():
     """A consumer's own ``prefetch_related`` of every many-side kind resolves in the event loop.
 
     No optimizer: the root resolvers prefetch the relations themselves, so the
-    rows reach ``many_resolver`` in Django's prefetch cache unplanned. The reverse
-    M2M (``venuesponsor``, target without ``get_queryset``) and the forward M2M
-    (``venues``) are served from that cache; the reverse FK ``repairticket``
-    targets ``RepairTicketType``, whose custom ``get_queryset`` re-reads the
-    unplanned cache through ``_visible_many_rows`` and keeps ``VOID-2`` hidden.
+    rows reach ``many_resolver`` in Django's prefetch cache unplanned. Every
+    target declares ``get_queryset`` (``VenueSponsorType`` for ``venuesponsor``,
+    ``VenueType`` for ``venues``, ``RepairTicketType`` for ``repairticket``), so
+    each unplanned cache is re-read through ``_visible_many_rows`` inside the
+    event loop and ``VOID-2`` stays hidden.
     """
     await sync_to_async(_seed_sponsor_graph)()
 
@@ -334,3 +338,78 @@ async def test_async_consumer_prefetched_many_side_resolves_over_http():
 
     assert payload.get("errors") is None, payload
     assert payload["data"] == _SPONSOR_GRAPH_DATA
+
+
+def _seed_withdrawn_badge_and_sponsor():
+    """Two venues, each with a visible and a withdrawn row on the no-``related_name`` relations.
+
+    ``VenueBadgeType`` hides the ``VOID-RAMP`` badge on ``Depot`` and
+    ``VenueSponsorType`` hides ``Withdrawn Initech``, which funds both venues.
+    """
+    annex = models.Venue.objects.create(name="Annex")
+    depot = models.Venue.objects.create(name="Depot")
+    models.VenueBadge.objects.create(code="STEP-FREE", venue=annex)
+    models.VenueBadge.objects.create(code="VOID-RAMP", venue=depot)
+    models.VenueSponsor.objects.create(name="Acme").venues.add(annex, depot)
+    models.VenueSponsor.objects.create(name="Withdrawn Initech").venues.add(annex, depot)
+    return (
+        models.VenueBadge.objects.filter(code="VOID-RAMP", venue=depot).exists()
+        and models.VenueSponsor.objects.filter(name="Withdrawn Initech", venues=annex).exists()
+    )
+
+
+def _composed_schema() -> strawberry.Schema:
+    from config.schema import schema
+
+    return schema
+
+
+def _unoptimized_venue_schema() -> strawberry.Schema:
+    from apps.library.schema import VenueType
+
+    @strawberry.type
+    class Query:
+        @strawberry.field(graphql_type=list[VenueType])
+        async def all_library_venues(self) -> list[models.Venue]:
+            return await sync_to_async(list)(models.Venue.objects.order_by("name"))
+
+    return strawberry.Schema(query=Query, config=strawberry_config())
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "build",
+    [_composed_schema, _unoptimized_venue_schema],
+    ids=["optimizer-planned", "lazy-loaded"],
+)
+async def test_async_withdrawn_badges_and_sponsors_are_absent_over_http(
+    build: Callable[[], strawberry.Schema],
+):
+    """A withdrawn badge or sponsor is absent from the async wire, never an error.
+
+    The composed schema's optimizer plans both reverse relations as prefetches
+    through the targets' hooks; without an optimizer each row lazy-loads them
+    through the visibility arms instead. Either way a venue whose only badge is
+    withdrawn answers ``null`` and the sponsor list drops the withdrawn sponsor.
+    """
+    assert await sync_to_async(_seed_withdrawn_badge_and_sponsor)()
+    schema = await sync_to_async(build)()
+    payload = await _post_async(
+        schema,
+        "{ allLibraryVenues { name venuebadge { code } venuesponsor { name } } }",
+    )
+
+    assert payload.get("errors") is None, payload
+    assert "STEP-FREE" in str(payload) and "Acme" in str(payload), payload
+    assert "VOID-RAMP" not in str(payload), payload
+    assert "Withdrawn" not in str(payload), payload
+    assert payload["data"] == {
+        "allLibraryVenues": [
+            {
+                "name": "Annex",
+                "venuebadge": {"code": "STEP-FREE"},
+                "venuesponsor": [{"name": "Acme"}],
+            },
+            {"name": "Depot", "venuebadge": None, "venuesponsor": [{"name": "Acme"}]},
+        ],
+    }

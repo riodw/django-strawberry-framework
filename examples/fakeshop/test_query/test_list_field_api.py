@@ -4224,11 +4224,10 @@ def test_consumer_prefetched_many_to_many_stays_silent_under_strictness_raise():
     reverse side of ``VenueSponsor.venues`` (declared without ``related_name``)
     under the query name ``venuesponsor``, not the ``venuesponsor_set`` accessor,
     so a probe on the accessor reports the prefetched rows as an unplanned N+1.
-    The forward ``venues`` side is the control; its target ``VenueType`` declares
-    ``get_queryset``, so its unplanned cache is re-read through the visibility
-    boundary per sponsor. The reverse side is served from the consumer's prefetch:
-    ``library_venuesponsor`` is read by that prefetch and by the ``sponsors`` root,
-    never per venue.
+    Both targets (``VenueType`` and ``VenueSponsorType``) declare
+    ``get_queryset``, so each unplanned cache is re-read through the visibility
+    boundary per row: ``library_venuesponsor`` is read by the consumer's
+    prefetch, by the ``sponsors`` root and once per venue.
     """
     annex = library_models.Venue.objects.create(name="Annex")
     depot = library_models.Venue.objects.create(name="Depot")
@@ -4278,4 +4277,4 @@ def test_consumer_prefetched_many_to_many_stays_silent_under_strictness_raise():
         for entry in captured.captured_queries
         if entry["sql"].split(" FROM ", 1)[-1].startswith('"library_venuesponsor"')
     ]
-    assert len(sponsor_sql) == 2, captured.captured_queries
+    assert len(sponsor_sql) == 4, captured.captured_queries

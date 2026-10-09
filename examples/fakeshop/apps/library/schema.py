@@ -794,7 +794,21 @@ class RepairTicketType(DjangoType):
 
 
 class VenueBadgeType(DjangoType):
-    """A venue's badge, the forward side of the no-``related_name`` one-to-one."""
+    """A venue's badge, the forward side of the no-``related_name`` one-to-one.
+
+    ``VOID-`` badges are withdrawn and hidden from every viewer, so the reverse
+    ``venuebadge`` accessor is read against a visibility hook.
+    """
+
+    @classmethod
+    @override
+    def get_queryset(
+        cls,
+        queryset: QuerySet[models.VenueBadge],
+        info: Info,
+    ) -> QuerySet[models.VenueBadge]:
+        """Hide withdrawn badges."""
+        return queryset.exclude(code__startswith="VOID-")
 
     class Meta:
         model = models.VenueBadge
@@ -804,7 +818,21 @@ class VenueBadgeType(DjangoType):
 
 
 class VenueSponsorType(DjangoType):
-    """A sponsor, the forward side of the no-``related_name`` many-to-many."""
+    """A sponsor, the forward side of the no-``related_name`` many-to-many.
+
+    ``Withdrawn`` sponsors are hidden from every viewer, so the reverse
+    ``venuesponsor_set`` accessor is read against a visibility hook.
+    """
+
+    @classmethod
+    @override
+    def get_queryset(
+        cls,
+        queryset: QuerySet[models.VenueSponsor],
+        info: Info,
+    ) -> QuerySet[models.VenueSponsor]:
+        """Hide withdrawn sponsors."""
+        return queryset.exclude(name__startswith="Withdrawn")
 
     class Meta:
         model = models.VenueSponsor

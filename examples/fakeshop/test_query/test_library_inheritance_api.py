@@ -10,7 +10,9 @@ query shape, off the SQL the request emitted:
   link (transitively for the two-level chain).
 - Reverse relations declared without ``related_name``:
   ``VenueType.repairticket`` / ``venuebadge`` / ``venuesponsor`` resolve
-  through Django's default accessors, each batched once.
+  through Django's default accessors, each batched once, and the rows the
+  badge and sponsor hooks hide are absent from those accessors and from both
+  roots.
 - The nullable ``Venue.lead_ticket`` <-> ``RepairTicket.venue`` cycle:
   ``VenueType`` cascades over the nullable key (a venue with no lead ticket
   stays visible, one whose lead ticket is hidden does not) and
@@ -224,9 +226,9 @@ def test_venue_reverse_relations_without_related_name_resolve_through_default_ac
     None of the three relations declares ``related_name``, so each is published
     under its query name while rows live behind ``repairticket_set``,
     ``venuebadge`` and ``venuesponsor_set``. The page is one venue statement
-    (the badge joined into it), one ticket prefetch and one sponsor prefetch;
-    the withdrawn ``VOID-`` ticket stays hidden and a venue with no badge
-    answers ``null``.
+    and one prefetch per relation (each target's hook keeps the badge out of
+    a join); the withdrawn ``VOID-`` ticket stays hidden and a venue with no
+    badge answers ``null``.
     """
     annex = models.Venue.objects.create(name="Annex")
     depot = models.Venue.objects.create(name="Depot")
@@ -267,10 +269,88 @@ def test_venue_reverse_relations_without_related_name_resolve_through_default_ac
             "venuesponsor": [{"name": "Acme"}],
         },
     ], data
-    assert len(captured.captured_queries) == 3, captured.captured_queries
+    assert len(captured.captured_queries) == 4, captured.captured_queries
     assert len(_sql_from_table(captured, "library_venue")) == 1, captured.captured_queries
     assert len(_sql_from_table(captured, "library_repairticket")) == 1, captured.captured_queries
+    assert len(_sql_from_table(captured, "library_venuebadge")) == 1, captured.captured_queries
     assert len(_sql_from_table(captured, "library_venuesponsor")) == 1, captured.captured_queries
+
+
+def _seed_withdrawn_badge_and_sponsor() -> None:
+    """Two venues, each with a visible and a withdrawn row on the no-``related_name`` relations.
+
+    ``Annex`` holds the visible ``STEP-FREE`` badge and ``Depot`` the withdrawn
+    ``VOID-RAMP`` one; both venues are funded by the visible ``Acme`` and the
+    withdrawn ``Withdrawn Initech``.
+    """
+    annex = models.Venue.objects.create(name="Annex")
+    depot = models.Venue.objects.create(name="Depot")
+    models.VenueBadge.objects.create(code="STEP-FREE", venue=annex)
+    models.VenueBadge.objects.create(code="VOID-RAMP", venue=depot)
+    models.VenueSponsor.objects.create(name="Acme").venues.add(annex, depot)
+    models.VenueSponsor.objects.create(name="Withdrawn Initech").venues.add(annex, depot)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("query", "visible", "expected"),
+    [
+        (
+            "{ allLibraryVenues { name venuebadge { code } venuesponsor { name } } }",
+            ("STEP-FREE", "Acme"),
+            {
+                "allLibraryVenues": [
+                    {
+                        "name": "Annex",
+                        "venuebadge": {"code": "STEP-FREE"},
+                        "venuesponsor": [{"name": "Acme"}],
+                    },
+                    {"name": "Depot", "venuebadge": None, "venuesponsor": [{"name": "Acme"}]},
+                ],
+            },
+        ),
+        (
+            "{ allLibraryVenueBadges { code venue { name } } }",
+            ("STEP-FREE",),
+            {"allLibraryVenueBadges": [{"code": "STEP-FREE", "venue": {"name": "Annex"}}]},
+        ),
+        (
+            "{ allLibraryVenueSponsors { name venues { name } } }",
+            ("Acme",),
+            {
+                "allLibraryVenueSponsors": [
+                    {"name": "Acme", "venues": [{"name": "Annex"}, {"name": "Depot"}]},
+                ],
+            },
+        ),
+    ],
+    ids=["reverse-relations-from-venue", "badge-root", "sponsor-root"],
+)
+def test_withdrawn_badges_and_sponsors_are_absent_from_every_read_path(
+    query: str,
+    visible: tuple[str, ...],
+    expected: dict[str, object],
+):
+    """A withdrawn badge or sponsor is absent from the wire, never an error.
+
+    ``VenueBadgeType`` hides ``VOID-`` badges and ``VenueSponsorType`` hides
+    ``Withdrawn`` sponsors. Through the reverse accessors a venue whose only
+    badge is withdrawn answers ``null`` and the sponsor list drops the
+    withdrawn sponsor; the roots drop both rows outright.
+    """
+    _seed_withdrawn_badge_and_sponsor()
+    assert models.VenueBadge.objects.filter(code="VOID-RAMP", venue__name="Depot").exists()
+    assert models.VenueSponsor.objects.filter(
+        name="Withdrawn Initech",
+        venues__name="Annex",
+    ).exists()
+
+    data = assert_graphql_success(query)
+
+    assert all(marker in str(data) for marker in visible), data
+    assert "VOID-RAMP" not in str(data), data
+    assert "Withdrawn" not in str(data), data
+    assert data == expected, data
 
 
 @pytest.mark.django_db

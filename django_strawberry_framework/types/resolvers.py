@@ -108,9 +108,10 @@ _PLAN_UNREAD: Final = _PlanUnread.UNREAD
 
 # Sentinel returned by ``_build_fk_id_stub`` when the FK ``attname`` is deferred
 # on ``root`` (spec-035 Decision 5). FK-id elision reads the FK column off the
-# parent row; G2 guarantees the row loads for OPTIMIZER-owned projections, but a
-# consumer-returned ``.only(...)`` survives B8 consumer-wins diffing and can
-# defer the FK column while the plan still carries the elision. Reading the
+# parent row; G2 guarantees the row loads for OPTIMIZER-owned projections, but
+# under a non-``QUERY`` operation the plan writes no projection, so a
+# consumer-returned ``.only(...)`` stays as returned and can defer the FK
+# column while the plan still carries the elision. Reading the
 # deferred column here would silently lazy-load per row - and because the
 # relation is recorded as planned, strictness would never see it. The stub
 # signals "elision unsafe" instead of reading the column; ``forward_resolver``
@@ -153,9 +154,10 @@ def _build_fk_id_stub(root: object, field_meta: FieldMeta) -> object:
 
     Returns ``_FK_ELISION_UNSAFE`` when ``field_meta.attname`` is deferred on
     ``root`` (spec-035 Decision 5 - a consumer ``.only(...)`` that dropped the FK
-    column survives B8 consumer-wins diffing while the plan still carries the
-    elision). In that case the column is NOT read (which would be the silent
-    per-row lazy load Decision 5 forbids); the caller falls back loudly so
+    column stays as returned under a non-``QUERY`` operation, whose plan writes no
+    projection, while the plan still carries the elision). In that case the
+    column is NOT read (which would be the silent per-row lazy load Decision 5
+    forbids); the caller falls back loudly so
     strictness sees the access. A fully-loaded column (the
     optimizer-owned-projection norm and the consumer-``.only()``-that-includes-
     the-FK case) builds the stub as before.

@@ -42,6 +42,7 @@ from .plans import (
     append_prefetch_unique,
     append_unique,
     append_unique_many,
+    diff_plan_for_queryset,
     resolver_key,
     runtime_path_from_info,
 )
@@ -929,17 +930,21 @@ def _walk_selections(
         # ``types/resolvers.py::_check_n1`` for every generated resolver under
         # the consumer's OWN returned instances, silencing a real N+1 under
         # strictness. Leaving the selection unplanned (no
-        # ``Prefetch``, no resolver keys, no connector column) is the
+        # ``Prefetch``, no resolver keys) is the
         # spec-033 Decision 6 fallback discipline: strictness SEES the per-parent
         # accesses, and a delegating resolver opts back in with an explicit
         # ``OptimizerHint`` (``force_select`` / ``force_prefetch`` /
         # ``prefetch(...)``) - the hint dispatch below runs when one is
         # declared. Consumer-assigned SCALAR shadows are unaffected (the
-        # scalar branch above projects columns, which is harmless).
+        # scalar branch above projects columns, which is harmless). The
+        # relation's link columns on the parent row are the one thing recorded:
+        # the consumer's resolver reaches the relation from that row, and a
+        # deferred carrier would refetch per parent before it does.
         consumer_assigned = (
             definition is not None and django_name in definition.consumer_assigned_relation_fields
         )
         if consumer_assigned and hints_map.get(django_name) is None:
+            _record_relation_carriers(plan, django_field, prefix, enable_only=enable_only)
             continue
 
         full_path = f"{prefix}{django_name}"
@@ -1074,9 +1079,10 @@ def _plan_select_relation(
     a ``_plan_prefetch_relation`` concern only.
 
     ``enable_only`` (G2 gate, spec-035 Decision 4) gates only the
-    connector-column projection in ``_record_relation_access`` and the
-    nested scalar appends; ``select_related`` and ``fk_id_elisions`` stay
-    intact under a non-``QUERY`` operation.
+    connector-column projection in ``_record_relation_access``, the
+    nested scalar appends and the reverse one-to-one pk floor;
+    ``select_related`` and ``fk_id_elisions`` stay intact under a
+    non-``QUERY`` operation.
     """
     _record_relation_access(
         plan,
@@ -1102,15 +1108,32 @@ def _plan_select_relation(
     # these keys leave ``planned_resolver_keys`` with it.
     _record_select_path_keys(plan, full_path, resolver_identities)
     if django_field.related_model is not None:
+        child_prefix = f"{full_path}__"
         _walk_selections(
             sel.selections,
             django_field.related_model,
             plan,
-            prefix=f"{full_path}__",
+            prefix=child_prefix,
             info=info,
             runtime_prefixes=runtime_paths,
             enable_only=enable_only,
         )
+        # A reverse one-to-one JOIN (an MTI parent link included) has no column
+        # on this row, so a selection that reads no column of the related row
+        # (``__typename`` only, say) leaves nothing projected under the path:
+        # Django's select mask then reads it as deferred and refuses the JOIN
+        # (``cannot be both deferred and traversed using select_related``). The
+        # target pk is the narrowest column that keeps it valid. A forward join
+        # needs no floor: its FK column, recorded above, loads the row whole.
+        if (
+            enable_only
+            and django_field.relation_kind != "forward_single"
+            and not any(f.startswith(child_prefix) for f in plan.only_fields)
+        ):
+            append_unique(
+                cast("MutableSequence[str]", plan.only_fields),
+                f"{child_prefix}{django_field.related_model._meta.pk.attname}",
+            )
 
 
 def _plan_prefetch_relation(
@@ -1221,15 +1244,37 @@ def _record_relation_access(
     relation regardless of operation (Decision 4 / Edge cases
     #"every projection writer checks the gate").
     """
+    _record_relation_carriers(plan, django_field, prefix, enable_only=enable_only)
+    append_unique_many(
+        cast("MutableSequence[str]", plan.planned_resolver_keys),
+        resolver_identities,
+    )
+
+
+def _record_relation_carriers(
+    plan: OptimizationPlan,
+    django_field: FieldMeta,
+    prefix: str,
+    *,
+    enable_only: bool,
+) -> None:
+    """Keep the source-row link columns of a relation the selection touches loaded.
+
+    Every relation a selection reaches is traversed at resolve time, planned or
+    not: a planned one by Django's JOIN or prefetch attach, an unplanned one (a
+    ``SKIP`` hint, a consumer-assigned resolver) by the per-row access the plan
+    leaves to the resolver. Each read ``FieldMeta.source_link_attnames`` on the
+    source row, and a projected row that defers them pays a second query per row
+    before the relation's own. So the carriers are recorded for every traversal
+    while ``planned_resolver_keys`` stay with the planned ones only, keeping an
+    unplanned relation strictness-visible. Gated by G2 like every projection
+    writer: under a non-``QUERY`` operation the row loads whole.
+    """
     if enable_only:
         append_unique_many(
             cast("MutableSequence[str]", plan.only_fields),
             [f"{prefix}{attname}" for attname in django_field.source_link_attnames],
         )
-    append_unique_many(
-        cast("MutableSequence[str]", plan.planned_resolver_keys),
-        resolver_identities,
-    )
 
 
 def _build_prefetch_child_queryset(
@@ -1299,6 +1344,14 @@ def _build_prefetch_child_queryset_from_base(
         enable_only=enable_only,
     )
     _ensure_connector_only_fields(child_plan, django_field, enable_only=enable_only)
+    # The base is a consumer queryset too (the target type's hook, its default
+    # manager), reconciled exactly as the root reconciles the resolver's: a
+    # generated ``Prefetch`` never collides with a lookup the hook added
+    # (Django's "lookup was already seen with a different queryset"), a
+    # consumer-wins drop strips its resolver keys before the parent absorbs
+    # them, and ``apply`` writes the union of the hook's projection and the
+    # child selection's.
+    child_plan, base_queryset = diff_plan_for_queryset(child_plan, base_queryset)
     _absorb_child_plan(parent_plan, child_plan)
     return child_plan.apply(base_queryset)
 
@@ -1338,6 +1391,9 @@ def _apply_hint(
     consumer's own resolver can honor the attribute contract.
     """
     if hint_is_skip(hint):
+        # Unplanned: no Prefetch, no JOIN, no resolver keys. The parent row still
+        # carries the link columns the per-row access reads.
+        _record_relation_carriers(plan, django_field, prefix, enable_only=enable_only)
         return True
     if hint.prefetch_obj is not None:
         hinted_to_attr = getattr(hint.prefetch_obj, "to_attr", None)

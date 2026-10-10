@@ -64,11 +64,11 @@ Spec: [Decision 5 — G2 — FK-id elision stays enabled under non-`QUERY` opera
 
 ### Justification
 
-Elision's correctness precondition is "the FK column is loaded on the parent row." G2 guarantees that *for optimizer-owned projections* but consumer-wins diffing can still defer it, so the precondition must be **checked**, not assumed. Keeping elision on (with the guard) preserves the B2 advantage and avoids a needless join on the common fully-loaded path; the guard only changes the rare consumer-`.only()`-defers-the-FK path, turning a silent lazy-load into a visible, strictness-honest fallback.
+Elision's correctness precondition is "the FK column is loaded on the parent row." G2 guarantees that *for optimizer-owned projections* (and under `QUERY` the union with a consumer projection loads the column the plan records), but under a non-`QUERY` operation a consumer-returned projection stays as returned and can still defer it, so the precondition must be **checked**, not assumed. Keeping elision on (with the guard) preserves the B2 advantage and avoids a needless join on the common fully-loaded path; the guard only changes the rare consumer-`.only()`-defers-the-FK path, turning a silent lazy-load into a visible, strictness-honest fallback.
 
 ### Alternatives considered (and rejected)
 
-**disable elision entirely under non-`QUERY` ops.** Rejected: it does not address the real hazard (which is consumer projection, not operation type — it bites under `QUERY` too) and trades a correct single-query elision for an unnecessary join on every fully-loaded mutation row. **Drop all elisions after diffing whenever the consumer applied `.only()`.** Rejected as insufficient on its own: the elision branch recorded no `select_related` fallback, so merely dropping the elision still leaves the relation needing a resolve path — the resolver-time loaded-check is what makes the fallback honest.
+**disable elision entirely under non-`QUERY` ops.** Rejected: it does not address the real hazard (which is the consumer's projection, not the operation type) and trades a correct single-query elision for an unnecessary join on every fully-loaded mutation row. **Drop all elisions after diffing whenever the consumer applied `.only()`.** Rejected as insufficient on its own: the elision branch recorded no `select_related` fallback, so merely dropping the elision still leaves the relation needing a resolve path — the resolver-time loaded-check is what makes the fallback honest.
 
 ## Decision 6 — G3 — registry-only fragment type-condition narrowing
 

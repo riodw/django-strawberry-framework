@@ -126,7 +126,8 @@ class OptimizerHint:
         force_prefetch: Force ``prefetch_related`` regardless of cardinality.
         prefetch_obj: A specific ``django.db.models.Prefetch`` instance
             to use instead of the auto-generated lookup string.
-        skip: Exclude this relation from the optimization plan entirely.
+        skip: Exclude this relation from the optimization plan (no JOIN, no
+            ``Prefetch``); the parent row still loads the relation's link columns.
         nested_strategy: Override the nested-connection fetch strategy for a
             Relay connection field (a registered strategy name such as
             ``"windowed"`` / ``"lateral"``, ``"auto"``, or a

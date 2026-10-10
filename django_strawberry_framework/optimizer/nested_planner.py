@@ -60,9 +60,9 @@ from .plans import (
     OptimizationPlan,
     append_unique,
     append_unique_many,
+    apply_projection,
     deferred_loading_of,
     effective_connection_order,
-    only_through_joins,
     order_entry_has_explicit_nulls,
     order_entry_name_and_direction,
 )
@@ -729,7 +729,7 @@ def _project_scalar_only_window(
     concrete ordering columns the deterministic window order references
     (spec-033 Decision 4 / Decision 6 scalar-only contract). The ``_dst_*`` window annotations
     compose with ``.only()`` (annotations, not deferred columns). The projection is written
-    through ``only_through_joins``, so a JOIN the child type's hook added keeps the connector
+    through ``apply_projection``, so a JOIN the child type's hook added keeps the connector
     it traverses.
 
     The G2 gate (spec-035 Decision 4): under a non-``QUERY`` operation this
@@ -753,7 +753,7 @@ def _project_scalar_only_window(
         append_unique(fields, column)
     for column in _concrete_order_columns(order_by, related_model):
         append_unique(fields, column)
-    return only_through_joins(child_queryset, fields)
+    return apply_projection(child_queryset, fields)
 
 
 def _extend_only_projection(
@@ -1175,21 +1175,21 @@ def plan_connection_relation(
     django_field = field_map.get(relation_field_name)
     if django_field is None:
         return NestedConnectionPlanResult(plan=plan)
-    hints_map = resolve_optimizer_hints(definition)
-    if hint_is_skip(hints_map.get(relation_field_name)):
-        return NestedConnectionPlanResult(plan=plan)
     # Parent-row link columns (a reverse ``to_field`` / ``ForeignObject``
     # link's non-pk targets). The window's attach reads them off each parent
-    # row, and so does the per-parent resolution every refusal arm below leaves
-    # the relation to, so they load before the first of those arms, under the
-    # same G2 gate as ``walker.py::_record_relation_access``. Only a SKIP hint
-    # (the consumer opting the relation out of planning) and a field the map
-    # does not carry leave them unloaded.
+    # row, and so does the per-parent resolution every refusal arm below - and
+    # a SKIP hint - leaves the relation to, so they load before the first of
+    # those arms, under the same G2 gate as
+    # ``walker.py::_record_relation_carriers``. Only a field the map does not
+    # carry leaves them unloaded.
     if enable_only:
         append_unique_many(
             cast("MutableSequence[str]", plan.only_fields),
             [f"{prefix}{attname}" for attname in django_field.source_link_attnames],
         )
+    hints_map = resolve_optimizer_hints(definition)
+    if hint_is_skip(hints_map.get(relation_field_name)):
+        return NestedConnectionPlanResult(plan=plan)
     # (b) Refusal arms detectable before any queryset is built -> UNPLANNED.
     if response_key_arguments_conflict(sel):
         _log_connection_fallback(

@@ -20,17 +20,18 @@ from django_strawberry_framework.optimizer.plans import (
     WINDOW_ROW_NUMBER_REVERSED,
     WINDOW_TOTAL_COUNT,
     OptimizationPlan,
-    _consumer_only_fields,
     _flatten_select_related,
+    _projection_aliases,
     _reverse_order_by,
     _select_path_missing_connectors,
+    apply_projection,
     apply_window_pagination,
     deterministic_order,
     diff_plan_for_queryset,
     effective_connection_order,
     ends_in_unique_column,
     lookup_paths,
-    only_through_joins,
+    merged_projection,
     order_entry_has_explicit_nulls,
     resolver_key,
     runtime_path_from_path,
@@ -462,59 +463,6 @@ class TestFlattenSelectRelated:
         assert _flatten_select_related([1, 2]) == set()
 
 
-class TestConsumerOnlyFields:
-    """``_consumer_only_fields`` defends Django's private ``deferred_loading`` contract.
-
-    The function is fed real ``QuerySet`` objects from ``diff_plan_for_queryset``,
-    but the contract it reads (``query.deferred_loading`` - a private 2-tuple
-    of ``(field_set, defer_flag)``) is volatile across Django versions, so
-    the function defends against missing-attribute, wrong-shape, defer-mode,
-    and wildcard-``.only()`` inputs by returning ``None``. These pins cover
-    each defensive branch directly so the guards cannot rot silently.
-    """
-
-    def test_returns_none_for_non_queryset_without_deferred_loading(self):
-        """Pins the missing-attribute branch.
-
-        A ``getattr(query, "deferred_loading", None)`` lookup returns ``None``
-        when ``queryset.query`` is absent or has no ``deferred_loading`` -
-        e.g. when the optimizer is fed a plain ``Manager`` or a test double.
-        """
-        assert _consumer_only_fields(object()) is None
-        assert _consumer_only_fields(SimpleNamespace(query=SimpleNamespace())) is None
-
-    def test_returns_none_for_malformed_deferred_loading_shape(self):
-        """Pins the ``except (TypeError, ValueError)`` guard.
-
-        Django's contract is ``(field_set, defer_flag)``; a future Django
-        version (or a test double) returning a non-iterable, a non-2-tuple,
-        a non-iterable field set, or any other malformed value falls through
-        to ``None`` instead of crashing the optimizer.
-        """
-        bad_three_tuple = SimpleNamespace(
-            query=SimpleNamespace(
-                deferred_loading=(set(), False, "extra"),
-            ),
-        )
-        bad_scalar = SimpleNamespace(query=SimpleNamespace(deferred_loading=42))
-        bad_field_set = SimpleNamespace(query=SimpleNamespace(deferred_loading=(None, False)))
-        assert _consumer_only_fields(bad_three_tuple) is None
-        assert _consumer_only_fields(bad_scalar) is None
-        assert _consumer_only_fields(bad_field_set) is None
-
-    def test_returns_none_for_wildcard_only_with_empty_field_set(self):
-        """Pins the ``not field_set`` branch.
-
-        ``(set(), False)`` is not a meaningful consumer projection - Django's
-        wildcard ``.only()`` collapses to the defer-mode default
-        ``(set(), True)``, so this shape is mostly synthetic, but the guard
-        keeps the contract symmetric with the wildcard explanation in the
-        docstring.
-        """
-        empty_only = SimpleNamespace(query=SimpleNamespace(deferred_loading=(set(), False)))
-        assert _consumer_only_fields(empty_only) is None
-
-
 class TestDiffPlanForQueryset:
     """``diff_plan_for_queryset`` reconciles plan vs. queryset without mutating the plan."""
 
@@ -692,25 +640,19 @@ class TestDiffPlanForQueryset:
         assert delta_qs is not qs
         assert queryset_prefetch_lookups(delta_qs) == (unrelated,)
 
-    def test_drops_only_fields_when_consumer_applied_only(self):
-        # Django's ``QuerySet.only(...).only(...)`` replaces (not
-        # merges) the deferred-field set. If the consumer already
-        # restricted columns via ``.only()`` (e.g., to enforce a
-        # column-level permission boundary), the optimizer must drop
-        # its own ``only_fields`` rather than silently overwriting the
-        # consumer projection. The diff result has ``only_fields=()``
-        # so ``apply()`` does not call ``.only()`` again.
-        plan = OptimizationPlan(select_related=["category"], only_fields=["id"])
+    def test_keeps_only_fields_when_consumer_applied_only_and_apply_unions(self):
+        # Django's ``QuerySet.only(...).only(...)`` replaces (not merges) the
+        # deferred-field set, so the diff leaves ``only_fields`` alone and the
+        # projection writer spells out the union: the consumer's columns and
+        # the selection's both load, neither side lazy-loads per row.
+        plan = OptimizationPlan(select_related=["category"], only_fields=["id", "category_id"])
         qs = Item.objects.only("name")
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
-        assert delta_plan is not plan
-        assert delta_plan.only_fields == ()
-        # The consumer's projection survives untouched.
-        fields, is_deferred = delta_qs.query.deferred_loading
-        assert fields == {"name"}
+        assert delta_plan is plan
+        assert delta_qs is qs
+        fields, is_deferred = delta_plan.apply(delta_qs).query.deferred_loading
+        assert fields == {"id", "category_id", "name"}
         assert is_deferred is False
-        # Original plan untouched (plan-cache invariant).
-        assert plan.only_fields == ["id"]
 
     def test_keeps_only_fields_when_consumer_did_not_apply_only(self):
         # Counterpart to the drop case: without a consumer ``.only()``,
@@ -727,24 +669,25 @@ class TestDiffPlanForQueryset:
         assert is_deferred is False
 
     def test_keeps_only_fields_when_consumer_used_defer(self):
-        # ``.defer()`` is not a consumer projection in the
-        # ``.only()`` sense - Django composes ``.only()`` after
-        # ``.defer()`` cleanly. The optimizer keeps its ``only_fields``.
-        plan = OptimizationPlan(only_fields=["id"])
-        qs = Item.objects.defer("name")
+        # Django's ``defer(a).only(a, b)`` silently keeps ``a`` deferred, so the
+        # projection writer un-defers what the plan reads and keeps the rest of
+        # the consumer's ``defer()``: the loaded set is the union of both sides.
+        plan = OptimizationPlan(only_fields=["id", "name"])
+        qs = Item.objects.defer("name", "description")
         delta_plan, _ = diff_plan_for_queryset(plan, qs)
         assert delta_plan is plan
-        assert delta_plan.only_fields == ["id"]
+        fields, is_deferred = delta_plan.apply(qs).query.deferred_loading
+        assert fields == {"description"}
+        assert is_deferred is True
 
-    def test_drops_only_fields_when_consumer_chained_only(self):
-        # Django's chained ``.only().only()`` collapses to the most
-        # recent argument; the consumer's effective ``.only()`` still
-        # triggers the drop because ``deferred_loading`` is still
-        # ``(<non-empty set>, False)``.
+    def test_unions_with_the_consumer_effective_only_when_chained(self):
+        # Django's chained ``.only().only()`` collapses to the most recent
+        # argument; the union reads that effective set.
         plan = OptimizationPlan(only_fields=["id"])
         qs = Item.objects.only("name").only("category_id")
         delta_plan, _ = diff_plan_for_queryset(plan, qs)
-        assert delta_plan.only_fields == ()
+        fields, _ = delta_plan.apply(qs).query.deferred_loading
+        assert fields == {"id", "category_id"}
 
     def test_consumer_prefetch_with_queryset_keeps_consumer_drops_optimizer(self):
         # When the consumer passes their own ``Prefetch`` with a custom
@@ -1356,10 +1299,25 @@ class TestPruneUnsupportableSelectRelated:
         delta, queryset = diff_plan_for_queryset(pruned, queryset)
         return pruned, delta.apply(queryset)
 
-    def test_consumer_only_drops_blocked_path_and_its_resolver_keys(self):
+    def test_projected_plan_keeps_the_path_and_loads_its_connector(self):
+        # A plan carrying its own projection is written as the union with the
+        # consumer's, connector included, so the JOIN stays and compiles.
         plan = OptimizationPlan(
             select_related=["category"],
             only_fields=["name", "category_id"],
+            planned_resolver_keys=["category-key"],
+            select_path_resolver_keys={"category": ("category-key",)},
+        ).finalize()
+        pruned, applied = self._reconcile(plan, Item.objects.only("name"))
+        assert pruned is plan
+        assert 'JOIN "products_category"' in str(applied.query)
+        assert "category-key" in pruned.planned_resolver_keys
+
+    def test_consumer_only_drops_blocked_path_and_its_resolver_keys(self):
+        # No projection of its own (a non-``QUERY`` operation): the plan would
+        # apply ``select_related`` straight over the consumer's ``.only()``.
+        plan = OptimizationPlan(
+            select_related=["category"],
             planned_resolver_keys=["category-key", "unrelated-key"],
             select_path_resolver_keys={"category": ("category-key",)},
         ).finalize()
@@ -1408,7 +1366,7 @@ class TestPruneUnsupportableSelectRelated:
         assert 'JOIN "library_shelf"' in compiled
         assert 'JOIN "library_branch"' not in compiled
 
-    def test_consumer_defer_drops_path_keys_and_nested_only_fields(self):
+    def test_projected_plan_undefers_the_connector_the_consumer_deferred(self):
         from apps.library.models import Book
 
         plan = OptimizationPlan(
@@ -1421,11 +1379,25 @@ class TestPruneUnsupportableSelectRelated:
             },
         ).finalize()
         pruned, applied = self._reconcile(plan, Book.objects.defer("shelf"))
+        assert pruned is plan
+        compiled = str(applied.query)
+        assert 'JOIN "library_shelf"' in compiled
+        assert 'JOIN "library_branch"' in compiled
+
+    def test_consumer_defer_drops_path_keys(self):
+        from apps.library.models import Book
+
+        plan = OptimizationPlan(
+            select_related=["shelf", "shelf__branch"],
+            planned_resolver_keys=["shelf-key", "branch-key"],
+            select_path_resolver_keys={
+                "shelf": ("shelf-key",),
+                "shelf__branch": ("branch-key",),
+            },
+        ).finalize()
+        pruned, applied = self._reconcile(plan, Book.objects.defer("shelf"))
         assert pruned.select_related == ()
         assert pruned.planned_resolver_keys == ()
-        # The nested projection entry is only valid alongside the dropped
-        # join; the plain root columns stay (defer composes with only()).
-        assert pruned.only_fields == ("title", "shelf_id")
         assert 'JOIN "library_shelf"' not in str(applied.query)
 
     def test_defer_of_an_unrelated_column_prunes_nothing(self):
@@ -1528,13 +1500,62 @@ def test_select_path_missing_connectors(
     assert _select_path_missing_connectors(path, frozenset(names), defer_mode, Entry) == expected
 
 
-def test_only_through_joins_leaves_a_filtered_relation_join_alone():
+def test_apply_projection_leaves_a_filtered_relation_join_alone():
     """A ``FilteredRelation`` alias is no deferred field: the ``.only()`` applies as given."""
     queryset = Entry.objects.annotate(
         public_item=FilteredRelation("item", condition=Q(item__is_private=False)),
     ).select_related("public_item")
 
-    applied = only_through_joins(queryset, ["value"])
+    applied = apply_projection(queryset, ["value"])
 
     assert applied.query.deferred_loading == (frozenset({"value"}), False)
     assert "public_item" in str(applied.query)
+
+
+@pytest.mark.parametrize(
+    ("deferred", "names", "remaining"),
+    [
+        pytest.param(("shelf", "subtitle"), ["shelf_id"], ["subtitle"], id="attname"),
+        pytest.param(("shelf", "subtitle"), ["shelf__code"], ["subtitle"], id="dotted-read"),
+        pytest.param(
+            ("shelf__code", "shelf__topic"),
+            ["shelf__code"],
+            ["shelf__topic"],
+            id="dotted-defer",
+        ),
+    ],
+)
+def test_merged_projection_defer_mode_matches_every_spelling_of_a_read_column(
+    deferred: tuple[str, ...],
+    names: list[str],
+    remaining: list[str],
+):
+    """A consumer ``.defer()`` stops deferring a column the names read under any spelling.
+
+    The live rows defer and read one column by its field name; these are the
+    spellings no fakeshop row carries: the attname, a dotted read under the
+    deferred relation, and a dotted ``.defer()`` entry.
+    """
+    from apps.library.models import Book
+
+    assert merged_projection(Book.objects.defer(*deferred), names) == (remaining, True)
+
+
+@pytest.mark.parametrize(
+    ("entry", "model", "aliases"),
+    [
+        pytest.param("missing", Item, {"missing"}, id="unknown-field"),
+        pytest.param("missing__name", Item, {"missing__name"}, id="unknown-head"),
+        pytest.param("category__missing", Item, {"category__missing"}, id="unknown-leaf"),
+        pytest.param("name__a__b", Item, {"name__a__b"}, id="through-a-column"),
+        pytest.param("category", None, {"category"}, id="no-model"),
+        pytest.param("category", Item, {"category", "category_id"}, id="forward-key"),
+    ],
+)
+def test_projection_aliases_resolve_only_what_the_model_names(
+    entry: str,
+    model: type[Model] | None,
+    aliases: set[str],
+):
+    """An entry aliases its name and attname spellings; an unresolvable one only itself."""
+    assert _projection_aliases(entry, model) == aliases

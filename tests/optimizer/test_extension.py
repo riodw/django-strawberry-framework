@@ -32,7 +32,9 @@ import pytest_django
 import strawberry
 from apps.products import services
 from apps.products.models import Category, Entry, Item, Property
+from django.db import connection
 from django.db.models import Manager, Model, QuerySet
+from django.test.utils import CaptureQueriesContext
 from graphql import (
     DefinitionNode,
     DocumentNode,
@@ -54,6 +56,7 @@ from django_strawberry_framework import (
     DjangoOptimizerExtension,
     DjangoSchema,
     DjangoType,
+    OptimizerHint,
     finalize_django_types,
     strawberry_config,
 )
@@ -5328,15 +5331,14 @@ def test_plan_with_cascading_hook_uncacheable():
 
 
 @pytest.mark.django_db
-def test_b8_pruned_select_related_stays_strictness_visible():
-    """B8 + B3: the pruned relation's resolver keys leave the strictness set.
+def test_consumer_projection_widens_to_the_selection_and_keeps_the_join():
+    """A consumer ``.only()`` and the plan's projection load as one union.
 
-    Dropping ``select_related("category")`` for the consumer projection must
-    ALSO drop the resolver keys that path satisfied - otherwise strictness
-    would trust a directive that was never applied while the generated
-    resolver lazy-loads. Under ``strictness="raise"`` the per-row access is
-    a visible unplanned N+1; the projection-free counterpart plans normally
-    and stays silent.
+    ``select_related("category")`` over a consumer ``.only("name")`` is
+    written with the connector and the selection's columns added to the
+    consumer's, so the JOIN compiles and nothing lazy-loads per row: under
+    ``strictness="raise"`` both the projected and the plain resolver stay
+    silent, and each answers in one query.
     """
     services.seed_data(1)
 
@@ -5370,18 +5372,78 @@ def test_b8_pruned_select_related_stays_strictness_visible():
     )
     # Strictness sentinels stash on the context: execution needs a real
     # context object (the standing strictness-test convention).
-    projected = schema.execute_sync(
-        "{ projectedItems { name category { name } } }",
-        context_value=SimpleNamespace(),
-    )
-    assert projected.errors is not None
-    assert any("Unplanned N+1" in str(error) for error in projected.errors)
+    with CaptureQueriesContext(connection) as captured:
+        projected = schema.execute_sync(
+            "{ projectedItems { name category { name } } }",
+            context_value=SimpleNamespace(),
+        )
+    assert projected.errors is None, projected.errors
+    assert len(captured) == 1
+    assert 'JOIN "products_category"' in captured[0]["sql"]
 
     planned = schema.execute_sync(
         "{ plannedItems { name category { name } } }",
         context_value=SimpleNamespace(),
     )
     assert planned.errors is None, planned.errors
+
+
+@pytest.mark.django_db
+def test_mutation_over_a_consumer_projection_prunes_the_join_it_cannot_traverse():
+    """A non-``QUERY`` plan writes no projection, so it cannot widen the consumer's.
+
+    G2 leaves the mutation's ``only_fields`` empty, so ``select_related("category")``
+    would be applied straight over the resolver's ``.only("name")`` - a deferred
+    and traversed relation Django refuses to compile. The prune drops the path and
+    its resolver keys before the plan is published: the relation resolves per row,
+    visible to strictness, and the response is correct.
+    """
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    assert registry.get(Category) is CategoryType
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def ping(self) -> bool:
+            return True
+
+    @strawberry.type
+    class Mutation:
+        @strawberry.mutation(graphql_type=list[ItemType])
+        def touch_items(self) -> QuerySet[Item]:
+            return Item.objects.order_by("id").only("name")
+
+    finalize_django_types()
+    ext = DjangoOptimizerExtension()
+    schema = strawberry.Schema(query=Query, mutation=Mutation, extensions=[lambda: ext])
+
+    context = SimpleNamespace()
+    result = schema.execute_sync(
+        "mutation { touchItems { name category { name } } }",
+        context_value=context,
+    )
+
+    assert result.errors is None, result.errors
+    expected = [
+        {"name": item.name, "category": {"name": item.category.name}}
+        for item in Item.objects.select_related("category").order_by("id")
+    ]
+    assert result.data == {"touchItems": expected}
+    plan = context.dst_optimizer_plan
+    assert plan.only_fields == ()
+    assert plan.select_related == ()
+    assert plan.planned_resolver_keys == ()
 
 
 @pytest.mark.django_db
@@ -5531,6 +5593,7 @@ def test_strictness_reaches_an_execution_with_no_stashable_context():
         class Meta:
             model = Item
             fields = ("id", "name", "category")
+            optimizer_hints = {"category": OptimizerHint.SKIP}
 
     @strawberry.type
     class Query:

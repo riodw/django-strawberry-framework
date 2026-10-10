@@ -11,10 +11,11 @@ import base64
 import contextlib
 import importlib
 import json
+import re
 import string
 import sys
 from collections.abc import Callable, Mapping
-from typing import NamedTuple, TypeAlias
+from typing import NamedTuple, TypeAlias, cast
 
 import pytest
 import strawberry
@@ -13188,17 +13189,15 @@ def test_nested_ambiguous_empty_served_from_marker_in_fixed_queries(args: str):
 
 @pytest.mark.django_db
 def test_library_card_projection_survives_select_related_relation():
-    """Root fix, live: consumer ``.only()`` + ``select_related``.
+    """A consumer ``.only()`` under a planned ``select_related`` loads the union.
 
     ``allLibraryCardsProjected`` returns ``.only("barcode")`` while the query
     selects the forward ``patron`` relation - ``PatronType`` has no
-    visibility hook, so the walker plans a REAL ``select_related("patron")``.
-    Pre-fix the optimizer applied it on top of the projection and every
-    request failed with ``FieldError: Field MembershipCard.patron cannot be
-    both deferred and traversed using select_related at the same time``. The
-    relation-aware prune drops the path (and its strictness keys - the
-    package pin lives in ``tests/optimizer/test_extension.py``), so the
-    response is correct and the relation resolves per row.
+    visibility hook, so the walker plans a REAL ``select_related("patron")``,
+    which Django refuses over the bare projection (``Field
+    MembershipCard.patron cannot be both deferred and traversed``). The
+    optimizer writes ``barcode`` together with the selection's columns and
+    the join's ``patron_id``, so the JOIN stands and the page is one query.
     """
     _seed_library_graph()
 
@@ -13219,24 +13218,21 @@ def test_library_card_projection_survives_select_related_relation():
             ],
         },
     }
-    # The dropped join resolves per row: root card page (patron_id stayed
-    # deferred), the deferred ``patron_id`` load, then the patron row.
-    assert len(captured) == 3
-    assert "library_patron" not in captured[0]["sql"]
+    # The consumer's projection is widened to the selection and the join's
+    # connector, so the planned JOIN survives and the page is one query.
+    assert len(captured) == 1
+    assert "library_patron" in captured[0]["sql"]
 
 
 @pytest.mark.django_db
 def test_library_card_deferred_projection_survives_select_related():
-    """Root fix, defer flavor, live: ``.defer("patron")`` + ``select_related``.
+    """A consumer ``.defer()`` stops deferring what the selection reads.
 
     Django raises the same deferred-and-traversed ``FieldError`` for a
-    ``defer()`` projection, so the prune's defer-mode rules (exact entries
-    defer; everything else stays loaded) must drop the planned
-    ``select_related("patron")`` live. Cheaper than the ``.only()`` sibling:
-    the plan's own ``only()`` projection chains AFTER the consumer
-    ``defer()`` and re-loads the ``patron_id`` connector (Django's
-    defer-then-only replacement semantics), so no per-row deferred loads
-    fire - just the root page and the patron fetch.
+    ``defer("patron")`` projection under ``select_related("patron")``, and
+    ``defer(a).only(a, b)`` keeps ``a`` deferred, so the optimizer re-defers
+    the consumer's set minus every column the selection reads: ``patron``
+    loads, the JOIN stands, and the page is one query.
     """
     _seed_library_graph()
 
@@ -13257,8 +13253,564 @@ def test_library_card_deferred_projection_survives_select_related():
             ],
         },
     }
-    assert len(captured) == 2
+    assert len(captured) == 1
+    assert "library_patron" in captured[0]["sql"]
+
+
+def _hooked_holder_schema(
+    *,
+    genres: Callable[[QuerySet[models.Genre]], QuerySet[models.Genre]] | None = None,
+    books: Callable[[QuerySet[models.Book]], QuerySet[models.Book]] | None = None,
+    loans: Callable[[QuerySet[models.Loan]], QuerySet[models.Loan]] | None = None,
+    tags: Callable[[QuerySet[models.TaggedItem]], QuerySet[models.TaggedItem]] | None = None,
+) -> strawberry.Schema:
+    """Holder types whose ``get_queryset`` hooks shape the querysets the optimizer receives.
+
+    Each hook is the consumer's own ``get_queryset``: a root list field applies
+    it to the root queryset, and a planned ``Prefetch`` child applies it to the
+    child's base queryset, so whatever ``.only()`` / ``.defer()`` /
+    ``prefetch_related`` it adds meets the plan's projection in one writer.
+    """
+    from django_strawberry_framework import (
+        DjangoListField,
+        DjangoOptimizerExtension,
+        finalize_django_types,
+    )
+    from django_strawberry_framework.registry import registry
+
+    class HolderHookedGenreType(DjangoType):
+        @classmethod
+        @override
+        def get_queryset(
+            cls,
+            queryset: QuerySet[models.Genre],
+            info: strawberry.Info,
+        ) -> QuerySet[models.Genre]:
+            return queryset if genres is None else genres(queryset)
+
+        class Meta:
+            model = models.Genre
+            fields = ("id", "name")
+            name = "HolderHookedGenreType"
+
+    class HolderHookedLoanType(DjangoType):
+        @classmethod
+        @override
+        def get_queryset(
+            cls,
+            queryset: QuerySet[models.Loan],
+            info: strawberry.Info,
+        ) -> QuerySet[models.Loan]:
+            return queryset if loans is None else loans(queryset)
+
+        class Meta:
+            model = models.Loan
+            fields = ("id", "note")
+            name = "HolderHookedLoanType"
+
+    class HolderHookedBookType(DjangoType):
+        @classmethod
+        @override
+        def get_queryset(
+            cls,
+            queryset: QuerySet[models.Book],
+            info: strawberry.Info,
+        ) -> QuerySet[models.Book]:
+            return queryset if books is None else books(queryset)
+
+        class Meta:
+            model = models.Book
+            fields = (
+                "id",
+                "title",
+                "subtitle",
+                "loans",
+            )
+            name = "HolderHookedBookType"
+
+    assert registry.get(models.Book) is HolderHookedBookType
+
+    class HolderHookedShelfType(DjangoType):
+        class Meta:
+            model = models.Shelf
+            fields = ("id", "code", "books")
+            name = "HolderHookedShelfType"
+
+    class HolderHookedTagType(DjangoType):
+        @classmethod
+        @override
+        def get_queryset(
+            cls,
+            queryset: QuerySet[models.TaggedItem],
+            info: strawberry.Info,
+        ) -> QuerySet[models.TaggedItem]:
+            return queryset if tags is None else tags(queryset)
+
+        class Meta:
+            model = models.TaggedItem
+            fields = ("id", "tag")
+            name = "HolderHookedTagType"
+
+    @strawberry.type
+    class Query:
+        genres: list[HolderHookedGenreType] = DjangoListField(HolderHookedGenreType)
+        shelves: list[HolderHookedShelfType] = DjangoListField(HolderHookedShelfType)
+        loans: list[HolderHookedLoanType] = DjangoListField(HolderHookedLoanType)
+        tags: list[HolderHookedTagType] = DjangoListField(HolderHookedTagType)
+
+    finalize_django_types()
+    optimizer = DjangoOptimizerExtension()
+    return strawberry.Schema(query=Query, extensions=[lambda: optimizer])
+
+
+def _post_hooked_holder(
+    document: str,
+    build: Callable[[], strawberry.Schema],
+) -> tuple[JSONObject, list[str]]:
+    """POST ``document`` to the holder schema ``build`` returns; return the payload and its SQL."""
+    from django_strawberry_framework.registry import registry
+
+    registry.clear()
+    try:
+        schema = build()
+        with CaptureQueriesContext(connection) as captured:
+            response = _post_holder(schema, document)
+    finally:
+        registry.clear()
+    payload: JSONObject = response.json()
+    assert payload.get("errors") is None, payload
+    return payload, [entry["sql"] for entry in captured.captured_queries]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("method", ["only", "defer"])
+async def test_library_root_hook_projection_loads_the_selection_on_async(method: str):
+    """A root hook's ``.only()`` / ``.defer()`` that leaves out a selected column, on async.
+
+    The genre hook projects ``name`` away (``.only("id")`` / ``.defer("name")``)
+    while the selection reads it. A column left deferred would load on first
+    read, which the async transport refuses (``SynchronousOnlyOperation``), so an
+    error-free page is the proof that the selection's columns loaded with the
+    hook's.
+    """
+    from django_strawberry_framework.registry import registry
+
+    await models.Genre.objects.acreate(name="Speculative")
+    await models.Genre.objects.acreate(name="Mystery")
+    registry.clear()
+    try:
+        _CURRENT["schema"] = _hooked_holder_schema(
+            genres=lambda queryset: (
+                queryset.only("id") if method == "only" else queryset.defer("name")
+            ),
+        )
+        with override_settings(ROOT_URLCONF=__name__):
+            result = await AsyncTestClient().query(
+                "{ genres { name } }",
+                assert_no_errors=False,
+                url="/graphql-async-test/",
+            )
+    finally:
+        _CURRENT["schema"] = None
+        registry.clear()
+
+    payload = result.response.json()
+    assert payload.get("errors") is None, payload
+    assert sorted(genre["name"] for genre in payload["data"]["genres"]) == [
+        "Mystery",
+        "Speculative",
+    ]
+
+
+def _seed_subtitled_books() -> None:
+    """Three subtitled books on the seeded shelf, each lent once."""
+    _seed_library_graph()
+    shelf = models.Shelf.objects.get(code="A-1")
+    patron = models.Patron.objects.get(name="Ada")
+    for index in range(3):
+        book = models.Book.objects.create(
+            title=f"Volume {index}",
+            subtitle=f"Part {index}",
+            shelf=shelf,
+        )
+        models.Loan.objects.create(book=book, patron=patron, note=f"loan {index}")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("method", "hook_columns"),
+    [
+        pytest.param("only", ("title",), id="only"),
+        pytest.param("defer", (), id="defer"),
+    ],
+)
+def test_library_child_hook_projection_unions_with_the_selection(
+    method: str,
+    hook_columns: tuple[str, ...],
+):
+    """A planned child's hook ``.only()`` / ``.defer()`` loads alongside the child selection.
+
+    ``shelves { books }`` plans a ``Prefetch`` through the book type's hook, which
+    keeps only ``title`` or defers ``subtitle``. The hook's projection meets the
+    child plan's in one writer: the child statement carries the hook's columns
+    AND the selected ``subtitle``, so no book row lazy-loads ``subtitle`` - two
+    statements for any number of books.
+    """
+    _seed_subtitled_books()
+
+    payload, statements = _post_hooked_holder(
+        "{ shelves { code books { subtitle } } }",
+        lambda: _hooked_holder_schema(
+            books=lambda queryset: (
+                queryset.only("title") if method == "only" else queryset.defer("subtitle")
+            ),
+        ),
+    )
+
+    [shelf] = payload["data"]["shelves"]
+    assert sorted(str(book["subtitle"]) for book in shelf["books"]) == [
+        "None",
+        "Part 0",
+        "Part 1",
+        "Part 2",
+    ]
+    assert len(statements) == 2, statements
+    [book_sql] = [sql for sql in statements if 'FROM "library_book"' in sql]
+    for column in ("subtitle", *hook_columns):
+        assert f'"library_book"."{column}"' in book_sql, book_sql
+
+
+@pytest.mark.django_db
+def test_library_child_hook_prefetch_meets_the_planned_prefetch():
+    """A child hook's ``prefetch_related`` on a lookup the planner also prefetches.
+
+    The book type's hook adds ``prefetch_related("loans")`` while the selection
+    reads ``loans { note }``, which the child plan fetches with its own
+    ``Prefetch("loans", ...)``. The child base is reconciled like a root
+    queryset, so the planner's ``Prefetch`` absorbs the hook's plain lookup
+    instead of Django raising "lookup was already seen with a different
+    queryset": one statement per level.
+    """
+    _seed_subtitled_books()
+
+    payload, statements = _post_hooked_holder(
+        "{ shelves { code books { title loans { note } } } }",
+        lambda: _hooked_holder_schema(books=lambda queryset: queryset.prefetch_related("loans")),
+    )
+
+    [shelf] = payload["data"]["shelves"]
+    assert sorted(shelf["books"], key=lambda book: book["title"]) == [
+        {"title": "Kindred", "loans": [{"note": "first checkout"}]},
+        {"title": "Volume 0", "loans": [{"note": "loan 0"}]},
+        {"title": "Volume 1", "loans": [{"note": "loan 1"}]},
+        {"title": "Volume 2", "loans": [{"note": "loan 2"}]},
+    ]
+    assert len(statements) == 3, statements
+
+
+def _seed_branch_tags() -> None:
+    """Three tags, each on its own branch."""
+    for index in range(3):
+        branch = models.Branch.objects.create(name=f"Tagged {index}", city="Boston")
+        models.TaggedItem.objects.create(content_object=branch, tag=f"tag-{index}")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    (
+        "seed",
+        "document",
+        "build",
+        "expected",
+        "statements",
+        "link_columns",
+    ),
+    [
+        pytest.param(
+            _seed_subtitled_books,
+            "{ loans { note } }",
+            lambda: _hooked_holder_schema(
+                loans=lambda queryset: queryset.prefetch_related("patron"),
+            ),
+            {
+                "loans": [
+                    {"note": "first checkout"},
+                    *({"note": f"loan {index}"} for index in range(3)),
+                ],
+            },
+            2,
+            ("patron_id",),
+            id="forward-key",
+        ),
+        pytest.param(
+            _seed_branch_tags,
+            "{ tags { tag } }",
+            lambda: _hooked_holder_schema(
+                tags=lambda queryset: queryset.prefetch_related("content_object"),
+            ),
+            {"tags": [{"tag": f"tag-{index}"} for index in range(3)]},
+            2,
+            ("content_type_id", "object_id"),
+            id="generic-foreign-key",
+        ),
+    ],
+)
+def test_library_consumer_prefetch_keeps_its_link_columns(
+    seed: Callable[[], None],
+    document: str,
+    build: Callable[[], strawberry.Schema],
+    expected: JSONObject,
+    statements: int,
+    link_columns: tuple[str, ...],
+):
+    """A consumer ``prefetch_related`` keeps the link columns its attach reads.
+
+    The root hook prefetches a relation the selection never reads, so the plan's
+    projection names none of its link columns. The projection writer adds them:
+    Django's attach reads them off every root row (a forward key's column; a
+    generic foreign key's content type and object id), and a deferred one would
+    be fetched again once per row - two statements, not ``2 + rows``.
+    """
+    seed()
+
+    payload, sql = _post_hooked_holder(document, build)
+
+    assert payload["data"] == expected
+    assert len(sql) == statements, sql
+    for column in link_columns:
+        assert column in sql[0], sql[0]
+
+
+@pytest.mark.django_db
+def test_library_skip_relation_keeps_its_link_column_beside_a_sibling_scalar():
+    """``LoanType.patron`` is hinted ``SKIP``; a sibling scalar projects the loan row.
+
+    The relation stays unplanned - one patron statement per loan - but the root
+    ``SELECT`` keeps ``patron_id``, so no loan pays a second statement to load a
+    deferred key before its patron's: ``1 + loans`` statements, not ``1 + 2 * loans``.
+    """
+    _seed_subtitled_books()
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql("{ allLibraryLoans { note patron { name } } }")
+
+    payload = response.json()
+    assert payload.get("errors") is None, payload
+    assert payload["data"]["allLibraryLoans"] == [
+        {"note": "first checkout", "patron": {"name": "Ada"}},
+        {"note": "loan 0", "patron": {"name": "Ada"}},
+        {"note": "loan 1", "patron": {"name": "Ada"}},
+        {"note": "loan 2", "patron": {"name": "Ada"}},
+    ]
+    assert len(captured) == 5, [entry["sql"] for entry in captured.captured_queries]
+    assert "patron_id" in captured[0]["sql"]
     assert "library_patron" not in captured[0]["sql"]
+
+
+@pytest.mark.django_db
+def test_library_typename_only_reverse_one_to_one_join_projects_its_key():
+    """A planned JOIN whose selection reads nothing from the joined row still compiles.
+
+    ``card { __typename }`` plans ``select_related("card")`` with no column under
+    ``card__``, which Django reads as a deferred-and-traversed relation. The plan
+    projects the card's primary key, so the page is one statement.
+    """
+    _seed_library_graph()
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql("{ allLibraryPatrons { name card { __typename } } }")
+
+    assert response.json() == {
+        "data": {
+            "allLibraryPatrons": [
+                {"name": "Ada", "card": {"__typename": "MembershipCardType"}},
+                {"name": "Grace", "card": None},
+            ],
+        },
+    }
+    assert len(captured) == 1, [entry["sql"] for entry in captured.captured_queries]
+    assert '"library_membershipcard"."id"' in captured[0]["sql"]
+
+
+def _unplanned_relation_holder_schema() -> strawberry.Schema:
+    """Holder types whose relations the optimizer leaves unplanned.
+
+    ``PatronProfile.favorite_genre`` targets ``Genre.name``, not the pk, so a
+    genre's ``favoring_profiles`` reads ``name`` off the genre row; the holder
+    hints that relation ``SKIP`` on both its list and connection shapes.
+    ``HolderOwnLoanType.book`` is a relation the consumer resolves itself, which
+    reads ``book_id`` off the loan row. Neither has a planned fetch, and both
+    keep their link column in the parent's projection.
+    """
+    from django_strawberry_framework import (
+        DjangoListField,
+        DjangoOptimizerExtension,
+        OptimizerHint,
+        finalize_django_types,
+    )
+    from django_strawberry_framework.registry import registry
+
+    class HolderSkipProfileType(DjangoType):
+        class Meta:
+            model = models.PatronProfile
+            fields = ("postal_code",)
+            interfaces = (relay.Node,)
+            name = "HolderSkipProfileType"
+
+    assert registry.get(models.PatronProfile) is HolderSkipProfileType
+
+    class HolderSkipGenreType(DjangoType):
+        class Meta:
+            model = models.Genre
+            fields = ("id", "name", "favoring_profiles")
+            interfaces = (relay.Node,)
+            relation_shapes = {"favoring_profiles": "both"}
+            optimizer_hints = {"favoring_profiles": OptimizerHint.SKIP}
+            name = "HolderSkipGenreType"
+
+    class HolderOwnBookType(DjangoType):
+        class Meta:
+            model = models.Book
+            fields = ("id", "title")
+            name = "HolderOwnBookType"
+
+    class HolderOwnLoanType(DjangoType):
+        @strawberry.field(graphql_type=HolderOwnBookType)
+        @staticmethod
+        def book(root: strawberry.Parent[models.Loan]) -> models.Book:
+            """The loan's book, resolved by the consumer."""
+            return root.book
+
+        class Meta:
+            model = models.Loan
+            fields = ("id", "note", "book")
+            name = "HolderOwnLoanType"
+
+    @strawberry.type
+    class Query:
+        genres: list[HolderSkipGenreType] = DjangoListField(HolderSkipGenreType)
+        loans: list[HolderOwnLoanType] = DjangoListField(HolderOwnLoanType)
+
+    finalize_django_types()
+    optimizer = DjangoOptimizerExtension()
+    return strawberry.Schema(query=Query, extensions=[lambda: optimizer])
+
+
+def _seed_favoring_profiles() -> None:
+    """Two genres, each favored by one patron profile."""
+    _seed_library_graph()
+    models.Genre.objects.create(name="Mystery")
+    for patron_name, genre_name, postal_code in (
+        ("Ada", "Speculative", "02101"),
+        ("Grace", "Mystery", "02139"),
+    ):
+        models.PatronProfile.objects.create(
+            patron=models.Patron.objects.get(name=patron_name),
+            favorite_genre=models.Genre.objects.get(name=genre_name),
+            postal_code=postal_code,
+        )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    (
+        "document",
+        "leaf",
+        "leaves",
+        "statements",
+        "link_column",
+    ),
+    [
+        pytest.param(
+            "{ genres { id favoringProfiles { postalCode } } }",
+            "postalCode",
+            ["02101", "02139"],
+            3,
+            '"library_genre"."name"',
+            id="skip-list-non-pk-link",
+        ),
+        pytest.param(
+            "{ genres { id favoringProfilesConnection { edges { node { postalCode } } } } }",
+            "postalCode",
+            ["02101", "02139"],
+            3,
+            '"library_genre"."name"',
+            id="skip-connection-non-pk-link",
+        ),
+        pytest.param(
+            "{ loans { note book { title } } }",
+            "title",
+            ["Kindred"],
+            2,
+            '"library_loan"."book_id"',
+            id="consumer-assigned-forward-key",
+        ),
+    ],
+)
+def test_library_unplanned_relations_keep_their_link_columns(
+    document: str,
+    leaf: str,
+    leaves: list[str],
+    statements: int,
+    link_column: str,
+):
+    """A relation the optimizer does not plan still finds its link column loaded.
+
+    The per-parent access each unplanned relation leaves to its resolver reads
+    the link column off the parent row first; the parent's projection carries
+    it, so every parent costs one statement for the relation and none for a
+    deferred column. The roots carry no order, so the related leaves compare
+    as a sorted list.
+    """
+    from django_strawberry_framework.registry import registry
+
+    _seed_favoring_profiles()
+    registry.clear()
+    try:
+        schema = _unplanned_relation_holder_schema()
+        with CaptureQueriesContext(connection) as captured:
+            response = _post_holder(schema, document)
+    finally:
+        registry.clear()
+
+    payload = response.json()
+    assert payload.get("errors") is None, payload
+    found = re.findall(rf'"{leaf}": "([^"]*)"', json.dumps(payload["data"]))
+    assert sorted(cast("list[str]", found)) == leaves
+    assert len(captured) == statements, [entry["sql"] for entry in captured.captured_queries]
+    assert link_column in captured[0]["sql"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_library_skip_non_pk_link_resolves_on_async():
+    """The ``SKIP``-hinted non-pk link resolves on the async transport.
+
+    The relation's per-genre access reads ``Genre.name`` on the event loop; a
+    deferred ``name`` would load there and raise ``SynchronousOnlyOperation``.
+    """
+    from django_strawberry_framework.registry import registry
+
+    await sync_to_async(_seed_favoring_profiles)()
+    registry.clear()
+    try:
+        _CURRENT["schema"] = _unplanned_relation_holder_schema()
+        with override_settings(ROOT_URLCONF=__name__):
+            result = await AsyncTestClient().query(
+                "{ genres { id favoringProfiles { postalCode } } }",
+                assert_no_errors=False,
+                url="/graphql-async-test/",
+            )
+    finally:
+        _CURRENT["schema"] = None
+        registry.clear()
+
+    payload = result.response.json()
+    assert payload.get("errors") is None, payload
+    assert sorted(
+        profile["postalCode"]
+        for genre in payload["data"]["genres"]
+        for profile in genre["favoringProfiles"]
+    ) == ["02101", "02139"]
 
 
 #: A consumer ``select_related`` the selection reads none (or only the first hop) of:

@@ -5521,7 +5521,7 @@ def _shelf_types_with_consumer_books(
 
 
 def test_consumer_assigned_relation_left_fully_unplanned():
-    """A consumer-owned relation gets NO prefetch, NO resolver keys, NO columns.
+    """A consumer-owned relation gets NO prefetch, NO resolver keys, only its link columns.
 
     The #697-class gap: the walker used to trust the model shape for a
     relation whose generated resolver the consumer REPLACED
@@ -5531,7 +5531,8 @@ def test_consumer_assigned_relation_left_fully_unplanned():
     ``planned_resolver_keys`` for the walked subtree, which silenced the
     subtree's real N+1 under strictness. The spec-033 Decision 6 fallback discipline
     applies instead: fully unplanned, strictness-visible. Sibling scalars keep
-    their projection.
+    their projection, and the parent row keeps the relation's link columns
+    (``FieldMeta.source_link_attnames``; none for this reverse FK over the pk).
     """
     registry.clear()
     try:
@@ -5545,7 +5546,8 @@ def test_consumer_assigned_relation_left_fully_unplanned():
         assert list(plan.prefetch_related) == []
         assert list(plan.select_related) == []
         assert list(plan.planned_resolver_keys) == []
-        # The consumer field contributes nothing; sibling scalars still project.
+        # The consumer field contributes no column of its own; sibling scalars
+        # still project.
         assert "code" in plan.only_fields
         assert not any("books" in f for f in plan.only_fields)
     finally:

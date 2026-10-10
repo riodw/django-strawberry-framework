@@ -1039,7 +1039,7 @@ Safety properties:
 
 FK-id elisions are stashed on `info.context.dst_optimizer_plan.fk_id_elisions` (tuple, as part of the plan) and `info.context.dst_optimizer_fk_id_elisions` (standalone set, for resolver-time membership checks).
 
-Elision stays enabled under non-`QUERY` operations, with a consumer-`.only()` loaded-check: a consumer-returned `.only(...)` queryset survives queryset diffing and can defer the FK column even when the optimizer suppresses its own `.only()`, so the elision stub verifies the FK column is loaded on the parent row and falls back loudly ([strictness](#strictness-mode)-visible) when a consumer projection deferred it, rather than a silent per-row lazy load.
+Elision stays enabled under non-`QUERY` operations, with a consumer-`.only()` loaded-check: the optimizer writes no projection there, so a consumer-returned `.only(...)` queryset keeps its own and can defer the FK column, so the elision stub verifies the FK column is loaded on the parent row and falls back loudly ([strictness](#strictness-mode)-visible) when a consumer projection deferred it, rather than a silent per-row lazy load.
 
 **See also:** [`only()` projection](#only-projection) · [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Plan cache](#plan-cache).
 
@@ -1492,7 +1492,7 @@ Typed wrapper for per-relation optimizer overrides. Pass instances through [`Met
 
 Supported modes:
 
-- `OptimizerHint.SKIP` — exclude a relation from automatic planning (the optimizer leaves it alone).
+- `OptimizerHint.SKIP` — exclude a relation from automatic planning: no JOIN, no `Prefetch`, the relation resolves per row. The parent row still loads the relation's link columns, so each row pays one query for the relation, not a second one for a deferred key.
 - `OptimizerHint.select_related()` — force `select_related`.
 - `OptimizerHint.prefetch_related()` — force `prefetch_related`.
 - `OptimizerHint.prefetch(Prefetch(...))` — use a consumer-provided `Prefetch` object and stop walking below that relation. A hint chooses how the relation is fetched, never which rows it admits: when the target type overrides `get_queryset`, the hook narrows the hinted queryset exactly as it narrows a generated one, keeping the queryset's explicit `.using(...)` and refusing a sliced one. A combined `Prefetch` queryset is served as the set of primary keys it selects; one that set cannot represent raises `ConfigurationError` naming `OptimizerHint.prefetch(obj)` on `Type.field`.
@@ -1643,11 +1643,11 @@ The optimizer does not assume it owns the queryset. It reconciles framework-gene
 Cooperation rules:
 
 - **Queryset cooperation.** If your resolver already calls `select_related("category")`, the optimizer does not reapply it.
-- **Unread JOINs.** A named `select_related` path your queryset carries that the selection never reads, and that the optimizer does not prefetch, keeps its JOIN and loads its related row whole: the optimizer never defers a column such a JOIN traverses.
+- **Unread JOINs.** A named `select_related` path your queryset carries that the selection never reads, and that the optimizer does not prefetch, keeps its JOIN and loads its related row whole: the optimizer never defers a column such a JOIN traverses. A reverse one-to-one JOIN the optimizer plans whose selection reads nothing from the related row (`card { __typename }`) projects the related primary key, the narrowest column that keeps the JOIN valid; a forward JOIN's key column already loads its related row whole.
 - **Prefetch cooperation.** If your resolver returns `Category.objects.prefetch_related(Prefetch("items", queryset=...))`, the consumer `Prefetch` wins over less-specific automatic work.
 - **Subtree-aware reconciliation.** `prefetch_related("items", "items__entries")` cooperates with the optimizer's nested `Prefetch("items", ...)` instead of raising Django's "lookup already seen with a different queryset" error.
 - **Plain-string absorption.** Safe consumer string prefetches can be absorbed by richer optimizer `Prefetch` objects.
-- **`only()` cooperation.** If your resolver already calls `.only(...)` to enforce a column-level projection (e.g., a permission boundary that restricts which columns leave the database), the optimizer drops its own `only_fields` rather than chaining a second `.only(...)` that would replace yours — Django's `QuerySet.only(...).only(...)` replaces (not merges) the deferred-field set. `.defer(...)` is not treated as a consumer projection because `.defer()` and `.only()` compose cleanly in Django.
+- **`only()` cooperation.** Under a `QUERY` operation, a `.only(...)` or `.defer(...)` your resolver or a `get_queryset` hook applies, at the root or on a planned child, is merged with the selection's projection: the query loads the union of your columns and the ones the selection reads, plus the connector each of your JOINs traverses and the link column each of your `prefetch_related` lookups attaches by, so neither side lazy-loads per row. Django's `QuerySet.only(...).only(...)` replaces the set and `defer(a).only(a, b)` keeps `a` deferred, so the optimizer writes the union itself. A `.only()` is not a column-visibility boundary (a selected column reaches the response either way); column visibility belongs to the type's declared fields. A consumer `Prefetch(queryset=...)` (a root `prefetch_related`, a child type's `get_queryset` hook, or an `OptimizerHint.prefetch(...)`) and a relation resolver you supply are the source of truth for their own querysets and are not merged into: a column such a queryset defers loads lazily per row, and on the async transport that raises `SynchronousOnlyOperation`.
 
 **See also:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Plan cache](#plan-cache) · [`OptimizerHint`](#optimizerhint).
 

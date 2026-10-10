@@ -105,7 +105,9 @@ registered definition (with no class-attribute mirror, [`spec-016`][spec-016]) g
 - **Why reconcile at all.** Django merges a duplicate `select_related`, but stacking the optimizer's
   directive on a consumer's masks the consumer's intentional optimization and clutters debug output.
   A consumer projection that defers a column on a planned join path also makes Django refuse the
-  join, so dropping that path avoids a `FieldError`.
+  join: a projected plan writes the connector into the union with the consumer's projection, and a
+  plan with no projection of its own (a non-`QUERY` operation) drops the path, so neither raises a
+  `FieldError`.
 - **A delta plan plus a queryset.** Reconciliation can upgrade a consumer's plain string lookup to the
   optimizer's `Prefetch`, which rewrites the queryset side; a plan-only delta cannot express that.
 - **Copy, never mutate.** The same plan object is served from B1's cache across requests, so an

@@ -1114,15 +1114,15 @@ def test_fk_id_elision_falls_back_when_consumer_only_defers_fk(
 ):
     """Decision 5: a deferred consumer-``.only()`` FK column falls back loudly.
 
-    A consumer ``Item.objects.only("name")`` survives B8 consumer-wins diffing
-    while the plan still carries the ``category`` elision AND records it planned.
+    A consumer ``Item.objects.only("name")`` stays as returned under a non-``QUERY``
+    operation (the plan writes no projection there) while the plan still carries
+    the ``category`` elision AND records it planned.
     The resolver must NOT silently read the deferred ``category_id`` (the per-row
     lazy load Decision 5 forbids), and because the relation is planned it must
     NOT let ``_check_n1`` mistake the planned key for a satisfied relation - the
-    fallback forces the lazy-load probe so strictness sees the access. The bug
-    bites under both ``QUERY`` and a mutation (the resolver is operation-agnostic,
-    so ``operation_arm`` only documents the two shapes), per spec-035
-    Decision 5 / Edge cases #"can defer the FK column (both".
+    fallback forces the lazy-load probe so strictness sees the access. The
+    resolver is operation-agnostic, so ``operation_arm`` only documents the two
+    shapes, per spec-035 Decision 5 / Edge cases #"can defer the FK column under".
     """
     from types import SimpleNamespace
 

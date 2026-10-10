@@ -44,6 +44,8 @@ from typing_extensions import override
 from ..exceptions import OptimizerError
 from ..utils.connections import assert_window_fetch_mode, window_range_plan
 from ..utils.querysets import applied_order
+from ..utils.relations import instance_accessor
+from .field_meta import FieldMeta
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -183,8 +185,9 @@ class OptimizationPlan:
     handoff raises ``AttributeError``; the three ``finalized_*`` metadata fields
     are swapped to frozensets. The ``cacheable`` bool remains a plain settable
     attribute and its post-handoff immutability is a construction-time
-    convention. ``merge_from`` / ``merge_metadata_from`` reject finalized plans,
-    so the extracted nested planner cannot reopen a handed-off plan.
+    convention. ``merge_from`` rejects finalized plans on both sides and
+    ``merge_metadata_from`` a finalized target, so the extracted nested planner
+    cannot reopen a handed-off plan.
     """
 
     select_related: Sequence[str] = field(default_factory=_indexed_list)
@@ -329,16 +332,17 @@ class OptimizationPlan:
 
         A ``select_related`` the queryset already carries on a path this plan
         prefetches is released first (``_release_select_related_to_prefetches``),
-        so each planned ``Prefetch`` is the only source of its rows. Every
-        other ``select_related`` it carries stays: ``only_through_joins`` adds
-        the connector each of those joins traverses to the ``.only()``, on the
-        queryset alone, so the cached plan's ``only_fields`` stay exactly what
-        the selection reads.
+        so each planned ``Prefetch`` is the only source of its rows. Everything
+        else the queryset carries stays: ``apply_projection`` writes the union of
+        its ``.only()`` / ``.defer()`` and the plan's ``only_fields``, plus the
+        connector each of its joins traverses and the link column each of its
+        prefetches attaches by, on the queryset alone, so the cached plan's
+        ``only_fields`` stay exactly what the selection reads.
         """
         if self.prefetch_related:
             queryset = _release_select_related_to_prefetches(queryset, self.prefetch_related)
         if self.only_fields:
-            queryset = only_through_joins(queryset, self.only_fields)
+            queryset = apply_projection(queryset, self.only_fields)
         if self.select_related:
             queryset = queryset.select_related(*self.select_related)
         if self.prefetch_related:
@@ -383,11 +387,13 @@ class OptimizationPlan:
         ``only_fields`` to their own queryset before handoff. Only resolver
         metadata and cacheability belong on the root plan, so this narrower
         operation keeps that ownership distinction explicit while sharing the
-        same centralized field handling as ``merge_from``.
+        same centralized field handling as ``merge_from``. Only the target
+        must be under construction: the child is read, never reopened, and a
+        child plan reaches this point already reconciled against its base
+        queryset (``diff_plan_for_queryset`` publishes a finalized copy).
         """
         self._assert_merge_field_inventory()
         self._assert_under_construction()
-        other._assert_under_construction()
         append_unique_many(cast("MutableSequence[str]", self.fk_id_elisions), other.fk_id_elisions)
         append_unique_many(
             cast("MutableSequence[str]", self.planned_resolver_keys),
@@ -630,8 +636,8 @@ def deferred_loading_of(queryset: object) -> tuple[frozenset[str], bool] | None:
     where ``defer_flag is False`` means ``.only()`` was applied (Django's
     "load only this set" mode) and ``defer_flag is True`` is the default
     ``.defer()``-or-nothing mode. Every consumer builds on this one unpack
-    (``_consumer_only_fields``, ``_consumer_projection``, the lateral
-    backend's projection read) so a future Django rename has one fix.
+    (``_consumer_projection``, the lateral backend's projection read) so a
+    future Django rename has one fix.
 
     Returns ``None`` when the state is unreadable: the attribute is missing
     (a non-QuerySet input, e.g. a test double) or the tuple shape is
@@ -648,23 +654,75 @@ def deferred_loading_of(queryset: object) -> tuple[frozenset[str], bool] | None:
         return None
 
 
-def _consumer_only_fields(queryset: object) -> frozenset[str] | None:
-    """Return the consumer-applied ``.only()`` field set, or ``None``.
+def _projection_aliases(entry: str, model: type[models.Model] | None) -> set[str]:
+    """Every spelling of one projection entry: the field name and its attname at that level.
 
-    Returns the non-empty only-set when the consumer applied ``.only()``;
-    returns ``None`` otherwise (no ``.only()`` applied, ``.defer()`` mode,
-    or the deferred-loading state is unreadable - see
-    ``deferred_loading_of``). The wildcard ``.only()`` with no args is not a
-    meaningful consumer projection (Django collapses it to the default empty
-    set in defer mode) and is handled implicitly by the non-empty check.
+    ``shelf`` and ``shelf_id`` name the same column of a ``Book`` row, and Django
+    accepts either in ``.only()`` / ``.defer()``; a dotted entry (``shelf__branch``)
+    is resolved along its path. An unresolvable entry aliases only itself.
     """
-    loading = deferred_loading_of(queryset)
+    aliases = {entry}
+    head, sep, last = entry.rpartition("__")
+    current = model
+    for segment in head.split("__") if head else ():
+        if current is None:
+            break
+        try:
+            current = getattr(current._meta.get_field(segment), "related_model", None)
+        except FieldDoesNotExist:
+            current = None
+    if current is None:
+        return aliases
+    try:
+        field_obj = current._meta.get_field(last)
+    except FieldDoesNotExist:
+        return aliases
+    for spelling in (getattr(field_obj, "name", None), getattr(field_obj, "attname", None)):
+        if spelling:
+            aliases.add(f"{head}{sep}{spelling}")
+    return aliases
+
+
+def _entry_loaded_by(
+    entry: str,
+    projection: frozenset[str],
+    model: type[models.Model] | None,
+) -> bool:
+    """Whether ``projection`` (an ``.only()`` set) loads the column ``entry`` names."""
+    return any(
+        alias in projection or any(name.startswith(f"{alias}__") for name in projection)
+        for alias in _projection_aliases(entry, model)
+    )
+
+
+def merged_projection(queryset: object, names: Sequence[str]) -> tuple[list[str], bool]:
+    """Union the queryset's own projection with ``names`` as loaded column sets.
+
+    Returns ``(entries, defer_mode)``: the entries to write with ``.only()``
+    (``defer_mode=False``) or ``.defer()`` (``defer_mode=True``). Neither side's
+    entries are dropped:
+
+    - no projection on the queryset: ``names`` as given;
+    - a consumer ``.only(C)``: ``names`` first (plan order), then ``C``'s extra
+      entries in sorted order - Django's ``.only()`` chaining REPLACES the set, so
+      the union has to be spelled out;
+    - a consumer ``.defer(D)``: the consumer loads every column but ``D``, so the
+      union defers ``D`` minus whatever ``names`` reads (name or attname spelling,
+      or a dotted entry under it).
+    """
+    entries = list(dict.fromkeys(names))
+    loading = _consumer_projection(queryset)
     if loading is None:
-        return None
-    field_set, defer_flag = loading
-    if defer_flag or not field_set:
-        return None
-    return field_set
+        return entries, False
+    existing, defer_flag = loading
+    if not defer_flag:
+        append_unique_many(entries, sorted(existing))
+        return entries, False
+    projection = frozenset(entries)
+    model = getattr(queryset, "model", None)
+    return [
+        entry for entry in sorted(existing) if not _entry_loaded_by(entry, projection, model)
+    ], True
 
 
 def prune_unsupportable_select_related(
@@ -687,18 +745,22 @@ def prune_unsupportable_select_related(
     which can never outlive its prefix here because traversability fails at
     the same segment) leave ``planned_resolver_keys``, so strictness sees
     the relation's per-row lazy loads instead of trusting a directive that
-    was never applied. Under a ``defer()`` projection the plan's nested
-    ``only_fields`` entries below a dropped path are removed too (they are
-    only valid alongside the ``select_related`` join); under ``.only()``
-    the existing consumer-wins rule in ``diff_plan_for_queryset`` already
-    drops ``only_fields`` wholesale.
+    was never applied.
 
-    Returns ``plan`` unchanged (same object) when the consumer has no
-    projection or every path survives - the overwhelmingly common shape.
+    Only a plan with no projection of its own reaches the prune (a non-``QUERY``
+    operation, whose G2 gate leaves ``only_fields`` empty): it applies
+    ``select_related`` straight over the consumer's ``.only()`` / ``.defer()``.
+    A projected plan is written as the union with the consumer's projection,
+    every join connector loaded (``apply_projection``), so its paths always
+    traverse.
+
+    Returns ``plan`` unchanged (same object) when the plan is projected, the
+    consumer has no projection, or every path survives - the overwhelmingly
+    common shape.
     Never mutates: the pruned plan is a finalized ``replace`` copy, so B1's
     cached plan stays intact.
     """
-    if not plan.select_related:
+    if not plan.select_related or plan.only_fields:
         return plan
     projection = _consumer_projection(queryset)
     if projection is None:
@@ -715,7 +777,6 @@ def prune_unsupportable_select_related(
     dropped_keys: set[str] = set()
     for path in unsupported:
         dropped_keys.update(plan.select_path_resolver_keys.get(path, ()))
-    dropped_prefixes = tuple(f"{path}__" for path in unsupported)
     new_select_path_keys = {
         path: keys
         for path, keys in plan.select_path_resolver_keys.items()
@@ -725,7 +786,6 @@ def prune_unsupportable_select_related(
         plan,
         select_related=[p for p in plan.select_related if p not in unsupported],
         planned_resolver_keys=[k for k in plan.planned_resolver_keys if k not in dropped_keys],
-        only_fields=[f for f in plan.only_fields if not f.startswith(dropped_prefixes)],
         select_path_resolver_keys=new_select_path_keys,
     ).finalize()
 
@@ -735,9 +795,9 @@ def _consumer_projection(queryset: object) -> tuple[frozenset[str], bool] | None
 
     ``None`` when the consumer restricted nothing (the default
     ``(frozenset(), True)`` state, or an unreadable deferred-loading state -
-    see ``deferred_loading_of``). Unlike ``_consumer_only_fields`` this keeps
-    ``defer()`` projections too: ``defer("category")`` blocks
-    ``select_related`` traversal exactly like an omitting ``.only(...)`` does.
+    see ``deferred_loading_of``). Both modes count: ``defer("category")``
+    blocks ``select_related`` traversal exactly like an omitting ``.only(...)``
+    does.
     """
     loading = deferred_loading_of(queryset)
     if loading is None:
@@ -826,28 +886,83 @@ def _select_path_missing_connectors(
     return tuple(missing)
 
 
-def only_through_joins(queryset: QuerySet[_M], names: Sequence[str]) -> QuerySet[_M]:
-    """Apply ``.only(*names)`` without deferring a column one of the queryset's JOINs traverses.
+def apply_projection(queryset: QuerySet[_M], names: Sequence[str]) -> QuerySet[_M]:
+    """Project ``names`` onto ``queryset`` without shrinking what it already loads or traverses.
 
-    A ``select_related`` already on the queryset (a ``get_queryset`` hook, a
-    root resolver, a ``Prefetch`` child) names paths the selection may never
-    read, and ``.only(*names)`` alone would defer their connector columns,
-    which Django rejects at compile time (``Field X cannot be both deferred and
-    traversed using select_related``). Every joined path is walked under the
-    projection (``_select_path_missing_connectors``) and the connectors it still
-    needs ride along: the JOIN stays and loads its related row whole, while the
-    queryset's own columns stay narrow. A path the walk cannot resolve is left
-    to Django: a ``FilteredRelation`` alias is never a deferred field (its
-    select mask is keyed by alias), and an unknown name fails Django's own
-    ``select_related`` validation.
+    The one projection writer for a plan (``OptimizationPlan.apply``, root and
+    every ``Prefetch`` child) and for a scalar-only connection window. Three
+    things the queryset already carries (from a ``get_queryset`` hook, a root
+    resolver, a default manager) are reconciled with ``names``:
+
+    - its ``.only()`` / ``.defer()``: the loaded set becomes the UNION of what it
+      loads and what ``names`` reads (``merged_projection``). Django's ``.only()``
+      chaining replaces the set, so a plain ``.only(*names)`` would drop the
+      queryset's columns, and leaving its set in place would lazy-load every
+      selected column once per row;
+    - every ``select_related`` path: the connectors each path still needs ride
+      along (``_select_path_missing_connectors``), since a deferred connector
+      under a JOIN is a compile-time ``FieldError``;
+    - every ``prefetch_related`` lookup: the link columns Django reads on each
+      source row to attach the prefetched rows (``_prefetch_carrier_attnames``),
+      otherwise the attach refetches them one row at a time.
+
+    Under a ``.defer()`` both other points already hold: the queryset's own
+    joins and prefetches are valid over its own deferral, and every column
+    ``names`` reads - the plan's join connectors and prefetch carriers included -
+    is subtracted from it. A path the walk cannot resolve is left to Django: a
+    ``FilteredRelation`` alias is never a deferred field (its select mask is
+    keyed by alias), and an unknown name fails Django's own ``select_related``
+    validation.
     """
-    projection = frozenset(names)
+    entries, defer_mode = merged_projection(queryset, names)
+    if defer_mode:
+        cleared = queryset.defer(None)
+        return cleared.defer(*entries) if entries else cleared
+    model = queryset.model
+    projection = frozenset(entries)
     extras: list[str] = []
     for path in sorted(_flatten_select_related(queryset.query.select_related)):
-        missing = _select_path_missing_connectors(path, projection, False, queryset.model)
+        missing = _select_path_missing_connectors(path, projection, False, model)
         if missing is not None:
             append_unique_many(extras, missing)
-    return queryset.only(*names, *extras)
+    for attname in _prefetch_carrier_attnames(queryset):
+        if not _entry_loaded_by(attname, projection, model):
+            append_unique(extras, attname)
+    return queryset.only(*entries, *extras)
+
+
+def _prefetch_carrier_attnames(queryset: QuerySet[_M]) -> list[str]:
+    """Source-row link columns of every ``prefetch_related`` lookup the queryset carries.
+
+    Each lookup's first segment names the field Django reaches on the instance
+    (``utils/relations.py::instance_accessor``: a forward field by name, a
+    reverse relation by its accessor, ``book_set`` for one without
+    ``related_name``). Its link columns are the ones Django's attach reads on
+    each source row: a relation's ``FieldMeta.source_link_attnames``, and a
+    ``GenericForeignKey``'s content-type and object-id columns. Deeper segments
+    attach on related rows the consumer's own lookup loads whole. An
+    unresolvable segment contributes nothing.
+    """
+    model = queryset.model
+    attnames: list[str] = []
+    for entry in _consumer_prefetch_lookups(queryset):
+        # A ``Prefetch`` walks ``prefetch_through``; a string is its own path.
+        first = cast("str", getattr(entry, "prefetch_through", entry)).split("__", 1)[0]
+        for field_obj in model._meta.get_fields():
+            if instance_accessor(field_obj) != first:
+                continue
+            # A ``GenericForeignKey`` (duck-typed, as everywhere in the package)
+            # links through its content-type key and its object-id column.
+            ct_field: object = getattr(field_obj, "ct_field", None)
+            fk_field: object = getattr(field_obj, "fk_field", None)
+            if isinstance(ct_field, str) and isinstance(fk_field, str):
+                append_unique_many(attnames, [f"{ct_field}_id", fk_field])
+            else:
+                append_unique_many(
+                    attnames,
+                    FieldMeta.from_django_field(field_obj).source_link_attnames,
+                )
+    return attnames
 
 
 def _optimizer_can_absorb(
@@ -1389,19 +1504,11 @@ def diff_plan_for_queryset(
     are dropped from the plan; the wildcard form (``True``) is treated
     as no overlap so explicit nullable-FK entries still apply.
 
-    ``only_fields`` - dropped entirely when the consumer already
-    applied ``.only(...)`` to the queryset (detected via
-    ``query.deferred_loading`` with ``defer_flag is False`` and a
-    non-empty field set). Django's ``QuerySet.only(...).only(...)``
-    chaining *replaces* the previous deferred-field set rather than
-    merging, so applying the optimizer's ``only_fields`` on top of a
-    consumer ``.only()`` would silently drop the consumer's projection
-    - including columns the consumer may have restricted to enforce a
-    permission boundary. The conservative consumer-wins choice is to
-    drop the optimizer's ``only_fields`` whenever the consumer has
-    already restricted columns; ``.defer(...)`` is not treated as a
-    consumer projection because ``.defer()`` and ``.only()`` compose
-    cleanly in Django.
+    ``only_fields`` - never diffed. A consumer ``.only(...)`` / ``.defer(...)``
+    is reconciled where the projection is written
+    (``apply_projection`` -> ``merged_projection``): the applied
+    queryset loads the union of the consumer's columns and the
+    selection's, so neither side's columns lazy-load per row.
 
     ``prefetch_related`` - compared by ``prefetch_to`` with ancestry
     awareness. For each optimizer entry we gather the consumer entries
@@ -1434,9 +1541,6 @@ def diff_plan_for_queryset(
         plan.prefetch_related,
         queryset,
     )
-    drop_only_fields = bool(plan.only_fields) and _consumer_only_fields(queryset) is not None
-    new_only_fields: Sequence[str] = () if drop_only_fields else plan.only_fields
-
     # Consumer-wins (and other) prefetch drops: strip the planned resolver
     # keys that were only satisfied by the dropped optimizer Prefetch
     # (including nested planned keys absorbed from its child plan). Without
@@ -1456,7 +1560,6 @@ def diff_plan_for_queryset(
         len(new_select) == len(plan.select_related)
         and len(new_prefetch) == len(plan.prefetch_related)
         and new_queryset is queryset
-        and not drop_only_fields
         and not dropped_keys
     ):
         return plan, queryset
@@ -1470,7 +1573,6 @@ def diff_plan_for_queryset(
             plan,
             select_related=new_select,
             prefetch_related=new_prefetch,
-            only_fields=new_only_fields,
             planned_resolver_keys=new_planned,
             prefetch_path_resolver_keys=new_prefetch_path_keys,
         ).finalize(),

@@ -1114,10 +1114,11 @@ class Query:
         """Dogfood: consumer ``.only()`` vs a planned ``select_related``.
 
         ``PatronType`` has NO visibility hook, so selecting ``patron`` under
-        this field plans a real ``select_related("patron")`` - which Django
-        refuses to apply over the ``.only("barcode")`` projection (a field
-        cannot be both deferred and traversed). The relation-aware prune
-        must drop the path (and its strictness metadata) live. Pinned in
+        this field plans a real ``select_related("patron")``, which Django
+        refuses over the bare ``.only("barcode")`` projection (a field cannot
+        be both deferred and traversed). The optimizer writes the union of
+        ``barcode``, the selection's columns and the join's ``patron_id``, so
+        the JOIN stands and the page is one query. Pinned in
         ``test_query/test_library_api.py``
         (``test_library_card_projection_survives_select_related_relation``).
         """
@@ -1128,10 +1129,9 @@ class Query:
         """Dogfood, defer flavor: ``.defer("patron")`` blocks the same join.
 
         Django raises the same deferred-and-traversed ``FieldError`` for a
-        ``defer()`` projection, and the prune's defer-mode rules (exact
-        entries defer; everything else stays loaded) must drop the planned
-        ``select_related("patron")`` live. Pinned in
-        ``test_query/test_library_api.py``
+        ``defer()`` projection. The selection reads ``patron``, so the
+        optimizer stops deferring it and the planned ``select_related("patron")``
+        stands. Pinned in ``test_query/test_library_api.py``
         (``test_library_card_deferred_projection_survives_select_related``).
         """
         return models.MembershipCard.objects.order_by("id").defer("patron")

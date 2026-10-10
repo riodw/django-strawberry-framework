@@ -1300,10 +1300,12 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         # B8 pre-publish prune: a consumer projection - an ``.only`` or
         # ``.defer`` call on the returned queryset - can make a planned
         # ``select_related`` path Django-invalid (a field cannot be both
-        # deferred and traversed). The prune drops those paths AND their
-        # resolver keys so strictness accounts for the relation as the
+        # deferred and traversed) when the plan writes no projection of its
+        # own (a non-``QUERY`` operation; a projected plan is written as the
+        # union and loads every connector). The prune drops those paths AND
+        # their resolver keys so strictness accounts for the relation as the
         # per-row fallback it now is. Same-object return on the common
-        # no-projection shape; the cached plan is never mutated.
+        # shapes; the cached plan is never mutated.
         plan = prune_unsupportable_select_related(plan, queryset)
         # B8: reconcile against consumer queryset optimizations BEFORE
         # publishing sentinels. Consumer-wins prefetch drops must strip

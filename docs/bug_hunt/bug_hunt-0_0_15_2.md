@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 38 done, 46 to do.
+Progress: 39 done, 45 to do.
 
 ## Done
 
@@ -65,6 +65,9 @@ Progress: 38 done, 46 to do.
   `.only()`. Both now load the union under a `QUERY` operation; a hook's `prefetch_related` no longer collides with the
   planned `Prefetch`, and `{ allLibraryPatrons { name card { __typename } } }` no longer hits the masked FieldError shipped
   since 0.0.7 (`548059b3`)
+- [x] 42. `auto_camel_case=False` keeps every generated input camelCase (82 mutation, 3,487 filter, 124 order fields) while
+  Strawberry-owned names follow it; FieldError keys still match the published names. Not a defect under rule 37 (no shipped doc
+  says inputs follow the converter): Rio's 2026-09-25 decision already homes it on `TODO-BETA-077-0.1.7`, no code
 
 ## To do: t3 robustness rows
 
@@ -86,7 +89,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## To do: found along the way
 
-- [ ] 42. `auto_camel_case=False` still produces camelCase mutation inputs (unverified)
 - [ ] 43. `ListField(child=ChoiceField(...))` shows up as `String`, not an enum
 - [ ] 44. `IntegerField(choices, blank=True, null=False)` in a ModelForm mutation: optional startup check
 - [ ] 45. Postgres: plain `ChoiceField` over an `ArrayField` builds, then the save fails

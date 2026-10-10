@@ -329,12 +329,16 @@ class OptimizationPlan:
 
         A ``select_related`` the queryset already carries on a path this plan
         prefetches is released first (``_release_select_related_to_prefetches``),
-        so each planned ``Prefetch`` is the only source of its rows.
+        so each planned ``Prefetch`` is the only source of its rows. Every
+        other ``select_related`` it carries stays: ``only_through_joins`` adds
+        the connector each of those joins traverses to the ``.only()``, on the
+        queryset alone, so the cached plan's ``only_fields`` stay exactly what
+        the selection reads.
         """
         if self.prefetch_related:
             queryset = _release_select_related_to_prefetches(queryset, self.prefetch_related)
         if self.only_fields:
-            queryset = queryset.only(*self.only_fields)
+            queryset = only_through_joins(queryset, self.only_fields)
         if self.select_related:
             queryset = queryset.select_related(*self.select_related)
         if self.prefetch_related:
@@ -752,31 +756,55 @@ def _select_path_traversable(
 ) -> bool:
     """Whether ``select_related(path)`` is Django-valid under the projection.
 
+    ``True`` exactly when ``_select_path_missing_connectors`` finds nothing to
+    add: the path is resolvable and every connector it traverses is loaded.
+    Unresolvable segments (no model, unknown field) read as not traversable -
+    conservatively dropping the path costs a fallback query, never a
+    ``FieldError``.
+    """
+    return _select_path_missing_connectors(path, names, defer_mode, model) == ()
+
+
+def _select_path_missing_connectors(
+    path: str,
+    names: frozenset[str],
+    defer_mode: bool,
+    model: type[models.Model] | None,
+) -> tuple[str, ...] | None:
+    """The projection entries ``select_related(path)`` still needs, or ``None``.
+
     Walks the path one relation segment at a time, mirroring Django's
     deferred-loading rule at each level (pinned empirically; the error is
     ``Field X cannot be both deferred and traversed using select_related``):
 
     - ``defer()`` mode: a segment is blocked when the projection defers it
-      at that level (by field name or attname).
+      at that level (by field name or attname). A blocked segment cannot be
+      repaired by adding a name, so the result is ``None``.
     - ``.only()`` mode: a level is RESTRICTED when the projection names any
       column at it; a restricted level loads a segment only when some entry
       leads with the segment's name or attname (a dotted entry like
       ``"category__code"`` loads its connector). An unrestricted deeper
-      level (no entries under the prefix) loads every column.
+      level (no entries under the prefix) loads every column. A restricted
+      level missing its connector contributes the connector's ``.only()``
+      entry: the FK column (attname) for a forward relation, which Django's
+      select mask reads as the relation itself and so loads the whole
+      related row - what the JOIN's author asked for - or the relation name
+      for a reverse one-to-one, which has no column.
 
-    Unresolvable segments (no model, unknown field) return ``False`` -
-    conservatively dropping the path costs a fallback query, never a
-    ``FieldError``.
+    ``()`` means the path is traversable as-is. ``None`` means unresolvable
+    (no model, unknown field - a ``FilteredRelation`` alias, say) or blocked
+    by a ``defer()``.
     """
     current_model = model
     prefix = ""
+    missing: list[str] = []
     for segment in path.split("__"):
         if current_model is None:
-            return False
+            return None
         try:
             field_obj = current_model._meta.get_field(segment)
         except FieldDoesNotExist:
-            return False
+            return None
         aliases = {segment}
         attname: str | None = getattr(field_obj, "attname", None)
         if attname:
@@ -790,12 +818,36 @@ def _select_path_traversable(
             # A dotted defer entry ("shelf__branch") defers a column at a
             # DEEPER level; only an exact entry at this level blocks it.
             if aliases & {entry for entry in scoped if "__" not in entry}:
-                return False
+                return None
         elif scoped and not (aliases & {entry.split("__", 1)[0] for entry in scoped}):
-            return False
+            missing.append(f"{prefix}{attname or segment}")
         prefix = f"{prefix}{segment}__"
         current_model = getattr(field_obj, "related_model", None)
-    return True
+    return tuple(missing)
+
+
+def only_through_joins(queryset: QuerySet[_M], names: Sequence[str]) -> QuerySet[_M]:
+    """Apply ``.only(*names)`` without deferring a column one of the queryset's JOINs traverses.
+
+    A ``select_related`` already on the queryset (a ``get_queryset`` hook, a
+    root resolver, a ``Prefetch`` child) names paths the selection may never
+    read, and ``.only(*names)`` alone would defer their connector columns,
+    which Django rejects at compile time (``Field X cannot be both deferred and
+    traversed using select_related``). Every joined path is walked under the
+    projection (``_select_path_missing_connectors``) and the connectors it still
+    needs ride along: the JOIN stays and loads its related row whole, while the
+    queryset's own columns stay narrow. A path the walk cannot resolve is left
+    to Django: a ``FilteredRelation`` alias is never a deferred field (its
+    select mask is keyed by alias), and an unknown name fails Django's own
+    ``select_related`` validation.
+    """
+    projection = frozenset(names)
+    extras: list[str] = []
+    for path in sorted(_flatten_select_related(queryset.query.select_related)):
+        missing = _select_path_missing_connectors(path, projection, False, queryset.model)
+        if missing is not None:
+            append_unique_many(extras, missing)
+    return queryset.only(*names, *extras)
 
 
 def _optimizer_can_absorb(

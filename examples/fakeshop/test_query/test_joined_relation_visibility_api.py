@@ -13,8 +13,12 @@ resolver the unscoped row the hook excludes. These rows pin that the planned
 depth two (``select_related("item__category")`` beside a planned
 ``Prefetch("item")`` whose child plans ``Prefetch("category")``), each for an
 anonymous viewer the hook refuses and a staff viewer it admits, over sync and
-async requests.
+async requests. A JOIN a hook adds that the selection never reads stays: its
+connector rides the ``.only()`` at the root, on a planned ``Prefetch`` child, and on
+a scalar-only nested connection window.
 """
+
+from collections.abc import Callable
 
 import pytest
 import strawberry
@@ -369,3 +373,142 @@ async def test_async_hook_join_does_not_serve_the_planned_targets_hidden_row(que
         _CURRENT["schema"] = None
     assert response.status_code == 200
     _assert_refused(response.json(), _HOLDER_REFUSAL, hidden_name)
+
+
+def _root_rows(item: Item, entry: Entry) -> JSONObject:
+    return {"items": [{"name": item.name}]}
+
+
+def _planned_child_rows(item: Item, entry: Entry) -> JSONObject:
+    return {"entries": [{"value": entry.value, "item": {"name": item.name}}]}
+
+
+#: The hook JOINs ``category``, which neither selection reads: the root ``items``
+#: list, and the planned ``item`` child under ``entries``. Each row is the query,
+#: the expected data, and the index of the statement that carries the JOIN.
+_UNREAD_HOOK_JOINS = [
+    pytest.param("{ items { name } }", _root_rows, 0, id="root"),
+    pytest.param(
+        "{ entries { value item { name } } }",
+        _planned_child_rows,
+        1,
+        id="planned-child",
+    ),
+]
+
+
+@pytest.mark.parametrize(("query", "expected", "statement"), _UNREAD_HOOK_JOINS)
+def test_hook_join_the_selection_never_reads_survives_the_projection(
+    db: None,
+    query: str,
+    expected: Callable[[Item, Entry], JSONObject],
+    statement: int,
+) -> None:
+    """The hook's JOIN stays: the ``.only()`` loads the ``category`` connector, one statement per level."""
+    services.seed_data(1)
+    item, entry = _hide_one_items_category()
+
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post(_holder_schema(item.pk, entry.pk), query)
+
+    assert payload == {"data": expected(item, entry)}
+    assert len(captured) == statement + 1
+    assert "products_category" in captured[statement]["sql"]
+
+
+def _hooked_entries_schema(item_pk: int) -> strawberry.Schema:
+    """Holder whose ``entries`` connection child type's hook JOINs ``property``."""
+
+    def join_property(
+        cls: type[DjangoType],
+        queryset: QuerySet[Entry],
+        info: strawberry.Info[object, object],
+    ) -> QuerySet[Entry]:
+        return queryset.select_related("property")
+
+    registry.clear()
+    make_django_type(
+        "HookedEntryType",
+        Entry,
+        ("id", "value"),
+        namespace_extra={"get_queryset": classmethod(join_property)},
+    )
+    item_type = make_django_type(
+        "HookedItemType",
+        Item,
+        ("id", "name", "entries"),
+        meta_extra={"relation_shapes": {"entries": "connection"}},
+    )
+    finalize_django_types()
+
+    def resolve_items(_root: object, _info: object) -> QuerySet[Item]:
+        return Item.objects.filter(pk=item_pk)
+
+    query = strawberry.type(
+        type(
+            "Query",
+            (),
+            {
+                "__annotations__": {"items": list[item_type]},
+                "items": DjangoListField(item_type, resolver=resolve_items),
+            },
+        ),
+    )
+    optimizer = DjangoOptimizerExtension()
+    return strawberry.Schema(
+        query=query,
+        extensions=[lambda: optimizer],
+        config=strawberry_config(),
+    )
+
+
+def test_hook_join_survives_a_scalar_only_connection_window(db: None) -> None:
+    """A ``pageInfo``-only window projects pk and connector columns and keeps the hook's JOIN."""
+    services.seed_data(1)
+    item = Item.objects.order_by("pk").first()
+    assert item is not None
+
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post(
+            _hooked_entries_schema(item.pk),
+            "{ items { name entriesConnection { pageInfo { hasNextPage } } } }",
+        )
+
+    assert payload == {
+        "data": {
+            "items": [
+                {"name": item.name, "entriesConnection": {"pageInfo": {"hasNextPage": False}}},
+            ],
+        },
+    }
+    assert len(captured) == 2
+    assert "products_property" in captured[1]["sql"]
+
+
+def _unread_hook_join_rows() -> tuple[strawberry.Schema, Item, Entry]:
+    services.seed_data(1)
+    item, entry = _hide_one_items_category()
+    return _holder_schema(item.pk, entry.pk), item, entry
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(("query", "expected", "statement"), _UNREAD_HOOK_JOINS)
+async def test_async_hook_join_the_selection_never_reads_survives_the_projection(
+    query: str,
+    expected: Callable[[Item, Entry], JSONObject],
+    statement: int,
+) -> None:
+    """The same unread hook JOIN, at the root and in the planned child, on an async request."""
+    schema, item, entry = await sync_to_async(_unread_hook_join_rows)()
+    _CURRENT["schema"] = schema
+    try:
+        with override_settings(ROOT_URLCONF=__name__):
+            res = await AsyncTestClient().query(
+                query,
+                assert_no_errors=False,
+                url="/graphql-async/",
+            )
+    finally:
+        _CURRENT["schema"] = None
+    assert res.response.status_code == 200
+    assert res.response.json() == {"data": expected(item, entry)}

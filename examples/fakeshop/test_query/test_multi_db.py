@@ -888,20 +888,7 @@ def test_cross_shard_isolation_default_rows_not_visible_via_shard_b_resolver(
     _seed_book_chain("default", title="default-only")
     _seed_book_chain("shard_b", title="shard-b-only")
 
-    # Query selects the full select_related("shelf__branch") chain so the
-    # optimizer's `.only(...)` projection is compatible with the resolver's
-    # pinned select_related shape (Django raises FieldError when a field is
-    # both deferred and traversed via select_related). Pinning only `title`
-    # would conflict with the resolver shape ``_build_test_schema`` pins
-    # (spec-023 #"return models.Book.objects.using(\"shard_b\").select_related(\"shelf__branch\")").
-    query = """
-      query {
-        booksOnShardB {
-          title
-          shelf { code branch { name } }
-        }
-      }
-    """
+    query = "{ booksOnShardB { title } }"
 
     client = Client()
     with override_settings(ROOT_URLCONF=__name__):

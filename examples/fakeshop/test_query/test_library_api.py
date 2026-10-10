@@ -13261,6 +13261,81 @@ def test_library_card_deferred_projection_survives_select_related():
     assert "library_patron" not in captured[0]["sql"]
 
 
+#: A consumer ``select_related`` the selection reads none (or only the first hop) of:
+#: query, expected rows, a non-key column of the joined row, and the request's query count.
+_UNREAD_CONSUMER_JOINS = [
+    pytest.param(
+        "{ allLibraryPrefetchedBooks { title } }",
+        {"allLibraryPrefetchedBooks": [{"title": "Kindred"}]},
+        '"library_shelf"."code"',
+        2,
+        id="forward-fk",
+    ),
+    pytest.param(
+        "{ allLibraryCardedPatrons { name } }",
+        {"allLibraryCardedPatrons": [{"name": "Ada"}, {"name": "Grace"}]},
+        '"library_membershipcard"."barcode"',
+        1,
+        id="reverse-one-to-one",
+    ),
+    pytest.param(
+        "{ allLibraryPublishedPrintings { runSize edition { imprint } } }",
+        {"allLibraryPublishedPrintings": [{"runSize": 500, "edition": {"imprint": "Beacon"}}]},
+        '"library_publisher"."name"',
+        1,
+        id="second-hop",
+    ),
+    pytest.param(
+        "{ allLibraryPatronLoans { note patron { name } } }",
+        {"allLibraryPatronLoans": [{"note": "first checkout", "patron": {"name": "Ada"}}]},
+        '"library_patron"."name"',
+        1,
+        id="skip-hinted-relation",
+    ),
+]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    (
+        "query",
+        "data",
+        "joined_column",
+        "query_count",
+    ),
+    _UNREAD_CONSUMER_JOINS,
+)
+def test_library_consumer_join_survives_the_optimizers_projection(
+    query: str,
+    data: JSONObject,
+    joined_column: str,
+    query_count: int,
+):
+    """A consumer JOIN the selection never reads keeps its row: the ``.only()`` loads the connector.
+
+    The optimizer's ``.only()`` follows the selection, so on its own it would defer
+    the column each consumer ``select_related`` traverses, which Django refuses to
+    compile. The JOIN stays in the root statement, selecting the related row whole
+    rather than its key alone, and no relation is read per row.
+    """
+    _seed_library_graph()
+    publisher = models.Publisher.objects.create(name="Beacon Press", house_code="BCN")
+    edition = models.Edition.objects.create(
+        isbn_13="9780807083697",
+        imprint="Beacon",
+        publisher=publisher,
+    )
+    models.Printing.objects.create(edition=edition, run_size=500)
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(query)
+
+    assert response.status_code == 200
+    assert response.json() == {"data": data}
+    assert len(captured) == query_count
+    assert joined_column in captured[0]["sql"]
+
+
 @pytest.mark.django_db
 def test_nested_connection_last_zero_serves_the_first_zero_page():
     """``last: 0`` live: every parent's page is ``first: 0``'s, from one window query.

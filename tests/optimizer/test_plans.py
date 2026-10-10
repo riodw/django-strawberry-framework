@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 from apps.products.models import Category, Entry, Item, Property
-from django.db.models import Model, OrderBy, Prefetch, QuerySet
+from django.db.models import FilteredRelation, Model, OrderBy, Prefetch, Q, QuerySet
 
 from django_strawberry_framework.exceptions import OptimizerError
 from django_strawberry_framework.optimizer.plans import (
@@ -23,12 +23,14 @@ from django_strawberry_framework.optimizer.plans import (
     _consumer_only_fields,
     _flatten_select_related,
     _reverse_order_by,
+    _select_path_missing_connectors,
     apply_window_pagination,
     deterministic_order,
     diff_plan_for_queryset,
     effective_connection_order,
     ends_in_unique_column,
     lookup_paths,
+    only_through_joins,
     order_entry_has_explicit_nulls,
     resolver_key,
     runtime_path_from_path,
@@ -1501,3 +1503,38 @@ def test_consumer_projection_and_traversal_defensive_shapes():
     malformed = SimpleNamespace(query=SimpleNamespace(deferred_loading=("only-one",)))
     assert _consumer_projection(malformed) is None
     assert _select_path_traversable("title__upper", frozenset({"title"}), False, Book) is False
+
+
+@pytest.mark.parametrize(
+    (
+        "path",
+        "names",
+        "defer_mode",
+        "expected",
+    ),
+    [
+        pytest.param("item", {"value", "item_id"}, False, (), id="connector-loaded"),
+        pytest.param("bogus", {"value"}, False, None, id="unknown-segment"),
+        pytest.param("item", {"item"}, True, None, id="deferred-connector"),
+    ],
+)
+def test_select_path_missing_connectors(
+    path: str,
+    names: set[str],
+    defer_mode: bool,
+    expected: tuple[str, ...] | None,
+):
+    """The ``.only()`` entries a joined path still needs, or ``None`` when no entry can help."""
+    assert _select_path_missing_connectors(path, frozenset(names), defer_mode, Entry) == expected
+
+
+def test_only_through_joins_leaves_a_filtered_relation_join_alone():
+    """A ``FilteredRelation`` alias is no deferred field: the ``.only()`` applies as given."""
+    queryset = Entry.objects.annotate(
+        public_item=FilteredRelation("item", condition=Q(item__is_private=False)),
+    ).select_related("public_item")
+
+    applied = only_through_joins(queryset, ["value"])
+
+    assert applied.query.deferred_loading == (frozenset({"value"}), False)
+    assert "public_item" in str(applied.query)

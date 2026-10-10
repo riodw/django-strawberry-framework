@@ -1643,6 +1643,7 @@ The optimizer does not assume it owns the queryset. It reconciles framework-gene
 Cooperation rules:
 
 - **Queryset cooperation.** If your resolver already calls `select_related("category")`, the optimizer does not reapply it.
+- **Unread JOINs.** A named `select_related` path your queryset carries that the selection never reads, and that the optimizer does not prefetch, keeps its JOIN and loads its related row whole: the optimizer never defers a column such a JOIN traverses.
 - **Prefetch cooperation.** If your resolver returns `Category.objects.prefetch_related(Prefetch("items", queryset=...))`, the consumer `Prefetch` wins over less-specific automatic work.
 - **Subtree-aware reconciliation.** `prefetch_related("items", "items__entries")` cooperates with the optimizer's nested `Prefetch("items", ...)` instead of raising Django's "lookup already seen with a different queryset" error.
 - **Plain-string absorption.** Safe consumer string prefetches can be absorbed by richer optimizer `Prefetch` objects.

@@ -1136,6 +1136,25 @@ class Query:
         """
         return models.MembershipCard.objects.order_by("id").defer("patron")
 
+    @strawberry.field(graphql_type=list[PatronType])
+    def all_library_carded_patrons(self) -> QuerySet[models.Patron]:
+        """Dogfood: a consumer JOIN across the reverse one-to-one ``card``.
+
+        The optimizer's ``.only()`` keeps the JOIN whether or not the selection
+        reads ``card``. Pinned in ``test_query/test_library_api.py``.
+        """
+        return models.Patron.objects.select_related("card").order_by("id")
+
+    @strawberry.field(graphql_type=list[PrintingType])
+    def all_library_published_printings(self) -> QuerySet[models.Printing]:
+        """Dogfood: a two-hop consumer JOIN, ``edition`` then its ``publisher``."""
+        return models.Printing.objects.select_related("edition__publisher").order_by("id")
+
+    @strawberry.field(graphql_type=list[LoanType])
+    def all_library_patron_loans(self) -> QuerySet[models.Loan]:
+        """Dogfood: a consumer JOIN on ``patron``, which ``LoanType`` hints to skip."""
+        return models.Loan.objects.select_related("patron").order_by("id")
+
     @strawberry.field(graphql_type=list[ShelfType])
     def all_library_shelves(
         self,

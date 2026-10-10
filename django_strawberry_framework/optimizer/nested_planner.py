@@ -62,6 +62,7 @@ from .plans import (
     append_unique_many,
     deferred_loading_of,
     effective_connection_order,
+    only_through_joins,
     order_entry_has_explicit_nulls,
     order_entry_name_and_direction,
 )
@@ -727,7 +728,9 @@ def _project_scalar_only_window(
     identity), the relation connector column (Django's prefetch attach), and the
     concrete ordering columns the deterministic window order references
     (spec-033 Decision 4 / Decision 6 scalar-only contract). The ``_dst_*`` window annotations
-    compose with ``.only()`` (annotations, not deferred columns).
+    compose with ``.only()`` (annotations, not deferred columns). The projection is written
+    through ``only_through_joins``, so a JOIN the child type's hook added keeps the connector
+    it traverses.
 
     The G2 gate (spec-035 Decision 4): under a non-``QUERY`` operation this
     direct ``.only(...)`` is the projection-writer that never touches
@@ -750,7 +753,7 @@ def _project_scalar_only_window(
         append_unique(fields, column)
     for column in _concrete_order_columns(order_by, related_model):
         append_unique(fields, column)
-    return child_queryset.only(*fields)
+    return only_through_joins(child_queryset, fields)
 
 
 def _extend_only_projection(

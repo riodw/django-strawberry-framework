@@ -93,7 +93,6 @@ Spec text: [Decision 6][spec-023-d6]. The mechanism that makes `pytest.skip(...,
 - **In-process `execute_sync(...)`.** Rejected: it skips URL routing, the view, and the Django request pipeline that the live-HTTP rule names as the right tier.
 - **A module-level static schema built at import time.** Rejected: the autouse reload fixture clears the registry and reloads `apps.library.schema` before the tests run, so a static schema would reference `DjangoType` classes whose registry entries were cleared. The holder pattern defers schema construction until after the reload.
 - **Rebuild the schema inside each test body.** Rejected in favor of the per-test fixture, which is the same construction factored into one place; test bodies stay on the assertion.
-- **A `{ title }`-only isolation query.** Rejected: under the optimizer's `.only(...)` projection it produces `Book.objects.only("title", "shelf_id").select_related("shelf__branch")`, which Django rejects with `FieldError`. The full `shelf { code branch { name } }` selection keeps the resolver's `select_related` shape and moves the negative pin onto the returned title set.
 
 ## Decision 7 — The reload fixture comes from the shared `test_query` conftest
 

@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 34 done, 46 to do.
+Progress: 35 done, 46 to do.
 
 ## Done
 
@@ -50,6 +50,9 @@ Progress: 34 done, 46 to do.
   `resolve_nodes` defaults Strawberry's `relay.node()` reaches (`8d4f66bd`)
 - [x] 28. Deep dive 3 (authorization on deferred paths): findings 12 and 13 done; `VenueBadgeType` and `VenueSponsorType` now
   hide marked rows, and live rows prove none leaks through the no-`related_name` reverse accessors (`16a8c179`)
+- [x] 74. A consumer `select_related` the selection never reads made the optimizer's `.only()` defer the column the JOIN traverses
+  (masked "cannot be both deferred and traversed", even for `{ allLibraryPrefetchedBooks { title } }`); the `.only()` writers now load
+  each joined row whole: root, planned children, scalar-only nested windows, both one-to-one directions, second hops (`13de7c4c`)
 
 ## To do: t3 hunt findings
 
@@ -86,12 +89,13 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 50. SKIP hint drops relation columns from `.only()`, so every row is fetched again (unverified)
 - [ ] 51. `OrderSet` `"__all__"` leaves out `ForeignObject` fields (unverified)
 - [ ] 56. Two writable serializer fields can write the same FK column (`category` and `source="category_id"`)
-- [ ] 74. A consumer `select_related` on a forward FK the query never selects, combined with the optimizer's `.only()`, raises
-  Django's "cannot be both deferred and traversed" (`Entry.objects.select_related("property")` with `{ entries { value item { name } } }`)
 - [ ] 80. `_guard_source_not_pre_sliced` and three `_finalize_queryset` catches turn a consumer QuerySet or ordering fault into a
   deliberate `GraphQLError` naming the exception class: no `correlationId`, class name on the wire (robustness; no text leaks)
 - [ ] 81. `decode_offset_cursor` checks `relay.Edge.CURSOR_PREFIX`, not the connection's `edge_class.CURSOR_PREFIX`: a custom Edge
   prefix turns a foreign `arrayconnection:` cursor into a masked error instead of the cursor message (robustness, fails closed)
+- [ ] 83. A planned child's `.only()` replaces the `.only()` the child type's `get_queryset` hook applied, so the GLOSSARY "`only()`
+  cooperation" row holds at the root but not on planned children (`walker.py::_build_prefetch_child_queryset_from_base`; no crash,
+  wider or different columns; mirror `diff_plan_for_queryset`'s consumer-`.only()` rule)
 
 ## To do: holes found re-checking the fixes
 

@@ -1783,7 +1783,7 @@ def test_library_declared_model_choice_filter_validates_against_its_own_queryset
 
 @pytest.mark.django_db
 def test_library_declared_model_multiple_choice_filter_takes_a_list_of_pks_over_http():
-    """A declared ``ModelMultipleChoiceFilter`` takes a list and validates every member."""
+    """A declared ``ModelMultipleChoiceFilter`` takes a list, validates every member, skips ``[]``."""
     north, south, restricted = _seed_shelves_on_home_branches()
     query = """
     query ($pks: [Int!]) {
@@ -1799,6 +1799,12 @@ def test_library_declared_model_multiple_choice_filter_takes_a_list_of_pks_over_
         variables={"pks": [north.pk, south.pk]},
     )
     _assert_invalid_choice(query, {"pks": [north.pk, restricted.pk]}, "home_branches")
+    # A declared filter keeps django-filter's empty-value rule: ``[]`` applies no constraint.
+    _assert_graphql_data(
+        query,
+        {"allLibraryShelves": [{"code": "N-1"}, {"code": "S-1"}, {"code": "V-1"}]},
+        variables={"pks": []},
+    )
 
 
 @pytest.mark.django_db
@@ -14162,6 +14168,118 @@ def test_shelf_condition_exact_blank_matches_only_blank_shelves_over_http():
             ],
         },
         variables={"filter": {"topic": {"exact": ""}}},
+    )
+
+
+@pytest.mark.django_db
+def test_shelf_condition_explicit_empty_in_is_the_empty_set_over_http():
+    """``in: []`` on a generated choice ``in`` matches no rows: flat, nested and connection arg.
+
+    The answer Django gives ``filter(condition__in=[])``: the root list is empty, ``not``
+    of it is every visible shelf, ``or`` with a real arm is that arm, ``and`` with one is
+    empty, a nested ``shelves: { condition: { in: [] } }`` keeps no branch (``not`` of it
+    every branch), and a nested connection's own ``filter: { circulationStatus: { in: [] } }``
+    keeps no child. ``in: null`` applies no constraint on the flat leaf and on the
+    connection argument.
+    """
+    branch = models.Branch.objects.create(name="EmptyInBranch", city="Boston")
+    shelves = [
+        models.Shelf.objects.create(
+            code=code,
+            branch=branch,
+            topic="permanent collection",
+            condition=condition,
+        )
+        for code, condition in (("E-good", "good"), ("E-worn", "worn"))
+    ]
+    genre = models.Genre.objects.create(name="EmptyInGenre")
+    models.Book.objects.create(title="EmptyInBook", shelf=shelves[0]).genres.add(genre)
+
+    _assert_graphql_data(
+        """
+        query {
+          empty: allLibraryShelves(filter: { condition: { in: [] } }) { code }
+          negated: allLibraryShelves(filter: { not: { condition: { in: [] } } }) { code }
+          orValid: allLibraryShelves(
+            filter: { or: [{ condition: { in: [] } }, { condition: { in: [good] } }] }
+          ) { code }
+          andValid: allLibraryShelves(
+            filter: { and: [{ condition: { in: [] } }, { condition: { in: [good] } }] }
+          ) { code }
+          unconstrained: allLibraryShelves(filter: { condition: { in: null } }) { code }
+          nestedEmpty: allLibraryBranches(filter: { shelves: { condition: { in: [] } } }) { name }
+          nestedNegated: allLibraryBranches(
+            filter: { not: { shelves: { condition: { in: [] } } } }
+          ) { name }
+          connectionEmpty: allLibraryGenres {
+            booksConnection(filter: { circulationStatus: { in: [] } }) {
+              edges { node { title } }
+            }
+          }
+          connectionNull: allLibraryGenres {
+            booksConnection(filter: { circulationStatus: { in: null } }) {
+              edges { node { title } }
+            }
+          }
+        }
+        """,
+        {
+            "empty": [],
+            "negated": [{"code": "E-good"}, {"code": "E-worn"}],
+            "orValid": [{"code": "E-good"}],
+            "andValid": [],
+            "unconstrained": [{"code": "E-good"}, {"code": "E-worn"}],
+            "nestedEmpty": [],
+            "nestedNegated": [{"name": "EmptyInBranch"}],
+            "connectionEmpty": [{"booksConnection": {"edges": []}}],
+            "connectionNull": [
+                {"booksConnection": {"edges": [{"node": {"title": "EmptyInBook"}}]}},
+            ],
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_logical_arm_without_a_constraint_is_the_identity_over_http():
+    """An arm that constrains nothing (``{}``, or only ``null`` lookups) is Django's ``Q()``.
+
+    As ``exclude()`` and strawberry-django's ``NOT {}`` read it: ``not: {}`` and
+    ``not: { condition: { in: null } }`` keep every visible row, ``or: [{}, real]`` and
+    ``and: [{}, real]`` are the real arm, and a declared ``ModelMultipleChoiceFilter``
+    given ``[]`` (django-filter's no-constraint rule) is the same identity inside ``not``.
+    """
+    branch = models.Branch.objects.create(name="IdentityArmBranch", city="Boston")
+    for code, condition in (("I-good", "good"), ("I-worn", "worn")):
+        models.Shelf.objects.create(
+            code=code,
+            branch=branch,
+            topic="permanent collection",
+            condition=condition,
+        )
+
+    _assert_graphql_data(
+        """
+        query {
+          notEmpty: allLibraryShelves(filter: { not: {} }) { code }
+          notNull: allLibraryShelves(filter: { not: { condition: { in: null } } }) { code }
+          orEmpty: allLibraryShelves(
+            filter: { or: [{}, { condition: { in: [good] } }] }
+          ) { code }
+          andEmpty: allLibraryShelves(
+            filter: { and: [{}, { condition: { in: [good] } }] }
+          ) { code }
+          notDeclaredEmpty: allLibraryShelves(
+            filter: { not: { homeBranches: { exact: [] } } }
+          ) { code }
+        }
+        """,
+        {
+            "notEmpty": [{"code": "I-good"}, {"code": "I-worn"}],
+            "notNull": [{"code": "I-good"}, {"code": "I-worn"}],
+            "orEmpty": [{"code": "I-good"}],
+            "andEmpty": [{"code": "I-good"}],
+            "notDeclaredEmpty": [{"code": "I-good"}, {"code": "I-worn"}],
+        },
     )
 
 

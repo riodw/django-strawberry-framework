@@ -14,7 +14,7 @@ delivers a non-list container to ``GlobalIDMultipleChoiceFilter``.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from typing import TypeVar
 
 import pytest
@@ -22,6 +22,7 @@ from apps.library import models
 from django.core.exceptions import ValidationError
 from django.db.models import Model, QuerySet
 from django.http import HttpRequest, QueryDict
+from django_filters import BaseInFilter, CharFilter
 from graphql import GraphQLError
 from strawberry import relay
 from typing_extensions import Self, override
@@ -48,6 +49,7 @@ from django_strawberry_framework.filters.base import (
     _GLOBALID_RELATION_PK_ATTR,
     IntegerInFilter,
     IntegerRangeFilter,
+    MembershipInFilter,
     RelationPkFilter,
     RelationPkMultipleFilter,
     _accepted_globalid_type_names,
@@ -55,6 +57,7 @@ from django_strawberry_framework.filters.base import (
     _decode_and_validate_global_id,
     _relation_uses_non_pk_to_field,
     _target_definition_for,
+    membership_in_filter_class,
     relation_identity_column,
     resolve_globalid_target_definition,
 )
@@ -283,12 +286,6 @@ def test_list_filter_returns_qs_none_on_empty_list():
     assert f.filter(qs, []) is qs.nothing
 
 
-def test_list_filter_returns_qs_when_excluding_on_empty_list():
-    qs = _RecordingQs()
-    f = ListFilter(field_name="ids", exclude=True)
-    assert f.filter(qs, []) is qs
-
-
 def test_list_filter_defers_to_super_for_nonempty_lists():
     qs = _RecordingQs()
 
@@ -300,7 +297,7 @@ def test_list_filter_defers_to_super_for_nonempty_lists():
 def test_list_filter_passes_through_none():
     """``None`` skips the list-shape gate entirely and falls through to
     ``Filter.filter``, which short-circuits on ``EMPTY_VALUES`` - the same
-    pass-through the sibling ``IntegerInFilter`` documents."""
+    omission pass-through the sibling ``MembershipInFilter`` documents."""
     sentinel = _RecordingQs()
     f = ListFilter(field_name="ids")
     assert f.filter(sentinel, None) is sentinel
@@ -382,6 +379,40 @@ def test_global_id_multiple_choice_field_distinguishes_absent_from_explicit_empt
     assert field.clean(explicit_empty) == []
 
 
+class _CharInFilter(BaseInFilter, CharFilter):
+    """django-filter's ``in`` shape over ``CharFilter`` (what ``filter_for_lookup`` builds)."""
+
+
+def test_membership_in_field_reads_a_raw_empty_string_as_omission():
+    """``?field__in=`` (django-filter's CSV ``""``) cleans to ``None``; a list stays a list.
+
+    Raw form data keeps django-filter's empty-value rule (no constraint) while the
+    GraphQL layer's explicit ``[]`` reaches ``MembershipInFilter.filter`` as the empty set.
+    """
+    field = membership_in_filter_class(_CharInFilter)(field_name="code", lookup_expr="in").field
+
+    raw_empty = field.widget.value_from_datadict(QueryDict("code__in="), {}, "code__in")
+    explicit_empty = field.widget.value_from_datadict({"code__in": []}, {}, "code__in")
+    absent = field.widget.value_from_datadict(QueryDict(), {}, "code__in")
+    csv = field.widget.value_from_datadict(QueryDict("code__in=a,b"), {}, "code__in")
+
+    assert field.clean(raw_empty) is None
+    assert field.clean(absent) is None
+    assert field.clean(explicit_empty) == []
+    assert field.clean(csv) == ["a", "b"]
+
+
+def test_membership_in_filter_class_wraps_a_new_class_per_call_and_rejects_a_scalar():
+    """A NEW class per call (django-filter's lifecycle) keeping the inner name; a scalar is coded."""
+    wrapped = membership_in_filter_class(_CharInFilter)
+    assert wrapped is not membership_in_filter_class(_CharInFilter)
+    assert wrapped.__name__ == "_CharInFilter"
+    assert wrapped.__mro__[1:3] == (MembershipInFilter, _CharInFilter)
+    with pytest.raises(GraphQLError) as exc_info:
+        wrapped(field_name="code", lookup_expr="in").filter(models.Shelf.objects.all(), "ab")
+    assert exc_info.value.extensions == {"code": "FILTER_INVALID"}
+
+
 def test_global_id_multiple_choice_field_omission_still_enforces_required():
     """Preserving ``None`` must not bypass Django's required-field validation."""
     field = GlobalIDMultipleChoiceFilter(field_name="id", required=True).field
@@ -420,20 +451,33 @@ def test_global_id_multiple_choice_filter_empty_exact_matches_nothing_like_list_
     assert list_filter.filter(qs, []) is qs.nothing
 
 
-def test_global_id_multiple_choice_filter_empty_excluded_in_matches_everything():
-    qs = _RecordingQs()
-    f = GlobalIDMultipleChoiceFilter(field_name="id", lookup_expr="in", exclude=True)
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "excluding",
+    [
+        lambda: ListFilter(field_name="code", exclude=True),
+        lambda: GlobalIDMultipleChoiceFilter(field_name="id", lookup_expr="in", exclude=True),
+        lambda: GlobalIDMultipleChoiceFilter(field_name="id", lookup_expr="exact", exclude=True),
+    ],
+    ids=["list-filter", "global-id-in", "global-id-exact"],
+)
+def test_excluded_empty_membership_matches_every_row_as_a_constraint(
+    excluding: Callable[[], Filter],
+):
+    """Exclude + empty membership is the complement of match-nothing: every row.
 
-    assert f.filter(qs, []) is qs
+    The rows come back on a new queryset, never the input by identity, which the
+    package reads as "applied no constraint".
+    """
+    branch = models.Branch.objects.create(name="Home", city="Boston")
+    models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
+    models.Shelf.objects.create(code="A-2", topic="general", branch=branch)
+    qs = models.Shelf.objects.order_by("code")
 
+    result = excluding().filter(qs, [])
 
-def test_global_id_multiple_choice_filter_empty_excluded_exact_matches_everything():
-    """Exclude + empty membership is the complement of match-nothing: every row."""
-
-    qs = _RecordingQs()
-    f = GlobalIDMultipleChoiceFilter(field_name="genres", lookup_expr="exact", exclude=True)
-
-    assert f.filter(qs, []) is qs
+    assert result is not qs
+    assert [shelf.code for shelf in result] == ["A-1", "A-2"]
 
 
 # ---------------------------------------------------------------------------

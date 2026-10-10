@@ -271,25 +271,51 @@ def test_filter_specimens_by_bigint_in_drops_past_64bit_members_no_overflow():
 
 
 @pytest.mark.django_db
-def test_filter_specimens_by_bigint_explicit_empty_in_is_noop_no_constraint():
-    """An EXPLICIT ``in: []`` (no membership values supplied) is a no-op, returning all rows.
+@pytest.mark.parametrize(
+    ("leaf", "valid"),
+    [
+        ("signedBig", "[7]"),
+        ("label", '["keep"]'),
+        ("occurredOn", '["2021-06-11"]'),
+        ("price", '["1.5000"]'),
+        ("externalId", '["00000000-0000-0000-0000-000000000007"]'),
+    ],
+)
+def test_filter_specimens_explicit_empty_in_is_the_empty_set_on_every_column(
+    leaf: str,
+    valid: str,
+):
+    """An explicit ``in: []`` is the empty set on every column type, as Django's ``x__in=[]``.
 
-    The deliberate counterpart to the all-out-of-range leg above: a client that supplies
-    NO membership values is not expressing a restrictive filter that lost its members, so
-    ``IntegerInFilter`` keeps django-filter's empty-value SKIP (no constraint) - distinct
-    from a non-empty list whose values all drop, which matches nothing. Pinning this
-    guards the ``in: []`` boundary the coercion fix deliberately preserves.
+    No rows; ``not`` of it every row; ``or`` with a real arm that arm, ``and`` with one no
+    rows; ``null`` stays the no-constraint form. The integer column's ``in`` drops
+    out-of-range members (``IntegerInFilter``) and keeps the same empty-set rule.
     """
-    _seed_specimen(label="keep", signed_big=7)
-    _seed_specimen(label="other", signed_big=1)
-
-    response = _post_graphql(
-        "query { allScalarSpecimens(filter: { signedBig: { in: [] } }) { label } }",
+    _seed_specimen(
+        label="keep",
+        signed_big=7,
+        occurred_on=datetime.date(2021, 6, 11),
+        price=Decimal("1.5000"),
+        external_id=UUID(int=7),
     )
-    assert response.status_code == 200
-    body = response.json()
-    assert "errors" not in body, body
-    assert {row["label"] for row in body["data"]["allScalarSpecimens"]} == {"keep", "other"}
+    _seed_specimen(label="other")
+
+    def rows(doc: str) -> set[str]:
+        response = _post_graphql(f"query {{ allScalarSpecimens(filter: {doc}) {{ label }} }}")
+        body = response.json()
+        assert "errors" not in body, body
+        return {row["label"] for row in body["data"]["allScalarSpecimens"]}
+
+    assert rows(f"{{ {leaf}: {{ in: {valid} }} }}") == {"keep"}
+    assert rows(f"{{ {leaf}: {{ in: [] }} }}") == set()
+    assert rows(f"{{ not: {{ {leaf}: {{ in: [] }} }} }}") == {"keep", "other"}
+    assert rows(f"{{ or: [{{ {leaf}: {{ in: [] }} }}, {{ {leaf}: {{ in: {valid} }} }}] }}") == {
+        "keep",
+    }
+    assert (
+        rows(f"{{ and: [{{ {leaf}: {{ in: [] }} }}, {{ {leaf}: {{ in: {valid} }} }}] }}") == set()
+    )
+    assert rows(f"{{ {leaf}: {{ in: null }} }}") == {"keep", "other"}
 
 
 @pytest.mark.django_db

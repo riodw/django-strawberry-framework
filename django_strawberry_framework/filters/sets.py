@@ -118,12 +118,14 @@ from .base import (
     IntegerInFilter,
     IntegerRangeFilter,
     ListFilter,
+    MembershipInFilter,
     RangeFilter,
     RelatedFilter,
     RelationPkFilter,
     RelationPkMultipleFilter,
     _bound_field_name,
     _relation_uses_non_pk_to_field,
+    membership_in_filter_class,
 )
 from .inputs import (
     LOGIC_OPERATORS,
@@ -484,6 +486,14 @@ _PACKAGE_POLICY_BASELINE: Mapping[type[ModelField], _NormalizedPolicyEntry | Non
 # Audited today: the 25.x and 26.x families -- the package test suite runs against
 # django-filter 25.2 (the locked development / CI version) and 26.1 (the
 # Python 3.10 + Django 5.2.16 compatibility-floor cell).
+#
+# The generated ``in`` filter (``filters/base.py::membership_in_filter_class``) also reads
+# these upstream bodies, identical in every published release from 25.2 through 26.2:
+# ``BaseFilterSet.filter_for_lookup`` (``in`` -> ``class ConcreteInFilter(BaseInFilter,
+# <scalar>): pass``), ``Filter.filter`` + ``constants.EMPTY_VALUES`` (``[]`` skipped),
+# ``BaseCSVFilter.__init__`` (``ConcreteCSVField(base_field_class, field_class)``),
+# ``BaseCSVField._get_widget_class`` (``(base_widget_class, widget)``) and
+# ``BaseCSVWidget.value_from_datadict`` (``""`` -> ``[]``).
 _AUDITED_DJANGO_FILTER_RANGE: tuple[tuple[int, ...], tuple[int, ...]] = ((25, 2), (27,))
 
 
@@ -830,8 +840,16 @@ def _dynamic_csv_profile_for(klass: type[object]) -> _FilterFamilyProfile | None
     behaviorally identical to a package-generated one (pure CSV-of-scalar semantics, no
     added state), so granting it the sequence profile is safe -- and it cannot route
     anyway unless the ownership oracle independently marks it framework-origin.
+
+    The generated ``in`` class is an empty-body ``(MembershipInFilter, <django-filter's
+    class>)`` wrapper (``filters/base.py::membership_in_filter_class``); it is unwrapped
+    one level first, so it resolves exactly as the class django-filter built does.
     """
     bases = klass.__bases__
+    empty_body = frozenset(vars(klass)) == _EMPTY_BODY_DYNAMIC_CSV_ATTRS
+    if len(bases) == 2 and bases[0] is MembershipInFilter and empty_body:
+        klass = bases[1]
+        bases = klass.__bases__
     if len(bases) != 2:
         return None
     csv_base, scalar_base = bases
@@ -2555,9 +2573,11 @@ class FilterSet(
         column's choice enum is a value (``BLANK`` is ``""`` on each lookup; a
         ``Meta.filter_overrides`` entry that maps the column to plain
         ``CharFilter`` still yields ``EnumLookupFilter``, as any override still
-        yields ``EnumChoiceFilter`` for ``exact``), or
-        it is an integer ``in`` / ``range``
-        (``IntegerInFilter`` / ``IntegerRangeFilter``). For relation fields a
+        yields ``EnumChoiceFilter`` for ``exact``), or it is an ``in``
+        (``MembershipInFilter`` in front of the class django-filter builds;
+        ``IntegerInFilter`` for an integer column) or an integer ``range``
+        (``IntegerRangeFilter``).
+        For relation fields a
         Relay-Node-shaped target maps to a ``(GlobalIDFilter, params)``
         pair (or ``GlobalIDMultipleChoiceFilter`` for multi-valued
         relations); a non-Relay target, or a model no ``DjangoType``
@@ -2639,9 +2659,24 @@ class FilterSet(
                 # backend at bind) and matches NOTHING when a non-empty list fully
                 # drops, instead of django-filter's empty-value skip that would widen
                 # a restrictive ``in`` to no constraint. Own-PK Relay ``in``
-                # is handled above (GlobalIDMultipleChoiceFilter); a non-integer column
-                # carries no binding-range limit so it keeps the upstream filter.
+                # is handled above (GlobalIDMultipleChoiceFilter).
                 return IntegerInFilter, params
+            # basedpyright: ``None`` for an unrecognized field (``filter_for_field``'s WARN /
+            # IGNORE contract), so the comparison is live
+            if lookup_type == "in" and default_class is not None:  # pyright: ignore[reportUnnecessaryComparison]
+                # Every other generated ``in`` gets the package base in front of the class
+                # django-filter built, so an explicit ``[]`` is the empty set (matches no
+                # rows) on every column type, never django-filter's empty-value skip. A
+                # class that is not a ``BaseInFilter`` is a shape no audited release
+                # builds: fail at build rather than generate a filter without that rule.
+                if not issubclass(default_class, BaseInFilter):
+                    raise ConfigurationError(
+                        f"{cls.__name__}: the inherited filter_for_lookup returned "
+                        f"{default_class.__name__!r} for the 'in' lookup on "
+                        f"{getattr(field, 'name', field)!r}, which is not a BaseInFilter; the "
+                        "package cannot apply its membership rule.",
+                    )
+                return membership_in_filter_class(default_class), params
             if lookup_type == "range" and isinstance(field, models.IntegerField):
                 # A bound-binding integer ``__range`` routes through IntegerRangeFilter:
                 # a raw ``BETWEEN a AND b`` binds BOTH bounds directly, so an out-of-range
@@ -4368,8 +4403,8 @@ class FilterSet(
         helper (``_invoke_suppressing_framework_distinct``) and attached as a
         positive ``Exists`` via ``optimizer/predicates.py::attach_exists``. An
         invocation that returns the inner root BY IDENTITY is upstream's no-op
-        (empty-value short circuit, ``_match_none_queryset`` exclude branch,
-        ``MultipleChoiceFilter.is_noop``) and attaches nothing -- without this a
+        (empty-value short circuit, ``MultipleChoiceFilter.is_noop``) and
+        attaches nothing (a routed leaf never carries ``exclude``) -- without this a
         tautological ``EXISTS`` + reserved alias would ride along for every
         inactive to-many candidate.
 
@@ -4383,9 +4418,9 @@ class FilterSet(
         graph that issues NO SQL, and skipping construction earlier would require
         freezing a per-filter contract-identity policy in the generation metadata
         to short-circuit only values known to be identity for THAT filter class
-        (a blanket ``EMPTY_VALUES`` skip is wrong -- the package gives
-        ``GlobalIDMultipleChoiceFilter`` / ``ListFilter`` ``in: []`` RESTRICTIVE
-        match-nothing semantics, which is not a no-op). Measured cost is roughly
+        (a blanket ``EMPTY_VALUES`` skip is wrong -- the package gives every
+        generated membership filter ``in: []`` RESTRICTIVE match-nothing
+        semantics, which is not a no-op). Measured cost is roughly
         12 microseconds per inactive to-many leaf, all inner-root construction
         and no I/O; a pathological sixteen-inactive-leaf request is about 0.2 ms
         of Python and is dwarfed by the database round-trip of any request that
@@ -4463,7 +4498,9 @@ class FilterSet(
 
         Per-branch composition uses ``Q(pk__in=child_qs.values("pk"))``
         against a sibling ``cls(data=child_data, queryset=queryset)``
-        instantiation. The sibling reuses the parent's already
+        instantiation, or the empty ``Q()`` for a branch that constrains nothing
+        (this method returns its input BY IDENTITY when no leaf and no logical key
+        constrained anything). The sibling reuses the parent's already
         visibility-scoped and ``RelatedFilter``-constrained queryset, so
         the visibility-before-filter ordering carries through to every recursive
         level by construction.
@@ -4513,7 +4550,10 @@ class FilterSet(
             _nested_qs_by_branch_id=nested_map,
             _flat_hop_visibility=self._hop_visibility(),
         )
-        return qs.filter(q)
+        # An empty ``Q`` is the identity: the input queryset comes back BY IDENTITY when
+        # no leaf and no logical key constrained anything, so ``_q_for_branch`` can tell
+        # an arm that applied nothing from one that matched every row.
+        return qs.filter(q) if q else qs
 
     @classmethod
     def _evaluate_logic_tree(
@@ -4543,9 +4583,14 @@ class FilterSet(
 
         Inactive children (``None`` / ``strawberry.UNSET``) inside sequence
         lists -- and an inactive single-element value -- are skipped, matching
-        ``_collect_nested_visibility_querysets_async``. Without that skip an
-        inactive ``or`` arm materializes as ``pk__in=<full qs>`` (match-all)
-        and silently widens past every real sibling arm.
+        ``_collect_nested_visibility_querysets_async``, and an arm that applies
+        no constraint (``{}``, or only ``null`` / unset lookups) composes as the
+        empty ``Q()`` (``_q_for_branch``). Without that an inactive ``or`` arm
+        materializes as ``pk__in=<full qs>`` (match-all) and silently widens
+        past every real sibling arm, and ``not`` of it matches no rows.
+        A filter set that overrides django-filter's ``qs`` composes every arm as the
+        rows its ``qs`` returns (``pk__in``), so there an arm that constrains nothing is
+        whatever the override returns (every row when it adds nothing), not the identity.
         """
         q = models.Q()
         if not isinstance(tree_data, dict) or not tree_data:
@@ -4583,15 +4628,16 @@ class FilterSet(
         _flat_hop_visibility: dict[tuple[object, str | None], models.QuerySet[models.Model]]
         | None = None,
     ) -> models.Q:
-        """Materialize one nested-branch input into a ``pk__in`` ``Q``.
+        """Materialize one nested-branch input into a ``pk__in`` ``Q`` (``Q()`` if inert).
 
         Re-applies this branch's ``RelatedFilter`` visibility scoping +
         constraints exactly as ``apply_sync`` does at the top level, THEN
         normalizes the Strawberry input and builds a sibling ``FilterSet``
-        instance against the constrained ``queryset``. Reading ``.qs``
-        triggers ``BaseFilterSet``'s leaf-clause path against the child's
-        normalized data AND re-enters this override for any deeper
-        ``and`` / ``or`` / ``not`` keys the branch carries.
+        instance against the constrained ``queryset``. Its ``filter_queryset`` (its
+        ``qs``, for a class overriding django-filter's) runs the leaf-clause path
+        against the child's normalized data AND re-enters ``_evaluate_logic_tree``
+        for any deeper ``and`` / ``or`` / ``not`` keys the branch carries. A branch whose rows come back as
+        ``queryset`` itself constrained nothing and composes as ``Q()``.
 
         The related re-application is essential: ``_normalize_input``
         STRIPS related-branch keys from the child's form data (the parent
@@ -4608,9 +4654,9 @@ class FilterSet(
         the documented sync-misuse error on the pure-sync path.
 
         ``_depth`` and ``_apply_info`` are stashed on the sibling instance
-        so ``filter_queryset`` can carry the recursion counter and the
-        resolver ``info`` across django-filter's ``.qs`` machinery into the
-        next ``_evaluate_logic_tree`` call. Without this hand-off the depth
+        so ``filter_queryset`` (upstream's one-argument signature) can carry the
+        recursion counter and the resolver ``info`` into the next
+        ``_evaluate_logic_tree`` call. Without this hand-off the depth
         counter would reset at every nesting level and deeper branches
         would lose the ``info`` needed to re-derive their related
         visibility (the recursion path crosses through django-filter's
@@ -4680,7 +4726,19 @@ class FilterSet(
         child_set._nested_qs_by_branch_id = _nested_qs_by_branch_id
         child_set._flat_hop_visibility = _flat_hop_visibility
         cls._validate_form_or_raise(child_set)
-        return models.Q(pk__in=child_set.qs.values("pk"))
+        if type(child_set).qs is not filterset.BaseFilterSet.qs:
+            # A consumer ``qs`` override (django-filter's seam) runs inside the arm as it
+            # does at the top level; its rows compose as ``pk__in`` like any other arm.
+            return models.Q(pk__in=child_set.qs.values("pk"))
+        child_qs = child_set.filter_queryset(constrained)
+        if child_qs is queryset:
+            # The arm applied no constraint at all (no active leaf, branch or nested
+            # logical key): it is Django's ``Q()`` identity, as strawberry-django's
+            # ``process_filters`` composes an empty arm and as ``exclude()`` / ``~Q()``
+            # read it -- never ``pk__in=<every visible row>``, which ``not`` would
+            # invert to no rows and ``or`` would widen to every row.
+            return models.Q()
+        return models.Q(pk__in=child_qs.values("pk"))
 
     @classmethod
     def _apply_related_constraints(

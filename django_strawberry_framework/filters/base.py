@@ -53,9 +53,10 @@ from django_filters import (
     NumberFilter,
 )
 from django_filters.constants import EMPTY_VALUES
-from django_filters.fields import ChoiceField
+from django_filters.fields import BaseCSVField, ChoiceField
 from django_filters.filters import BaseInFilter, BaseRangeFilter, FilterMethod
 from django_filters.utils import get_model_field
+from django_filters.widgets import BaseCSVWidget
 from graphql import GraphQLError
 from strawberry import relay
 from typing_extensions import override
@@ -226,11 +227,16 @@ def _match_none_queryset(filter_instance: Filter, qs: models.QuerySet[_M]) -> mo
     """Match nothing, or every row when ``exclude=True``.
 
     The restrictive-empty membership result shared by ``ListFilter``,
-    ``GlobalIDMultipleChoiceFilter``, and ``IntegerInFilter``'s fully-dropped
-    coerce path. Must never degrade to django-filter's empty-value skip (which
-    would silently widen a restrictive predicate to no constraint).
+    ``GlobalIDMultipleChoiceFilter``, ``RelationPkMultipleFilter`` and every
+    generated ``in`` filter (``MembershipInFilter``: an explicit ``[]`` and
+    ``IntegerInFilter``'s fully-dropped coerce path alike). Must never degrade
+    to django-filter's empty-value skip (which would silently widen a
+    restrictive predicate to no constraint). The excluded empty set is a
+    constraint whose answer is every row, never the input BY IDENTITY, which
+    the package reads as "applied no constraint" (``FilterSet._q_for_branch``,
+    ``FilterSet._leaf_applies``): ``not`` of it matches no rows.
     """
-    return qs if filter_instance.exclude else qs.none()
+    return qs.all() if filter_instance.exclude else qs.none()
 
 
 def _materialize_list_shaped_values(value: object, *, message: str, code: str) -> list[object]:
@@ -624,8 +630,8 @@ class ListFilter(TypedFilter):
     """Filter that accepts a list-shaped input (e.g. `__in` lookups).
 
     Port of `graphene_django/filter/filters/list_filter.py::ListFilter`:
-    an empty list short-circuits to `qs.none()` (or the original queryset
-    when `exclude=True`) instead of being normalized into a "no value
+    an empty list short-circuits to `qs.none()` (or a new queryset over every
+    row when `exclude=True`) instead of being normalized into a "no value
     supplied" pass-through.
     """
 
@@ -640,7 +646,7 @@ class ListFilter(TypedFilter):
 
     @override
     def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
-        """Short-circuit empty-list inputs to `qs.none()` (or `qs` when excluding).
+        """Short-circuit empty-list inputs to `qs.none()` (every row when excluding).
 
         The raw input is shape-gated through
         ``_materialize_list_shaped_values`` before the emptiness probe: the
@@ -662,6 +668,91 @@ class ListFilter(TypedFilter):
         if len(value) == 0:
             return _match_none_queryset(self, qs)
         return super().filter(qs, value)
+
+
+class _MembershipCSVWidget(BaseCSVWidget):
+    """Read a raw-form empty value (``?field__in=``) as omission, a list as itself.
+
+    django-filter's ``BaseCSVWidget`` turns the empty string a querystring carries
+    into ``[]``, which ``MembershipInFilter`` reads as the empty set. Raw form data
+    keeps django-filter's own rule (an empty ``?field__in=`` applies no constraint)
+    by reading it as ``None``; only a real list -- the shape the GraphQL input layer
+    sends -- reaches the filter as an explicit ``[]``.
+    """
+
+    # basedpyright: the stub types the CSV widget's return as ``list[str]``; the base already
+    # returns ``None`` for an absent key, and this override returns it for an empty one too
+    @override
+    def value_from_datadict(  # pyright: ignore[reportIncompatibleMethodOverride]
+        self,
+        data: Mapping[str, object],
+        files: Mapping[str, object],
+        name: str,
+    ) -> list[str] | None:
+        """Return ``None`` for a raw empty string; defer to ``BaseCSVWidget`` otherwise."""
+        if data.get(name) == "":
+            return None
+        return super().value_from_datadict(data, files, name)
+
+
+class _MembershipCSVField(BaseCSVField):
+    """``BaseCSVField`` bound to ``_MembershipCSVWidget``."""
+
+    base_widget_class = _MembershipCSVWidget
+
+
+class MembershipInFilter(BaseInFilter):
+    """The generated ``in`` filter of every non-relation column: ``[]`` is the empty set.
+
+    ``FilterSet.filter_for_lookup`` puts this base in front of the ``in`` class
+    django-filter builds (``membership_in_filter_class``); ``IntegerInFilter`` is the
+    integer column's. Omission and ``None`` apply no constraint, an explicit ``[]``
+    matches no rows (every row under ``exclude``), as Django's own
+    ``filter(<field>__in=[])`` does, and a non-empty list binds as one ``__in``
+    predicate. A raw ``?field__in=`` through ``DjangoFilterBackend`` keeps
+    django-filter's rule (``_MembershipCSVWidget``).
+    """
+
+    base_field_class: type[BaseCSVField] = _MembershipCSVField
+
+    @override
+    def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
+        """Match nothing for an explicit ``[]``; otherwise django-filter's ``__in``.
+
+        The raw input is shape-gated through ``_materialize_list_shaped_values``
+        (``ListFilter`` / ``IntegerInFilter`` containment): only the list/tuple
+        shapes the form contract delivers are meaningful; everything else is a
+        coded reject.
+        """
+        if value is None:
+            return qs
+        members = _materialize_list_shaped_values(
+            value,
+            message="Invalid filter value: expected a list.",
+            code=FILTER_INVALID_ERROR_CODE,
+        )
+        if not members:
+            return _match_none_queryset(self, qs)
+        return super().filter(qs, members)
+
+
+def membership_in_filter_class(in_filter_class: type[BaseInFilter]) -> type[MembershipInFilter]:
+    """Put ``MembershipInFilter`` in front of the ``in`` class django-filter built.
+
+    ``class ConcreteInFilter(MembershipInFilter, in_filter_class): pass`` over whatever
+    ``BaseInFilter`` subclass ``BaseFilterSet.filter_for_lookup`` returned, keeping its
+    name: a ``class`` statement, so the body carries exactly the interpreter's
+    structural dunders the sequence-profile validator
+    (``filters/sets.py::_dynamic_csv_profile_for``) unwraps, and a NEW class per call,
+    as upstream builds, so a class one filter set's instantiation has deep-copied (which
+    stamps ``copyreg``'s ``__slotnames__`` on it) is never another filter set's.
+    """
+
+    class ConcreteInFilter(MembershipInFilter, in_filter_class):
+        pass
+
+    ConcreteInFilter.__name__ = in_filter_class.__name__
+    return ConcreteInFilter
 
 
 def _coerce_int_in_members(
@@ -693,7 +784,7 @@ def _coerce_int_in_members(
     return kept
 
 
-class IntegerInFilter(BaseInFilter, NumberFilter):
+class IntegerInFilter(MembershipInFilter, NumberFilter):
     """Integer ``__in`` filter that drops out-of-range members and is empty-aware.
 
     `filter_for_lookup` routes a non-relation integer column's `in` lookup here
@@ -707,15 +798,15 @@ class IntegerInFilter(BaseInFilter, NumberFilter):
       drop - every value is out of range and can identify no row - matches NOTHING,
       so it short-circuits to `qs.none()` rather than degrading to django-filter's
       empty-value SKIP, which would silently widen a restrictive `in` to no
-      constraint (return every visible row). An explicitly empty input (`in: []` - no
-      membership values provided) is NOT a restrictive filter that lost its members,
-      so it keeps the default skip. A mixed input keeps its valid members. For an
-      `exclude` filter the complement of "no row" is "every row", so it returns `qs`.
+      constraint (return every visible row). An explicitly empty input (`in: []`) is
+      the empty set too (`MembershipInFilter`). A mixed input keeps its valid
+      members. For an `exclude` filter the complement of "no row" is "every row", so
+      it returns a new queryset over every row.
     """
 
     @override
     def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
-        """Coerce members, matching nothing when a non-empty input fully drops.
+        """Coerce members, matching nothing when the input is empty or fully drops.
 
         The raw input is shape-gated through ``_materialize_list_shaped_values``
         first: a scalar leaked ``TypeError: 'int' object is not iterable`` out
@@ -731,10 +822,6 @@ class IntegerInFilter(BaseInFilter, NumberFilter):
             message="Invalid filter value: expected a list of integers.",
             code=FILTER_INVALID_ERROR_CODE,
         )
-        if value in EMPTY_VALUES:
-            # Explicit empty (``in: []``): keep django-filter's skip (no
-            # membership values were supplied, so there is no constraint to honor).
-            return super().filter(qs, value)
         # django-filter's ``BaseFilterSet.__init__`` stamps ``filter_.parent = self`` and its
         # metaclass stores ``_meta = FilterSetOptions(...)``.
         parent: BaseFilterSet | None = getattr(self, "parent", None)
@@ -746,8 +833,8 @@ class IntegerInFilter(BaseInFilter, NumberFilter):
         if model_field is not None:
             kept = _coerce_int_in_members(model_field, value)
             if not kept:
-                # A non-empty membership list whose every value is out of range matches
-                # no row; never the empty-value skip that would return all rows.
+                # An empty membership list, or one whose every value is out of range,
+                # matches no row; never the empty-value skip that would return all rows.
                 return _match_none_queryset(self, qs)
             return super().filter(qs, kept)
         return super().filter(qs, value)

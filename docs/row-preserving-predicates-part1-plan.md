@@ -860,7 +860,9 @@ not routable / no snapshot row
     `ConcreteInFilter` / `ConcreteRangeFilter` — exactly `(BaseInFilter | BaseRangeFilter,
     <an exact-registered scalar family>)` bases and an own attribute-NAME set identical to
     a `pass`-body reference (`_EMPTY_BODY_DYNAMIC_CSV_ATTRS`), so a DUNDER-named
-    state/behavior member fails closed too (Rev 14) — and returns `None` otherwise. An
+    state/behavior member fails closed too (Rev 14) — after unwrapping the generated `in`
+    class's one empty-body `(MembershipInFilter, <that class>)` layer, and returns `None`
+    otherwise. An
     unknown family, INCLUDING an unaudited SUBCLASS of a registered base (which the
     retired MRO walk wrongly accepted through its ancestor), resolves to no profile and
     is ineligible. A consumer subclass is a supported customization whose behavior this
@@ -953,10 +955,10 @@ framework-owned applicator mirroring upstream's loop exactly:
   attaches a tautological `EXISTS(SELECT 1 … WHERE U0.id = outer.id)` —
   row-set-safe but one correlated subquery + one `_dst_` alias per
   inactive leaf per query, and it breaks the C.4 SQL-shape assertions.
-  The identity rule also covers the package's own identity-return
-  branches (`django_strawberry_framework/filters/base.py::_match_none_queryset`
-  under `exclude=True` returns `qs` unchanged — baseline is match-all, so
-  skipping is equivalent — and upstream `MultipleChoiceFilter.is_noop`).
+  The identity rule also covers upstream `MultipleChoiceFilter.is_noop`;
+  `django_strawberry_framework/filters/base.py::_match_none_queryset` under
+  `exclude=True` returns a new queryset over every row, never the input by
+  identity, and a routed leaf never carries `exclude`.
   The inverse composes correctly with no special case: a restrictive-empty
   input's `qs.none()` on the inner root gives `Exists(none) = False`,
   matching the baseline empty result;

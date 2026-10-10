@@ -61,6 +61,7 @@ from django_strawberry_framework.filters import (
     FilterSetMetaclass,
     GlobalIDFilter,
     GlobalIDMultipleChoiceFilter,
+    ListFilter,
     RelatedFilter,
 )
 from django_strawberry_framework.filters.base import (
@@ -69,9 +70,11 @@ from django_strawberry_framework.filters.base import (
     EnumLookupFilter,
     EnumMemberValue,
     IntegerInFilter,
+    MembershipInFilter,
     RelationPkFilter,
     RelationPkMultipleFilter,
     _GlobalIDMultipleChoiceField,
+    membership_in_filter_class,
 )
 from django_strawberry_framework.filters.inputs import (
     _field_specs,
@@ -799,6 +802,7 @@ def test_filter_for_field_preserves_upstream_none_contract_for_unrecognized_fiel
 
     attachment_field = Item._meta.get_field("attachment")
     assert AttachmentProbe.filter_for_field(attachment_field, "attachment", "exact") is None
+    assert AttachmentProbe.filter_for_field(attachment_field, "attachment", "in") is None
 
     with pytest.raises(AssertionError):
 
@@ -2483,10 +2487,10 @@ def test_many_inactive_candidates_match_empty_filter_sql(monkeypatch: pytest.Mon
 def test_restrictive_empty_in_composes_as_exists_over_none():
     """A restrictive membership on a to-many path matches no rows via ``Exists(none)``.
 
-    ``IntegerInFilter`` treats an explicit ``in: []`` as a no-op skip; the
-    RESTRICTIVE-empty shape (a non-empty membership whose every value is out of
-    range and drops) routes through ``_match_none_queryset`` -> ``inner_root.none()``,
-    which the adapter attaches as ``Exists(none)``. Django folds that to a constant
+    The RESTRICTIVE-empty shape (a non-empty membership whose every value is out of
+    range and drops, as an explicit ``in: []`` does) routes through
+    ``_match_none_queryset`` -> ``inner_root.none()``, which the adapter attaches as
+    ``Exists(none)``. Django folds that to a constant
     ``False`` (so the EXISTS text is optimized away), but the reserved alias is
     still attached and the composed result matches nothing.
     """
@@ -2502,7 +2506,7 @@ def test_restrictive_empty_in_composes_as_exists_over_none():
     BookGenreInFilter.get_filters()
     bare = BookGenreInFilter(
         # A member past SQLite's signed-64-bit range drops, leaving an empty but
-        # RESTRICTIVE membership (``_match_none_queryset``), unlike an explicit [].
+        # RESTRICTIVE membership (``_match_none_queryset``), as an explicit [] is.
         data={"genres__id__in": [99999999999999999999999]},
         queryset=library_models.Book.objects.order_by("id"),
         request=HttpRequest(),
@@ -3267,9 +3271,10 @@ def test_generated_flat_leaves_never_carry_exclude():
 def test_c4_integer_in_over_to_many_path():
     """Matrix row 11 (integer ``in`` semantics over an eligible to-many path).
 
-    ``Genre`` root over ``books__id`` ``in``: an explicit empty list is a no-op
-    skip (matches every row, == baseline); a mixed valid/invalid membership
-    filters on the valid member only; an all-invalid membership matches nothing.
+    ``Genre`` root over ``books__id`` ``in``: an explicit empty list is the empty
+    set (matches no row, as ``filter(books__id__in=[])`` does); a mixed valid/invalid
+    membership filters on the valid member only; an all-invalid membership matches
+    nothing.
     (The GlobalID-list sub-case is covered by
     ``test_c4_global_id_list_over_flat_relay_m2m_is_row_preserving`` below.)
     """
@@ -3288,7 +3293,7 @@ def test_c4_integer_in_over_to_many_path():
 
     outer = library_models.Genre.objects.order_by("id")
     cases = {
-        "empty-noop": ([], [g1.pk, g2.pk]),
+        "empty-set": ([], []),
         "mixed-valid-invalid": ([b1.pk, 99999999], [g1.pk]),
         "all-invalid": ([88888888, 99999999], []),
     }
@@ -9526,12 +9531,13 @@ class _UnknownFamilyFilter(Filter):
 def _genuine_dynamic_csv_class(lookup: str) -> type[Filter]:
     """Return a genuine django-filter dynamic ``in`` / ``range`` CSV class (a real product).
 
-    ``FilterSet.filter_for_lookup`` on a plain scalar field synthesizes
-    ``class ConcreteInFilter(BaseInFilter, <scalar>): pass`` (and the ``range`` variant)
-    exactly as django-filter does at generation, so this exercises the structural
-    validator on a REAL product rather than a hand-built stand-in. A ``CharField``
-    (``in``) / ``FloatField`` (``range``) is used because those fields carry NO static
-    package CSV class, so ``filter_for_lookup`` builds a genuine dynamic one -- an
+    ``FilterSet.filter_for_lookup`` on a plain scalar field returns django-filter's
+    ``class ConcreteRangeFilter(BaseRangeFilter, <scalar>): pass`` and, for ``in``, an
+    empty-body ``(MembershipInFilter, <django-filter's ConcreteInFilter>)`` wrapper, so
+    this exercises the structural validator on a REAL product rather than a hand-built
+    stand-in. A
+    ``CharField`` (``in``) / ``FloatField`` (``range``) is used because those fields carry
+    NO static package CSV class, so ``filter_for_lookup`` builds a dynamic one -- an
     ``IntegerField`` would instead return the STATIC package ``IntegerInFilter`` /
     ``IntegerRangeFilter`` (an exact registry key), not a dynamic class.
     """
@@ -9564,16 +9570,72 @@ def test_genuine_dynamic_concrete_in_and_range_resolve_to_sequence_profile():
     These are real django-filter products (a NEW class object per ``filter_for_lookup``
     call), so they can never be registry keys and are recognized STRUCTURALLY -- not via
     an ancestry allowlist. The structural validator (exact 2-tuple ``__bases__`` over an
-    audited scalar, empty body) grants them ``_SEQUENCE_LOOKUP_PROFILE``.
+    audited scalar, empty body) grants them ``_SEQUENCE_LOOKUP_PROFILE``. The generated
+    ``in`` wrapper is unwrapped one level, so it resolves exactly as the class inside it.
     """
     concrete_in = _genuine_dynamic_csv_class("in")
     concrete_range = _genuine_dynamic_csv_class("range")
     assert concrete_in not in _FILTER_FAMILY_REGISTRY
     assert concrete_range not in _FILTER_FAMILY_REGISTRY
-    assert concrete_in.__bases__[0] is BaseInFilter
+    assert concrete_in.__bases__[0] is MembershipInFilter
+    assert concrete_in.__bases__[1].__bases__ == (BaseInFilter, CharFilter)
     assert concrete_range.__bases__[0] is BaseRangeFilter
+
+    class _UnauditedScalar(Filter):
+        pass
+
+    class _UnauditedIn(BaseInFilter, _UnauditedScalar):
+        pass
+
+    assert (
+        _family_profile_for(object.__new__(concrete_in.__bases__[1])) is _SEQUENCE_LOOKUP_PROFILE
+    )
     assert _family_profile_for(object.__new__(concrete_in)) is _SEQUENCE_LOOKUP_PROFILE
     assert _family_profile_for(object.__new__(concrete_range)) is _SEQUENCE_LOOKUP_PROFILE
+    wrapped_unaudited = membership_in_filter_class(_UnauditedIn)
+    assert _family_profile_for(object.__new__(wrapped_unaudited)) is None
+
+    # A wrapper with its own body is not the generated shape: declined, never unwrapped.
+    class _GenuineIn(BaseInFilter, CharFilter):
+        pass
+
+    class _WrapperWithBody(MembershipInFilter, _GenuineIn):
+        extra_state: int = 1
+
+    wrapped_genuine = membership_in_filter_class(_GenuineIn)
+    assert _family_profile_for(object.__new__(wrapped_genuine)) is _SEQUENCE_LOOKUP_PROFILE
+    assert _family_profile_for(object.__new__(_WrapperWithBody)) is None
+
+
+def test_in_lookup_inherited_as_a_non_base_in_filter_fails_at_build():
+    """An inherited ``in`` class that is not a ``BaseInFilter`` never generates a filter without ``[]``'s rule.
+
+    A cooperative ``BaseFilterSet`` mixin behind ``FilterSet`` returns the bare scalar
+    class for ``in``; the package refuses it at build instead of generating a filter
+    that would skip an explicit ``[]``.
+    """
+
+    class _ScalarInDefaults(BaseFilterSet):
+        @classmethod
+        @override
+        def filter_for_lookup(
+            cls,
+            field: ModelField,
+            lookup_type: str,
+        ) -> tuple[type[CharFilter], dict[str, object]]:
+            return CharFilter, {}
+
+    # basedpyright: ``FilterSet`` narrows ``filter_for_field`` / ``filter_for_lookup`` /
+    # ``get_fields`` / ``FILTER_DEFAULTS`` against the stubs, which the plain mixin keeps; the
+    # clash is the shape under test
+    class _ScalarInFilterSet(FilterSet, _ScalarInDefaults):  # pyright: ignore[reportIncompatibleMethodOverride, reportIncompatibleVariableOverride]
+        pass
+
+    with pytest.raises(
+        ConfigurationError,
+        match="inherited filter_for_lookup returned 'CharFilter' for the 'in' lookup on 'code'",
+    ):
+        _ScalarInFilterSet.filter_for_lookup(django_models.CharField(name="code"), "in")
 
 
 @pytest.mark.parametrize(
@@ -12270,6 +12332,124 @@ def _shelf_branch_world():
 
     BookParent.get_filters()
     return BookParent, shelves, open_branch, restricted, books
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("filter_input", "expected"),
+    [
+        ({"code_out": []}, {"North", "Hidden", "Empty"}),
+        ({"not_": {"code_out": []}}, set()),
+        ({"or_": [{"code_out": []}, {"name": {"exact": "North"}}]}, {"North", "Hidden", "Empty"}),
+        ({"and_": [{"code_out": []}, {"name": {"exact": "North"}}]}, {"North"}),
+        ({"codes_out": []}, {"North", "Hidden", "Empty"}),
+        ({"not_": {"codes_out": []}}, set()),
+        ({"or_": [{"codes_out": []}, {"name": {"exact": "North"}}]}, {"North", "Hidden", "Empty"}),
+    ],
+    ids=[
+        "flat",
+        "not",
+        "or",
+        "and",
+        "walked-flat",
+        "walked-not",
+        "walked-or",
+    ],
+)
+def test_declared_excluded_empty_membership_is_every_row_inside_logical_arms(
+    filter_input: dict[str, object],
+    expected: set[str],
+):
+    """``exclude=True`` over ``[]`` is a constraint matching every row, never an inert arm.
+
+    As Django's ``exclude(x__in=[])`` / ``exclude(rel__x__in=[])``: every parent,
+    one with no related row included, so ``not`` of it matches none and ``or`` with
+    it matches every row, on the parent's own column and on a leaf walking the
+    declared ``shelves`` branch alike (a branch whose only shelf is hidden included).
+    """
+    _hide(library_models.Shelf, topic="secret")
+
+    class ShelfChild(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class BranchParent(FilterSet):
+        shelves = RelatedFilter(ShelfChild, field_name="shelves")
+        code_out = ListFilter(field_name="name", lookup_expr="in", exclude=True)
+        codes_out = ListFilter(field_name="shelves__code", lookup_expr="in", exclude=True)
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    BranchParent.get_filters()
+    north = library_models.Branch.objects.create(name="North", city="Boston")
+    hidden = library_models.Branch.objects.create(name="Hidden", city="Boston")
+    library_models.Branch.objects.create(name="Empty", city="Boston")
+    library_models.Shelf.objects.create(code="N-1", topic="general", branch=north)
+    library_models.Shelf.objects.create(code="H-1", topic="secret", branch=hidden)
+    base = library_models.Branch.objects.all()
+
+    kept = _applied(BranchParent, filter_input, base)
+
+    assert (
+        set(
+            library_models.Branch.objects.filter(pk__in=kept).values_list("name", flat=True),
+        )
+        == expected
+    )
+
+
+@pytest.mark.django_db
+def test_consumer_qs_override_runs_inside_a_logical_arm():
+    """A ``FilterSet.qs`` override (django-filter's seam) shapes a logical arm as it does the root.
+
+    The override keeps only worn shelves when the input names ``worn_only``; a
+    ``worn_only`` filter that itself returns its queryset unchanged still makes
+    ``not: { worn_only }`` the complement of the worn shelves.
+    """
+
+    class WornOnlyShelfFilter(FilterSet):
+        worn_only = CharFilter(method="keep_all")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+        def keep_all(
+            self,
+            queryset: QuerySet[library_models.Shelf],
+            name: str,
+            value: object,
+        ) -> QuerySet[library_models.Shelf]:
+            return queryset
+
+        @property
+        @override
+        def qs(self) -> QuerySet[library_models.Shelf]:
+            rows = super().qs
+            if self.form.cleaned_data.get("worn_only"):
+                rows = rows.filter(condition="worn")
+            return rows
+
+    WornOnlyShelfFilter.get_filters()
+    branch = library_models.Branch.objects.create(name="North", city="Boston")
+    good = library_models.Shelf.objects.create(
+        code="G",
+        topic="t",
+        branch=branch,
+        condition="good",
+    )
+    library_models.Shelf.objects.create(code="W", topic="t", branch=branch, condition="worn")
+
+    kept = _applied(
+        WornOnlyShelfFilter,
+        {"not_": {"worn_only": "y"}},
+        library_models.Shelf.objects.all(),
+    )
+
+    assert kept == {good.pk}
 
 
 @pytest.mark.django_db

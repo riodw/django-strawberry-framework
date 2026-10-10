@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 37 done, 44 to do.
+Progress: 38 done, 46 to do.
 
 ## Done
 
@@ -48,6 +48,10 @@ Progress: 37 done, 44 to do.
 - [x] 12. Nested forward-FK / OneToOne resolvers never checked the request deadline; every package seam that reaches the database
   now checks it first, which also covers the session-auth `login` / `logout` / `me` fields and the `resolve_node` /
   `resolve_nodes` defaults Strawberry's `relay.node()` reaches (`8d4f66bd`)
+- [x] 14. `in: []` matched every row on every generated `in` except GlobalID and relation keys (35 families: integer, text,
+  choice, date/time/UUID/decimal, FK-id paths, nested branches, nested connection arguments), and a logical arm that constrained
+  nothing was TRUE (`not: {}` no rows, `or: [{}, real]` every row). Now `[]` is the empty set as in Django, strawberry-django and
+  graphene-django, an inert arm is `Q()`, a raw `?x__in=` keeps django-filter's no-constraint rule (`e09b5ef1`)
 - [x] 28. Deep dive 3 (authorization on deferred paths): findings 12 and 13 done; `VenueBadgeType` and `VenueSponsorType` now
   hide marked rows, and live rows prove none leaks through the no-`related_name` reverse accessors (`16a8c179`)
 - [x] 50. A SKIP hint (and a consumer-assigned relation, and the nested-connection SKIP arm) left the relation's key column out of
@@ -61,11 +65,6 @@ Progress: 37 done, 44 to do.
   `.only()`. Both now load the union under a `QUERY` operation; a hook's `prefetch_related` no longer collides with the
   planned `Prefetch`, and `{ allLibraryPatrons { name card { __typename } } }` no longer hits the masked FieldError shipped
   since 0.0.7 (`548059b3`)
-
-## To do: t3 hunt findings
-
-- [ ] 14. README says `in: []` matches nothing; it matches every row on integer, text and choice columns (flat), and on a nested
-  `shelves.condition in: []` only parents with a child. Check which is right
 
 ## To do: t3 robustness rows
 
@@ -134,6 +133,14 @@ not real bugs and just get deleted from t3. One checkbox per area:
   client; pagination rejections keep their messages and are the new public `PaginationArgumentError`
 - [ ] 73. A set subclass used only as a `RelatedFilter` / `RelatedOrder` target, never wired to a type, inherits its base's owner and
   that owner's visibility. Keep, or fall back to the target model's registered type?
+- [ ] 84. `range: []` applies no constraint on every generated `range` (and `range: [1]` is a validation error), where Django
+  raises on both. Make `[]` an arity error like `[1]`, or keep?
+- [ ] 85. A nested branch that constrains nothing (`shelves: {}`, `shelves: { condition: { in: null } }`) still keeps only parents
+  with a visible child (`_apply_related_constraints`), at the top level and inside `and` / `or` / `not`; strawberry-django treats
+  it as no condition. Make it the identity, or keep (and state it in spec-027 Decision 8)?
+- [ ] 86. CHANGELOG entry for item 14: an explicit `in: []` on every generated membership lookup matches no rows (integer, text,
+  choice, date and every other column type used to return every row); `not: {}` matches every row and `or: [{}, real]` is the real
+  arm; a declared `ModelMultipleChoiceFilter` `[]` inside `not` now matches every row; raw `?x__in=` is unchanged
 
 ## Hunt not finished in t3
 

@@ -2232,9 +2232,10 @@ the shipped SDL.
     `Meta.ordering` alone. Together they show that a published `offset` is a runtime
     precondition, not a capability claim.
 21. Offset alone, with `limit` omitted, returns `[offset:offset + effective_ceiling]` rather
-    than only the combined offset-plus-limit shape of row 2; the captured SQL carries the
-    raised low mark and the unchanged policy high mark. A resource-policy unit row pins the
-    same arithmetic at the bounding seam.
+    than only the combined offset-plus-limit shape of row 2; the captured SQL keeps the policy
+    `LIMIT` and adds the `OFFSET`, so both marks move by the offset (`LIMIT 100 OFFSET 2`
+    under the default policy and offset 2). A resource-policy unit row pins the same
+    arithmetic at the bounding seam.
 22. The omitted/all-null legacy branch - on the shipped field, on a holder field, and on
     `branches_combined` - is asserted against a LEGACY REFERENCE FIELD mounted beside the
     current one, not against the absence of the new error and not against a second run of

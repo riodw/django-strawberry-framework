@@ -30,7 +30,9 @@ settings are loaded.
     reachable from ``HEAD``) and ``HEAD``, the folder integration item of the
     folder each such module sits in, the folder item of a changed folder
     ``__init__.py`` and the project item for a changed package-root
-    ``__init__.py``. Dirty and untracked paths are concurrent work, never
+    ``__init__.py``; a deleted path or a rename's old path takes the
+    integration item of its nearest surviving folder, else the project item
+    (a rename counts both ends). Dirty and untracked paths are concurrent work, never
     scope; the plan's ``## Cycle baseline`` records them. The ``Scope:`` line
     reads ``changed since <rev> (<sha>)``. When nothing changed the plan is
     written with ``Status: complete``, a ``Nothing in scope:`` line, every
@@ -406,16 +408,22 @@ def _changed_scope(root: Path, since: str | None, tracked: Iterable[str]) -> _Ch
     """Return the labels of the items covering committed package changes since ``since``."""
     report = build_scope(root, since)
     present = set(tracked)
+    folders = set(_package_folders(present))
     paths = [str(entry["path"]) for entry in report.committed]
-    paths.extend(str(entry["new"]) for entry in report.renames if entry["where"] == "committed")
+    for entry in report.renames:
+        if entry["where"] == "committed":
+            paths.extend((str(entry["old"]), str(entry["new"])))
     labels: set[str] = set()
     for path in paths:
-        if path not in present:
-            continue
-        labels.add(_covering_item(path))
         folder = _package_relative(path).rpartition("/")[0]
-        if folder and not _is_init(path):
-            labels.add(f"{folder}{FOLDER_SUFFIX}")
+        if path in present:
+            labels.add(_covering_item(path))
+            if folder and not _is_init(path):
+                labels.add(f"{folder}{FOLDER_SUFFIX}")
+            continue
+        while folder and folder not in folders:
+            folder = folder.rpartition("/")[0]
+        labels.add(f"{folder}{FOLDER_SUFFIX}" if folder else PROJECT_LABEL)
     return _Changed(since=report.since, since_sha=report.since_sha, labels=frozenset(labels))
 
 

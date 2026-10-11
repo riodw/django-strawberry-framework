@@ -354,6 +354,94 @@ def test_plan_changed_takes_the_project_item_for_the_root_init_only(
     ]
 
 
+@pytest.mark.parametrize(
+    (
+        "removed",
+        "renamed",
+        "modified",
+        "expected",
+    ),
+    [
+        pytest.param(("sub/beta.py",), None, (), {"sub/ integration"}, id="delete-in-folder"),
+        pytest.param(
+            ("sub/deep/gamma.py",),
+            None,
+            (),
+            {"sub/ integration"},
+            id="delete-subpackage-to-ancestor",
+        ),
+        pytest.param(
+            ("sub/__init__.py", "sub/beta.py", "sub/deep/gamma.py"),
+            None,
+            (),
+            {"Project integration"},
+            id="delete-subpackage-to-project",
+        ),
+        pytest.param(("alpha.py",), None, (), {"Project integration"}, id="delete-root-module"),
+        pytest.param(
+            (),
+            ("sub/beta.py", "sub/deep/beta.py"),
+            (),
+            {"sub/deep/beta.py", "sub/deep/ integration", "sub/ integration"},
+            id="rename-across-folders",
+        ),
+        pytest.param(
+            (),
+            ("sub/deep/gamma.py", "gamma.py"),
+            (),
+            {"gamma.py", "sub/ integration"},
+            id="rename-out-of-a-vanished-folder",
+        ),
+        pytest.param(
+            (),
+            None,
+            ("sub/beta.py",),
+            {"sub/beta.py", "sub/ integration"},
+            id="modify-control",
+        ),
+    ],
+)
+def test_changed_scope_covers_deleted_and_renamed_away_paths(
+    repo: Path,
+    removed: tuple[str, ...],
+    renamed: tuple[str, str] | None,
+    modified: tuple[str, ...],
+    expected: set[str],
+) -> None:
+    _git(repo, "tag", "0.1.1")
+    package = repo / PACKAGE
+    for relative in removed:
+        (package / relative).unlink()
+    if renamed is not None:
+        old, new = renamed
+        (package / new).parent.mkdir(parents=True, exist_ok=True)
+        (package / old).rename(package / new)
+    for relative in modified:
+        _write(package / relative, "MODIFIED = 1\n")
+    _commit_all(repo, "change")
+
+    changed = review_plan._changed_scope(repo, "0.1.1", review_plan._tracked_python(repo))
+
+    assert changed.labels == expected
+
+
+def test_plan_changed_works_a_deletion_only_change(repo: Path, tmp_path: Path) -> None:
+    _git(repo, "tag", "0.1.1")
+    (repo / PACKAGE / "sub" / "beta.py").unlink()
+    _commit_all(repo, "delete")
+    output = tmp_path / "review.md"
+
+    assert _plan(repo, output, "--changed") == 0
+    text = output.read_text(encoding="utf-8")
+
+    assert "Nothing in scope:" not in text
+    parsed = {item.label: item.status for item in review_plan.parse_plan(text)}
+    assert [label for label, status in parsed.items() if status == "pending"] == [
+        "sub/ integration",
+        "Final gate",
+    ]
+
+
 def test_plan_changed_with_nothing_changed_writes_a_complete_plan_without_a_gate(
     repo: Path,
     tmp_path: Path,

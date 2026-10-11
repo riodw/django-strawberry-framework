@@ -356,8 +356,10 @@ The run's scope: the entry command's `scope:` entries, each passed as `--scope` 
 `resume`, else `--changed`. `--changed` works the release's own changes: every module whose
 committed content changed since the latest tag (`--since <rev>` overrides), the folder integration
 item of the folder each sits in, the folder item of a changed folder `__init__.py`, the project
-item for a changed package-root `__init__.py`. Dirty and untracked paths are concurrent work, never
-scope. Each resumed run recomputes it; an item the plan already holds is carried, never re-added.
+item for a changed package-root `__init__.py`; a deleted path or a rename's old path takes the
+integration item of its nearest surviving folder, else the project item (a rename counts both
+ends). Dirty and untracked paths are concurrent work, never scope. Each resumed run recomputes it;
+an item the plan already holds is carried, never re-added.
 When nothing changed, `plan` writes `Status: complete` w/ a `Nothing in scope:` line, every item
 out of scope and no gate, `resume` appends the run w/ that line, both print `nothing in scope`, and
 Worker-0 reports and stops. `scope` lists the same changes for reading: committed w/ their `HEAD`

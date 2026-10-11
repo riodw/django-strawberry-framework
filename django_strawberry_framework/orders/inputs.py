@@ -78,14 +78,14 @@ class Ordering(enum.Enum):
     True-or-None semantics).
 
     Portability note: a bare ``ASC`` / ``DESC`` over a NULLABLE column defers
-    NULL placement to the backend - SQLite sorts NULLs first on ``ASC``,
-    Postgres / MySQL sort them last - so the NULL partition (and thus the page
-    boundaries of a connection paged over a nullable column) differs across
-    databases, and the test suite runs on SQLite. This does NOT break cursor
-    stability WITHIN one backend (positional cursors only need a stable order
-    across requests on the same database); use the explicit ``ASC_NULLS_FIRST``
-    / ``ASC_NULLS_LAST`` (and ``DESC_*``) variants for a backend-independent
-    NULL partition.
+    NULL placement to the backend - SQLite and MySQL sort NULLs first on
+    ``ASC`` and last on ``DESC``; Postgres sorts them last on ``ASC`` and first
+    on ``DESC`` - so the NULL partition (and thus the page boundaries of a
+    connection paged over a nullable column) differs across databases, and the
+    test suite runs on SQLite. This does NOT break cursor stability WITHIN one
+    backend (positional cursors only need a stable order across requests on the
+    same database); use the explicit ``ASC_NULLS_FIRST`` / ``ASC_NULLS_LAST``
+    (and ``DESC_*``) variants for a backend-independent NULL partition.
     """
 
     ASC = "ASC"

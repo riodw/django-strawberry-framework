@@ -70,6 +70,7 @@ from _bench_common import (
     seed_glossary_terms,
     write_report,
 )
+from graphql import GraphQLError, OperationDefinitionNode, parse
 from typing_extensions import NotRequired
 
 if TYPE_CHECKING:
@@ -169,6 +170,25 @@ def operation_sha1(document: str) -> str:
     return hashlib.sha1(document.strip().encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
+def effective_operation_name(document: str, operation_name: str | None) -> str | None:
+    """Return the name of the operation ``document`` runs under ``operation_name``.
+
+    Without a name Strawberry runs the document's first operation definition
+    (``strawberry.types.execution::ExecutionContext.operation_name``), so its
+    name is the one recorded; an unparseable document runs no operation.
+    """
+    if operation_name is not None:
+        return operation_name
+    try:
+        definitions = parse(document).definitions
+    except GraphQLError:
+        return None
+    for definition in definitions:
+        if isinstance(definition, OperationDefinitionNode):
+            return definition.name.value if definition.name else None
+    return None
+
+
 class _Cell(TypedDict):
     """One measured cardinality; ``sql`` only under ``--show-sql``."""
 
@@ -197,10 +217,17 @@ def compare_reports(baseline: _Report, current: _Report) -> list[str]:
 
     Raises:
         ValueError: the reports measured a different operation or seeder.
+            ``graphql_operation_name`` is the executed operation's name, so a
+            report that recorded only the requested name can refuse.
     """
     before_params = baseline["header"]["params"]
     after_params = current["header"]["params"]
-    for key in ("operation_sha1", "seeder", "optimizer"):
+    for key in (
+        "operation_sha1",
+        "graphql_operation_name",
+        "seeder",
+        "optimizer",
+    ):
         if before_params.get(key) != after_params.get(key):
             msg = (
                 f"baseline {key}={before_params.get(key)!r} differs from "
@@ -380,7 +407,7 @@ def main() -> int:
         provenance=provenance.as_dict(),
         params={
             "cardinalities": cardinalities,
-            "graphql_operation_name": graphql_operation_name,
+            "graphql_operation_name": effective_operation_name(document, graphql_operation_name),
             "operation": args.query or args.operation_name,
             "operation_sha1": sha1,
             "optimizer": not args.no_optimizer,

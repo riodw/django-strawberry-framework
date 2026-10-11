@@ -82,11 +82,22 @@ def test_cardinalities_parse_sorted_and_refuse_zero_or_repeats(count_queries: Mo
         count_queries.parse_cardinalities("2,2,10")
 
 
-def _report(counts: list[int], *, sha1: str = "abc", verdict: str = "batched"):
+def _report(
+    counts: list[int],
+    *,
+    sha1: str = "abc",
+    name: str | None = None,
+    verdict: str = "batched",
+):
     report = _bench_common.build_report(
         tool="count_queries",
         provenance={"package_file": "/tree/pkg/__init__.py"},
-        params={"operation_sha1": sha1, "optimizer": True, "seeder": "products"},
+        params={
+            "graphql_operation_name": name,
+            "operation_sha1": sha1,
+            "optimizer": True,
+            "seeder": "products",
+        },
         rows=[
             {"cardinality": n, "queries": q, "root_rows": n * 6}
             for n, q in zip((2, 10, 30), counts, strict=False)
@@ -113,13 +124,52 @@ def test_compare_prints_per_cardinality_deltas_and_both_verdicts(count_queries: 
     ]
 
 
-def test_compare_refuses_a_different_operation(count_queries: ModuleType):
-    """Deltas between two operations mean nothing, so the comparison refuses."""
-    before = _report([4, 4, 4], sha1="abc")
-    after = _report([4, 4, 4], sha1="def")
+@pytest.mark.parametrize(
+    ("before", "after", "key"),
+    [
+        (("abc", None), ("def", None), "operation_sha1"),
+        (("abc", "One"), ("abc", "Two"), "graphql_operation_name"),
+        (("abc", None), ("abc", "Two"), "graphql_operation_name"),
+    ],
+)
+def test_compare_refuses_a_different_operation(
+    count_queries: ModuleType,
+    before: tuple[str, str | None],
+    after: tuple[str, str | None],
+    key: str,
+):
+    """Deltas between two operations mean nothing, so the comparison refuses.
 
-    with pytest.raises(ValueError, match="operation_sha1"):
-        count_queries.compare_reports(before, after)
+    One document can hold several operations, so the same fingerprint run
+    under another operation name is a different measurement.
+    """
+    baseline = _report([4, 4, 4], sha1=before[0], name=before[1])
+    current = _report([4, 4, 4], sha1=after[0], name=after[1])
+
+    with pytest.raises(ValueError, match=key):
+        count_queries.compare_reports(baseline, current)
+
+
+@pytest.mark.parametrize(
+    ("document", "operation_name", "effective"),
+    [
+        ("{ allItems { name } }", None, None),
+        ("query One { allItems { name } }", None, "One"),
+        ("query One { allItems { name } }", "One", "One"),
+        ("query One { a } query Two { b }", None, "One"),
+        ("query One { a } query Two { b }", "Two", "Two"),
+        ("fragment F on Item { name } query Two { b }", None, "Two"),
+        ("query {", None, None),
+    ],
+)
+def test_effective_operation_name_is_the_one_executed(
+    count_queries: ModuleType,
+    document: str,
+    operation_name: str | None,
+    effective: str | None,
+):
+    """A missing name runs the first operation, so a named single operation compares alike."""
+    assert count_queries.effective_operation_name(document, operation_name) == effective
 
 
 def test_builtin_operations_name_a_known_seeder(count_queries: ModuleType):

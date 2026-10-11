@@ -2135,7 +2135,9 @@ class CreateShelfViaMetadataSerializer(SerializerMutation):
     The input carries a serializer-only ``ChoiceField(allow_blank=True)`` -> a GENERATED enum
     with a ``BLANK`` member (``priority``), a ``DictField`` -> ``JSON`` (``attributes``), a
     custom ``HexColorField`` mapped via the public converter registry -> ``String``
-    (``accentColor``), a ``ListField`` of nullable strings -> ``[String]`` (``tags``), and the
+    (``accentColor``), a ``ListField`` of nullable strings -> ``[String]`` (``tags``), a
+    ``ListField`` of a choice child and a ``MultipleChoiceField`` (both ``allow_blank=True``)
+    -> lists of a generated enum with ``BLANK`` (``labels`` / ``flags``), and the
     model-backed blank-admitting choice column ``condition`` -> the read side's enum. The live
     test introspects each input field's type (ENUM / JSON / String) and posts a create through
     them, proving the expanded input type system - serializer-only enums, the expanded DRF

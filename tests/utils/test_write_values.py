@@ -38,6 +38,7 @@ from django_strawberry_framework.utils.write_values import (
     decoded_into,
     file_into,
     materialize_relation_id_container,
+    raw_choice_value,
     relation_into,
     scalar_into,
     store_decoded,
@@ -308,6 +309,44 @@ def test_decode_scalar_leaf_normalizes_string_subclass_after_preflight():
     assert error is None
     assert type(decoded) is str
     assert decoded == "valid"
+
+
+class _Flag(Enum):
+    BLANK = ""
+    on = "on"
+
+
+def test_raw_choice_value_unwraps_list_elements():
+    """A list-of-choices value arrives as members; each is unwrapped, ``BLANK`` to ``""``."""
+    members = [
+        _Flag.BLANK,
+        _Flag.on,
+        "raw",
+        None,
+    ]
+    decoded = raw_choice_value(members)
+    assert decoded == [
+        "",
+        "on",
+        "raw",
+        None,
+    ]
+    assert decoded is not members
+    assert members == [
+        _Flag.BLANK,
+        _Flag.on,
+        "raw",
+        None,
+    ]
+
+
+def test_raw_choice_value_unwraps_one_level_only():
+    """A nested list is a JSON value, which never carries a member: it passes through untouched."""
+    nested = [[_Flag.on]]
+    decoded = raw_choice_value(nested)
+    assert isinstance(decoded, list)
+    assert decoded == [[_Flag.on]]
+    assert decoded[0] is nested[0]
 
 
 def test_decode_scalar_leaf_checks_choice_value_after_unwrapping():

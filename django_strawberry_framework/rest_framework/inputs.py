@@ -85,6 +85,7 @@ from .serializer_converter import (
     nested_serializer_child,
     require_one_segment_source,
     resolve_serializer_field,
+    serializer_choice_source,
     serializer_field_description,
 )
 
@@ -411,18 +412,20 @@ def _fingerprint_relation_target(field: DRFField) -> str | None:
 
 
 def _fingerprint_choices(field: DRFField) -> tuple[tuple[str, ...], bool] | None:
-    """Return a ``ChoiceField``'s choice VALUES and ``allow_blank`` for the fingerprint, else ``None``.
+    """Return a choice-sourced field's choice VALUES and ``allow_blank`` for the fingerprint, else ``None``.
 
     The generated enum's members come from the choice VALUES plus the ``BLANK`` member
     ``allow_blank=True`` adds, so a hook that changes either changes the SDL enum - both
     folded into the fingerprint. Every ``ChoiceField`` (incl. ``FilePathField``, whose choices
-    are filesystem-dynamic but stable within a single process between the two hook reads) is
-    fingerprinted; a non-choice field yields ``None``.
+    are filesystem-dynamic but stable within a single process between the two hook reads) and
+    every ``ListField`` choice child (``serializer_choice_source``, the same peel the enum
+    upgrade reads) is fingerprinted; a non-choice field yields ``None``.
     """
-    if isinstance(field, serializers.ChoiceField):
+    choice = serializer_choice_source(field)
+    if choice is not None:
         # drf-stubs: ``ChoiceField.choices`` is the flattened ``dict`` of value -> display.
-        choices: Mapping[object, object] = field.choices
-        return tuple(str(value) for value in choices), bool(field.allow_blank)
+        choices: Mapping[object, object] = choice.choices
+        return tuple(str(value) for value in choices), bool(choice.allow_blank)
     return None
 
 

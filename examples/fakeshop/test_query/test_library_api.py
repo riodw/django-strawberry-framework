@@ -11965,6 +11965,79 @@ def test_create_shelf_via_metadata_serializer_expanded_input_type_system_over_ht
     ).exists()
 
 
+@pytest.mark.parametrize(
+    (
+        "field_name",
+        "enum_name",
+        "sent",
+        "topic",
+    ),
+    [
+        (
+            "labels",
+            "ShelfMetadataSerializerInputLabelsEnum",
+            ["BLANK", "rare", "rare"],
+            'labels:["", "rare", "rare"]',
+        ),
+        (
+            "flags",
+            "ShelfMetadataSerializerInputFlagsEnum",
+            ["BLANK", "locked", "locked"],
+            'flags:["", "locked"]',
+        ),
+    ],
+    ids=["listfield-choice-child", "multiple-choice"],
+)
+@pytest.mark.django_db
+def test_create_shelf_list_of_choices_enum_blank_member_writes_empty_string_over_http(
+    field_name: str,
+    enum_name: str,
+    sent: list[str],
+    topic: str,
+):
+    """A list-of-choices input publishes a list of the generated enum, and ``BLANK`` writes ``""``.
+
+    ``ShelfMetadataSerializer.labels`` is a ``ListField`` whose child is a
+    ``ChoiceField(allow_blank=True)``; ``flags`` is a ``MultipleChoiceField(allow_blank=True)``.
+    Both publish ``[<Enum>!]`` named after the declared field (the ``ListField`` child is bound
+    under the empty name) with a ``BLANK`` member, and a posted ``BLANK`` element reaches the
+    serializer as the ``""`` it admits: the members are unwrapped before DRF reads the list
+    (``ChoiceField.to_internal_value`` tests ``data == ""`` before it unwraps an enum member).
+    The ``ListField`` keeps duplicates; the ``MultipleChoiceField`` de-duplicates.
+    """
+    branch = models.Branch.objects.create(name="ListChoiceBranch", city="Boston")
+
+    rendered = {name: typ for name, typ, _ in _input_fields_sdl("ShelfMetadataSerializerInput")}
+    assert rendered[field_name] == f"[{enum_name}!]"
+    enum_values = _post_graphql(
+        'query { __type(name: "' + enum_name + '") { enumValues { name } } }',
+    ).json()["data"]["__type"]["enumValues"]
+    assert "BLANK" in {v["name"] for v in enum_values}
+
+    response = _post_graphql(
+        "mutation($d: ShelfMetadataSerializerInput!) { createShelfViaMetadataSerializer(data: $d) { "
+        "result { code topic } errors { field messages codes path } } }",
+        variables={
+            "d": {"code": f"ListChoice-{field_name}", "branchId": branch.pk, field_name: sent},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfViaMetadataSerializer"]
+    assert result["errors"] == []
+    assert result["result"] == {"code": f"ListChoice-{field_name}", "topic": topic}
+
+    # A value outside the enum is refused by GraphQL before the serializer runs.
+    refused = _post_graphql(
+        "mutation($d: ShelfMetadataSerializerInput!) { createShelfViaMetadataSerializer(data: $d) { "
+        "result { code } errors { field messages } } }",
+        variables={"d": {"code": "x", "branchId": branch.pk, field_name: ["nope"]}},
+    ).json()
+    assert refused["data"] is None
+    assert f"does not exist in '{enum_name}' enum" in refused["errors"][0]["message"]
+
+
 def _input_field_description(type_name: str, field_name: str) -> str | None:
     """Return an input object field's GraphQL description via introspection."""
     response = _post_graphql(
@@ -12875,6 +12948,8 @@ def test_golden_sdl_library_schema_hook_serializer_input():
         ("attributes", "JSON", None),
         ("accentColor", "String", None),
         ("tags", "[String]", None),
+        ("labels", "[ShelfMetadataSerializerInputLabelsEnum!]", "Constraints: allow_blank=true."),
+        ("flags", "[ShelfMetadataSerializerInputFlagsEnum!]", "Constraints: allow_blank=true."),
         ("label", "String", "A short human label for the shelf. Constraints: max_length=40."),
     ]
     assert _type_fields_sdl("CreateShelfViaMetadataSerializerPayload") == [

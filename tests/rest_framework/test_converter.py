@@ -84,6 +84,8 @@ from django_strawberry_framework.scalars import Upload
 from tests._idioms import bind_unparented
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from django_strawberry_framework.rest_framework.serializer_converter import DRFField
     from django_strawberry_framework.utils.typing import ConcreteField
 
@@ -1146,6 +1148,47 @@ def test_serializer_only_multiple_choicefield_allow_blank_enum_has_blank_member(
     assert {member.name: member.value for member in inner} == {"BLANK": "", "a": "a"}
 
 
+def test_listfield_choice_child_allow_null_makes_the_enum_element_nullable():
+    """A choice child with ``allow_null=True`` admits ``None`` per element: ``list[<enum> | None]``."""
+
+    class ListSer(serializers.Serializer[object]):
+        tags = serializers.ListField(
+            child=serializers.ChoiceField(choices=[("a", "A")], allow_null=True),
+        )
+
+    field = ListSer().fields["tags"]
+    _attr, annotation, _spec = resolve_serializer_field(field, None, "X")
+    (element,) = get_args(annotation)
+    inner, none_type = get_args(element)
+    assert none_type is type(None)
+    assert issubclass(inner, Enum)
+    assert {member.value for member in inner} == {"a"}
+
+
+def test_listfield_multiple_choice_child_stays_list_of_list_str():
+    """A ``MultipleChoiceField`` child admits a list per element, so no enum is generated for it."""
+
+    class ListSer(serializers.Serializer[object]):
+        groups = serializers.ListField(
+            child=serializers.MultipleChoiceField(choices=[("a", "A"), ("b", "B")]),
+        )
+
+    field = ListSer().fields["groups"]
+    _attr, annotation, _spec = resolve_serializer_field(field, None, "X")
+    assert annotation == list[list[str]]
+
+
+def test_listfield_filepath_child_stays_list_str(tmp_path: Path):
+    """A ``FilePathField`` child's choices are filesystem-dynamic, so the list stays ``list[str]``."""
+
+    class ListSer(serializers.Serializer[object]):
+        paths = serializers.ListField(child=serializers.FilePathField(path=str(tmp_path)))
+
+    field = ListSer().fields["paths"]
+    _attr, annotation, _spec = resolve_serializer_field(field, None, "X")
+    assert annotation == list[str]
+
+
 def test_declared_choicefield_allow_blank_over_model_column_enum_has_blank_member():
     """A declared ``ChoiceField(allow_blank=True)`` over a plain column emits its enum with ``BLANK``."""
 
@@ -1532,9 +1575,13 @@ def test_serializer_only_multiple_choice_over_empty_label_choices_keeps_a_non_nu
     assert {member.name: member.value for member in inner} == {"good": "good", "worn": "worn"}
 
 
-def _multiple_choice_refusal(serializer_name: str, field_name: str) -> str:
+def _multiple_choice_refusal(
+    serializer_name: str,
+    field_name: str,
+    field_kind: str = "MultipleChoiceField",
+) -> str:
     return (
-        f"Serializer {serializer_name} field {field_name!r} is a MultipleChoiceField over the "
+        f"Serializer {serializer_name} field {field_name!r} is a {field_kind} over the "
         "single-value choice column Book.circulation_status: it writes a list, which is not one "
         "of the column's choices. Declare a ChoiceField to write one value, or store many values "
         "in an ArrayField column whose base_field declares the choices."
@@ -1582,14 +1629,34 @@ def _generated_multiple_choice_ser():
     return MultiStatusSer, "circulation_status"
 
 
+def _listfield_choice_child_ser():
+    class MultiStatusSer(serializers.ModelSerializer[library_models.Book]):
+        circulation_status = serializers.ListField(
+            child=serializers.ChoiceField(choices=library_models.Book.CirculationStatus.choices),
+        )
+
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+            model = library_models.Book
+            fields = ("circulation_status",)
+
+    return MultiStatusSer, "circulation_status"
+
+
 @pytest.mark.parametrize(
     "make_serializer",
     [
         _declared_multiple_choice_ser,
         _source_mapped_multiple_choice_ser,
         _generated_multiple_choice_ser,
+        _listfield_choice_child_ser,
     ],
-    ids=["declared", "source-mapped", "serializer-choice-field"],
+    ids=[
+        "declared",
+        "source-mapped",
+        "serializer-choice-field",
+        "listfield-choice-child",
+    ],
 )
 def test_multiple_choice_over_single_value_choice_column_refused(
     make_serializer: Callable[
@@ -1597,18 +1664,36 @@ def test_multiple_choice_over_single_value_choice_column_refused(
         tuple[type[serializers.ModelSerializer[library_models.Book]], str],
     ],
 ):
-    """A ``MultipleChoiceField`` stores its list as one value no member of the column's enum reads.
+    """A list-of-choices field stores its list as one value no member of the column's enum reads.
 
-    Every choice it declares is a column choice, so only the list shape is refused.
+    Every choice it declares is a column choice, so only the list shape is refused; a
+    ``ListField`` with a choice child is refused the same way as a ``MultipleChoiceField``.
     """
     serializer_cls, field_name = make_serializer()
     field = serializer_cls().fields[field_name]
-    assert isinstance(field, serializers.MultipleChoiceField)
+    assert isinstance(field, (serializers.MultipleChoiceField, serializers.ListField))
     with pytest.raises(ConfigurationError) as exc_info:
         resolve_serializer_field(field, library_models.Book, "X")
-    assert str(exc_info.value) == _multiple_choice_refusal("MultiStatusSer", field_name)
+    assert str(exc_info.value) == _multiple_choice_refusal(
+        "MultiStatusSer",
+        field_name,
+        type(field).__name__,
+    )
 
 
+def _multiple_choice_field(choices: list[tuple[str, str]]) -> serializers.MultipleChoiceField:
+    return serializers.MultipleChoiceField(choices=choices)
+
+
+def _list_of_choices_field(choices: list[tuple[str, str]]) -> serializers.ListField:
+    return serializers.ListField(child=serializers.ChoiceField(choices=choices))
+
+
+@pytest.mark.parametrize(
+    "make_field",
+    [_multiple_choice_field, _list_of_choices_field],
+    ids=["multiple-choice", "listfield-choice-child"],
+)
 @pytest.mark.parametrize(
     ("model", "column_name"),
     [(library_models.Book, "title"), (scalar_models.ScalarSpecimen, "payload")],
@@ -1617,10 +1702,15 @@ def test_multiple_choice_over_single_value_choice_column_refused(
 def test_multiple_choice_over_column_without_choices_accepted(
     model: type[models.Model],
     column_name: str,
+    make_field: Callable[[list[tuple[str, str]]], DRFField],
 ):
-    """A column without ``choices`` has no read enum to hold the list to: the field is accepted."""
+    """A column without ``choices`` has no read enum to hold the list to: the field is accepted.
+
+    A declared list-of-choices field keeps its generated enum over it, whether it is a
+    ``MultipleChoiceField`` or a ``ListField`` whose child is a ``ChoiceField``.
+    """
     meta = type("Meta", (), {"model": model, "fields": (column_name,)})
-    multi_field = serializers.MultipleChoiceField(choices=[("a", "A"), ("b", "B")])
+    multi_field = make_field([("a", "A"), ("b", "B")])
     serializer_cls = type(
         "ListColumnSer",
         (serializers.ModelSerializer,),
@@ -1663,14 +1753,47 @@ def _multi_tags_field(**kwargs: Any) -> DRFField:  # pyright: ignore[reportExpli
     return TagsSer().fields["tags"]
 
 
-def test_multiple_choice_over_array_choice_column_accepted(monkeypatch: pytest.MonkeyPatch):
+# basedpyright: verbatim forward to ChoiceField.__init__; object fails its typed params
+def _list_choice_tags_field(**kwargs: Any) -> DRFField:  # pyright: ignore[reportExplicitAny]
+    class TagsSer(serializers.Serializer[object]):
+        tags = serializers.ListField(child=serializers.ChoiceField(**kwargs))
+
+    return TagsSer().fields["tags"]
+
+
+@pytest.mark.parametrize(
+    "make_field",
+    [_multi_tags_field, _list_choice_tags_field],
+    ids=["multiple-choice", "listfield-choice-child"],
+)
+def test_multiple_choice_over_array_choice_column_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+    make_field: Callable[..., DRFField],
+):
     """Each element is stored through ``base_field``, whose enum carries every declared choice."""
     column = _array_choice_column(monkeypatch)
-    field = _multi_tags_field(choices=[("a", "A"), ("b", "B")])
+    field = make_field(choices=[("a", "A"), ("b", "B")])
     annotation = serializer_converter._model_backed_scalar_annotation(field, column, "X")
     assert get_origin(annotation) is list
     (inner,) = get_args(annotation)
     assert {member.value for member in inner} == {"a", "b"}
+
+
+def test_listfield_choice_child_element_missing_from_array_base_enum_refused(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A choice child's values are checked against the ``base_field`` like a ``MultipleChoiceField``'s."""
+    column = _array_choice_column(monkeypatch)
+    field = _list_choice_tags_field(choices=[("a", "A")], allow_blank=True)
+    with pytest.raises(ConfigurationError) as exc_info:
+        serializer_converter._model_backed_scalar_annotation(field, column, "X")
+    assert str(exc_info.value) == _value_refusal(
+        "TagsSer",
+        "tags",
+        "''",
+        "Category.tags",
+        _BLANK_COLUMN_REMEDY,
+    )
 
 
 @pytest.mark.parametrize(

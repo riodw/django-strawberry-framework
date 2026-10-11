@@ -36,7 +36,8 @@ is the SANCTIONED extension so a consumer supports their OWN DRF field without p
 the framework - the MRO walk then resolves it, while an UNregistered custom field still
 hits the raising fallthrough (no silent ``String``). Mirrors the read-side
 ``types/converters.py::SCALAR_MAP`` mutable-module-dict hook. A serializer-only
-``ChoiceField`` is upgraded to a generated GraphQL enum at the build site;
+``ChoiceField`` (or a ``ListField``'s choice child, as a list) is upgraded to a generated
+GraphQL enum at the build site;
 a consumer-declared serializer field whose scalar disagrees with its backing model
 column's scalar fails loud rather than silently picking the column.
 
@@ -436,18 +437,25 @@ def _list_child_conversion(field: serializers.ListField) -> SerializerFieldConve
             f"{type(child).__name__} does not resolve to a scalar annotation; only a "
             "scalar child is supported.",
         )
-    element = child_conversion.annotation
-    if child.allow_null:
-        # ``ListField.to_internal_value`` runs each element through the child, which
-        # admits ``None`` on ``allow_null=True``; the element type must carry it (the model
-        # ``ArrayField`` element follows ``base_field.null`` the same way). A converted
-        # scalar annotation is a runtime annotation.
-        element = cast("OptionalWidenable", element) | None
     return SerializerFieldConversion(
-        annotation=GenericAlias(list, (element,)),
+        annotation=_list_annotation(field, child_conversion.annotation),
         kind=SCALAR,
         required=field.required,
     )
+
+
+def _list_annotation(field: serializers.ListField, element: object) -> object:
+    """Return ``list[element]``, the element nullable when the ``ListField``'s child admits ``None``.
+
+    ``ListField.to_internal_value`` runs each element through the child, which admits
+    ``None`` on ``allow_null=True``; the element type must carry it (the model ``ArrayField``
+    element follows ``base_field.null`` the same way). Shared by the scalar-child conversion
+    and the choice-child enum upgrade so the element rule has one owner. A converted scalar
+    annotation or a generated enum is a runtime annotation.
+    """
+    if field.child.allow_null:
+        element = cast("OptionalWidenable", element) | None
+    return GenericAlias(list, (element,))
 
 
 def _finish_serializer_conversion(
@@ -521,7 +529,10 @@ def convert_serializer_field(
     - ``FileField`` / ``ImageField`` -> ``file`` (``ImageField`` subclasses
       ``FileField``);
     - ``ListField`` -> ``list[<scalar child>]`` (recursive; a relation /
-      nested-serializer child raises);
+      nested-serializer child raises; a single-value ``ChoiceField`` child is ``str``
+      here and upgraded to ``list[<enum>]`` at the build site like
+      ``MultipleChoiceField``, while a ``MultipleChoiceField`` child stays
+      ``list[list[str]]``);
     - ``MultipleChoiceField`` -> ``list[str]`` (it subclasses ``ChoiceField`` so
       it must precede the scalar ``ChoiceField`` -> ``str``);
     - a nested ``Serializer`` / ``ListSerializer`` field raises (the nested-write
@@ -535,13 +546,14 @@ def convert_serializer_field(
     A ``ListField``'s element nullability follows its child's ``allow_null`` and is
     encoded here (``list[str | None]``). ``allow_blank`` does not change a ``CharField``'s
     ``str`` (``String`` already carries ``""``); on a ``ChoiceField`` /
-    ``MultipleChoiceField`` it adds the generated enum's ``BLANK`` member at the build
-    site (``_serializer_choice_enum``), since enum coercion would otherwise reject ``""``
-    before the serializer runs (spec-039 Decision 7); over a model choice column that does
-    not list ``""`` (or any declared choice value) the build site refuses the field instead
-    (``_reject_choice_values_the_column_does_not_list``). A ``MultipleChoiceField`` writes a
-    list, so it is checked against an ``ArrayField``'s ``base_field`` and refused over a
-    single-value choice column (``_multiple_choice_element_column``).
+    ``MultipleChoiceField`` / a ``ListField``'s choice child it adds the generated enum's
+    ``BLANK`` member at the build site (``_serializer_choice_enum``), since enum coercion
+    would otherwise reject ``""`` before the serializer runs (spec-039 Decision 7); over a
+    model choice column that does not list ``""`` (or any declared choice value) the build
+    site refuses the field instead (``_reject_choice_values_the_column_does_not_list``). A
+    ``MultipleChoiceField`` / ``ListField(child=ChoiceField)`` writes a list, so it is checked
+    against an ``ArrayField``'s ``base_field`` and refused over a single-value choice column
+    (``_multiple_choice_element_column``).
     """
     del is_input  # graphene-parity, accepted-and-ignored.
 
@@ -703,7 +715,11 @@ def serializer_field_description(field: DRFField) -> str | None:
             value: object = getattr(field, attr, None)
             if value is not None:
                 facts.append(f"{attr}={value}")
-        if getattr(field, "allow_blank", False):
+        # A ``ListField``'s choice child carries the per-element ``allow_blank`` the
+        # generated enum's ``BLANK`` member reflects, so it is described like a
+        # ``MultipleChoiceField``'s own.
+        blank_source: DRFField = serializer_choice_source(field) or field
+        if getattr(blank_source, "allow_blank", False):
             facts.append("allow_blank=true")
         if getattr(field, "allow_empty", None) is False:
             facts.append("allow_empty=false")
@@ -886,6 +902,44 @@ def _stored_choice_value(column: ConcreteField, value: object) -> object:
         return value
 
 
+def serializer_choice_source(field: DRFField) -> serializers.ChoiceField | None:
+    """Return the ``ChoiceField`` whose choices a serializer field admits per value, else ``None``.
+
+    A ``ChoiceField`` (``MultipleChoiceField`` and ``FilePathField`` included) is its own
+    source; a ``ListField`` whose ``child`` is a single-value ``ChoiceField`` admits the child's
+    choices per element, so the child is the source (DRF binds a ``ListField`` child under the
+    empty name, so the child never names the field: callers keep naming the top-level field).
+    A ``MultipleChoiceField`` child is not peeled: each element is itself a list, so the field
+    keeps its ``list[list[str]]`` scalar conversion. Every reader of a field's choice values or
+    ``allow_blank`` (the enum upgrade, the column-subset check, the schema fingerprint) peels
+    through this one accessor, so the two list-of-choices shapes cannot drift apart. Any other
+    field yields ``None``.
+    """
+    if isinstance(field, serializers.ChoiceField):
+        return field
+    if isinstance(field, serializers.ListField):
+        child: object = getattr(field, "child", None)
+        if isinstance(child, serializers.ChoiceField) and not isinstance(
+            child,
+            serializers.MultipleChoiceField,
+        ):
+            return child
+    return None
+
+
+def _writes_choice_list(field: DRFField) -> bool:
+    """Return whether a serializer field validates a LIST of choice values.
+
+    ``MultipleChoiceField.to_internal_value`` returns a list, and a ``ListField`` whose child
+    is a ``ChoiceField`` (``serializer_choice_source``) validates each element through that
+    child; both publish ``list[<enum>]`` and both store a collection, so both are checked
+    against the column each element is stored through.
+    """
+    if isinstance(field, serializers.MultipleChoiceField):
+        return True
+    return isinstance(field, serializers.ListField) and serializer_choice_source(field) is not None
+
+
 def _reject_choice_values_the_column_does_not_list(field: DRFField, column: ConcreteField) -> None:
     """Refuse a serializer choice field admitting a value its choice column does not list.
 
@@ -900,7 +954,9 @@ def _reject_choice_values_the_column_does_not_list(field: DRFField, column: Conc
     column are exactly its read enum's member values. Each admitted value is compared, as
     the column reads it back (``_stored_choice_value``), against those values; any value missing
     raises at input build. The check reads the admitted values of every ``ChoiceField``
-    subclass, declared or auto-generated (``Meta.extra_kwargs``), and of a field map a
+    subclass and of a ``ListField`` choice child (``serializer_choice_source``), declared or
+    auto-generated (``Meta.extra_kwargs``, the ``ListField(child=ChoiceField)`` DRF builds over
+    an ``ArrayField`` whose ``base_field`` declares choices), and of a field map a
     ``get_serializer_for_schema()`` / ``get_fields()`` hook returns, since the input is built
     from that map. A column without ``choices`` is not checked (its read type is a scalar); a
     serializer-only field has no column, so its generated enum keeps every declared
@@ -908,13 +964,14 @@ def _reject_choice_values_the_column_does_not_list(field: DRFField, column: Conc
     column has no read enum (``convert_choices_to_enum`` refuses its form), but a declared flat
     choice field over it is checked here like any other.
     """
-    if not isinstance(field, serializers.ChoiceField) or not column.choices:
+    choice = serializer_choice_source(field)
+    if choice is None or not column.choices:
         return
     listed_values = choice_column_values(column)
     # drf-stubs: ``ChoiceField.choices`` is the flattened ``dict`` of value -> display.
-    declared: Mapping[object, object] = field.choices
+    declared: Mapping[object, object] = choice.choices
     admitted = [value for value in declared if value is not None]
-    blank_from_allow_blank = field.allow_blank and "" not in admitted
+    blank_from_allow_blank = choice.allow_blank and "" not in admitted
     if blank_from_allow_blank:
         admitted.append("")
     missing = [
@@ -929,7 +986,7 @@ def _reject_choice_values_the_column_does_not_list(field: DRFField, column: Conc
     if missing_declared:
         rendered = ", ".join(_safe_arg_repr(value) for value in missing_declared)
         field_fixes.append(f"remove {rendered} from the serializer field's choices")
-    if field.allow_blank and "" in missing:
+    if choice.allow_blank and "" in missing:
         field_fixes.append("drop allow_blank from the serializer field")
     field_remedy = " and ".join(field_fixes)
     if missing == [""] and column.empty_strings_allowed:
@@ -948,9 +1005,10 @@ def _reject_choice_values_the_column_does_not_list(field: DRFField, column: Conc
 
 
 def _multiple_choice_element_column(field: DRFField, column: ConcreteField) -> ConcreteField:
-    """Return the column a ``MultipleChoiceField``'s chosen values are each stored through.
+    """Return the column a list-of-choices field's chosen values are each stored through.
 
-    ``MultipleChoiceField.to_internal_value`` returns a list of choice values, so the column
+    ``MultipleChoiceField.to_internal_value`` returns a list of choice values, and a
+    ``ListField(child=ChoiceField)`` validates one per element, so the column
     must store a collection. An ``ArrayField`` stores each element through its ``base_field``
     (``types/converters.py::array_element_field``), which carries any element choices, so the
     element values are checked against the values it lists (groups flattened). A column with
@@ -968,10 +1026,11 @@ def _multiple_choice_element_column(field: DRFField, column: ConcreteField) -> C
         return column
     serializer_name = _safe_type_name(getattr(field, "parent", None))
     raise ConfigurationError(
-        f"Serializer {serializer_name} field {field.field_name!r} is a MultipleChoiceField over "
-        f"the single-value choice column {column.model.__name__}.{column.name}: it writes a list, "
-        "which is not one of the column's choices. Declare a ChoiceField to write one value, or "
-        "store many values in an ArrayField column whose base_field declares the choices.",
+        f"Serializer {serializer_name} field {field.field_name!r} is a {type(field).__name__} "
+        f"over the single-value choice column {column.model.__name__}.{column.name}: it writes "
+        "a list, which is not one of the column's choices. Declare a ChoiceField to write one "
+        "value, or store many values in an ArrayField column whose base_field declares the "
+        "choices.",
     )
 
 
@@ -1023,7 +1082,8 @@ def _model_backed_scalar_annotation(
     apply).
 
     **Declared choices are a schema-affecting override.** A CONSUMER-DECLARED
-    ``ChoiceField`` / ``MultipleChoiceField`` (even ``source``-mapped to a plain model column)
+    ``ChoiceField`` / ``MultipleChoiceField`` / ``ListField(child=ChoiceField)`` (even
+    ``source``-mapped to a plain model column)
     emits the GENERATED serializer-only enum from its DECLARED choices, rather than collapsing
     back to the column's scalar (``String``) - the declared choices are part of the public
     mutation contract, so they must survive (never silently lost). A choice field admitting a
@@ -1031,15 +1091,16 @@ def _model_backed_scalar_annotation(
     list is refused first (``_reject_choice_values_the_column_does_not_list``), so a
     single-value choice field never writes a value the column's read enum cannot serialize; over
     a grouped column (no read enum) the declared flat field is checked the same way and keeps
-    its generated enum. A ``MultipleChoiceField`` is checked against the column each element is
-    stored through (``_multiple_choice_element_column``: an ``ArrayField``'s ``base_field``), and
+    its generated enum. A list-of-choices field (``MultipleChoiceField``,
+    ``ListField(child=ChoiceField)``) is checked against the column each element is stored
+    through (``_multiple_choice_element_column``: an ``ArrayField``'s ``base_field``), and
     refused over a single-value choice column, which lists no list value.
 
     Every other field takes the column's read enum as its input type, which a grouped column
     does not have, so it is refused (``_reject_read_enum_over_grouped_column``).
     """
     choice_column = column
-    if isinstance(field, serializers.MultipleChoiceField):
+    if _writes_choice_list(field):
         choice_column = _multiple_choice_element_column(field, column)
     _reject_choice_values_the_column_does_not_list(field, choice_column)
     if _is_consumer_declared(field) and _is_enumerable_serializer_choice(field):
@@ -1066,22 +1127,19 @@ def _model_backed_scalar_annotation(
     return model_annotation
 
 
-def _is_enumerable_serializer_choice(
-    field: DRFField,
-) -> TypeGuard[serializers.ChoiceField]:
-    """Return whether a serializer-only ``ChoiceField`` should generate a GraphQL enum.
+def _is_enumerable_serializer_choice(field: DRFField) -> bool:
+    """Return whether a serializer field's declared choices generate a GraphQL enum.
 
-    A serializer-only ``ChoiceField`` / ``MultipleChoiceField`` with static choices maps to
-    a generated enum (schema precision over the graphene-django ``str``). A ``FilePathField``
-    is EXCLUDED - it is a ``ChoiceField`` subclass whose choices are dynamic filesystem paths,
-    not a stable GraphQL enum - staying the ``str`` its registry entry maps it to.
-    Model-backed choice fields never reach here (they route through the read-side model-choice
-    enum at the ``column is not None`` branch).
+    A ``ChoiceField`` / ``MultipleChoiceField`` / ``ListField(child=ChoiceField)`` with static
+    choices maps to a generated enum (schema precision over the graphene-django ``str``):
+    declared choices are a schema-affecting override, never collapsed to ``String``, whether
+    the field admits one value or a list of them. A ``FilePathField`` source is EXCLUDED - it
+    is a ``ChoiceField`` subclass whose choices are dynamic filesystem paths, not a stable
+    GraphQL enum - staying the ``str`` its registry entry maps it to. An auto-generated
+    model-backed choice field never reaches here (it takes the read-side column enum).
     """
-    return isinstance(field, serializers.ChoiceField) and not isinstance(
-        field,
-        serializers.FilePathField,
-    )
+    choice = serializer_choice_source(field)
+    return choice is not None and not isinstance(choice, serializers.FilePathField)
 
 
 def _enum_member_map(enum_cls: type[Enum]) -> dict[str, object]:
@@ -1089,37 +1147,44 @@ def _enum_member_map(enum_cls: type[Enum]) -> dict[str, object]:
     return {member.name: member.value for member in enum_cls}
 
 
-def _serializer_choice_enum(field: serializers.ChoiceField, type_name: str) -> type[Enum]:
-    """Build (or dedupe) the generated enum for a serializer-only ``ChoiceField``.
+def _serializer_choice_enum(field: DRFField, type_name: str) -> type[Enum]:
+    """Build (or dedupe) the generated enum for a serializer field's declared choices.
 
-    Reuses the shared ``types/converters.py::build_enum_from_choices`` core (the SAME
-    grouped-form / value-sanitization / sanitize-collision rules the read-side model enum
-    applies), so a serializer-only choice enum cannot drift from a model-choice enum. DRF's
-    ``ChoiceField.choices`` is a value -> display mapping (already flattened), so its
-    ``.items()`` are the ``(value, label)`` pairs the builder expects; a ``None``-valued pair
-    (``Choices.__empty__``'s empty-option label) gets no member, so the empty option travels as
-    ``null`` where ``allow_null=True`` (a ``MultipleChoiceField`` element stays non-null: its
-    ``allow_null`` nulls the whole list). ``allow_blank=True``
+    The choices come from the field's choice source (``serializer_choice_source``: the
+    ``ChoiceField`` itself, or a ``ListField``'s choice child); the enum is named after the
+    TOP-LEVEL field (``<TypeName><FieldName>Enum``), since a ``ListField`` child is bound
+    under the empty name. Reuses the shared ``types/converters.py::build_enum_from_choices``
+    core (the SAME grouped-form / value-sanitization / sanitize-collision rules the read-side
+    model enum applies), so a serializer-only choice enum cannot drift from a model-choice
+    enum. DRF's ``ChoiceField.choices`` is a value -> display mapping (already flattened), so
+    its ``.items()`` are the ``(value, label)`` pairs the builder expects; a ``None``-valued
+    pair (``Choices.__empty__``'s empty-option label) gets no member, so the empty option
+    travels as ``null`` where the source has ``allow_null=True`` (a ``MultipleChoiceField``
+    element stays non-null: its ``allow_null`` nulls the whole list; a ``ListField`` child's
+    ``allow_null`` nulls the element). ``allow_blank=True`` on the source
     (``ChoiceField.to_internal_value`` returns ``""``) adds the ``BLANK`` member, so the
-    blank the serializer admits is reachable over the wire (``MultipleChoiceField`` too:
-    ``[BLANK]`` decodes to ``[""]``). Over a model choice column every member, ``BLANK``
-    included, must also be a value the column lists (for a ``MultipleChoiceField``, the
-    ``ArrayField`` ``base_field`` each element is stored through):
-    ``_reject_choice_values_the_column_does_not_list`` refuses the field before this enum is
-    built otherwise. The enum is cached by
-    its descriptor-derived name so two inputs referencing the same serializer-only choice
-    field share ONE enum object (Strawberry rejects two distinct types under one GraphQL
-    name); a name reused with a DIFFERENT member set fails loud rather than silently reusing
-    the first.
+    blank the serializer admits is reachable over the wire; a list of members is unwrapped
+    element-wise before DRF reads it (``utils/write_values.py::raw_choice_value``), so
+    ``[BLANK]`` reaches a ``MultipleChoiceField`` or a choice child as ``[""]``. Over a model
+    choice column every member, ``BLANK`` included, must also be a value the column lists
+    (for a list-of-choices field, the ``ArrayField`` ``base_field`` each element is stored
+    through): ``_reject_choice_values_the_column_does_not_list`` refuses the field before this
+    enum is built otherwise. The enum is cached by its descriptor-derived name so two inputs
+    referencing the same serializer-only choice field share ONE enum object (Strawberry
+    rejects two distinct types under one GraphQL name); a name reused with a DIFFERENT member
+    set fails loud rather than silently reusing the first.
     """
-    enum_name = f"{type_name}{pascal_case(_bound_field_name(field))}Enum"
+    field_name = _bound_field_name(field)
+    enum_name = f"{type_name}{pascal_case(field_name)}Enum"
+    # Callers reach this only through ``_is_enumerable_serializer_choice``.
+    choice = cast("serializers.ChoiceField", serializer_choice_source(field))
     # drf-stubs: ``ChoiceField.choices`` is the flattened ``dict`` of value -> display.
-    choices: Mapping[object, object] = field.choices
+    choices: Mapping[object, object] = choice.choices
     enum_cls = build_enum_from_choices(
         list(choices.items()),
         enum_name,
-        source_label=f"serializer field {field.field_name!r}",
-        include_blank=field.allow_blank,
+        source_label=f"serializer field {field_name!r}",
+        include_blank=choice.allow_blank,
     )
     cached = _SERIALIZER_CHOICE_ENUMS.get(enum_name)
     if cached is not None:
@@ -1134,16 +1199,20 @@ def _serializer_choice_enum(field: serializers.ChoiceField, type_name: str) -> t
     return enum_cls
 
 
-def _serializer_choice_annotation(field: serializers.ChoiceField, type_name: str) -> object:
-    """Return the generated enum annotation for an enumerable ``ChoiceField``.
+def _serializer_choice_annotation(field: DRFField, type_name: str) -> object:
+    """Return the generated enum annotation for an enumerable choice-sourced field.
 
     A ``ChoiceField`` -> a single generated enum; a ``MultipleChoiceField`` (a ``ChoiceField``
-    subclass) -> ``list[<enum>]``. Shared by the column-less path
+    subclass) -> ``list[<enum>]`` with a non-null element; a ``ListField(child=ChoiceField)``
+    -> ``list[<enum>]`` whose element follows the child's ``allow_null`` like every other
+    ``ListField`` (``_list_annotation``). Shared by the column-less path
     (``_serializer_only_scalar_annotation``) and the model-backed path
     (``_model_backed_scalar_annotation``), so a declared choice field emits the SAME generated
     enum whether or not it maps to a model column.
     """
     enum_cls = _serializer_choice_enum(field, type_name)
+    if isinstance(field, serializers.ListField):
+        return _list_annotation(field, enum_cls)
     if isinstance(field, serializers.MultipleChoiceField):
         return GenericAlias(list, (enum_cls,))
     return enum_cls
@@ -1157,7 +1226,8 @@ def _serializer_only_scalar_annotation(
     """Resolve a column-less serializer SCALAR annotation, upgrading choices to enums.
 
     A serializer-only ``ChoiceField`` becomes a generated enum; a ``MultipleChoiceField``
-    (a ``ChoiceField`` subclass, so its base conversion is ``list[str]``) becomes
+    (a ``ChoiceField`` subclass, so its base conversion is ``list[str]``) and a
+    ``ListField(child=ChoiceField)`` (base ``list[str]`` through the scalar registry) become
     ``list[<enum>]``. Every other scalar keeps its converter annotation.
     """
     if not _is_enumerable_serializer_choice(field):
@@ -1186,7 +1256,8 @@ def resolve_serializer_field(
     ``convert_serializer_field`` (the model-less table) for the kind, and the
     relation / file annotations are finalized here (where ``Upload`` and the
     serializer-only relation id-type are known); a column-less ``ChoiceField`` /
-    ``MultipleChoiceField`` is upgraded to a generated GraphQL enum.
+    ``MultipleChoiceField`` / ``ListField(child=ChoiceField)`` is upgraded to a generated
+    GraphQL enum.
 
     The GraphQL name is ALWAYS derived from the DECLARED serializer field name via
     the id-like-suffix rule (never ``source``). Returns the BASE (non-nullable)
@@ -1282,9 +1353,10 @@ def resolve_serializer_field(
             )
             graphql_name = graphql_camel_name(python_attr)
         else:
-            # #6: a serializer-only ``ChoiceField`` / ``MultipleChoiceField`` is upgraded
-            # to a generated GraphQL enum here (the build site owns ``type_name``); every
-            # other scalar keeps its converter annotation.
+            # #6: a serializer-only ``ChoiceField`` / ``MultipleChoiceField`` /
+            # ``ListField(child=ChoiceField)`` is upgraded to a generated GraphQL enum here
+            # (the build site owns ``type_name``); every other scalar keeps its converter
+            # annotation.
             annotation = _serializer_only_scalar_annotation(field, conversion, type_name)
             python_attr, graphql_name = serializer_field_graphql_name(field_name, kind)
 

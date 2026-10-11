@@ -30,7 +30,7 @@ and ``examples/fakeshop/test_query/test_products_api.py`` (serializer mutations)
 from __future__ import annotations
 
 import sys
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -1269,18 +1269,42 @@ def test_schema_fingerprint_sensitive_to_converter_extras():
     )
 
 
+def _list_of_choices(**kwargs: object) -> serializers.ListField:
+    """A ``ListField`` whose choice child carries ``kwargs``: the third list-of-choices shape."""
+    # basedpyright: verbatim forward to ChoiceField.__init__; object fails its typed params
+    return serializers.ListField(child=serializers.ChoiceField(**kwargs))  # pyright: ignore[reportArgumentType]
+
+
 @pytest.mark.parametrize(
-    "field_cls",
-    [serializers.ChoiceField, serializers.MultipleChoiceField],
+    "make_field",
+    [serializers.ChoiceField, serializers.MultipleChoiceField, _list_of_choices],
+    ids=["choice", "multiple-choice", "listfield-choice-child"],
 )
-def test_choice_fingerprint_folds_allow_blank(field_cls: type[serializers.ChoiceField]):
-    """Both choice flavors fingerprint ``allow_blank`` beside their values."""
+def test_choice_fingerprint_folds_allow_blank(
+    make_field: Callable[..., serializers.ChoiceField | serializers.ListField],
+):
+    """Every choice-sourced shape fingerprints its ``allow_blank`` beside its values."""
     from django_strawberry_framework.rest_framework.inputs import _fingerprint_choices
 
-    strict = field_cls(choices=[("r", "R")])
-    blank = field_cls(choices=[("r", "R")], allow_blank=True)
+    strict = make_field(choices=[("r", "R")])
+    blank = make_field(choices=[("r", "R")], allow_blank=True)
     assert _fingerprint_choices(strict) == (("r",), False)
     assert _fingerprint_choices(blank) == (("r",), True)
+
+
+def test_schema_fingerprint_sensitive_to_listfield_choice_child_values():
+    """A ``ListField`` choice child's values build its enum, so a hook changing them is drift."""
+    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
+
+    class C1(serializers.Serializer[object]):
+        tags = serializers.ListField(child=serializers.ChoiceField(choices=[("r", "R")]))
+
+    class C2(serializers.Serializer[object]):
+        tags = serializers.ListField(child=serializers.ChoiceField(choices=[("b", "B")]))
+
+    assert serializer_schema_fingerprint(dict(C1().fields)) != serializer_schema_fingerprint(
+        dict(C2().fields),
+    )
 
 
 def test_schema_fingerprint_sensitive_to_choice_allow_blank():

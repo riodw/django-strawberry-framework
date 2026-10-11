@@ -401,7 +401,7 @@ register_serializer_field_converter(
 class ShelfMetadataSerializer(serializers.ModelSerializer[Shelf]):
     """A ``Shelf`` serializer exercising the expanded input type system live.
 
-    Four serializer-only WRITE-ONLY fields prove the expanded input type system over
+    The serializer-only WRITE-ONLY fields below prove the expanded input type system over
     ``/graphql/``:
 
     * ``priority`` - a serializer-only ``ChoiceField(allow_blank=True)`` -> a GENERATED
@@ -411,14 +411,20 @@ class ShelfMetadataSerializer(serializers.ModelSerializer[Shelf]):
     * ``accent_color`` - a custom ``HexColorField`` mapped ONLY via the public converter
       registry -> ``String``;
     * ``tags`` - a ``ListField`` whose child admits ``None`` -> ``[String]`` (nullable
-      elements).
+      elements);
+    * ``labels`` - a ``ListField`` whose child is a ``ChoiceField(allow_blank=True)`` -> a
+      list of the GENERATED enum (``[<Enum>!]``, named after the ``ListField``), its ``BLANK``
+      member writing the ``""`` each element admits;
+    * ``flags`` - a ``MultipleChoiceField(allow_blank=True)`` -> the same list-of-enum shape
+      with ``BLANK``, DRF de-duplicating the selection.
 
-    All four are ``write_only`` + ``required=False`` serializer-only extras (no ``Shelf``
+    All are ``write_only`` + ``required=False`` serializer-only extras (no ``Shelf``
     column), decoded + validated then popped in ``create()`` (``Shelf`` has no such columns);
-    the resolved ``priority`` or ``tags`` is stamped into ``topic`` so the live test can read
-    the effect. ``code`` + ``condition`` + ``branch`` are the ordinary model-backed columns
-    (auto-generated, so the declared-field conflict policy leaves them alone); ``condition``
-    is the blank-admitting choice column, so its input is the read side's enum.
+    the resolved ``priority``, ``tags``, ``labels`` or ``flags`` is stamped into ``topic`` so
+    the live test can read the effect. ``code`` + ``condition`` + ``branch`` are the ordinary
+    model-backed columns (auto-generated, so the declared-field conflict policy leaves them
+    alone); ``condition`` is the blank-admitting choice column, so its input is the read
+    side's enum.
     """
 
     priority = serializers.ChoiceField(
@@ -430,6 +436,20 @@ class ShelfMetadataSerializer(serializers.ModelSerializer[Shelf]):
     attributes = serializers.DictField(required=False, write_only=True)
     tags = serializers.ListField(
         child=serializers.CharField(allow_null=True),
+        required=False,
+        write_only=True,
+    )
+    labels = serializers.ListField(
+        child=serializers.ChoiceField(
+            choices=[("fiction", "Fiction"), ("rare", "Rare")],
+            allow_blank=True,
+        ),
+        required=False,
+        write_only=True,
+    )
+    flags = serializers.MultipleChoiceField(
+        choices=[("fragile", "Fragile"), ("locked", "Locked")],
+        allow_blank=True,
         required=False,
         write_only=True,
     )
@@ -456,6 +476,8 @@ class ShelfMetadataSerializer(serializers.ModelSerializer[Shelf]):
             "attributes",
             "accent_color",
             "tags",
+            "labels",
+            "flags",
             "label",
         )
 
@@ -467,6 +489,8 @@ class ShelfMetadataSerializer(serializers.ModelSerializer[Shelf]):
         # live test can read the effect.
         priority = validated_data.pop("priority", None)
         tags = validated_data.pop("tags", None)
+        labels = validated_data.pop("labels", None)
+        flags = validated_data.pop("flags", None)
         validated_data.pop("attributes", None)
         validated_data.pop("accent_color", None)
         validated_data.pop("label", None)
@@ -474,6 +498,10 @@ class ShelfMetadataSerializer(serializers.ModelSerializer[Shelf]):
             validated_data["topic"] = f"priority:{priority}"
         if tags is not None:
             validated_data["topic"] = f"tags:{json.dumps(tags)}"
+        if labels is not None:
+            validated_data["topic"] = f"labels:{json.dumps(labels)}"
+        if flags is not None:
+            validated_data["topic"] = f"flags:{json.dumps(flags)}"
         return super().create(validated_data)
 
 

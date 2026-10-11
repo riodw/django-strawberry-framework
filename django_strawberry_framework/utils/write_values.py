@@ -99,7 +99,26 @@ def raw_choice_value(value: object) -> object:
     ``== "available"``). Unwrapping to ``.value`` feeds Django the raw choice value
     it stores and validates against. A non-enum scalar is passed through unchanged;
     an explicit ``None`` (a provided null) stays ``None``.
+
+    A list value is unwrapped element-wise: every list-of-choices input (a
+    ``MultipleChoiceField`` / ``ListField(child=ChoiceField)`` serializer field, an
+    ``ArrayField`` whose ``base_field`` declares choices) publishes ``list[<enum>]``, so
+    its elements arrive as members the same way. Unwrapping them here, rather than
+    trusting each validator to accept a member, keeps the ``BLANK`` member honest:
+    DRF's ``ChoiceField.to_internal_value`` tests ``data == ""`` for ``allow_blank``
+    BEFORE it unwraps an ``Enum``, so a ``BLANK`` member reaching it is refused as an
+    invalid choice while the unwrapped ``""`` is admitted. One level only: a scalar list
+    input is a flat list of members, and the only deeper list (a ``JSON`` value, which is
+    client-controlled nesting) never carries a member. The list is rebuilt, never mutated
+    in place.
     """
+    if isinstance(value, list):
+        return [_raw_choice_scalar(element) for element in value]
+    return _raw_choice_scalar(value)
+
+
+def _raw_choice_scalar(value: object) -> object:
+    """Unwrap one non-list value: an enum member to its value, a ``str`` to the base ``str``."""
     raw_value: object = value.value if isinstance(value, Enum) else value
     return str.__str__(raw_value) if isinstance(raw_value, str) else raw_value
 

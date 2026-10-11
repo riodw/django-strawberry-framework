@@ -5596,6 +5596,18 @@ def _union_of_a_difference_of_a_union_all(
     return qs.union(qs.difference(qs.union(qs, all=True)))
 
 
+def _union_of_a_values_projected_intersection(
+    qs: models.QuerySet[Category],
+) -> models.QuerySet[Category]:
+    return qs.union(qs.intersection(qs).values("id", "name"))
+
+
+def _union_of_a_values_list_projected_intersection(
+    qs: models.QuerySet[Category],
+) -> models.QuerySet[Category]:
+    return qs.union(qs.intersection(qs).values_list("id", "name"))
+
+
 @pytest.mark.parametrize(
     ("build", "detail"),
     [
@@ -5608,6 +5620,18 @@ def _union_of_a_difference_of_a_union_all(
             _union_of_a_difference_of_a_union_all,
             "union: union(all=True) keeps duplicate rows, which a primary-key set cannot",
             id="nested-union-all",
+        ),
+        pytest.param(
+            _union_of_a_values_projected_intersection,
+            "union: a nested combinator projects .values('id', 'name'), which the "
+            "primary-key subquery cannot re-project",
+            id="nested-combinator-values",
+        ),
+        pytest.param(
+            _union_of_a_values_list_projected_intersection,
+            "union: a nested combinator projects .values('id', 'name'), which the "
+            "primary-key subquery cannot re-project",
+            id="nested-combinator-values-list",
         ),
     ],
 )

@@ -1771,8 +1771,27 @@ def test_plan_honors_prefetch_obj_hint_does_not_walk_inner_selections():
     assert plan.prefetch_related == (explicit,)
 
 
+def _hinted_union(qs: QuerySet[Item], pks: Sequence[int]) -> QuerySet[Item]:
+    return qs.filter(pk=pks[0]).union(Item.objects.filter(pk=pks[1]))
+
+
+def _hinted_union_of_a_difference(qs: QuerySet[Item], pks: Sequence[int]) -> QuerySet[Item]:
+    return qs.filter(pk=pks[0]).union(
+        Item.objects.filter(pk__in=pks[1:]).difference(Item.objects.filter(pk=pks[2])),
+    )
+
+
 @pytest.mark.django_db
-def test_plan_rewrites_a_combined_prefetch_obj_hint_to_its_primary_key_set():
+@pytest.mark.parametrize(
+    "build",
+    [
+        pytest.param(_hinted_union, id="union"),
+        pytest.param(_hinted_union_of_a_difference, id="nested-combinator"),
+    ],
+)
+def test_plan_rewrites_a_combined_prefetch_obj_hint_to_its_primary_key_set(
+    build: Callable[[QuerySet[Item], Sequence[int]], QuerySet[Item]],
+):
     """A hinted ``Prefetch`` over a union is planned as the rows its primary keys select.
 
     Django's reverse-FK prefetch adds the parent-batch predicate with
@@ -1780,15 +1799,15 @@ def test_plan_rewrites_a_combined_prefetch_obj_hint_to_its_primary_key_set():
     ``Prefetch`` carries the single-table ``pk__in`` rewrite instead, on the
     hinted queryset's own alias, with its nested prefetches and ``to_attr``
     lookup kept, so every parent receives exactly its own combined children.
+    An unprojected combinator nested in a branch keeps its set operation inside
+    the subquery.
     """
     seed_data(1)
     registry.clear()
-    first, second = Item.objects.order_by("pk")[:2]
-    combined = (
-        Item.objects.using("default")
-        .prefetch_related("entries")
-        .filter(pk=first.pk)
-        .union(Item.objects.filter(pk=second.pk))
+    first, second, third = Item.objects.order_by("pk")[:3]
+    combined = build(
+        Item.objects.using("default").prefetch_related("entries"),
+        (first.pk, second.pk, third.pk),
     )
     explicit = Prefetch("items", queryset=combined)
 
@@ -1824,10 +1843,31 @@ def test_plan_rewrites_a_combined_prefetch_obj_hint_to_its_primary_key_set():
     assert served == expected
 
 
-def test_plan_refuses_a_combined_prefetch_obj_hint_the_primary_key_set_cannot_carry():
-    """A hinted ``Prefetch`` over a ``union(all=True)`` fails at plan time with the combined text."""
+@pytest.mark.parametrize(
+    ("combined", "detail"),
+    [
+        pytest.param(
+            lambda: Item.objects.union(Item.objects.all(), all=True),
+            "union: union(all=True) keeps duplicate rows, which a primary-key set cannot",
+            id="union-all",
+        ),
+        pytest.param(
+            lambda: Item.objects.union(
+                Item.objects.intersection(Item.objects.all()).values("id", "name"),
+            ),
+            "union: a nested combinator projects .values('id', 'name'), which the "
+            "primary-key subquery cannot re-project",
+            id="nested-combinator-values",
+        ),
+    ],
+)
+def test_plan_refuses_a_combined_prefetch_obj_hint_the_primary_key_set_cannot_carry(
+    combined: Callable[[], QuerySet[Item]],
+    detail: str,
+):
+    """A hinted ``Prefetch`` its primary-key set cannot carry fails at plan time, typed."""
     registry.clear()
-    explicit = Prefetch("items", queryset=Item.objects.union(Item.objects.all(), all=True))
+    explicit = Prefetch("items", queryset=combined())
 
     class CategoryType:
         @classmethod
@@ -1839,7 +1879,6 @@ def test_plan_refuses_a_combined_prefetch_obj_hint_the_primary_key_set_cannot_ca
         CategoryType,
         optimizer_hints={"items": OptimizerHint.prefetch(explicit)},
     )
-    detail = "union: union(all=True) keeps duplicate rows, which a primary-key set cannot"
     try:
         with pytest.raises(ConfigurationError) as excinfo:
             plan_optimizations([_sel("items", selections=[_sel("name")])], Category)

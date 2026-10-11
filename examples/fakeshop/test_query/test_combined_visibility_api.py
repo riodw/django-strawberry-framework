@@ -1321,6 +1321,13 @@ _REFUSED = {
         ),
         ("difference: a branch selects annotations ('rank') that would be dropped from the rows",),
     ),
+    "nested-branch-values": _Refused(
+        lambda qs: _a(qs).union(_b(qs).intersection(_b(qs)).values("id", "name")),
+        (
+            "union: a nested combinator projects .values('id', 'name'), which the primary-key "
+            "subquery cannot re-project",
+        ),
+    ),
 }
 
 

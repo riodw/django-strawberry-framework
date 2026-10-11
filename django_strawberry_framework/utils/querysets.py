@@ -3603,13 +3603,18 @@ def _combined_lost_property(
                 )
         if query.is_sliced:
             return "it is sliced, and a LIMIT/OFFSET cannot ride inside the primary-key subquery"
-        if query.values_select:
-            outer_values: tuple[object, ...] = query.values_select
-            cols = ", ".join(repr(col) for col in outer_values)
+    if query.values_select:
+        combined_values: tuple[object, ...] = query.values_select
+        cols = ", ".join(repr(col) for col in combined_values)
+        if outer:
             return (
                 f"it projects .values({cols}) after the combinator, which computes the "
                 "combinator over those columns instead of the primary key"
             )
+        return (
+            f"a nested combinator projects .values({cols}), which the primary-key "
+            "subquery cannot re-project"
+        )
     # Django's ``_combinator_query`` builds ``combined_queries`` from each branch's
     # ``QuerySet.query``, so every member is a ``sql.Query``.
     branches: tuple[sql.Query, ...] = query.combined_queries

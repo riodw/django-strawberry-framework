@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 44 done, 52 to do.
+Progress: 45 done, 55 to do.
 
 ## Done
 
@@ -84,6 +84,10 @@ Progress: 44 done, 52 to do.
   `"__all__"` dropped every forward `ForeignObject` (a side effect of `7000d920`); a leaf now orders by one term per carrier
   column as Django's `order_by` does, `"__all__"` publishes it again, and a link naming no visible target sorts as missing
   instead of being dropped by an inner join (`0eb96efe`)
+- [x] 99. A connection target whose `get_queryset` (or manager) returns a `.reverse()`d queryset compiled reversed SQL while
+  the keyset seek, the minted cursors and the optimized nested window (keyset and offset) read the forward terms, so pages
+  repeated and lost rows with no error; the order ladder now materializes the reverse of the forward total order as explicit
+  terms first, keeping the page-1 `ORDER BY` byte-identical (`b005a7ee`)
 
 ## To do: t3 robustness rows
 
@@ -120,6 +124,9 @@ not real bugs and just get deleted from t3. One checkbox per area:
   serializer flavor maps it into the envelope
 - [ ] 97. A `FilterSet` declaring `{"<fo>": ["exact", "isnull"]}` over a forward `ForeignObject` raises django-filter's
   `AssertionError: unrecognized field type ForeignObject` at class creation, where a `ForeignKey` builds `isnull`
+- [ ] 100. A random `"?"` order (hook `order_by("?")` or `Meta.ordering = ["?"]`) on an optimized nested offset connection
+  raises "Cannot resolve keyword '?' into field" (masked), reversed or not, `first:` or `last:`; the root path serves it
+- [ ] 101. `manage.py import_spec_terms --check` fails on spec-020's terms CSV on main (seen at `eb30dd7e`)
 
 ## To do: holes found re-checking the fixes
 
@@ -178,6 +185,9 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 98. CHANGELOG entry for item 51: an `OrderSet` over a forward `ForeignObject` orders it by every carrier column (a
   multi-column link no longer errors), `Meta.fields = "__all__"` publishes the `ForeignObject` leaf, and naming a reverse
   `GenericRel` in a `DjangoMutation`'s `fields` / `exclude` raises the unknown-field error instead of the `ForeignObject` one
+- [ ] 102. CHANGELOG entry for item 99: a connection over a type whose `get_queryset` or manager returns a `.reverse()`d
+  queryset pages every row once and its cursors replay, root and nested; the order served is unchanged, an `orderBy:` beside
+  such a hook stays inverted (Django `order_by()` semantics)
 
 ## Hunt not finished in t3
 

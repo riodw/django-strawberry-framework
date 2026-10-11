@@ -804,7 +804,10 @@ def test_filter_for_field_preserves_upstream_none_contract_for_unrecognized_fiel
     assert AttachmentProbe.filter_for_field(attachment_field, "attachment", "exact") is None
     assert AttachmentProbe.filter_for_field(attachment_field, "attachment", "in") is None
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(
+        AssertionError,
+        match=r"RaiseProbe resolved field 'attachment'.*unrecognized field type FileField",
+    ):
 
         @definition_raises
         class RaiseProbe(FilterSet):

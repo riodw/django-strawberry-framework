@@ -11,7 +11,8 @@ failure directions against canned responses, and the export / collection
 guards - stay in the package tier at ``tests/testing/test_client.py``.
 
 Covered live here: the ``assert_no_errors=True`` raising direction on a real
-invalid selection; the source-level non-JSON ``ValueError`` from a real 404 on
+invalid selection; a non-``dict`` ``variables`` mapping (``MappingProxyType``,
+``UserDict``) sent as JSON; the source-level non-JSON ``ValueError`` from a real 404 on
 both transport colors; the ``AsyncTestClient`` happy path (awaited transport,
 async decode), its ``login()`` bracket including logout when the block raises,
 and its nested two-file multipart upload (the async color of
@@ -33,10 +34,13 @@ Django's 404 handler and needs no database.
 """
 
 import io
+from collections import UserDict
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
-from apps.products.models import Category
+from apps.products.models import Category, Item
 from apps.products.services import create_users, seed_data
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -161,6 +165,27 @@ def test_wrong_configured_endpoint_surfaces_django_non_json_decode_error():
     ):
         with pytest.raises(ValueError, match="Content-Type.*text/html"):
             TestClient().query("{ __typename }")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("wrap", [MappingProxyType, UserDict], ids=["mappingproxy", "userdict"])
+def test_query_sends_a_non_dict_variables_mapping(
+    wrap: Callable[[dict[str, object]], Mapping[str, object]],
+):
+    """A ``MappingProxyType`` / ``UserDict`` for ``variables=`` reaches the server as JSON.
+
+    ``query()`` accepts any ``Mapping[str, object]``; the builder copies it to a
+    plain ``dict`` before encoding. With two seeded items, exactly one edge back
+    proves the ``first`` variable arrived rather than being dropped.
+    """
+    seed_data(2)
+    res = TestClient().query(_ITEMS_QUERY, variables=wrap({"first": 1}))
+
+    assert res.errors is None
+    assert res.data is not None
+    edges = res.data["allItems"]["edges"]
+    assert len(edges) == 1
+    assert Item.objects.filter(name=edges[0]["node"]["name"]).exists()
 
 
 # ---------------------------------------------------------------------------

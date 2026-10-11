@@ -257,8 +257,14 @@ class _GraphQLTestClientBase(BaseGraphQLTestClient, Generic[_ClientT]):
         if operation_name is not None:
             body["operationName"] = operation_name
 
+        # Truthiness first, then a plain-``dict`` copy: the annotation admits any
+        # ``Mapping`` (``MappingProxyType``, ``UserDict``), which ``json.dumps``
+        # cannot encode and the placeholder walk cannot descend. The copy is the
+        # one object both the envelope and the walk read.
+        sent: dict[str, object] = {}
         if variables:
-            body["variables"] = variables
+            sent = dict(variables)
+            body["variables"] = sent
 
         # Truthiness, matching the ``files`` switches in ``query()`` and
         # ``request()``: ``files={}`` is a JSON post, never a mixed envelope.
@@ -292,9 +298,7 @@ class _GraphQLTestClientBase(BaseGraphQLTestClient, Generic[_ClientT]):
                 f"are built by this client - rename the variable path.",
             )
 
-        # ``cast``: the ``variables`` member checked above exists only for a
-        # non-empty ``variables`` mapping.
-        self._assert_file_placeholders(cast("Mapping[str, object]", variables), files)
+        self._assert_file_placeholders(sent, files)
 
         file_map = {key: [f"variables.{key}"] for key in files}
         return {"operations": json.dumps(body), "map": json.dumps(file_map), **files}

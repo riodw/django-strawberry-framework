@@ -34,7 +34,9 @@ local view that answers with the canned JSON payload the transport attached.
 
 import json
 import unittest
-from collections.abc import Mapping
+from collections import UserDict
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 import pytest
@@ -658,6 +660,33 @@ def test_build_body_map_rule_is_uniform_across_path_shapes():
     assert body["file"] is f_top
     assert body["data.image"] is f_nested
     assert body["tags.0"] is f_listed
+
+
+@pytest.mark.parametrize("wrap", [MappingProxyType, UserDict], ids=["mappingproxy", "userdict"])
+def test_build_body_multipart_accepts_a_non_dict_variables_mapping(
+    wrap: Callable[[dict[str, object]], Mapping[str, object]],
+):
+    """A non-``dict`` ``Mapping`` for ``variables=`` walks and encodes like a ``dict``.
+
+    ``query()`` annotates ``variables`` as ``Mapping[str, object]``, so a
+    ``MappingProxyType`` or ``UserDict`` is a valid call: the builder copies it
+    to a plain ``dict`` that both the placeholder walk and the JSON-encoded
+    ``operations`` field read, so the top-level placeholder resolves and the map
+    rule holds.
+    """
+    upload = object()
+    body = TestClient()._build_body(
+        "mutation($file: Upload!) { up }",
+        wrap({"file": None}),
+        {"file": upload},
+        None,
+    )
+
+    assert isinstance(body["operations"], str)
+    assert json.loads(body["operations"])["variables"] == {"file": None}
+    assert isinstance(body["map"], str)
+    assert json.loads(body["map"]) == {"file": ["variables.file"]}
+    assert body["file"] is upload
 
 
 def test_build_body_sends_empty_operation_name_instead_of_dropping_it():

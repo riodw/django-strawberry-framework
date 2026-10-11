@@ -14,7 +14,7 @@ contracts, ``SyncMisuseError`` discrimination (``original_error`` is not a wire
 field), and the public-export surface.
 """
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Awaitable, Callable, Iterable, Iterator
 from typing import SupportsIndex
 
 import pytest
@@ -32,7 +32,9 @@ import django_strawberry_framework
 from django_strawberry_framework import (
     DjangoNodeField,
     DjangoNodesField,
+    DjangoSchema,
     DjangoType,
+    ErrorPolicy,
     finalize_django_types,
     strawberry_config,
 )
@@ -916,6 +918,58 @@ def test_node_sync_with_async_consumer_resolve_node_raises_sync_misuse():
     assert isinstance(result.errors[0].original_error, SyncMisuseError)
     assert "resolve_node" in str(result.errors[0])
     assert result.data == {"category": None}
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_node_sync_operation_inside_an_event_loop_never_calls_async_resolve_node():
+    """``execute_sync`` under a running loop refuses before the override is called.
+
+    Masking is off because the subject is the typed error itself.
+    """
+    await sync_to_async(services.seed_data)(1)
+    calls: list[str] = []
+
+    async def _no_row() -> None:
+        return None
+
+    class AsyncCategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "CategoryNode"
+
+        @classmethod
+        def resolve_node(
+            cls,
+            node_id: str,
+            *,
+            info: strawberry.Info,
+            required: bool = False,
+        ) -> Awaitable[None]:
+            del cls, info, required
+            calls.append(node_id)
+            return _no_row()
+
+    @strawberry.type
+    class Query:
+        category: AsyncCategoryNode | None = DjangoNodeField(AsyncCategoryNode)
+
+    await sync_to_async(finalize_django_types)()
+    schema = DjangoSchema(query=Query, error_policy=ErrorPolicy(enabled=False))
+    row = await Category.objects.order_by("pk").afirst()
+    assert row is not None
+
+    result = schema.execute_sync(
+        _CATEGORY_QUERY,
+        variable_values={"id": _gid("products.category", row.pk)},
+    )
+
+    assert result.errors is not None
+    assert isinstance(result.errors[0].original_error, SyncMisuseError)
+    assert "await schema.execute" in str(result.errors[0])
+    assert result.data == {"category": None}
+    assert calls == []
 
 
 @pytest.mark.django_db

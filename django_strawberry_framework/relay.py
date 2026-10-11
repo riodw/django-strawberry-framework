@@ -551,8 +551,10 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
         # consumer overrides for free. It receives the decoded ``node_id``
         # string, exactly what Strawberry's own ``relay.node()`` field passes
         # (``Node.resolve_node(node_id: str)``); the coercion above only gates.
+        # Mode first: an async override called before a refusal leaves its coroutine unawaited.
+        is_async = async_execution()
         result = resolved.resolve_node(node_id, info=info, required=False)
-        if not async_execution():
+        if not is_async:
             result = reject_async_in_sync_context(
                 result,
                 owner=resolved.__name__,

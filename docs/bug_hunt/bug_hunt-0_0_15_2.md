@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 40 done, 49 to do.
+Progress: 41 done, 50 to do.
 
 ## Done
 
@@ -71,6 +71,9 @@ Progress: 40 done, 49 to do.
 - [x] 43. A serializer `ListField(child=ChoiceField(...))` published `[String!]`; it now publishes the field's generated enum like a
   `MultipleChoiceField`. Fixed with it: `MultipleChoiceField(allow_blank=True)` refused its own `BLANK` (list members reached DRF
   unwrapped); `raw_choice_value` now unwraps a list element-wise (`a9dec21d`)
+- [x] 44. A `DjangoModelFormMutation` over a non-text choice column with `blank=True, null=False` answered `null` (or an omitted
+  field with no default) with a masked top-level error, since `form.save()` raised `ValueError` / `ValidationError`; it now returns
+  the field-keyed `null` FieldError the model flavor gives. Django keeps the shape on purpose, so no startup check (`6c31c5e3`)
 
 ## To do: t3 robustness rows
 
@@ -92,10 +95,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## To do: found along the way
 
-- [ ] 44. `IntegerField(choices, blank=True, null=False)` in a ModelForm mutation: optional startup check
-- [ ] 45. Postgres: plain `ChoiceField` over an `ArrayField` builds, then the save fails
-- [ ] 46. Postgres: `ListField(child=ChoiceField)` over an `ArrayField` is refused
-- [ ] 47. Postgres: `serializer_choice_field=MultipleChoiceField` over an `ArrayField` is unusable
 - [ ] 49. `serializer_field_description` re-raises `KeyboardInterrupt`
 - [ ] 51. `OrderSet` `"__all__"` leaves out `ForeignObject` fields (unverified)
 - [ ] 56. Two writable serializer fields can write the same FK column (`category` and `source="category_id"`)
@@ -109,6 +108,8 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 89. The grouped-choices `ArrayField` refusal tells a list column to "declare a flat ChoiceField", which cannot write a list
 - [ ] 90. Nested list-of-choice serializer shapes (`ListField(child=MultipleChoiceField)`, `ListField(child=ListField(child=ChoiceField))`)
   still publish `[[String!]!]`; an enum there needs a deeper element unwrap than item 43's one level
+- [ ] 92. A consumer `save()` raising Django's `ValidationError` escapes the ModelForm flavor as a masked top-level error, while the
+  serializer flavor maps it into the envelope
 
 ## To do: holes found re-checking the fixes
 
@@ -153,6 +154,11 @@ not real bugs and just get deleted from t3. One checkbox per area:
   arm; a declared `ModelMultipleChoiceFilter` `[]` inside `not` now matches every row; raw `?x__in=` is unchanged
 - [ ] 91. CHANGELOG entry for item 43: a serializer `ListField(child=ChoiceField)` publishes a list of the field's generated enum
   (clients send enum names, not strings: `[a]`, `[MEMBER_1]`), and `MultipleChoiceField(allow_blank=True)` accepts `BLANK` as `""`
+- [ ] 45. Postgres: plain `ChoiceField` over an `ArrayField` builds, then the save fails (parked: needs a Postgres run)
+- [ ] 46. Postgres: `ListField(child=ChoiceField)` over an `ArrayField` is refused (parked: needs a Postgres run)
+- [ ] 47. Postgres: `serializer_choice_field=MultipleChoiceField` over an `ArrayField` is unusable (parked: needs a Postgres run)
+- [ ] 93. CHANGELOG entry for item 44: a ModelForm mutation over a non-text choice column with `blank=True, null=False` answers
+  `null` (or an omitted field with no default) with a field-keyed `null` FieldError instead of "An unexpected error occurred."
 
 ## Hunt not finished in t3
 

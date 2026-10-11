@@ -480,6 +480,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_build_kanban_html.py     # Tests for KANBAN version-tuple parsing, placeholder resolvability, and truncation.
 ├── test_build_kanban_md.py       # Tests for KANBAN markdown glossary inlining around existing links.
 ├── test_build_tree_md.py         # Tests for TREE renderer planned descriptions, replacements, and source discovery.
+├── test_census_test_models.py    # Script tests for the test-model census's name resolution.
 ├── test_check_citations.py       # Script tests for the ``path::Symbol`` citation gate.
 ├── test_check_public_types.py    # Script tests for the public-API type-completeness gate in ``scripts/check_public_types.py``.
 ├── test_check_trailing_commas.py # Script tests for the ``source-layout`` gate in ``scripts/check_trailing_commas.py``.
@@ -748,6 +749,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_build_kanban_html.py     # Tests for KANBAN version-tuple parsing, placeholder resolvability, and truncation.
 ├── test_build_kanban_md.py       # Tests for KANBAN markdown glossary inlining around existing links.
 ├── test_build_tree_md.py         # Tests for TREE renderer planned descriptions, replacements, and source discovery.
+├── test_census_test_models.py    # Script tests for the test-model census's name resolution.
 ├── test_check_citations.py       # Script tests for the ``path::Symbol`` citation gate.
 ├── test_check_public_types.py    # Script tests for the public-API type-completeness gate in ``scripts/check_public_types.py``.
 ├── test_check_trailing_commas.py # Script tests for the ``source-layout`` gate in ``scripts/check_trailing_commas.py``.

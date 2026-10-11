@@ -23,14 +23,16 @@ from __future__ import annotations
 import ast
 import collections
 import functools
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import TypeGuard
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TESTS_ROOT = REPO_ROOT / "tests"
 IMPORT_ROOTS = (REPO_ROOT, REPO_ROOT / "examples" / "fakeshop")
 DJANGO_MODEL_MODULES = frozenset({"django.db.models", "django.db.models.base"})
 MODEL_BASE_MODULES = ("models", "djmodels", "dj_models")
+FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
+SCOPES = (ast.Module, *FUNCTIONS, ast.ClassDef)
 
 ModelNode = ast.ClassDef | ast.Call
 
@@ -92,15 +94,16 @@ def _is_model_in(module: str, attr: str) -> bool:
 
 def _resolves_to_model(
     expr: ast.expr,
-    local_models: set[str],
+    local_model: Callable[[str], bool | None],
     imports: dict[str, tuple[str, str | None]],
 ) -> bool:
     """Return whether the base expression ``expr`` names a model class."""
     text = ast.unparse(expr)
     head, _, tail = text.rpartition(".")
     if not head:
-        if tail in local_models:
-            return True
+        known = local_model(tail)
+        if known is not None:
+            return known
         if tail in imports:
             module, attr = imports[tail]
             return attr is not None and _is_model_in(module, attr)
@@ -116,41 +119,92 @@ def _resolves_to_model(
 
 
 def _type_call_model(
-    node: ast.AST,
-    local_models: set[str],
+    node: ast.Call,
+    local_model: Callable[[str], bool | None],
     imports: dict[str, tuple[str, str | None]],
-) -> TypeGuard[ast.Call]:
+) -> bool:
     """Return whether ``node`` is ``type(name, (<model base>, ...), attrs)``."""
     return (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
+        isinstance(node.func, ast.Name)
         and node.func.id == "type"
         and len(node.args) == 3
         and isinstance(node.args[1], ast.Tuple)
-        and any(_resolves_to_model(elt, local_models, imports) for elt in node.args[1].elts)
+        and any(_resolves_to_model(elt, local_model, imports) for elt in node.args[1].elts)
     )
 
 
 def _census_tree(tree: ast.Module, path: Path | None) -> tuple[list[ModelNode], set[str]]:
-    """Return every model node in ``tree`` plus the names of its top-level model classes."""
+    """Return every model node in ``tree`` plus the names of its top-level model classes.
+
+    A bare base name resolves lexically, as Python binds it: the nearest visible scope
+    (the innermost one, then enclosing non-class scopes) declaring a class of that name
+    decides, by its last declaration before the use, or its final one once the use sits
+    inside a function; a plain class shadows a same-named model or import. A function is
+    assumed to run after its enclosing scope finished executing, so it sees final bindings;
+    a call made mid-module before a later rebinding is out of reach of a static census.
+    """
     imports = _import_map(tree, path)
+    parent = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+
+    def scopes(node: ast.AST) -> Iterator[ast.AST]:
+        """Yield the scopes enclosing ``node``, innermost first.
+
+        Only a body opens a scope: a function's or class's header (defaults, decorators,
+        annotations, bases, keywords) runs in the enclosing one.
+        """
+        child = node
+        while child in parent:
+            node = parent[child]
+            if isinstance(node, ast.Module) or (isinstance(node, SCOPES) and child in node.body):
+                yield node
+            child = node
+
     classes = [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
-    local_models: set[str] = set()
+    declared: dict[tuple[ast.AST, str], list[ast.ClassDef]] = {}
+    for node in classes:
+        declared.setdefault((next(scopes(node)), node.name), []).append(node)
+    models: set[ast.ClassDef] = set()
+
+    def position(node: ModelNode) -> tuple[int, int]:
+        """Return where ``node`` starts; ``ast.walk`` order is breadth-first, not textual."""
+        return node.lineno, node.col_offset
+
+    def lookup(node: ModelNode, name: str) -> bool | None:
+        """Return whether ``name`` seen from ``node`` is a local model, ``None`` if undeclared."""
+        running = True
+        for index, scope in enumerate(scopes(node)):
+            if index == 0 or not isinstance(scope, ast.ClassDef):
+                bound = [
+                    decl
+                    for decl in declared.get((scope, name), [])
+                    if not running or position(decl) < position(node)
+                ]
+                if bound:
+                    return max(bound, key=position) in models
+            running = running and not isinstance(scope, FUNCTIONS)
+        return None
+
     changed = True
     while changed:
         changed = False
         for node in classes:
-            if node.name in local_models:
-                continue
-            if any(_resolves_to_model(base, local_models, imports) for base in node.bases):
-                local_models.add(node.name)
+            local_model = functools.partial(lookup, node)
+            if node not in models and any(
+                _resolves_to_model(base, local_model, imports) for base in node.bases
+            ):
+                models.add(node)
                 changed = True
-    found: list[ModelNode] = [node for node in classes if node.name in local_models]
-    found.extend(node for node in ast.walk(tree) if _type_call_model(node, local_models, imports))
+    found: list[ModelNode] = [node for node in classes if node in models]
+    found.extend(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and _type_call_model(node, functools.partial(lookup, node), imports)
+    )
     top_level = {
-        node.name
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name in local_models
+        name
+        for (scope, name), decls in declared.items()
+        if scope is tree and max(decls, key=position) in models
     }
     return found, top_level
 

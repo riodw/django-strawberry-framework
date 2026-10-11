@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 39 done, 45 to do.
+Progress: 40 done, 49 to do.
 
 ## Done
 
@@ -68,6 +68,9 @@ Progress: 39 done, 45 to do.
 - [x] 42. `auto_camel_case=False` keeps every generated input camelCase (82 mutation, 3,487 filter, 124 order fields) while
   Strawberry-owned names follow it; FieldError keys still match the published names. Not a defect under rule 37 (no shipped doc
   says inputs follow the converter): Rio's 2026-09-25 decision already homes it on `TODO-BETA-077-0.1.7`, no code
+- [x] 43. A serializer `ListField(child=ChoiceField(...))` published `[String!]`; it now publishes the field's generated enum like a
+  `MultipleChoiceField`. Fixed with it: `MultipleChoiceField(allow_blank=True)` refused its own `BLANK` (list members reached DRF
+  unwrapped); `raw_choice_value` now unwraps a list element-wise (`a9dec21d`)
 
 ## To do: t3 robustness rows
 
@@ -89,7 +92,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## To do: found along the way
 
-- [ ] 43. `ListField(child=ChoiceField(...))` shows up as `String`, not an enum
 - [ ] 44. `IntegerField(choices, blank=True, null=False)` in a ModelForm mutation: optional startup check
 - [ ] 45. Postgres: plain `ChoiceField` over an `ArrayField` builds, then the save fails
 - [ ] 46. Postgres: `ListField(child=ChoiceField)` over an `ArrayField` is refused
@@ -101,6 +103,12 @@ not real bugs and just get deleted from t3. One checkbox per area:
   deliberate `GraphQLError` naming the exception class: no `correlationId`, class name on the wire (robustness; no text leaks)
 - [ ] 81. `decode_offset_cursor` checks `relay.Edge.CURSOR_PREFIX`, not the connection's `edge_class.CURSOR_PREFIX`: a custom Edge
   prefix turns a foreign `arrayconnection:` cursor into a masked error instead of the cursor message (robustness, fails closed)
+- [ ] 87. ModelForm: a declared `forms.ChoiceField` narrower than its column's choices still publishes the column enum, so a
+  published member is refused by the form (accurate `invalid_choice`); the form analogue of item 35 (robustness)
+- [ ] 88. `ListField(child=CharField())` elements skip the lone-surrogate text preflight (top-level `str` only) and reach `save()` raw
+- [ ] 89. The grouped-choices `ArrayField` refusal tells a list column to "declare a flat ChoiceField", which cannot write a list
+- [ ] 90. Nested list-of-choice serializer shapes (`ListField(child=MultipleChoiceField)`, `ListField(child=ListField(child=ChoiceField))`)
+  still publish `[[String!]!]`; an enum there needs a deeper element unwrap than item 43's one level
 
 ## To do: holes found re-checking the fixes
 
@@ -143,6 +151,8 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 86. CHANGELOG entry for item 14: an explicit `in: []` on every generated membership lookup matches no rows (integer, text,
   choice, date and every other column type used to return every row); `not: {}` matches every row and `or: [{}, real]` is the real
   arm; a declared `ModelMultipleChoiceFilter` `[]` inside `not` now matches every row; raw `?x__in=` is unchanged
+- [ ] 91. CHANGELOG entry for item 43: a serializer `ListField(child=ChoiceField)` publishes a list of the field's generated enum
+  (clients send enum names, not strings: `[a]`, `[MEMBER_1]`), and `MultipleChoiceField(allow_blank=True)` accepts `BLANK` as `""`
 
 ## Hunt not finished in t3
 

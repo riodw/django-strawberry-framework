@@ -372,9 +372,9 @@ continuation lines indented two spaces. A drifted path is concurrent work like t
 
 Per item: `uv run python scripts/workspace.py baseline dry/<item>` prints `ITEM_BASELINE` (`git
 stash create`, or the `HEAD` sha) and takes the item's `before` copy; Worker-0 records it + the
-same listings, for the item-scoped comparison only. Item-scoped diff = `git diff <item baseline> --
-<paths touched>` PLUS every file the item added (`git diff --no-index /dev/null <new>`): a new
-owner and its tests never drop out of review for being unstaged.
+same listings, for the item-scoped comparison only. Item-scoped diff = `workspace.py diff <item
+baseline> -- <paths touched>`, every file the item added included: a new owner and its tests never
+drop out of review for being unstaged.
 
 Dirty ≠ untouchable. Each item landing tracked edits or new files appends to the plan's
 `## Owned changes`: path, item, symbols changed. A later item may build on a path listed there.

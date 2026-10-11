@@ -71,9 +71,8 @@ Worker-0 names the target, the main artifact, the three axis records, the plan, 
    `uv run python scripts/build_tree_md.py --list-docstrings <paths>` clean, then
    `uv run python scripts/build_tree_md.py`; a TREE.md hunk your change does not explain is named
    in the report as concurrent ("Comments").
-6. **Check the diff**: `git diff <ITEM_BASELINE> -- <paths>` plus `git diff --no-index /dev/null
-   <new>` per new file; a hunk neither you nor an earlier pass of this item made stops you as in
-   step 2.
+6. **Check the diff**: `workspace.py diff <ITEM_BASELINE> -- <paths>`; a hunk neither you nor an
+   earlier pass of this item made stops you as in step 2.
 7. **Write** `## Implementation (Worker-2)` in the main artifact when no pass wrote it yet, else an
    `## Iterations` entry headed `Implement pass <n>` that answers each named gap first. Fields:
    "Worker-2 implements" last paragraph, every run id w/ its exact command, and a

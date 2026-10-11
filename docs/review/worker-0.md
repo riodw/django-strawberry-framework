@@ -65,8 +65,8 @@ Each open item takes the first row that matches:
 | `verified` and ticked; `blocked` | skip |
 
 - **Interrupted Worker-2:** `workspace.py release review/<item> --role implement`;
-  `git diff <ITEM_BASELINE>` plus each untracked file no baseline or `Drift:` line lists →
-  `<root>/diff/interrupted.diff`; a fresh Worker-2, `interrupted`. A hunk serving a finding (its
+  `workspace.py diff <ITEM_BASELINE> --output <root>/diff/interrupted.diff -- .` (an untracked
+  file a baseline or `Drift:` line lists is concurrent work); a fresh Worker-2, `interrupted`. A hunk serving a finding (its
   target, owner or permanent test) is the cut-off pass's own; one in a path Worker-2 must touch
   that serves none is unattributed; the rest is concurrent work.
 - **Lost `before`** (`status` lacks `review/<item>/before`, item open): item diff empty → rerun
@@ -93,8 +93,8 @@ blocked ones ("Integration passes").
    `workspace.py release review/<item> --keep before`.
 5. `implementing`; dispatch Worker-2.
 6. "Worker-0 checks the report", with `workspace.py audit <artifact>`. Item diff:
-   `git diff <ITEM_BASELINE> -- <paths the report lists>` plus `git diff --no-index /dev/null
-   <file>` per new file → `<root>/diff/pass-<n>.diff`. Pass → missing fixtures it names into
+   `workspace.py diff <ITEM_BASELINE> --output <root>/diff/pass-<n>.diff -- <paths the report
+   lists>`. Pass → missing fixtures it names into
    `## Decisions`, `ready-for-verification/<n>`, `workspace.py release review/<item> --keep
    before`.
 7. Dispatch the owed Performance and Mechanics verifiers at once; Comments after both report.

@@ -25,6 +25,16 @@ Worker commands
     ``path <address>``
         Print the copy's directory, binding it first when unbound, so a
         worker can read or edit files there.
+    ``diff <ITEM_BASELINE> [--output FILE | --check FILE] -- <paths...>``
+        The item diff: ``git diff --binary <ITEM_BASELINE> -- <paths>``
+        (tracked and staged changes, deletions, renames), then each
+        untracked, non-ignored file under ``<paths>`` once, in sorted order,
+        as ``git diff --binary --no-index /dev/null <file>``. Paths are
+        repository-relative and the caller's global git config is ignored,
+        so two copies of one change give the same bytes. The last line is
+        ``sha256 <hex>`` of the bytes before it. ``--output`` writes it to a
+        file; ``--check`` recomputes it and exits 1 unless the file holds
+        exactly those bytes.
 
 Worker-0 commands
     ``baseline <flow>/<item>``
@@ -134,7 +144,7 @@ Exit codes: ``run`` and ``prove`` return the command's own exit code. ``125``
 means this script refused before the command ran (bad address, full pool,
 wrong provenance, Postgres unavailable), with the reason on stderr. The other
 commands return ``0`` on success and ``1`` on a failed audit, a failed gate
-suite or a refusal.
+suite, a ``diff --check`` mismatch or a refusal.
 
 POSIX only (``fcntl`` locks). Run from the shared checkout's root as
 ``uv run python scripts/workspace.py ...``, never from inside a copy.
@@ -435,6 +445,61 @@ def baseline_sha(repo_root: Path) -> str:
     return (
         _git(repo_root, "stash", "create").strip() or _git(repo_root, "rev-parse", "HEAD").strip()
     )
+
+
+def _git_diff(repo_root: Path, *args: str, success: frozenset[int]) -> bytes:
+    # Only the repository's own config: a caller's global or system diff settings never
+    # reach the bytes, and the flags pin what the repository config could still vary.
+    completed = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_root),
+            "diff",
+            "--binary",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--find-renames",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            *args,
+        ],
+        capture_output=True,
+        env=clean_env(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1"),
+        check=False,
+    )
+    if completed.returncode not in success:
+        detail = completed.stderr.decode("utf-8", "replace").strip()
+        msg = f"git diff {' '.join(args)} failed ({completed.returncode}): {detail}"
+        raise WorkspaceError(msg)
+    return completed.stdout
+
+
+def item_diff(repo_root: Path, baseline: str, paths: Sequence[str]) -> bytes:
+    """Return an item's diff since ``baseline`` under ``paths``, ending ``sha256 <hex>``.
+
+    ``git diff <baseline>`` carries every tracked and staged change, deletions and renames
+    included; each untracked, non-ignored file under ``paths`` follows once, in sorted order, as
+    its ``git diff --no-index /dev/null <file>``. Paths are repository-relative, so two copies
+    of one change give the same bytes.
+    """
+    if not paths:
+        msg = "diff needs at least one path after --"
+        raise WorkspaceError(msg)
+    body = bytearray(_git_diff(repo_root, baseline, "--", *paths, success=frozenset({0})))
+    untracked = _git(repo_root, "ls-files", "-z", "--others", "--exclude-standard", "--", *paths)
+    for relative in sorted(name for name in untracked.split("\0") if name):
+        # ``--no-index`` exits 1 when the files differ, which an addition always does.
+        body += _git_diff(
+            repo_root,
+            "--no-index",
+            "--",
+            os.devnull,
+            relative,
+            success=frozenset({0, 1}),
+        )
+    return bytes(body) + f"sha256 {hashlib.sha256(body).hexdigest()}\n".encode("ascii")
 
 
 @contextlib.contextmanager
@@ -2108,6 +2173,26 @@ def _cmd_baseline(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_diff(args: argparse.Namespace) -> int:
+    check_shared_checkout(REPO_ROOT)
+    diff = item_diff(REPO_ROOT, args.baseline, args.tail)
+    if args.check:
+        try:
+            recorded = Path(args.check).read_bytes()
+        except OSError as error:
+            msg = f"--check {args.check}: {error}"
+            raise WorkspaceError(msg) from error
+        if recorded != diff:
+            print(f"{args.check}: does not match the tree; tree gives {diff.splitlines()[-1]!r}")
+            return 1
+        print(f"{args.check}: matches")
+    elif args.output:
+        Path(args.output).write_bytes(diff)
+    else:
+        sys.stdout.buffer.write(diff)
+    return 0
+
+
 def _cmd_release(args: argparse.Namespace) -> int:
     ref = ItemRef.parse(args.item)
     released = release(Layout.for_flow(ref.flow), ref.item, args.role or (), args.keep or ())
@@ -2190,6 +2275,20 @@ def build_parser() -> argparse.ArgumentParser:
     baseline.add_argument("item", help="<flow>/<item>")
     baseline.set_defaults(handler=_cmd_baseline)
 
+    diff_parser = commands.add_parser(
+        "diff",
+        help="an item's diff since its baseline, new files included, sha256-sealed",
+        usage="%(prog)s <ITEM_BASELINE> [--output FILE | --check FILE] -- <paths...>",
+    )
+    diff_parser.add_argument("baseline", help="the item's ITEM_BASELINE sha")
+    diff_target = diff_parser.add_mutually_exclusive_group()
+    diff_target.add_argument("--output", help="write the diff here instead of stdout")
+    diff_target.add_argument(
+        "--check",
+        help="exit 1 unless this file holds exactly the diff the tree gives now",
+    )
+    diff_parser.set_defaults(handler=_cmd_diff)
+
     release_parser = commands.add_parser("release", help="return an item's copies to the pool")
     release_parser.add_argument("item", help="<flow>/<item>")
     release_parser.add_argument(
@@ -2231,9 +2330,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     """Dispatch one command; a refusal prints its reason and exits 125 (run/prove) or 1.
 
-    Everything after the first ``--`` is the worker's command (``run``) or
-    extra ``prove_failability.py`` arguments (``prove``), split off before
-    parsing so options such as ``--cell`` may follow the address.
+    Everything after the first ``--`` is the worker's command (``run``),
+    extra ``prove_failability.py`` arguments (``prove``) or the paths
+    (``diff``), split off before parsing so options such as ``--cell`` may
+    follow the address.
     """
     words = list(sys.argv[1:] if argv is None else argv)
     tail: list[str] = []
@@ -2243,7 +2343,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(words)
     args.tail = tail
-    if tail and args.name not in {"run", "prove"}:
+    if tail and args.name not in {"run", "prove", "diff"}:
         parser.error(f"{args.name} takes nothing after --")
     try:
         return args.handler(args)

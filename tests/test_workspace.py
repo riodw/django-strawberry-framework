@@ -10,6 +10,7 @@ request has no wire shape for workspace copies, so none of these rows can
 move there. There is no live sibling in ``examples/fakeshop/test_query/``.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -1049,6 +1050,185 @@ def test_summarize_suite_reads_summary_collected_and_coverage() -> None:
             "Required test coverage of 100% reached. Total coverage: 100.00%",
         ],
     }
+
+
+# --------------------------------------------------------------------------------------------
+# Item diff
+# --------------------------------------------------------------------------------------------
+
+
+def _item_diff(root: Path, *paths: str) -> str:
+    """Return the item diff since ``HEAD`` after checking its closing ``sha256`` line."""
+    raw = workspace.item_diff(root, _git(root, "rev-parse", "HEAD").strip(), paths or (PACKAGE,))
+    split = raw.rindex(b"sha256 ")
+    body, seal = raw[:split], raw[split:]
+    assert seal == f"sha256 {hashlib.sha256(body).hexdigest()}\n".encode()
+    return raw.decode("utf-8")
+
+
+def _headers(diff: str) -> list[str]:
+    return [line for line in diff.splitlines() if line.startswith("diff --git ")]
+
+
+def test_item_diff_carries_a_tracked_edit(repo: Path) -> None:
+    _write(repo / PACKAGE / "core.py", "CORE = 3\n")
+
+    diff = _item_diff(repo)
+
+    assert _headers(diff) == [f"diff --git a/{PACKAGE}/core.py b/{PACKAGE}/core.py"]
+    assert "+CORE = 3" in diff
+
+
+def test_item_diff_adds_an_untracked_file_exactly_once(repo: Path) -> None:
+    _write(repo / PACKAGE / "new.py", "NEW = 1\n")
+
+    diff = _item_diff(repo)
+
+    assert _headers(diff) == [f"diff --git a/{PACKAGE}/new.py b/{PACKAGE}/new.py"]
+    assert "+NEW = 1" in diff
+
+
+def test_item_diff_leaves_out_untracked_files_outside_the_paths_and_ignored_ones(
+    repo: Path,
+) -> None:
+    _write(repo / "other" / "x.py", "X = 1\n")
+    _write(repo / PACKAGE / "ignored.txt", "ignored\n")
+    _write(repo / PACKAGE / "new.py", "NEW = 1\n")
+
+    assert _headers(_item_diff(repo)) == [f"diff --git a/{PACKAGE}/new.py b/{PACKAGE}/new.py"]
+
+
+def test_item_diff_adds_a_staged_file_exactly_once(repo: Path) -> None:
+    _write(repo / PACKAGE / "staged.py", "STAGED = 1\n")
+    _git(repo, "add", f"{PACKAGE}/staged.py")
+
+    diff = _item_diff(repo)
+
+    assert _headers(diff) == [f"diff --git a/{PACKAGE}/staged.py b/{PACKAGE}/staged.py"]
+    assert "new file mode" in diff
+
+
+def test_item_diff_carries_a_deletion(repo: Path) -> None:
+    (repo / PACKAGE / "core.py").unlink()
+
+    diff = _item_diff(repo)
+
+    assert _headers(diff) == [f"diff --git a/{PACKAGE}/core.py b/{PACKAGE}/core.py"]
+    assert "deleted file mode" in diff
+
+
+def test_item_diff_carries_a_rename(repo: Path) -> None:
+    _git(repo, "mv", f"{PACKAGE}/core.py", f"{PACKAGE}/renamed.py")
+
+    diff = _item_diff(repo)
+
+    assert _headers(diff) == [f"diff --git a/{PACKAGE}/core.py b/{PACKAGE}/renamed.py"]
+    assert f"rename to {PACKAGE}/renamed.py" in diff
+
+
+def test_item_diff_orders_untracked_files_by_path_whatever_order_git_lists_them(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in ("zeta", "alpha", "mid"):
+        _write(repo / PACKAGE / f"{name}.py", f"{name.upper()} = 1\n")
+    expected = _item_diff(repo)
+    listed = workspace._git
+
+    def _reversed_listing(root: Path, *args: str) -> str:
+        output = listed(root, *args)
+        if args[:1] != ("ls-files",):
+            return output
+        return "\0".join(reversed(output.rstrip("\0").split("\0"))) + "\0"
+
+    monkeypatch.setattr(workspace, "_git", _reversed_listing)
+
+    diff = _item_diff(repo)
+
+    assert diff == expected
+    assert _headers(diff) == [
+        f"diff --git a/{PACKAGE}/{name}.py b/{PACKAGE}/{name}.py"
+        for name in ("alpha", "mid", "zeta")
+    ]
+
+
+def test_item_diff_gives_identical_bytes_from_two_clones_of_one_change(tmp_path: Path) -> None:
+    origin = tmp_path / "origin"
+    _write(origin / PACKAGE / "core.py", "CORE = 2\n")
+    _write(origin / PACKAGE / "gone.py", "GONE = 1\n")
+    _git(origin, "init", "-q")
+    _git(origin, "add", "-A")
+    _git(origin, "commit", "-q", "-m", "initial")
+    diffs = []
+    for name in ("first-copy", "second"):
+        clone = tmp_path / name
+        _git(tmp_path, "clone", "-q", str(origin), str(clone))
+        _write(clone / PACKAGE / "core.py", "CORE = 3\n")
+        _write(clone / PACKAGE / "staged.py", "STAGED = 1\n")
+        _git(clone, "add", f"{PACKAGE}/staged.py")
+        (clone / PACKAGE / "gone.py").unlink()
+        _write(clone / PACKAGE / "new.py", "NEW = 1\n")
+        diffs.append(_item_diff(clone))
+
+    assert diffs[0] == diffs[1]
+    assert len(_headers(diffs[0])) == 4
+
+
+def test_diff_check_passes_on_the_written_diff_and_fails_once_the_tree_moves(
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(workspace, "REPO_ROOT", repo)
+    baseline = _git(repo, "rev-parse", "HEAD").strip()
+    record = tmp_path / "pass-1.diff"
+    _write(repo / PACKAGE / "new.py", "NEW = 1\n")
+    command = [
+        "diff",
+        baseline,
+        "--output",
+        str(record),
+        "--",
+        PACKAGE,
+    ]
+
+    assert workspace.main(command) == 0
+    assert (
+        workspace.main(
+            [
+                "diff",
+                baseline,
+                "--check",
+                str(record),
+                "--",
+                PACKAGE,
+            ],
+        )
+        == 0
+    )
+    _write(repo / PACKAGE / "new.py", "NEW = 2\n")
+    capsys.readouterr()
+
+    assert (
+        workspace.main(
+            [
+                "diff",
+                baseline,
+                "--check",
+                str(record),
+                "--",
+                PACKAGE,
+            ],
+        )
+        == 1
+    )
+    assert "does not match the tree" in capsys.readouterr().out
+
+
+def test_diff_refuses_an_empty_path_list(repo: Path) -> None:
+    with pytest.raises(workspace.WorkspaceError):
+        workspace.item_diff(repo, "HEAD", ())
 
 
 # --------------------------------------------------------------------------------------------

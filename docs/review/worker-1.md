@@ -63,8 +63,8 @@ as `uv run python scripts/<name>.py` from the repo root; `workspace.py` is that 
 
 ## Verify pass ("Worker-1 verifies"), address `review/<item>/verify-<axis>-<n>`
 
-1. First, `git diff <ITEM_BASELINE> -- <paths>` must hash equal to the item diff you were sent;
-   else report to Worker-0 and grade nothing. Before reading `## Implementation (Worker-2)`, run
+1. First, `workspace.py diff <ITEM_BASELINE> --check <the item diff you were sent> -- <paths>`
+   must pass; else report to Worker-0 and grade nothing. Before reading `## Implementation (Worker-2)`, run
    verbatim, at your address, every Proof line in your record, in the other records'
    `## Cross-axis (for <your axis>)`, and on a re-pass the ones earlier passes verified; record
    each result under `## Verification (<Axis>)`, heading suffixed ` pass <n>` when n > 1.

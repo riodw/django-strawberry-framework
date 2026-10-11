@@ -431,8 +431,7 @@ Per item: `uv run python scripts/workspace.py baseline review/<item>` prints `IT
 (`git stash create`; empty → the `git rev-parse HEAD` sha, since an empty value would send the diff
 tooling back to the latest tag) and takes the item's `before` copy ("Workspace"); Worker-0 records
 it + the same listings as `Item baseline:` fields on the plan item. Item-scoped diff =
-`git diff <item baseline> -- <paths touched>` PLUS every file the item added
-(`git diff --no-index /dev/null <new>`).
+`workspace.py diff <item baseline> -- <paths touched>`, every file the item added included.
 
 Each item landing tracked edits or new files appends to `## Owned changes`: path, item, axis,
 symbols changed. A later item may build on a ledgered path. Attribute by content, never by dirty
@@ -678,8 +677,8 @@ handoffs, Performance and Mechanics at once, Comments after those two report.
 
 Expectation-first: the Proof line written before the edit is the expectation. Each verifier, on
 its own axis, first confirms the shared tree still carries the change it was sent to grade:
-`git diff <ITEM_BASELINE> -- <paths>` hashes equal to `<root>/diff/pass-<n>.diff` (a mismatch →
-report to Worker-0, grade nothing). Then it:
+`workspace.py diff <ITEM_BASELINE> --check <root>/diff/pass-<n>.diff -- <paths>` passes (a
+mismatch → report to Worker-0, grade nothing). Then it:
 
 1. Runs every Proof line in its record, those the other records hold for its axis under
    `## Cross-axis (for <axis>)`, and on a re-pass the ones earlier passes verified, in its own

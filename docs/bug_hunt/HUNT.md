@@ -141,8 +141,8 @@ two spaces. A drifted path is concurrent work like the rest.
 
 Per item Worker-0 runs `uv run python scripts/workspace.py baseline hunt/<item>` (prints
 `ITEM_BASELINE`, `git stash create` or the `HEAD` sha, and takes the item's `before` copy) and
-records it + `git status --short`. Item-scoped diff = `git diff <item baseline> -- <paths touched>`
-PLUS every file the item added, shown via `git diff --no-index /dev/null <new>`.
+records it + `git status --short`. Item-scoped diff = `workspace.py diff <item baseline> -- <paths
+touched>`, every file the item added included.
 
 Fixes accumulate uncommitted. Each verified item's tracked edits + new files go to the `## Owned
 changes` ledger (path, item, symbols). A later item may build on a ledgered path. Attribute by

@@ -1180,10 +1180,61 @@ def effective_connection_order(
       empty ``query.order_by`` does NOT mean unordered - reading it in isolation
       would drop ``Meta.ordering`` and rewrite ``ORDER BY name`` into
       ``ORDER BY pk``.
+
+    Every read here ignores ``query.standard_ordering``: both callers run
+    ``normalize_order_direction`` on the queryset first, so a hook / manager
+    ``.reverse()`` reaches this read as explicit terms under the forward flag
+    (already total, returned unchanged) rather than as a flag the terms do not
+    show.
     """
     if cursor_field is not None and not query.order_by:
         return tuple(cursor_field)
     return deterministic_order(applied_order(query, model), model)
+
+
+def normalize_order_direction(
+    queryset: QuerySet[_M],
+    cursor_field: tuple[str, ...] | None,
+    model: type[models.Model],
+) -> QuerySet[_M]:
+    """Return ``queryset`` with a ``.reverse()`` materialized as explicit forward-flag terms.
+
+    ``QuerySet.reverse()`` only sets ``query.standard_ordering = False``; Django's
+    compiler then flips every term it compiles (``query.order_by``, else
+    ``Meta.ordering`` while default ordering stands), and every later
+    ``order_by(...)`` on that queryset inherits the flip. The connection order
+    ladder reads terms (``applied_order`` -> ``effective_connection_order`` ->
+    ``effective_cursor_state`` / the window ``RowNumber`` order) and writes terms
+    back (``_finalize_queryset``'s pk tiebreaker, ``apply_window_pagination``'s
+    ``order_by``, the ``last:`` ``.reverse()``), so a reversed queryset would
+    compile one direction while its seek, its cursors and its row numbers ran
+    the other. Both entry points of that ladder (the two callers of
+    ``effective_connection_order``) run this first.
+
+    The materialized order is the reverse of the FORWARD total order: the order
+    ``effective_connection_order`` selects for ``cursor_field`` reading the terms
+    as if the flag were set (explicit order, else ``Meta.ordering``, else the
+    declared ``cursor_field``, made total by the pk tiebreaker), flipped as a
+    whole by ``_reverse_order_by`` (the compiler's own rules). That is the order
+    Django compiles once the connection's tiebreaker joins the reversed queryset
+    (``order_by("title").reverse()`` serves ``title DESC, id DESC``), so the
+    page-1 ``ORDER BY`` is unchanged and every read and write after this is
+    truthful for it. The result is already total, so
+    ``effective_connection_order`` returns it unchanged. A queryset ordered
+    forward is returned as is.
+    """
+    query = queryset.query
+    if query.standard_ordering:
+        return queryset
+    # ``QuerySet.order_by`` admits a field-name string or an expression, which
+    # django-stubs spells ``str | Combinable``; the reversal takes it as ``OrderEntry``.
+    forward = cast(
+        "Sequence[OrderEntry]",
+        effective_connection_order(cursor_field, query, model),
+    )
+    normalized = queryset.order_by(*_reverse_order_by(forward))
+    normalized.query.standard_ordering = True
+    return normalized
 
 
 def deterministic_order(
@@ -1631,9 +1682,11 @@ def _reverse_order_by(order_by: Sequence[OrderEntry]) -> list[OrderEntry]:
     """Return ``order_by`` with each entry's direction (and NULLS) flipped.
 
     Backward (``last``-only) pagination counts row numbers from the partition
-    end, which needs the reversed ordering. Mirrors Django's
+    end, which needs the reversed ordering, and ``normalize_order_direction``
+    materializes a hook's ``.reverse()`` through it. Mirrors Django's
     ``queryset.reverse()`` for every entry shape ``deterministic_order``
-    produces, without re-running the queryset compiler:
+    produces (``"?"`` carries no direction and passes through), without
+    re-running the queryset compiler:
     the direction flips, and any explicit ``nulls_first`` / ``nulls_last``
     positioning swaps too (Django inverts NULLS placement on reversal), so a
     consumer ordering with explicit NULLS positioning reverses the same way the
@@ -1665,6 +1718,11 @@ def _reverse_order_by(order_by: Sequence[OrderEntry]) -> list[OrderEntry]:
     reversed_order: list[OrderEntry] = []
     for entry in order_by:
         if isinstance(entry, str):
+            if entry == "?":
+                # Random order has no direction: the compiler matches the bare ``"?"``
+                # before reading a direction, and ``order_by("-?")`` is a FieldError.
+                reversed_order.append(entry)
+                continue
             reversed_order.append(entry[1:] if entry.startswith("-") else f"-{entry}")
             continue
         if isinstance(entry, OrderBy):

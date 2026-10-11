@@ -252,6 +252,10 @@ def _fetch_single_parent_rows(queryset: SingleParentWindowQuerySet) -> list[mode
     query = queryset.query
     if query.extra or query.extra_tables or query.group_by is not None:
         return None
+    # Fetch-time order drift guard: the planner materialized a target hook's
+    # ``.reverse()`` as explicit terms under the forward flag
+    # (``plans.py::normalize_order_direction``), so a reversed flag here means the
+    # queryset was reordered after planning and no longer compiles the planned order.
     if tuple(query.order_by) != tuple(spec.order_by) or not query.standard_ordering:
         return None
     if set(query.annotations) != {WINDOW_ROW_NUMBER}:

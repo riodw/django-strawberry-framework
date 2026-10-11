@@ -643,6 +643,10 @@ def _recognize_lateral_fetch(
     query = queryset.query
     if query.select_related or query.extra_tables or query.group_by is not None:
         return None
+    # Fetch-time order drift guard: the planner materialized a target hook's
+    # ``.reverse()`` as explicit terms under the forward flag
+    # (``plans.py::normalize_order_direction``), so a reversed flag here means the
+    # queryset was reordered after planning and no longer compiles the planned order.
     if tuple(query.order_by) != spec.query_order_by or not query.standard_ordering:
         return None
     if _select_columns(queryset, queryset.model._meta) != spec.select_columns:

@@ -92,6 +92,7 @@ from .optimizer.plans import (
     effective_cursor_state,
     ends_in_unique_column,
     local_cursor_attnames,
+    normalize_order_direction,
     resolver_key,
     runtime_path_from_info,
 )
@@ -876,7 +877,9 @@ def _keyset_order_state(
 
     The resolve-time caller of ``plans.py::effective_cursor_state`` - the one
     derivation the plan-time nested window also runs - over the order
-    ``_finalize_queryset`` left on the queryset: the declared
+    ``_finalize_queryset`` left on the queryset (a hook's ``.reverse()``
+    already materialized there as explicit terms under the forward flag, so
+    the raw ``query.order_by`` read below is the compiled order): the declared
     ``Meta.cursor_field`` when no ``orderBy:`` / ``get_queryset`` order won
     (also the defensive no-order shape, which is ordered by it here), else the
     per-order columns and fingerprint of THAT order. An order a value cursor
@@ -1663,7 +1666,13 @@ def _finalize_queryset(
         implementation the plan-time window order uses, so this resolve-time
         order cannot drift from the planned window's (the cursor-parity
         invariant, spec-033 Decision 4). This covers all three cases - fully
-        unordered, a supplied ``orderBy``, and a model ``Meta.ordering``.
+        unordered, a supplied ``orderBy``, and a model ``Meta.ordering``. A
+        target hook / manager ``.reverse()`` is first materialized as the
+        reverse of that forward total order under the forward flag
+        (``optimizer/plans.py::normalize_order_direction``), after the
+        sidecars, so an ``orderBy:`` beside it is inverted the way Django's
+        ``order_by()`` inverts it, and the order applied, sought and minted
+        is the one compiled.
      6. Optimizer plan - ``apply_connection_optimization`` applies
         ``select_related`` / ``prefetch_related`` / ``only()`` using the node
         type / model explicitly (the connection field's own cooperation
@@ -1678,6 +1687,9 @@ def _finalize_queryset(
     target_model = definition.model
     cursor_field = definition.cursor_field
     try:
+        # A hook / manager ``.reverse()`` becomes the reverse of the forward total order
+        # under the forward flag before any order is read or written here.
+        qs = normalize_order_direction(qs, cursor_field, target_model)
         applied = applied_order(qs.query, target_model)
     except (
         TypeError,

@@ -53,7 +53,10 @@ Contract highlights (each enforced in this module or at finalization):
   turns a page's effective order - the declared ``cursor_field``, a root
   ``orderBy:``, or the order a target ``get_queryset`` / manager imposed -
   into its columns and fingerprint for the root slicer, the per-parent
-  pipeline and the plan-time nested window alike.
+  pipeline and the plan-time nested window alike. A ``.reverse()``'d queryset
+  is first materialized as the reverse of its forward total order under the
+  forward flag (``optimizer/plans.py::normalize_order_direction``), so the
+  seek, the minted cursors and the compiled ``ORDER BY`` run one direction.
 - **Portable non-nullable local columns only.** ``cursor_field`` entries must
   be local concrete non-nullable columns ending in a unique column (validated
   at finalization by ``validate_cursor_field_columns``): NULL values poison

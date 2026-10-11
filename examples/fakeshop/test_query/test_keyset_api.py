@@ -82,6 +82,7 @@ from django_strawberry_framework import (
     strawberry_config,
 )
 from django_strawberry_framework.optimizer import DjangoOptimizerExtension
+from django_strawberry_framework.orders import OrderSet
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing import AsyncTestClient, TestClient
 from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
@@ -1148,6 +1149,14 @@ _HOOK_SHAPES = {
 
 _HOOK_ORDERS = {"-id": ("-id",), "title": ("title",)}
 
+#: A hook order the hook then ``.reverse()``s (``None``: a bare ``.reverse()``).
+_REVERSED_HOOK_ORDERS: dict[str, tuple[str, ...] | None] = {
+    "id": ("id",),
+    "title": ("title",),
+    "-id": ("-id",),
+    "bare": None,
+}
+
 #: A hook order through a required forward FK: its cursor value rides an annotation.
 _RELATED_HOOK_ORDERS = {"fk": ("periodical__name", "-id"), "m2m": ("shelf__code", "-id")}
 
@@ -1162,17 +1171,23 @@ _UNANCHORABLE_ORDER = (
 
 def _hook_order_schema(
     shape: str,
-    hook_order: tuple[str | Combinable, ...],
+    hook_order: tuple[str | Combinable, ...] | None,
     *,
     optimizer: bool = True,
     strictness: str = "off",
     distinct: bool = False,
+    reverse: bool = False,
+    keyset: bool = True,
+    orderable: bool = False,
 ) -> strawberry.Schema:
     """Holder schema: ``parents`` (a planned list root) plus a root ``children`` connection.
 
-    The child type declares ``cursor_field = ("id",)`` and a ``get_queryset``
-    ordering by ``hook_order`` (``.distinct()`` too when ``distinct``, which
-    the planner refuses to window).
+    The child type declares ``cursor_field = ("id",)`` (an offset connection
+    when not ``keyset``) and a ``get_queryset`` ordering by ``hook_order``
+    (left unordered when ``None``), then ``.reverse()``'d when ``reverse``
+    (``.distinct()`` too when ``distinct``, which the planner refuses to
+    window). ``orderable`` adds an ``orderBy:`` argument over the child's
+    columns.
     """
     child_model, parent_model, relation, label = _HOOK_SHAPES[shape]
 
@@ -1181,15 +1196,26 @@ def _hook_order_schema(
         queryset: QuerySet[models.Issue | models.Book],
         info: strawberry.Info[object, object],
     ) -> QuerySet[models.Issue | models.Book]:
-        ordered = queryset.order_by(*hook_order)
+        ordered = queryset if hook_order is None else queryset.order_by(*hook_order)
+        if reverse:
+            ordered = ordered.reverse()
         return ordered.distinct() if distinct else ordered
 
     registry.clear()
+    meta_extra: dict[str, object] = {"connection": {"total_count": True}}
+    if keyset:
+        meta_extra["cursor_field"] = ("id",)
+    if orderable:
+        meta_extra["orderset_class"] = type(
+            "HookOrderedChildOrder",
+            (OrderSet,),
+            {"Meta": type("Meta", (), {"model": child_model, "fields": ["id", label]})},
+        )
     child_type = make_django_type(
         "HookOrderedChildType",
         child_model,
         ("id", label),
-        meta_extra={"cursor_field": ("id",), "connection": {"total_count": True}},
+        meta_extra=meta_extra,
         namespace_extra={"get_queryset": classmethod(hook)},
     )
     parent_type = make_django_type(
@@ -1334,7 +1360,16 @@ def test_nested_keyset_window_pages_under_the_hook_order(
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("shape", ["fk", "m2m"])
-@pytest.mark.parametrize("hook", ["-id", "title", "related"])
+@pytest.mark.parametrize(
+    "hook",
+    [
+        "-id",
+        "title",
+        "related",
+        "id-reversed",
+        "title-reversed",
+    ],
+)
 def test_hook_ordered_cursor_bytes_match_across_root_window_and_per_parent_paths(
     shape: str,
     hook: str,
@@ -1347,10 +1382,18 @@ def test_hook_ordered_cursor_bytes_match_across_root_window_and_per_parent_paths
     row, and the three maps are equal. The root's first cursor then pages
     the PLANNED nested window: one child statement serving the remaining rows.
     The ``related`` order reads its first cursor value through a forward FK,
-    which the window, the seek and the mint carry as an annotation.
+    which the window, the seek and the mint carry as an annotation; a
+    ``-reversed`` hook ``.reverse()``s its order, which every path pages under
+    the same materialized order.
     """
     _seed_hook_order_rows(shape, with_b=False)
-    hook_order = _RELATED_HOOK_ORDERS[shape] if hook == "related" else _HOOK_ORDERS[hook]
+    reverse = hook.endswith("-reversed")
+    if hook == "related":
+        hook_order = _RELATED_HOOK_ORDERS[shape]
+    elif reverse:
+        hook_order = _REVERSED_HOOK_ORDERS[hook.removesuffix("-reversed")]
+    else:
+        hook_order = _HOOK_ORDERS[hook]
     relation, label = _HOOK_SHAPES[shape][2], _HOOK_SHAPES[shape][3]
     query = (
         f"{{ children(first: 3) {{ edges {{ cursor node {{ {label} }} }} }} "
@@ -1369,9 +1412,12 @@ def test_hook_ordered_cursor_bytes_match_across_root_window_and_per_parent_paths
     # Each build re-registers the child type, so the per-parent schema is used
     # up before the planned one is built.
     root_off, per_parent = cursors(
-        _post_holder(_hook_order_schema(shape, hook_order, optimizer=False), query),
+        _post_holder(
+            _hook_order_schema(shape, hook_order, optimizer=False, reverse=reverse),
+            query,
+        ),
     )
-    planned_schema = _hook_order_schema(shape, hook_order)
+    planned_schema = _hook_order_schema(shape, hook_order, reverse=reverse)
     root, planned = cursors(_post_holder(planned_schema, query))
     assert sorted(root) == ["1", "2", "3"]
     assert root_off == root
@@ -1569,6 +1615,344 @@ async def test_async_nested_keyset_window_pages_under_the_hook_order() -> None:
     second = await pages({"first": 2, "after": first["A"]["pageInfo"]["endCursor"]})
     assert [_labels("fk", first["A"]), _labels("fk", first["B"])] == [["3", "2"], ["1"]]
     assert [_labels("fk", second["A"]), _labels("fk", second["B"])] == [["1"], []]
+
+
+# A target ``get_queryset`` that ``.reverse()``s its queryset compiles the reverse
+# of its forward total order (explicit order, else ``Meta.ordering``, else the
+# declared ``cursor_field``, made total by the pk tiebreaker): the root slicer,
+# the planned nested window and the per-parent pipeline seek, mint and number
+# rows under that same reversed order. Rows below reuse the hook-order seed:
+# ``A1`` ``y``, ``A2`` ``x``, ``A3`` ``x``, ``B1`` ``a``, created in that order.
+
+#: The full root order per reversed hook (``title``: ``title DESC, id DESC``).
+_REVERSED_ROOT_ORDERS = {
+    "id": [
+        "B1",
+        "A3",
+        "A2",
+        "A1",
+    ],
+    "title": [
+        "A1",
+        "A3",
+        "A2",
+        "B1",
+    ],
+    "-id": [
+        "A1",
+        "A2",
+        "A3",
+        "B1",
+    ],
+    "bare": [
+        "B1",
+        "A3",
+        "A2",
+        "A1",
+    ],
+}
+
+
+def _root_children_page(
+    schema: strawberry.Schema,
+    *,
+    order_by: str = "",
+    **variables: object,
+) -> JSONObject:
+    """One root ``children`` page; ``order_by`` is an ``orderBy:`` argument literal."""
+    argument = f", orderBy: {order_by}" if order_by else ""
+    query = (
+        "query ($first: Int, $after: String, $last: Int, $before: String) { "
+        f"children(first: $first, after: $after, last: $last, before: $before{argument}) {{ "
+        "pageInfo { hasNextPage hasPreviousPage startCursor endCursor } "
+        "edges { node { id } } } }"
+    )
+    payload = _post_holder(schema, query, variables=variables)
+    assert payload.get("errors") is None, payload
+    return payload["data"]["children"]
+
+
+def _issue_labels(connection_payload: JSONObject) -> list[str]:
+    """``<periodical><number>`` per edge, read back from the node's global id."""
+    pks = [int(from_base64(edge["node"]["id"])[1]) for edge in connection_payload["edges"]]
+    issues = models.Issue.objects.select_related("periodical").in_bulk(pks)
+    return [f"{issues[pk].periodical.name}{issues[pk].number}" for pk in pks]
+
+
+def _root_flags(*pages: JSONObject) -> list[list[bool]]:
+    return [
+        [page["pageInfo"]["hasPreviousPage"], page["pageInfo"]["hasNextPage"]] for page in pages
+    ]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("hook", list(_REVERSED_ROOT_ORDERS))
+def test_reversed_hook_root_pages_forward_every_row_once(hook: str) -> None:
+    """``first`` then ``after: endCursor`` serves every row once in the reversed order.
+
+    Each page is one statement; page 2 seeks past page 1's last row under the
+    order the SQL compiles, so no row repeats and none is lost.
+    """
+    _seed_hook_order_rows("fk")
+    schema = _hook_order_schema("fk", _REVERSED_HOOK_ORDERS[hook], reverse=True)
+    with CaptureQueriesContext(connection) as first_captured:
+        first = _root_children_page(schema, first=2)
+    with CaptureQueriesContext(connection) as second_captured:
+        second = _root_children_page(schema, first=2, after=first["pageInfo"]["endCursor"])
+    expected = _REVERSED_ROOT_ORDERS[hook]
+    assert [_issue_labels(first), _issue_labels(second)] == [expected[:2], expected[2:]]
+    assert [first["pageInfo"]["hasNextPage"], second["pageInfo"]["hasNextPage"]] == [True, False]
+    assert [len(first_captured), len(second_captured)] == [1, 1]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("hook", list(_REVERSED_ROOT_ORDERS))
+def test_reversed_hook_root_pages_backward_every_row_once(hook: str) -> None:
+    """``last`` then ``before: startCursor`` walks the same reversed order from its end."""
+    _seed_hook_order_rows("fk")
+    schema = _hook_order_schema("fk", _REVERSED_HOOK_ORDERS[hook], reverse=True)
+    with CaptureQueriesContext(connection) as tail_captured:
+        tail = _root_children_page(schema, last=2)
+    with CaptureQueriesContext(connection) as head_captured:
+        head = _root_children_page(schema, last=2, before=tail["pageInfo"]["startCursor"])
+    expected = _REVERSED_ROOT_ORDERS[hook]
+    assert [_issue_labels(head), _issue_labels(tail)] == [expected[:2], expected[2:]]
+    assert [tail["pageInfo"]["hasPreviousPage"], head["pageInfo"]["hasPreviousPage"]] == [
+        True,
+        False,
+    ]
+    assert [len(tail_captured), len(head_captured)] == [1, 1]
+
+
+@pytest.mark.django_db
+def test_reversed_non_unique_hook_order_compiles_the_pk_tiebreak_descending() -> None:
+    """``order_by("title").reverse()`` pages under ``title DESC, id DESC`` on both pages.
+
+    The whole forward total order is reversed, its pk tiebreaker included,
+    which is the order Django compiles for the reversed queryset once the
+    connection adds its tiebreaker; the seek on page 2 runs under it too.
+    """
+    _seed_hook_order_rows("fk")
+    schema = _hook_order_schema("fk", ("title",), reverse=True)
+    with CaptureQueriesContext(connection) as first_captured:
+        first = _root_children_page(schema, first=2)
+    with CaptureQueriesContext(connection) as second_captured:
+        _root_children_page(schema, first=2, after=first["pageInfo"]["endCursor"])
+    order = 'ORDER BY "library_issue"."title" DESC, "library_issue"."id" DESC'
+    statements = [first_captured[0]["sql"], second_captured[0]["sql"]]
+    assert [order in sql for sql in statements] == [True, True], statements
+
+
+_REVERSED_NESTED_PAGES = [
+    ("id", (["3", "2"], ["1"]), (["1"], [])),
+    ("title", (["1", "3"], ["2"]), (["1"], ["1"])),
+    ("-id", (["1", "2"], ["3"]), (["1"], ["1"])),
+    ("bare", (["3", "2"], ["1"]), (["1"], [])),
+]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("shape", ["fk", "m2m"])
+@pytest.mark.parametrize(("hook", "a_pages", "b_pages"), _REVERSED_NESTED_PAGES)
+def test_reversed_hook_nested_window_pages_under_the_reversed_order(
+    shape: str,
+    hook: str,
+    a_pages: tuple[list[str], list[str]],
+    b_pages: tuple[list[str], list[str]],
+) -> None:
+    """The planned window numbers, seeks and mints under the reversed order from page 1.
+
+    ``A``'s rows are served once across both pages; ``A``'s ``endCursor``
+    positions ``B`` by value. Each page is one parent statement and ONE
+    batched child statement.
+    """
+    _seed_hook_order_rows(shape)
+    schema = _hook_order_schema(shape, _REVERSED_HOOK_ORDERS[hook], reverse=True)
+    query = _nested_hook_query(shape)
+    with CaptureQueriesContext(connection) as first_captured:
+        first = _nested_hook_pages(shape, _post_holder(schema, query, variables={"first": 2}))
+    with CaptureQueriesContext(connection) as second_captured:
+        second = _nested_hook_pages(
+            shape,
+            _post_holder(
+                schema,
+                query,
+                variables={"first": 2, "after": first["A"]["pageInfo"]["endCursor"]},
+            ),
+        )
+    assert [_labels(shape, first["A"]), _labels(shape, second["A"])] == list(a_pages)
+    assert [_labels(shape, first["B"]), _labels(shape, second["B"])] == list(b_pages)
+    for captured in (first_captured, second_captured):
+        assert [
+            len(_table_statements(captured, _parent_table(shape))),
+            len(_table_statements(captured, _child_table(shape))),
+        ] == [1, 1], captured.captured_queries
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("shape", ["fk", "m2m"])
+@pytest.mark.parametrize(
+    ("hook", "a_page", "b_page"),
+    [(hook, a_pages[0], b_pages[0]) for hook, a_pages, b_pages in _REVERSED_NESTED_PAGES],
+)
+def test_reversed_hook_nested_offset_window_matches_the_per_parent_page(
+    shape: str,
+    hook: str,
+    a_page: list[str],
+    b_page: list[str],
+) -> None:
+    """An offset connection's planned window serves the per-parent pipeline's page 1.
+
+    No ``cursor_field``: the window's row numbers run under the reversed order
+    the per-parent pipeline compiles, in one batched child statement where the
+    pipeline issues one per parent.
+    """
+    _seed_hook_order_rows(shape)
+    query = _nested_hook_query(shape)
+    pages: list[list[list[str]]] = []
+    child_statements: list[int] = []
+    for optimizer in (True, False):
+        schema = _hook_order_schema(
+            shape,
+            _REVERSED_HOOK_ORDERS[hook],
+            reverse=True,
+            keyset=False,
+            optimizer=optimizer,
+        )
+        with CaptureQueriesContext(connection) as captured:
+            page = _nested_hook_pages(shape, _post_holder(schema, query, variables={"first": 2}))
+        pages.append([_labels(shape, page["A"]), _labels(shape, page["B"])])
+        child_statements.append(len(_table_statements(captured, _child_table(shape))))
+    assert pages == [[a_page, b_page], [a_page, b_page]]
+    assert child_statements == [1, 2]
+
+
+@pytest.mark.django_db
+def test_order_by_beside_a_reversed_hook_pages_every_row_once() -> None:
+    """``orderBy:`` composes with the hook's ``.reverse()`` and its cursors replay.
+
+    ``orderBy`` replaces the hook's terms under Django ``order_by()``
+    semantics, so the hook's reversal inverts it: ``{number: ASC}`` pages
+    under ``number DESC, id DESC``, every row once, and page 1's ``endCursor``
+    serves the same page 2 on every replay.
+    """
+    _seed_hook_order_rows("fk")
+    schema = _hook_order_schema("fk", ("id",), reverse=True, orderable=True)
+    order_by = "[{ number: ASC }]"
+    first = _root_children_page(schema, order_by=order_by, first=2)
+    after = first["pageInfo"]["endCursor"]
+    second = _root_children_page(schema, order_by=order_by, first=2, after=after)
+    replayed = _root_children_page(schema, order_by=order_by, first=2, after=after)
+    assert [_issue_labels(first), _issue_labels(second), _issue_labels(replayed)] == [
+        ["A3", "A2"],
+        ["B1", "A1"],
+        ["B1", "A1"],
+    ]
+    assert _root_flags(first, second) == [[False, True], [True, False]]
+
+
+def _reversed_reading_list_schema(
+    cursor_field: tuple[str, ...] | None,
+    hook_order: tuple[str, ...] = (),
+) -> strawberry.Schema:
+    """A root ``children`` connection over ``ReadingList`` whose hook ``.reverse()``s it.
+
+    ``ReadingList`` orders by its inherited ``Meta.ordering = ["title"]``; the
+    hook orders by ``hook_order`` first when given, and the type is a keyset
+    connection over ``cursor_field`` unless it is ``None``.
+    """
+
+    def hook(
+        cls: type[DjangoType],
+        queryset: QuerySet[models.ReadingList],
+        info: strawberry.Info[object, object],
+    ) -> QuerySet[models.ReadingList]:
+        return (queryset.order_by(*hook_order) if hook_order else queryset).reverse()
+
+    registry.clear()
+    list_type = make_django_type(
+        "ReversedReadingListType",
+        models.ReadingList,
+        ("id", "title"),
+        meta_extra={"cursor_field": cursor_field} if cursor_field is not None else None,
+        namespace_extra={"get_queryset": classmethod(hook)},
+    )
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        children = DjangoConnectionField(list_type)
+
+    return strawberry.Schema(query=Query, config=strawberry_config())
+
+
+def _seed_reading_lists() -> dict[int, str]:
+    """``L1`` ``b``, ``L2`` ``a``, ``L3`` ``b``, ``L4`` ``c`` in pk order; returns pk -> label."""
+    return {
+        models.ReadingList.objects.create(title=title).pk: label
+        for label, title in (
+            ("L1", "b"),
+            ("L2", "a"),
+            ("L3", "b"),
+            ("L4", "c"),
+        )
+    }
+
+
+def _reading_list_labels(labels: dict[int, str], page: JSONObject) -> list[str]:
+    return [labels[int(from_base64(edge["node"]["id"])[1])] for edge in page["edges"]]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("cursor_field", "pages"),
+    [
+        (("title", "id"), [["L4", "L3"], ["L1", "L2"]]),
+        (("-title", "id"), [["L2", "L3"], ["L1", "L4"]]),
+        (None, [["L4", "L3"], ["L1", "L2"]]),
+    ],
+    ids=["keyset-meta-order", "keyset-cursor-field", "offset"],
+)
+def test_bare_reverse_of_a_meta_ordering_pages_every_row_once(
+    cursor_field: tuple[str, ...] | None,
+    pages: list[list[str]],
+) -> None:
+    """A bare ``.reverse()`` pages under the reverse of the forward total order.
+
+    The forward order is the declared ``cursor_field`` on a keyset type (it
+    beats ``Meta.ordering``), else ``Meta.ordering = ["title"]`` with the pk
+    tiebreaker: ``("-title", "id")`` reversed serves ``title ASC, id DESC``,
+    ``title`` / ``("title", "id")`` reversed serves ``title DESC, id DESC``.
+    """
+    labels = _seed_reading_lists()
+    schema = _reversed_reading_list_schema(cursor_field)
+    first = _root_children_page(schema, first=2)
+    second = _root_children_page(schema, first=2, after=first["pageInfo"]["endCursor"])
+    assert [_reading_list_labels(labels, first), _reading_list_labels(labels, second)] == pages
+    assert [first["pageInfo"]["hasNextPage"], second["pageInfo"]["hasNextPage"]] == [True, False]
+
+
+@pytest.mark.django_db
+def test_reversed_random_hook_order_serves_every_row_under_a_descending_tiebreak() -> None:
+    """``order_by("?").reverse()`` keeps ``"?"`` (it has no direction) and flips the pk.
+
+    An offset connection: one ``first`` page over every row, no error, one
+    statement ordered by the random term then the pk descending.
+    """
+    labels = _seed_reading_lists()
+    schema = _reversed_reading_list_schema(None, ("?",))
+    with CaptureQueriesContext(connection) as captured:
+        page = _root_children_page(schema, first=4)
+    assert sorted(_reading_list_labels(labels, page)) == [
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+    ]
+    assert len(captured) == 1, captured.captured_queries
+    sql = captured[0]["sql"]
+    # SQLite compiles Django's random order as ``RAND()``, PostgreSQL as ``RANDOM()``.
+    assert ["RAND" in sql, '"library_readinglist"."id" DESC' in sql] == [True, True], sql
 
 
 # One relation name, two windows: ``CirculationDesk.children`` (``DeskShift``,

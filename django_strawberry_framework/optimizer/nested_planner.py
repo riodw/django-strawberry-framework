@@ -65,6 +65,7 @@ from .plans import (
     effective_connection_order,
     effective_cursor_state,
     local_cursor_attnames,
+    normalize_order_direction,
     order_entry_has_explicit_nulls,
     order_entry_name_and_direction,
 )
@@ -1464,11 +1465,21 @@ def plan_connection_relation(
     # invariant). ``QuerySet.order_by`` admits only a field-name string or an
     # expression (Django requires ``resolve_expression`` of anything else), which
     # django-stubs spells ``str | Combinable``; the window takes it as ``OrderEntry``.
+    # A target ``get_queryset`` / manager ``.reverse()`` is first materialized as
+    # the reverse of the forward total order under the forward flag
+    # (``plans.py::normalize_order_direction``), so the order read below is the
+    # order the window's ``RowNumber`` and its ``ORDER BY`` both compile.
+    window_cursor_field = keyset_context.cursor_field if keyset_context is not None else None
+    child_queryset = normalize_order_direction(
+        child_queryset,
+        window_cursor_field,
+        django_field.related_model,
+    )
     order_by = cast(
         "list[OrderEntry]",
         list(
             effective_connection_order(
-                keyset_context.cursor_field if keyset_context is not None else None,
+                window_cursor_field,
                 child_queryset.query,
                 django_field.related_model,
             ),

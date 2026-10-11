@@ -39,6 +39,7 @@ from django_strawberry_framework.optimizer.plans import (
     local_cursor_attnames,
     lookup_paths,
     merged_projection,
+    normalize_order_direction,
     order_entry_has_explicit_nulls,
     resolver_key,
     runtime_path_from_path,
@@ -1194,6 +1195,76 @@ class TestEffectiveConnectionOrder:
         assert effective_connection_order(None, query, Status) == ("id",)
 
 
+class TestNormalizeOrderDirection:
+    """A reversed queryset becomes the reverse of its forward total order, flag reset.
+
+    The connection order ladder's two entry points run it first; the live
+    reversed-hook rows in ``examples/fakeshop/test_query/test_keyset_api.py``
+    page through it. These rows pin each source of the forward order and that
+    the materialized order compiles the SQL Django compiles for the reversed
+    queryset once the connection's tiebreaker joins it.
+    """
+
+    def test_forward_queryset_is_returned_as_is(self):
+        """A queryset under the forward flag is the same object back."""
+        queryset = Item.objects.order_by("name")
+        assert normalize_order_direction(queryset, None, Item) is queryset
+
+    def test_explicit_order_is_reversed_whole_with_the_flag_reset(self):
+        """``order_by("name").reverse()`` materializes ``-name, -id`` under the forward flag."""
+        reversed_queryset = Item.objects.order_by("name").reverse()
+        normalized = normalize_order_direction(reversed_queryset, None, Item)
+        assert reversed_queryset.query.standard_ordering is False
+        assert (normalized.query.standard_ordering, normalized.query.order_by) == (
+            True,
+            ("-name", "-id"),
+        )
+        compiled = Item.objects.order_by("name", "id").reverse()
+        assert str(normalized.query) == str(compiled.query)
+        assert effective_connection_order(None, normalized.query, Item) == ("-name", "-id")
+
+    def test_meta_ordering_is_materialized_then_reversed(self):
+        """A bare ``.reverse()`` reverses the model's ``Meta.ordering`` made total."""
+        from apps.kanban.models import Status
+        from apps.library.models import ReadingList
+
+        assert normalize_order_direction(
+            Status.objects.reverse(),
+            None,
+            Status,
+        ).query.order_by == ("-order", "-id")
+        normalized = normalize_order_direction(ReadingList.objects.reverse(), None, ReadingList)
+        assert normalized.query.order_by == ("-title", "-id")
+        assert str(normalized.query) == str(
+            ReadingList.objects.order_by("title", "id").reverse().query,
+        )
+
+    def test_orderby_expression_swaps_its_nulls_placement(self):
+        """An ``OrderBy`` reverses through Django's own ``reverse_ordering``, NULLS included."""
+        reversed_queryset = Item.objects.order_by(F("name").asc(nulls_first=True)).reverse()
+        normalized = normalize_order_direction(reversed_queryset, None, Item)
+        entry, tiebreaker = normalized.query.order_by
+        assert isinstance(entry, OrderBy)
+        assert (entry.descending, *_nulls_slots(entry), tiebreaker) == (
+            True,
+            None,
+            True,
+            "-id",
+        )
+        compiled = Item.objects.order_by(F("name").asc(nulls_first=True), "id").reverse()
+        assert str(normalized.query) == str(compiled.query)
+
+    def test_no_order_anywhere_reverses_the_cursor_field_else_the_pk(self):
+        """With no order on the queryset or model, the declared cursor order (or pk) flips."""
+        assert normalize_order_direction(
+            Item.objects.reverse(),
+            ("-name", "id"),
+            Item,
+        ).query.order_by == ("name", "-id")
+        normalized = normalize_order_direction(Item.objects.reverse(), None, Item)
+        assert (normalized.query.standard_ordering, normalized.query.order_by) == (True, ("-id",))
+
+
 def _issue_cursor_state() -> CursorState:
     """The declared ``("-number", "id")`` vocabulary over the library ``Issue`` model."""
     from apps.library.models import Issue
@@ -1288,6 +1359,10 @@ class TestReverseOrderBy:
         first_slot, last_slot = _nulls_slots(nulls_last)
         assert first_slot is True
         assert last_slot is None
+
+    def test_random_order_passes_through(self):
+        """``"?"`` carries no direction: it stays ``"?"`` (``order_by("-?")`` is a FieldError)."""
+        assert _reverse_order_by(["?", "id"]) == ["?", "-id"]
 
     def test_bare_expression_reverses_through_desc(self):
         """A term with no ``.descending`` is IMPLICITLY ascending; its reverse is ``desc()``.

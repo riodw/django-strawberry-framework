@@ -351,7 +351,11 @@ def default_order(query: sql.Query, model: type[models.Model]) -> tuple[str | Co
 def applied_order(query: sql.Query, model: type[models.Model]) -> tuple[str | Combinable, ...]:
     """Return the ORDER BY terms Django compiles for ``query``: its explicit order, else ``default_order``.
 
-    An ``extra(order_by=...)`` ordering is outside this read; only the list
+    Read under the forward flag: a ``.reverse()``'d query (``standard_ordering``
+    False) compiles each of these terms flipped; the connection order ladder
+    runs ``optimizer/plans.py::normalize_order_direction`` first, so the terms
+    it reads here are the ones Django compiles. An
+    ``extra(order_by=...)`` ordering is outside this read; only the list
     field's offset guard classifies it (``list_field.py::_selected_ordering``).
     """
     return tuple(query.order_by) or default_order(query, model)

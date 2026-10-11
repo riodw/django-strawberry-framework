@@ -2299,8 +2299,15 @@ def test_a_worker_threads_application_reaches_the_ledger_its_parent_claims_from(
     assert _ORDER_NORMALIZATION_CAPTURE.get() is None
 
 
-def test_concurrent_threads_publishing_into_one_ledger_lose_nothing():
-    """Every attestation survives simultaneous appends from many worker threads."""
+def test_concurrent_threads_publishing_into_one_ledger_lose_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Every attestation survives simultaneous appends from many worker threads.
+
+    Each worker runs in its own copy of the context holding the one ledger, as
+    ``sync_to_async`` does, and every publication waits for all the others so the
+    appends genuinely overlap.
+    """
     info = SimpleNamespace(context={"request": HttpRequest()})
 
     class ConcurrentOrder(OrderSet):
@@ -2310,21 +2317,33 @@ def test_concurrent_threads_publishing_into_one_ledger_lose_nothing():
 
     ConcurrentInput = _keyword_constructor(OrderArgumentsFactory(ConcurrentOrder).arguments)
     inputs = [[ConcurrentInput(title=Ordering.ASC)] for _ in range(24)]
+    at_publish = threading.Barrier(len(inputs), timeout=10)
+    original_publish = _NormalizationLedger.publish
+
+    def publish_together(self: _NormalizationLedger, record: _AppliedNormalization) -> None:
+        at_publish.wait()
+        original_publish(self, record)
+
+    monkeypatch.setattr(_NormalizationLedger, "publish", publish_together)
+    errors: list[BaseException] = []
+
+    def apply_one(copied: contextvars.Context, order_input: object):
+        try:
+            copied.run(ConcurrentOrder.apply_sync, order_input, Book.objects.all(), info)
+        except BaseException as error:
+            errors.append(error)
 
     with capture_applied_order_normalization():
-        copied = contextvars.copy_context()
-        start = threading.Barrier(len(inputs))
-
-        def apply_one(order_input: object):
-            start.wait()
-            copied.run(ConcurrentOrder.apply_sync, order_input, Book.objects.all(), info)
-
-        workers = [threading.Thread(target=apply_one, args=(value,)) for value in inputs]
+        workers = [
+            threading.Thread(target=apply_one, args=(contextvars.copy_context(), value))
+            for value in inputs
+        ]
         for worker in workers:
             worker.start()
         for worker in workers:
             worker.join()
 
+        assert errors == []
         attested = _attestations(ConcurrentOrder)
         assert attested is not None
         assert len(attested) == len(inputs)

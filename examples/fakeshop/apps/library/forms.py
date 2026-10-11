@@ -37,7 +37,9 @@ class ShelfRelationsForm(forms.ModelForm[models.Shelf]):
     ``to_field_name="name"`` so the decode binds the resolved Branch by its unique
     name rather than its pk. The generated input and relation decoder must therefore
     retain the backing model column's related model instead of consulting the
-    class-level form field's absent queryset.
+    class-level form field's absent queryset. ``tier`` is the ``blank=True`` integer
+    choice column: an explicit ``null`` cleans to ``""``, which only ``save()``
+    refuses, so it earns the save-time field-keyed ``null`` error live.
     """
 
     branch = forms.ModelChoiceField(
@@ -51,6 +53,7 @@ class ShelfRelationsForm(forms.ModelForm[models.Shelf]):
             "code",
             "topic",
             "condition",
+            "tier",
             "branch",
             "alt_branches",
         )

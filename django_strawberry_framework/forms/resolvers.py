@@ -72,8 +72,12 @@ and the form-specific invariants this module owns:
 
 - **Write via ``form.save()`` (``ModelForm``) / ``perform_mutate`` (plain),
   wrapped by the reused ``save_or_field_errors`` ``IntegrityError`` -> envelope
-  mapper** (Decision 8 step 5) - one catch, never a top-level ``GraphQLError``
-  at the write.
+  mapper** (Decision 8 step 5), never a top-level ``GraphQLError`` at the write.
+  The ``ModelForm`` save adds the one other failure a valid ``ModelForm`` reaches
+  on its own: a ``blank=True, null=False`` non-text choice column cleaned to
+  ``""``, which ``save()`` refuses with a ``ValueError`` / ``ValidationError``,
+  maps to that column's field-keyed ``null`` error
+  (``_modelform_save_or_field_errors``); any other save exception propagates.
 
 - **The ``ModelForm`` re-fetch rides the ``036`` ``refetch_optimized`` G2 path**
   (Decision 9): by pk WITHOUT the visibility filter, routed through
@@ -527,6 +531,72 @@ def _bound_form_or_field_errors(
     return form, None
 
 
+def _unstorable_blank_fields(
+    form: forms.ModelForm[models.Model],
+) -> list[models.Field[object, object]]:
+    """Return the form's columns holding a cleaned empty value the column cannot store.
+
+    Django's ``Field.formfield`` keeps ``TypedChoiceField(empty_value="")`` on a
+    ``null=False`` choice column whatever the column type, and ``ModelForm._post_clean``
+    writes that ``""`` onto ``form.instance`` while ``Model.clean_fields`` skips every
+    ``blank=True`` column whose value is an empty value ("the developer is responsible
+    for making sure they have a valid value"). A non-text column therefore carries a
+    value only ``save()`` refuses, for example the ``ValueError`` of an integer / float
+    column's ``get_prep_value`` ("expected a number but got ''") or the
+    ``ValidationError`` of a decimal / date / UUID / boolean column's ``to_python``.
+    Reads the model's concrete columns the form declares and ``_post_clean``
+    constructed, with Django's own skip predicate (``blank`` and an empty value)
+    narrowed to ``""`` on a column that stores no empty string. A text column storing
+    ``""`` is a legitimate clear and is never named; ``None`` on a ``null=False``
+    column is the database's ``NOT NULL`` ``IntegrityError``, which
+    ``save_or_field_errors`` already maps, so it is not this diagnosis.
+    """
+    instance = form.instance
+    unstorable_fields: list[models.Field[object, object]] = []
+    for field in instance._meta.concrete_fields:
+        if field.name not in form.fields or not field.editable or field.primary_key:
+            continue
+        value = getattr(instance, field.attname)
+        if field.blank and value == "" and not field.empty_strings_allowed:
+            unstorable_fields.append(field)
+    return unstorable_fields
+
+
+def _modelform_save_or_field_errors(
+    form: forms.ModelForm[models.Model],
+    mutation_cls: type[DjangoModelFormMutation],
+) -> list[FieldError] | None:
+    """Run ``form.save()``; map a save-time failure to the envelope else ``None``.
+
+    The ``IntegrityError`` -> ``"__all__"`` mapping is the shared
+    ``save_or_field_errors``. On top, the one failure a VALID ``ModelForm`` can reach
+    at ``save()`` on its own: a ``blank=True, null=False`` non-text column the form
+    cleaned to ``""`` (an omitted or explicitly ``null`` optional choice column with no
+    default to fall back on), which Django's ``clean_fields`` skipped and the column's
+    ``get_prep_value`` / ``to_python`` then refuses with a ``ValueError`` or
+    ``ValidationError``. The exception is the trigger, never the diagnosis: the
+    failure is mapped only when ``_unstorable_blank_fields`` finds such a column
+    on the instance the save was attempted on. The error carries the field, code
+    ``null`` and path the model flavor's ``mutations/resolvers.py::_explicit_null_error``
+    gives the same column, with the column's Django ``error_messages["null"]`` as the
+    message (the form is the message source of truth, so a custom or translated
+    message is sent as is). Any other ``ValueError`` / ``ValidationError`` out of a
+    consumer ``save()`` propagates unchanged. Checking the instance AFTER the save
+    attempt, not before, keeps Django's own ``blank=True, null=False`` contract
+    (django-trac 13776 / 20205): a consumer ``save()`` that fills the value in never
+    sees the guard.
+    """
+    try:
+        return save_or_field_errors(form.save)
+    except (ValueError, ValidationError):
+        unstorable_fields = _unstorable_blank_fields(form)
+        if not unstorable_fields:
+            raise
+        for field in unstorable_fields:
+            form.add_error(field.name, ValidationError(field.error_messages["null"], code="null"))
+        return _form_errors_to_field_errors(form, mutation_cls)
+
+
 def _modelform_write_step(
     mutation_cls: type[DjangoModelFormMutation],
     info: Info[object, object],
@@ -538,10 +608,11 @@ def _modelform_write_step(
     Constructs the form via the overridable ``get_form`` hook over the decoded bound
     data, runs ``is_valid()`` once (a failure maps ``form.errors`` onto the envelope
     via the reused ``validation_error_to_field_errors``), then writes via
-    ``form.save()`` wrapped by the reused ``save_or_field_errors`` ``IntegrityError``
-    mapper. Returns the saved instance (the skeleton's ``refetch_optimized``
-    re-fetches it by pk under the G2 plan) or a ``list[FieldError]`` on a validation
-    / write failure.
+    ``form.save()`` through ``_modelform_save_or_field_errors`` (the reused
+    ``save_or_field_errors`` ``IntegrityError`` mapper plus the blank non-text
+    choice column ``null`` mapping). Returns the saved instance (the skeleton's
+    ``refetch_optimized`` re-fetches it by pk under the G2 plan) or a
+    ``list[FieldError]`` on a validation / write failure.
     """
     bound = _bound_form_or_field_errors(
         mutation_cls,
@@ -558,7 +629,7 @@ def _modelform_write_step(
     # construction + ``is_valid()`` above are database-read-only under the
     # pipeline's phased alias guard.
     with pipeline_write_phase():
-        write_error = save_or_field_errors(form.save)
+        write_error = _modelform_save_or_field_errors(form, mutation_cls)
     if write_error is not None:
         return write_error
     # ``get_form`` returns a ``ModelForm[Any]`` (its model parameter is invariant),

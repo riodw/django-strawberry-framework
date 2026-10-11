@@ -331,7 +331,9 @@ package-internal; Slice 4 is the live consumer surface.
     `validation_error_to_field_errors(ValidationError(form.errors.as_data()), key_map)`)
     and returns a null-object payload; **write** via `form.save()` (`ModelForm`) /
     `perform_mutate` (plain form), **wrapped by the `036` `save_or_field_errors`
-    `IntegrityError` → envelope mapper** (no top-level error at write); **re-fetch**
+    `IntegrityError` → envelope mapper** (no top-level error at write), the
+    `ModelForm` save also mapping a `blank=True, null=False` non-text choice column
+    the form cleaned to `""` onto that column's field-keyed `null` error; **re-fetch**
     the saved object by pk + optimizer-plan (the `ModelForm` flavor); **return** the
     `<Name>Payload` (`node` / `result` for the `ModelForm`, the pinned `ok` + `errors`
     for the plain form). The whole pipeline runs inside one `transaction.atomic()`
@@ -1385,7 +1387,23 @@ write flavor rides.
    time. This wraps **both** the `ModelForm` `form.save()` and the plain-form
    `perform_mutate` default save path. Runs inside the one `transaction.atomic()`
    boundary (the `IntegrityError` is caught at the resolver, so the atomic block is
-   exited cleanly with the envelope as the result).
+   exited cleanly with the envelope as the result). **The `ModelForm` save also maps
+   the one other failure a valid `ModelForm` reaches on its own**
+   ([`forms/resolvers.py`][forms-resolvers]`::_modelform_save_or_field_errors`): over
+   a `blank=True, null=False` non-text choice column, Django's form field keeps
+   `TypedChoiceField(empty_value="")`, so an explicit `null` (or an omission with no
+   column default) cleans to `""`, `Model.clean_fields` skips it, and `save()` refuses
+   it with a `ValueError` (e.g. an integer / float `get_prep_value`) or
+   `ValidationError` (e.g. a decimal / date / UUID / boolean `to_python`). After that failed save, a form-declared editable
+   column holding `""` that stores no empty string is reported as the field-keyed
+   error with the same field, code `null` and path the model flavor answers an explicit
+   `null` on a non-nullable column with, and the column's Django `error_messages["null"]`
+   as the message (the form is the message source of truth, so a custom or translated
+   message is sent as is, where the model flavor's message is fixed); when no column explains
+   the exception it propagates unchanged. The check runs on the instance after the
+   save attempt, never before it, so a model `save()` that fills the blank value in
+   (the reason Django keeps the shape) still writes. The returned envelope rolls the
+   atomic block back exactly as the `IntegrityError` envelope does.
 6. **Re-fetch** (`ModelForm`): re-read the saved row by pk and optimizer-plan it for
    the response selection through the `036` `refetch_optimized`
    ([Decision 9](#decision-9--optimizer-composition-the-modelform-payload-re-fetch-rides-the-spec-036-g2-path)).
@@ -1410,7 +1428,9 @@ helpers the runner composes are public, and live in three modules:
   ([Decision 9](#decision-9--optimizer-composition-the-modelform-payload-re-fetch-rides-the-spec-036-g2-path)),
   `build_payload` (the uniform-slot envelope), and `save_or_field_errors` (the
   save-time `IntegrityError` → `FieldError` mapper reused per step 5, wrapping a
-  zero-arg save callable).
+  zero-arg save callable; the `ModelForm` flavor calls it through
+  `_modelform_save_or_field_errors`, which adds step 5's blank non-text choice column
+  mapping).
 - [`utils/errors.py`][utils-errors] — `validation_error_to_field_errors` and
   `build_error_key_map` (the validation-error mapper and its input-name key map, reused
   per step 4).
@@ -1551,7 +1571,8 @@ plain `ContactForm`, and `products/schema.py` exposes them via
   and `CreateBranchPair` over `ShelfRelationsForm` / `BookGenresModelForm` /
   `BranchWithShelfForm` / `BranchPairForm`. Library carries the cases products cannot:
   the **non-Relay raw-pk** relation decode, the `to_field_name` conversion, the
-  request-scoped-`queryset` idiom, and the plain-form `perform_mutate` rollback.
+  request-scoped-`queryset` idiom, the plain-form `perform_mutate` rollback, and the
+  write-time blank integer choice column (`Shelf.tier`).
 - **`scalars`** — `CreateMediaSpecimenImageViaForm`, the image-column flavor of the
   `Upload` routing.
 
@@ -1724,6 +1745,15 @@ Rationale companion: [Decision 14][rationale-d14].
   constraint returns the null-object + `FieldError` envelope via the `036`
   `save_or_field_errors` mapper — never a top-level `GraphQLError`
   ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)).
+- **Write-time blank non-text choice column.** A `ModelForm` over a `blank=True,
+  null=False` choice column of any non-text type (e.g. integer, decimal, date) cleans
+  an explicit `null` (or an omission with no column default) to `""`, which only
+  `save()` refuses; the
+  failure returns the null-object envelope keyed by that column with code `null`,
+  nothing written. A consumer `save()` that fills the value in writes; any other
+  `ValueError` / `ValidationError` out of `save()` propagates
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)
+  step 5).
 - **Two distinct generated form inputs colliding on one GraphQL name.** Two
   **different** form classes with the same `__name__` both emit `<__name__>Input` and
   **always** raise a finalize-time [`ConfigurationError`][glossary-configurationerror]
@@ -1775,7 +1805,10 @@ behavior reachable through `/graphql/`, package tests own internals.
   (`submitPing`, top-level denial). **Write-time `IntegrityError`** — a valid
   `ModelForm.save()` that hits a constraint the form's validation excluded
   (`createDefaultCategoryItemViaForm`) surfaces the **`FieldError` envelope**, not a
-  top-level GraphQL error.
+  top-level GraphQL error. **Write-time blank non-text choice column** — an explicit
+  `tier: null` on `createShelfViaForm` (`Shelf.tier` is a `blank=True` integer choice
+  column with a default) returns the `tier` / `null` envelope with no row written, while
+  a member writes and an omission keeps the default.
 - **Package-internal** ([`tests/forms/`][test-forms]):
   - `test_converter.py` — each supported form-field class → annotation +
     required-ness; `ModelChoiceField` / `ModelMultipleChoiceField` id mapping
@@ -1822,6 +1855,10 @@ behavior reachable through `/graphql/`, package tests own internals.
     by the target field, not pk; **write-time `IntegrityError`** — a valid
     `form.save()` raising `IntegrityError` (and the plain-form `perform_mutate` save
     path) → `FieldError` envelope, not a top-level error (via `save_or_field_errors`);
+    **write-time blank non-text choice column** — an integer column omitted with no
+    default, decimal and date columns sent `null`, and an update sent `null` each return
+    the column-keyed `null` envelope with nothing written; a model `save()` filling the
+    value in writes; a consumer `save()` `ValueError` with no such column propagates;
     **the `get_form_kwargs` / `get_form` hook** — an override injecting `user` and one
     scoping a `ModelChoiceField.queryset` (input shape unchanged); **partial-update
     reconstruction at the unit tier** — omitted scalar / FK / M2M preserved from the
@@ -2000,7 +2037,9 @@ The completion contract.
    onto the [`FieldError` envelope][glossary-fielderror-envelope] (each form field keyed
    to its input name, `NON_FIELD_ERRORS` → `"__all__"`, via the reused
    `validation_error_to_field_errors(ValidationError(form.errors.as_data()), key_map)`); **the write is wrapped by the `036` `save_or_field_errors`
-   `IntegrityError` → envelope mapper** (no top-level error on a save-time race);
+   `IntegrityError` → envelope mapper** (no top-level error on a save-time race), and
+   a `ModelForm` save refused over a `blank=True, null=False` non-text choice column
+   cleaned to `""` returns that column's field-keyed `null` error;
    the `ModelForm` payload object is re-fetched through the
    `036` optimizer path (G2: `select_related` / `prefetch_related` kept, no
    [`.only(...)`][glossary-only-projection]); the **plain `DjangoFormMutation`

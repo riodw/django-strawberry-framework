@@ -135,6 +135,11 @@ class Shelf(models.Model):
         WORN = "worn", "Worn"
         DAMAGED = "damaged", "Damaged"
 
+    class Tier(models.IntegerChoices):
+        LOWER = 1, "Lower"
+        MIDDLE = 2, "Middle"
+        UPPER = 3, "Upper"
+
     code = models.TextField()
     topic = models.TextField(blank=True, default="")
     # A blank-admitting choice column: an unassessed shelf stores ``""``, so the
@@ -144,6 +149,15 @@ class Shelf(models.Model):
         choices=Condition.choices,
         blank=True,
         default="",
+    )
+    # A blank-admitting integer choice column that stores no empty value: Django's
+    # form field for it cleans an empty submission to ``""``, which only ``save()``
+    # refuses, so an explicit ``null`` through the ModelForm mutation exercises the
+    # save-time mapping onto the field-keyed ``null`` error.
+    tier = models.PositiveSmallIntegerField(
+        choices=Tier.choices,
+        blank=True,
+        default=Tier.MIDDLE,
     )
     branch = models.ForeignKey(
         Branch,

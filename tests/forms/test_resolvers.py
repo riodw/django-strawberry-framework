@@ -10,7 +10,8 @@ Live HTTP owns the consumer-visible form writes in
 write-time IntegrityError / ``submitContact`` / ``submitPing`` /
 ``/graphql-async/``), ``test_library_api.py`` (raw-pk hidden FK+M2M,
 ``to_field_name`` write, omitted M2M preserve, explicit-null required M2M,
-``perform_mutate`` write + IntegrityError rollback), and
+``perform_mutate`` write + IntegrityError rollback, explicit-null blank integer
+choice column ``tier`` -> field-keyed ``null``), and
 ``test_uploads_api.py`` (ImageField form multipart).
 
 Kept here because no shipped mutation carries them: Relay-GlobalID M2M
@@ -22,13 +23,18 @@ Django-default-required omit needs a throwaway form, and a live holder cannot
 declare ``DjangoFormMutation`` after the acceptance finalize), required extra
 field on a partial input, ``to_field_name`` reconstruction, ImageField
 reconstruction key absence, decode-helper envelopes, optimizer
-``dst_optimizer_plan`` G2.
+``dst_optimizer_plan`` G2, and the save-time blank non-text choice column shapes
+fakeshop has no column for (omitted with no default, decimal / date, update
+``null``, a filling-in model ``save()``, an unrelated consumer ``ValueError``).
 """
 
 from __future__ import annotations
 
+import contextlib
+import datetime
+import decimal
 import itertools
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from enum import Enum
 from types import SimpleNamespace
 from typing import Any
@@ -1790,3 +1796,257 @@ def test_reconstruct_partial_data_m2m_does_not_exist(monkeypatch: pytest.MonkeyP
 
     data = _reconstruct_partial_data(BookMutation, library_models.Book(pk=1), {})
     assert "genres" not in data
+
+
+# ---------------------------------------------------------------------------
+# Save-time blank non-text choice column (``_modelform_save_or_field_errors``)
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def _blank_choice_table(model_class: type[models.Model]) -> Generator[None, None, None]:
+    """Give a ``managed = False`` synthetic model a real table for the test, then drop it."""
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(model_class)
+    try:
+        yield
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(model_class)
+
+
+def _blank_choice_schema(
+    model_class: type[models.Model],
+    fields: tuple[str, ...],
+) -> tuple[strawberry.Schema, str, str]:
+    """A non-Relay primary + create / update ModelForm mutations over ``model_class``.
+
+    Returns the schema and the create / update input type names.
+    """
+
+    form_class = type(
+        f"{model_class.__name__}Form",
+        (forms.ModelForm,),
+        {"Meta": type("Meta", (), {"model": model_class, "fields": fields})},
+    )
+    type(
+        f"{model_class.__name__}T",
+        (DjangoType,),
+        {"Meta": type("Meta", (), {"model": model_class, "fields": ("id", *fields)})},
+    )
+    create = type(
+        "CreateRow",
+        (DjangoModelFormMutation,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {"form_class": form_class, "operation": "create", "permission_classes": []},
+            ),
+        },
+    )
+    update = type(
+        "UpdateRow",
+        (DjangoModelFormMutation,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {"form_class": form_class, "operation": "update", "permission_classes": []},
+            ),
+        },
+    )
+
+    @strawberry.type
+    class Mutation:
+        create_row = DjangoMutationField(create)
+        update_row = DjangoMutationField(update)
+
+    finalize_django_types()
+    assert create._input_class is not None
+    assert update._input_class is not None
+    return _schema(Mutation), create._input_class.__name__, update._input_class.__name__
+
+
+def _blank_choice_model(name: str, column: models.Field[object, object]) -> type[models.Model]:
+    """A synthetic model: a ``blank=True, null=False`` choice column ``pick`` + a blank text ``note``.
+
+    ``note`` holds ``""`` whenever it is omitted; a text column stores an empty string,
+    so it is never the column the save failure is reported under.
+    """
+    return type(
+        name,
+        (models.Model,),
+        {
+            "__module__": __name__,
+            "pick": column,
+            "note": models.TextField(blank=True),
+            "Meta": type("Meta", (), {"app_label": "products", "managed": False}),
+        },
+    )
+
+
+_NULL_PICK_ERROR = {"field": "pick", "messages": ["This field cannot be null."], "codes": ["null"]}
+
+
+@pytest.mark.parametrize(
+    (
+        "column",
+        "operation",
+        "pick_input",
+        "stored",
+    ),
+    [
+        pytest.param(
+            models.IntegerField(choices=[(1, "One"), (2, "Two")], blank=True),
+            "create",
+            {},
+            None,
+            id="integer-create-omitted-no-default",
+        ),
+        pytest.param(
+            models.DecimalField(
+                max_digits=4,
+                decimal_places=2,
+                choices=[(decimal.Decimal("1.50"), "Low"), (decimal.Decimal("2.50"), "High")],
+                blank=True,
+            ),
+            "create",
+            {"pick": None},
+            None,
+            id="decimal-create-null",
+        ),
+        pytest.param(
+            models.DateField(choices=[(datetime.date(2026, 1, 1), "New year")], blank=True),
+            "create",
+            {"pick": None},
+            None,
+            id="date-create-null",
+        ),
+        pytest.param(
+            models.IntegerField(choices=[(1, "One"), (2, "Two")], blank=True),
+            "update",
+            {"pick": None},
+            2,
+            id="integer-update-null",
+        ),
+    ],
+)
+@pytest.mark.django_db(transaction=True)
+def test_modelform_blank_choice_save_failure_is_field_keyed_null_error(
+    column: models.Field[object, object],
+    operation: str,
+    pick_input: dict[str, object],
+    stored: object,
+):
+    """A ``blank=True, null=False`` non-text choice column cleaned to ``""`` is the ``null`` error.
+
+    Django's form field keeps ``empty_value=""`` on the column, ``Model.clean_fields``
+    skips the blank value, and ``form.save()`` refuses it: an integer column's
+    ``get_prep_value`` raises ``ValueError``, a decimal / date column's ``to_python``
+    raises ``ValidationError``. Each reaches the envelope keyed by the column with
+    Django's ``null`` message and code, and the write does not happen (no row on
+    create, the stored value unchanged on update). The omitted ``note`` holds ``""``
+    too, on a text column that stores it, so it is never reported.
+    """
+    model_class = _blank_choice_model("BlankPickRow", column)
+    with _blank_choice_table(model_class):
+        schema, create_input, update_input = _blank_choice_schema(model_class, ("pick", "note"))
+        if operation == "create":
+            res = schema.execute_sync(
+                f"mutation($d: {create_input}!){{ createRow(data:$d){{ "
+                "result{ id } errors{ field messages codes } } }",
+                variable_values={"d": pick_input},
+            )
+            payload = res.data and res.data["createRow"]
+        else:
+            row = model_class.objects.create(pick=stored)
+            res = schema.execute_sync(
+                f"mutation($id: ID!, $d: {update_input}!){{ updateRow(id:$id, data:$d){{ "
+                "result{ id } errors{ field messages codes } } }",
+                variable_values={"id": str(row.pk), "d": pick_input},
+            )
+            payload = res.data and res.data["updateRow"]
+        assert res.errors is None, res.errors
+        assert payload == {"result": None, "errors": [_NULL_PICK_ERROR]}
+        assert list(model_class.objects.values_list("pick", flat=True)) == (
+            [] if stored is None else [stored]
+        )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_modelform_blank_choice_filled_in_by_model_save_writes():
+    """A model ``save()`` that fills the blank column in writes; nothing guards it beforehand.
+
+    Django keeps ``blank=True, null=False`` so ``save()`` can supply the value
+    (django-trac 13776), so the mapping runs only after a failed save: an omitted
+    ``pick`` reaches ``save()`` as ``""``, the override stores ``2`` and the row is
+    written.
+    """
+
+    class FilledPickRow(models.Model):
+        pick = models.IntegerField(choices=[(1, "One"), (2, "Two")], blank=True)
+
+        class Meta:
+            app_label = "products"
+            managed = False
+
+        @override
+        # basedpyright: verbatim forward to Model.save; object fails its typed params
+        def save(self, *args: Any, **kwargs: Any) -> None:  # pyright: ignore[reportExplicitAny]
+            if self.pick == "":
+                self.pick = 2
+            super().save(*args, **kwargs)
+
+    with _blank_choice_table(FilledPickRow):
+        schema, create_input, _ = _blank_choice_schema(FilledPickRow, ("pick",))
+        res = schema.execute_sync(
+            f"mutation($d: {create_input}!){{ createRow(data:$d){{ "
+            "result{ id } errors{ field messages codes } } }",
+            variable_values={"d": {}},
+        )
+        assert res.errors is None, res.errors
+        assert res.data is not None
+        assert res.data["createRow"]["errors"] == []
+        assert list(FilledPickRow.objects.values_list("pick", flat=True)) == [2]
+
+
+#: The one exception instance the consumer ``save()`` raises, so the test can prove the
+#: pipeline re-raised it rather than a replacement carrying the same message.
+_CONSUMER_SAVE_ERROR = ValueError("consumer save refused the row")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_modelform_unrelated_save_value_error_propagates():
+    """A consumer ``save()`` ``ValueError`` with no unstorable blank column is not mapped.
+
+    The exception class is the trigger, never the diagnosis: ``pick`` holds a member
+    and ``note`` holds ``""`` on a text column (which stores an empty string), so no
+    column explains the failure and the consumer's error propagates unchanged: the
+    very instance ``save()`` raised reaches the response as the error's original.
+    """
+
+    class FailingPickRow(models.Model):
+        pick = models.IntegerField(choices=[(1, "One"), (2, "Two")], blank=True)
+        note = models.TextField(blank=True)
+
+        class Meta:
+            app_label = "products"
+            managed = False
+
+        @override
+        # basedpyright: Model.save override signature; object fails its typed params
+        def save(self, *args: Any, **kwargs: Any) -> None:  # pyright: ignore[reportExplicitAny]
+            raise _CONSUMER_SAVE_ERROR
+
+    with _blank_choice_table(FailingPickRow):
+        schema, create_input, _ = _blank_choice_schema(FailingPickRow, ("pick", "note"))
+        res = schema.execute_sync(
+            f"mutation($d: {create_input}!){{ createRow(data:$d){{ "
+            "result{ id } errors{ field messages codes } } }",
+            variable_values={"d": {"pick": "MEMBER_1"}},
+        )
+        assert res.errors is not None
+        assert [error.message for error in res.errors] == ["consumer save refused the row"]
+        assert res.errors[0].original_error is _CONSUMER_SAVE_ERROR
+        assert not FailingPickRow.objects.exists()

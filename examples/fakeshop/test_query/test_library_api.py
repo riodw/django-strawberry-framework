@@ -10739,6 +10739,73 @@ def test_create_shelf_via_form_visible_branch_resolves_by_to_field_name_and_writ
     assert shelf.branch_id == visible.pk  # resolved by name (to_field_name) + written
 
 
+_CREATE_SHELF_VIA_FORM_TIER = (
+    "mutation($d: ShelfRelationsFormInput!){ createShelfViaForm(data:$d){ "
+    "result{ code } errors{ field messages codes path } } }"
+)
+
+
+@pytest.mark.django_db
+def test_create_shelf_via_form_explicit_null_tier_is_field_keyed_null_error_without_write():
+    """An explicit ``null`` on the blank integer choice column is the field-keyed ``null`` error.
+
+    ``Shelf.tier`` is ``blank=True, null=False`` over integer choices, so Django's form
+    field cleans the ``null`` to ``""``, ``Model.clean_fields`` skips it, and only
+    ``form.save()`` refuses it (the integer column's ``get_prep_value`` ``ValueError``).
+    The ModelForm flavor answers that in the ``FieldError`` envelope under the GraphQL
+    input name with Django's ``null`` message and code - the error the model flavor gives
+    an explicit ``null`` on a non-nullable column - and no row is written.
+    """
+    branch = models.Branch.objects.create(name="TierNullBranch", city="open")
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            _CREATE_SHELF_VIA_FORM_TIER,
+            variables={"d": {"code": "TIER-NULL", "branchId": branch.pk, "tier": None}},
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfViaForm"]
+    assert result == {
+        "result": None,
+        "errors": [
+            {
+                "field": "tier",
+                "messages": ["This field cannot be null."],
+                "codes": ["null"],
+                "path": ["tier"],
+            },
+        ],
+    }
+    assert not [entry for entry in captured.captured_queries if entry["sql"].startswith("INSERT")]
+    assert not models.Shelf.objects.filter(code="TIER-NULL").exists()
+
+
+@pytest.mark.parametrize(
+    ("tier_input", "stored"),
+    [
+        pytest.param({"tier": "MEMBER_3"}, models.Shelf.Tier.UPPER, id="member"),
+        pytest.param({}, models.Shelf.Tier.MIDDLE, id="omitted-keeps-default"),
+    ],
+)
+@pytest.mark.django_db
+def test_create_shelf_via_form_tier_member_or_omission_writes(
+    tier_input: dict[str, str],
+    stored: int,
+):
+    """A tier member writes its value; an omitted tier keeps the column default."""
+    branch = models.Branch.objects.create(name="TierWriteBranch", city="open")
+    response = _post_graphql(
+        _CREATE_SHELF_VIA_FORM_TIER,
+        variables={"d": {"code": "TIER-OK", "branchId": branch.pk, **tier_input}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"]["createShelfViaForm"] == {"result": {"code": "TIER-OK"}, "errors": []}
+    assert models.Shelf.objects.get(code="TIER-OK").tier == stored
+
+
 @pytest.mark.django_db
 def test_create_shelf_model_mutation_hidden_branch_is_field_error():
     """The MODEL pipeline's raw-pk relation decode hides a Branch live (``utils/write_values.py::decode_visible_relation``).

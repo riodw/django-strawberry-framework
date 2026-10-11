@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 42 done, 50 to do.
+Progress: 43 done, 51 to do.
 
 ## Done
 
@@ -77,6 +77,9 @@ Progress: 42 done, 50 to do.
 - [x] 49. `serializer_field_description` converts (does not re-raise) a `KeyboardInterrupt` from hostile field metadata into
   `ConfigurationError`, by design and pinned since `3470fb7f`. Not a defect under rule 37 (no contract row, application Python, no
   wire input), no code; the package-wide policy question is item 94
+- [x] 95. A nested keyset connection whose target `get_queryset` (or manager) orders differently from `Meta.cursor_field`
+  windowed by that order but sought and minted by the declared one, so a forward page 2 silently dropped rows; the window now
+  derives its cursor vocabulary from the order it pages by through the resolver the root uses (`5197d03d`)
 
 ## To do: t3 robustness rows
 
@@ -165,6 +168,8 @@ not real bugs and just get deleted from t3. One checkbox per area:
   `KeyboardInterrupt` / `SystemExit` into a typed error (pinned, e.g. `serializer_field_description`), while `utils/directives.py`
   and the await-side guards let control signals propagate (pinned the other way). No upstream library converts them at
   configuration time. One policy (re-raise control signals first, or narrow to `Exception`), or keep the split?
+- [ ] 96. CHANGELOG entry for item 95: a nested keyset connection over a type whose `get_queryset` or manager orders pages and
+  mints cursors under that order, so its cursors now replay on the root connection; `DeclaredCursorState` is renamed `CursorState`
 
 ## Hunt not finished in t3
 

@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 43 done, 51 to do.
+Progress: 44 done, 52 to do.
 
 ## Done
 
@@ -80,6 +80,10 @@ Progress: 43 done, 51 to do.
 - [x] 95. A nested keyset connection whose target `get_queryset` (or manager) orders differently from `Meta.cursor_field`
   windowed by that order but sought and minted by the declared one, so a forward page 2 silently dropped rows; the window now
   derives its cursor vocabulary from the order it pages by through the resolver the root uses (`5197d03d`)
+- [x] 51. An `OrderSet` leaf over a multi-column forward `ForeignObject` raised a masked `FieldError` on every `orderBy`, and
+  `"__all__"` dropped every forward `ForeignObject` (a side effect of `7000d920`); a leaf now orders by one term per carrier
+  column as Django's `order_by` does, `"__all__"` publishes it again, and a link naming no visible target sorts as missing
+  instead of being dropped by an inner join (`0eb96efe`)
 
 ## To do: t3 robustness rows
 
@@ -101,7 +105,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## To do: found along the way
 
-- [ ] 51. `OrderSet` `"__all__"` leaves out `ForeignObject` fields (unverified)
 - [ ] 56. Two writable serializer fields can write the same FK column (`category` and `source="category_id"`)
 - [ ] 80. `_guard_source_not_pre_sliced` and three `_finalize_queryset` catches turn a consumer QuerySet or ordering fault into a
   deliberate `GraphQLError` naming the exception class: no `correlationId`, class name on the wire (robustness; no text leaks)
@@ -115,6 +118,8 @@ not real bugs and just get deleted from t3. One checkbox per area:
   still publish `[[String!]!]`; an enum there needs a deeper element unwrap than item 43's one level
 - [ ] 92. A consumer `save()` raising Django's `ValidationError` escapes the ModelForm flavor as a masked top-level error, while the
   serializer flavor maps it into the envelope
+- [ ] 97. A `FilterSet` declaring `{"<fo>": ["exact", "isnull"]}` over a forward `ForeignObject` raises django-filter's
+  `AssertionError: unrecognized field type ForeignObject` at class creation, where a `ForeignKey` builds `isnull`
 
 ## To do: holes found re-checking the fixes
 
@@ -170,6 +175,9 @@ not real bugs and just get deleted from t3. One checkbox per area:
   configuration time. One policy (re-raise control signals first, or narrow to `Exception`), or keep the split?
 - [ ] 96. CHANGELOG entry for item 95: a nested keyset connection over a type whose `get_queryset` or manager orders pages and
   mints cursors under that order, so its cursors now replay on the root connection; `DeclaredCursorState` is renamed `CursorState`
+- [ ] 98. CHANGELOG entry for item 51: an `OrderSet` over a forward `ForeignObject` orders it by every carrier column (a
+  multi-column link no longer errors), `Meta.fields = "__all__"` publishes the `ForeignObject` leaf, and naming a reverse
+  `GenericRel` in a `DjangoMutation`'s `fields` / `exclude` raises the unknown-field error instead of the `ForeignObject` one
 
 ## Hunt not finished in t3
 

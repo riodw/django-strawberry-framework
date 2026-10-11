@@ -729,6 +729,37 @@ def test_many_over_reverse_o2o_column_is_rejected():
         resolve_serializer_field(field, library_models.Patron, "ProbeInput")
 
 
+@pytest.mark.parametrize(
+    ("model_cls", "column_name", "related_cls"),
+    [
+        pytest.param(library_models.Branch, "shelves", library_models.Shelf, id="reverse-fk"),
+        pytest.param(library_models.Book, "genres", library_models.Genre, id="m2m"),
+    ],
+)
+def test_single_over_collection_column_is_rejected(
+    model_cls: type[models.Model],
+    column_name: str,
+    related_cls: type[models.Model],
+) -> None:
+    """A single relation over a reverse FK or a many-to-many is a cardinality mismatch."""
+
+    class SingleSer(serializers.ModelSerializer[models.Model]):
+        target = serializers.PrimaryKeyRelatedField(
+            queryset=related_cls._default_manager.all(),
+            source=column_name,
+        )
+
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+            model = model_cls
+            fields = ("target",)
+
+    field = SingleSer().fields["target"]
+    assert not isinstance(field, serializers.ManyRelatedField)
+    with pytest.raises(ConfigurationError, match="cardinality"):
+        resolve_serializer_field(field, model_cls, "ProbeInput")
+
+
 def test_model_backed_slug_related_field_raises():
     """A ``SlugRelatedField`` over a model RELATION column fails loud at resolve.
 

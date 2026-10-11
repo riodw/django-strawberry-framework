@@ -1388,8 +1388,8 @@ the read side) stay strictly separate.
 **The generated input must describe the same shape the runtime serializer validates, so a
 model-backed relation's cardinality must agree with its backing column.** A serializer
 relation field whose `many=` shape contradicts the column it is mapped over — a
-`PrimaryKeyRelatedField(many=True, source="category")` across a forward FK, or a single
-`PrimaryKeyRelatedField` across a reverse one-to-one that cannot hold a list — is a
+`PrimaryKeyRelatedField(many=True, ...)` across a forward FK or a reverse one-to-one, or a
+single `PrimaryKeyRelatedField` across a reverse FK or a many-to-many — is a
 [`ConfigurationError`][glossary-configurationerror]
 ([`rest_framework/serializer_converter.py`][rf-converter]`::_reject_relation_cardinality_mismatch`). Where the two agree,
 the emitted `kind` is re-derived from the **serializer** field's cardinality rather than

@@ -15,7 +15,9 @@ injectivity -- construction and private helpers a request cannot name.
 
 from __future__ import annotations
 
+import gc
 import typing
+import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import Enum
@@ -46,6 +48,7 @@ from django_strawberry_framework.filters import (
     filter_input_type,
 )
 from django_strawberry_framework.filters.base import RelationPkFilter, RelationPkMultipleFilter
+from django_strawberry_framework.filters.factories import FilterArgumentsFactory
 from django_strawberry_framework.filters.inputs import (
     _FILTER_INPUT_KIND_TYPES,
     INPUTS_MODULE_PATH,
@@ -77,6 +80,7 @@ from django_strawberry_framework.filters.inputs import (
     normalize_input_value,
 )
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.types.finalizer import finalize_django_types
 from django_strawberry_framework.types.relay import apply_interfaces
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
 from tests._soft_dependency import blocked_modules
@@ -1541,54 +1545,118 @@ def test_materialize_input_class_registers_in_module_globals():
     assert getattr(inputs_mod, "ScratchCustomInput", None) is ScratchCustomInput
 
 
-def test_build_range_input_class_is_cached_on_the_filter_instance():
-    """The same generation identity returns one cached class.
+class _EqRangeFilter(RangeFilter):
+    """A ``RangeFilter`` defining ``__eq__`` without ``__hash__``, so instances are unhashable."""
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _EqRangeFilter) and self.field_name == other.field_name
+
+
+def _range_owner() -> type[FilterSet]:
+    class RangeOwnerFilter(FilterSet):
+        class Meta:
+            model = library_models.Branch
+            fields = []
+
+    return RangeOwnerFilter
+
+
+@pytest.mark.parametrize("owned", [False, True], ids=["unowned", "owned"])
+def test_range_input_class_for_a_filter_defining_eq_without_hash(owned: bool):
+    """An unhashable ``RangeFilter`` still gets its range input class.
 
     Owned names over HTTP:
     ``test_scalars_filter_api.py::test_range_input_types_are_scoped_per_filterset``.
     """
-    f = RangeFilter(field_name="price")
-    first = _build_range_input_class(f, int)
-    second = _build_range_input_class(f, int)
-    assert first is second
+    owner = _range_owner() if owned else None
+    cls = _build_range_input_class(_EqRangeFilter(field_name="id"), int, owner)
+    assert cls.__name__ == ("RangeOwnerFilterIdRangeInputType" if owned else "IdRangeInputType")
+    assert cls.__annotations__["start"] == (int | None)
 
 
-def test_build_range_input_class_cache_is_keyed_by_owner_field_and_scalar():
-    """One filter instance never reuses a class across generation identities."""
+def test_build_range_input_class_name_and_axes_follow_owner_field_and_scalar():
+    """One filter instance gets the name and axes of each owner, field and scalar it is built for."""
 
     class FirstFilter(FilterSet):
         class Meta:
             model = library_models.Branch
             fields = []
 
-    class SecondFilter(FilterSet):
-        class Meta:
-            model = library_models.Shelf
-            fields = []
-
     f = RangeFilter(field_name="price")
-    direct = _build_range_input_class(f, int)
     owned = _build_range_input_class(f, int, FirstFilter)
-    other_owner = _build_range_input_class(f, int, SecondFilter)
     other_scalar = _build_range_input_class(f, str, FirstFilter)
     f.field_name = "cost"
     other_field = _build_range_input_class(f, int, FirstFilter)
 
-    assert (
-        len(
-            {
-                direct,
-                owned,
-                other_owner,
-                other_scalar,
-                other_field,
-            },
-        )
-        == 5
-    )
     assert owned.__name__ == "FirstFilterPriceRangeInputType"
     assert other_scalar.__annotations__["start"] == (str | None)
     assert other_field.__name__ == "FirstFilterCostRangeInputType"
+
+
+def test_finalize_accepts_a_range_filter_defining_eq_without_hash():
+    """A ``Meta.filterset_class`` declaring an unhashable ``RangeFilter`` finalizes."""
+
+    class UnhashableRangeFilter(FilterSet):
+        span = _EqRangeFilter(field_name="id")
+
+        class Meta:
+            model = library_models.Branch
+            fields = []
+
+    class UnhashableRangeBranchType(DjangoType):
+        class Meta:
+            model = library_models.Branch
+            fields = ("id", "name")
+            filterset_class = UnhashableRangeFilter
+
+    finalize_django_types()
+    assert registry.get(library_models.Branch) is UnhashableRangeBranchType
+    assert "UnhashableRangeFilterInputType" in FilterArgumentsFactory.input_object_types
+
+
+@pytest.mark.parametrize("owned", [False, True], ids=["unowned", "owned"])
+def test_range_input_class_retains_neither_filter_nor_filterset(owned: bool):
+    """Building a range input class keeps no reference to its filter or owning filterset."""
+
+    def build() -> tuple[weakref.ref[type[FilterSet]], weakref.ref[RangeFilter]]:
+        owner = _range_owner()
+        f = RangeFilter(field_name="id")
+        owner.base_filters["span"] = f
+        _build_range_input_class(f, int, owner if owned else None)
+        return weakref.ref(owner), weakref.ref(f)
+
+    owner_ref, filter_ref = build()
+    gc.collect()
+    assert owner_ref() is None
+    assert filter_ref() is None
+
+
+def test_filterset_is_collectable_after_finalize_and_registry_clear():
+    """A finalized filterset with a ``RangeFilter`` is released by ``registry.clear()``."""
+
+    def build() -> weakref.ref[type[FilterSet]]:
+        class CollectableRangeFilter(FilterSet):
+            span = RangeFilter(field_name="id")
+
+            class Meta:
+                model = library_models.Branch
+                fields = []
+
+        class CollectableRangeBranchType(DjangoType):
+            class Meta:
+                model = library_models.Branch
+                fields = ("id", "name")
+                filterset_class = CollectableRangeFilter
+
+        finalize_django_types()
+        assert registry.get(library_models.Branch) is CollectableRangeBranchType
+        return weakref.ref(CollectableRangeFilter)
+
+    ref = build()
+    registry.clear()
+    gc.collect()
+    assert ref() is None
 
 
 def test_build_range_input_class_name_unqualified_without_filterset():

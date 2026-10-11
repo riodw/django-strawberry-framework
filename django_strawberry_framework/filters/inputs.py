@@ -26,7 +26,6 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from types import GenericAlias, MappingProxyType
 from typing import TYPE_CHECKING, Annotated, cast
-from weakref import WeakKeyDictionary
 
 import strawberry
 from django.db import models
@@ -844,15 +843,6 @@ def _unwrap_enum_member(value: object) -> object:
     return value
 
 
-# Range sub-input classes built per filter instance, keyed by generation identity
-# (see ``_build_range_input_class``). Weak keys tie each cache to its filter's
-# lifetime without writing an attribute onto the upstream ``Filter`` object.
-_RANGE_INPUT_CLASSES: WeakKeyDictionary[
-    Filter,
-    dict[tuple[type[FilterSet] | None, str, _TypeForm], type[object]],
-] = WeakKeyDictionary()
-
-
 def _build_range_input_class(
     filter_instance: Filter,
     inner: _TypeForm,
@@ -860,13 +850,9 @@ def _build_range_input_class(
 ) -> type[object]:
     """Return a Strawberry input dataclass with ``start: T | None`` and ``end: T | None``.
 
-    Classes are cached per filter instance by their full generation identity:
-    owning filterset, Django field path, and inner scalar. A single declared
-    filter instance can be converted first without an owner (a direct converter
-    call) and later through its owning filterset; one unkeyed cache slot would
-    return the earlier unqualified class and defeat owner-scoped naming. Including
-    ``inner`` also prevents a reused/mutated filter from retaining a class whose
-    axes expose the wrong scalar.
+    Each call builds a fresh class and nothing caches it: the name and axes depend
+    only on the owning filterset, the Django field path and the inner scalar, and
+    the arguments factory builds each filterset's input once per generation.
 
     The class name is qualified by the owning ``FilterSet`` when one is
     supplied -- ``f"{filterset_cls.__name__}{Pascal(field_name)}RangeInputType"``
@@ -887,19 +873,12 @@ def _build_range_input_class(
     that build no schema) keeps the unqualified ``<Field>RangeInputType`` name.
     """
     field_name = getattr(filter_instance, "field_name", "field") or "field"
-    cache_key = (filterset_cls, field_name, inner)
-    cache = _RANGE_INPUT_CLASSES.setdefault(filter_instance, {})
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return cached
     prefix = filterset_cls.__name__ if filterset_cls is not None else ""
     cls_name = f"{prefix}{_pascal_case(field_name)}RangeInputType"
-    cls = build_input_class(
+    return build_input_class(
         cls_name,
         [("start", inner | None, {"default": None}), ("end", inner | None, {"default": None})],
     )
-    cache[cache_key] = cls
-    return cls
 
 
 def _normalize_range_value(

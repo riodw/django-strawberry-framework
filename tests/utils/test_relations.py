@@ -14,6 +14,8 @@ from apps.kanban.models import Decision
 from apps.library.models import Book, Branch, Genre, Loan, MembershipCard, Patron, TaggedItem
 from django.apps import AppConfig
 from django.apps.registry import Apps
+from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from django.db.models import Model
@@ -33,6 +35,7 @@ from django_strawberry_framework.utils.relations import (
     _is_traversable_relation,
     _path_traverses_to_many_cached,
     _resolve_segment_field,
+    carrier_backed_link,
     classify_path,
     has_composite_pk,
     instance_accessor,
@@ -41,6 +44,8 @@ from django_strawberry_framework.utils.relations import (
     is_many_side_relation_kind,
     is_single_column_foreign_key,
     m2m_through_link_fields,
+    non_pk_forward_link,
+    order_column_paths,
     path_traverses_to_many,
     relation_bool,
     relation_kind,
@@ -53,6 +58,7 @@ from tests.optimizer._link_models import (
     LnkPairChild,
     LnkParent,
     LnkSlugChild,
+    LnkSlugObjectChild,
     LnkTag,
 )
 
@@ -1609,6 +1615,156 @@ def test_is_single_column_foreign_key(owner: str, field_name: str, expected: boo
         "TaggedItem": TaggedItem,
     }[owner]
     assert is_single_column_foreign_key(model._meta.get_field(field_name)) is expected
+
+
+def _reverse_generic_relation() -> object:
+    """Return the reverse ``GenericRel`` a ``GenericRelation`` adds to its generic-key model.
+
+    A ``related_query_name`` makes the reverse descriptor visible in the
+    generic-key model's ``_meta.get_fields()``; its link pairs read the
+    ``object_id`` column against the holder's primary key.
+    """
+    meta = type("Meta", (), {"app_label": "products", "managed": False})
+    tag = type(
+        "CarrierProbeTag",
+        (models.Model,),
+        {
+            "__module__": __name__,
+            "content_type": models.ForeignKey(
+                ContentType,
+                on_delete=models.CASCADE,
+                related_name="+",
+            ),
+            "object_id": models.PositiveIntegerField(),
+            "content_object": GenericForeignKey("content_type", "object_id"),
+            "Meta": meta,
+        },
+    )
+    type(
+        "CarrierProbeHolder",
+        (models.Model,),
+        {
+            "__module__": __name__,
+            "tags": GenericRelation(tag, related_query_name="holder"),
+            "Meta": meta,
+        },
+    )
+    return tag._meta.get_field("holder")
+
+
+@pytest.mark.parametrize(
+    ("field", "carriers"),
+    [
+        (lambda: LnkPairChild._meta.get_field("parent"), ("p_tenant", "p_code")),
+        (lambda: LnkColumnChild._meta.get_field("parent"), ("p_id",)),
+        (lambda: LnkSlugChild._meta.get_field("parent"), None),
+        (lambda: LnkParent._meta.get_field("pair_children"), None),
+        (lambda: Branch._meta.get_field("tags"), None),
+        (_reverse_generic_relation, None),
+        (lambda: TaggedItem._meta.get_field("content_object"), None),
+        (lambda: Book._meta.get_field("genres"), None),
+        (lambda: Book._meta.get_field("title"), None),
+    ],
+    ids=[
+        "two_column_fo",
+        "one_column_fo",
+        "to_field_fk",
+        "reverse_fo",
+        "generic_relation",
+        "reverse_generic_relation",
+        "generic_foreign_key",
+        "m2m",
+        "non_relation",
+    ],
+)
+def test_carrier_backed_link_answers_only_a_forward_foreign_object(
+    field: Callable[[], object],
+    carriers: tuple[str, ...] | None,
+):
+    """Only a forward ``ForeignObject`` that is not a ``ForeignKey`` is carrier-backed.
+
+    Its link is its carrier / target pairs. A ``ForeignKey`` has a column of its
+    own, and a reverse descriptor (the reverse ``GenericRel`` included, although
+    ``relation_link`` reads ``object_id`` pairs off it) belongs to the field on
+    the other model.
+    """
+    link = carrier_backed_link(field())
+    assert (None if link is None else link.carrier_attnames) == carriers
+
+
+@pytest.mark.parametrize(
+    ("field", "carriers"),
+    [
+        (lambda: LnkPairChild._meta.get_field("parent"), ("p_tenant", "p_code")),
+        (lambda: LnkSlugObjectChild._meta.get_field("parent"), ("p_slug",)),
+        (lambda: LnkSlugChild._meta.get_field("parent"), ("parent_id",)),
+        (lambda: LnkColumnChild._meta.get_field("parent"), None),
+        (lambda: Book._meta.get_field("shelf"), None),
+        (lambda: MembershipCard._meta.get_field("patron"), None),
+        (lambda: LnkParent._meta.get_field("pair_children"), None),
+        (lambda: TaggedItem._meta.get_field("content_object"), None),
+        (lambda: Book._meta.get_field("genres"), None),
+        (lambda: Book._meta.get_field("title"), None),
+    ],
+    ids=[
+        "two_column_fo",
+        "one_column_fo_non_pk",
+        "to_field_fk",
+        "one_column_fo_pk",
+        "fk",
+        "o2o",
+        "reverse_fo",
+        "generic_foreign_key",
+        "m2m",
+        "non_relation",
+    ],
+)
+def test_non_pk_forward_link_answers_only_links_keyed_by_other_columns(
+    field: Callable[[], object],
+    carriers: tuple[str, ...] | None,
+):
+    """Only a forward single-valued link whose targets are not the related pk answers its pairs.
+
+    Django trims ``<relation>__pk`` to the carrier column of a link onto the
+    related pk, so only the others need a correlation of their own.
+    """
+    link = non_pk_forward_link(field())
+    assert (None if link is None else link.carrier_attnames) == carriers
+
+
+@pytest.mark.parametrize(
+    ("model", "field_path", "expected"),
+    [
+        (LnkPairChild, "parent", ("p_tenant", "p_code")),
+        (LnkColumnChild, "parent", ("p_id",)),
+        (LnkParent, "pair_children__parent", ("pair_children__p_tenant", "pair_children__p_code")),
+        (LnkSlugChild, "parent", ("parent",)),
+        (LnkPairChild, "parent__label", ("parent__label",)),
+        (LnkPairChild, "pk", ("pk",)),
+        (Book, "shelf__branch", ("shelf__branch",)),
+    ],
+    ids=[
+        "two_column_fo",
+        "one_column_fo",
+        "fo_behind_a_relation",
+        "to_field_fk",
+        "column_past_a_fo",
+        "pk",
+        "fk_chain",
+    ],
+)
+def test_order_column_paths_expands_only_a_terminal_foreign_object(
+    model: type[Model],
+    field_path: str,
+    expected: tuple[str, ...],
+):
+    """A path ending on a carrier-backed link orders by its carriers; any other path is itself.
+
+    The carriers keep the relations the path crosses before the link, in link
+    order.
+    """
+    terminal = classify_path(model, field_path).terminal
+    assert order_column_paths(field_path, terminal) == expected
 
 
 @pytest.mark.parametrize(

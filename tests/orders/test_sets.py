@@ -358,7 +358,7 @@ def test_orderset_resolve_order_expressions_rejects_unknown_order_path():
 
 
 def test_orderset_all_excludes_virtual_generic_fields():
-    """``__all__`` contains database columns, not GenericRelation/GFK descriptors."""
+    """``__all__`` leaves out the virtual GenericRelation / GFK descriptors."""
     from apps.library.models import Branch, TaggedItem
 
     from django_strawberry_framework.orders.inputs import (
@@ -864,6 +864,52 @@ def test_resolve_order_expressions_aggregates_to_many_orders_scalar_directly():
     assert expressions[0].expression == F(alias)
     # scalar ordered directly
     assert expressions[1].expression == F("name")
+
+
+@pytest.mark.usefixtures("isolate_global_registry")
+@pytest.mark.parametrize(
+    ("direction", "aggregate_name"),
+    [(Ordering.ASC, "Min"), (Ordering.DESC_NULLS_LAST, "Max")],
+    ids=["asc_min", "desc_max"],
+)
+def test_resolve_order_expressions_aggregates_each_carrier_of_a_to_many_foreign_object(
+    direction: Ordering,
+    aggregate_name: str,
+):
+    """A to-many path ending on a multi-column ``ForeignObject`` aggregates each carrier.
+
+    ``Branch.shelf_labels`` fans out to the labels and ``ShelfLabel.shelf`` is
+    held in ``branch`` and ``shelf_code``, so the term is two aggregates, one
+    per carrier in link order, each under its own alias and ordered in the
+    term's direction. No type is registered, so no relation hides rows and
+    each aggregate reads its carrier path directly.
+    """
+
+    class _LabelShelfOrder(OrderSet):
+        class Meta:
+            model = Branch
+            fields = ["shelf_labels__shelf"]
+
+    annotations, expressions = _LabelShelfOrder._resolve_order_expressions(
+        [("shelf_labels__shelf", direction)],
+        model=Branch,
+        visible_rows=_every_row,
+    )
+
+    assert {
+        alias: (type(aggregate).__name__, aggregate.source_expressions)
+        for alias, aggregate in annotations.items()
+    } == {
+        "_dst_order_0_shelf_labels_branch": (aggregate_name, [F("shelf_labels__branch")]),
+        "_dst_order_0_shelf_labels_shelf_code": (aggregate_name, [F("shelf_labels__shelf_code")]),
+    }
+    assert [expression.expression for expression in expressions] == [
+        F("_dst_order_0_shelf_labels_branch"),
+        F("_dst_order_0_shelf_labels_shelf_code"),
+    ]
+    assert {expression.descending for expression in expressions} == {
+        not direction.is_ascending,
+    }
 
 
 def test_path_traverses_to_many_returns_false_for_nonmultiplying_paths():

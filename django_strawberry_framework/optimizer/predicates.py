@@ -31,7 +31,11 @@ walking the branch read the related rows the same way.
 already reached is one of THESE rows", correlated by that joined row's primary
 key. An order value belongs to one joined row, not to the outer row, so the
 test reuses the join the value is read through instead of re-walking the path
-from the outer row. Its exact type is ``utils/querysets.py::VisibleRowExists``.
+from the outer row. A value read from a relation's own carrier columns needs
+no join, so for a relation keyed by columns other than the related pk the test
+correlates on the carrier / target pairs instead and never adds the join that
+would drop a row whose carriers match nothing. Its exact type is
+``utils/querysets.py::VisibleRowExists``.
 
 Implementation invariant: the INNER queryset built here is correlated with
 ``OuterRef`` and compiles inside the outer statement - it must never execute
@@ -68,6 +72,7 @@ if TYPE_CHECKING:
     from django.db import models
     from django.db.models import QuerySet
 
+    from ..utils.relations import RelationLink
     from ..utils.typing import ConcreteField, ForeignKeyField, ModelField
 
 _M = TypeVar("_M", bound="models.Model")
@@ -418,7 +423,11 @@ def _carries(rows_model: type[models.Model], field: ModelField) -> bool:
         return False
 
 
-def visible_row_exists(rows: QuerySet[models.Model], joined_path: str) -> VisibleRowExists:
+def visible_row_exists(
+    rows: QuerySet[models.Model],
+    joined_path: str,
+    link: RelationLink | None = None,
+) -> VisibleRowExists:
     """Return ``EXISTS`` "the row the outer query reaches through ``joined_path`` is one of ``rows``".
 
     Correlated by primary key to the row the outer query's own join over
@@ -426,8 +435,29 @@ def visible_row_exists(rows: QuerySet[models.Model], joined_path: str) -> Visibl
     adds no join of its own: a to-one value reuses its join, and inside a to-many
     aggregate the test reads the same joined row the aggregate does. ``rows``
     keep any ``DISTINCT`` inside the subquery, where it changes no answer.
+
+    ``link`` is the link of the relation ``joined_path`` ends on when the value
+    is read from that relation's own carrier columns and the relation is keyed
+    by columns other than the related pk
+    (``utils/relations.py::non_pk_forward_link``).
+    The test then correlates each target column to its carrier on the row
+    before the relation instead: ``<relation>__pk`` would add an inner join the
+    value never needed, and that join drops a row whose carriers match no
+    related row, where the plain value keeps it. Such a row fails the test, so
+    its value reads as a missing related row's.
     """
-    return VisibleRowExists(rows.filter(pk=OuterRef(f"{joined_path}{LOOKUP_SEP}pk")))
+    if link is None:
+        return VisibleRowExists(rows.filter(pk=OuterRef(f"{joined_path}{LOOKUP_SEP}pk")))
+    head, _sep, _tail = joined_path.rpartition(LOOKUP_SEP)
+    prefix = f"{head}{LOOKUP_SEP}" if head else ""
+    return VisibleRowExists(
+        rows.filter(
+            **{
+                target.name: OuterRef(f"{prefix}{carrier.name}")
+                for carrier, target in zip(link.carriers, link.targets, strict=True)
+            },
+        ),
+    )
 
 
 def visible_value(field_path: str, tests: Sequence[VisibleRowExists]) -> Case:

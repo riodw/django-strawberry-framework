@@ -40,6 +40,7 @@ from ..utils.inputs import (
     make_set_input_namespace,
     set_input_type_name,
 )
+from ..utils.relations import carrier_backed_link
 from ..utils.strings import graphql_camel_name
 
 if TYPE_CHECKING:
@@ -158,20 +159,24 @@ _field_specs: dict[tuple[type[OrderSet], str], FieldSpec]
 
 
 def _get_concrete_field_names_for_order(model: object) -> list[str]:
-    """Return every column-backed field name for ``model``.
+    """Return the field names ``Meta.fields = "__all__"`` publishes as order leaves for ``model``.
 
     Backs ``OrderSet._expand_meta_fields`` when ``Meta.fields = "__all__"``
     per spec-028 Decision 3. The cookbook's ``get_concrete_field_names``
     at ``django_graphene_filters/mixins.py`` uses ``hasattr(f, "column")``
     alone, but Django's virtual ``GenericRelation`` and
     ``GenericForeignKey`` descriptors also expose ``column = None``.
-    Checking that the column is a real database column (rather than merely
-    an attribute) keeps those virtual fields out alongside reverse
-    relations and many-to-many managers.
+    Requiring a real database column keeps those virtual fields out
+    alongside reverse relations and many-to-many managers; the one
+    column-less field kept is a forward ``ForeignObject`` that is not a
+    ``ForeignKey`` (``utils/relations.py::carrier_backed_link``), whose value
+    is its carrier columns and whose term orders by them
+    (``utils/relations.py::order_column_paths``).
 
-    Returned list includes forward ``ForeignKey`` / ``OneToOneField``
-    columns (their ``<field>_id`` column is on the model's own table)
-    and excludes reverse FKs (no ``column`` attribute) and M2M managers.
+    Returned list includes scalar columns, forward ``ForeignKey`` /
+    ``OneToOneField`` columns (their ``<field>_id`` column) and forward
+    ``ForeignObject`` links, in model field order; it excludes reverse
+    relations, M2M managers, ``GenericRelation`` and ``GenericForeignKey``.
     """
     meta = getattr(model, "_meta", None)
     if meta is None or not callable(getattr(meta, "get_fields", None)):
@@ -182,7 +187,8 @@ def _get_concrete_field_names_for_order(model: object) -> list[str]:
     return [
         f.name
         for f in meta.get_fields()
-        if getattr(f, "column", None) is not None and not getattr(f, "many_to_many", False)
+        if (getattr(f, "column", None) is not None and not getattr(f, "many_to_many", False))
+        or carrier_backed_link(f) is not None
     ]
 
 

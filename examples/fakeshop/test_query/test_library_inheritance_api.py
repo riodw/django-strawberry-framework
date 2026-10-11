@@ -23,6 +23,13 @@ query shape, off the SQL the request emitted:
 - ``CirculationDesk``, one model carrying every relation kind: its reverse
   ``children`` / ``profile`` resolve, and its cascade scoped to ``branch`` /
   ``shelf`` serves rows despite the generic foreign key a full walk refuses.
+- A multi-column forward ``ForeignObject``: ``ShelfLabel.shelf`` is held in
+  ``branch`` and ``shelf_code``; the ``"__all__"`` ``ShelfLabelOrder`` publishes
+  it after its carriers, a ``shelf`` term orders by both carriers in one
+  statement, and a label on a shelf ``ShelfType`` hides, or naming no shelf at
+  all, stays listed and sorts as one with none; behind the to-many
+  ``BranchOrder.shelf_labels`` hop each carrier is aggregated per branch and
+  correlated to the label's own carrier columns.
 - Write-input requiredness: ``Book.archive_genres`` (``editable=False``) is
   absent from both generated ``Book`` inputs, and ``MediaSpecimen``'s optional
   file columns are optional through the ``blank`` arm and the ``null`` arm
@@ -30,6 +37,7 @@ query shape, off the SQL the request emitted:
 """
 
 import datetime
+import re
 
 import pytest
 from apps.library import models
@@ -500,6 +508,271 @@ def test_circulation_desk_publishes_children_and_profile_under_a_scoped_cascade(
         "Front",
         "Vault Desk",
     ], staff
+
+
+def _seed_shelf_labels() -> None:
+    """Four labels over two branches, one naming the ``secret`` shelf, inserted out of order.
+
+    ``Central`` is created first, so its primary key sorts before ``Annex``'s
+    although its name sorts after. Carrier order is ``(branch, shelf_code)``:
+    ``central-a1``, ``central-c3``, ``annex-b2``, ``annex-s9``, which neither
+    insertion order nor ``shelf_code`` alone reproduces.
+    """
+    central = models.Branch.objects.create(name="Central")
+    annex = models.Branch.objects.create(name="Annex")
+    for branch, code, topic in (
+        (central, "A1", ""),
+        (central, "C3", ""),
+        (annex, "B2", ""),
+        (annex, "S9", "secret"),
+    ):
+        models.Shelf.objects.create(branch=branch, code=code, topic=topic)
+    for text, branch, code in (
+        ("annex-b2", annex, "B2"),
+        ("central-c3", central, "C3"),
+        ("annex-s9", annex, "S9"),
+        ("central-a1", central, "A1"),
+    ):
+        models.ShelfLabel.objects.create(text=text, branch=branch, shelf_code=code)
+
+
+def _shelf_label_texts(
+    direction: str,
+    client: Client | None = None,
+) -> tuple[list[str], list[str]]:
+    """Return the label texts ordered by ``shelf`` in ``direction`` and the label statements."""
+    with CaptureQueriesContext(connection) as captured:
+        data = assert_graphql_success(
+            f"{{ allLibraryShelfLabels(orderBy: [{{shelf: {direction}}}]) {{ text }} }}",
+            client=client,
+        )
+    texts = [row["text"] for row in data["allLibraryShelfLabels"]]
+    return texts, _sql_from_table(captured, "library_shelflabel")
+
+
+def test_shelf_label_order_input_publishes_the_foreign_object_beside_its_carriers() -> None:
+    """``"__all__"`` publishes the multi-column ``shelf`` relation as an order leaf.
+
+    ``ShelfLabelOrder`` declares ``fields = "__all__"``. ``shelf`` has no column
+    of its own (its value is the ``branch`` / ``shelf_code`` pair), and it is
+    published after its carriers in model field order, like every other field.
+    """
+    fields = _introspect_input_fields("ShelfLabelOrderInputType")
+
+    assert list(fields) == [
+        "id",
+        "text",
+        "branch",
+        "shelfCode",
+        "shelf",
+    ], fields
+    assert fields["shelf"] == {"kind": "ENUM", "name": "Ordering", "ofType": None}, fields
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("direction", "expected"),
+    [
+        (
+            "ASC",
+            [
+                "central-a1",
+                "central-c3",
+                "annex-b2",
+                "annex-s9",
+            ],
+        ),
+        (
+            "DESC",
+            [
+                "annex-s9",
+                "annex-b2",
+                "central-c3",
+                "central-a1",
+            ],
+        ),
+    ],
+    ids=["asc", "desc"],
+)
+def test_shelf_labels_order_by_shelf_sorts_by_both_carriers(
+    direction: str,
+    expected: list[str],
+) -> None:
+    """A ``shelf`` term orders by ``branch_id`` then ``shelf_code``, each in the term's direction.
+
+    The relation is ordered the way Django's ``order_by("shelf")`` orders it:
+    one key per carrier column in link order, never ``Shelf``'s own columns.
+    The viewer is staff, so ``ShelfType`` hides no shelf and each carrier keeps
+    its value; the page is one ``library_shelflabel`` statement.
+    """
+    create_users(1)
+    _seed_shelf_labels()
+    staff_client = Client()
+    staff_client.force_login(get_user_model().objects.get(username="staff_1"))
+
+    texts, label_sql = _shelf_label_texts(direction, staff_client)
+
+    assert texts == expected, texts
+    assert len(label_sql) == 1, label_sql
+    order_clause = label_sql[0].split(" ORDER BY ", 1)[1]
+    assert re.findall(
+        r'"library_shelflabel"\."(branch_id|shelf_code)" ELSE NULL END (ASC|DESC)',
+        order_clause,
+    ) == [("branch_id", direction), ("shelf_code", direction)], order_clause
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("direction", "expected"),
+    [
+        (
+            "ASC",
+            [
+                "annex-s9",
+                "central-a1",
+                "central-c3",
+                "annex-b2",
+            ],
+        ),
+        (
+            "ASC_NULLS_LAST",
+            [
+                "central-a1",
+                "central-c3",
+                "annex-b2",
+                "annex-s9",
+            ],
+        ),
+        (
+            "DESC",
+            [
+                "annex-b2",
+                "central-c3",
+                "central-a1",
+                "annex-s9",
+            ],
+        ),
+    ],
+    ids=["asc", "asc_nulls_last", "desc"],
+)
+def test_shelf_labels_order_a_hidden_shelf_as_a_missing_one(
+    direction: str,
+    expected: list[str],
+) -> None:
+    """A label on a shelf ``ShelfType`` hides from the viewer sorts as one with no shelf.
+
+    Anonymous viewers do not see the ``secret`` shelf, so both of
+    ``annex-s9``'s carriers order as ``NULL``: first under SQLite's ``ASC``,
+    last under ``ASC_NULLS_LAST`` and ``DESC``. The label itself stays listed.
+    """
+    _seed_shelf_labels()
+
+    texts, label_sql = _shelf_label_texts(direction)
+
+    assert texts == expected, texts
+    assert len(label_sql) == 1, label_sql
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("direction", "expected"),
+    [
+        (
+            "ASC",
+            [
+                "central-zz",
+                "central-a1",
+                "central-c3",
+                "annex-b2",
+                "annex-s9",
+            ],
+        ),
+        (
+            "DESC",
+            [
+                "annex-s9",
+                "annex-b2",
+                "central-c3",
+                "central-a1",
+                "central-zz",
+            ],
+        ),
+    ],
+    ids=["asc", "desc"],
+)
+def test_shelf_labels_keep_a_label_naming_no_shelf_and_sort_it_as_missing(
+    direction: str,
+    expected: list[str],
+) -> None:
+    """A label whose ``(branch, shelf_code)`` matches no shelf stays listed and sorts as missing.
+
+    No database constraint holds a ``ForeignObject``, so ``central-zz`` names a
+    shelf that does not exist. ``ShelfType`` declares ``get_queryset``, so each
+    carrier is read under a visibility test; the test correlates on the link's
+    carrier / target columns, adds no join to ``library_shelf`` and so drops no
+    label, and the label with no shelf reads ``NULL`` on both carriers: first
+    under SQLite's ``ASC``, last under ``DESC``. The viewer is staff, so every
+    existing shelf keeps its value.
+    """
+    create_users(1)
+    _seed_shelf_labels()
+    models.ShelfLabel.objects.create(
+        text="central-zz",
+        branch=models.Branch.objects.get(name="Central"),
+        shelf_code="ZZ",
+    )
+    staff_client = Client()
+    staff_client.force_login(get_user_model().objects.get(username="staff_1"))
+
+    texts, label_sql = _shelf_label_texts(direction, staff_client)
+
+    assert texts == expected, texts
+    assert len(label_sql) == 1, label_sql
+    assert "JOIN" not in label_sql[0], label_sql[0]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("direction", "expected"),
+    [("ASC", ["Vault", "Central", "Annex"]), ("DESC", ["Annex", "Central", "Vault"])],
+    ids=["asc", "desc"],
+)
+def test_branches_order_by_label_shelves_aggregate_each_carrier_behind_the_labels(
+    direction: str,
+    expected: list[str],
+) -> None:
+    """``shelfLabels: { shelf: ... }`` orders branches by one aggregate per carrier, keeping every branch.
+
+    ``BranchOrder.shelf_labels`` is a to-many hop, so the ``shelf`` term is
+    ``Min`` / ``Max`` of each carrier (``branch_id``, then ``shelf_code``) over
+    a branch's labels. ``ShelfType`` hides the ``secret`` shelf from this
+    anonymous viewer, and each aggregate's visibility test correlates the
+    shelf's ``(branch, code)`` to the label's own carriers through the label
+    join, adding no join to ``library_shelf``: ``Vault``'s only label names a
+    shelf that does not exist, so both its aggregates are ``NULL`` and it sorts
+    first under SQLite's ``ASC`` and last under ``DESC``, still listed. One
+    statement serves the page.
+    """
+    _seed_shelf_labels()
+    vault = models.Branch.objects.create(name="Vault")
+    models.ShelfLabel.objects.create(text="vault-zz", branch=vault, shelf_code="ZZ")
+
+    with CaptureQueriesContext(connection) as captured:
+        data = assert_graphql_success(
+            f"{{ allLibraryBranches(orderBy: [{{shelfLabels: {{shelf: {direction}}}}}]) "
+            "{ name } }",
+        )
+
+    assert [row["name"] for row in data["allLibraryBranches"]] == expected, data
+    assert len(captured.captured_queries) == 1, captured.captured_queries
+    # Django 6 quotes the subquery alias (``"U0"``); 5.2 does not.
+    branch_sql = captured.captured_queries[0]["sql"].replace('"U0"', "U0")
+    correlation = (
+        'U0."branch_id" = ("library_shelflabel"."branch_id") '
+        'AND U0."code" = ("library_shelflabel"."shelf_code")'
+    )
+    assert branch_sql.count(correlation) == 2, branch_sql
+    assert 'JOIN "library_shelf"' not in branch_sql, branch_sql
 
 
 @pytest.mark.parametrize(

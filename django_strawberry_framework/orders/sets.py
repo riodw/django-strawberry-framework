@@ -9,6 +9,11 @@ On top of that skeleton the module carries:
 
 - The ``"__all__"`` expansion via the
   ``_get_concrete_field_names_for_order`` walk per spec-028.
+- The order-expression builder (``_resolve_order_expressions``): a term
+  ending on a forward ``ForeignObject`` orders by each of its carrier
+  columns (``utils/relations.py::order_column_paths``), a to-many term by a
+  ``Min`` / ``Max`` aggregate, and a term reading a related row a type hides
+  as a missing one.
 - The resolver-facing classmethod pair ``apply_sync`` /
   ``apply_async`` (no ``apply(...)`` dispatcher per spec-028 DoD 4(c)).
 - The classmethod permission pipeline, inherited from
@@ -63,6 +68,8 @@ from ..utils.querysets import (
 from ..utils.relations import (
     classify_path,
     leading_relation_hops,
+    non_pk_forward_link,
+    order_column_paths,
 )
 from ..utils.relations import (
     path_traverses_to_many as _path_traverses_to_many,
@@ -522,9 +529,11 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         """Expand ``Meta.fields`` into an ``OrderedDict`` keyed by field name.
 
         Supports list / tuple form (``["title", "subtitle"]``) and the
-        ``"__all__"`` shorthand (every column-backed model field name
-        per spec-028 -- forward FK columns are included,
-        M2M managers and reverse FKs are excluded). Unordered ``set`` /
+        ``"__all__"`` shorthand (``_get_concrete_field_names_for_order`` per
+        spec-028: every column-backed model field name plus each forward
+        ``ForeignObject`` link, which orders by its carrier columns -- forward
+        FK columns are included, M2M managers, reverse relations and generic
+        relations are excluded). Unordered ``set`` /
         ``frozenset`` declarations expand in one ``repr``-sorted order under
         every ``PYTHONHASHSEED`` (``read_set_meta_fields``); dict-shaped
         declarations iterate their keys (the django-filter lookup-bag shape
@@ -563,7 +572,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
             if model is None:
                 raise ConfigurationError(
                     f"{cls.__name__}.Meta.fields = '__all__' requires Meta.model "
-                    "so the column-backed field names can be derived from "
+                    "so the order field names can be derived from "
                     "model._meta.get_fields().",
                 )
             for name in _get_concrete_field_names_for_order(model):
@@ -735,14 +744,15 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         flat_orders: list[tuple[str, Ordering | None]],
         *,
         model: type[models.Model],
-    ) -> list[tuple[int, str, Ordering]]:
-        """Return ``(index, field_path, direction)`` for every term with a direction, validated.
+    ) -> list[tuple[int, str, Ordering, object]]:
+        """Return ``(index, field_path, direction, terminal)`` for every term with a direction.
 
-        A ``None`` direction contributes no term. A direction that is not an
-        ``Ordering`` member, and a path ``classify_path`` cannot resolve against
-        ``model``, raise ``ConfigurationError`` naming the term.
+        ``terminal`` is the path's last field, from the one ``classify_path``
+        that validates it. A ``None`` direction contributes no term. A direction
+        that is not an ``Ordering`` member, and a path ``classify_path`` cannot
+        resolve against ``model``, raise ``ConfigurationError`` naming the term.
         """
-        terms: list[tuple[int, str, Ordering]] = []
+        terms: list[tuple[int, str, Ordering, object]] = []
         for index, (field_path, direction) in enumerate(flat_orders):
             if direction is None:
                 continue
@@ -755,13 +765,20 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
                     f"expected an Ordering enum member.",
                 )
             try:
-                classify_path(model, field_path)
+                terminal = classify_path(model, field_path).terminal
             except PathResolutionError as exc:
                 raise ConfigurationError(
                     f"OrderSet {cls.__qualname__} received invalid order path "
                     f"{field_path!r} for model {_safe_type_name(model)}: {exc}",
                 ) from exc
-            terms.append((index, field_path, direction))
+            terms.append(
+                (
+                    index,
+                    field_path,
+                    direction,
+                    terminal,
+                ),
+            )
         return terms
 
     @classmethod
@@ -786,6 +803,12 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         whose type keeps the identity ``get_queryset``, or whose model no type
         registers, hides nothing and is left out, so a path crossing only such
         relations orders by its plain column.
+
+        The joined path of a hop is what ``visible_row_exists`` correlates to.
+        For the hop a path ends on, ``_resolve_order_expressions`` also passes the
+        link of a relation keyed by columns other than the related pk
+        (``utils/relations.py::non_pk_forward_link``), so that test reads
+        the carriers the value is read from rather than joining the relation.
         """
         joins = leading_relation_hops(model, field_path)
         if not joins:
@@ -842,7 +865,21 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         reaches; the term's value is ``optimizer/predicates.py::visible_value``,
         ``NULL`` wherever a test fails, so a hidden related row orders the parent
         exactly as a missing one does. A path crossing no such relation orders
-        by its plain column.
+        by its plain column. A test never removes a row the plain term keeps:
+        for a path ending on a relation keyed by columns other than the related
+        pk (a ``to_field`` key, a ``ForeignObject`` onto other columns) the
+        value is the carriers, so its own test correlates on the link's carrier
+        / target pairs instead of joining the relation, and a row whose carriers
+        match no related row stays and reads as missing.
+
+        A path ending on a forward ``ForeignObject`` that is not a
+        ``ForeignKey`` names a relation held in carrier columns rather than a
+        column of its own; ``utils/relations.py::order_column_paths`` expands it
+        to one key per carrier in link order, each under the term's direction
+        and the same visibility tests, as Django's ``order_by("<link>")`` does
+        (the related model's ``Meta.ordering`` never applied). Every other path
+        is one key, and a to-many term aggregates each of its keys under its
+        own alias.
 
         A term whose ``field_path`` traverses a **to-many** relation (reverse FK
         or M2M -- ``_path_traverses_to_many``) is ordered by an AGGREGATE of that
@@ -885,23 +922,40 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         """
         annotations: dict[str, models.Aggregate] = {}
         expressions: list[OrderBy] = []
-        for index, field_path, direction in cls._active_order_terms(flat_orders, model=model):
+        for index, field_path, direction, terminal in cls._active_order_terms(
+            flat_orders,
+            model=model,
+        ):
+            # A path ending on a relation keyed by columns other than the related
+            # pk is valued by its carriers; its own hop's test correlates on them,
+            # never adding the join that would drop a row whose carriers match
+            # nothing.
+            link = non_pk_forward_link(terminal)
             tests = [
-                visible_row_exists(visible_rows(scope), joined)
+                visible_row_exists(
+                    visible_rows(scope),
+                    joined,
+                    link if joined == field_path else None,
+                )
                 for joined, scope in cls._scoped_hops(model, field_path)
             ]
-            value = visible_value(field_path, tests) if tests else field_path
-            if _path_traverses_to_many(model, field_path):
-                # ``flatten_lookup_path``: LOOKUP_SEP must never survive into a
-                # generated alias (one owner for the mangle).
-                alias = f"_dst_order_{index}_{flatten_lookup_path(field_path)}"
-                # Ascending vs descending: ``Ordering.is_ascending`` (same rule
-                # ``Ordering.resolve`` uses) picks Min / Max for the aggregate.
-                aggregate = models.Min if direction.is_ascending else models.Max
-                annotations[alias] = aggregate(value)
-                expressions.append(direction.resolve(alias))
-            else:
-                expressions.append(direction.resolve(value))
+            to_many = _path_traverses_to_many(model, field_path)
+            # A term names one value; a carrier-backed relation holds it in
+            # several columns (``utils/relations.py::order_column_paths``), each
+            # ordered under the term's direction and the same visibility tests.
+            for column_path in order_column_paths(field_path, terminal):
+                value = visible_value(column_path, tests) if tests else column_path
+                if to_many:
+                    # ``flatten_lookup_path``: LOOKUP_SEP must never survive into a
+                    # generated alias (one owner for the mangle).
+                    alias = f"_dst_order_{index}_{flatten_lookup_path(column_path)}"
+                    # Ascending vs descending: ``Ordering.is_ascending`` (same rule
+                    # ``Ordering.resolve`` uses) picks Min / Max for the aggregate.
+                    aggregate = models.Min if direction.is_ascending else models.Max
+                    annotations[alias] = aggregate(value)
+                    expressions.append(direction.resolve(alias))
+                else:
+                    expressions.append(direction.resolve(value))
         return annotations, expressions
 
     @classmethod
@@ -942,7 +996,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         the order expressions are built synchronously and read only this map.
         """
         derived: dict[type[DjangoType], models.QuerySet[models.Model]] = {}
-        for _index, field_path, _direction in cls._active_order_terms(
+        for _index, field_path, _direction, _terminal in cls._active_order_terms(
             flat_orders,
             model=queryset.model,
         ):

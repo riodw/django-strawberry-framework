@@ -308,7 +308,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
     ├── policies.py               # Shared schema-construction policy normalization.
     ├── private_state.py          # State an object owns, that consumer code can neither read out nor forge.
     ├── querysets.py              # Shared query-source, field-coercion, sync/async hook, and visibility contracts.
-    ├── relations.py              # Relation-shape helpers shared by converters, resolvers, and the optimizer.
+    ├── relations.py              # Relation-shape helpers shared by converters, resolvers, the optimizer, and input selectors.
     ├── sessions.py               # The session-engine resolver and the connection actor lease, shared across the opt-in boundary.
     ├── strings.py                # GraphQL/Django naming helpers for case conversion and lookup-path flattening.
     ├── typing.py                 # Async-callable detection and type-unwrapping helpers for Strawberry, Python, and GraphQL types.
@@ -444,7 +444,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
     ├── predicates.py             # planned by TODO-BETA-058-0.1.1 - Graph substrate: shared graph policy and dependency planning.
     ├── private_state.py          # State an object owns, that consumer code can neither read out nor forge.
     ├── querysets.py              # Shared query-source, field-coercion, sync/async hook, and visibility contracts.
-    ├── relations.py              # Relation-shape helpers shared by converters, resolvers, and the optimizer.
+    ├── relations.py              # Relation-shape helpers shared by converters, resolvers, the optimizer, and input selectors.
     ├── sessions.py               # The session-engine resolver and the connection actor lease, shared across the opt-in boundary.
     ├── strings.py                # GraphQL/Django naming helpers for case conversion and lookup-path flattening.
     ├── typing.py                 # Async-callable detection and type-unwrapping helpers for Strawberry, Python, and GraphQL types.

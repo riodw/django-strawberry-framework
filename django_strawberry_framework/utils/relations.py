@@ -1,4 +1,4 @@
-"""Relation-shape helpers shared by converters, resolvers, and the optimizer."""
+"""Relation-shape helpers shared by converters, resolvers, the optimizer, and input selectors."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias, TypeGuard, cast,
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from django.db.models.constants import LOOKUP_SEP
+from django.db.models.fields.reverse_related import ForeignObjectRel
 
 from django_strawberry_framework.exceptions import (
     ConfigurationError,
@@ -31,6 +32,7 @@ __all__ = [
     "RelationKind",
     "RelationLink",
     "RelationPathHop",
+    "carrier_backed_link",
     "classify_path",
     "has_composite_pk",
     "instance_accessor",
@@ -40,6 +42,8 @@ __all__ = [
     "is_single_column_foreign_key",
     "m2m_through_link_fields",
     "m2m_through_model",
+    "non_pk_forward_link",
+    "order_column_paths",
     "path_traverses_to_many",
     "relation_attr",
     "relation_bool",
@@ -925,6 +929,76 @@ def is_single_column_foreign_key(field: object) -> TypeGuard[ForeignKeyField]:
     lateral and single-parent fetch link) gates on this predicate.
     """
     return isinstance(field, models.ForeignKey) and getattr(field, "column", None) is not None
+
+
+def carrier_backed_link(field: object) -> RelationLink | None:
+    """Return the link of a forward relation whose value lives only in separate carrier columns.
+
+    A forward ``ForeignObject`` that is not a ``ForeignKey`` stores nothing in a
+    column of its own (``column`` is ``None``): its link is the pairs of
+    carrier columns on this model and target columns on the related model that
+    :func:`relation_link` reads. ``None`` for every other field, a
+    ``ForeignKey`` / ``OneToOneField`` (one column of its own), a
+    ``GenericRelation`` (many-valued), a ``GenericForeignKey`` (no link
+    pairs) and every reverse descriptor (a ``ForeignObjectRel``, the reverse
+    side of a ``GenericRelation`` included, whose link belongs to the field
+    on the other model) included.
+    """
+    if not getattr(field, "is_relation", False) or is_single_column_foreign_key(field):
+        return None
+    if isinstance(field, ForeignObjectRel) or relation_kind(field) != "forward_single":
+        return None
+    link = relation_link(field)
+    return link if link.carriers else None
+
+
+def non_pk_forward_link(field: object) -> RelationLink | None:
+    """Return the link of a forward relation keyed by columns other than the related pk.
+
+    A ``ForeignKey`` with a ``to_field`` and a ``ForeignObject`` whose
+    ``to_fields`` are not the related model's primary key: ``<relation>__pk``
+    names a column the source row does not hold, so Django reaches it through
+    a join, and a link whose carriers match no related row (no database
+    constraint holds a ``ForeignObject``, nor a ``db_constraint=False`` key)
+    drops the source row from an inner join. ``None`` for a relation keyed by
+    the related pk (Django trims ``<relation>__pk`` to the carrier column, no
+    join) and for every field that is not a forward single-valued relation.
+    """
+    if not getattr(field, "is_relation", False) or isinstance(field, ForeignObjectRel):
+        return None
+    if relation_kind(field) != "forward_single":
+        return None
+    link = relation_link(field)
+    if not link.carriers:
+        return None
+    # A forward single-valued relation with link pairs names a resolved model.
+    related = cast("type[models.Model]", getattr(field, "related_model", None))
+    return None if link.targets == (related._meta.pk,) else link
+
+
+def order_column_paths(field_path: str, terminal: object) -> tuple[str, ...]:
+    """Return the column paths an ordering term over ``field_path`` orders by, in order.
+
+    A path ending on a carrier-backed forward relation (:func:`carrier_backed_link`)
+    orders by each carrier column in link order, under the relations the path
+    crosses: ``"fo"`` over ``from_fields=["tenant", "code"]`` is
+    ``("tenant", "code")`` and ``"shelf__fo"`` is ``("shelf__tenant",
+    "shelf__code")``. That is what Django's string ``order_by("fo")`` compiles
+    to (``SQLCompiler.find_ordering_name``: one ``OrderBy`` per local column,
+    no join, the related model's ``Meta.ordering`` never applied), and the
+    only spelling an expression accepts: ``F("fo")`` reads one column, so
+    ``Query.resolve_ref`` raises ``FieldError`` for a link of several. Every
+    other path is returned unchanged: a ``ForeignKey`` / ``OneToOneField``
+    leaf already names its own column. ``terminal`` is the field
+    ``field_path`` ends on, the ``terminal`` of its :func:`classify_path`, which
+    the caller has already classified.
+    """
+    link = carrier_backed_link(terminal)
+    if link is None:
+        return (field_path,)
+    head, _sep, _tail = field_path.rpartition(LOOKUP_SEP)
+    prefix = f"{head}{LOOKUP_SEP}" if head else ""
+    return tuple(f"{prefix}{carrier.name}" for carrier in link.carriers)
 
 
 def instance_accessor(field: object) -> str:

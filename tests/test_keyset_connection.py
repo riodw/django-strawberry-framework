@@ -28,6 +28,10 @@ This module keeps claims no GraphQL request can express:
   non-null local and required-FK paths, so those error arms are not reachable
   on the shipped schema. Related-path acceptance is live
   (``test_root_keyset_order_by_related_path_seeks_via_annotation``).
+- A ``ForeignObject`` ``orderBy:`` term paged by a seek over its carrier
+  columns, on the test-local ``LnkPairChild``: the fakeshop link
+  (``ShelfLabel.shelf``) has a relation carrier and a target type that hides
+  rows, so a keyset connection refuses its term.
 - Pure ``plans.py`` helpers ``_keyset_order_ref`` and ``_resolve_order_path_field``
   (including detached / virtual fields, and the ``LendingDesk.venue_ptr``
   parent link no keyset type orders through).
@@ -44,16 +48,20 @@ This module keeps claims no GraphQL request can express:
 from types import SimpleNamespace
 
 import pytest
+import strawberry
 from apps.library.models import Book, Issue, LendingDesk, Patron, Periodical
 from apps.scalars.models import ScalarSpecimen
 from django.contrib.auth.models import AnonymousUser
+from django.db import connection
 from django.db.models import Count, F, Model, QuerySet
 from django.http import HttpRequest
+from django.test import RequestFactory
+from django.test.utils import CaptureQueriesContext
 from graphql import GraphQLError
 from strategy_schemas import make_django_type
 from strawberry.schema.config import StrawberryConfig
 
-from django_strawberry_framework import DjangoType, finalize_django_types
+from django_strawberry_framework import DjangoConnectionField, DjangoType, finalize_django_types
 from django_strawberry_framework.connection import (
     DjangoConnection,
     _connection_type_for,
@@ -82,6 +90,7 @@ from django_strawberry_framework.optimizer.plans import (
 from django_strawberry_framework.orders import Ordering, OrderSet, RelatedOrder
 from django_strawberry_framework.utils.connections import UnwindowableConnection
 from tests._info import make_info
+from tests.optimizer._link_models import LnkPairChild, link_fixture_tables
 
 ISSUE_ORDER = ("-number", "id")
 
@@ -435,6 +444,71 @@ def test_keyset_order_state_rejects_a_related_value_read_through_a_hiding_type(
     else:
         columns, _fingerprint, _queryset = _keyset_order_state(state, ordered)
         assert [column.name for column in columns] == ["periodical__name", "number"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_keyset_pages_a_foreign_object_term_by_seeking_over_its_carriers():
+    """A ``ForeignObject`` ``orderBy:`` term pages by value cursors over each carrier column.
+
+    ``LnkPairChild.parent`` is held in ``p_tenant`` and ``p_code``, so the term
+    is two non-null columns and the cursor seeks over both, then the
+    ``cursor_field`` pk tiebreaker. The live ``ShelfLabel.shelf`` cannot carry
+    this row: one of its carriers is the ``branch`` key, a relation no keyset
+    order accepts, and its target ``ShelfType`` hides rows, which makes the
+    term nullable. ``z9`` names no parent and sorts first by its carriers,
+    although it is inserted last. A cursor minted under the ``parent`` order is
+    refused under another order.
+    """
+
+    class KeysetPairOrder(OrderSet):
+        class Meta:
+            model = LnkPairChild
+            fields = ["parent", "name"]
+
+    pair_type = make_django_type(
+        "KeysetPairNode",
+        LnkPairChild,
+        ("id", "name"),
+        meta_extra={"cursor_field": ("id",), "orderset_class": KeysetPairOrder},
+    )
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        children: DjangoConnection[pair_type] = DjangoConnectionField(pair_type)  # pyright: ignore[reportInvalidTypeForm]
+
+    schema = strawberry.Schema(query=Query)
+
+    def page(order: str, after: str | None = None):
+        cursor = "" if after is None else f', after: "{after}"'
+        with CaptureQueriesContext(connection) as captured:
+            result = schema.execute_sync(
+                f"{{ children(first: 2{cursor}, orderBy: [{{{order}: ASC}}]) "
+                "{ edges { node { name } } pageInfo { hasNextPage endCursor } } }",
+                context_value={"request": RequestFactory().get("/")},
+            )
+        return result, [entry["sql"] for entry in captured.captured_queries]
+
+    with link_fixture_tables(connection):
+        LnkPairChild.objects.create(p_tenant=0, p_code="Z", name="z9")
+        first, _sql = page("parent")
+        assert first.errors is None, first.errors
+        assert first.data is not None
+        first_page = first.data["children"]
+        assert [edge["node"]["name"] for edge in first_page["edges"]] == ["z9", "a1"]
+        second, second_sql = page("parent", first_page["pageInfo"]["endCursor"])
+        replayed, _sql = page("name", first_page["pageInfo"]["endCursor"])
+
+    assert second.errors is None, second.errors
+    assert second.data is not None
+    assert [edge["node"]["name"] for edge in second.data["children"]["edges"]] == ["a2", "a3"]
+    assert second.data["children"]["pageInfo"]["hasNextPage"] is True
+    (seek,) = [sql for sql in second_sql if "ORDER BY" in sql]
+    where = seek.split(" WHERE ", 1)[1].split(" ORDER BY ", 1)[0]
+    assert '"p_tenant"' in where, seek
+    assert '"p_code"' in where, seek
+    assert replayed.errors is not None
+    assert "invalid cursor" in str(replayed.errors[0]), replayed.errors
 
 
 def test_keyset_order_ref_parses_strings_and_rejects_nulls():

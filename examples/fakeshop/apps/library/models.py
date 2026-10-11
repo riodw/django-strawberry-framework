@@ -196,6 +196,42 @@ class Shelf(models.Model):
         return self.code
 
 
+class ShelfLabel(models.Model):
+    """A printed label naming a shelf by its branch and code, not by its primary key.
+
+    ``shelf`` is a multi-column forward ``ForeignObject``: its value lives in the
+    two carrier fields ``branch`` and ``shelf_code``, matched against the
+    ``(branch, code)`` pair ``unique_shelf_code_per_branch`` keeps unique on
+    ``Shelf``. The relation has no column of its own, so a label orders by
+    ``shelf`` the way Django's ``order_by("shelf")`` does, by both carriers.
+    """
+
+    text = models.TextField()
+    branch = models.ForeignKey(
+        Branch,
+        related_name="shelf_labels",
+        on_delete=models.CASCADE,
+    )
+    shelf_code = models.TextField()
+    shelf = models.ForeignObject(
+        Shelf,
+        from_fields=[
+            "branch",
+            "shelf_code",
+        ],
+        to_fields=[
+            "branch",
+            "code",
+        ],
+        related_name="shelf_labels",
+        on_delete=models.CASCADE,
+    )
+
+    @override
+    def __str__(self) -> str:
+        return self.text
+
+
 class Genre(models.Model):
     """A genre used to group books."""
 

@@ -1178,7 +1178,7 @@ def test_clear_order_input_namespace_tolerates_unimportable_submodules():
 
 
 def test_get_concrete_field_names_for_order_direct():
-    """_get_concrete_field_names_for_order extracts column-backed fields and rejects non-models."""
+    """_get_concrete_field_names_for_order extracts the orderable fields and rejects non-models."""
     from apps.library.models import Book
 
     from django_strawberry_framework.exceptions import ConfigurationError

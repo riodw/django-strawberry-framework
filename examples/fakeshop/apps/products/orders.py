@@ -6,9 +6,10 @@ Ported from the ``django-graphene-filters`` cookbook recipe to the
 * ``OrderSet`` (not the cookbook's ``AdvancedOrderSet``), imported from
   ``django_strawberry_framework.orders``;
 * ``Meta.fields`` as a list, or the ``"__all__"`` shorthand which expands
-  to every column-backed model field (includes forward FK columns such as
-  ``category`` -> sorts by ``category_id``; excludes reverse relations and
-  M2M managers);
+  to every column-backed model field plus each forward ``ForeignObject``
+  link (includes forward FK columns such as ``category`` -> sorts by
+  ``category_id``, and orders a ``ForeignObject`` by its carrier columns;
+  excludes reverse relations, M2M managers and generic relations);
 * ``RelatedOrder`` cross-references mirror ``apps.products.filters``'s
   relation graph: ``Item`` / ``Property`` -> ``Category`` (forward FK) and
   ``Item.entries`` / ``Entry.property`` (reverse + forward FK). Targets that

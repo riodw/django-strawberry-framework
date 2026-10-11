@@ -1,6 +1,6 @@
 """OrderSet declarations for library relation-graph and keyset-cursor acceptance coverage.
 
-Twenty-eight ordersets mirror the relation shape ``apps.library.schema`` exposes
+Twenty-nine ordersets mirror the relation shape ``apps.library.schema`` exposes
 through the live ``/graphql/`` endpoint; ``PeriodicalOrder`` and
 ``IssueOrder`` are the keyset-cursor ``orderBy:`` substrate: a root
 ``orderBy: {title: ASC}`` page over ``IssueOrder`` mints value cursors
@@ -39,9 +39,15 @@ class BranchOrder(OrderSet):
     ``"alt_shelves__topic"`` orders through a many-to-many no ``RelatedOrder``
     declares, into ``ShelfType``'s hidden ``topic="secret"`` shelves: the live
     undeclared to-many visibility row.
+
+    ``shelf_labels`` reaches ``ShelfLabelOrder``'s multi-column ``shelf``
+    behind a to-many hop: a ``shelfLabels: { shelf: ASC }`` term orders each
+    branch by one aggregate per carrier, each reading the labels' own carrier
+    columns under ``ShelfType``'s visibility.
     """
 
     shelves = RelatedOrder("ShelfOrder", field_name="shelves")
+    shelf_labels = RelatedOrder("ShelfLabelOrder", field_name="shelf_labels")
 
     class Meta:
         model = models.Branch
@@ -402,6 +408,20 @@ class DeskProfileOrder(OrderSet):
         fields = ["id", "code"]
 
 
+class ShelfLabelOrder(OrderSet):
+    """Shelf-label orderset bound to ``ShelfLabelType`` at finalize phase 2.5.
+
+    The whole-set ``"__all__"`` sweep over a model whose ``shelf`` is a
+    multi-column forward ``ForeignObject``: it publishes ``shelf`` beside its
+    two carriers ``branch`` and ``shelf_code``, and a ``shelf`` term orders by
+    both carriers in link order.
+    """
+
+    class Meta:
+        model = models.ShelfLabel
+        fields = "__all__"
+
+
 __all__ = (
     "AnnotationOrder",
     "BookOrder",
@@ -426,6 +446,7 @@ __all__ = (
     "ReadingListOrder",
     "RepairTicketOrder",
     "SelfServeDeskOrder",
+    "ShelfLabelOrder",
     "ShelfOrder",
     "VenueBadgeOrder",
     "VenueOrder",

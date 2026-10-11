@@ -4,9 +4,10 @@ One ``OrderSet`` per ``FilterSet`` in ``apps.kanban.filters`` (1:1 with the
 owning ``DjangoType``). Each uses the ``Meta.fields = "__all__"`` shorthand,
 which expands to every column-backed model field -- the orderable scalars
 (``key`` / ``label`` / ``order`` / ``rank`` / audit timestamps / ``body`` /
-...) plus forward FK / OneToOne columns (``status`` -> ``status_id``, etc.).
-Reverse relations, the reverse ``uuid`` OneToOne accessor, and M2M managers
-are excluded by the column-backed rule, so ``"__all__"`` produces a clean
+...) plus forward FK / OneToOne columns (``status`` -> ``status_id``, etc.) --
+and any forward ``ForeignObject``, ordered by its carrier columns. Reverse
+relations, the reverse ``uuid`` OneToOne accessor, and M2M managers are
+excluded, so ``"__all__"`` produces a clean
 leaf-ordering surface with no nested traversal. No per-field permission
 gates -- ordering is a straight wiring of the ``Ordering`` surface.
 """

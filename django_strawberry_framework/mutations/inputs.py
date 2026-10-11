@@ -68,11 +68,9 @@ from ..utils.inputs import (
 )
 from ..utils.relations import (
     RelationLink,
+    carrier_backed_link,
     is_forward_concrete_relation,
     is_forward_many_to_many,
-    is_single_column_foreign_key,
-    relation_kind,
-    relation_link,
 )
 from ..utils.strings import graphql_camel_name
 
@@ -289,10 +287,13 @@ def editable_input_fields(
 
     The write-side counterpart to ``orders/inputs.py::_get_concrete_field_names_for_order``
     - deliberately the OPPOSITE selection: writes EXCLUDE read-only timestamps
-    (``editable=False`` covers ``auto_now`` / ``auto_now_add``) and INCLUDE M2M,
-    where the order side does the reverse. So this is a genuinely new selector,
-    not a duplication; it borrows the ``model._meta.get_fields()`` +
-    ``hasattr(f, "column")`` idiom and the M2M caveat documented there.
+    (``editable=False`` covers ``auto_now`` / ``auto_now_add``) and a forward
+    ``ForeignObject`` link, and INCLUDE M2M, where the order side does the
+    reverse. So this is a genuinely new selector, not a duplication; both walk
+    ``model._meta.get_fields()`` and both recognize a forward ``ForeignObject``
+    through ``utils/relations.py::carrier_backed_link``, but this one keeps any
+    field with a ``column`` attribute (the cookbook's ``hasattr(f, "column")``
+    idiom) where the order side requires a real database column.
 
     Kept (in declaration order): concrete editable columns whose ``editable``
     flag is ``True`` and that are not the primary key, plus forward M2M fields.
@@ -327,7 +328,7 @@ def editable_input_fields(
     selected: list[ConcreteField] = []
     carrier_links: dict[str, RelationLink] = {}
     for field in model._meta.get_fields():
-        link = _carrier_backed_link(field)
+        link = carrier_backed_link(field)
         if link is not None:
             carrier_links[field.name] = link
             continue
@@ -377,24 +378,6 @@ def editable_input_fields(
         unknown_noun="non-editable or unknown field(s)",
     )
     return list(effective.values())
-
-
-def _carrier_backed_link(field: object) -> RelationLink | None:
-    """Return the link of a forward relation whose value lives in separate carrier columns.
-
-    A forward ``ForeignObject`` that is not a ``ForeignKey`` stores nothing in a
-    column of its own (``column`` is ``None``): its link is the pairs of
-    carrier columns on this model and target columns on the related model that
-    ``utils/relations.py::relation_link`` reads. ``None`` for every other field,
-    a ``ForeignKey`` / ``OneToOneField`` (one column of its own) and a
-    ``GenericForeignKey`` (no link pairs) included.
-    """
-    if not getattr(field, "is_relation", False) or is_single_column_foreign_key(field):
-        return None
-    if relation_kind(field) != "forward_single":
-        return None
-    link = relation_link(field)
-    return link if link.carriers else None
 
 
 def _carrier_backed_link_error(

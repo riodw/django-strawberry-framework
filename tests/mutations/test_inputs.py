@@ -56,6 +56,8 @@ from apps.library import models as library_models
 from apps.products import models as product_models
 from apps.products.schema import CategoryType, ItemType
 from apps.scalars.models import MediaSpecimen
+from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
+from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from strawberry import UNSET, relay
 from strawberry.types.base import (
@@ -1395,6 +1397,59 @@ def test_editable_fields_report_fields_and_exclude_together_before_a_foreign_obj
     """``fields`` beside ``exclude`` is the mutual-exclusion error, whichever names the link."""
     with pytest.raises(ConfigurationError, match="both `fields` and `exclude`"):
         editable_input_fields(_link_models.LnkPairChild, fields=("parent",), exclude=("name",))
+
+
+@pytest.mark.parametrize("key", ["fields", "exclude"])
+def test_editable_fields_reject_a_reverse_generic_relation_as_an_unknown_name(key: str):
+    """A reverse ``GenericRel`` is a reverse relation, not a carrier-backed link.
+
+    A ``GenericRelation`` with a ``related_query_name`` adds that reverse
+    descriptor to the generic-key model's fields, and its link pairs read the
+    ``object_id`` column. It is the reverse side of the holder's relation, so
+    naming it gets the unknown-name rejection every reverse relation gets,
+    never the forward ``ForeignObject`` error that offers ``object_id`` as its
+    carrier.
+    """
+    meta = type("Meta", (), {"app_label": "products", "managed": False})
+    tag = type(
+        "MutationProbeTag",
+        (models.Model,),
+        {
+            "__module__": __name__,
+            "name": models.TextField(),
+            "content_type": models.ForeignKey(
+                ContentType,
+                on_delete=models.CASCADE,
+                related_name="+",
+            ),
+            "object_id": models.PositiveIntegerField(),
+            "content_object": GenericForeignKey("content_type", "object_id"),
+            "Meta": meta,
+        },
+    )
+    type(
+        "MutationProbeHolder",
+        (models.Model,),
+        {
+            "__module__": __name__,
+            "tags": GenericRelation(tag, related_query_name="holder"),
+            "Meta": meta,
+        },
+    )
+
+    assert [field.name for field in editable_input_fields(tag)] == [
+        "name",
+        "content_type",
+        "object_id",
+    ]
+    with pytest.raises(
+        ConfigurationError,
+        match=re.escape(
+            f"DjangoMutation for MutationProbeTag declares `{key}` naming non-editable or "
+            "unknown field(s): ['holder'].",
+        ),
+    ):
+        editable_input_fields(tag, **{key: ("name", "holder")})
 
 
 def test_generated_input_over_a_foreign_object_model_binds_its_carriers():

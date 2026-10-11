@@ -932,6 +932,23 @@ class DeskProfileType(DjangoType):
         orderset_class = orders.DeskProfileOrder
 
 
+class ShelfLabelType(DjangoType):
+    """A shelf label, published with every model field.
+
+    ``fields = "__all__"`` publishes the multi-column ``shelf`` relation as a
+    ``ShelfType`` beside its carriers ``branch`` and ``shelf_code``, and the
+    ``"__all__"`` ``ShelfLabelOrder`` publishes ``shelf`` as an order leaf.
+    ``ShelfType`` hides ``topic="secret"`` shelves from non-staff requests, so
+    for them a label on a secret shelf sorts by ``shelf`` as one with no shelf.
+    """
+
+    class Meta:
+        model = models.ShelfLabel
+        fields = "__all__"
+        filterset_class = filters.ShelfLabelFilter
+        orderset_class = orders.ShelfLabelOrder
+
+
 @strawberry.type
 class Query:
     """Library acceptance root fields."""
@@ -1005,6 +1022,9 @@ class Query:
     all_library_desk_shifts: list[DeskShiftType] = DjangoListField(DeskShiftType)
     # Acceptance surface for the reverse one-to-one published on a circulation desk as profile.
     all_library_desk_profiles: list[DeskProfileType] = DjangoListField(DeskProfileType)
+    # Acceptance surface for a multi-column forward ForeignObject, published and ordered by its
+    # carriers.
+    all_library_shelf_labels: list[ShelfLabelType] = DjangoListField(ShelfLabelType)
 
     all_library_branches_via_list_field: list[BranchType] = DjangoListField(
         BranchType,

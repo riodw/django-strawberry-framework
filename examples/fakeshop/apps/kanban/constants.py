@@ -270,6 +270,7 @@ TRACKED_FILE_PATHS = (
     "tests/test_bench_common.py",
     "tests/test_bug_hunt.py",
     "tests/test_build_kanban_html.py",
+    "tests/test_build_kanban_md.py",
     "tests/test_build_tree_md.py",
     "tests/test_check_citations.py",
     "tests/test_check_public_types.py",

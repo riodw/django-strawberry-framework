@@ -85,12 +85,21 @@ MD_OMITTED_DONE_SECTION_KEYS = frozenset({"verified_upstream"})
 # character, a dotted/``::``-qualified path, or a path separator on either side.
 TERM_BOUNDARY_BEFORE = r"(?<![A-Za-z0-9_.:/\-])"
 TERM_BOUNDARY_AFTER = r"(?![A-Za-z0-9_.:/\-])"
-# Regions a term match may not straddle: an existing link or a ``#"substring"``
-# citation pinpoint (any overlap rejects -- the pinpoint must stay byte-exact), and an
-# inline code span (a match must contain the whole span or none of it, so a term is
-# linked when it IS the span, never when it sits inside a longer literal).
-LINK_SPAN_RE = re.compile(r"\[[^\]]*\]\([^)]*\)|#\"[^\"\n]*\"")
+# Regions a term match may not straddle: a ``#"substring"`` citation pinpoint or any
+# balanced ``[...]`` group with its trailing ``(destination "title")`` or ``[label]``
+# (any overlap rejects -- the pinpoint must stay byte-exact, and an existing link of any
+# shape keeps its text), and an inline code span (a match must contain the whole span
+# or none of it, so a term is linked when it IS the span, never when it sits inside a
+# longer literal). Brackets are paired after masking backslash escapes and code spans,
+# so an escaped or backticked bracket is literal text; a trailing destination and title
+# are scanned whole with only escapes masked, so a backtick in a title is literal too.
+PINPOINT_RE = re.compile(r"#\"[^\"\n]*\"")
 CODE_SPAN_RE = re.compile(r"`[^`\n]+`")
+ESCAPE_RE = re.compile(r"\\[\s\S]")
+ESCAPE_OR_CODE_RE = re.compile(ESCAPE_RE.pattern + "|" + CODE_SPAN_RE.pattern)
+LINK_LABEL_RE = re.compile(r"\[[^\[\]]*\]")
+LINK_ANGLE_DESTINATION_RE = re.compile(r"<[^<>\n]*>")
+LINK_TITLE_RE = re.compile(r"\"[^\"]*\"|'[^']*'|\([^()]*\)")
 
 
 # --------------------------------------------------------------------------------------
@@ -375,16 +384,58 @@ def term_pattern(title: str) -> re.Pattern[str]:
 Spans = list[tuple[int, int]]
 
 
+def _skip_space(raw: str, j: int) -> int:
+    """The first index at or after ``j`` that is not whitespace."""
+    while j < len(raw) and raw[j].isspace():
+        j += 1
+    return j
+
+
+def _link_tail_end(raw: str, i: int) -> int | None:
+    """End of the ``[label]`` or ``(destination "title")`` link tail at ``raw[i]``, else None.
+
+    ``raw`` has only its backslash escapes masked. A destination is ``<...>`` or a
+    whitespace-free run with balanced parens (possibly empty); a title is ``"..."``,
+    ``'...'`` or ``(...)`` after whitespace.
+    """
+    if raw.startswith("[", i):
+        label = LINK_LABEL_RE.match(raw, i)
+        return label.end() if label else None
+    if not raw.startswith("(", i):
+        return None
+    j = _skip_space(raw, i + 1)
+    if raw.startswith("<", j):
+        angle = LINK_ANGLE_DESTINATION_RE.match(raw, j)
+        if angle is None:
+            return None
+        j = angle.end()
+    else:
+        depth = 0
+        while j < len(raw) and not raw[j].isspace() and (depth or raw[j] != ")"):
+            depth += (raw[j] == "(") - (raw[j] == ")")
+            j += 1
+        if depth:
+            return None
+    k = _skip_space(raw, j)
+    title = LINK_TITLE_RE.match(raw, k) if k > j else None
+    if title:
+        k = _skip_space(raw, title.end())
+    return k + 1 if raw.startswith(")", k) else None
+
+
 class GlossaryInliner:
     r"""Link the first in-text mention of every glossary term inside one card.
 
     Derived, not stored: the whole glossary is searched against the card's text, so a
     link lands exactly where the prose names the term and nowhere else. One link per
     term per card, longest title first so ``Meta.fields`` never fires inside
-    ``Meta.fields_class``. A match may not overlap an existing link or a ``#"..."``
-    citation pinpoint at all, and may not cut a code span in half; it may swallow a
-    whole span (a backticked ``Foo`` becomes a linked span) or several (a backticked
-    ``BigInt`` followed by ``scalar``).
+    ``Meta.fields_class``. A match may not overlap a ``#"..."`` citation pinpoint or
+    any unescaped balanced ``[...]`` group (link text of every link shape, so a
+    literal bracket run stays unlinked too) with its trailing destination, title or
+    label at all (titles and destinations are scanned whole; escapes inert), and may
+    not cut a code span in half; it may swallow a whole span (a backticked ``Foo``
+    becomes a linked span) or several (a backticked ``BigInt`` followed by
+    ``scalar``).
     """
 
     def __init__(self, glossary_terms: list[GlossaryTermRef]) -> None:
@@ -410,8 +461,20 @@ class GlossaryInliner:
     @staticmethod
     def _protected(text: str) -> tuple[Spans, Spans]:
         """The (link-or-pinpoint, code-span) regions of ``text``."""
-        links = [(m.start(), m.end()) for m in LINK_SPAN_RE.finditer(text)]
-        spans = [(m.start(), m.end()) for m in CODE_SPAN_RE.finditer(text)]
+        links = [m.span() for m in PINPOINT_RE.finditer(text)]
+        masked = ESCAPE_OR_CODE_RE.sub(lambda m: "." * len(m.group()), text)
+        raw = ESCAPE_RE.sub(lambda m: "." * len(m.group()), text)
+        openers: list[int] = []
+        i = 0
+        while i < len(masked):
+            if masked[i] == "[":
+                openers.append(i)
+            elif masked[i] == "]" and openers:
+                end = _link_tail_end(raw, i + 1) or i + 1
+                links.append((openers.pop(), end))
+                i = end - 1
+            i += 1
+        spans = [m.span() for m in CODE_SPAN_RE.finditer(text)]
         return links, spans
 
     @staticmethod

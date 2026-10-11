@@ -1,7 +1,8 @@
 """Relation resolver tests for FK-id elision, N+1 strictness, and multi-database routing.
 
-Generated relation payloads, reverse-O2O custom visibility, and unoptimized
-many-side query cost live in ``examples/fakeshop/test_query/test_products_visibility_api.py``
+Generated relation payloads, reverse-O2O custom visibility (planned and
+unplanned), and unoptimized many-side query cost live in
+``examples/fakeshop/test_query/test_products_visibility_api.py``
 and ``examples/fakeshop/test_query/test_relations_async_api.py``. A nullable dangling
 self-FK over HTTP lives in
 ``examples/fakeshop/test_query/test_scalars_api.py``

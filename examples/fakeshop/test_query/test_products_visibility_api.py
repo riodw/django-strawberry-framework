@@ -19,7 +19,7 @@ installed still pays ``1 + N`` for a nested connection.
 """
 
 from collections.abc import Callable
-from typing import TypeAlias
+from typing import Literal, TypeAlias
 
 import pytest
 import strawberry
@@ -650,11 +650,17 @@ def test_unoptimized_list_relation_costs_one_query_per_parent(db: None) -> None:
     assert len(_list_relation_item_queries(5)) == 5
 
 
-def _holder_patron_card_schema(*, optimizer: bool) -> strawberry.Schema:
+def _holder_patron_card_schema(
+    *,
+    root: Literal["queryset", "list"],
+    optimizer: bool,
+) -> strawberry.Schema:
     """Throwaway reverse-O2O types: card hook hides ``HIDDEN*`` barcodes.
 
     Shipped ``MembershipCardType`` has no ``get_queryset``; adding one there
-    would change every ``patron { card }`` traversal. Rung 3 holder.
+    would change every ``patron { card }`` traversal. Rung 3 holder. ``root``
+    picks what ``patrons`` hands back: an unevaluated ``QuerySet`` the optimizer
+    can plan, or a materialized list it cannot.
     """
     from apps.library.models import MembershipCard, Patron
 
@@ -690,8 +696,9 @@ def _holder_patron_card_schema(*, optimizer: bool) -> strawberry.Schema:
     @strawberry.type
     class Query:
         @strawberry.field(graphql_type=list[HolderPatronType])
-        def patrons(self) -> list[Patron]:
-            return list(Patron.objects.filter(name__endswith="Holder").order_by("name"))
+        def patrons(self) -> QuerySet[Patron] | list[Patron]:
+            patrons = Patron.objects.filter(name__endswith="Holder").order_by("name")
+            return patrons if root == "queryset" else list(patrons)
 
     extensions = []
     if optimizer:
@@ -700,13 +707,21 @@ def _holder_patron_card_schema(*, optimizer: bool) -> strawberry.Schema:
     return strawberry.Schema(query=Query, extensions=extensions)
 
 
-def test_reverse_one_to_one_custom_visibility_matches_with_and_without_optimizer(db: None) -> None:
+@pytest.mark.parametrize("optimizer", [False, True], ids=["unoptimized", "optimized"])
+@pytest.mark.parametrize("root", ["queryset", "list"])
+def test_reverse_one_to_one_custom_visibility_matches_with_and_without_optimizer(
+    db: None,
+    root: Literal["queryset", "list"],
+    optimizer: bool,
+) -> None:
     """Hidden reverse-O2O cards collapse to ``null`` whether or not the relation was planned.
 
-    The optimizer leg also pins its statement count. The root hands back a
-    materialized list, so nothing is planned and each patron pays exactly two
-    card statements: the descriptor load and the hook's re-check. Four in total
-    at two patrons - a third statement per patron fails this row.
+    Every cell serves the same data; the card statement count says which half
+    enforced it. A ``QuerySet`` root under the optimizer is the planned cell:
+    one batched card ``Prefetch`` already carrying the hook's predicate, and the
+    resolver stands down. Every other cell plans nothing, so each patron pays
+    exactly two card statements, the descriptor load and the hook's re-check:
+    four at two patrons, and a third statement per patron fails the row.
     """
     from apps.library.models import MembershipCard, Patron
 
@@ -716,26 +731,27 @@ def test_reverse_one_to_one_custom_visibility_matches_with_and_without_optimizer
     MembershipCard.objects.create(patron=visible, barcode="OPEN-1")
 
     query = "{ patrons { name card { barcode } } }"
-    expected = {
+    schema = _holder_patron_card_schema(root=root, optimizer=optimizer)
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post_visibility_query(schema, query)
+    assert payload.get("errors") is None, payload
+    assert payload["data"] == {
         "patrons": [
             {"name": "Hidden Holder", "card": None},
             {"name": "Visible Holder", "card": {"barcode": "OPEN-1"}},
         ],
     }
-    unplanned = _post_visibility_query(_holder_patron_card_schema(optimizer=False), query)
-    planned_schema = _holder_patron_card_schema(optimizer=True)
-    with CaptureQueriesContext(connection) as captured:
-        planned = _post_visibility_query(planned_schema, query)
-    assert unplanned.get("errors") is None, unplanned
-    assert planned.get("errors") is None, planned
-    assert unplanned["data"] == expected
-    assert planned["data"] == expected
     card_sql = [
         entry["sql"]
         for entry in captured.captured_queries
         if 'FROM "library_membershipcard"' in entry["sql"]
     ]
-    assert len(card_sql) == 4, card_sql
+    if root == "queryset" and optimizer:
+        assert len(card_sql) == 1, card_sql
+        assert " IN (" in card_sql[0], card_sql
+        assert "HIDDEN%" in card_sql[0], card_sql
+    else:
+        assert len(card_sql) == 4, card_sql
 
 
 @pytest.mark.django_db(transaction=True)

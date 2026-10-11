@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 41 done, 50 to do.
+Progress: 42 done, 50 to do.
 
 ## Done
 
@@ -74,6 +74,9 @@ Progress: 41 done, 50 to do.
 - [x] 44. A `DjangoModelFormMutation` over a non-text choice column with `blank=True, null=False` answered `null` (or an omitted
   field with no default) with a masked top-level error, since `form.save()` raised `ValueError` / `ValidationError`; it now returns
   the field-keyed `null` FieldError the model flavor gives. Django keeps the shape on purpose, so no startup check (`6c31c5e3`)
+- [x] 49. `serializer_field_description` converts (does not re-raise) a `KeyboardInterrupt` from hostile field metadata into
+  `ConfigurationError`, by design and pinned since `3470fb7f`. Not a defect under rule 37 (no contract row, application Python, no
+  wire input), no code; the package-wide policy question is item 94
 
 ## To do: t3 robustness rows
 
@@ -95,7 +98,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## To do: found along the way
 
-- [ ] 49. `serializer_field_description` re-raises `KeyboardInterrupt`
 - [ ] 51. `OrderSet` `"__all__"` leaves out `ForeignObject` fields (unverified)
 - [ ] 56. Two writable serializer fields can write the same FK column (`category` and `source="category_id"`)
 - [ ] 80. `_guard_source_not_pre_sliced` and three `_finalize_queryset` catches turn a consumer QuerySet or ordering fault into a
@@ -159,6 +161,10 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 47. Postgres: `serializer_choice_field=MultipleChoiceField` over an `ArrayField` is unusable (parked: needs a Postgres run)
 - [ ] 93. CHANGELOG entry for item 44: a ModelForm mutation over a non-text choice column with `blank=True, null=False` answers
   `null` (or an omitted field with no default) with a field-keyed `null` FieldError instead of "An unexpected error occurred."
+- [ ] 94. The package's 228 `except BaseException` guards follow two postures: about 90 hostile-metadata guards turn a
+  `KeyboardInterrupt` / `SystemExit` into a typed error (pinned, e.g. `serializer_field_description`), while `utils/directives.py`
+  and the await-side guards let control signals propagate (pinned the other way). No upstream library converts them at
+  configuration time. One policy (re-raise control signals first, or narrow to `Exception`), or keep the split?
 
 ## Hunt not finished in t3
 

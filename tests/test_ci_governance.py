@@ -313,8 +313,31 @@ def _forbidden_optimizer_entries(source: str, label: str) -> list[tuple[int, str
     1. any ``lambda`` whose body constructs the optimizer;
     2. any bare optimizer class load that is an ELEMENT of a list or tuple
        literal and is not itself the callee of a call.
+
+    Both rules share one test for "this expression is the optimizer class": the
+    bare name, any attribute whose leaf is the class name (``dsf.DjangoOptimizerExtension``,
+    ``pkg.sub.DjangoOptimizerExtension``), or a name the module binds with
+    ``from ... import DjangoOptimizerExtension as <alias>``.
     """
     tree = ast.parse(source, filename=label)
+    class_names = {OPTIMIZER_EXTENSION}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            class_names.update(
+                alias.asname
+                for alias in node.names
+                if alias.name == OPTIMIZER_EXTENSION and alias.asname
+            )
+
+    def is_optimizer_class(node: ast.expr) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in class_names and isinstance(node.ctx, ast.Load)
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == OPTIMIZER_EXTENSION
+            and isinstance(node.ctx, ast.Load)
+        )
+
     call_funcs = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
     sequence_elements = set()
     for node in ast.walk(tree):
@@ -324,16 +347,17 @@ def _forbidden_optimizer_entries(source: str, label: str) -> list[tuple[int, str
     for node in ast.walk(tree):
         if isinstance(node, ast.Lambda):
             body = node.body
-            if isinstance(body, ast.Call) and OPTIMIZER_EXTENSION in ast.unparse(body.func):
+            if isinstance(body, ast.Call) and (
+                OPTIMIZER_EXTENSION in ast.unparse(body.func) or is_optimizer_class(body.func)
+            ):
                 found.append((node.lineno, "constructing lambda", ast.unparse(node)))
         if (
-            isinstance(node, ast.Name)
-            and node.id == OPTIMIZER_EXTENSION
-            and isinstance(node.ctx, ast.Load)
+            isinstance(node, ast.expr)
+            and is_optimizer_class(node)
             and id(node) not in call_funcs
             and id(node) in sequence_elements
         ):
-            found.append((node.lineno, "bare class in a sequence", OPTIMIZER_EXTENSION))
+            found.append((node.lineno, "bare class in a sequence", ast.unparse(node)))
     return sorted(found)
 
 
@@ -365,6 +389,26 @@ MUST_FLAG_SNIPPETS = [
         "extensions = [lambda: DjangoOptimizerExtension()] if optimizer else []",
     ),
     ("lambda-dotted", "extensions = [lambda: optimizer.DjangoOptimizerExtension()]"),
+    ("attribute-package-alias", "extensions = [dsf.DjangoOptimizerExtension]"),
+    (
+        "attribute-package-dotted",
+        "extensions = [django_strawberry_framework.DjangoOptimizerExtension]",
+    ),
+    (
+        "attribute-subpackage-dotted",
+        "extensions = [django_strawberry_framework.optimizer.DjangoOptimizerExtension]",
+    ),
+    ("attribute-tuple", "extensions = (DjangoDebugExtension, dsf.DjangoOptimizerExtension)"),
+    (
+        "import-alias-bare",
+        "from django_strawberry_framework import DjangoOptimizerExtension as Opt\n"
+        "extensions = [Opt]",
+    ),
+    (
+        "import-alias-lambda",
+        "from django_strawberry_framework import DjangoOptimizerExtension as Opt\n"
+        "extensions = [lambda: Opt()]",
+    ),
 ]
 
 # Negative controls. Each is a form that LOOKS like the violation to a
@@ -385,6 +429,10 @@ MUST_NOT_FLAG_SNIPPETS = [
     ("classmethod-call", "DjangoOptimizerExtension.check_schema(schema)"),
     ("identity-assertion", "assert DjangoOptimizerExtension is Other"),
     ("bare-instance-assignment", "ext = DjangoOptimizerExtension()\nextensions = [ext]"),
+    ("attribute-classmethod-call", "dsf.DjangoOptimizerExtension.check_schema(schema)"),
+    ("attribute-debug-extension", "extensions = [dsf.DjangoDebugExtension]"),
+    ("attribute-instance-assignment", "ext = dsf.DjangoOptimizerExtension()\nextensions = [ext]"),
+    ("attribute-identity-assertion", "assert dsf.DjangoOptimizerExtension is Other"),
 ]
 
 
@@ -824,8 +872,12 @@ def test_no_active_source_uses_a_forbidden_optimizer_extensions_form():
     deprecated instance form ``extensions=[DjangoOptimizerExtension()]`` (already
     fatal at runtime, since Strawberry's ``DeprecationWarning`` meets
     ``pytest.ini``'s ``filterwarnings = error``), a SUBCLASS entry spelled under
-    another name, or a named module-level function that constructs the optimizer;
-    the last two would need name resolution and neither exists here.
+    another name, a rebinding (``Opt = DjangoOptimizerExtension``), a ``getattr``
+    lookup, a set literal, or a named module-level function that constructs the
+    optimizer; all but the set literal would need name resolution and none exists
+    here. Qualified spellings (any attribute whose leaf is the class name) and
+    ``from ... import DjangoOptimizerExtension as <alias>`` names ARE matched, by
+    both rules.
 
     Its false-positive direction is deliberate too, and BOTH arms have one. The
     bare-class rule flags the class in ANY list or tuple literal, not only in an

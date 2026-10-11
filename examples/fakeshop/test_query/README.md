@@ -949,7 +949,7 @@ Production rules unchanged: ASCII-only `.py`, trailing-comma explosion at 4, `pa
 - **Failing assertion carries the payload.** `assert "errors" not in payload, payload`.
 - **Seeding rules absolute.** `seed_data(N)` / `create_users(N)` first for products/auth; inline `Model.objects.create` for library; seed helpers' own tests = only exception.
 - **Expected values derived, not memorized.** Faker → compute from ORM. Package-owned encodings (GlobalIDs, cursors) → mint w/ package helpers.
-- **Format after every edit, stop.** `uv run ruff format .` then `uv run ruff check --fix .`. No `pytest` after edits unless asked; asked → `uv run pytest`; single test `uv run pytest -n0 path/to/test_file.py::test_name`.
+- **Format after every edit, stop.** `uv run ruff check --fix .` then `uv run ruff format .` (format last: `--fix` can add a magic trailing comma the formatter rejects). No `pytest` after edits unless asked; asked → `uv run pytest`; single test `uv run pytest -n0 path/to/test_file.py::test_name`.
 - **New / deleted test file changes the tracked set.** After staging: `uv run python scripts/build_kanban_tracked_path_constants.py`, stage regenerated `examples/fakeshop/apps/kanban/constants.py` with it, else the hook rejects every later commit until a constants-only sync. Also re-render [TREE.md][tree-tests] (`uv run python scripts/build_tree_md.py`): one row per test module, a deleted module strands its row and the citation gate can't see it.
 - **Removing code sweeps all four trees** for orphan imports / fixtures / helpers / builder kwargs, same change; ruff catches imports only. Then `grep -rn '::<name>' docs/` for stranded prose citations.
 - **Trimmed row = renamed row.** Keep one clause of a multi-claim test → rename it to that clause; a name asserting a payload the row no longer reads lies on the failure line.
@@ -967,7 +967,7 @@ Production rules unchanged: ASCII-only `.py`, trailing-comma explosion at 4, `pa
 9. Async rows `django_db(transaction=True)`; sharded rows gate at module level + declare both aliases.
 10. Module docstring one sentence (TREE.md re-rendered if changed); test docstrings no provenance; stand-in's claim verified against code before it was copied.
 11. Message asserted → pass-through override present; error asserted → `data is None`, not absent.
-12. `uv run ruff format .`, `uv run ruff check --fix .`, `uvx pre-commit run --files <paths>`; test file added / removed → kanban constants regenerated AND TREE.md re-rendered.
+12. `uv run ruff check --fix .`, `uv run ruff format .`, `uvx pre-commit run --files <paths>`; test file added / removed → kanban constants regenerated AND TREE.md re-rendered.
 
 ## Suite map
 

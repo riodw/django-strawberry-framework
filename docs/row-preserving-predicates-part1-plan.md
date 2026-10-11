@@ -1277,7 +1277,7 @@ make stale:
 10. Slice D documentation updates; leave search grouping and the `search:`
     surface to card 060.
 
-After every edit: `uv run ruff format .` and `uv run ruff check --fix .`
+After every edit: `uv run ruff check --fix .` then `uv run ruff format .`
 only; tests run when explicitly requested; the change must hold
 `fail_under = 100` when the suite runs. Before any commit: pre-commit hooks
 — and the tracked-path hook may require a constants-only sync commit since

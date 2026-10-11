@@ -70,8 +70,8 @@ The spec's nested sub-bullets for this slice from `## Slice checklist`, copied v
 
 ### Validation run
 
-- `uv run ruff format <files this pass touched>` — pass/fail (scoped to your own files, never `.`)
-- `uv run ruff check --fix <the same files>` — pass/fail
+- `uv run ruff check --fix <files this pass touched>` — pass/fail (scoped to your own files, never `.`)
+- `uv run ruff format <the same files>` — pass/fail
 - `git status --short` after both ruff invocations — every modified file must be slice-intended and appear in `### Files touched`. Anything else is a **stop-and-report**, never a revert: this tree can carry a concurrent session's uncommitted work, so `git checkout -- path` to tidy unexpected churn destroys someone else's change. Scoping the write-mode runs above is what stops the churn existing; if it appears anyway, say so in the build report rather than cleaning it up.
 - Focused test commands run, if any (no `--cov*` flags — see "Coverage is the maintainer's gate, not a worker's tool")
 

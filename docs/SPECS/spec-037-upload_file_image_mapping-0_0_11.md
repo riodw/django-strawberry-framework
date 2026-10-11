@@ -773,7 +773,8 @@ make an explicit `null` a clear instruction. Because `FILE` rides the scalar han
 `_explicit_null_error` returns a [`FieldError`][glossary-fielderror-envelope]
 (`"This field cannot be null."`) for a provided `None` on a `null=False` file column —
 including the `blank=True, null=False` shape, which `full_clean()` alone would let slip
-to a `save()`-time `IntegrityError` — before any DB work. A `null=True` file column
+to a `save()`-time `IntegrityError` — at decode, after the update's locate and
+authorization and before `full_clean()` and any write. A `null=True` file column
 accepts `None` as a value; clearing is otherwise out of scope
 ([Risks and open questions][rationale-risks]).
 

@@ -580,9 +580,10 @@ def _explicit_null_error(
     validation and only fails at ``save()`` as a NOT NULL ``IntegrityError`` - surfacing
     as the generic ``"__all__"`` "A database constraint was violated." with no field
     attribution, after a write was attempted. Reject it at decode as a field-keyed
-    ``FieldError`` so the client learns WHICH field, before any DB work. A ``null=True``
-    column treats ``None`` as a valid clear and is left alone. ``django_field`` is the
-    bind-time column from ``_model_fields_by_attr`` (never a live ``get_field``).
+    ``FieldError`` so the client learns WHICH field, before validation or any write. A
+    ``null=True`` column treats ``None`` as a valid clear and is left alone.
+    ``django_field`` is the bind-time column from ``_model_fields_by_attr`` (never a
+    live ``get_field``).
     """
     if value is not None:
         return None

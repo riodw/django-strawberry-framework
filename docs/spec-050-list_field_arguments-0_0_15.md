@@ -1392,9 +1392,10 @@ a positive `offset` over a source whose order cannot be established, are both re
 field cannot honor; answering them with `null` would report success for a page that was never
 produced. *Why short-circuiting None was rejected: see the [rationale][rationale-d8].*
 Because the surprise is real, both outer annotations are pinned
-live: a nullable outer list and a non-null outer list over the same `None`-returning source,
-each with a limit-only request (which preserves `null`) and with a rejected argument (which
-errors, propagating through whichever nullability the consumer annotation declares).
+live over the same `None`-returning source. A limit-only request hands `None` to GraphQL
+completion unchanged, as a request without arguments does: the nullable outer list answers
+`null`, the non-null one graphql-core's `Cannot return null for non-nullable field` error,
+which the error policy masks on the wire. A rejected argument raises its typed error on both.
 
 Error precedence follows the pipeline rather than incidental exception timing. Numeric
 validation (`offset`, then `limit`) runs before the consumer resolver. After source
@@ -2257,10 +2258,11 @@ the shipped SDL.
 23. Two aliases of the same field in one document, with different `offset` / `limit` pairs,
     return independent pages. Root list fields share no window state and no merged plan, and
     this row exists so an accidental per-field cache cannot pass unnoticed.
-24. A nullable outer list and a non-null outer list over the same `None`-returning holder field
-    each preserve `null` under a limit-only request and each error under a rejected argument,
-    with the response nullability the consumer annotation declares. This is the surprising
-    half of Decision 8's capability-over-null-propagation choice and is earned live.
+24. A nullable outer list and a non-null outer list over the same `None`-returning holder field:
+    a limit-only request hands `None` to GraphQL completion unchanged, so the nullable list
+    answers `null` and the non-null one the masked `Cannot return null for non-nullable field`
+    error (as with no arguments); a rejected argument raises its typed error on both. This is the
+    surprising half of Decision 8's capability-over-null-propagation choice and is earned live.
 25. A conforming test-local `OrderSet` override that returns a `QuerySet` SUBCLASS derived from
     its sealed input succeeds and returns the correct ordered page, proving the seal normalizes
     a sealable subclass into a plain queryset rather than rejecting it for its class.

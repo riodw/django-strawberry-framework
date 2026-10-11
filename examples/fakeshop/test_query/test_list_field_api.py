@@ -3514,8 +3514,46 @@ def test_shipped_branches_independent_aliases():
     assert payload["data"]["p2"] == [{"name": "Bravo"}]
 
 
+_NEGATIVE_OFFSET = "expected a non-negative integer, got -1."
+
+
 @pytest.mark.django_db
-def test_holder_nullability_propagation_over_none_source():
+@pytest.mark.parametrize(
+    ("query", "data", "errors"),
+    [
+        ("{ nullableNone(limit: 1) { name } }", {"nullableNone": None}, []),
+        ("{ nonNullNone(limit: 1) { name } }", None, [("An unexpected error occurred.", None)]),
+        (
+            "{ nullableNone(offset: -1) { name } }",
+            {"nullableNone": None},
+            [(f"Invalid argument 'offset' on nullableNone: {_NEGATIVE_OFFSET}", "negative")],
+        ),
+        (
+            "{ nonNullNone(offset: -1) { name } }",
+            None,
+            [(f"Invalid argument 'offset' on nonNullNone: {_NEGATIVE_OFFSET}", "negative")],
+        ),
+    ],
+    ids=[
+        "nullable-limit-only",
+        "non-null-limit-only",
+        "nullable-rejected",
+        "non-null-rejected",
+    ],
+)
+def test_holder_nullability_propagation_over_none_source(
+    query: str,
+    data: JSONObject | None,
+    errors: list[tuple[str, str | None]],
+):
+    """A limit-only request hands ``None`` to completion; a rejected argument errors on both.
+
+    The declared outer nullability decides the limit-only answer exactly as it does
+    with no arguments: ``null`` on the nullable list, graphql-core's non-null completion
+    error (masked by the error policy) on the non-null one. Argument validation
+    outranks the ``None`` result on both.
+    """
+
     @strawberry.type
     class _NullabilityQuery:
         nullable_none: list[library_schema.BranchType] | None = DjangoListField(
@@ -3529,17 +3567,12 @@ def test_holder_nullability_propagation_over_none_source():
 
     schema = DjangoSchema(query=_NullabilityQuery, config=strawberry_config())
 
-    # limit-only request preserves nullability
-    p_null = _post_sync(schema, "{ nullableNone(limit: 1) { name } }")
-    assert "errors" not in p_null, p_null
-    assert p_null["data"]["nullableNone"] is None
-
-    # rejected argument rejects before resolving
-    p_null_err = _post_sync(schema, "{ nullableNone(offset: -1) { name } }")
-    assert p_null_err["errors"][0]["extensions"]["reason"] == "negative"
-
-    p_non_err = _post_sync(schema, "{ nonNullNone(offset: -1) { name } }")
-    assert p_non_err["errors"][0]["extensions"]["reason"] == "negative"
+    payload = _post_sync(schema, query)
+    assert payload["data"] == data, payload
+    assert [
+        (error["message"], (error.get("extensions") or {}).get("reason"))
+        for error in payload.get("errors", [])
+    ] == errors, payload
 
 
 @pytest.mark.django_db

@@ -49,15 +49,22 @@ Contract highlights (each enforced in this module or at finalization):
 - **Order fingerprint.** The encrypted payload embeds the effective order the
   cursor was minted under; decode rejects replay under a different order
   (a root ``orderBy:`` change between pages) rather than seeking against
-  the wrong columns.
+  the wrong columns. One derivation (``optimizer/plans.py::effective_cursor_state``)
+  turns a page's effective order - the declared ``cursor_field``, a root
+  ``orderBy:``, or the order a target ``get_queryset`` / manager imposed -
+  into its columns and fingerprint for the root slicer, the per-parent
+  pipeline and the plan-time nested window alike.
 - **Portable non-nullable local columns only.** ``cursor_field`` entries must
   be local concrete non-nullable columns ending in a unique column (validated
   at finalization by ``validate_cursor_field_columns``): NULL values poison
   tuple comparisons and their placement diverges across backends (SQLite
   sorts NULLs first ASC, Postgres last), while JSONField comparison semantics
   are backend-specific. The v1 contract excludes both loudly instead of
-  paginating wrongly. Root ``orderBy:`` seeks reuse the same rules per
-  effective-order column at query time.
+  paginating wrongly. Every other effective order (a root ``orderBy:``, a
+  hook or manager order under a nested window) is held to the same rules per
+  column at query time; an order that fails them is refused with a keyset
+  ``GraphQLError`` (a nested window leaves the relation to the per-parent
+  pipeline, which raises it at the field).
 - **Permission-aware decode by construction.** The seek predicate is always
   applied to the ALREADY-visibility-scoped queryset (the pipeline runs
   ``get_queryset`` / cascade permissions before any seek), so a cursor
@@ -274,13 +281,16 @@ def cursor_columns_for(
 
 
 @dataclass(frozen=True)
-class DeclaredCursorState:
-    """The DECLARED ``Meta.cursor_field`` vocabulary of one DjangoType.
+class CursorState:
+    """The cursor vocabulary of one connection order over a ``Meta.cursor_field`` type.
 
-    ``definition`` / ``cursor_field`` are the declaring definition and raw
-    order tuple; ``columns`` / ``fingerprint`` their canonical resolution
-    through ``cursor_columns_for`` / ``order_fingerprint`` - the vocabulary
-    every cursor over the type mints and decodes under.
+    The declared one comes from ``declared_cursor_state_for_definition`` (the
+    connection default); any other effective order of a page (a root
+    ``orderBy:``, a target ``get_queryset`` / manager order) derives its own
+    through ``optimizer/plans.py::effective_cursor_state``. ``definition`` is
+    the declaring definition; ``cursor_field`` the order refs the vocabulary
+    mints and decodes under; ``columns`` / ``fingerprint`` are that order's
+    canonical resolution through ``CursorColumn`` / ``order_fingerprint``.
     """
 
     definition: DjangoTypeDefinition
@@ -291,25 +301,28 @@ class DeclaredCursorState:
 
 def declared_cursor_state_for_definition(
     definition: DjangoTypeDefinition | None,
-) -> DeclaredCursorState | None:
+) -> CursorState | None:
     """Derive the declared keyset vocabulary from a ``DjangoTypeDefinition``.
 
     The one derivation, and it is DEFINITION-keyed because every caller holds a
     captured definition: the connection class generated for a field takes its
     own, and the plan-time nested window takes the child definition the walker
     resolved the relation through. Cursor vocabulary is therefore fixed by the
-    same object that fixed the connection's name and its sidecar arguments, and
-    plan-time decode and resolve-time mint share columns and fingerprint by
-    construction (the cross-strategy byte-parity invariant). ``None`` when the
-    definition carries no declaration (or is not one) - the offset vocabulary
-    applies.
+    same object that fixed the connection's name and its sidecar arguments.
+    It is the DEFAULT vocabulary: a page whose effective order differs (a root
+    ``orderBy:``, a nested window under a hook or manager order) derives its
+    own through ``optimizer/plans.py::effective_cursor_state`` from this one, so
+    plan-time decode and resolve-time mint still share columns and fingerprint
+    by construction (the cross-strategy byte-parity invariant). ``None`` when
+    the definition carries no declaration (or is not one) - the offset
+    vocabulary applies.
     """
     cursor_field: tuple[str, ...] | None = getattr(definition, "cursor_field", None)
     if cursor_field is None:
         return None
     # A declared ``cursor_field`` was just read off it, so it is a definition.
     definition = cast("DjangoTypeDefinition", definition)
-    return DeclaredCursorState(
+    return CursorState(
         definition=definition,
         cursor_field=cursor_field,
         columns=cursor_columns_for(definition.model, cursor_field),

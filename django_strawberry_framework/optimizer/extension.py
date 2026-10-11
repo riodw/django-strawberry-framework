@@ -106,6 +106,9 @@ from ._context import (
     publish_scoped_relations as _publish_scoped_relations,
 )
 from ._context import (
+    publish_window_cursor_states as _publish_window_cursor_states,
+)
+from ._context import (
     stash_for_optimizer as _stash_for_optimizer,
 )
 from ._context import (
@@ -1449,6 +1452,10 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         # attribution is live under the default strictness and must also survive
         # an execution that carries no ``context_value`` at all.
         _publish_scoped_relations(planned_resolver_keys)
+        # Likewise frame-published on every execution: the vocabulary each
+        # planned keyset window mints under is a correctness input of the
+        # relation-connection resolver, not a strictness sentinel.
+        _publish_window_cursor_states(plan.window_cursor_states)
         if self.strictness != "off":
             plan_lookup_paths = plan.finalized_lookup_paths
             if plan_lookup_paths is None:

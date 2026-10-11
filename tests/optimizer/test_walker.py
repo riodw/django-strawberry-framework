@@ -2992,6 +2992,79 @@ def test_plan_connection_relation_non_windowable_partition_is_noop():
         registry.clear()
 
 
+@pytest.mark.parametrize("keyset", [False, True], ids=["offset-target", "keyset-target"])
+def test_non_windowable_relation_still_records_a_malformed_pagination_identity(keyset: bool):
+    """A rejected cursor on a relation the join gate refuses is still accounted for.
+
+    The ``after:`` cursor is an authentic keyset cursor of the ``-id`` order.
+    The offset pass rejects it before the join gate; the keyset target's
+    declared ``("id",)`` vocabulary rejects it too, but a cursor of another
+    order waits for the effective order, so that pass settles at the join gate.
+    Both record the relation's identity, so strictness leaves the pipeline's
+    own cursor error to the field.
+    """
+    from strawberry import relay
+
+    from django_strawberry_framework import finalize_django_types
+    from django_strawberry_framework.keyset import (
+        cursor_columns_for,
+        encode_keyset_cursor,
+        order_fingerprint,
+    )
+    from django_strawberry_framework.optimizer.walker import _plan_connection_relation
+
+    registry.clear()
+    try:
+        meta: dict[str, object] = {"model": Category, "fields": ("id", "name")}
+        if keyset:
+            meta.update(cursor_field=("id",), interfaces=(relay.Node,))
+        type("WalkerGateCategoryType", (DjangoType,), {"Meta": type("Meta", (), meta)})
+        finalize_django_types()
+        minus_id = ("-id",)
+        after = encode_keyset_cursor(
+            cursor_columns_for(Category, minus_id),
+            Category(pk=7),
+            fingerprint=order_fingerprint(minus_id),
+        )
+        plan = OptimizationPlan()
+        _plan_connection_relation(
+            _conn_sel(
+                "categoryConnection",
+                node_selections=[_sel("id")],
+                arguments={"first": 1, "after": after},
+            ),
+            None,
+            relation_field_name="category",
+            field_map={"category": FieldMeta.from_django_field(Item._meta.get_field("category"))},
+            plan=plan,
+            prefix="",
+            info=_fake_info(),
+            runtime_prefixes=((),),
+            type_cls=None,
+            model=Item,
+        )
+        assert not plan.prefetch_related
+        assert list(plan.planned_resolver_keys) == ["category@categoryConnection"]
+    finally:
+        registry.clear()
+
+
+@pytest.mark.parametrize("divergent", [False, True], ids=["shared", "divergent"])
+def test_record_accounted_keys_with_no_keys_records_nothing(divergent: bool):
+    """An empty key list records no identity, even under the shared-window scheme."""
+    from django_strawberry_framework.optimizer.nested_planner import _record_accounted_keys
+
+    plan = OptimizationPlan()
+    _record_accounted_keys(
+        plan,
+        [],
+        divergent=divergent,
+        runtime_paths=(("objs", "booksConnection"),),
+        resolver_identities=("GenreType.books@objs.booksConnection",),
+    )
+    assert list(plan.planned_resolver_keys) == []
+
+
 def test_relation_connections_slot_recorded():
     """The synthesis records ``{generated: relation_field}`` for attached siblings only."""
     registry.clear()

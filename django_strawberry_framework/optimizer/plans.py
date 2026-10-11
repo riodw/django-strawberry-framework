@@ -37,15 +37,23 @@ from dataclasses import dataclass, field, fields, replace
 from typing import TYPE_CHECKING, ClassVar, TypeVar, cast
 
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Count, OrderBy, Prefetch, Q, Value, Window
+from django.db.models import Count, F, OrderBy, Prefetch, Q, Value, Window
 from django.db.models.functions import RowNumber
 from typing_extensions import override
 
 from ..exceptions import OptimizerError
+from ..keyset import (
+    CursorColumn,
+    CursorState,
+    _is_supported_cursor_field,
+    keyset_contract_error,
+    order_fingerprint,
+)
 from ..utils.connections import assert_window_fetch_mode, window_range_plan
 from ..utils.querysets import applied_order
-from ..utils.relations import instance_accessor
+from ..utils.relations import instance_accessor, relation_kind
 from .field_meta import FieldMeta
+from .predicates import visible_value_path
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -53,12 +61,13 @@ if TYPE_CHECKING:
 
     from django.db import models
     from django.db.models import QuerySet
-    from django.db.models.expressions import Combinable, Expression, F
+    from django.db.models.expressions import Combinable, Expression
     from django.db.models.options import Options
     from django.db.models.sql.query import Query
 
     from ..keyset import KeysetSeek
     from ..utils.connections import WindowRangePlan
+    from ..utils.typing import ConcreteField, ModelField
 
     #: One ``QuerySet.prefetch_related`` lookup: a plain lookup path or a ``Prefetch``.
     PrefetchLookup: TypeAlias = str | Prefetch[str]
@@ -233,6 +242,23 @@ class OptimizationPlan:
     must leave the published strictness / elision sentinels, or nested N+1s
     under the dropped subtree are masked. Excluded from ``is_empty``.
     """
+    window_cursor_states: dict[str, CursorState] = field(default_factory=dict)
+    """Per planned keyset window, the cursor vocabulary it was built under.
+
+    Keyed by the window's branch-sensitive resolver keys (``resolver_key``,
+    the vocabulary of ``planned_resolver_keys``), so one relation name at
+    two depths or under two root fields keeps one vocabulary per window.
+    Written by ``nested_planner.py::plan_connection_relation`` for every
+    keyset window it plans: the ``effective_cursor_state`` of the window's
+    order, which the window's seek and ORDER BY already ran under. The
+    extension publishes it to the execution frame
+    (``_context.py::publish_window_cursor_states``) beside the planned
+    resolver keys, and the relation-connection resolver reads it back under
+    its own resolver key and hands it to ``connection.py::_consume_window``
+    so the page's cursors are minted under the same vocabulary. Resolver
+    metadata (merged like ``planned_resolver_keys``), excluded from
+    ``is_empty``.
+    """
 
     _FULL_MERGE_FIELDS: ClassVar[frozenset[str]] = frozenset(
         {
@@ -244,7 +270,12 @@ class OptimizationPlan:
         },
     )
     _METADATA_MERGE_FIELDS: ClassVar[frozenset[str]] = frozenset(
-        {"fk_id_elisions", "planned_resolver_keys", "cacheable"},
+        {
+            "fk_id_elisions",
+            "planned_resolver_keys",
+            "cacheable",
+            "window_cursor_states",
+        },
     )
     _DERIVED_FINALIZED_FIELDS: ClassVar[frozenset[str]] = frozenset(
         {"finalized_fk_id_elisions", "finalized_planned_resolver_keys", "finalized_lookup_paths"},
@@ -399,6 +430,7 @@ class OptimizationPlan:
             cast("MutableSequence[str]", self.planned_resolver_keys),
             other.planned_resolver_keys,
         )
+        self.window_cursor_states.update(other.window_cursor_states)
         if not other.cacheable:
             self.cacheable = False
 
@@ -1136,9 +1168,11 @@ def effective_connection_order(
     gave ``deterministic_order`` its one source):
 
     - a keyset target's declared ``Meta.cursor_field`` IS the connection
-      default order when no explicit ``orderBy:`` won (finalization validates
-      it ends in a unique column, so ``deterministic_order`` would return it
-      unchanged);
+      default order when nothing else ordered ``query`` - no explicit
+      ``orderBy:``, no target ``get_queryset`` / manager ``order_by``
+      (finalization validates it ends in a unique column, so
+      ``deterministic_order`` would return it unchanged); the cursor
+      vocabulary of whatever order wins is ``effective_cursor_state``'s;
     - otherwise the effective ordering is the one Django compiles for ``query``
       (``utils/querysets.py::applied_order``: an explicit ``orderBy:``, else the
       model's ``Meta.ordering`` while default ordering stands), made total by
@@ -1169,6 +1203,175 @@ def deterministic_order(
     if ends_in_unique_column(effective, model):
         return effective
     return (*effective, model._meta.pk.attname)
+
+
+def _keyset_order_ref(entry: object) -> tuple[str, str, bool] | None:
+    """Parse one effective-order entry into ``(canonical ref, name, descending)``.
+
+    Accepts the string and plain-``OrderBy``/``F`` shapes
+    ``order_entry_name_and_direction`` parses; rejects (``None``) entries a
+    value cursor cannot anchor: unresolvable expressions (aggregates,
+    transforms) and explicit ``nulls_first`` / ``nulls_last`` positioning
+    (the nullable domain the v1 column contract excludes --
+    ``order_entry_has_explicit_nulls``).
+    """
+    try:
+        if order_entry_has_explicit_nulls(entry):
+            return None
+        parsed = order_entry_name_and_direction(entry)
+    except (
+        TypeError,
+        ValueError,
+        AttributeError,
+        KeyError,
+        IndexError,
+    ):
+        return None
+    if parsed is None:
+        return None
+    name, descending = parsed
+    return (f"-{name}" if descending else name), name, descending
+
+
+def _resolve_order_path_field(model: type[models.Model], path: str) -> ConcreteField | None:
+    """Resolve a (possibly ``__``-traversing) order path to its terminal field.
+
+    Returns ``None`` when any segment fails to resolve, an intermediate
+    relation is nullable / reverse / multi-valued, or the terminal is not a
+    concrete non-relation column. A non-null terminal behind an optional join
+    still yields NULL cursor values, and a to-many join duplicates source rows.
+    """
+    current: type[models.Model] | None = model
+    field: ModelField | None = None
+    segments = path.split("__")
+    for index, segment in enumerate(segments):
+        if current is None:
+            return None
+        resolved_segment = current._meta.pk.name if segment == "pk" else segment
+        try:
+            field = current._meta.get_field(resolved_segment)
+        except FieldDoesNotExist:
+            return None
+        if index < len(segments) - 1:
+            if not getattr(field, "is_relation", False):
+                return None
+            if relation_kind(field) != "forward_single" or getattr(field, "null", False):
+                return None
+        current = getattr(field, "related_model", None)
+    if field is None or getattr(field, "is_relation", False):
+        return None
+    if not getattr(field, "concrete", False):
+        return None
+    # Every ``ForeignObjectRel`` is a relation, which the ``is_relation`` gate refused.
+    return cast("ConcreteField", field)
+
+
+def effective_cursor_state(
+    state: CursorState,
+    effective: Sequence[object],
+) -> tuple[CursorState, dict[str, F]]:
+    """Resolve the cursor vocabulary a keyset page mints and seeks under.
+
+    The ONE derivation behind every keyset page - the root slicer
+    (``connection.py::_keyset_order_state``), the per-parent pipeline it also
+    serves, and the plan-time nested window
+    (``nested_planner.py::plan_connection_relation``): the same effective order
+    that the page's ``ORDER BY`` (and a window's row numbering) runs under
+    also names the cursor columns, the seek direction and the fingerprint
+    embedded in every cursor, so cursors over the same rows are byte-identical
+    across those paths by construction and a cursor replayed on a page that
+    orders differently is rejected at decode (not seeked wrongly).
+
+    The default-ordered page (``effective`` empty or equal to the declared
+    ``Meta.cursor_field``) is ``state`` itself. Any other effective order - a
+    root ``orderBy:``, a target ``get_queryset`` or manager ``order_by``
+    (``effective_connection_order``) - derives per-entry columns: each entry
+    must map to a non-nullable concrete column (local or ``__``-related; a
+    related value is read through the returned annotation so end cursors can
+    be minted without per-row traversal), and the fingerprint pins THIS
+    order. Entries a value cursor cannot anchor (aggregate aliases,
+    expressions, explicit NULLS positioning, nullable columns, backend-specific
+    JSON ordering) raise a ``GraphQLError`` naming the keyset boundary rather
+    than paginating wrongly. A related value an ``OrderSet`` reads through a
+    relation whose type hides rows (``optimizer/predicates.py::visible_value``)
+    is ``NULL`` for a hidden related row, so it is refused as nullable.
+
+    Returns ``(state, annotations)``: the resolved vocabulary and the
+    ``alias -> F(path)`` annotations the caller applies to the page queryset
+    for the related-path entries (empty for a local-only order).
+    """
+    effective = tuple(effective)
+    if not effective or effective == state.cursor_field:
+        return state, {}
+    model = state.definition.model
+    refs: list[str] = []
+    columns: list[CursorColumn] = []
+    annotations: dict[str, F] = {}
+    for index, entry in enumerate(effective):
+        scoped_path = visible_value_path(entry)
+        if scoped_path is not None:
+            raise keyset_contract_error(
+                f"require non-nullable ordering columns; '{scoped_path}' is nullable: it "
+                "is read through a relation whose type hides rows, and a hidden related "
+                "row orders as missing. Order by a non-nullable column or paginate under "
+                "the default order.",
+            )
+        parsed = _keyset_order_ref(entry)
+        field = None if parsed is None else _resolve_order_path_field(model, parsed[1])
+        if parsed is None or field is None:
+            raise keyset_contract_error(
+                "require every ordering entry to be a database column; the "
+                "requested order cannot anchor stable cursors. Remove the "
+                "unsupported orderBy entry or paginate under the default order.",
+            )
+        ref, name, descending = parsed
+        if getattr(field, "null", False):
+            raise keyset_contract_error(
+                f"require non-nullable ordering columns; '{name}' is nullable. "
+                "Order by a non-nullable column or paginate under the default "
+                "order.",
+            )
+        if not _is_supported_cursor_field(field):
+            raise keyset_contract_error(
+                f"require portable ordering semantics; '{name}' is a JSONField, "
+                "whose ordering differs between database backends. Order by a "
+                "scalar column or paginate under the default order.",
+            )
+        if "__" in name:
+            value_source = f"_dst_cursor_value_{index}"
+            annotations[value_source] = F(name)
+        else:
+            value_source = field.attname
+        refs.append(ref)
+        columns.append(
+            CursorColumn(
+                order_ref=ref,
+                name=name,
+                descending=descending,
+                field=field,
+                value_source=value_source,
+            ),
+        )
+    resolved = CursorState(
+        definition=state.definition,
+        cursor_field=tuple(refs),
+        columns=tuple(columns),
+        fingerprint=order_fingerprint(tuple(refs)),
+    )
+    return resolved, annotations
+
+
+def local_cursor_attnames(state: CursorState) -> tuple[str, ...]:
+    """The attnames of ``state``'s LOCAL cursor columns (the ones a mint reads off the row).
+
+    A related-path column reads its annotation instead, so it is excluded; the
+    callers extend the page queryset's ``.only()`` projection with the result.
+    """
+    return tuple(
+        column.field.attname
+        for column in state.columns
+        if column.value_source == column.field.attname
+    )
 
 
 def apply_window_pagination(

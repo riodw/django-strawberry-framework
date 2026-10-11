@@ -22,12 +22,27 @@ newest-first mixed-direction shape) and ``PeriodicalType.issuesConnection``
 - cursors are permission-aware by construction: a staff-minted cursor
   replays for an anonymous viewer over only the rows that viewer can see;
 - the nested window itself is scoped by the target hook the plan applied, so a
-  keyset page is partitioned over the viewer's rows and counted on them.
+  keyset page is partitioned over the viewer's rows and counted on them;
+- a target ``get_queryset`` ORDER is the connection's effective order: the
+  nested window (reverse FK and M2M, batched or single-parent) orders, seeks
+  and mints under that order's own cursor vocabulary, so page 2 serves every
+  remaining row once, ``totalCount`` stays pre-seek, and one row's cursor is
+  byte-identical from the root connection, the planned window and the
+  per-parent pipeline (sync and async); one relation name windowed twice in
+  an operation (``children`` under two root fields) keeps each window's own
+  vocabulary; an order no cursor can anchor is the same keyset error nested
+  as at the root, ``strictness="raise"`` included, and a malformed ``after:``
+  on a relation the planner refuses stays the cursor error under
+  ``strictness="raise"``.
 
 Resolver-contract refusals (a list source, an already-sliced QuerySet) and the
 async slicer colour (``acount``, async iteration, deferred cursor columns) ride
 a test-local holder: ``/graphql-test/`` (sync ``DjangoGraphQLView``) and
 ``/graphql-async/`` (``AsyncDjangoGraphQLView``) over shipped ``IssueType``.
+The hook-order rows mount test-local ``Issue`` / ``Book`` children
+(``cursor_field = ("id",)`` plus an ordering ``get_queryset``) under
+``Periodical`` / ``Genre`` parents on the same holder, and the one-name rows mount ``CirculationDesk`` /
+``ScalarSpecimen`` ``children`` the same way.
 Async rows are exempt from ``graphql_client.py`` (sync-only) and use
 ``AsyncTestClient`` with ``django_db(transaction=True)``.
 
@@ -45,6 +60,9 @@ from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import connection
+from django.db.models import QuerySet
+from django.db.models.expressions import Combinable
+from django.db.models.functions import Lower
 from django.http import HttpRequest
 from django.http.response import HttpResponseBase
 from django.test import override_settings
@@ -54,9 +72,17 @@ from graphql_client import JSONObject
 from graphql_client import assert_graphql_success as _assert_graphql_success
 from graphql_client import graphql_payload as _graphql_payload
 from graphql_client import post_graphql as _post_graphql
+from strategy_schemas import make_django_type
 from strawberry.relay.utils import from_base64, to_base64
 
-from django_strawberry_framework import DjangoConnectionField, strawberry_config
+from django_strawberry_framework import (
+    DjangoConnectionField,
+    DjangoType,
+    finalize_django_types,
+    strawberry_config,
+)
+from django_strawberry_framework.optimizer import DjangoOptimizerExtension
+from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing import AsyncTestClient, TestClient
 from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
 
@@ -1094,3 +1120,678 @@ async def test_async_keyset_deferred_cursor_column_is_loaded():
     assert payload.get("errors") is None, payload
     assert len(payload["data"]["issues"]["edges"]) == 1
     assert payload["data"]["issues"]["edges"][0]["cursor"]
+
+
+# A target ``get_queryset`` that orders the child queryset makes THAT order the
+# connection's effective order, ahead of the declared ``cursor_field``. The rows
+# below mount a test-local keyset child (``cursor_field = ("id",)``) whose hook
+# orders by ``-id`` (a unique column) or ``title`` (non-unique: the pk tiebreak
+# decides between the two ``x`` rows), under a reverse-FK parent
+# (``Periodical.issues``) and an M2M parent (``Genre.books``), on the
+# ``/graphql-test/`` holder.
+
+#: ``(child model, parent model, relation, label field)`` per relation shape.
+_HOOK_SHAPES = {
+    "fk": (
+        models.Issue,
+        models.Periodical,
+        "issues",
+        "number",
+    ),
+    "m2m": (
+        models.Book,
+        models.Genre,
+        "books",
+        "subtitle",
+    ),
+}
+
+_HOOK_ORDERS = {"-id": ("-id",), "title": ("title",)}
+
+#: A hook order through a required forward FK: its cursor value rides an annotation.
+_RELATED_HOOK_ORDERS = {"fk": ("periodical__name", "-id"), "m2m": ("shelf__code", "-id")}
+
+_INVALID_AFTER = "Argument 'after' contains an invalid cursor for this connection."
+
+_UNANCHORABLE_ORDER = (
+    "This connection uses keyset cursors (Meta.cursor_field), which require every "
+    "ordering entry to be a database column; the requested order cannot anchor stable "
+    "cursors. Remove the unsupported orderBy entry or paginate under the default order."
+)
+
+
+def _hook_order_schema(
+    shape: str,
+    hook_order: tuple[str | Combinable, ...],
+    *,
+    optimizer: bool = True,
+    strictness: str = "off",
+    distinct: bool = False,
+) -> strawberry.Schema:
+    """Holder schema: ``parents`` (a planned list root) plus a root ``children`` connection.
+
+    The child type declares ``cursor_field = ("id",)`` and a ``get_queryset``
+    ordering by ``hook_order`` (``.distinct()`` too when ``distinct``, which
+    the planner refuses to window).
+    """
+    child_model, parent_model, relation, label = _HOOK_SHAPES[shape]
+
+    def hook(
+        cls: type[DjangoType],
+        queryset: QuerySet[models.Issue | models.Book],
+        info: strawberry.Info[object, object],
+    ) -> QuerySet[models.Issue | models.Book]:
+        ordered = queryset.order_by(*hook_order)
+        return ordered.distinct() if distinct else ordered
+
+    registry.clear()
+    child_type = make_django_type(
+        "HookOrderedChildType",
+        child_model,
+        ("id", label),
+        meta_extra={"cursor_field": ("id",), "connection": {"total_count": True}},
+        namespace_extra={"get_queryset": classmethod(hook)},
+    )
+    parent_type = make_django_type(
+        "HookOrderedParentType",
+        parent_model,
+        ("id", "name", relation),
+        meta_extra={"relation_shapes": {relation: "connection"}},
+    )
+    finalize_django_types()
+
+    async def async_parents(
+        root: object,
+        info: strawberry.Info[object, object],
+    ) -> QuerySet[models.Periodical | models.Genre]:
+        return parent_model.objects.order_by("name")
+
+    @strawberry.type
+    class Query:
+        children = DjangoConnectionField(child_type)
+        # The async engine's planned root: a connection over an ``async def``
+        # resolver (the async rows read ``parentsConnection``).
+        parents_connection = DjangoConnectionField(parent_type, resolver=async_parents)
+
+        @strawberry.field(graphql_type=list[parent_type])
+        def parents(self) -> QuerySet[models.Periodical | models.Genre]:
+            return parent_model.objects.order_by("name")
+
+    extensions = [lambda: DjangoOptimizerExtension(strictness=strictness)] if optimizer else []
+    return strawberry.Schema(query=Query, config=strawberry_config(), extensions=extensions)
+
+
+def _seed_hook_order_rows(shape: str, *, with_b: bool = True) -> None:
+    """Parent ``A``: children labelled 1, 2, 3 titled ``y``, ``x``, ``x`` (in pk order).
+
+    Parent ``B`` (``with_b``) holds one child labelled 1 titled ``a``, created
+    last, so it sorts BEFORE ``A``'s rows under ``title`` and AFTER them under
+    ``-id``: an ``after:`` cursor minted on ``A``'s page leaves ``B`` nothing.
+    """
+    rows = [("A", 1, "y"), ("A", 2, "x"), ("A", 3, "x")]
+    if with_b:
+        rows.append(("B", 1, "a"))
+    names = dict.fromkeys(row[0] for row in rows)
+    if shape == "fk":
+        periodicals = {name: models.Periodical.objects.create(name=name) for name in names}
+        for name, label, title in rows:
+            models.Issue.objects.create(periodical=periodicals[name], number=label, title=title)
+        return
+    genres = {name: models.Genre.objects.create(name=name) for name in names}
+    branch = models.Branch.objects.create(name="Hook Branch")
+    for name, label, title in rows:
+        # ``(shelf, title)`` is unique, so each book gets its own shelf.
+        shelf = models.Shelf.objects.create(code=f"{name}-{label}", branch=branch)
+        book = models.Book.objects.create(title=title, subtitle=str(label), shelf=shelf)
+        book.genres.add(genres[name])
+
+
+def _nested_hook_query(shape: str, *, total_count: bool = False) -> str:
+    _child_model, _parent_model, relation, label = _HOOK_SHAPES[shape]
+    count = "totalCount " if total_count else ""
+    return (
+        "query ($first: Int, $after: String) { parents { name "
+        f"{relation}Connection(first: $first, after: $after) {{ {count}"
+        "pageInfo { hasNextPage endCursor } "
+        f"edges {{ cursor node {{ {label} }} }} }} }} }}"
+    )
+
+
+def _nested_hook_pages(shape: str, payload: JSONObject) -> dict[str, JSONObject]:
+    assert payload.get("errors") is None, payload
+    relation = _HOOK_SHAPES[shape][2]
+    return {
+        parent["name"]: parent[f"{relation}Connection"] for parent in payload["data"]["parents"]
+    }
+
+
+def _labels(shape: str, connection_payload: JSONObject) -> list[str]:
+    label = _HOOK_SHAPES[shape][3]
+    return [str(edge["node"][label]) for edge in connection_payload["edges"]]
+
+
+def _table_statements(captured: CaptureQueriesContext, table: str) -> list[str]:
+    return [q["sql"] for q in captured.captured_queries if f'FROM "{table}"' in q["sql"]]
+
+
+def _child_table(shape: str) -> str:
+    return _HOOK_SHAPES[shape][0]._meta.db_table
+
+
+def _parent_table(shape: str) -> str:
+    return _HOOK_SHAPES[shape][1]._meta.db_table
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("shape", ["fk", "m2m"])
+@pytest.mark.parametrize(
+    ("hook", "page_one", "page_two"),
+    [("-id", ["3", "2"], ["1"]), ("title", ["2", "3"], ["1"])],
+    ids=["unique-column", "pk-tiebreak"],
+)
+def test_nested_keyset_window_pages_under_the_hook_order(
+    shape: str,
+    hook: str,
+    page_one: list[str],
+    page_two: list[str],
+) -> None:
+    """A hook-ordered nested window seeks under the hook order: page 2 serves the rest.
+
+    Page 1's ``endCursor`` replays as ``after:``: ``A``'s rows are served once
+    each across the two pages and ``B``'s only row sits before the cursor
+    position. Each page is one parent statement and ONE child statement for
+    both parents (the batched window, no per-parent fallback).
+    """
+    _seed_hook_order_rows(shape)
+    schema = _hook_order_schema(shape, _HOOK_ORDERS[hook])
+    query = _nested_hook_query(shape)
+    with CaptureQueriesContext(connection) as first_captured:
+        first = _nested_hook_pages(shape, _post_holder(schema, query, variables={"first": 2}))
+    with CaptureQueriesContext(connection) as second_captured:
+        second = _nested_hook_pages(
+            shape,
+            _post_holder(
+                schema,
+                query,
+                variables={"first": 2, "after": first["A"]["pageInfo"]["endCursor"]},
+            ),
+        )
+
+    assert [_labels(shape, first["A"]), _labels(shape, first["B"])] == [page_one, ["1"]]
+    assert [_labels(shape, second["A"]), _labels(shape, second["B"])] == [page_two, []]
+    assert [first["A"]["pageInfo"]["hasNextPage"], second["A"]["pageInfo"]["hasNextPage"]] == [
+        True,
+        False,
+    ]
+    for captured in (first_captured, second_captured):
+        assert len(_table_statements(captured, _parent_table(shape))) == 1, (
+            captured.captured_queries
+        )
+        assert len(_table_statements(captured, _child_table(shape))) == 1, (
+            captured.captured_queries
+        )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("shape", ["fk", "m2m"])
+@pytest.mark.parametrize("hook", ["-id", "title", "related"])
+def test_hook_ordered_cursor_bytes_match_across_root_window_and_per_parent_paths(
+    shape: str,
+    hook: str,
+) -> None:
+    """The same row mints the same cursor bytes from every path, and a root cursor replays.
+
+    One parent, so the root ``children`` connection and the nested connection
+    serve the same three rows: the root slicer, the planned window (optimizer
+    on) and the per-parent pipeline (optimizer off) each mint one cursor per
+    row, and the three maps are equal. The root's first cursor then pages
+    the PLANNED nested window: one child statement serving the remaining rows.
+    The ``related`` order reads its first cursor value through a forward FK,
+    which the window, the seek and the mint carry as an annotation.
+    """
+    _seed_hook_order_rows(shape, with_b=False)
+    hook_order = _RELATED_HOOK_ORDERS[shape] if hook == "related" else _HOOK_ORDERS[hook]
+    relation, label = _HOOK_SHAPES[shape][2], _HOOK_SHAPES[shape][3]
+    query = (
+        f"{{ children(first: 3) {{ edges {{ cursor node {{ {label} }} }} }} "
+        f"parents {{ {relation}Connection(first: 3) {{ edges {{ cursor node {{ {label} }} }} }} }} }}"
+    )
+
+    def cursors(payload: JSONObject) -> tuple[dict[str, str], dict[str, str]]:
+        assert payload.get("errors") is None, payload
+        root = payload["data"]["children"]["edges"]
+        nested = payload["data"]["parents"][0][f"{relation}Connection"]["edges"]
+        return (
+            {str(edge["node"][label]): edge["cursor"] for edge in root},
+            {str(edge["node"][label]): edge["cursor"] for edge in nested},
+        )
+
+    # Each build re-registers the child type, so the per-parent schema is used
+    # up before the planned one is built.
+    root_off, per_parent = cursors(
+        _post_holder(_hook_order_schema(shape, hook_order, optimizer=False), query),
+    )
+    planned_schema = _hook_order_schema(shape, hook_order)
+    root, planned = cursors(_post_holder(planned_schema, query))
+    assert sorted(root) == ["1", "2", "3"]
+    assert root_off == root
+    assert planned == root
+    assert per_parent == root
+
+    first_label = next(iter(root))
+    with CaptureQueriesContext(connection) as captured:
+        replayed = _nested_hook_pages(
+            shape,
+            _post_holder(
+                planned_schema,
+                _nested_hook_query(shape),
+                variables={"first": 3, "after": root[first_label]},
+            ),
+        )
+    assert _labels(shape, replayed["A"]) == [key for key in root if key != first_label]
+    assert len(_table_statements(captured, _child_table(shape))) == 1, captured.captured_queries
+
+
+@pytest.mark.django_db
+def test_hook_ordered_nested_total_count_stays_pre_seek_on_page_two() -> None:
+    """A counted page 2 under the hook order: rows after the cursor, totals of the whole set."""
+    _seed_hook_order_rows("fk")
+    schema = _hook_order_schema("fk", _HOOK_ORDERS["title"])
+    query = _nested_hook_query("fk", total_count=True)
+    first = _nested_hook_pages("fk", _post_holder(schema, query, variables={"first": 2}))
+    with CaptureQueriesContext(connection) as captured:
+        second = _nested_hook_pages(
+            "fk",
+            _post_holder(
+                schema,
+                query,
+                variables={"first": 2, "after": first["A"]["pageInfo"]["endCursor"]},
+            ),
+        )
+    assert [(_labels("fk", second[name]), second[name]["totalCount"]) for name in ("A", "B")] == [
+        (["1"], 3),
+        ([], 1),
+    ]
+    assert len(_table_statements(captured, "library_issue")) == 1, captured.captured_queries
+
+
+@pytest.mark.django_db
+def test_hook_ordered_single_parent_fast_path_pages_on() -> None:
+    """One parent: page 1 rides the single-parent fast path, its cursor seeks page 2 right."""
+    _seed_hook_order_rows("fk", with_b=False)
+    schema = _hook_order_schema("fk", _HOOK_ORDERS["-id"])
+    query = _nested_hook_query("fk")
+    with CaptureQueriesContext(connection) as first_captured:
+        first = _nested_hook_pages("fk", _post_holder(schema, query, variables={"first": 2}))
+    with CaptureQueriesContext(connection) as second_captured:
+        second = _nested_hook_pages(
+            "fk",
+            _post_holder(
+                schema,
+                query,
+                variables={"first": 2, "after": first["A"]["pageInfo"]["endCursor"]},
+            ),
+        )
+    first_sql = _table_statements(first_captured, "library_issue")
+    second_sql = _table_statements(second_captured, "library_issue")
+    assert [_labels("fk", first["A"]), _labels("fk", second["A"])] == [["3", "2"], ["1"]]
+    assert [len(first_sql), len(second_sql)] == [1, 1]
+    # The fast path is the plain ``LIMIT`` re-query; the seek page keeps the window.
+    assert ["OVER (" in first_sql[0], "OVER (" in second_sql[0]] == [False, True]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("optimizer", "strictness"),
+    [(True, "off"), (False, "off"), (True, "raise")],
+    ids=["planned", "unplanned", "strict"],
+)
+@pytest.mark.parametrize("shape", ["fk", "m2m"])
+def test_unanchorable_hook_order_raises_the_root_keyset_error_nested(
+    shape: str,
+    optimizer: bool,
+    strictness: str,
+) -> None:
+    """An expression hook order is refused nested exactly as at the root, on every mount.
+
+    The planner leaves the relation to the per-parent pipeline and records it
+    as accounted for, so even ``strictness="raise"`` surfaces the keyset error,
+    not an N+1 error.
+    """
+    _seed_hook_order_rows(shape, with_b=False)
+    schema = _hook_order_schema(
+        shape,
+        (Lower("title"),),
+        optimizer=optimizer,
+        strictness=strictness,
+    )
+    root = _post_holder(schema, "{ children(first: 1) { edges { cursor } } }")
+    nested = _post_holder(schema, _nested_hook_query(shape), variables={"first": 1})
+    assert [error["message"] for error in root["errors"]] == [_UNANCHORABLE_ORDER]
+    assert [error["message"] for error in nested["errors"]] == [_UNANCHORABLE_ORDER]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("kind", ["garbage", "offset", "tampered"])
+@pytest.mark.parametrize("shape", ["fk", "m2m"])
+def test_malformed_cursor_on_a_refused_keyset_relation_is_the_cursor_error_under_strictness(
+    shape: str,
+    kind: str,
+) -> None:
+    """A relation the planner refuses still reports a malformed ``after:`` as the cursor error.
+
+    The ``.distinct()`` hook makes the child queryset unwindowable, so the
+    relation runs per parent. The planner validated the pagination arguments
+    first and recorded the relation as accounted for, so ``strictness="raise"``
+    does not preempt the pipeline's invalid-cursor error with an N+1 error.
+    """
+    _seed_hook_order_rows(shape, with_b=False)
+    schema = _hook_order_schema(shape, _HOOK_ORDERS["-id"], strictness="raise", distinct=True)
+    minted = _post_holder(schema, "{ children(first: 1) { edges { cursor } } }")
+    after = {
+        "garbage": "not-a-valid-cursor",
+        "offset": to_base64("arrayconnection", 0),
+        "tampered": minted["data"]["children"]["edges"][0]["cursor"][:-8] + "AAAAAAAA",
+    }[kind]
+    payload = _post_holder(
+        schema,
+        _nested_hook_query(shape),
+        variables={"first": 1, "after": after},
+    )
+    assert [error["message"] for error in payload["errors"]] == [_INVALID_AFTER]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("shape", ["fk", "m2m"])
+def test_hook_order_cursor_on_a_refused_keyset_relation_keeps_its_per_parent_page(
+    shape: str,
+) -> None:
+    """A refused relation judges a hook-order cursor under the declared vocabulary.
+
+    The root mints the cursor under the hook's ``-id`` order. The declared
+    ``("id",)`` vocabulary rejects it, which records the relation as accounted
+    for; the ``.distinct()`` hook then makes the planner refuse the relation,
+    and the per-parent pipeline, which pages under the hook order, serves the
+    page with no N+1 error under ``strictness="raise"``.
+    """
+    _seed_hook_order_rows(shape, with_b=False)
+    schema = _hook_order_schema(shape, _HOOK_ORDERS["-id"], strictness="raise", distinct=True)
+    root = _post_holder(schema, "{ children(first: 1) { edges { cursor } } }")
+    after = root["data"]["children"]["edges"][0]["cursor"]
+    page = _nested_hook_pages(
+        shape,
+        _post_holder(schema, _nested_hook_query(shape), variables={"first": 2, "after": after}),
+    )
+    assert _labels(shape, page["A"]) == ["2", "1"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("shape", ["fk", "m2m"])
+def test_cursor_of_another_order_is_the_cursor_error_nested(shape: str) -> None:
+    """An authentic cursor minted under an order the window does not run is refused.
+
+    The cursor carries the ``title`` order's fingerprint; the window pages
+    under the hook's ``-id`` order, so the planner leaves the page to the
+    per-parent pipeline, which rejects it as the root would.
+    """
+    _seed_hook_order_rows(shape, with_b=False)
+    titled = _hook_order_schema(shape, _HOOK_ORDERS["title"])
+    minted = _post_holder(titled, "{ children(first: 1) { edges { cursor } } }")
+    after = minted["data"]["children"]["edges"][0]["cursor"]
+    payload = _post_holder(
+        _hook_order_schema(shape, _HOOK_ORDERS["-id"]),
+        _nested_hook_query(shape),
+        variables={"first": 1, "after": after},
+    )
+    assert [error["message"] for error in payload["errors"]] == [_INVALID_AFTER]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_nested_keyset_window_pages_under_the_hook_order() -> None:
+    """The async twin of the first hook-order row: page 2 serves the rest of ``A``."""
+    await sync_to_async(_seed_hook_order_rows)("fk")
+    schema = await sync_to_async(_hook_order_schema)("fk", _HOOK_ORDERS["-id"])
+    query = (
+        "query ($first: Int, $after: String) { parentsConnection { edges { node { name "
+        "issuesConnection(first: $first, after: $after) { pageInfo { endCursor } "
+        "edges { node { number } } } } } } }"
+    )
+
+    async def pages(variables: dict[str, object]) -> dict[str, JSONObject]:
+        payload = await _post_async_holder(schema, query, variables=variables)
+        assert payload.get("errors") is None, payload
+        return {
+            edge["node"]["name"]: edge["node"]["issuesConnection"]
+            for edge in payload["data"]["parentsConnection"]["edges"]
+        }
+
+    first = await pages({"first": 2})
+    second = await pages({"first": 2, "after": first["A"]["pageInfo"]["endCursor"]})
+    assert [_labels("fk", first["A"]), _labels("fk", first["B"])] == [["3", "2"], ["1"]]
+    assert [_labels("fk", second["A"]), _labels("fk", second["B"])] == [["1"], []]
+
+
+# One relation name, two windows: ``CirculationDesk.children`` (``DeskShift``,
+# hook order ``-id``) and ``ScalarSpecimen.children`` (self-referential, hook
+# order ``label``) in one operation. Each window's vocabulary is published under
+# its own resolver key, so neither page is minted under the other's columns.
+
+_TWIN_CHILDREN_QUERY = """
+query ($first: Int, $desk: String, $specimen: String) {
+  desks { childrenConnection(first: $first, after: $desk) {
+    pageInfo { endCursor } edges { cursor node { name } } } }
+  specimens { childrenConnection(first: $first, after: $specimen) {
+    pageInfo { endCursor } edges { cursor node { label } } } }
+}
+"""
+
+_ASYNC_DESKS_FIELD = """
+  desksConnection { edges { node { childrenConnection(first: $first, after: $desk) {
+    pageInfo { endCursor } edges { node { name } } } } } }
+"""
+
+_ASYNC_SPECIMENS_FIELD = """
+  specimensConnection { edges { node { childrenConnection(first: $first, after: $specimen) {
+    pageInfo { endCursor } edges { node { label } } } } } }
+"""
+
+
+def _twin_children_schema(*, optimizer: bool = True) -> strawberry.Schema:
+    """Holder schema whose two root fields each window a ``children`` relation."""
+    from apps.scalars.models import ScalarSpecimen
+
+    def shifts_newest_first(
+        cls: type[DjangoType],
+        queryset: QuerySet[models.DeskShift],
+        info: strawberry.Info[object, object],
+    ) -> QuerySet[models.DeskShift]:
+        return queryset.order_by("-id")
+
+    def specimens_by_label(
+        cls: type[DjangoType],
+        queryset: QuerySet[ScalarSpecimen],
+        info: strawberry.Info[object, object],
+    ) -> QuerySet[ScalarSpecimen]:
+        return queryset.order_by("label")
+
+    registry.clear()
+    make_django_type(
+        "TwinShiftType",
+        models.DeskShift,
+        ("id", "name"),
+        meta_extra={"cursor_field": ("id",)},
+        namespace_extra={"get_queryset": classmethod(shifts_newest_first)},
+    )
+    desk_type = make_django_type(
+        "TwinDeskType",
+        models.CirculationDesk,
+        ("id", "name", "children"),
+        meta_extra={"relation_shapes": {"children": "connection"}},
+    )
+    specimen_type = make_django_type(
+        "TwinSpecimenType",
+        ScalarSpecimen,
+        ("id", "label", "children"),
+        meta_extra={"cursor_field": ("id",), "relation_shapes": {"children": "connection"}},
+        namespace_extra={"get_queryset": classmethod(specimens_by_label)},
+    )
+    finalize_django_types()
+
+    async def async_desks(
+        root: object,
+        info: strawberry.Info[object, object],
+    ) -> QuerySet[models.CirculationDesk]:
+        return models.CirculationDesk.objects.all()
+
+    async def async_specimens(
+        root: object,
+        info: strawberry.Info[object, object],
+    ) -> QuerySet[ScalarSpecimen]:
+        return ScalarSpecimen.objects.filter(parent__isnull=True)
+
+    @strawberry.type
+    class Query:
+        desks_connection = DjangoConnectionField(desk_type, resolver=async_desks)
+        specimens_connection = DjangoConnectionField(specimen_type, resolver=async_specimens)
+
+        @strawberry.field(graphql_type=list[desk_type])
+        def desks(self) -> QuerySet[models.CirculationDesk]:
+            return models.CirculationDesk.objects.all()
+
+        @strawberry.field(graphql_type=list[specimen_type])
+        def specimens(self) -> QuerySet[ScalarSpecimen]:
+            return ScalarSpecimen.objects.filter(parent__isnull=True)
+
+    extensions = [lambda: DjangoOptimizerExtension()] if optimizer else []
+    return strawberry.Schema(query=Query, config=strawberry_config(), extensions=extensions)
+
+
+def _seed_twin_children() -> None:
+    """One desk with shifts s1, s2, s3 and one specimen with children c-b, c-c, c-a (pk order)."""
+    import datetime
+    import uuid
+
+    from apps.scalars.models import ScalarSpecimen
+
+    branch = models.Branch.objects.create(name="Twin Branch")
+    shelf = models.Shelf.objects.create(code="T-1", branch=branch)
+    desk = models.CirculationDesk.objects.create(name="Twin Desk", branch=branch, shelf=shelf)
+    for name in ("s1", "s2", "s3"):
+        models.DeskShift.objects.create(name=name, desk=desk)
+    stamp = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+    parent = None
+    for label in (
+        "root",
+        "c-b",
+        "c-c",
+        "c-a",
+    ):
+        specimen = ScalarSpecimen.objects.create(
+            label=label,
+            occurred_on=stamp.date(),
+            occurred_at=stamp,
+            occurred_time=stamp.time(),
+            external_id=uuid.uuid4(),
+            parent=parent,
+        )
+        parent = parent or specimen
+
+
+def _twin_pages(payload: JSONObject) -> tuple[JSONObject, JSONObject]:
+    assert payload.get("errors") is None, payload
+    data = payload["data"]
+    return data["desks"][0]["childrenConnection"], data["specimens"][0]["childrenConnection"]
+
+
+def _twin_names(desk_page: JSONObject, specimen_page: JSONObject) -> list[list[str]]:
+    return [
+        [edge["node"]["name"] for edge in desk_page["edges"]],
+        [edge["node"]["label"] for edge in specimen_page["edges"]],
+    ]
+
+
+@pytest.mark.django_db
+def test_one_relation_name_windowed_twice_keeps_each_windows_cursor_vocabulary() -> None:
+    """Both ``childrenConnection`` windows stay batched and mint under their own order.
+
+    Each page is one ``DeskShift`` statement and one specimen-children
+    statement (beside the specimen root); page 1's cursors equal the
+    optimizer-off cursors byte for byte, and each window's ``endCursor`` pages
+    on to the rest of its own rows.
+    """
+    _seed_twin_children()
+    unplanned = _twin_pages(
+        _post_holder(
+            _twin_children_schema(optimizer=False),
+            _TWIN_CHILDREN_QUERY,
+            variables={"first": 2},
+        ),
+    )
+    schema = _twin_children_schema()
+    with CaptureQueriesContext(connection) as first_captured:
+        first = _twin_pages(_post_holder(schema, _TWIN_CHILDREN_QUERY, variables={"first": 2}))
+    with CaptureQueriesContext(connection) as second_captured:
+        second = _twin_pages(
+            _post_holder(
+                schema,
+                _TWIN_CHILDREN_QUERY,
+                variables={
+                    "first": 2,
+                    "desk": first[0]["pageInfo"]["endCursor"],
+                    "specimen": first[1]["pageInfo"]["endCursor"],
+                },
+            ),
+        )
+
+    assert _twin_names(*first) == [["s3", "s2"], ["c-a", "c-b"]]
+    assert _twin_names(*second) == [["s1"], ["c-c"]]
+    assert [[edge["cursor"] for edge in page["edges"]] for page in first] == [
+        [edge["cursor"] for edge in page["edges"]] for page in unplanned
+    ]
+    for captured in (first_captured, second_captured):
+        statements = [
+            len(_table_statements(captured, "library_deskshift")),
+            len(_table_statements(captured, "scalars_scalarspecimen")),
+        ]
+        assert statements == [1, 2], captured.captured_queries
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("desks_first", [True, False], ids=["desks-first", "specimens-first"])
+async def test_async_one_relation_name_windowed_twice_keeps_each_windows_cursor_vocabulary(
+    desks_first: bool,
+) -> None:
+    """The async twin: two concurrently planned root fields, each window paged by its own cursor.
+
+    The async engine plans both root fields before either one's rows resolve,
+    so whichever field is planned first would mint under the other's
+    vocabulary if the two windows shared one key.
+    """
+    await sync_to_async(_seed_twin_children)()
+    schema = await sync_to_async(_twin_children_schema)()
+    fields = (
+        (_ASYNC_DESKS_FIELD, _ASYNC_SPECIMENS_FIELD)
+        if desks_first
+        else (_ASYNC_SPECIMENS_FIELD, _ASYNC_DESKS_FIELD)
+    )
+    query = "query ($first: Int, $desk: String, $specimen: String) {" + "".join(fields) + "}"
+
+    async def pages(variables: dict[str, object]) -> tuple[JSONObject, JSONObject]:
+        payload = await _post_async_holder(schema, query, variables=variables)
+        assert payload.get("errors") is None, payload
+        data = payload["data"]
+        return (
+            data["desksConnection"]["edges"][0]["node"]["childrenConnection"],
+            data["specimensConnection"]["edges"][0]["node"]["childrenConnection"],
+        )
+
+    first = await pages({"first": 2})
+    second = await pages(
+        {
+            "first": 2,
+            "desk": first[0]["pageInfo"]["endCursor"],
+            "specimen": first[1]["pageInfo"]["endCursor"],
+        },
+    )
+    assert _twin_names(*first) == [["s3", "s2"], ["c-a", "c-b"]]
+    assert _twin_names(*second) == [["s1"], ["c-c"]]

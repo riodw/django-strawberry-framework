@@ -11,9 +11,14 @@ from types import SimpleNamespace
 
 import pytest
 from apps.products.models import Category, Entry, Item, Property
-from django.db.models import FilteredRelation, Model, OrderBy, Prefetch, Q, QuerySet
+from django.db.models import F, FilteredRelation, Model, OrderBy, Prefetch, Q, QuerySet
 
 from django_strawberry_framework.exceptions import OptimizerError
+from django_strawberry_framework.keyset import (
+    CursorState,
+    declared_cursor_state_for_definition,
+    order_fingerprint,
+)
 from django_strawberry_framework.optimizer.plans import (
     _MAX_PATH_DEPTH,
     WINDOW_ROW_NUMBER,
@@ -29,7 +34,9 @@ from django_strawberry_framework.optimizer.plans import (
     deterministic_order,
     diff_plan_for_queryset,
     effective_connection_order,
+    effective_cursor_state,
     ends_in_unique_column,
+    local_cursor_attnames,
     lookup_paths,
     merged_projection,
     order_entry_has_explicit_nulls,
@@ -39,6 +46,7 @@ from django_strawberry_framework.optimizer.plans import (
 from django_strawberry_framework.utils._queryset_private import (
     queryset_prefetch_lookups,
 )
+from tests._definition import make_definition
 
 
 class TestOptimizationPlanIsEmpty:
@@ -1184,6 +1192,57 @@ class TestEffectiveConnectionOrder:
         query = Status.objects.order_by().query
         assert query.default_ordering is False
         assert effective_connection_order(None, query, Status) == ("id",)
+
+
+def _issue_cursor_state() -> CursorState:
+    """The declared ``("-number", "id")`` vocabulary over the library ``Issue`` model."""
+    from apps.library.models import Issue
+
+    state = declared_cursor_state_for_definition(
+        make_definition(Issue, cursor_field=("-number", "id")),
+    )
+    assert state is not None
+    return state
+
+
+class TestEffectiveCursorState:
+    """The one derivation of a keyset page's cursor vocabulary from its effective order."""
+
+    @pytest.mark.parametrize("effective", [(), ("-number", "id")], ids=["unordered", "declared"])
+    def test_the_declared_order_is_the_declared_state_itself(self, effective: tuple[str, ...]):
+        """The planner reads ``is`` as "decode under the declared vocabulary already done"."""
+        state = _issue_cursor_state()
+        assert effective_cursor_state(state, effective) == (state, {})
+        assert effective_cursor_state(state, effective)[0] is state
+
+    def test_another_order_derives_its_own_columns_fingerprint_and_annotations(self):
+        state = _issue_cursor_state()
+        derived, annotations = effective_cursor_state(state, ("periodical__name", "-id"))
+        assert derived.definition is state.definition
+        assert derived.cursor_field == ("periodical__name", "-id")
+        assert derived.fingerprint == order_fingerprint(("periodical__name", "-id"))
+        assert [(c.name, c.descending, c.value_source) for c in derived.columns] == [
+            ("periodical__name", False, "_dst_cursor_value_0"),
+            ("id", True, "id"),
+        ]
+        assert annotations == {"_dst_cursor_value_0": F("periodical__name")}
+        # Only the local column is read off the row; the related one rides its annotation.
+        assert local_cursor_attnames(derived) == ("id",)
+        assert local_cursor_attnames(state) == ("number", "id")
+
+
+def test_metadata_merge_merges_the_window_vocabularies_by_resolver_key():
+    """Each window keeps its own vocabulary under its own resolver key."""
+    state = _issue_cursor_state()
+    derived, _annotations = effective_cursor_state(state, ("-id",))
+    target = OptimizationPlan(window_cursor_states={"Root.kids@roots.kids": state})
+    target.merge_metadata_from(
+        OptimizationPlan(window_cursor_states={"Kid.kids@roots.kids.edges.node.kids": derived}),
+    )
+    assert target.window_cursor_states == {
+        "Root.kids@roots.kids": state,
+        "Kid.kids@roots.kids.edges.node.kids": derived,
+    }
 
 
 def _nulls_slots(entry: OrderBy) -> tuple[bool | None, bool | None]:

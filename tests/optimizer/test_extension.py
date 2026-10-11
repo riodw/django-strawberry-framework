@@ -3652,9 +3652,11 @@ def test_optimizer_context_all_exports():
         "operation_publishes_to_context",
         "optimizer_value",
         "publish_scoped_relations",
+        "publish_window_cursor_states",
         "relation_is_optimizer_scoped",
         "stash_for_optimizer",
         "stash_on_context",
+        "window_cursor_state",
     }
     assert set(ctx_mod.__all__) == expected
     for name in expected:
@@ -3688,6 +3690,42 @@ def test_publish_scoped_relations_handles_empty_and_generator_keys_when_active_a
         assert not relation_is_optimizer_scoped("unplanned@Type")
     finally:
         end_execution_frame(frame)
+
+
+def test_window_cursor_states_publish_read_and_clear_with_the_frame():
+    """The frame carries each window's vocabulary by resolver key, for this execution only."""
+    from apps.library.models import Issue
+
+    from django_strawberry_framework.keyset import declared_cursor_state_for_definition
+    from django_strawberry_framework.optimizer._context import (
+        begin_execution_frame,
+        end_execution_frame,
+        publish_window_cursor_states,
+        window_cursor_state,
+    )
+    from tests._definition import make_definition
+
+    declared = declared_cursor_state_for_definition(make_definition(Issue, cursor_field=("id",)))
+    other = declared_cursor_state_for_definition(make_definition(Issue, cursor_field=("-id",)))
+    assert declared is not None
+    assert other is not None
+    # Inactive: nothing to record into and nothing to read.
+    publish_window_cursor_states({"Root.kids@roots.kids": declared})
+    assert window_cursor_state("Root.kids@roots.kids") is None
+
+    scope = begin_execution_frame({}, nested=False)
+    frame = scope.lease.held()
+    assert frame is not None
+    try:
+        publish_window_cursor_states({"Root.kids@roots.kids": declared})
+        publish_window_cursor_states({"Kid.kids@roots.kids.edges.node.kids": other})
+        assert window_cursor_state("Root.kids@roots.kids") is declared
+        assert window_cursor_state("Kid.kids@roots.kids.edges.node.kids") is other
+        assert window_cursor_state("Root.other@roots.other") is None
+    finally:
+        end_execution_frame(scope)
+    assert frame.window_cursor_states == {}
+    assert window_cursor_state("Root.kids@roots.kids") is None
 
 
 def test_relation_is_optimizer_scoped_unhashable_fail_closed():

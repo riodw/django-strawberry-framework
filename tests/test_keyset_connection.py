@@ -21,13 +21,14 @@ This module keeps claims no GraphQL request can express:
   annotation. Nested ``last:`` / ``before:`` over HTTP fall back before a
   wrapper is built
   (``test_nested_keyset_backward_falls_back_per_parent_with_same_cursors``).
-- ``_keyset_order_state`` derivation with hand-built states: column-object
+- ``_keyset_order_state`` derivation (``plans.py::effective_cursor_state``)
+  with hand-built states: column-object
   reuse, and rejection of expression / nulls-positioning / nullable / JSON /
   optional-or-multivalued related orders. ``IssueOrder`` only publishes
   non-null local and required-FK paths, so those error arms are not reachable
   on the shipped schema. Related-path acceptance is live
   (``test_root_keyset_order_by_related_path_seeks_via_annotation``).
-- Pure helpers ``_keyset_order_ref`` and ``_resolve_order_path_field``
+- Pure ``plans.py`` helpers ``_keyset_order_ref`` and ``_resolve_order_path_field``
   (including detached / virtual fields, and the ``LendingDesk.venue_ptr``
   parent link no keyset type orders through).
 - Nested-planner ``_keyset_window_slice_from_arguments`` returning ``None`` /
@@ -57,14 +58,12 @@ from django_strawberry_framework.connection import (
     DjangoConnection,
     _connection_type_for,
     _keyset_connection_context,
-    _keyset_order_ref,
     _keyset_order_state,
     _resolve_from_window,
-    _resolve_order_path_field,
     _WindowedConnectionRows,
 )
 from django_strawberry_framework.keyset import (
-    DeclaredCursorState,
+    CursorState,
     cursor_columns_for,
     declared_cursor_state_for_definition,
     order_fingerprint,
@@ -76,6 +75,8 @@ from django_strawberry_framework.optimizer.nested_planner import (
 from django_strawberry_framework.optimizer.plans import (
     WINDOW_ROW_NUMBER,
     WINDOW_TOTAL_COUNT,
+    _keyset_order_ref,
+    _resolve_order_path_field,
     deferred_loading_of,
 )
 from django_strawberry_framework.orders import Ordering, OrderSet, RelatedOrder
@@ -189,7 +190,11 @@ def test_backward_args_over_a_window_wrapper_fall_back_to_the_keyset_slicer():
     periodical = Periodical.objects.create(name="P")
     for number in (1, 2, 3):
         Issue.objects.create(periodical=periodical, number=number, title=f"i{number}")
-    wrapper = _WindowedConnectionRows(rows=[], fallback=lambda: Issue.objects.all())
+    wrapper = _WindowedConnectionRows(
+        rows=[],
+        fallback=lambda: Issue.objects.all(),
+        keyset_state=_keyset_connection_context(connection_type),
+    )
     # ``edges`` selected so the slicer's edge-resolution gate
     # (``should_resolve_list_connection_edges``) actually slices.
     info = make_info(
@@ -207,6 +212,54 @@ def test_backward_args_over_a_window_wrapper_fall_back_to_the_keyset_slicer():
     assert [node.title for node in nodes if isinstance(node, Issue)] == ["i2", "i1"]
     assert len(nodes) == 2
     assert connection_payload.page_info.has_previous_page is True
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("seek", [False, True], ids=["first-page", "after-page"])
+def test_keyset_window_without_a_published_vocabulary_is_served_per_parent(seek: bool):
+    """A keyset wrapper carrying no planned vocabulary never mints from its rows.
+
+    The window rows (one decoy row here) were ordered and seeked under a
+    vocabulary the resolver cannot see, so the fallback queryset runs through
+    the keyset slicer instead, on a first page and on an ``after:`` page alike,
+    even where the window could serve the forward page.
+    """
+    from django_strawberry_framework.keyset import encode_keyset_cursor
+
+    issue_type = _make_issue_type("KeysetUnpublishedWindowNode")
+    finalize_django_types()
+    connection_type = _issue_connection_of(issue_type)
+    state = _keyset_connection_context(connection_type)
+    assert state is not None
+    periodical = Periodical.objects.create(name="P")
+    newest = None
+    for number in (1, 2, 3):
+        newest = Issue.objects.create(periodical=periodical, number=number, title=f"i{number}")
+    assert newest is not None
+    decoy = Issue(id=99, number=99, title="decoy")
+    vars(decoy).update({WINDOW_ROW_NUMBER: 1, WINDOW_TOTAL_COUNT: 1})
+    wrapper = _WindowedConnectionRows(rows=[decoy], fallback=lambda: Issue.objects.all())
+    info = make_info(
+        field_name="issues",
+        selections="{ edges }",
+        config=StrawberryConfig(relay_max_results=100),
+    )
+    after = (
+        encode_keyset_cursor(state.columns, newest, fingerprint=state.fingerprint)
+        if seek
+        else None
+    )
+    connection_payload = connection_type.resolve_connection(
+        wrapper,
+        info=info,
+        first=2,
+        after=after,
+    )
+    assert isinstance(connection_payload, DjangoConnection)
+    nodes = [edge.node for edge in connection_payload.edges]
+    titles = [node.title for node in nodes if isinstance(node, Issue)]
+    assert titles == (["i2", "i1"] if seek else ["i3", "i2"])
+    assert len(nodes) == 2
 
 
 @pytest.mark.django_db
@@ -246,11 +299,11 @@ def _issue_order_state():
     return state
 
 
-def _state_stub(model: type[Model], cursor_field: tuple[str, ...]) -> DeclaredCursorState:
+def _state_stub(model: type[Model], cursor_field: tuple[str, ...]) -> CursorState:
     """A hand-built declared state over a directly built definition of ``model``."""
     from tests._definition import make_definition
 
-    return DeclaredCursorState(
+    return CursorState(
         definition=make_definition(model, cursor_field=cursor_field),
         cursor_field=cursor_field,
         columns=cursor_columns_for(model, cursor_field),

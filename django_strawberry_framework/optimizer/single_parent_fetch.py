@@ -24,6 +24,12 @@ correctness cliff. The wrapped queryset IS cached inside the ``Prefetch`` (same
 as lateral); only the len==1 decision is fetch-time, so cache hits and misses
 behave identically.
 
+A keyset first page served here is still the planned window's page: its rows
+are fetched under the plan's order (a target ``get_queryset`` / manager order
+included) and minted under the cursor vocabulary the plan derived from that
+order (``plans.py::effective_cursor_state``, read back by
+``connection.py::_consume_window``), so its cursors equal the windowed body's.
+
 Two verified corrections to the original idea:
 
 1. ``node(id:)`` roots do NOT reach the windowed prefetch today -

@@ -265,7 +265,8 @@ class NestedConnectionRequest:
     to_attr: str
     lookup: str
     next_page_probe: bool = False
-    # The decoded ``cursor_field`` value seek (a ``keyset.KeysetSeek``) for a
+    # The decoded value seek (a ``keyset.KeysetSeek``, under the cursor
+    # vocabulary of ``order_by``: ``plans.py::effective_cursor_state``) for a
     # keyset connection resolving ``after:``, or ``None`` (offset windows AND
     # keyset first pages alike). Forward-only by the walker's fallback
     # discipline; ``apply_window_pagination`` enforces that loudly.

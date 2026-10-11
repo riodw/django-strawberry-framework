@@ -633,7 +633,9 @@ its synthesized signature, into both pipelines, and into the resolve-time total 
 (`connection.py::_finalize_queryset`, whose model and `cursor_field` both come from it). The
 keyset vocabulary is fixed at class generation from that definition
 (`keyset.py::declared_cursor_state_for_definition`) rather than derived at first resolve, so the
-cursors a connection mints and the ones it decodes are the ones its class was built with. That
+class carries the default (declared) vocabulary its cursors mint and decode under; a page ordered
+otherwise (an `orderBy:`, a `get_queryset` / manager order) derives its own vocabulary from it
+through `optimizer/plans.py::effective_cursor_state`. That declared
 derivation is definition-keyed and single-sited: the plan-time nested window reaches it through
 the child definition the walker resolved the relation through, so there is no type-keyed way in
 at all. A Phase-2.5 synthesized relation connection takes its target's definition from the

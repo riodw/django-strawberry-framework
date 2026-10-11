@@ -2651,7 +2651,7 @@ def test_window_rows_are_annotated_hostile_key_error_returns_false():
 
 def test_keyset_order_ref_hostile_entry_returns_none():
     """``_keyset_order_ref`` with hostile ``__str__``/attribute access returns ``None`` (not ``ValueError``)."""
-    from django_strawberry_framework.connection import _keyset_order_ref
+    from django_strawberry_framework.optimizer.plans import _keyset_order_ref
 
     class Hostile:
         def __getattr__(self, name: str):

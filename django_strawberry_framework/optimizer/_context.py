@@ -26,12 +26,13 @@ from ..utils.context import clear_context_key, get_context_value, stash_on_conte
 from ..utils.operation_lease import OperationLease
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
     from typing import TypeAlias
 
     from django.db import models
     from strawberry.types.nodes import Selection
 
+    from ..keyset import CursorState
     from ..types.base import DjangoType
     from .extension import DjangoOptimizerExtension
     from .nested_fetch import NestedConnectionStrategy
@@ -76,9 +77,11 @@ __all__ = (
     "operation_publishes_to_context",
     "optimizer_value",
     "publish_scoped_relations",
+    "publish_window_cursor_states",
     "relation_is_optimizer_scoped",
     "stash_for_optimizer",
     "stash_on_context",
+    "window_cursor_state",
 )
 
 DST_OPTIMIZER_PLAN = "dst_optimizer_plan"
@@ -124,6 +127,12 @@ DST_OPTIMIZER_STRICTNESS = "dst_optimizer_strictness"
 #:   a consumer populated with its own ``prefetch_related``. A mutable set
 #:   updated in place, so a nested connection's fallback publish adds to the
 #:   keys rather than replacing them.
+#: - ``window_cursor_states`` records, per planned keyset window's resolver
+#:   key, the cursor vocabulary (``plans.py::effective_cursor_state``) the
+#:   window was ordered, seeked and must be minted under, for the
+#:   relation-connection resolver that hands the window's rows to
+#:   ``resolve_connection``. Published with the plan, like
+#:   ``scoped_relations``, and updated in place for the same reason.
 #: - ``plans`` memoizes plans this execution BUILT, which is the job the
 #:   cross-request plan cache deliberately refuses: an uncacheable plan (one
 #:   baking a request-scoped ``get_queryset`` queryset or a consumer
@@ -184,6 +193,7 @@ class _ExecutionFrame:
         "stashes",
         "strategy",
         "strictness",
+        "window_cursor_states",
     )
 
     def __init__(
@@ -201,6 +211,7 @@ class _ExecutionFrame:
         self.strategy = strategy
         self.strictness = strictness
         self.scoped_relations: set[str] = set()
+        self.window_cursor_states: dict[str, CursorState] = {}
         self.plans: dict[PlanCacheKey, OptimizationPlan] = {}
         self.key_parts: dict[int, CacheKeyParts] = {}
         self.converted: dict[ConvertedMemoKey, list[Selection]] = {}
@@ -219,6 +230,7 @@ class _ExecutionFrame:
         collection still reads; it ends when the runner does.
         """
         self.scoped_relations.clear()
+        self.window_cursor_states.clear()
         self.plans.clear()
         self.key_parts.clear()
         self.converted.clear()
@@ -333,6 +345,22 @@ def publish_scoped_relations(keys: Iterable[str]) -> None:
     frame = _active_frame()
     if frame is not None:
         frame.scoped_relations.update(keys)
+
+
+def publish_window_cursor_states(states: Mapping[str, CursorState]) -> None:
+    """Record each planned keyset window's cursor vocabulary by resolver key (in-place update)."""
+    frame = _active_frame()
+    if frame is not None:
+        frame.window_cursor_states.update(states)
+
+
+def window_cursor_state(key: str) -> CursorState | None:
+    """The cursor vocabulary the keyset window under resolver ``key`` was planned with.
+
+    ``None`` outside an execution and for a key no published plan windowed.
+    """
+    frame = _active_frame()
+    return None if frame is None else frame.window_cursor_states.get(key)
 
 
 def relation_is_optimizer_scoped(key: str) -> bool:

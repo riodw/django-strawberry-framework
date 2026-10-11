@@ -220,7 +220,8 @@ class LateralWindowSpec:
     # window is already the whole-partition scan the count forces, so raw
     # SQL would buy nothing and cost a second dialect of the marker/count
     # arithmetic). The seek's columns are the window's ``order_columns`` in
-    # the same sequence (the ``cursor_field`` IS the order), which
+    # the same sequence (the window's effective order IS the cursor
+    # vocabulary, ``plans.py::effective_cursor_state``), which
     # ``build_lateral_sql`` relies on when rendering the seek.
     keyset_seek: KeysetSeek | None = None
     # A single-table plain-column visibility WHERE (a target type's
@@ -463,8 +464,8 @@ def _keyset_seek_sql(
     Lateral-specific adapter only: prepares values through each cursor
     column's Django field, quotes the child-table column refs, and hands
     the shared ``KeysetSeekPlan`` to ``keyset.keyset_seek_sql``. The seek
-    columns ARE ``spec.order_columns`` (the ``cursor_field`` is the window
-    order), aligned index-for-index with the decoded cursor values -
+    columns ARE ``spec.order_columns`` (the window's effective order is the
+    cursor vocabulary), aligned index-for-index with the decoded cursor values -
     ``_build_lateral_spec`` guarantees the arity.
     """
     # Reached only for a spec that carries a seek.
@@ -1107,10 +1108,10 @@ def _build_lateral_spec(request: NestedConnectionRequest) -> LateralWindowSpec |
         if seek_signature != order_columns or len(order_columns) != len(
             request.keyset_seek.cursor.values,
         ):
-            # The seek rides the order columns index-for-index (the cursor_field
-            # IS the window order); an arity/order mismatch means the deterministic
-            # order drifted from the cursor columns - downgrade rather than
-            # misalign values against raw SQL columns.
+            # The seek rides the order columns index-for-index (the planner
+            # derives both from the window's effective order); an arity/order
+            # mismatch means the two drifted - downgrade rather than misalign
+            # values against raw SQL columns.
             return None
     select_columns = _select_columns(child_queryset, child_meta)
     if select_columns is None:

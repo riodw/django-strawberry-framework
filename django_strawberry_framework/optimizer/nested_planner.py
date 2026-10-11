@@ -24,7 +24,7 @@ from django.db.models.sql.query import Query
 from graphql import GraphQLError
 
 from ..keyset import (
-    DeclaredCursorState,
+    CursorState,
     KeysetSeek,
     declared_cursor_state_for_definition,
     decode_keyset_cursor,
@@ -63,6 +63,8 @@ from .plans import (
     apply_projection,
     deferred_loading_of,
     effective_connection_order,
+    effective_cursor_state,
+    local_cursor_attnames,
     order_entry_has_explicit_nulls,
     order_entry_name_and_direction,
 )
@@ -79,6 +81,7 @@ from .selections import (
 
 if TYPE_CHECKING:
     from collections.abc import MutableSequence
+    from typing import TypeAlias
 
     from django.contrib.postgres.indexes import BTreeIndex
     from django.db.models import QuerySet
@@ -96,6 +99,15 @@ if TYPE_CHECKING:
     from .nested_fetch import NestedConnectionStrategy, StrategySelection
     from .plans import OrderEntry
     from .selections import FieldSelection
+
+    #: One planned window: its response key, bounds, and decoded keyset seek.
+    _KeyedWindow: TypeAlias = tuple[str | None, ConnectionWindowBounds, KeysetSeek | None]
+    #: One ``_divergent_key_windows`` pass: ``(planned, malformed, fallbacks)``.
+    _WindowPass: TypeAlias = tuple[
+        list[_KeyedWindow],
+        list[str | None],
+        list[tuple[str | None, str]],
+    ]
 
 _M = TypeVar("_M", bound=models.Model)
 _RowT = TypeVar("_RowT")
@@ -992,12 +1004,8 @@ def _keyset_window_slice_from_arguments(
 def _divergent_key_windows(
     response_key_arguments: Mapping[str | None, Arguments],
     info: GraphQLResolveInfo | None,
-    keyset_context: DeclaredCursorState | None = None,
-) -> tuple[
-    list[tuple[str | None, ConnectionWindowBounds, KeysetSeek | None]],
-    list[str | None],
-    list[tuple[str | None, str]],
-]:
+    keyset_context: CursorState | None = None,
+) -> _WindowPass:
     """Resolve one window per payload for a nested connection selection.
 
     The arguments-derived window pass for both schemes. The caller supplies
@@ -1023,17 +1031,19 @@ def _divergent_key_windows(
       identity, matching the pre-fold single-window write;
     - otherwise the key's ``ConnectionWindowBounds`` window joins ``planned``.
 
-    ``keyset_context`` routes every key through the keyset window adapter
-    instead (each alias decodes its OWN ``after:`` cursor into its own
-    seek); the entry shape gains that seek (``None`` under the offset
-    vocabulary and for keyset first pages alike).
+    ``keyset_context`` - the cursor vocabulary of the window's effective
+    order (``plans.py::effective_cursor_state``) - routes every key through
+    the keyset window adapter instead (each alias decodes its OWN ``after:``
+    cursor into its own seek under that vocabulary); the entry shape gains
+    that seek (``None`` under the offset vocabulary and for keyset first
+    pages alike).
 
     Returns ``(planned, malformed, fallbacks)``; each fallback carries its
     stable reason for the caller's debug log. Relation-level gates (hint
     SKIP, join windowability, child-queryset safety) stay whole-relation in
     ``plan_connection_relation``.
     """
-    planned: list[tuple[str | None, ConnectionWindowBounds, KeysetSeek | None]] = []
+    planned: list[_KeyedWindow] = []
     malformed: list[str | None] = []
     fallbacks: list[tuple[str | None, str]] = []
     for resp_key, key_arguments in response_key_arguments.items():
@@ -1101,6 +1111,72 @@ def _identities_for_response_keys(
     )
 
 
+def _settle_window_pass(
+    window_pass: _WindowPass,
+    plan: OptimizationPlan,
+    sel: FieldSelection,
+    *,
+    relation_field_name: str,
+    divergent: bool,
+    runtime_paths: tuple[tuple[str, ...], ...],
+    resolver_identities: tuple[str, ...],
+) -> list[_KeyedWindow]:
+    """Log one window pass's fallbacks, record its malformed keys, return its windows.
+
+    Malformed pagination (Decision 4 step f / spec-033 Decision 8) emits NO
+    window so the connection pipeline raises at the field, but RECORDS the
+    identities so strictness does not preempt that error. Per-key under the
+    divergent scheme (that alias's own error locality; siblings plan
+    independently); every identity for the shared window (``None`` is not a
+    runtime_path suffix, so the filter would drop them all).
+    """
+    keyed_windows, malformed_keys, fallback_keys = window_pass
+    for fallback_key, reason in fallback_keys:
+        _log_connection_fallback(
+            relation_field_name,
+            [fallback_key] if fallback_key is not None else _response_keys(sel),
+            reason,
+        )
+    if malformed_keys:
+        _log_connection_fallback(
+            relation_field_name,
+            malformed_keys if divergent else _response_keys(sel),
+            "malformed pagination",
+        )
+        _record_accounted_keys(
+            plan,
+            malformed_keys,
+            divergent=divergent,
+            runtime_paths=runtime_paths,
+            resolver_identities=resolver_identities,
+        )
+    return keyed_windows
+
+
+def _record_accounted_keys(
+    plan: OptimizationPlan,
+    response_keys: list[str | None],
+    *,
+    divergent: bool,
+    runtime_paths: tuple[tuple[str, ...], ...],
+    resolver_identities: tuple[str, ...],
+) -> None:
+    """Record ``response_keys`` as accounted for: the field raises its own error per parent.
+
+    Per-key under the divergent scheme; every identity for the shared window
+    (``None`` is not a runtime_path suffix, so the filter would drop them all).
+    An empty ``response_keys`` records nothing.
+    """
+    if not response_keys:
+        return
+    append_unique_many(
+        cast("MutableSequence[str]", plan.planned_resolver_keys),
+        _identities_for_response_keys(runtime_paths, resolver_identities, response_keys)
+        if divergent
+        else resolver_identities,
+    )
+
+
 def _raw_relation_field(model: type[models.Model], relation_field_name: str) -> ModelField:
     """Return the raw Django relation field for ``relation_field_name`` on ``model``.
 
@@ -1163,13 +1239,14 @@ def plan_connection_relation(
     ``resolve_relation_target`` answers with the child definition beside its
     origin, and that object - never a fresh read of the target class - decides
     the ``get_queryset`` downgrade, supplies the model the child's visibility
-    seal validates against, and fixes the declared cursor vocabulary the
-    windows derive through. A synthesized relation connection's resolver already
-    takes its definition from the registry at finalization; planning the same
-    field at request time now reads the same one answer, so a target whose
-    metadata changed after acceptance cannot answer the plan differently from
-    the resolver - including on the ``has_custom_get_queryset`` verdict that
-    decides whether the child's visibility hook runs before the window is built.
+    seal validates against, and fixes the declared cursor vocabulary each
+    window's effective-order vocabulary derives from. A synthesized relation
+    connection's resolver already takes its definition from the registry at
+    finalization; planning the same field at request time now reads the same
+    one answer, so a target whose metadata changed after acceptance cannot
+    answer the plan differently from the resolver - including on the
+    ``has_custom_get_queryset`` verdict that decides whether the child's
+    visibility hook runs before the window is built.
     """
     plan = OptimizationPlan()
     django_field = field_map.get(relation_field_name)
@@ -1233,9 +1310,10 @@ def plan_connection_relation(
     # Keyset context (the ``cursor_field`` opt-in): when the relation target
     # is keyset-mode, every window below derives through the keyset adapter
     # (value-cursor decode + forward-only bounds) instead of the offset
-    # engine, and the connection order is the DECLARED ``cursor_field``
-    # rather than the child queryset / model ``Meta.ordering`` (the BACKLOG
-    # "enforced matching order" contract - the cursor columns ARE the order).
+    # engine, under the cursor vocabulary of the window's EFFECTIVE order
+    # (step d below) - the declared ``cursor_field`` when nothing else orders
+    # the child queryset, else the order a target ``get_queryset`` / manager
+    # imposed, exactly as the root slicer resolves it.
     keyset_context = declared_cursor_state_for_definition(target_definition)
 
     # (e/f) Slice window(s) from the selection's resolved pagination arguments.
@@ -1256,47 +1334,34 @@ def plan_connection_relation(
         if divergent
         else {None: getattr(sel, "arguments", None) or {}}
     )
-    keyed_windows, malformed_keys, fallback_keys = _divergent_key_windows(
-        response_key_arguments,
-        info,
-        keyset_context,
-    )
-    for fallback_key, reason in fallback_keys:
-        _log_connection_fallback(
-            relation_field_name,
-            [fallback_key] if fallback_key is not None else _response_keys(sel),
-            reason,
-        )
-    if malformed_keys:
-        _log_connection_fallback(
-            relation_field_name,
-            malformed_keys if divergent else _response_keys(sel),
-            "malformed pagination",
-        )
-        # Malformed pagination (Decision 4 step f / spec-033 Decision 8): emit
-        # NO window so the connection pipeline raises at the field, but RECORD
-        # the identities so strictness does not preempt that error. Per-key
-        # under the divergent scheme (that alias's own error locality; siblings
-        # plan independently); every identity for the shared window (``None``
-        # is not a runtime_path suffix, so the filter would drop them all).
-        if divergent:
-            append_unique_many(
-                cast("MutableSequence[str]", plan.planned_resolver_keys),
-                _identities_for_response_keys(
-                    runtime_paths,
-                    resolver_identities,
-                    malformed_keys,
-                ),
-            )
-        else:
-            append_unique_many(
-                cast("MutableSequence[str]", plan.planned_resolver_keys),
-                resolver_identities,
-            )
-    if not keyed_windows:
-        return NestedConnectionPlanResult(plan=plan)
+    argument_pass = _divergent_key_windows(response_key_arguments, info, keyset_context)
 
-    # (g, partition) also pure; classify the join before the child build so an
+    def settle(window_pass: _WindowPass) -> list[_KeyedWindow]:
+        return _settle_window_pass(
+            window_pass,
+            plan,
+            sel,
+            relation_field_name=relation_field_name,
+            divergent=divergent,
+            runtime_paths=runtime_paths,
+            resolver_identities=resolver_identities,
+        )
+
+    # The offset vocabulary is fixed, so its pass settles here. A keyset pass
+    # decodes cursors under the DECLARED vocabulary, which is the window's only
+    # when step (d) finds no other order. With no planned and no malformed key
+    # no vocabulary can change its outcome, so it settles here too and the
+    # child queryset is never built. Otherwise it settles at the first refusal
+    # below (a refused relation is judged under the declared vocabulary), or
+    # after step (d), where a differing effective order re-runs the pass under
+    # ITS vocabulary (``keyed_windows`` stays empty until then).
+    keyed_windows: list[_KeyedWindow] = []
+    if keyset_context is None or not (argument_pass[0] or argument_pass[1]):
+        keyed_windows = settle(argument_pass)
+        if not keyed_windows:
+            return NestedConnectionPlanResult(plan=plan)
+
+    # (g, partition) pure; classify the join before the child build so an
     # unsupported relation kind (single-valued forward, or a shape with no
     # resolvable parent partition) falls back without leaking child metadata.
     # The RAW field (not the ``FieldMeta``) also rides the strategy request:
@@ -1305,6 +1370,8 @@ def plan_connection_relation(
     raw_relation_field = _raw_relation_field(model, relation_field_name)
     join = classify_relation_join(raw_relation_field)
     if not join.windowable:
+        if keyset_context is not None:
+            settle(argument_pass)
         return NestedConnectionPlanResult(plan=plan)
 
     # (a) Unwrap edges { node }; scalar-only selections plan with [] node children.
@@ -1339,6 +1406,8 @@ def plan_connection_relation(
         target_model=getattr(target_definition, "model", None),
     )
     if unwindowable_child_queryset_reason(base_queryset) is not None:
+        if keyset_context is not None:
+            settle(argument_pass)
         return NestedConnectionPlanResult(plan=plan)
 
     # (c) Build the child plan/queryset exactly like the list prefetch path, but
@@ -1385,10 +1454,10 @@ def plan_connection_relation(
     # package's optimizer directives.
 
     # (d) Deterministic total order shared with the resolve-time pipeline. The
-    # precedence ladder - a keyset target's declared ``cursor_field`` when no
-    # explicit order won (the BACKLOG "enforced matching order" contract; a
-    # sidecar-bearing connection is never window-planned, so this branch sees
-    # no user ``orderBy:``), else child-queryset / model ``Meta.ordering``
+    # precedence ladder - a keyset target's declared ``cursor_field`` when
+    # nothing orders the child queryset (a sidecar-bearing connection is never
+    # window-planned, so the only other order here is a target ``get_queryset``
+    # / manager ``order_by``), else child-queryset / model ``Meta.ordering``
     # through ``deterministic_order`` - lives ONCE in
     # ``plans.py::effective_connection_order`` so this plan-time window order
     # and ``connection.py::_finalize_queryset`` cannot drift (the cursor-parity
@@ -1406,6 +1475,57 @@ def plan_connection_relation(
         ),
     )
 
+    # The keyset cursor vocabulary of THAT order (``plans.py::effective_cursor_state``,
+    # the one derivation the root slicer runs): the columns every ``after:``
+    # cursor decodes into and seeks by, and the fingerprint every minted cursor
+    # carries, so a window cursor is byte-identical to the root's and the
+    # per-parent pipeline's for the same row. An order no value cursor can
+    # anchor (an expression, a nullable or hidden-related column) leaves the
+    # relation UNPLANNED: the per-parent pipeline resolves it and raises the
+    # same keyset ``GraphQLError`` at the field the root path would.
+    keyset_window_state: CursorState | None = None
+    if keyset_context is not None:
+        try:
+            keyset_window_state, cursor_annotations = effective_cursor_state(
+                keyset_context,
+                order_by,
+            )
+        except GraphQLError:
+            settle(argument_pass)
+            _log_connection_fallback(
+                relation_field_name,
+                _response_keys(sel),
+                "keyset order cannot anchor cursors",
+            )
+            # Every key this order governs raises that keyset error per parent,
+            # so it is recorded as accounted for (like malformed pagination):
+            # strictness must not preempt the field's own error with an N+1
+            # error. A sidecar key stays strictness-visible: its ``orderBy:`` /
+            # ``filter:`` is the shipped per-parent fallback.
+            sidecar_keys = {
+                key for key, reason in argument_pass[2] if reason == "sidecar arguments"
+            }
+            _record_accounted_keys(
+                plan,
+                [key for key in response_key_arguments if key not in sidecar_keys],
+                divergent=divergent,
+                runtime_paths=runtime_paths,
+                resolver_identities=resolver_identities,
+            )
+            return NestedConnectionPlanResult(plan=plan)
+        if cursor_annotations:
+            child_queryset = child_queryset.annotate(**cursor_annotations)
+        # The declared vocabulary IS the window's (the same object) -> the
+        # argument pass already decoded under it; otherwise re-decode every
+        # key's cursors under the effective order's columns and fingerprint.
+        keyed_windows = settle(
+            argument_pass
+            if keyset_window_state is keyset_context
+            else _divergent_key_windows(response_key_arguments, info, keyset_window_state),
+        )
+        if not keyed_windows:
+            return NestedConnectionPlanResult(plan=plan)
+
     # A scalar-only (pageInfo/totalCount) selection unwrapped to [] node children,
     # so the child plan added no `.only()` projection; restrict it to the minimal
     # pk/connector/order columns now that the deterministic order is known
@@ -1417,15 +1537,16 @@ def plan_connection_relation(
             order_by,
             enable_only=enable_only,
         )
-    elif keyset_context is not None:
+    elif keyset_window_state is not None:
         # Keyset edges mint cursors from the rows' ORDERING-COLUMN VALUES
-        # (not the row-number annotation), so the cursor columns must be
+        # (not the row-number annotation), so the local cursor columns must be
         # loaded on every page row - extend a node-selection ``.only()``
         # projection that did not select them as GraphQL fields (the
-        # scalar-only branch above already carries its order columns).
+        # scalar-only branch above already carries its order columns; a
+        # related-path column rides its annotation instead).
         child_queryset = _extend_only_projection(
             child_queryset,
-            tuple(column.field.attname for column in keyset_context.columns),
+            local_cursor_attnames(keyset_window_state),
         )
 
     # Conditional total count (spec-033 Decision 4) + count-free ``hasNextPage``
@@ -1518,6 +1639,24 @@ def plan_connection_relation(
         if strategy.plan(request, strategy_plan):
             plan.merge_from(strategy_plan)
             planned_keys.append(resp_key)
+            if keyset_window_state is not None:
+                # The vocabulary this window's cursors must be minted under,
+                # published with the plan under each resolver key the window
+                # serves (the same keys ``planned_resolver_keys`` records), so
+                # the relation-connection resolver reads back its own window's
+                # vocabulary however its relation name repeats elsewhere.
+                plan.window_cursor_states.update(
+                    dict.fromkeys(
+                        resolver_identities
+                        if resp_key is None
+                        else _identities_for_response_keys(
+                            runtime_paths,
+                            resolver_identities,
+                            [resp_key],
+                        ),
+                        keyset_window_state,
+                    ),
+                )
             if not advised:
                 # First accepted window: emit the field-static composite-index
                 # advisory exactly once (see the note above the loop).

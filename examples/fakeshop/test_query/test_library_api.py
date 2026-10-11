@@ -3785,6 +3785,101 @@ def test_relay_global_id_filter_multihop_leaf_validates_against_the_terminal_mod
     assert models.Genre._meta.label_lower in message
 
 
+def _relation_pk_global_id_rows() -> tuple[models.Patron, models.MembershipCard]:
+    """Two patrons, each with a card and a profile; returns the first patron and its card."""
+    ada = models.Patron.objects.create(name="Ada")
+    ada_card = models.MembershipCard.objects.create(patron=ada, barcode="ADA-1")
+    models.PatronProfile.objects.create(patron=ada, postal_code="02101")
+    bo = models.Patron.objects.create(name="Bo")
+    models.MembershipCard.objects.create(patron=bo, barcode="BO-1")
+    models.PatronProfile.objects.create(patron=bo, postal_code="02202")
+    return ada, ada_card
+
+
+def _post_relation_pk_filter(schema: strawberry.Schema, input_name: str, wire: str) -> JSONObject:
+    response = _post_holder(
+        schema,
+        f'{{ profiles(filter: {{ {input_name}: {{ exact: "{wire}" }} }}) {{ postalCode }} }}',
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("input_name", ["card", "pkCard"])
+def test_relay_global_id_filter_through_a_relation_primary_key_validates_the_terminal(
+    input_name: str,
+):
+    """A GlobalID leaf whose path starts at a relation primary key validates its terminal model.
+
+    ``PatronProfile``'s primary key is the ``patron`` one-to-one key, so
+    ``patron__card`` and ``pk__card`` walk THROUGH the primary key to
+    ``MembershipCard``. ``filters/base.py::resolve_globalid_target_definition``
+    walks a relation primary key like any relation: a ``library.membershipcard``
+    id selects its profile, a ``library.patron`` id carrying the same pk is a
+    type mismatch, and a well-typed id whose node id is not an integer is the
+    coded ``GLOBALID_INVALID`` rejection rather than a raw Django ``ValueError``.
+    """
+    from django_strawberry_framework.registry import registry
+
+    _ada, ada_card = _relation_pk_global_id_rows()
+    card_label = models.MembershipCard._meta.label_lower
+    right = str(relay.GlobalID(type_name=card_label, node_id=str(ada_card.pk)))
+    wrong = str(
+        relay.GlobalID(type_name=models.Patron._meta.label_lower, node_id=str(ada_card.pk)),
+    )
+    malformed = str(relay.GlobalID(type_name=card_label, node_id="not-an-int"))
+
+    registry.clear()
+    try:
+        schema = _relation_pk_global_id_holder_schema()
+        accepted = _post_relation_pk_filter(schema, input_name, right)
+        rejected = _post_relation_pk_filter(schema, input_name, wrong)
+        invalid = _post_relation_pk_filter(schema, input_name, malformed)
+    finally:
+        registry.clear()
+
+    assert "errors" not in accepted, accepted
+    assert accepted["data"] == {"profiles": [{"postalCode": "02101"}]}
+
+    assert rejected["data"] is None, rejected
+    message = rejected["errors"][0]["message"]
+    assert "GlobalID type mismatch" in message, rejected
+    assert f"expects {card_label} but received {models.Patron._meta.label_lower}" in message
+
+    assert invalid["data"] is None, invalid
+    assert invalid["errors"][0]["extensions"]["code"] == "GLOBALID_INVALID", invalid
+
+
+@pytest.mark.django_db
+def test_relay_global_id_filter_on_a_relation_primary_key_validates_its_target():
+    """The relation primary key's own GlobalID leaf validates the model the key points at.
+
+    ``patron`` is ``PatronProfile``'s primary key AND a relation to ``Patron``,
+    so its Meta.fields ``exact`` leaf carries a ``library.patron`` id, never a
+    ``library.patronprofile`` one.
+    """
+    from django_strawberry_framework.registry import registry
+
+    ada, _ada_card = _relation_pk_global_id_rows()
+    right = str(relay.GlobalID(type_name=models.Patron._meta.label_lower, node_id=str(ada.pk)))
+    profile_label = models.PatronProfile._meta.label_lower
+    wrong = str(relay.GlobalID(type_name=profile_label, node_id=str(ada.pk)))
+
+    registry.clear()
+    try:
+        schema = _relation_pk_global_id_holder_schema()
+        accepted = _post_relation_pk_filter(schema, "patron", right)
+        rejected = _post_relation_pk_filter(schema, "patron", wrong)
+    finally:
+        registry.clear()
+
+    assert "errors" not in accepted, accepted
+    assert accepted["data"] == {"profiles": [{"postalCode": "02101"}]}
+    assert rejected["data"] is None, rejected
+    assert "GlobalID type mismatch" in rejected["errors"][0]["message"], rejected
+
+
 # ---------------------------------------------------------------------------
 # Live HTTP order coverage (spec-028 test plan), plus the row-preserving
 # to-many aggregate cases from ``spec-030-connection_field-0_0_9`` Decision 11
@@ -7100,6 +7195,72 @@ def _relay_relation_isnull_holder_schema():
             queryset = models.Book.objects.order_by("title")
             if filter is not None:
                 queryset = HolderBookIsnullFilter.apply_sync(filter, queryset, info)
+            return queryset
+
+    finalize_django_types()
+    return strawberry.Schema(query=Query, config=strawberry_config())
+
+
+def _relation_pk_global_id_holder_schema():
+    """Holder schema filtering ``PatronProfile`` by GlobalID through its relation primary key.
+
+    ``PatronProfile``'s primary key is the ``patron`` one-to-one key. Shipped
+    ``PatronType`` and ``MembershipCardType`` are not Relay nodes, so no shipped
+    input carries a GlobalID through that key; this holder makes all three Relay
+    nodes and declares the leaves a consumer would: ``patron`` (the key itself,
+    a Meta.fields relation lookup), ``card`` (``patron__card``) and ``pkCard``
+    (``pk__card``, the same hop spelled through the ``pk`` alias).
+    """
+    from strawberry.types import Info
+
+    from django_strawberry_framework import finalize_django_types
+    from django_strawberry_framework.filters import FilterInput, FilterSet, GlobalIDFilter
+    from django_strawberry_framework.registry import registry
+
+    class HolderRelationPkCardType(DjangoType):
+        class Meta:
+            model = models.MembershipCard
+            fields = ("id", "barcode")
+            interfaces = (relay.Node,)
+            name = "HolderRelationPkCardType"
+
+    class HolderRelationPkPatronType(DjangoType):
+        class Meta:
+            model = models.Patron
+            fields = ("id", "name", "card")
+            interfaces = (relay.Node,)
+            name = "HolderRelationPkPatronType"
+
+    assert registry.get(models.MembershipCard) is HolderRelationPkCardType
+    assert registry.get(models.Patron) is HolderRelationPkPatronType
+
+    class HolderRelationPkProfileFilter(FilterSet):
+        card = GlobalIDFilter(field_name="patron__card")
+        pk_card = GlobalIDFilter(field_name="pk__card")
+
+        class Meta:
+            model = models.PatronProfile
+            fields = {"patron": ["exact"]}
+
+    class HolderRelationPkProfileType(DjangoType):
+        class Meta:
+            model = models.PatronProfile
+            fields = ("patron", "postal_code")
+            interfaces = (relay.Node,)
+            filterset_class = HolderRelationPkProfileFilter
+            name = "HolderRelationPkProfileType"
+
+    @strawberry.type
+    class Query:
+        @strawberry.field(graphql_type=list[HolderRelationPkProfileType])
+        def profiles(
+            self,
+            info: Info,
+            filter: FilterInput[HolderRelationPkProfileFilter] | None = None,  # noqa: A002
+        ) -> QuerySet[models.PatronProfile]:
+            queryset = models.PatronProfile.objects.order_by("postal_code")
+            if filter is not None:
+                queryset = HolderRelationPkProfileFilter.apply_sync(filter, queryset, info)
             return queryset
 
     finalize_django_types()

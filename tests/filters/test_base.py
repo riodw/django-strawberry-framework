@@ -923,6 +923,7 @@ def _definition(
     model: type[Model],
     type_name: str,
     strategy: str | None = "model",
+    fields: tuple[str, ...] = ("id",),
 ) -> DjangoTypeDefinition:
     """Declare a real ``DjangoType`` over ``model`` and record its finalization-time strategy.
 
@@ -930,11 +931,12 @@ def _definition(
     here stands in for that step, so each test states the strategy it exercises.
     """
     django_model = model
+    declared_fields = fields
 
     class _Type(DjangoType):
         class Meta:
             model = django_model
-            fields = ("id",)
+            fields = declared_fields
             name = type_name
 
     definition = _Type.__django_strawberry_definition__
@@ -1221,6 +1223,55 @@ def test_resolve_globalid_target_definition_multihop():
     # basedpyright: the non-str field name is the hostile input under test;
     # resolve_globalid_target_definition types the parameter as str | None
     assert resolve_globalid_target_definition(owner, 123) is None  # pyright: ignore[reportArgumentType]
+
+
+@pytest.mark.parametrize(
+    ("owner_model", "field_name", "expected_model"),
+    [
+        # ``PatronProfile.patron`` is the primary key AND a one-to-one relation.
+        (models.PatronProfile, "patron", models.Patron),
+        (models.PatronProfile, "pk", models.Patron),
+        (models.PatronProfile, "patron__id", models.Patron),
+        (models.PatronProfile, "pk__pk", models.Patron),
+        (models.PatronProfile, "patron__card", models.MembershipCard),
+        (models.PatronProfile, "pk__card", models.MembershipCard),
+        (models.PatronProfile, "patron__card__id", models.MembershipCard),
+        # MTI: the child's primary key is the ``<parent>_ptr`` parent link.
+        (models.LendingDesk, "venue_ptr", models.Venue),
+        (models.LendingDesk, "pk", models.Venue),
+        (models.SelfServeDesk, "pk", models.LendingDesk),
+        (models.SelfServeDesk, "pk__pk", models.Venue),
+        (models.SelfServeDesk, "lendingdesk_ptr__venue_ptr__id", models.Venue),
+    ],
+)
+def test_resolve_globalid_target_definition_walks_a_relation_primary_key(
+    owner_model: type[Model],
+    field_name: str,
+    expected_model: type[Model],
+):
+    """A primary key that is itself a relation is walked as a relation, never the owner's own id.
+
+    The terminal ``pk`` / key name resolves to the model the key points at, and a
+    path through it continues from there, so a GlobalID validates against the
+    terminal model instead of being accepted node-id-only or checked against the
+    owner.
+    """
+    definitions: dict[type[Model], DjangoTypeDefinition] = {
+        models.Patron: _definition(models.Patron, "PatronType"),
+        models.MembershipCard: _definition(models.MembershipCard, "MembershipCardType"),
+        models.PatronProfile: _definition(
+            models.PatronProfile,
+            "PatronProfileType",
+            fields=("patron",),
+        ),
+        models.Venue: _definition(models.Venue, "VenueType"),
+        models.LendingDesk: _definition(models.LendingDesk, "LendingDeskType"),
+        models.SelfServeDesk: _definition(models.SelfServeDesk, "SelfServeDeskType"),
+    }
+
+    resolved = resolve_globalid_target_definition(definitions[owner_model], field_name)
+
+    assert resolved is definitions[expected_model]
 
 
 # ---------------------------------------------------------------------------

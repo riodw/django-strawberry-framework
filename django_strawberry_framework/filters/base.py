@@ -901,10 +901,13 @@ def _target_definition_for(filter_instance: Filter) -> DjangoTypeDefinition | No
     routing branches:
 
     1. **Own-PK branch.** When ``filter_instance.field_name`` matches the
-       owning model's PK column name (``_meta.pk.name``), the relevant
-       definition is the owning ``DjangoType`` (the OWNER itself is the
-       Relay node - its PK gets a GlobalID).
-    2. **Relation branch.** Otherwise the field name resolves through
+       owning model's PK name (``_meta.pk.name`` or ``"pk"``) and that PK is
+       not itself a relation, the relevant definition is the owning
+       ``DjangoType`` (the OWNER itself is the Relay node - its PK gets a
+       GlobalID).
+    2. **Relation branch.** Otherwise - including a PK that is a relation
+       (``OneToOneField(primary_key=True)``, an MTI ``<parent>_ptr``) - the
+       field name resolves through
        ``owner_definition.related_target_for(<base_field>)`` - where
        ``<base_field>`` is the parent-relation prefix in expanded child
        filter names like ``"genres__id"`` (Django ``__`` source paths per
@@ -944,10 +947,20 @@ def resolve_globalid_target_definition(
     ``filter.field_name`` that the runtime path resolves from a live filter
     instance - the own-PK-vs-relation decision stays single-sited here.
 
+    A ``"pk"`` segment names the current model's primary key. A scalar primary
+    key is the current definition's own Relay id, so it ends the path (owner
+    itself when it is the whole path). A primary key that is itself a relation
+    (``OneToOneField(primary_key=True)``, an MTI ``<parent>_ptr``) is walked like
+    any other relation, so ``"pk"`` on such a model resolves to the definition
+    the key points at, matching how ``FilterSet._is_own_pk_under_relay_owner``
+    keeps a relation primary key out of the own-PK filter branch.
+
     Returns the owner itself for the own-PK branch, the terminal related target's
     definition for relation paths (including multi-hop relations like
-    ``"shelf__branch__id"``), or ``None`` when any segment along the path does not
-    resolve to a registered target.
+    ``"shelf__branch__id"`` and paths through a relation primary key like
+    ``"pk__card"``), or ``None`` when any segment along the path does not
+    resolve to a registered target (a scalar segment before the end, an unknown
+    field, an unregistered target model).
     """
     if not isinstance(field_name, str) or not field_name:
         return None
@@ -959,8 +972,13 @@ def resolve_globalid_target_definition(
         current_model = getattr(current_def, "model", None)
         pk_field = getattr(getattr(current_model, "_meta", None), "pk", None)
         pk_name = getattr(pk_field, "name", None)
+        if pk_name is not None and segment == "pk":
+            segment = pk_name
 
-        if pk_name is not None and segment in (pk_name, "pk"):
+        # Only a scalar primary key is the definition's own Relay id; a relation
+        # primary key (``OneToOneField(primary_key=True)``, an MTI ``<parent>_ptr``)
+        # is a relation like any other and resolves to the definition it points at.
+        if segment == pk_name and not getattr(pk_field, "is_relation", False):
             if i == len(segments) - 1:
                 return current_def
             return None

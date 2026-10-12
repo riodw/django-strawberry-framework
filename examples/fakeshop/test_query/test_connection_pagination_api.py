@@ -88,8 +88,12 @@ the exception's text nowhere in the body) like any other unexpected exception,
 on the sync and async views alike. That is pinned for a failing row hydration on
 a root offset connection and on a nested connection under one (planned window
 and per-parent pipeline, told apart by their ``library_book`` statement count),
-and for a consumer generator source raising ``KeyError`` or ``ValueError``, whose
-original exception is read back from the policy's server log.
+for a consumer generator source raising ``KeyError`` or ``ValueError``, and for a
+source whose sliced-state read fails before any slice: a project ``QuerySet``
+whose ``query`` raises a project ``KeyError`` subclass and a related manager on
+an id its deferred relation filter cannot use. For each source the exception's
+class name is nowhere in the body either, and its original is read back from
+the policy's server log.
 
 Each test-local mount serves whichever schema the test in flight published in
 its holder: the acceptance harness reloads every contributing app schema
@@ -122,6 +126,7 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches, path
 from graphql_client import JSONObject, assert_graphql_success, graphql_payload
 from strawberry import relay
+from typing_extensions import override
 
 from django_strawberry_framework import DjangoConnectionField, DjangoSchema, strawberry_config
 from django_strawberry_framework.error_policy import DEFAULT_ERROR_POLICY
@@ -1557,6 +1562,32 @@ def _value_error_genres(root: object, info: strawberry.Info[object, object]):
     return _failing_genres(ValueError(_SOURCE_SECRET))
 
 
+class _TenantScopeMissingError(KeyError):
+    """A project exception whose class name is itself something the client must not read."""
+
+
+class _TenantScopedGenreQuerySet(models.QuerySet[library_models.Genre]):
+    """A project ``QuerySet`` whose ``query`` resolves a tenant scope first, and fails to."""
+
+    @property
+    @override
+    # basedpyright: the project shape under test, a ``query`` property that raises; the
+    # checker rejects any property overriding a base class attribute
+    def query(self):  # pyright: ignore[reportIncompatibleVariableOverride]
+        raise _TenantScopeMissingError(_SOURCE_SECRET)
+
+
+def _tenant_scoped_genres(root: object, info: strawberry.Info[object, object]):
+    return _TenantScopedGenreQuerySet(model=library_models.Genre)
+
+
+def _unusable_id_book_genres(root: object, info: strawberry.Info[object, object]):
+    # The idiom that skips reading the parent row: an unsaved instance carrying an id.
+    # This one is not an integer, so the relation filter Django defers to the queryset's
+    # first ``query`` read cannot be built.
+    return library_models.Book(pk=_SOURCE_SECRET).genres
+
+
 async def _async_list_genres(root: object, info: strawberry.Info[object, object]):
     return await sync_to_async(_cursor_rows)()
 
@@ -1574,8 +1605,10 @@ def _cursor_schema() -> DjangoSchema:
 
     Built per request after the harness reload (see ``_ASYNC_CURRENT``). The
     ``max_page_size`` policy is the cap a wrapped negative slice would
-    otherwise widen a page past. The two failing generator sources are plain
-    ``def`` resolvers that touch no database, so both mounts serve them.
+    otherwise widen a page past. The failing sources (two generators, a project
+    ``QuerySet`` whose ``query`` raises, a related manager whose deferred filter
+    cannot be built) are plain ``def`` resolvers that fail before touching the
+    database, so both mounts serve them.
     """
     importlib.import_module("config.schema")
     from apps.library.schema import GenreType
@@ -1590,6 +1623,11 @@ def _cursor_schema() -> DjangoSchema:
         async_queryset_genres = DjangoConnectionField(GenreType, resolver=_async_queryset_genres)
         key_error_genres = DjangoConnectionField(GenreType, resolver=_key_error_genres)
         value_error_genres = DjangoConnectionField(GenreType, resolver=_value_error_genres)
+        tenant_scoped_genres = DjangoConnectionField(GenreType, resolver=_tenant_scoped_genres)
+        unusable_id_book_genres = DjangoConnectionField(
+            GenreType,
+            resolver=_unusable_id_book_genres,
+        )
 
     return DjangoSchema(
         query=Query,
@@ -2114,22 +2152,36 @@ async def test_an_async_nested_connection_row_that_fails_to_hydrate_is_masked():
     _assert_masked(payload)
 
 
-#: ``field -> the exception type its generator raises``.
-_FAILING_SOURCES: dict[str, type[Exception]] = {
-    "keyErrorGenres": KeyError,
-    "valueErrorGenres": ValueError,
+#: ``field -> the exception its source raises``, matched in the server log by exact
+#: type and ``args``: two generators failing on their first ``next``, a project
+#: ``QuerySet`` whose ``query`` raises, and a related manager whose deferred relation
+#: filter Django cannot build from the id (its own ``ValueError`` names the id).
+_FAILING_SOURCES: dict[str, Exception] = {
+    "keyErrorGenres": KeyError(_SOURCE_SECRET),
+    "valueErrorGenres": ValueError(_SOURCE_SECRET),
+    "tenantScopedGenres": _TenantScopeMissingError(_SOURCE_SECRET),
+    "unusableIdBookGenres": ValueError(
+        f"Field 'id' expected a number but got {_SOURCE_SECRET!r}.",
+    ),
 }
 
 _PACKAGE_LOGGER = "django_strawberry_framework"
 
 
-def _assert_logged_source_failure(caplog: pytest.LogCaptureFixture, field: str) -> None:
-    """The masked error's server-side record is the generator's own exception.
+def _assert_source_failure_masked(
+    payload: JSONObject,
+    caplog: pytest.LogCaptureFixture,
+    field: str,
+) -> None:
+    """Masked on the wire, the exception's class name absent, its original in the server log.
 
     The policy logs the ORIGINAL exception under the correlation id it handed
-    the client, so this is what proves the mask covered the source's failure
-    and not some other error on the same path.
+    the client, so the log record is what proves the mask covered the source's
+    failure and not some other error on the same path.
     """
+    expected = _FAILING_SOURCES[field]
+    _assert_masked(payload)
+    assert type(expected).__name__ not in json.dumps(payload), payload
     records = [
         record
         for record in caplog.records
@@ -2138,24 +2190,26 @@ def _assert_logged_source_failure(caplog: pytest.LogCaptureFixture, field: str) 
     assert len(records) == 1, caplog.records
     assert records[0].exc_info is not None, records[0]
     original = records[0].exc_info[1]
-    assert isinstance(original, _FAILING_SOURCES[field]), original
-    assert type(original) is _FAILING_SOURCES[field], original
-    assert original.args == (_SOURCE_SECRET,), original
+    assert isinstance(original, type(expected)), original
+    assert type(original) is type(expected), original
+    assert original.args == expected.args, original
 
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("field", list(_FAILING_SOURCES))
 def test_a_consumer_source_that_raises_is_masked(caplog: pytest.LogCaptureFixture, field: str):
-    """A consumer generator raising ``KeyError`` / ``ValueError`` mid-slice is masked.
+    """A consumer source raising while the connection reads or slices it is masked.
 
-    Nothing between the slicer and the client catches either one: the
+    Nothing between the resolver's return and the client catches the
+    exception: neither the sliced-state read (where a project ``query`` runs and
+    a related manager's deferred filter is built) nor the slicer. The
     consumer's exception is not a statement for the client, so it reaches the
-    policy as itself rather than as a ``GraphQLError`` carrying its text.
+    policy as itself rather than as a ``GraphQLError`` carrying its text or its
+    class name.
     """
     caplog.set_level(logging.ERROR, logger=_PACKAGE_LOGGER)
 
-    _assert_masked(_post_cursor_sync(field, {"first": 2}))
-    _assert_logged_source_failure(caplog, field)
+    _assert_source_failure_masked(_post_cursor_sync(field, {"first": 2}), caplog, field)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2164,8 +2218,8 @@ async def test_an_async_view_consumer_source_that_raises_is_masked(
     caplog: pytest.LogCaptureFixture,
     field: str,
 ):
-    """The same generator sources over ``/graphql-cursor-async/``."""
+    """The same failing sources over ``/graphql-cursor-async/``."""
     caplog.set_level(logging.ERROR, logger=_PACKAGE_LOGGER)
 
-    _assert_masked(await _post_cursor_async(field, {"first": 2}))
-    _assert_logged_source_failure(caplog, field)
+    payload = await _post_cursor_async(field, {"first": 2})
+    _assert_source_failure_masked(payload, caplog, field)

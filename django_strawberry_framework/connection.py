@@ -1614,24 +1614,14 @@ def _guard_source_not_pre_sliced(source: models.QuerySet[models.Model, object]) 
     request), symmetric with ``_guard_sidecar_input_against_non_queryset``: a
     structural misuse of the connection ``resolver=`` contract surfaces as a
     package error, never a leaked Django internal.
+
+    Only that sliced verdict is the package's to state. Reading it runs the
+    source's own ``query`` (on a related manager's queryset, the pending
+    relation filter is applied there), so whatever that read raises comes from
+    the consumer's source and travels as that exception for the error policy to
+    classify, never re-raised as client-facing text.
     """
-    try:
-        is_sliced = source.query.is_sliced
-    except (
-        TypeError,
-        ValueError,
-        AttributeError,
-        KeyError,
-        IndexError,
-    ) as exc:
-        raise GraphQLError(
-            "A connection resolver returned a QuerySet whose sliced state could not be read "
-            f"({_safe_type_name(exc)}); a connection field manages its own pagination and "
-            "cannot paginate a source whose sliced state is unreadable. Return an unsliced "
-            "QuerySet (or a Manager) and let the connection's `first` / `last` / `before` / "
-            "`after` arguments paginate it.",
-        ) from exc
-    if is_sliced:
+    if source.query.is_sliced:
         raise GraphQLError(
             "A connection resolver returned an already-sliced QuerySet (e.g. "
             "`qs[:10]`). A connection field manages its own ordering and cursor "
@@ -1683,53 +1673,23 @@ def _finalize_queryset(
     total order is derived over and the ``cursor_field`` that selects it come
     from that one object, so the order this resolve-time tail applies and the
     order the planner planned cannot be answered from two different reads.
+
+    Nothing here is caught. The queryset arrives sealed, so the order read,
+    the reversal and ``order_by`` read Django's query state and the model's
+    declared ordering; what they raise (a ``FieldError`` for an unknown
+    term, a ``TypeError`` for a ``Meta.ordering`` Django's ``models.E014``
+    check rejects) travels as that exception for the error policy to classify,
+    as it does when the plan-time window order reads the same declaration.
     """
     target_model = definition.model
     cursor_field = definition.cursor_field
-    try:
-        # A hook / manager ``.reverse()`` becomes the reverse of the forward total order
-        # under the forward flag before any order is read or written here.
-        qs = normalize_order_direction(qs, cursor_field, target_model)
-        applied = applied_order(qs.query, target_model)
-    except (
-        TypeError,
-        ValueError,
-        AttributeError,
-        KeyError,
-        IndexError,
-    ) as exc:
-        raise GraphQLError(
-            f"A connection's ordering could not be read ({_safe_type_name(exc)}); a "
-            "connection field manages its own ordering and cannot paginate a source "
-            "whose ordering is unreadable. Return a regular QuerySet and let the "
-            "connection's ordering logic handle it.",
-        ) from exc
-    try:
-        ordered = effective_connection_order(cursor_field, qs.query, target_model)
-    except (
-        TypeError,
-        ValueError,
-        AttributeError,
-        KeyError,
-        IndexError,
-    ) as exc:
-        raise GraphQLError(
-            "A connection's ordering could not be resolved "
-            f"({_safe_type_name(exc)}); check the connection's ordering configuration.",
-        ) from exc
+    # A hook / manager ``.reverse()`` becomes the reverse of the forward total order
+    # under the forward flag before any order is read or written here.
+    qs = normalize_order_direction(qs, cursor_field, target_model)
+    applied = applied_order(qs.query, target_model)
+    ordered = effective_connection_order(cursor_field, qs.query, target_model)
     if ordered != applied:
-        try:
-            qs = qs.order_by(*ordered)
-        except (
-            TypeError,
-            ValueError,
-            AttributeError,
-            KeyError,
-            IndexError,
-        ) as exc:
-            raise GraphQLError(
-                f"A connection's ordering could not be applied ({_safe_type_name(exc)}).",
-            ) from exc
+        qs = qs.order_by(*ordered)
     return apply_connection_optimization(target_type, qs, info)
 
 

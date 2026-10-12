@@ -12,7 +12,7 @@ Each phase finishes completely (every agent it dispatched has reported) before t
 |---|---|---|
 | Coordinator | the session running the loop | picks the item, writes briefs, decides, lands, commits; never implements |
 | Fact finders | `sonnet-high` | reproduce, read history, read upstream; run probes and tests; report facts |
-| Researcher | `fable-medium` | reads the fact reports, looks upstream for a better fix, prototypes it, lists decisions |
+| Researcher | `opus-high` | reads the fact reports, looks upstream for a better fix, prototypes it, lists decisions |
 | Implementer | `opus-medium` | builds the change from the brief in a private clone |
 | Verifier | `opus-high` | attacks the change, expectation first; LAND / FIX / BLOCK |
 
@@ -26,7 +26,7 @@ Each phase finishes completely (every agent it dispatched has reported) before t
    **history** (which commit, spec, doc or test claims what; is a test pinning the current behaviour), **upstream**
    (what Django, strawberry-django, graphene-django, django-graphene-filters, DRF / django-filter do). Add a repro agent
    per sub-claim when one item bundles several. Wait for all of them.
-3. **Research.** Hand every report to one `fable-medium` agent: find the more elegant or more upstream-aligned fix
+3. **Research.** Hand every report to one `opus-high` agent: find the more elegant or more upstream-aligned fix
    nobody thought of, prototype it in its own clone, measure it against the repro grid, and list numbered
    decisions (D1, D2, ...) each with a recommendation.
 4. **Rules check.** The coordinator rereads [AGENTS.md][agents], [START.md][start] and [GOAL.md][goal] and answers

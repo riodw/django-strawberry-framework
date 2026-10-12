@@ -7,6 +7,8 @@ This holds even when the prompt has its own instructions or names other files to
 
 SUBAGENT MODEL + EFFORT: the Agent tool has a `model` parameter but NO effort parameter; reasoning effort (the only per-agent "temperature" Claude Code has) is set by `effort:` in the agent type's `.claude/agents/<name>.md` frontmatter, so a requested effort means dispatching (creating first if needed) an agent type whose frontmatter sets it, never `general-purpose`; full rule in AGENTS.md
 
+CHECK-IN TIMERS (CronCreate / ScheduleWakeup): a tick fires only when the session is idle, and a still-running background task (`run_in_background` Bash, e.g. `caffeinate`, a watcher, a server) keeps the session from ever counting as idle, so every tick silently stalls until it ends; never leave a long-lived background task running in a session that depends on a timer, and before reporting a loop as set up, confirm its first tick actually arrived
+
 Repo: django-strawberry-framework — DRF-idiom Meta-class GraphQL framework for Django on Strawberry (the deliberate alternative to strawberry-graphql-django's decorator API); package source `django_strawberry_framework/` example project `examples/fakeshop/`
 
 <no_performance>

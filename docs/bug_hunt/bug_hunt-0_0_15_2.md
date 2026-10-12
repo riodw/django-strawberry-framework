@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 47 done, 56 to do.
+Progress: 48 done, 62 to do.
 
 ## Done
 
@@ -94,6 +94,9 @@ Progress: 47 done, 56 to do.
 - [x] 80. Four connection catches turned a consumer source or `Meta.ordering` fault into a deliberate `GraphQLError` naming the
   exception class (no `correlationId`, no log line); they are deleted, so the fault reaches the error policy as itself and is
   masked with a `correlationId`, as on the list field and the optimized nested path (`29c1f670`)
+- [x] 103. A writable relation field bound to its `attname` (`cat = PrimaryKeyRelatedField(source="category_id")`, or a
+  `category_id` field with the source defaulted) published a create input every request failed with a masked TypeError; it
+  is refused at schema build with the remedy `source="category"`, root, nested and injected (`f8ff159c`)
 
 ## To do: t3 robustness rows
 
@@ -130,8 +133,17 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 100. A random `"?"` order (hook `order_by("?")` or `Meta.ordering = ["?"]`) on an optimized nested offset connection
   raises "Cannot resolve keyword '?' into field" (masked), reversed or not, `first:` or `last:`; the root path serves it
 - [ ] 101. `manage.py import_spec_terms --check` fails on spec-020's terms CSV on main (seen at `eb30dd7e`)
-- [ ] 103. A lone writable `PrimaryKeyRelatedField(source="category_id")` publishes a create input that always fails with a
-  masked TypeError (DRF hands `category_id=<Category>` to `Model.objects.create`); update works
+- [ ] 106. A `to_field` ForeignKey written through a declared `PrimaryKeyRelatedField` (either spelling) fails every create
+  and update with a masked `ConfigurationError`: `_attest_saved_relations` compares the column's `to_field` value to the pk
+- [ ] 107. A writable primary-key relation (MTI parent link, OneToOne `primary_key=True`) in an update input fails at request
+  time instead of at class creation
+- [ ] 108. A serializer-only source over the default `create()` / `update()` (`gs = PrimaryKeyRelatedField(many=True,
+  source="genres_id")`) builds; create raises a masked TypeError and update is a silent no-op
+- [ ] 109. `pid = PrimaryKeyRelatedField(source="pk")` over a relation primary key builds and every create raises a masked
+  TypeError: `backing_model_field` does not resolve `"pk"`, while `write_source_key` does
+- [ ] 110. The item-56 alias message labels an owner `'category_id' (source 'category_id')` when the name and the source match
+- [ ] 111. A GenericForeignKey own-name `PrimaryKeyRelatedField(source="content_object")` raises `AttributeError` in
+  `_require_relation_primary` (`related_model` is None) instead of `ConfigurationError`
 
 ## To do: holes found re-checking the fixes
 
@@ -199,6 +211,9 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 105. CHANGELOG entry for item 80: a connection whose source or model ordering raises (a project `QuerySet` whose `query`
   raises, a related manager on an unusable pk, a non-iterable `Meta.ordering`) is masked with the policy message and a
   `correlationId` instead of a `GraphQLError` naming the exception class
+- [ ] 112. CHANGELOG entry for item 103: a `SerializerMutation` whose serializer binds a writable relation field to its
+  `attname` (`source="category_id"`, or a `category_id` `PrimaryKeyRelatedField` with no `source`) now raises
+  `ConfigurationError` at schema build; bind the relation instead (`source="category"`)
 
 ## Hunt not finished in t3
 

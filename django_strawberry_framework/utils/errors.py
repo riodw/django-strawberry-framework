@@ -387,11 +387,11 @@ def build_error_key_map(
     every depth; every other field's is ``None``.
 
     Primary names win: every spec's primary name is entered first, and an alias
-    only fills a name no primary claimed. Two specs can share names - a
-    serializer field over the FK ``category`` and another whose ``source`` is
-    its ``category_id`` both resolve to ``("category", "category_id")`` - and
-    then each primary name keeps its own spec's GraphQL name, while a name that
-    is only an alias goes to the first spec listing it. Each flavor's build
+    only fills a name no primary claimed. Two specs can share names only through
+    a caller's ``keys_of`` (no shipped flavor produces it: the serializer
+    ownership guards refuse two writable fields over one model field); then each
+    primary name keeps its own spec's GraphQL name, while a name that is only an
+    alias goes to the first spec listing it. Each flavor's build
     guards reject two inputs sharing one GraphQL name. A field the input does
     not expose has no entry, so an error on it keeps its validator-side name
     (``rekey_error_segment``).

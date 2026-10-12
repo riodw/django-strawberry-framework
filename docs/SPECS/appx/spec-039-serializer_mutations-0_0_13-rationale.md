@@ -211,8 +211,9 @@ the runtime serializer validates:
   "full" shape that differs takes a descriptor-derived name, so two distinct descriptors
   never collide on the canonical name at materialize.
 - **Writable `source` uniqueness** spans the whole write surface (inputs **and**
-  `Meta.injected_fields`), because DRF resolves a source collision last-write-wins and an
-  injected value could otherwise silently replace the client's.
+  `Meta.injected_fields`) and is keyed by the model field each `source` resolves to (an
+  `attname` or `pk` alias is the field it spells), because DRF resolves a source collision
+  last-write-wins and an injected value could otherwise silently replace the client's.
 
 ### Alternatives considered (and rejected)
 

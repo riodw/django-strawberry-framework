@@ -106,6 +106,7 @@ from .inputs import (
     resolve_injected_field_specs,
     resolve_optional_fields,
     runtime_validated_data_fields,
+    serializer_model,
     serializer_schema_fingerprint,
     validate_nested_config_keys,
     writable_serializer_fields,
@@ -430,7 +431,9 @@ def _assert_schema_source_ownership(
     (effective input + injected) and every explicitly opted-in nested config share
     the same ``runtime_validated_data_fields`` ->
     ``raise_writable_source_ownership_errors`` path so root vs nested wording cannot
-    drift apart from independent raise copies.
+    drift apart from independent raise copies. Each level passes its own serializer's
+    ``Meta.model`` (``None`` for a model-less nested serializer), so sources are keyed
+    by the model field they resolve to at that level.
     """
     runtime_fields = runtime_validated_data_fields(
         field_map,
@@ -439,7 +442,12 @@ def _assert_schema_source_ownership(
     )
     runtime_sources = {field_name: field.source for field_name, field in runtime_fields.items()}
     location = f"nested serializer path {path!r}" if path else None
-    raise_writable_source_ownership_errors(name, runtime_sources, location=location)
+    raise_writable_source_ownership_errors(
+        name,
+        runtime_sources,
+        location=location,
+        model=serializer_model(serializer_class),
+    )
     if not nested_fields:
         return
     validate_nested_config_keys(
@@ -722,8 +730,10 @@ class SerializerMutation(DjangoMutation):
         )
         # A runtime write ``source`` must be UNIQUE across EVERY field that can
         # contribute to ``validated_data``, not merely the generated input + injected
-        # fields. On creates, ``HiddenField`` and narrowed-out fields with defaults
-        # also contribute and can silently replace client data under the same source.
+        # fields, keyed by the model field it resolves to (an ``attname`` or ``pk``
+        # alias is the field it spells). On creates, ``HiddenField`` and narrowed-out
+        # fields with defaults also contribute and can silently replace client data
+        # written to the same model field.
         # Root + nested share one walker (``_assert_schema_source_ownership``).
         _assert_schema_source_ownership(
             name,

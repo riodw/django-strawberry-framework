@@ -43,11 +43,13 @@ not live. Live bind/write siblings:
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Iterator, Mapping
 from typing import TYPE_CHECKING, NoReturn
 
 import pytest
 import strawberry
+from apps.library import models as library_models
 from apps.products import models as product_models
 from django.db import models
 from rest_framework import serializers
@@ -1103,6 +1105,208 @@ def test_duplicate_source_between_two_input_fields_raises_at_class_creation():
                 serializer_class = _dup_source_serializer()
                 operation = "create"
                 permission_classes = []
+
+
+def _alias_serializer(
+    model: type[models.Model],
+    declared: dict[str, DRFField],
+    fields: tuple[str, ...],
+) -> type[serializers.ModelSerializer[models.Model]]:
+    """A ``ModelSerializer`` over ``model`` declaring ``declared`` and listing ``fields``."""
+    meta = type("Meta", (), {"model": model, "fields": fields})
+    return type(
+        f"{model.__name__}AliasSer",
+        (serializers.ModelSerializer,),
+        {**declared, "Meta": meta},
+    )
+
+
+def _item_attname_alias_serializer() -> type[serializers.ModelSerializer[models.Model]]:
+    """``Item``'s ``category`` beside ``cat`` (``source="category_id"``): one FK, two writers."""
+    cat = serializers.PrimaryKeyRelatedField(
+        source="category_id",
+        queryset=product_models.Category.objects.all(),
+    )
+    return _alias_serializer(product_models.Item, {"cat": cat}, ("name", "category", "cat"))
+
+
+class _PlainItemInline(serializers.Serializer[object]):
+    """A model-less nested serializer: its keys reach only the parent's own ``create()``."""
+
+    category = serializers.IntegerField()
+    cat = serializers.IntegerField(source="category_id")
+
+
+def _category_with_items(
+    child: type[serializers.Serializer[object]] | type[serializers.ModelSerializer[models.Model]],
+) -> type[serializers.ModelSerializer[product_models.Category]]:
+    """A ``Category`` serializer nesting ``child`` as writable ``items`` (create overridden)."""
+
+    class CategoryWithItems(serializers.ModelSerializer[product_models.Category]):
+        items = child(many=True)
+
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+            model = product_models.Category
+            fields = ("name", "items")
+
+        @override
+        def create(self, validated_data: dict[str, object]) -> NoReturn:
+            raise AssertionError("the nested-write check reads this override; nothing calls it")
+
+    return CategoryWithItems
+
+
+_ATTNAME_OWNERS = "source 'category' <- fields ['category', 'cat' (source 'category_id')]"
+
+_ALIAS_OWNER_ROWS = [
+    pytest.param(
+        lambda: {"serializer_class": _item_attname_alias_serializer(), "operation": "update"},
+        _ATTNAME_OWNERS,
+        id="relation-attname",
+    ),
+    pytest.param(
+        lambda: {
+            "serializer_class": _alias_serializer(
+                library_models.Edition,
+                {"ident": serializers.CharField(source="pk")},
+                ("isbn_13", "publisher", "ident"),
+            ),
+            "operation": "create",
+        },
+        "source 'isbn_13' <- fields ['isbn_13', 'ident' (source 'pk')]",
+        id="pk-alias",
+    ),
+    pytest.param(
+        lambda: {
+            "serializer_class": _alias_serializer(
+                library_models.PatronProfile,
+                {"genre_name": serializers.CharField(source="favorite_genre_id")},
+                ("address_2", "favorite_genre", "genre_name"),
+            ),
+            "operation": "update",
+        },
+        "source 'favorite_genre' <- fields "
+        "['favorite_genre', 'genre_name' (source 'favorite_genre_id')]",
+        id="to-field-relation-attname",
+    ),
+    pytest.param(
+        lambda: {
+            "serializer_class": _item_attname_alias_serializer(),
+            "operation": "create",
+            "fields": ("name", "category"),
+            "injected_fields": ("cat",),
+        },
+        _ATTNAME_OWNERS,
+        id="injected-attname",
+    ),
+    pytest.param(
+        lambda: {
+            "serializer_class": _category_with_items(_item_attname_alias_serializer()),
+            "operation": "create",
+            "nested_fields": {"items": NestedSerializerConfig()},
+        },
+        "nested serializer path 'items' has multiple writable fields that bind one serializer "
+        f"source: {_ATTNAME_OWNERS}",
+        id="nested-attname",
+    ),
+]
+
+
+@pytest.mark.parametrize(("meta_factory", "message"), _ALIAS_OWNER_ROWS)
+def test_aliases_of_one_model_field_are_one_write_target_at_class_creation(
+    meta_factory: Callable[[], dict[str, object]],
+    message: str,
+):
+    """Two writable fields over one model field are refused whatever spelling each source uses.
+
+    The ownership key is the model field a source resolves to (an FK's ``attname``
+    is the FK, ``pk`` is the primary key field), so an alias collides with the field it
+    spells at the root, through ``Meta.injected_fields`` and inside an opted-in nested
+    serializer; the message names the shared field and the alias's declared source.
+    """
+    mutation_meta = type("Meta", (), {"permission_classes": [], **meta_factory()})
+
+    with pytest.raises(ConfigurationError, match=re.escape(message)):
+        type("AliasOwnerMut", (SerializerMutation,), {"Meta": mutation_meta})
+
+
+_DISTINCT_TARGET_ROWS = [
+    pytest.param(
+        lambda: {
+            "serializer_class": _alias_serializer(
+                product_models.Item,
+                {"cat": serializers.IntegerField(source="category_id", read_only=True)},
+                ("name", "category", "cat"),
+            ),
+        },
+        id="read-only-attname-alias",
+    ),
+    pytest.param(
+        lambda: {
+            "serializer_class": _alias_serializer(
+                library_models.LendingDesk,
+                {
+                    "ptr": serializers.PrimaryKeyRelatedField(
+                        source="venue_ptr",
+                        queryset=library_models.Venue.objects.all(),
+                    ),
+                    "venue_id": serializers.IntegerField(source="id"),
+                },
+                ("name", "ptr", "venue_id"),
+            ),
+        },
+        id="mti-parent-id-beside-parent-link",
+    ),
+    pytest.param(
+        lambda: {
+            "serializer_class": _alias_serializer(
+                library_models.ShelfLabel,
+                {
+                    "shelf_ref": serializers.PrimaryKeyRelatedField(
+                        source="shelf",
+                        queryset=library_models.Shelf.objects.all(),
+                    ),
+                },
+                (
+                    "text",
+                    "branch",
+                    "shelf_code",
+                    "shelf_ref",
+                ),
+            ),
+        },
+        id="foreign-object-beside-its-carriers",
+    ),
+    pytest.param(
+        lambda: {
+            "serializer_class": _category_with_items(_PlainItemInline),
+            "nested_fields": {"items": NestedSerializerConfig()},
+        },
+        id="model-less-nested-serializer",
+    ),
+]
+
+
+@pytest.mark.parametrize("meta_factory", _DISTINCT_TARGET_ROWS)
+def test_distinct_model_fields_stay_separate_write_targets_at_class_creation(
+    meta_factory: Callable[[], dict[str, object]],
+):
+    """Sources resolving to different model fields (or to no model) build.
+
+    A read-only alias never writes; an MTI child's inherited ``id`` and its
+    ``venue_ptr`` parent link, and a ``ForeignObject`` and its carrier fields, are
+    distinct Django fields; a model-less nested serializer's keys compare as spelled.
+    """
+    mutation_meta = type(
+        "Meta",
+        (),
+        {"operation": "create", "permission_classes": [], **meta_factory()},
+    )
+
+    mutation = type("DistinctTargetMut", (SerializerMutation,), {"Meta": mutation_meta})
+
+    assert mutation in iter_mutations()
 
 
 # ---------------------------------------------------------------------------

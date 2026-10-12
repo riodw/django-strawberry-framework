@@ -182,6 +182,7 @@ from .hook_context import SerializerHookContext, UploadMetadata
 from .inputs import (
     raise_writable_source_ownership_errors,
     runtime_validated_data_fields,
+    serializer_model,
 )
 from .serializer_converter import (
     FILE,
@@ -1121,7 +1122,9 @@ def _assert_runtime_write_source_ownership(
     Schema discovery cannot see context-dependent fields returned by ``get_fields()``. Walk the
     instantiated serializer immediately before validation, including every explicitly opted-in
     nested serializer, so hidden/defaulted runtime fields cannot silently replace client or
-    injected values through DRF's last-write-wins source assignment.
+    injected values through DRF's last-write-wins source assignment. Sources are keyed by the
+    model field they resolve to on the serializer's own ``Meta.model``, so a runtime
+    ``source="category_id"`` collides with a client ``category``.
     """
     supplied_fields = set(data)
     runtime_fields = runtime_validated_data_fields(
@@ -1134,6 +1137,7 @@ def _assert_runtime_write_source_ownership(
         mutation_cls.__name__,
         runtime_sources,
         location=f"runtime serializer path {(path or '<root>')!r}",
+        model=serializer_model(type(serializer)),
     )
 
     for spec in specs:
@@ -2517,13 +2521,12 @@ def _save_time_error_key_map(mutation_cls: type[SerializerMutation]) -> ErrorKey
     keys are ``model_field_error_names`` of the backing model field named
     ``spec.source or spec.target_name`` (``category`` and ``category_id`` for a
     forward relation); a name with no concrete model field behind it keys by itself.
-    The source names themselves never collide (the ownership check rejects two
-    writable fields over one source string), and each spec's own source is its
-    primary name, which ``build_error_key_map`` never lets another spec's alias
-    displace: with ``category`` and ``category_ref = PrimaryKeyRelatedField(
-    source="category_id")``, ``category`` keys to ``categoryId`` and ``category_id``
-    to ``categoryRefId``. A model field no input exposes keeps its name. Read only on
-    this failure path.
+    No two specs share a model field (the ownership check keys writable sources by
+    the attribute they resolve to, so ``category`` beside ``source="category_id"``
+    is rejected at class creation), so every name a spec lists is its own: a
+    ``category_ref = PrimaryKeyRelatedField(source="category")`` keys both
+    ``category`` and ``category_id`` to ``categoryRefId``. A model field no input
+    exposes keeps its name. Read only on this failure path.
     """
     model_meta = backing_model_of(mutation_cls._mutation_meta)._meta
 

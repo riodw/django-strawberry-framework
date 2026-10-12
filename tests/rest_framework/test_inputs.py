@@ -34,6 +34,7 @@ from collections.abc import Callable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from apps.library import models as library_models
 from apps.products import models as product_models
 from django.db import models
 from rest_framework import serializers
@@ -974,7 +975,72 @@ def test_writable_source_collisions_excludes_star_and_flags_duplicates():
             "d": "name",
             "e": None,
         },
+        model=None,
     ) == {"name": ["c", "d"]}
+
+
+@pytest.mark.parametrize(
+    ("model", "source", "expected"),
+    [
+        pytest.param(product_models.Item, "category", "category", id="relation-name"),
+        pytest.param(product_models.Item, "category_id", "category", id="relation-attname"),
+        pytest.param(product_models.Item, "pk", "id", id="pk-alias"),
+        pytest.param(product_models.Item, "name", "name", id="scalar"),
+        pytest.param(product_models.Item, "category.name", "category.name", id="dotted"),
+        pytest.param(product_models.Item, "*", "*", id="star"),
+        pytest.param(product_models.Item, "full_clean", "full_clean", id="method"),
+        pytest.param(product_models.Item, "computed", "computed", id="serializer-only"),
+        pytest.param(product_models.Category, "items", "items", id="reverse-relation"),
+        pytest.param(library_models.Edition, "pk", "isbn_13", id="pk-alias-text-key"),
+        pytest.param(library_models.PatronProfile, "pk", "patron", id="pk-alias-o2o-key"),
+        pytest.param(library_models.PatronProfile, "patron_id", "patron", id="o2o-key-attname"),
+        pytest.param(
+            library_models.PatronProfile,
+            "favorite_genre_id",
+            "favorite_genre",
+            id="to-field-relation-attname",
+        ),
+        pytest.param(library_models.LendingDesk, "pk", "venue_ptr", id="mti-pk-alias"),
+        pytest.param(
+            library_models.LendingDesk,
+            "venue_ptr_id",
+            "venue_ptr",
+            id="mti-link-attname",
+        ),
+        pytest.param(library_models.LendingDesk, "id", "id", id="mti-parent-id"),
+        pytest.param(library_models.ShelfLabel, "shelf", "shelf", id="foreign-object"),
+        pytest.param(library_models.ShelfLabel, "shelf_code", "shelf_code", id="fo-carrier"),
+        pytest.param(library_models.TaggedItem, "content_object", "content_object", id="gfk"),
+        pytest.param(
+            library_models.TaggedItem,
+            "content_type_id",
+            "content_type",
+            id="gfk-type-attname",
+        ),
+        pytest.param(None, "category_id", "category_id", id="no-model"),
+    ],
+)
+def test_write_source_key_resolves_every_spelling_of_one_model_attribute(
+    model: type[models.Model] | None,
+    source: str,
+    expected: str,
+) -> None:
+    """A source keys by the concrete model field it writes; anything else keys by itself."""
+    assert serializer_inputs.write_source_key(model, source) == expected
+
+
+def test_writable_source_collisions_keys_by_resolved_model_attribute():
+    """With a model, the attname and ``pk`` spellings collide with the field they alias."""
+    assert serializer_inputs.writable_source_collisions(
+        {
+            "category": None,
+            "cat": "category_id",
+            "id": None,
+            "ident": "pk",
+            "name": None,
+        },
+        model=product_models.Item,
+    ) == {"category": ["category", "cat"], "id": ["id", "ident"]}
 
 
 def test_writable_star_sources_lists_every_star_field_sorted():
@@ -995,23 +1061,25 @@ def test_raise_writable_source_ownership_errors_star_and_collision():
         serializer_inputs.raise_writable_source_ownership_errors(
             "StarMut",
             {"alpha": "*", "name": "name"},
+            model=None,
         )
     with pytest.raises(ConfigurationError, match="bind one serializer source"):
         serializer_inputs.raise_writable_source_ownership_errors(
             "DupMut",
             {"a": "name", "b": "name"},
+            model=None,
         )
     with pytest.raises(ConfigurationError, match="runtime serializer path '<root>'"):
         serializer_inputs.raise_writable_source_ownership_errors(
             "RuntimeMut",
             {"a": "name", "b": "name"},
             location="runtime serializer path '<root>'",
+            model=None,
         )
 
 
-def test_two_writable_fields_sharing_one_source_raise():
-    """Two WRITABLE fields sharing one one-segment ``source`` raise (no double-write)."""
-    _register_products_types()
+def _name_alias_serializer() -> type[serializers.ModelSerializer[product_models.Item]]:
+    """``name`` beside ``alias`` (``source="name"``): one spelling, two writers."""
 
     class DoubleWriteSer(serializers.ModelSerializer[product_models.Item]):
         name = serializers.CharField()
@@ -1022,8 +1090,50 @@ def test_two_writable_fields_sharing_one_source_raise():
             model = product_models.Item
             fields = ("name", "alias")
 
-    with pytest.raises(ConfigurationError, match="sharing one source"):
-        _build_serializer_inputs(DoubleWriteSer, guard_required=False)
+    return DoubleWriteSer
+
+
+def _category_attname_alias_serializer() -> type[serializers.ModelSerializer[product_models.Item]]:
+    """``category`` beside ``cat`` (``source="category_id"``): two spellings of one FK."""
+
+    class AttnameWriteSer(serializers.ModelSerializer[product_models.Item]):
+        cat = serializers.PrimaryKeyRelatedField(
+            source="category_id",
+            queryset=product_models.Category.objects.all(),
+        )
+
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+            model = product_models.Item
+            fields = ("name", "category", "cat")
+
+    return AttnameWriteSer
+
+
+@pytest.mark.parametrize(
+    ("serializer_factory", "message"),
+    [
+        pytest.param(_name_alias_serializer, "sharing one source 'name'", id="same-spelling"),
+        pytest.param(
+            _category_attname_alias_serializer,
+            "sharing one source 'category'",
+            id="relation-attname",
+        ),
+    ],
+)
+def test_two_writable_fields_sharing_one_source_raise(
+    serializer_factory: Callable[[], type[serializers.ModelSerializer[product_models.Item]]],
+    message: str,
+):
+    """Two WRITABLE fields whose sources resolve to one model field raise (no double-write).
+
+    The walker keys each source through ``write_source_key``, so an FK's ``attname``
+    collides with the FK it spells, not only an identical spelling.
+    """
+    _register_products_types()
+
+    with pytest.raises(ConfigurationError, match=message):
+        _build_serializer_inputs(serializer_factory(), guard_required=False)
 
 
 def test_read_only_field_sharing_source_with_writable_is_accepted():
@@ -2066,7 +2176,11 @@ def test_runtime_validated_data_fields_defaults_and_supplied():
 
 def test_raise_writable_source_ownership_errors_clean():
     """raise_writable_source_ownership_errors is a no-op when sources are unique and non-star."""
-    raise_writable_source_ownership_errors("TestMutation", {"a": "source_a", "b": "source_b"})
+    raise_writable_source_ownership_errors(
+        "TestMutation",
+        {"a": "source_a", "b": "source_b"},
+        model=None,
+    )
 
 
 def test_resolve_optional_fields_unknown_field_raises():

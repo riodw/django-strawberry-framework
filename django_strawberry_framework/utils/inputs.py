@@ -1205,8 +1205,10 @@ def iter_input_field_collisions(
     write inputs; ``model_field_name`` for the model mutation naming record).
 
     ``source_of`` enables the serializer-only third arm (two WRITABLE fields
-    sharing one one-segment ``source`` would double-write one model attr); forms
-    have no ``source`` axis and leave it ``None``. The form guard raises on the
+    whose ``source_of`` keys match would double-write one model attr; the
+    serializer caller resolves each source to the model field it writes, so an
+    ``attname`` or ``pk`` alias keys as the field it spells); forms have no
+    ``source`` axis and leave it ``None``. The form guard raises on the
     FIRST yielded message; the serializer aggregates them all - the
     consumption policy stays at each call site.
 

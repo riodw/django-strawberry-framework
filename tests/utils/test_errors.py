@@ -724,7 +724,12 @@ def test_build_error_key_map_keys_by_keys_of_at_every_depth():
 
 
 def test_build_error_key_map_never_lets_an_alias_displace_a_primary_name():
-    """Every primary name is entered before any alias; an alias fills only an unclaimed name."""
+    """Every primary name is entered before any alias; an alias fills only an unclaimed name.
+
+    A synthetic ``keys_of`` hands two specs overlapping name tuples, so the two-pass
+    rule is pinned on its own rather than through a serializer the ownership guards
+    would refuse.
+    """
     specs = [
         InputFieldSpec(
             input_attr="category",
@@ -737,7 +742,6 @@ def test_build_error_key_map_never_lets_an_alias_displace_a_primary_name():
             graphql_name="categoryRefId",
             target_name="category_ref",
             kind=RELATION_SINGLE,
-            source="category_id",
         ),
     ]
     names = {"category": ("category", "category_id"), "category_ref": ("category_id", "category")}

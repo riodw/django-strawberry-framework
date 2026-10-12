@@ -2724,11 +2724,18 @@ co-clear block) — `clear_serializer_input_namespace` registers through the
   `build_strawberry_input_class` collapse the two).
 - **Two writable fields sharing one `source`.** A writable serializer `source`
   must be **unique across the whole write surface** — generated input fields **and**
-  `Meta.injected_fields`. Two distinct declared names with the same one-segment `source`
-  both write the same model attribute, and DRF resolves the collision last-write-wins, so
-  an injected value could silently replace the client's; the package rejects it at class
-  creation with a [`ConfigurationError`][glossary-configurationerror] naming the two fields
-  and the shared `source` rather than picking a winner. The rule is enforced **again at
+  `Meta.injected_fields`. Uniqueness is keyed by the model field a `source` resolves to
+  through `Options.get_field`, not by its spelling: a forward relation's `attname`
+  (`source="category_id"`) is the relation `category`, and `source="pk"` is the primary
+  key field, so `category` beside `cat = PrimaryKeyRelatedField(source="category_id")`,
+  or a primary key `code` beside `ident = CharField(source="pk")`, is two writers of one
+  attribute; a `source` naming no concrete model field (a serializer-only key, a reverse
+  accessor, a field of a model-less nested serializer) keys by its spelling. Two distinct
+  declared names writing the same model attribute race in DRF last-write-wins, so an
+  injected value could silently replace the client's; the package rejects it at class
+  creation with a [`ConfigurationError`][glossary-configurationerror] naming the shared
+  attribute and the two fields (an owner whose declared `source` differs is shown as
+  `'cat' (source 'category_id')`) rather than picking a winner. The rule is enforced **again at
   runtime**, against the instantiated serializer's context-dependent `get_fields()` and at
   every opted-in nesting depth
   (`rest_framework/resolvers.py::_assert_runtime_write_source_ownership`), because
@@ -2893,7 +2900,8 @@ same transport, different app.
     clashing with a literal `category_id` → `categoryId`, or `foo_bar` + `fooBar` → `fooBar`)
     raise [`ConfigurationError`][glossary-configurationerror] **before materialization** (the
     serializer analog of [`forms/inputs.py`][forms-inputs]`::_guard_input_attr_collisions`),
-    two **writable** serializer fields sharing **one** one-segment `source`
+    two **writable** serializer fields whose sources resolve to **one** model attribute
+    (the same spelling, or an `attname` / `pk` alias of it)
     raise [`ConfigurationError`][glossary-configurationerror] (no double-write of one model
     attr) while a `read_only` field sharing a `source` with a writable one is
     **accepted** (read-only is dropped from the input).

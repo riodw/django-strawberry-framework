@@ -57,6 +57,8 @@ from dataclasses import dataclass, replace
 from types import GenericAlias
 from typing import TYPE_CHECKING, cast
 
+from django.core.exceptions import FieldDoesNotExist
+from django.db import models
 from rest_framework import serializers
 from rest_framework.fields import empty
 
@@ -91,8 +93,6 @@ from .serializer_converter import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
-
-    from django.db import models
 
     from .serializer_converter import DRFBaseSerializer, DRFField, DRFSerializer
 
@@ -604,15 +604,43 @@ def _serializer_meta_value(serializer_class: type[DRFBaseSerializer], name: str)
     return getattr(meta, name, None)
 
 
-def _serializer_model(serializer_class: type[DRFBaseSerializer]) -> type[models.Model] | None:
+def serializer_model(serializer_class: type[DRFBaseSerializer]) -> type[models.Model] | None:
     """Return the ``ModelSerializer``'s ``Meta.model``, or ``None`` for a plain serializer.
 
     The backing model is what the converter resolves a field's ``source`` against
-    for the read-side ``models.Field``-keyed converters. A plain ``Serializer``
-    (no ``Meta.model``) routes every field through the model-less path.
+    for the read-side ``models.Field``-keyed converters and what the write-source
+    ownership guards resolve a ``source`` through (``write_source_key``). A plain
+    ``Serializer`` (no ``Meta.model``) routes every field through the model-less path.
     """
     # DRF's ``ModelSerializer`` contract: a declared ``Meta.model`` is the model class.
     return cast("type[models.Model] | None", _serializer_meta_value(serializer_class, "model"))
+
+
+def write_source_key(model: type[models.Model] | None, source: str) -> str:
+    """Return the model attribute a writable one-segment ``source`` writes, as an ownership key.
+
+    DRF assigns ``validated_data[source]`` onto the instance by ``setattr`` (update) or
+    as a constructor kwarg (create), so two sources that spell ONE model field are one
+    write target even when the strings differ: a forward relation answers to its
+    ``name`` and its ``attname`` (``category`` / ``category_id``), and every model
+    answers to ``pk`` for its primary key field (``pk`` / ``code``). The key is the
+    resolved concrete ``models.Field.name``, so the ownership guards compare write
+    targets, not spellings. A source naming no concrete field (a serializer-only
+    key a custom ``create()`` reads, a reverse accessor, a plain ``Serializer`` with
+    no model) keys by itself: nothing on the model is written through it, so only an
+    exact spelling match is a collision. ``"*"`` never reaches here (star sources are
+    reported separately).
+    """
+    if model is None:
+        return source
+    if source == "pk":
+        return model._meta.pk.name
+    try:
+        field = model._meta.get_field(source)
+    except FieldDoesNotExist:
+        return source
+    # A reverse relation (``ForeignObjectRel``) is no attribute DRF writes; keep the spelling.
+    return field.name if isinstance(field, models.Field) else source
 
 
 def writable_serializer_fields(
@@ -654,20 +682,27 @@ def runtime_validated_data_fields(
 
 def writable_source_collisions(
     field_sources: Mapping[str, str | None],
+    *,
+    model: type[models.Model] | None,
 ) -> dict[str, list[str]]:
     """Return duplicate writable-source ownership, excluding DRF's whole-object ``"*"``.
 
-    ``source="*"`` is excluded here because it is not a single-key collision: a
-    star field owns NO declared key - DRF merges the mapping it returns straight
-    into root ``validated_data``, so it can write (or overwrite) any key. That
-    is a distinct, stronger failure mode reported by ``writable_star_sources``.
+    Ownership is keyed by the model attribute a source writes
+    (``write_source_key`` against ``model``), so ``category`` and
+    ``source="category_id"``, or a primary key ``code`` and ``source="pk"``, are one
+    key with two owners. ``model`` is required so no caller can fall back to
+    spelling comparison by omission; ``model=None`` (a model-less serializer)
+    compares sources as spelled. ``source="*"`` is excluded here because it is not a single-key
+    collision: a star field owns NO declared key - DRF merges the mapping it returns
+    straight into root ``validated_data``, so it can write (or overwrite) any key.
+    That is a distinct, stronger failure mode reported by ``writable_star_sources``.
     """
     source_owners: dict[str, list[str]] = {}
     for name, source in field_sources.items():
         write_source = source or name
         if write_source == "*":
             continue
-        source_owners.setdefault(write_source, []).append(name)
+        source_owners.setdefault(write_source_key(model, write_source), []).append(name)
     return {source: owners for source, owners in source_owners.items() if len(owners) > 1}
 
 
@@ -690,15 +725,20 @@ def raise_writable_source_ownership_errors(
     field_sources: Mapping[str, str | None],
     *,
     location: str | None = None,
+    model: type[models.Model] | None,
 ) -> None:
     """Raise ``ConfigurationError`` when writable sources collide or use ``source='*'``.
 
     The one raise path for schema-time (``rest_framework/sets.py``) and runtime
     (``rest_framework/resolvers.py``) ownership checks - detection stays in
     ``writable_star_sources`` / ``writable_source_collisions``; callers only supply
-    the mutation name, the source map, and an optional path phrase (e.g.
-    ``"nested serializer path 'items'"`` or ``"runtime serializer path '<root>'"``).
-    Omit ``location`` for the top-level schema surface.
+    the mutation name, the source map, the serializer's backing ``model`` (required:
+    the model each source resolves through; an explicit ``None`` for a model-less
+    serializer compares sources as spelled), and
+    an optional path phrase (e.g. ``"nested serializer path 'items'"`` or
+    ``"runtime serializer path '<root>'"``). Omit ``location`` for the top-level
+    schema surface. A collision names the owners by their declared sources when
+    those differ from the shared attribute (``'cat' (source 'category_id')``).
     """
     star_fields = writable_star_sources(field_sources)
     if star_fields:
@@ -715,11 +755,18 @@ def raise_writable_source_ownership_errors(
             "the column converter). Remove the field, make it read_only, or give "
             "it a concrete single-column source.",
         )
-    colliding = writable_source_collisions(field_sources)
+    colliding = writable_source_collisions(field_sources, model=model)
     if not colliding:
         return
+
+    def owner_label(name: str, attribute: str) -> str:
+        declared = field_sources.get(name) or name
+        return repr(name) if declared == attribute else f"{name!r} (source {declared!r})"
+
     detail = "; ".join(
-        f"source {source!r} <- fields {owners!r}" for source, owners in sorted(colliding.items())
+        f"source {attribute!r} <- fields "
+        f"[{', '.join(owner_label(name, attribute) for name in owners)}]"
+        for attribute, owners in sorted(colliding.items())
     )
     where = (
         f"{location} has multiple writable fields that bind one serializer source"
@@ -860,7 +907,7 @@ def resolve_injected_field_specs(
     """
     if not injected_fields:
         return []
-    model = _serializer_model(serializer_class)
+    model = serializer_model(serializer_class)
     provisional_name = generated_input_type_name(
         serializer_class.__name__,
         is_partial=operation_kind == PARTIAL,
@@ -1230,16 +1277,18 @@ def _collect_input_attr_collision_messages(
       ``categoryId`` vs a literal ``category_id`` -> ``categoryId``). Strawberry
       would collapse the two onto one schema field. Mirrors the read-type guard
       ``types/finalizer.py::_audit_field_surface``.
-    * ``source`` clash - two WRITABLE fields sharing one one-segment ``source``
-      would double-write one model attr. A ``read_only`` field sharing a ``source``
+    * ``source`` clash - two WRITABLE fields whose sources resolve to one model
+      attribute would double-write it. A ``read_only`` field sharing a ``source``
       with a writable one is fine (read-only is dropped before this is reached), so
       only the writable-vs-writable collision is reported. (The ``source``-collision
-      arm is DRF-only - forms have no ``source`` axis.) ``source_of`` uses
-      ``spec.source or spec.target_name`` so a bare declared name (``source is None``)
-      still collides with an alias that names it as ``source`` - the same
-      ``source or name`` rule ``writable_source_collisions`` applies at runtime for
-      sets / resolvers (star sources never reach this schema-time walk; the converter
-      rejects them before a spec is built).
+      arm is DRF-only - forms have no ``source`` axis.) ``source_of`` keys
+      ``spec.source or spec.target_name`` through ``write_source_key`` against the
+      serializer's model, so a bare declared name (``source is None``) still collides
+      with an alias that names it as ``source``, and ``category`` with
+      ``source="category_id"`` or a primary key field with ``source="pk"`` - the same
+      key ``writable_source_collisions`` applies for sets / resolvers (star sources
+      never reach this schema-time walk; the converter rejects them before a spec is
+      built).
 
     The seen-dict walk + the three collision arms are single-sited in
     ``utils/inputs.py::iter_input_field_collisions``; the
@@ -1248,6 +1297,7 @@ def _collect_input_attr_collision_messages(
     serializer nouns (incl. the id-like-suffix ``camel_case_note`` and the
     serializer-only ``source_of`` arm).
     """
+    model = serializer_model(serializer_class)
     return list(
         iter_input_field_collisions(
             field_specs,
@@ -1256,7 +1306,7 @@ def _collect_input_attr_collision_messages(
             rename_clause="Rename one,",
             name_of=lambda spec: spec.target_name,
             camel_case_note=" (or the id-like-suffix rule)",
-            source_of=lambda spec: spec.source or spec.target_name,
+            source_of=lambda spec: write_source_key(model, spec.source or spec.target_name),
         ),
     )
 
@@ -1713,7 +1763,7 @@ def build_serializer_input_class(
         # still dedupes to the canonical ``<Serializer>PartialInput``). Names were
         # validated above before this is zeroed.
         effective_optional = frozenset()
-    model = _serializer_model(serializer_class)
+    model = serializer_model(serializer_class)
 
     # The provisional type name (for the choice-enum ``<TypeName><Field>Enum``
     # build) - the canonical name; the descriptor-derived divergent name is

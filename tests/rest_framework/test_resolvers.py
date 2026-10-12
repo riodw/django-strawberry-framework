@@ -41,9 +41,10 @@ from __future__ import annotations
 
 import dataclasses
 import inspect
+import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from types import MappingProxyType, SimpleNamespace
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
 import pytest
 import pytest_django
@@ -67,6 +68,7 @@ from django_strawberry_framework import (
     DjangoOptimizerExtension,
     DjangoSchema,
     DjangoType,
+    NestedSerializerConfig,
     SerializerMutation,
     finalize_django_types,
 )
@@ -468,9 +470,11 @@ def _bind_item_serializer_mutation(
     serializer_cls: type[DRFSerializer],
     *,
     operation: str = "create",
+    nested_fields: Mapping[str, NestedSerializerConfig] | None = None,
 ):
     """Declare + finalize a minimal `SerializerMutation` over `serializer_cls`."""
     op_value = operation
+    nested_value = nested_fields
 
     class CategoryT(DjangoType, relay.Node):
         class Meta:
@@ -499,6 +503,7 @@ def _bind_item_serializer_mutation(
         class Meta:
             serializer_class = serializer_cls
             operation = op_value
+            nested_fields = nested_value
             permission_classes = [_AllowAll]
 
     @strawberry.type
@@ -700,25 +705,25 @@ def test_save_time_django_validation_error_keys_a_serializer_only_field_to_its_i
 
 
 @pytest.mark.django_db
-def test_save_time_django_validation_error_keeps_each_fields_own_column_name():
-    """A field's own source name beats another field's column-name alias for the same FK.
+def test_save_time_django_validation_error_keys_a_renamed_relation_by_both_column_names():
+    """A renamed relation field owns both names Django keys its FK errors by.
 
-    ``category`` (the FK) and ``category_ref`` (``source="category_id"``, its column) both
-    answer to ``category`` and ``category_id``. Each field's own source is its primary
-    name, so ``category`` reports ``categoryId`` and ``category_id`` reports
-    ``categoryRefId``; neither is displaced by the other field's alias.
+    ``category_ref`` (``source="category"``) is the only writer of the FK, so a
+    save-time error under ``category`` or under the column ``category_id`` both
+    report as ``categoryRef``; the key map never splits one model field between two
+    inputs (two writable fields over one attribute are refused at class creation).
     """
 
-    class ColumnRefRaisingSerializer(serializers.ModelSerializer[product_models.Item]):
+    class RenamedRefRaisingSerializer(serializers.ModelSerializer[product_models.Item]):
         category_ref = serializers.PrimaryKeyRelatedField(
-            source="category_id",
+            source="category",
             queryset=product_models.Category.objects.all(),
         )
 
         # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
         class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = product_models.Item
-            fields = ("name", "category", "category_ref")
+            fields = ("name", "category_ref")
 
         @override
         def save(self, **kwargs: object):
@@ -727,7 +732,7 @@ def test_save_time_django_validation_error_keeps_each_fields_own_column_name():
             )
 
     category = product_models.Category.objects.create(name="DjColumnRefCat")
-    mutation_cls = _bind_item_serializer_mutation(ColumnRefRaisingSerializer)
+    mutation_cls = _bind_item_serializer_mutation(RenamedRefRaisingSerializer)
     request = HttpRequest()
     request.user = User(username="u")
     info = make_info(context=SimpleNamespace(request=request))
@@ -737,11 +742,11 @@ def test_save_time_django_validation_error_keeps_each_fields_own_column_name():
             mutation_cls,
             info,
             None,
-            {"name": "OK", "category": category.pk, "category_ref": category.pk},
+            {"name": "OK", "category_ref": category.pk},
         )
     assert isinstance(result, list)
     assert [(fe.field, fe.messages) for fe in result] == [
-        ("categoryId", ["on the FK"]),
+        ("categoryRefId", ["on the FK"]),
         ("categoryRefId", ["on the column"]),
     ]
 
@@ -4285,6 +4290,142 @@ def test_runtime_context_star_source_field_is_rejected_before_validation():
             {"name": "client"},
             [],
         )
+
+
+def _contextual_attname_item_serializer() -> type[
+    serializers.ModelSerializer[product_models.Item]
+]:
+    """An ``Item`` serializer whose ``get_fields()`` adds a defaulted FK ``attname`` alias per request.
+
+    ``cat`` (``source="category_id"``, ``default=None``) exists only when a request is in
+    context, so class creation never sees it.
+    """
+
+    class ContextualAttnameSerializer(serializers.ModelSerializer[product_models.Item]):
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+            model = product_models.Item
+            fields = ("name", "category")
+
+        @override
+        def get_fields(self) -> dict[str, DRFField]:
+            fields = super().get_fields()
+            if self.context.get("request") is not None:
+                fields["cat"] = serializers.PrimaryKeyRelatedField(
+                    source="category_id",
+                    queryset=product_models.Category.objects.all(),
+                    required=False,
+                    default=None,
+                )
+            return fields
+
+    return ContextualAttnameSerializer
+
+
+def _category_with_contextual_items() -> type[
+    serializers.ModelSerializer[product_models.Category]
+]:
+    """A ``Category`` serializer nesting the contextual ``Item`` serializer as ``items``."""
+
+    class CategoryWithContextualItems(serializers.ModelSerializer[product_models.Category]):
+        items = _contextual_attname_item_serializer()(many=True)
+
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+            model = product_models.Category
+            fields = ("name", "items")
+
+        @override
+        def create(self, validated_data: dict[str, object]) -> product_models.Category:
+            items = cast("list[dict[str, object]]", validated_data.pop("items"))
+            category = product_models.Category.objects.create(**validated_data)
+            for item in items:
+                product_models.Item.objects.create(**item)
+            return category
+
+    return CategoryWithContextualItems
+
+
+def _root_attname_data(category_pk: int) -> dict[str, object]:
+    """Client data for the root ``Item`` create: ``name`` + the FK ``category``."""
+    return {"name": "RuntimeAliasClient", "category": category_pk}
+
+
+def _nested_attname_data(category_pk: int) -> dict[str, object]:
+    """Client data for the ``Category`` create nesting one ``Item`` with its FK ``category``."""
+    return {
+        "name": "RuntimeAliasParent",
+        "items": [{"name": "RuntimeAliasClient", "category": category_pk}],
+    }
+
+
+@pytest.mark.parametrize(
+    (
+        "serializer_factory",
+        "nested_fields",
+        "data_factory",
+        "path",
+    ),
+    [
+        pytest.param(
+            _contextual_attname_item_serializer,
+            None,
+            _root_attname_data,
+            "<root>",
+            id="root",
+        ),
+        pytest.param(
+            _category_with_contextual_items,
+            {"items": NestedSerializerConfig()},
+            _nested_attname_data,
+            "items",
+            id="nested",
+        ),
+    ],
+)
+@pytest.mark.django_db
+def test_runtime_context_attname_alias_of_a_relation_is_rejected_before_any_write(
+    serializer_factory: Callable[[], type[DRFSerializer]],
+    nested_fields: Mapping[str, NestedSerializerConfig] | None,
+    data_factory: Callable[[int], dict[str, object]],
+    path: str,
+):
+    """A request-time defaulted field over the FK ``attname`` collides with the client's FK.
+
+    ``category_id`` spells the ``category`` FK, so on create the runtime default would
+    replace the client's ``category`` under DRF's last-write-wins assignment; the runtime
+    guard keys ownership by the model field each level's serializer resolves the source
+    to, at the root and inside an opted-in nested serializer, and refuses before
+    validation, writing no row.
+    """
+    category = product_models.Category.objects.create(name="RuntimeAliasCat")
+    mutation_cls = _bind_item_serializer_mutation(
+        serializer_factory(),
+        nested_fields=nested_fields,
+    )
+    request = HttpRequest()
+    request.user = User(username="u")
+    info = make_info(context=SimpleNamespace(request=request))
+    counts = (product_models.Category.objects.count(), product_models.Item.objects.count())
+
+    with (
+        pytest.raises(
+            ConfigurationError,
+            match=re.escape(
+                f"runtime serializer path {path!r} has multiple writable fields that bind one "
+                "serializer source: source 'category' <- fields "
+                "['category', 'cat' (source 'category_id')]",
+            ),
+        ),
+        write_pipeline("default", lock=False),
+    ):
+        serializer_resolvers._serializer_write_step(
+            mutation_cls,
+            info,
+            None,
+            data_factory(category.pk),
+        )
+    assert (product_models.Category.objects.count(), product_models.Item.objects.count()) == counts
 
 
 def test_validator_queryset_explicitly_routed_elsewhere_fails_closed():

@@ -5,22 +5,22 @@ rules still switched off and the `# pyright: ignore[...]` comments still in the 
 Each item is fixed at the root, gated (both passes 0 errors, full suite in one pass at 100% coverage), then committed.
 A split suite run on a tree other sessions are editing can drop modules from every part, so it is not a coverage gate.
 
-Progress: 18 done, 11 to do. Ignore comments: 1024 lines (1897 at the start of 0.0.15's ignore sweep).
+Progress: 18 done, 11 to do. Ignore comments: 1038 lines (1897 at the start of 0.0.15's ignore sweep).
 
-## Pre-commit (`uvx pre-commit run --all-files`, d322f477, clean clone)
+## Pre-commit (`uvx pre-commit run --all-files`, 7d8d1d72, clean clone)
 
 | Hook | Result | Time | Scope |
 | --- | --- | --- | --- |
-| kanban tracked path constants | pass | 0.2s | whole tracked set |
-| source layout | pass | 4.5s | 606 files checked, 81 excluded, 0 violations |
-| ruff check | pass | 0.4s | 486 files |
-| ruff format | pass | 0.1s | 486 files |
-| basedpyright | pass | 23.5s | 486 files, 0 errors |
-| basedpyright floor (3.10) | pass | 14.8s | 486 files, 0 errors |
-| public API type completeness | pass | 4.8s | 100%, 2 allowlisted warnings |
-| kanban anchors | pass | 1.1s | 77 cards, 146 glossary anchors |
-| citations | pass | 3.3s | 3226 citations |
-| **Total** | **9/9 pass** | **55s wall** | |
+| kanban tracked path constants | pass | 0.1s | whole tracked set |
+| source layout | pass | 4.5s | 621 files checked, 81 excluded, 0 violations |
+| ruff check | pass | 0.8s | 499 files |
+| ruff format | pass | 0.1s | 499 files |
+| basedpyright | pass | 15.9s | 499 files, 0 errors |
+| basedpyright floor (3.10) | pass | 16.0s | 499 files, 0 errors |
+| public API type completeness | pass | 4.7s | 100%, 2 allowlisted warnings |
+| kanban anchors | pass | 1.1s | 77 cards, 149 glossary anchors |
+| citations | pass | 3.3s | 3363 citations |
+| **Total** | **9/9 pass** | **48s wall** | |
 
 ## Done
 
@@ -34,7 +34,7 @@ Progress: 18 done, 11 to do. Ignore comments: 1024 lines (1897 at the start of 0
 - [x] 18. `FilterSet.__init__` overrides spell out their parameters instead of `*args, **kwargs` (10 ignores)
 - [x] 25. `_CrLampKiosk` renamed `CrLampKiosk`, clearing its `reportUnusedClass` (1 ignore)
 - [x] 22. The queryset-state check accepts only a tuple `_fields`, as Django stores it
-- [x] 14. `utils/_queryset_private.py` reads and writes Django's private QuerySet attributes; 156 lines to 35
+- [x] 14. `utils/_queryset_private.py` reads and writes Django's private QuerySet attributes; 156 ignore lines to 35
 - [x] 15. Real `User` / `AnonymousUser` objects instead of stand-in users (39 ignores)
 - [x] 16. `tests/_idioms.py::relay_hooks` / `async_relay_hooks` read the Relay methods the finalizer installs (26
   ignores; one kept, below)
@@ -56,16 +56,16 @@ Progress: 18 done, 11 to do. Ignore comments: 1024 lines (1897 at the start of 0
 
 ## To do: rules still off
 
-Counts are the diagnostics each rule reports when switched on (main pass, all seven on at once). Migrations account for
-478 of them.
+Counts are the diagnostics each rule reports when switched on (main pass, all seven on at once, 7d8d1d72). "Root" is
+`conftest.py`, `line_count.py` and `docs/dry/export_dry_review.py`. Migrations account for 482 of them.
 
-- [ ] 7. `reportAny`: 9861 (package 693, tests 3014, examples 5415, scripts 739)
-- [ ] 8. `reportUnannotatedClassAttribute`: 8662 (package 163, tests 6579, examples 1904, scripts 16)
-- [ ] 9. `reportUnusedCallResult`: 4559 (package 79, tests 2745, examples 1463, scripts 272)
-- [ ] 10. `reportUnusedParameter`: 1713 (package 50, tests 1130, examples 528, scripts 5)
-- [ ] 11. `reportUnknownMemberType`: 1671 (package 75, tests 892, examples 610, scripts 94)
-- [ ] 12. `reportUnknownVariableType`: 1211 (package 134, tests 590, examples 426, scripts 61)
-- [ ] 13. `reportUnknownArgumentType`: 660 (package 141, tests 374, examples 98, scripts 47)
+- [ ] 7. `reportAny`: 9912 (package 658, tests 3003, examples 5495, scripts 663, root 93)
+- [ ] 8. `reportUnannotatedClassAttribute`: 9057 (package 164, tests 6900, examples 1977, scripts 14, root 2)
+- [ ] 9. `reportUnusedCallResult`: 4768 (package 80, tests 2883, examples 1527, scripts 245, root 33)
+- [ ] 10. `reportUnusedParameter`: 1728 (package 50, tests 1106, examples 567, scripts 0, root 5)
+- [ ] 11. `reportUnknownMemberType`: 1538 (package 73, tests 728, examples 643, scripts 93, root 1)
+- [ ] 12. `reportUnknownVariableType`: 1208 (package 135, tests 572, examples 440, scripts 57, root 4)
+- [ ] 13. `reportUnknownArgumentType`: 692 (package 137, tests 403, examples 104, scripts 45, root 3)
 
 Off by design (not planned): `reportImplicitStringConcatenation`, `reportPrivateUsage`, `reportUnusedFunction`,
 `reportImportCycles`, `reportUninitializedInstanceVariable`. The reasons are in `pyproject.toml`.
@@ -92,7 +92,7 @@ Survey verdicts recorded so nothing is re-tried blind:
 ## Waiting on you
 
 - [ ] 23. Draft a djangorestframework-stubs issue for `ModelSerializer.Meta` (`Meta: ClassVar[type[object]]`)? It would
-  retire 136 ignores once released
+  retire 142 ignores once released
 - [ ] 24. Type `info` as `Info` on the public visibility helpers (`apply_cascade_permissions`, `FilterSet.apply_sync`,
   ...): 23 functions and about 65 test calls; a public API change
 - [ ] 28. Widen `DjangoType.get_queryset`'s return to a union? It breaks the direct sync calls in `docs/README.md` and
@@ -106,7 +106,7 @@ strawberry_django does?
 
 ## Ignore breakdown
 
-Lines carrying `# pyright: ignore[...]`: 1024 (1053 rule hits) in 164 files: tests 794, package 175, examples 53,
+Lines carrying `# pyright: ignore[...]`: 1038 (1068 rule hits) in 164 files: tests 806, package 177, examples 53,
 scripts 2.
 
 ### By cause
@@ -115,22 +115,23 @@ scripts 2.
 | --- | --- | --- |
 | Deliberately ill-typed test input (hostile values, forged classes, rejected writes) | 490 | keep |
 | Django private QuerySet attributes (seam 14, `super()._clone()` 2, hostile writes 7, planted shapes 12) | 35 | keep |
-| DRF stubs declare `ModelSerializer.Meta` | 136 | item 23 |
+| DRF stubs declare `ModelSerializer.Meta` | 142 | item 23 |
 | Verbatim `__init__` forwards (schema, consumers, ModelForm, ModelSerializer) | 34 | keep |
 | Framework `Meta` read from the class body only | 13 | keep |
 | Django model `Meta` on proxy / MTI children | 11 | keep |
 | Reviewed in item 21 and kept (each reason line states its cause) | 301 | keep |
 | Mixin bases whose `__init__` chain reaches one base (enum filter fields, `PaginationArgumentError`) | 4 | keep |
+| Added by bug-hunt fixes after item 21 (each with a reason line; filter overrides, `Any` forwards, a `ListField` argument, a `DjangoConnection[pair_type]` annotation) | 8 | review |
 
 ### By rule
 
 | Rule | Hits | Package | Tests | Examples | Scripts |
 | --- | --- | --- | --- | --- | --- |
-| `reportArgumentType` | 320 | 24 | 291 | 5 | 0 |
-| `reportIncompatibleVariableOverride` | 194 | 2 | 169 | 23 | 0 |
+| `reportArgumentType` | 321 | 24 | 292 | 5 | 0 |
+| `reportIncompatibleVariableOverride` | 201 | 2 | 176 | 23 | 0 |
 | `reportAttributeAccessIssue` | 186 | 25 | 160 | 1 | 0 |
-| `reportExplicitAny` | 101 | 67 | 19 | 13 | 2 |
-| `reportIncompatibleMethodOverride` | 69 | 5 | 59 | 5 | 0 |
+| `reportExplicitAny` | 104 | 67 | 22 | 13 | 2 |
+| `reportIncompatibleMethodOverride` | 71 | 6 | 60 | 5 | 0 |
 | `reportReturnType` | 26 | 0 | 25 | 1 | 0 |
 | `reportUnnecessaryIsInstance` | 20 | 20 | 0 | 0 | 0 |
 | `reportCallIssue` | 17 | 1 | 15 | 1 | 0 |
@@ -143,15 +144,15 @@ scripts 2.
 | `reportGeneralTypeIssues` | 7 | 1 | 6 | 0 | 0 |
 | `reportUndefinedVariable` | 7 | 0 | 7 | 0 | 0 |
 | `reportFunctionMemberAccess` | 6 | 4 | 1 | 1 | 0 |
+| `reportUnnecessaryComparison` | 5 | 5 | 0 | 0 | 0 |
 | `reportMissingParameterType` | 5 | 0 | 5 | 0 | 0 |
 | `reportPropertyTypeMismatch` | 4 | 4 | 0 | 0 | 0 |
-| `reportUnnecessaryComparison` | 4 | 4 | 0 | 0 | 0 |
 | `reportDeprecated` | 4 | 3 | 1 | 0 | 0 |
+| `reportInvalidTypeForm` | 4 | 0 | 4 | 0 | 0 |
 | `reportInvalidTypeArguments` | 3 | 1 | 2 | 0 | 0 |
 | `reportOptionalMemberAccess` | 3 | 3 | 0 | 0 | 0 |
 | `reportInvalidCast` | 3 | 3 | 0 | 0 | 0 |
 | `reportIncompatibleUnannotatedOverride` | 3 | 1 | 2 | 0 | 0 |
-| `reportInvalidTypeForm` | 3 | 0 | 3 | 0 | 0 |
 | `reportUntypedFunctionDecorator` | 2 | 2 | 0 | 0 | 0 |
 | `reportUntypedBaseClass` | 2 | 0 | 2 | 0 | 0 |
 | `reportImplicitOverride` | 1 | 0 | 1 | 0 | 0 |
@@ -164,35 +165,28 @@ scripts 2.
 | File | Lines |
 | --- | --- |
 | `tests/utils/test_querysets.py` | 71 |
-| `tests/rest_framework/test_resolvers.py` | 66 |
-| `tests/rest_framework/test_sets.py` | 48 |
-| `tests/rest_framework/test_converter.py` | 42 |
+| `tests/rest_framework/test_resolvers.py` | 68 |
+| `tests/rest_framework/test_sets.py` | 49 |
+| `tests/rest_framework/test_converter.py` | 45 |
 | `tests/test_resource_policy.py` | 29 |
 | `examples/fakeshop/apps/library/serializers.py` | 26 |
 | `tests/test_list_field.py` | 22 |
 | `tests/test_consumers.py` | 20 |
+| `tests/rest_framework/test_inputs.py` | 18 |
 | `tests/utils/test_relations.py` | 18 |
-| `tests/test_error_policy.py` | 17 |
 
 ## Addendum: items 11-13 root-fix analysis (2026-10-08, HEAD 85ba203e)
 
 Items 11-13 (`reportUnknownMemberType`, `reportUnknownVariableType`, `reportUnknownArgumentType`) were analyzed together
 because they share causes: most fixes clear rows in two or three of the rules at once. Method: one Sonnet gatherer per
 rule grouped every diagnostic by origin, then one Opus analyst per rule verified the groups and prototyped fixes in a
-`git archive` scratch copy (13 basedpyright runs, no pytest). Nothing is implemented; the repo is unchanged. The
-scratch reports and run outputs lived under `/private/tmp` and will not survive a reboot, so everything needed to resume
-is below.
+`git archive` scratch copy (13 basedpyright runs, no pytest). None of the fixes below has landed (re-checked at
+7d8d1d72); everything needed to resume is in this section.
 
-### Baseline (only these three rules on, main pass, 85ba203e)
+### Baseline
 
-| Rule | Total | Package | Tests | Examples | Scripts | Other |
-| --- | --- | --- | --- | --- | --- | --- |
-| `reportUnknownMemberType` (11) | 1517 | 72 | 720 | 631 | 93 | 1 |
-| `reportUnknownVariableType` (12) | 1176 | 134 | 556 | 425 | 57 | 4 |
-| `reportUnknownArgumentType` (13) | 664 | 136 | 378 | 102 | 45 | 3 |
-
-These differ from the to-do list counts above, which were taken with all seven rules on at an earlier HEAD; re-baseline
-those lines when an item lands. "Other" is root files (`conftest.py`, `line_count.py`, `docs/dry/export_dry_review.py`).
+Current counts are the items 11-13 lines in the to-do list. The per-cause and prototype figures below were measured at
+85ba203e (Member 1517, Variable 1176, Argument 664) and have not been re-run.
 
 To measure: `git archive HEAD` into a scratch dir, set the three rules to `"error"` in its `pyproject.toml`, and give the
 `examples/fakeshop` executionEnvironment `extraPaths = ["."]` (without it the copy checks examples against the real
@@ -347,15 +341,12 @@ The floor config keeps the Unknown rules off either way (django-stubs `-> Self` 
 
 ### Notes for the next agent
 
-- Read AGENTS.md and START.md first. No pytest unless the maintainer asks (AGENTS rule 15), including in agent briefs
-  and scratch copies. One heavy job machine-wide: check `pgrep -fl '[p]ytest|[b]asedpyright'` and serialize
-  basedpyright runs; two concurrent suites plus checker pairs OOM-crashed this 16 GB Mac on 2026-10-08 and the reboot
-  wiped `/private/tmp`.
+- START.md holds the general rules (no pytest unless asked, one heavy job machine-wide, scratch copies, subagent
+  reports).
 - Every commit for these items includes this file, updated in that commit; re-baseline the item lines with the
   measurement above.
 - Prototype in a `git archive` scratch copy with the examples `extraPaths` fix, never by running fakeshop scripts or
   `manage.py` (they write the tracked `examples/fakeshop/db.sqlite3`).
-- Subagents cannot write report files (the harness refuses); have them return the report as text and save it yourself.
 - Done lines name the item and its ignore count, never a commit hash; one commit per item, never a follow-up hash
   commit. This is a temp file, deleted once the rules are on and the ignores are gone.
 - Attributions above were verified with checker runs except where marked unproven (`_hint_prefetch_over_pk_set`,

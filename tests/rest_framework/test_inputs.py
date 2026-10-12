@@ -29,6 +29,7 @@ and ``examples/fakeshop/test_query/test_products_api.py`` (serializer mutations)
 
 from __future__ import annotations
 
+import re
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any
@@ -1124,13 +1125,29 @@ def _category_attname_alias_serializer() -> type[serializers.ModelSerializer[pro
     return AttnameWriteSer
 
 
+def _item_pk_alias_serializer() -> type[serializers.ModelSerializer[product_models.Item]]:
+    """A writable ``id`` beside ``ident`` (``source="pk"``): two spellings of one primary key."""
+
+    class PkAliasWriteSer(serializers.ModelSerializer[product_models.Item]):
+        id = serializers.IntegerField()
+        ident = serializers.IntegerField(source="pk")
+
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+            model = product_models.Item
+            fields = ("id", "ident")
+
+    return PkAliasWriteSer
+
+
 @pytest.mark.parametrize(
     ("serializer_factory", "message"),
     [
         pytest.param(_name_alias_serializer, "sharing one source 'name'", id="same-spelling"),
+        pytest.param(_item_pk_alias_serializer, "sharing one source 'id'", id="pk-alias"),
         pytest.param(
             _category_attname_alias_serializer,
-            "sharing one source 'category'",
+            "binds source 'category_id', the column (attname) of relation Item.category",
             id="relation-attname",
         ),
     ],
@@ -1141,12 +1158,15 @@ def test_two_writable_fields_sharing_one_source_raise(
 ):
     """Two WRITABLE fields whose sources resolve to one model field raise (no double-write).
 
-    The walker keys each source through ``write_source_key``, so an FK's ``attname``
-    collides with the FK it spells, not only an identical spelling.
+    The walker keys each source through ``write_source_key``, so a ``pk`` alias collides
+    with the primary key field it spells, not only an identical spelling. An FK's
+    ``attname`` alias never reaches the walk's collision arm: the converter refuses a
+    relation bound to its ``attname`` first (class creation reports the collision instead,
+    ``test_sets.py``).
     """
     _register_products_types()
 
-    with pytest.raises(ConfigurationError, match=message):
+    with pytest.raises(ConfigurationError, match=re.escape(message)):
         _build_serializer_inputs(serializer_factory(), guard_required=False)
 
 
@@ -1166,6 +1186,33 @@ def test_read_only_field_sharing_source_with_writable_is_accepted():
     # ``name_echo`` is read-only -> dropped, so no source collision.
     cre, _, _, _ = _build_serializer_inputs(MixedSer, guard_required=False)
     assert set(_field_map(cre)) == {"name"}
+
+
+def test_read_only_relation_bound_to_its_attname_is_accepted():
+    """A ``read_only`` relation over an FK ``attname`` builds: it is dropped before the converter."""
+    _register_products_types()
+
+    class AttnameEchoSer(serializers.ModelSerializer[product_models.Item]):
+        cat: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
+            source="category_id",
+            read_only=True,
+        )
+        category_id: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
+            read_only=True,
+        )
+
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+            model = product_models.Item
+            fields = (
+                "name",
+                "category",
+                "cat",
+                "category_id",
+            )
+
+    cre, _, _, _ = _build_serializer_inputs(AttnameEchoSer, guard_required=False)
+    assert set(_field_map(cre)) == {"name", "category_id"}
 
 
 # ---------------------------------------------------------------------------

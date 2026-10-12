@@ -47,7 +47,10 @@ suffix rule (``category`` / ``category_id`` -> ``categoryId``, ``category_pk`` -
 ``categoryPk`` - no doubled ``...IdId`` / ``...PkId``), NOT from ``source``. The
 backing ``models.Field`` is resolved through the field's ``source`` (one-segment
 or equal to the declared name). A dotted ``source`` / ``source="*"`` on a
-model-column-converting field raises ``ConfigurationError``. The unified
+model-column-converting field raises ``ConfigurationError``, and so does a relation
+bound to its forward relation's ``attname`` (``source="category_id"``, or a declared
+``category_id`` with no ``source``): the relation is bound by its name
+(``category_id = PrimaryKeyRelatedField(source="category")``). The unified
 ``utils/inputs.py::InputFieldSpec`` records the reverse map - ``target_name`` is
 the DECLARED serializer field name (the ``validated_data`` key), with the extra
 ``source`` axis carrying the resolved one-segment source.
@@ -661,6 +664,35 @@ def _reject_relation_cardinality_mismatch(field: DRFField, column: ModelField) -
         f"requires {expected}. Align the "
         "serializer relation's many= shape with the model relation, or map the field to a "
         "serializer-only target with an explicit queryset.",
+    )
+
+
+def _reject_relation_attname_source(field: DRFField, column: ModelField) -> None:
+    """Reject a serializer relation bound to its forward relation's ``attname``, not the relation.
+
+    ``Options.get_field`` answers to a forward relation's ``attname`` as well as its name, so
+    ``cat = PrimaryKeyRelatedField(source="category_id")`` (or a declared ``category_id =
+    PrimaryKeyRelatedField(...)``, whose ``source`` defaults to its name) resolves the
+    ``category`` relation. But ``PrimaryKeyRelatedField.to_internal_value`` returns the related
+    INSTANCE, and DRF writes it under the source spelled: ``ModelSerializer.create()`` hands
+    ``category_id=<Category>`` to ``Model._default_manager.create()``, which Django's INSERT
+    path cannot convert (a ``TypeError`` on every create), and ``update()`` leaves the instance
+    in the column attribute. The relation input is a contract the runtime serializer can
+    only honor through the relation's name, so the attname spelling fails loud here; binding
+    ``source`` to the relation keeps the declared name, and with it the GraphQL input name.
+    """
+    attname: str | None = getattr(column, "attname", None)
+    source = field.source or _bound_field_name(field)
+    if attname is None or attname == column.name or source != attname:
+        return
+    raise ConfigurationError(
+        f"Serializer relation field {field.field_name!r} binds source {source!r}, the column "
+        f"(attname) of relation {column.model.__name__}.{column.name}. A "
+        "PrimaryKeyRelatedField validates to the related instance, which DRF writes under the "
+        f"source as spelled: Django cannot insert an instance into {source!r} (every create "
+        "fails) and an update leaves the instance in that attribute. Bind the relation "
+        f"instead: source={column.name!r} (the declared name, and so the GraphQL input name, "
+        "stays).",
     )
 
 
@@ -1306,8 +1338,11 @@ def resolve_serializer_field(
             _reject_unsupported_relation_field(field)
             related_model = column.related_model
             _reject_relation_cardinality_mismatch(field, column)
-            # The guard has aligned the serializer field's cardinality with the model
-            # relation's collection shape, so the emitted kind follows the SERIALIZER
+            # A PK relation bound to the relation's ``attname`` validates to an instance DRF
+            # writes under the attname: refused, the relation is bound by its name.
+            _reject_relation_attname_source(field, column)
+            # The cardinality guard has aligned the serializer field's cardinality with the
+            # model relation's collection shape, so the emitted kind follows the SERIALIZER
             # field's cardinality: a many field over a one_to_many rel (a reverse FK /
             # GenericRelation - collection-shaped but many_to_many=False) emits a list
             # id input, never the single id the column classifier alone would produce.

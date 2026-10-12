@@ -1285,11 +1285,10 @@ def _collect_input_attr_collision_messages(
       arm is DRF-only - forms have no ``source`` axis.) ``source_of`` keys
       ``spec.source or spec.target_name`` through ``write_source_key`` against the
       serializer's model, so a bare declared name (``source is None``) still collides
-      with an alias that names it as ``source``, and ``category`` with
-      ``source="category_id"`` or a primary key field with ``source="pk"`` - the same
-      key ``writable_source_collisions`` applies for sets / resolvers (star sources
-      never reach this schema-time walk; the converter rejects them before a spec is
-      built).
+      with an alias that names it as ``source``, and a primary key field with
+      ``source="pk"`` - the same key ``writable_source_collisions`` applies for sets /
+      resolvers (star sources and a relation bound to its ``attname`` never reach this
+      schema-time walk; the converter rejects them before a spec is built).
 
     The seen-dict walk + the three collision arms are single-sited in
     ``utils/inputs.py::iter_input_field_collisions``; the

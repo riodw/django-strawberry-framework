@@ -295,7 +295,8 @@ live-first mandate, so the resolver's reachable lines are covered by a real
     **plus the `source` axis**,
     [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)
     **Renamed fields**: omitted / one-segment `source` supported, dotted `source` /
-    `source="*"` rejected for a model-column-converting field). The whole module is
+    `source="*"` rejected for a model-column-converting field, a relation bound to its
+    `attname` rejected). The whole module is
     behind the DRF soft-import guard
     ([Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy)).
   - [ ] [`rest_framework/inputs.py`][rf-inputs]: build **two** `@strawberry.input`
@@ -346,7 +347,8 @@ live-first mandate, so the resolver's reachable lines are covered by a real
     and preserve the declared name in the reverse map; **the id-like suffix rule** —
     `category` → `categoryId`, `category_id` → `categoryId`, `category_pk` →
     `categoryPk` (no doubled `…IdId` / `…PkId`); a **dotted `source`** / `source="*"` on
-    a model-column-converting field raises
+    a model-column-converting field, and a relation bound to its forward relation's
+    `attname`, raise
     [`ConfigurationError`][glossary-configurationerror]; the unknown serializer-field
     [`ConfigurationError`][glossary-configurationerror]. And
     [`tests/rest_framework/test_inputs.py`][test-rest-framework] — the serializer-derived
@@ -1421,13 +1423,28 @@ supported `source` scope:
   `categoryId` (already id-like — camel-cased, **no** doubled `…IdId`), and
   `category_pk` → `categoryPk` (already id-like — camel-cased, **no** `…PkId`). This
   matters because DRF migrants routinely name write-only related-id fields `<name>_id`
-  already; appending `Id` regardless would emit `categoryIdId`. (A non-relation scalar
+  already (`category_id = PrimaryKeyRelatedField(source="category", …)`); appending `Id`
+  regardless would emit `categoryIdId`. (A non-relation scalar
   field is camel-cased with no suffix: `full_name` → `fullName`.) The **backing Django
   model field** (for the enum / relation-target resolution above) is looked up by
   **`source`**, not the field name. The reverse map **preserves the declared serializer
   field name** as the `provided_data` key — DRF's `to_internal_value` reads by the
   declared key and maps it to `source` internally, so the resolver must **not**
   pre-apply `source`.
+- A single relation is bound by the relation's **name**, never its column. A `source`
+  spelling a forward relation's `attname` (`cat = PrimaryKeyRelatedField(source="category_id")`,
+  or a declared `category_id = PrimaryKeyRelatedField(queryset=…)` whose `source` defaults to
+  its name) resolves the `category` relation through `Options.get_field`, but
+  `PrimaryKeyRelatedField` validates to the related **instance** and DRF writes it under the
+  `source` as spelled: Django cannot insert an instance into `category_id`, so every create
+  fails, and an update leaves the instance in the attribute. It is a
+  [`ConfigurationError`][glossary-configurationerror] naming the field and the relation
+  ([`rest_framework/serializer_converter.py`][rf-converter]`::_reject_relation_attname_source`),
+  for a foreign key, a one-to-one, a `to_field` key, a generic relation's content-type key and
+  a multi-table parent link alike, at every opted-in nesting depth; the remedy
+  `source="category"` keeps the declared name, so the GraphQL name does not move. A
+  `read_only` field is dropped before the converter, so a read-only echo of the attname is
+  unaffected.
 - A **dotted `source`** (`source="user.email"`) or **`source="*"`** is **rejected** for
   any field that resolves its target from a model column (a `ModelSerializer` FK-backed
   relation, or a `choices`-enum overlap): a [`ConfigurationError`][glossary-configurationerror]
@@ -2775,7 +2792,8 @@ drive. The **package-internal boundary** (`tests/rest_framework/`) is narrow and
   fail-loud, the create-required guard, descriptor-collision raises) — these never reach
   a resolver;
 - **converter field-class matrix rows fakeshop does not expose** (every supported DRF
-  field → annotation, the custom-field raise, dotted-`source` raise);
+  field → annotation, the custom-field raise, dotted-`source` raise, attname-`source`
+  raise);
 - **registry / finalizer lifecycle** (binding, retry-idempotence, no-primary error);
 - **soft-dependency import simulation** (the DRF-absent guard);
 - **pure flattening-helper edge cases** (nested `serializer.errors` shapes no products
@@ -2841,7 +2859,7 @@ same transport, different app.
     — a `source="category"` FK and a `source="name"` scalar derive the GraphQL name from
     the declared field name, resolve the backing column via `source`, and preserve the
     declared name in the reverse map; a **dotted `source`** / `source="*"` on a
-    model-column-converting field raises
+    model-column-converting field, and a relation bound to its `attname`, raise
     [`ConfigurationError`][glossary-configurationerror]; **the fail-loud dispatch — a
     known field maps, but a custom `class CustomField(serializers.Field)` raises
     [`ConfigurationError`][glossary-configurationerror]** (the catch-all-shadowing
@@ -2902,7 +2920,8 @@ same transport, different app.
     raise [`ConfigurationError`][glossary-configurationerror] **before materialization** (the
     serializer analog of [`forms/inputs.py`][forms-inputs]`::_guard_input_attr_collisions`),
     two **writable** serializer fields whose sources resolve to **one** model attribute
-    (the same spelling, or an `attname` / `pk` alias of it)
+    (the same spelling, or a `pk` alias of it; a relation's `attname` alias is refused
+    first, as a relation bound to its `attname`)
     raise [`ConfigurationError`][glossary-configurationerror] (no double-write of one model
     attr) while a `read_only` field sharing a `source` with a writable one is
     **accepted** (read-only is dropped from the input).
@@ -2915,8 +2934,9 @@ same transport, different app.
     succeeds, a **later type fails finalization**, the missing type is registered, and a
     second `finalize_django_types()` succeeds with no stale serializer-input attributes
     (proving `clear_serializer_input_namespace()` runs in the pre-bind reset block, not
-    a per-pass clear); the no-registered-primary-type error; the model-flavor seam
-    defaults unchanged.
+    a per-pass clear); the no-registered-primary-type error; a lone relation bound to its
+    `attname` failing the bind for create, update, a `Meta.injected_fields` entry and an
+    opted-in nested child alike; the model-flavor seam defaults unchanged.
   - `test_resolvers.py` — **genuinely-unreachable internals only** (the create/update
     happy paths, `validate_<field>` / flat `validate()` → `"__all__"` envelopes,
     `categoryId` reverse-map, partial-update, visibility-scoped update, write-auth,
@@ -3065,9 +3085,9 @@ The completion contract.
    (`category`/`category_id` → `categoryId`, `category_pk` → `categoryPk`, no doubled
    suffix), `source` → backing column, declared name preserved as the DRF write-back
    key; dotted `source` / `source="*"` on a model-column-converting field rejected; a
-   choice field admitting a value its choice column's read enum has no member for
-   rejected; a `MultipleChoiceField` or a `ListField` choice child over a single-value choice
-   column rejected).
+   relation bound to its `attname` rejected; a choice field admitting a value its choice
+   column's read enum has no member for rejected; a `MultipleChoiceField` or a `ListField`
+   choice child over a single-value choice column rejected).
    [`rest_framework/inputs.py`][rf-inputs] builds both the serializer-derived
    `<Serializer>Input` (create) and `<Serializer>PartialInput` (update) from the
    **schema-time field set** (the overridable `get_serializer_for_schema()` hook, default
@@ -3329,15 +3349,16 @@ Earned live by `createShelfViaMetadataSerializer`'s `label` field.
 ### Aggregate schema-time diagnostics
 
 `rest_framework/inputs.py::_walk_serializer_fields` COLLECTS every per-field conversion error
-(unsupported field, non-PK relation, missing relation-primary, dotted / `source="*"`, the
-type-override conflict) instead of raising on the first, folds in the input-attr /
-GraphQL-name / source collision messages (`_collect_input_attr_collision_messages`), and
-raises ONE `ConfigurationError` (`_aggregate_field_problems`). A SINGLE problem is raised
-verbatim (so the precise per-field wording and every `pytest.raises(match=...)` substring
-hold); TWO OR MORE are grouped under a `… has N schema-time problem(s):` header with one
-bullet each, so a consumer with several bad fields fixes them all in one pass. The aggregate
-is a `ConfigurationError`, so the canonical-name gate's `_default_full_shape_identity`
-swallows it (an unbuildable default shape simply does not reserve the canonical name).
+(unsupported field, non-PK relation, a relation bound to its `attname`, missing
+relation-primary, dotted / `source="*"`, the type-override conflict) instead of raising on
+the first, folds in the input-attr / GraphQL-name / source collision messages
+(`_collect_input_attr_collision_messages`), and raises ONE `ConfigurationError`
+(`_aggregate_field_problems`). A SINGLE problem is raised verbatim (so the precise per-field
+wording and every `pytest.raises(match=...)` substring hold); TWO OR MORE are grouped under
+a `… has N schema-time problem(s):` header with one bullet each, so a consumer with several
+bad fields fixes them all in one pass. The aggregate is a `ConfigurationError`, so the
+canonical-name gate's `_default_full_shape_identity` swallows it (an unbuildable default
+shape simply does not reserve the canonical name).
 Package-tested (it is a configuration-time raise).
 
 ### Runtime schema/runtime serializer agreement guard

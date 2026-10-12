@@ -1324,6 +1324,73 @@ def test_distinct_model_fields_stay_separate_write_targets_at_class_creation(
     assert mutation in iter_mutations()
 
 
+def _item_lone_attname_serializer() -> type[serializers.ModelSerializer[models.Model]]:
+    """``Item`` writing its ``category`` FK only through ``cat`` (``source="category_id"``)."""
+    cat: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
+        source="category_id",
+        queryset=product_models.Category.objects.all(),
+    )
+    return _alias_serializer(product_models.Item, {"cat": cat}, ("name", "cat"))
+
+
+_LONE_ATTNAME_REFUSAL = (
+    "Serializer relation field 'cat' binds source 'category_id', the column (attname) of "
+    "relation Item.category. A PrimaryKeyRelatedField validates to the related instance, which "
+    "DRF writes under the source as spelled: Django cannot insert an instance into "
+    "'category_id' (every create fails) and an update leaves the instance in that attribute. "
+    "Bind the relation instead: source='category' (the declared name, and so the GraphQL input "
+    "name, stays)."
+)
+
+_LONE_ATTNAME_ROWS = [
+    pytest.param(
+        lambda: {"serializer_class": _item_lone_attname_serializer(), "operation": "create"},
+        id="root-create",
+    ),
+    pytest.param(
+        lambda: {"serializer_class": _item_lone_attname_serializer(), "operation": "update"},
+        id="root-update",
+    ),
+    pytest.param(
+        lambda: {
+            "serializer_class": _item_lone_attname_serializer(),
+            "operation": "create",
+            "fields": ("name",),
+            "injected_fields": ("cat",),
+        },
+        id="injected",
+    ),
+    pytest.param(
+        lambda: {
+            "serializer_class": _category_with_items(_item_lone_attname_serializer()),
+            "operation": "create",
+            "nested_fields": {"items": NestedSerializerConfig()},
+        },
+        id="nested",
+    ),
+]
+
+
+@pytest.mark.parametrize("meta_factory", _LONE_ATTNAME_ROWS)
+def test_lone_relation_bound_to_its_attname_fails_the_bind(
+    meta_factory: Callable[[], dict[str, object]],
+):
+    """A writable relation bound only through its ``attname`` fails loud for every operation.
+
+    No alias shares its model field, so class creation's ownership check passes; the
+    converter refuses the spelling wherever the input build resolves the field: the root
+    input of either operation, a ``Meta.injected_fields`` entry, and a child of an opted-in
+    nested serializer.
+    """
+    _declare_products_primaries()
+    mutation_meta = type("Meta", (), {"permission_classes": [], **meta_factory()})
+    mutation = type("LoneAttnameMut", (SerializerMutation,), {"Meta": mutation_meta})
+    assert mutation in iter_mutations()
+
+    with pytest.raises(ConfigurationError, match=re.escape(_LONE_ATTNAME_REFUSAL)):
+        finalize_django_types()
+
+
 # ---------------------------------------------------------------------------
 # Meta.optional_fields is the MUTATION's key
 # ---------------------------------------------------------------------------

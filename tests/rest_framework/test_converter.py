@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import datetime
 import decimal
+import re
 import uuid
 from collections.abc import Callable, Iterator
 from enum import Enum
@@ -57,6 +58,7 @@ import strawberry
 from apps.library import models as library_models
 from apps.products import models as product_models
 from apps.scalars import models as scalar_models
+from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from rest_framework import serializers
 from strawberry import relay
@@ -595,6 +597,164 @@ def test_model_backed_relation_cardinality_mismatch_raises():
     field = bound_fields(MismatchedSer())["category_ids"]
     with pytest.raises(ConfigurationError, match="cardinality"):
         resolve_serializer_field(field, product_models.Item, "X")
+
+
+def test_many_relation_bound_to_an_attname_reports_the_cardinality_mismatch():
+    """A ``many=True`` field over an FK's ``attname`` is refused for its cardinality first.
+
+    The cardinality guard runs before the attname guard, so the consumer is told the shape is
+    wrong (one id, not a list) rather than only the spelling.
+    """
+    relation_field: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=product_models.Category.objects.all(),
+        source="category_id",
+    )
+    field = bound_fields(_relation_field_serializer(product_models.Item, "cat", relation_field)())[
+        "cat"
+    ]
+    message = (
+        "Serializer relation field 'cat' has a cardinality mismatch: it declares many=True, "
+        "but its backing model relation Item.category requires a single related object. "
+        "Align the serializer relation's many= shape with the model relation, or map the "
+        "field to a serializer-only target with an explicit queryset."
+    )
+    with pytest.raises(ConfigurationError, match=f"^{re.escape(message)}$"):
+        resolve_serializer_field(field, product_models.Item, "X")
+
+
+def _relation_field_serializer(
+    model: type[models.Model],
+    name: str,
+    field: DRFField,
+) -> type[serializers.ModelSerializer[models.Model]]:
+    """A ``ModelSerializer`` over ``model`` declaring (and listing only) ``name = field``."""
+    meta = type("Meta", (), {"model": model, "fields": (name,)})
+    return type(
+        f"{model.__name__}RelationSer",
+        (serializers.ModelSerializer,),
+        {name: field, "Meta": meta},
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "model",
+        "name",
+        "source",
+        "target",
+        "relation",
+    ),
+    [
+        pytest.param(
+            product_models.Item,
+            "cat",
+            "category_id",
+            product_models.Category,
+            "Item.category",
+            id="fk-renamed",
+        ),
+        pytest.param(
+            product_models.Item,
+            "category_id",
+            None,
+            product_models.Category,
+            "Item.category",
+            id="fk-declared-attname",
+        ),
+        pytest.param(
+            library_models.MembershipCard,
+            "pat",
+            "patron_id",
+            library_models.Patron,
+            "MembershipCard.patron",
+            id="one-to-one",
+        ),
+        pytest.param(
+            library_models.PatronProfile,
+            "fav",
+            "favorite_genre_id",
+            library_models.Genre,
+            "PatronProfile.favorite_genre",
+            id="to-field-fk",
+        ),
+        pytest.param(
+            library_models.TaggedItem,
+            "ct",
+            "content_type_id",
+            ContentType,
+            "TaggedItem.content_type",
+            id="generic-fk-content-type",
+        ),
+        pytest.param(
+            library_models.LendingDesk,
+            "ptr",
+            "venue_ptr_id",
+            library_models.Venue,
+            "LendingDesk.venue_ptr",
+            id="mti-parent-link",
+        ),
+    ],
+)
+def test_relation_bound_to_its_attname_is_refused(
+    model: type[models.Model],
+    name: str,
+    source: str | None,
+    target: type[models.Model],
+    relation: str,
+):
+    """A ``PrimaryKeyRelatedField`` whose source is a forward relation's ``attname`` fails loud.
+
+    It validates to the related instance, which DRF writes under the attname: the default
+    ``create()`` cannot insert it and ``update()`` leaves it in the column attribute. The
+    remedy binds the relation by name, so the declared name (and GraphQL name) stays.
+    """
+    kwargs: dict[str, object] = {"queryset": target._default_manager.all()}
+    if source is not None:
+        kwargs["source"] = source
+    relation_field: _PkRelation[models.Model] = serializers.PrimaryKeyRelatedField(**kwargs)
+    field = bound_fields(_relation_field_serializer(model, name, relation_field)())[name]
+    attname = source or name
+    relation_name = relation.split(".")[1]
+    message = (
+        f"Serializer relation field {name!r} binds source {attname!r}, the column (attname) of "
+        f"relation {relation}. A PrimaryKeyRelatedField validates to the related instance, "
+        "which DRF writes under the source as spelled: Django cannot insert an instance into "
+        f"{attname!r} (every create fails) and an update leaves the instance in that "
+        f"attribute. Bind the relation instead: source={relation_name!r} (the declared name, "
+        "and so the GraphQL input name, stays)."
+    )
+    with pytest.raises(ConfigurationError, match=f"^{re.escape(message)}$"):
+        resolve_serializer_field(field, model, "ProbeInput")
+
+
+@pytest.mark.parametrize(
+    ("name", "input_attr", "graphql_name"),
+    [
+        pytest.param("cat", "cat_id", "catId", id="renamed"),
+        pytest.param("category_id", "category_id", "categoryId", id="declared-attname"),
+    ],
+)
+def test_relation_bound_by_name_keeps_its_graphql_name(
+    name: str,
+    input_attr: str,
+    graphql_name: str,
+):
+    """The remedy ``source="category"`` builds, and the declared name keeps its GraphQL name."""
+    _register_products_types()
+    relation_field: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
+        queryset=product_models.Category.objects.all(),
+        source="category",
+    )
+    field = bound_fields(_relation_field_serializer(product_models.Item, name, relation_field)())[
+        name
+    ]
+    python_attr, _annotation, spec = resolve_serializer_field(field, product_models.Item, "X")
+    assert python_attr == input_attr
+    assert spec.graphql_name == graphql_name
+    assert spec.target_name == name
+    assert spec.source == "category"
+    assert spec.kind == RELATION_SINGLE
 
 
 def _register_relay_shelf_primary() -> None:

@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 46 done, 56 to do.
+Progress: 47 done, 56 to do.
 
 ## Done
 
@@ -44,7 +44,7 @@ Progress: 46 done, 56 to do.
   reaches the filter as a typed value, so `""` is never skipped and a `"null"` member is never `IS NULL` (`309d4f04`)
 - [x] 48. `BLANK_CHOICE` marker broke under copy / pickle; replaced by the `EnumMemberValue` value object (`309d4f04`)
 - [x] 52. Connection resolvers sent row-hydration and consumer-source exception text to the client; pagination validators now
-  raise `PaginationArgumentError` themselves and nothing rewraps a foreign exception (`72065173`)
+  raise `PaginationArgumentError` themselves and nothing rewraps a foreign exception (`41969bc3`)
 - [x] 12. Nested forward-FK / OneToOne resolvers never checked the request deadline; every package seam that reaches the database
   now checks it first, which also covers the session-auth `login` / `logout` / `me` fields and the `resolve_node` /
   `resolve_nodes` defaults Strawberry's `relay.node()` reaches (`8d4f66bd`)
@@ -91,6 +91,9 @@ Progress: 46 done, 56 to do.
 - [x] 56. Two writable serializer fields aliasing one model field (`category` beside `source="category_id"`, a pk field
   beside `source="pk"`) passed every ownership guard, which compared spellings; the class-creation guard, the input walker
   and the runtime guard now key a source by the model field it resolves to, at every depth (`bcfe561e`)
+- [x] 80. Four connection catches turned a consumer source or `Meta.ordering` fault into a deliberate `GraphQLError` naming the
+  exception class (no `correlationId`, no log line); they are deleted, so the fault reaches the error policy as itself and is
+  masked with a `correlationId`, as on the list field and the optimized nested path (`29c1f670`)
 
 ## To do: t3 robustness rows
 
@@ -112,8 +115,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## To do: found along the way
 
-- [ ] 80. `_guard_source_not_pre_sliced` and three `_finalize_queryset` catches turn a consumer QuerySet or ordering fault into a
-  deliberate `GraphQLError` naming the exception class: no `correlationId`, class name on the wire (robustness; no text leaks)
 - [ ] 81. `decode_offset_cursor` checks `relay.Edge.CURSOR_PREFIX`, not the connection's `edge_class.CURSOR_PREFIX`: a custom Edge
   prefix turns a foreign `arrayconnection:` cursor into a masked error instead of the cursor message (robustness, fails closed)
 - [ ] 87. ModelForm: a declared `forms.ChoiceField` narrower than its column's choices still publishes the column enum, so a
@@ -195,6 +196,9 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 104. CHANGELOG entry for item 56: a `SerializerMutation` whose serializer has two writable fields writing one model
   field through an alias (`source="category_id"` beside `category`, `source="pk"` beside the pk field) now raises
   `ConfigurationError` at class creation, and again at runtime when `get_fields()` adds the alias
+- [ ] 105. CHANGELOG entry for item 80: a connection whose source or model ordering raises (a project `QuerySet` whose `query`
+  raises, a related manager on an unusable pk, a non-iterable `Meta.ordering`) is masked with the policy message and a
+  `correlationId` instead of a `GraphQLError` naming the exception class
 
 ## Hunt not finished in t3
 

@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 45 done, 55 to do.
+Progress: 46 done, 56 to do.
 
 ## Done
 
@@ -88,6 +88,9 @@ Progress: 45 done, 55 to do.
   the keyset seek, the minted cursors and the optimized nested window (keyset and offset) read the forward terms, so pages
   repeated and lost rows with no error; the order ladder now materializes the reverse of the forward total order as explicit
   terms first, keeping the page-1 `ORDER BY` byte-identical (`b005a7ee`)
+- [x] 56. Two writable serializer fields aliasing one model field (`category` beside `source="category_id"`, a pk field
+  beside `source="pk"`) passed every ownership guard, which compared spellings; the class-creation guard, the input walker
+  and the runtime guard now key a source by the model field it resolves to, at every depth (`bcfe561e`)
 
 ## To do: t3 robustness rows
 
@@ -109,7 +112,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## To do: found along the way
 
-- [ ] 56. Two writable serializer fields can write the same FK column (`category` and `source="category_id"`)
 - [ ] 80. `_guard_source_not_pre_sliced` and three `_finalize_queryset` catches turn a consumer QuerySet or ordering fault into a
   deliberate `GraphQLError` naming the exception class: no `correlationId`, class name on the wire (robustness; no text leaks)
 - [ ] 81. `decode_offset_cursor` checks `relay.Edge.CURSOR_PREFIX`, not the connection's `edge_class.CURSOR_PREFIX`: a custom Edge
@@ -127,6 +129,8 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 100. A random `"?"` order (hook `order_by("?")` or `Meta.ordering = ["?"]`) on an optimized nested offset connection
   raises "Cannot resolve keyword '?' into field" (masked), reversed or not, `first:` or `last:`; the root path serves it
 - [ ] 101. `manage.py import_spec_terms --check` fails on spec-020's terms CSV on main (seen at `eb30dd7e`)
+- [ ] 103. A lone writable `PrimaryKeyRelatedField(source="category_id")` publishes a create input that always fails with a
+  masked TypeError (DRF hands `category_id=<Category>` to `Model.objects.create`); update works
 
 ## To do: holes found re-checking the fixes
 
@@ -188,6 +192,9 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 102. CHANGELOG entry for item 99: a connection over a type whose `get_queryset` or manager returns a `.reverse()`d
   queryset pages every row once and its cursors replay, root and nested; the order served is unchanged, an `orderBy:` beside
   such a hook stays inverted (Django `order_by()` semantics)
+- [ ] 104. CHANGELOG entry for item 56: a `SerializerMutation` whose serializer has two writable fields writing one model
+  field through an alias (`source="category_id"` beside `category`, `source="pk"` beside the pk field) now raises
+  `ConfigurationError` at class creation, and again at runtime when `get_fields()` adds the alias
 
 ## Hunt not finished in t3
 

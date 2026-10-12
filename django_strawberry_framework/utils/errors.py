@@ -40,10 +40,13 @@ from django.db import models
 from django.utils.functional import Promise
 
 from ..exceptions import _safe_text, _unprintable
+from ._narrowing import is_iterable, is_list_or_tuple, is_set_or_frozenset
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import TypeAlias
+
+    from typing_extensions import TypeIs
 
     from ..mutations.inputs import FieldError
     from .inputs import InputFieldSpec
@@ -91,6 +94,12 @@ _TEXT_ATOM_TYPES = (
     memoryview,
     Promise,
 )
+
+
+def _is_text_atom(value: object) -> TypeIs[str | bytes | bytearray | memoryview | Promise]:
+    """Return whether ``value`` is one of the ``_TEXT_ATOM_TYPES`` (subclasses included)."""
+    return isinstance(value, _TEXT_ATOM_TYPES)
+
 
 # ---------------------------------------------------------------------------
 # ``FieldError.codes`` vocabulary
@@ -214,16 +223,7 @@ def _str_list(value: object) -> list[str]:
     if is_str:
         return [_safe_text(value)]
     try:
-        is_iter = isinstance(
-            value,
-            (
-                list,
-                tuple,
-                set,
-                frozenset,
-                Iterable,
-            ),
-        ) and not isinstance(value, _TEXT_ATOM_TYPES)
+        is_iter = is_iterable(value) and not _is_text_atom(value)
     except BaseException:
         is_iter = False
     if not is_iter:
@@ -243,21 +243,13 @@ def _validation_messages(error: Any) -> list[object]:  # pyright: ignore[reportE
     """Read one Django validation leaf's messages without trusting its metadata."""
     try:
         msgs = error.messages
-        if isinstance(msgs, _TEXT_ATOM_TYPES):
+        if _is_text_atom(msgs):
             return [msgs]
         return list(msgs)
     except BaseException:
         try:
             msg = error.message
-            if isinstance(
-                msg,
-                (
-                    list,
-                    tuple,
-                    set,
-                    frozenset,
-                ),
-            ):
+            if is_list_or_tuple(msg) or is_set_or_frozenset(msg):
                 return list(msg)
             return [msg]
         except BaseException:
@@ -286,7 +278,7 @@ def _validation_leaves(error: object) -> tuple[object, ...]:
         error_list = getattr(error, "error_list", None)
         if error_list is None:
             return (error,)
-        if isinstance(error_list, _TEXT_ATOM_TYPES):
+        if _is_text_atom(error_list):
             return (error_list,)
         return tuple(error_list)
     except BaseException:
@@ -500,7 +492,7 @@ def validation_error_to_field_errors(
                     if normalized_name == NON_FIELD_ERRORS
                     else rekey_error_segment(normalized_name, key_map)[0]
                 )
-                if isinstance(field_errors, _TEXT_ATOM_TYPES):
+                if _is_text_atom(field_errors):
                     field_error_items: tuple[object, ...] = (field_errors,)
                 else:
                     try:

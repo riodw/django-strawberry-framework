@@ -19,12 +19,6 @@ import pytest
 from apps.library.models import Book, Genre, LendingDesk, Shelf
 from django.db import connections, models
 from django.db.models import F, Prefetch, Value
-
-# basedpyright: django-stubs omits _filter_prefetch_queryset from
-# django.db.models.fields.related_descriptors, where Django defines it
-from django.db.models.fields.related_descriptors import (
-    _filter_prefetch_queryset,  # pyright: ignore[reportAttributeAccessIssue]
-)
 from django.db.models.options import Options
 from typing_extensions import Self
 
@@ -51,13 +45,27 @@ from django_strawberry_framework.optimizer.plans import (
     WINDOW_TOTAL_COUNT,
     OptimizationPlan,
 )
+from django_strawberry_framework.utils._narrowing import is_list
 from django_strawberry_framework.utils._queryset_private import (
     chain_queryset,
 )
+from tests.optimizer._builders import filter_prefetch_queryset
 from tests.optimizer._builders import nested_connection_request as _request
 
 if TYPE_CHECKING:
     from django_strawberry_framework.optimizer.lateral_fetch import CompiledSQL
+
+
+#: The column an M2M prefetch from ``Genre`` attaches each row's parent id under.
+_GENRE_PREFETCH_COLUMN = "_prefetch_related_val_genre_id"
+
+
+def _book_rows(value: object) -> list[Book]:
+    """The rows a ``Prefetch(to_attr=...)`` set: a list holding only ``Book`` instances."""
+    assert is_list(value)
+    books = [row for row in value if isinstance(row, Book)]
+    assert len(books) == len(value)
+    return books
 
 
 def _quote(name: str):
@@ -744,7 +752,7 @@ def _prefetch_filtered(
 ):
     """The planned queryset exactly as Django's prefetch hands it to ``_fetch_all``."""
     queryset = _planned_lateral_queryset(request)
-    filtered = _filter_prefetch_queryset(queryset, field_name, parents)
+    filtered = filter_prefetch_queryset(queryset, field_name, parents)
     assert isinstance(filtered, LateralQuerySet)
     return filtered
 
@@ -1240,9 +1248,8 @@ def test_lateral_execution_sets_m2m_prefetch_values(monkeypatch: pytest.MonkeyPa
     fetched = _fetch_lateral_rows(queryset)
     assert fetched is not None
     (instance,) = fetched
-    # basedpyright: extra(select=...) sets the column on each row at run time; the model class does
-    # not declare it
-    assert instance._prefetch_related_val_genre_id == 5  # pyright: ignore[reportAttributeAccessIssue]
+    # extra(select=...) sets the column on each row at run time; the model class does not declare it
+    assert getattr(instance, _GENRE_PREFETCH_COLUMN) == 5
     assert getattr(instance, WINDOW_ROW_NUMBER) == 1
     assert not hasattr(instance, WINDOW_TOTAL_COUNT)
     sql, params = facade.scripted_cursor.executed_call()
@@ -1409,17 +1416,16 @@ def test_auto_fallback_executes_the_windowed_body_end_to_end():
     (entry,) = plan.prefetch_related
     assert isinstance(entry, Prefetch)
     assert isinstance(entry.queryset, LateralQuerySet)
+    assert entry.to_attr is not None
     shelves = list(Shelf.objects.order_by("code").prefetch_related(entry))
-    # basedpyright: Prefetch(to_attr=...) sets the attribute on each row at run time; the model
-    # class does not declare it
-    a_rows = shelves[0]._dst_books_connection  # pyright: ignore[reportAttributeAccessIssue]
+    # Prefetch(to_attr=...) sets the attribute on each row at run time; the model class does not
+    # declare it
+    a_rows = _book_rows(getattr(shelves[0], entry.to_attr))
     assert [row.title for row in a_rows] == ["t1", "t2"]
     assert [getattr(row, WINDOW_ROW_NUMBER) for row in a_rows] == [1, 2]
     assert [getattr(row, WINDOW_TOTAL_COUNT) for row in a_rows] == [3, 3]
     assert len(a_rows) < getattr(a_rows[-1], WINDOW_TOTAL_COUNT)
-    # basedpyright: Prefetch(to_attr=...) sets the attribute on each row at run time; the model
-    # class does not declare it
-    assert shelves[1]._dst_books_connection == []  # pyright: ignore[reportAttributeAccessIssue]
+    assert getattr(shelves[1], entry.to_attr) == []
 
 
 def test_spec_downgrades_for_custom_queryset_subclasses():
@@ -1438,7 +1444,8 @@ def test_spec_downgrades_for_custom_queryset_subclasses():
 
         def _clone(self) -> Self:
             # basedpyright: django-stubs omits QuerySet._clone, reported as an unknown attribute
-            clone = super()._clone()  # pyright: ignore[reportAttributeAccessIssue]
+            clone = super()._clone()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
+            assert isinstance(clone, type(self))
             clone.marker = self.marker
             return clone
 
@@ -1506,7 +1513,7 @@ def test_keyset_seek_quals_match_single_and_multi_column():
     (entry1,) = plan1.prefetch_related
     assert isinstance(entry1, Prefetch)
     assert isinstance(entry1.queryset, LateralQuerySet)
-    prefetched1 = _filter_prefetch_queryset(
+    prefetched1 = filter_prefetch_queryset(
         entry1.queryset,
         "shelf_id",
         [Shelf(id=1), Shelf(id=2)],
@@ -1533,7 +1540,8 @@ def test_keyset_seek_quals_match_single_and_multi_column():
     assert LateralPrefetchStrategy().plan(req2, plan2) is True
     (entry2,) = plan2.prefetch_related
     assert isinstance(entry2, Prefetch)
-    prefetched2 = _filter_prefetch_queryset(entry2.queryset, "shelf_id", [Shelf(id=3)])
+    assert isinstance(entry2.queryset, LateralQuerySet)
+    prefetched2 = filter_prefetch_queryset(entry2.queryset, "shelf_id", [Shelf(id=3)])
     rec2 = _recognize_lateral_fetch(prefetched2, spec2)
     assert rec2 is not None
     assert rec2.parent_ids == [3]
@@ -1556,7 +1564,8 @@ def test_keyset_seek_quals_match_single_and_multi_column():
     assert LateralPrefetchStrategy().plan(req3, plan3) is True
     (entry3,) = plan3.prefetch_related
     assert isinstance(entry3, Prefetch)
-    prefetched3 = _filter_prefetch_queryset(entry3.queryset, "shelf_id", [Shelf(id=5)])
+    assert isinstance(entry3.queryset, LateralQuerySet)
+    prefetched3 = filter_prefetch_queryset(entry3.queryset, "shelf_id", [Shelf(id=5)])
     rec3 = _recognize_lateral_fetch(prefetched3, spec3)
     assert rec3 is not None
     assert rec3.parent_ids == [5]

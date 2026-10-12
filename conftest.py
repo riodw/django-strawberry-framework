@@ -190,7 +190,7 @@ def _refuse_nontransactional_async_db_tests(items: list[pytest.Item]) -> None:
     """
     from django.test import SimpleTestCase
 
-    offenders = []
+    offenders: list[str] = []
     for item in items:
         function = getattr(item, "obj", None)
         if function is None or not inspect.iscoroutinefunction(function):

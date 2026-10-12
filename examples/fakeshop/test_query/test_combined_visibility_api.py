@@ -29,6 +29,7 @@ under a nested connection, whose seal licenses a slice the rewrite cannot carry.
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import pytest
 import strawberry
@@ -59,6 +60,9 @@ from django_strawberry_framework.optimizer import DjangoOptimizerExtension
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing.relay import global_id_for
 from django_strawberry_framework.views import DjangoGraphQLView
+
+if TYPE_CHECKING:
+    from typing_extensions import TypeIs
 
 #: Opens the error policy's pass-through gate so a refusal's message reaches the
 #: wire; the toolbar middleware is dropped because ``config.urls`` computed its
@@ -136,6 +140,16 @@ def _data(query: str, **kwargs: Unpack[_PostOptions]) -> JSONObject:
     return payload["data"]
 
 
+def _is_dict(value: object) -> "TypeIs[dict[object, object]]":
+    """Whether a parsed payload value is a JSON object."""
+    return isinstance(value, dict)
+
+
+def _is_list(value: object) -> "TypeIs[list[object]]":
+    """Whether a parsed payload value is a JSON array."""
+    return isinstance(value, list)
+
+
 def _order_free(value: object) -> object:
     """``value`` with every list sorted, for comparing payloads whose rows are unordered.
 
@@ -144,9 +158,9 @@ def _order_free(value: object) -> object:
     happens to return primary-key order, Postgres a hash join's. The served SET is
     the contract; a test whose surface is ordered asserts that order itself.
     """
-    if isinstance(value, dict):
+    if _is_dict(value):
         return {key: _order_free(item) for key, item in value.items()}
-    if isinstance(value, list):
+    if _is_list(value):
         return sorted(
             (_order_free(item) for item in value),
             key=lambda item: json.dumps(item, sort_keys=True),
@@ -319,7 +333,7 @@ def _seed_books() -> dict[str, models.Book]:
     }
     spec = models.Genre.objects.create(name="Spec")
     myth = models.Genre.objects.create(name="Myth")
-    books = {}
+    books: dict[str, models.Book] = {}
     for word in _WORDS:
         books[word] = models.Book.objects.create(title=word, shelf=shelves[shelf_for[word]])
     spec.books.add(
@@ -682,7 +696,7 @@ class _NestedPage(TypedDict):
 
 def _expected_nested_pages(shape: str) -> dict[str, _NestedPage]:
     """Each genre's first two visible books in primary-key order, and whether more remain."""
-    pages = {}
+    pages: dict[str, _NestedPage] = {}
     for name, titles in _BOOKS_BY_GENRE.items():
         visible = [word for word in _WORDS if word in titles and word in _VISIBLE[shape]]
         pages[name] = {"titles": visible[:2], "has_next": len(visible) > 2}
@@ -897,7 +911,7 @@ def test_cascade_narrows_a_combined_root(
     secret = next(word for word in _WORDS if word in _VISIBLE[shape])
     _seed_desks(secret_word=secret)
 
-    results = {}
+    results: dict[bool, JSONObject] = {}
     for combined in (True, False):
         chosen = _SHAPES[shape].combined if combined else _SHAPES[shape].uncombined
 
@@ -1049,7 +1063,7 @@ def test_consumer_prefetch_of_a_combined_queryset_serves_its_rows(
 ):
     """A hook's ``Prefetch("books", queryset=<combined>)`` serves each genre's kept books."""
     _seed_books()
-    results = {}
+    results: dict[bool, JSONObject] = {}
     for combined in (True, False):
         chosen = _SHAPES[shape].combined if combined else _SHAPES[shape].uncombined
 
@@ -1121,7 +1135,7 @@ def test_reversed_outer_ordering_of_a_combined_hook_is_served_reversed(
 ):
     """``union(...).order_by("name").reverse()`` serves the combined genres in descending order."""
     _seed_genres()
-    results = {}
+    results: dict[bool, JSONObject] = {}
     for combined in (True, False):
         chosen = _SHAPES["union"].combined if combined else _SHAPES["union"].uncombined
         _install(
@@ -1170,7 +1184,7 @@ def test_outer_f_ordering_of_a_combined_hook_is_served_in_that_order(
     """
     _seed_genres()
     term, expected_order = _F_ORDERINGS[ordering]
-    results = {}
+    results: dict[bool, JSONObject] = {}
     for combined in (True, False):
         chosen = _SHAPES["union"].combined if combined else _SHAPES["union"].uncombined
         _install(
@@ -1527,7 +1541,7 @@ def _hinted_shelf_schema(books: QuerySet[Model]) -> DjangoSchema:
 def test_hinted_prefetch_of_a_combined_queryset_serves_its_rows(shape: str):
     """``OptimizerHint.prefetch(Prefetch("books", queryset=<combined>))`` serves the kept books."""
     _seed_books()
-    results = {}
+    results: dict[bool, JSONObject] = {}
     for combined in (True, False):
         chosen = _SHAPES[shape].combined if combined else _SHAPES[shape].uncombined
         schema = _hinted_shelf_schema(chosen(models.Book.objects.all(), "title"))

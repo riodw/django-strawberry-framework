@@ -124,7 +124,7 @@ import uuid
 from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 from django.core.exceptions import FieldDoesNotExist
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -139,10 +139,12 @@ from rest_framework.settings import api_settings
 from ..exceptions import ConfigurationError, _safe_type_name
 from ..mutations.inputs import NON_FIELD_ERROR_KEY, FieldError
 from ..mutations.resolvers import (
+    StepFailure,
     make_resolver_entries,
     run_write_pipeline_sync,
 )
 from ..mutations.sets import backing_model_of
+from ..utils._narrowing import is_dict, is_list, is_list_or_tuple, is_mapping
 from ..utils.errors import (
     FIELD_ERROR_CODE_INVALID,
     FIELD_ERROR_CODE_TRUNCATED,
@@ -178,6 +180,7 @@ from ..utils.write_values import (
     decode_visible_relation_ids,
     decoded_into,
 )
+from .accessors import bound_fields, child_relation_of, is_drf_field, serializer_errors
 from .hook_context import SerializerHookContext, UploadMetadata
 from .inputs import (
     raise_writable_source_ownership_errors,
@@ -201,6 +204,7 @@ if TYPE_CHECKING:
     from django.db import models
     from django.db.models import Manager, QuerySet
     from strawberry.types import Info
+    from typing_extensions import TypeIs
 
     from ..mutations.resolvers import _AsyncResolverEntry, _SyncResolverEntry
     from ..mutations.sets import _ValidatedMutationMeta
@@ -240,7 +244,13 @@ else:
 # explicit ``data=None`` / ``instance=None`` return distinguishable from a hook
 # that simply omitted the key (a ``pop(..., None)`` default would conflate the
 # two, silently forgiving an explicit ``None``).
-_OMITTED = object()
+class _Omitted(enum.Enum):
+    """The omission sentinel's type: one member, so an ``is _OMITTED`` test narrows it away."""
+
+    OMITTED = enum.auto()
+
+
+_OMITTED: Final = _Omitted.OMITTED
 
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
 # async ``get_queryset`` is met inside the (sync) serializer pipeline. Mirrors the
@@ -582,8 +592,8 @@ def _error_node_children(
     dropping). Anything else - a list of leaf messages, a bare string, an ``ErrorDetail`` - is a
     leaf (``None``).
     """
-    if isinstance(errors, dict):
-        error_map: dict[object, object] = errors
+    if is_dict(errors):
+        error_map = errors
         children: list[tuple[object, ErrorKeyMap, str]] = []
         for key, value in error_map.items():
             name = str(key)
@@ -594,7 +604,7 @@ def _error_node_children(
             )
             children.append((value, child_map, join_error_path(prefix, segment)))
         return children
-    if isinstance(errors, list) and any(isinstance(item, (dict, list)) for item in errors):
+    if is_list(errors) and any(isinstance(item, (dict, list)) for item in errors):
         return [
             (item, key_map, join_error_path(prefix, str(index)))
             for index, item in enumerate(errors)
@@ -638,7 +648,7 @@ def _error_detail_codes(errors: object) -> list[str]:
     serializer envelope carries structured codes a client can branch on (``required`` /
     ``invalid`` / ``unique`` / ``blank`` / ...) without parsing localized human text.
     """
-    if isinstance(errors, (list, tuple)):
+    if is_list_or_tuple(errors):
         return [code for code in (getattr(item, "code", None) for item in errors) if code]
     code = getattr(errors, "code", None)
     return [code] if code else []
@@ -689,7 +699,7 @@ def _hook_mapping(
     injection comparison, the shadow/model-field save-kwarg checks) operating on plain string
     keys no hostile key object can destabilize.
     """
-    if not isinstance(value, Mapping):
+    if not is_mapping(value):
         raise ConfigurationError(
             f"SerializerMutation {mutation_cls.__name__}.{hook_name} must return a mapping; "
             f"got {_safe_type_name(value)}.",
@@ -708,8 +718,8 @@ def _hook_mapping(
             f"non-string key(s) {[repr(key) for key in offenders]!r}; hook mappings become "
             "serializer kwargs / data keys, so every key must be a plain string.",
         )
-    # The offender check above rejected every key that is not exactly ``str``.
-    return cast("dict[str, object]", materialized)
+    # Every key is exactly ``str`` once the offender check passed; the filter states it.
+    return {key: item for key, item in materialized.items() if type(key) is str}
 
 
 # Leaf value types the frozen hook view may expose BY REFERENCE: each cannot be
@@ -756,6 +766,11 @@ _FROZEN_VIEW_CONTAINERS: tuple[
     set,
     frozenset,
 )
+
+
+def _is_frozen_container(value: object) -> TypeIs[_FrozenContainer]:
+    """Return whether ``value`` is one of the containers the hook view freezes (subclasses included)."""
+    return isinstance(value, _FROZEN_VIEW_CONTAINERS)
 
 
 @overload
@@ -805,7 +820,7 @@ def _frozen_hook_view(value: object) -> object:
             "mutate the authoritative serializer data). Supply a plain JSON-compatible value.",
         )
 
-    if not isinstance(value, _FROZEN_VIEW_CONTAINERS):
+    if not _is_frozen_container(value):
         return _freeze_leaf(value)
 
     def _entries(container: _FrozenContainer) -> Iterator[tuple[object, object]]:
@@ -856,7 +871,7 @@ def _frozen_hook_view(value: object) -> object:
         source, entries, acc, parent_acc, parent_key = frames[-1]
         descended = False
         for key, item in entries:
-            if not isinstance(item, _FROZEN_VIEW_CONTAINERS):
+            if not _is_frozen_container(item):
                 _place(acc, key, _freeze_leaf(item))
                 continue
             item_id = id(item)
@@ -1028,7 +1043,7 @@ def _merged_serializer_kwargs(
     request = request_from_info(info, family_label="SerializerMutation")
     raw_context = kwargs.get("context")
     if raw_context is not None:
-        if not isinstance(raw_context, Mapping):
+        if not is_mapping(raw_context):
             raise ConfigurationError(
                 f"SerializerMutation {mutation_cls.__name__}.get_serializer_kwargs returned a "
                 f"`context` that is not a mapping; got {_safe_type_name(raw_context)}.",
@@ -1071,7 +1086,9 @@ def _relation_model_of(field: DRFField) -> object:
     schema/runtime agreement guard to confirm the runtime relation still points at the same
     model the schema-time ``InputFieldSpec.related_model`` recorded.
     """
-    related = field.child_relation if isinstance(field, serializers.ManyRelatedField) else field
+    related = (
+        child_relation_of(field) if isinstance(field, serializers.ManyRelatedField) else field
+    )
     return getattr(getattr(related, "queryset", None), "model", None)
 
 
@@ -1128,7 +1145,7 @@ def _assert_runtime_write_source_ownership(
     """
     supplied_fields = set(data)
     runtime_fields = runtime_validated_data_fields(
-        serializer.fields,
+        bound_fields(serializer),
         supplied_fields=supplied_fields,
         apply_defaults=mutation_cls._mutation_meta.operation == "create",
     )
@@ -1143,14 +1160,19 @@ def _assert_runtime_write_source_ownership(
     for spec in specs:
         if spec.kind not in (NESTED_SINGLE, NESTED_MULTI):
             continue
-        runtime: DRFField = serializer.fields[spec.target_name]
+        runtime: DRFField = bound_fields(serializer)[spec.target_name]
         child_serializer, many = nested_serializer_child(runtime)
         raw_child = data.get(spec.target_name)
-        child_values = raw_child if many and isinstance(raw_child, (list, tuple)) else [raw_child]
-        child_mappings = [value for value in child_values if isinstance(value, Mapping)]
-        if not child_mappings:
-            child_mappings = [{}]
-        child_data = {key: value for item in child_mappings for key, value in item.items()}
+        child_values = raw_child if many and is_list_or_tuple(raw_child) else [raw_child]
+        # A nested input's keys are its serializer field names; a key that is not a
+        # string names no field, so it can neither supply one nor collide with one.
+        child_data: dict[str, object] = {
+            key: item
+            for value in child_values
+            if is_mapping(value)
+            for key, item in value.items()
+            if isinstance(key, str)
+        }
         child_path = f"{path}.{spec.target_name}" if path else spec.target_name
         _assert_runtime_write_source_ownership(
             mutation_cls,
@@ -1176,7 +1198,7 @@ def _assert_field_agreement(
     file / scalar kind compatible. Any divergence is a framework ``ConfigurationError`` at
     the boundary.
     """
-    runtime_fields = serializer.fields
+    runtime_fields = bound_fields(serializer)
     name = type(serializer).__name__
     target = spec.target_name
     runtime: DRFField | None = runtime_fields.get(target)
@@ -1323,7 +1345,7 @@ def _assert_relation_agreement(
         ok_shape = isinstance(runtime, serializers.PrimaryKeyRelatedField)
     else:
         ok_shape = isinstance(runtime, serializers.ManyRelatedField) and isinstance(
-            runtime.child_relation,
+            child_relation_of(runtime),
             serializers.PrimaryKeyRelatedField,
         )
     if not ok_shape:
@@ -1432,7 +1454,7 @@ def _pin_validator_querysets(serializer: DRFField, alias: str, *, path: str = ""
 
     # basedpyright: the copy's ``.queryset`` is written; drf-stubs' Validator declares none
     def _pinned(validators: Any, owner: str) -> list[Any]:  # pyright: ignore[reportExplicitAny]
-        pinned = []
+        pinned: list[object] = []
         for validator in validators:
             queryset = getattr(validator, "queryset", None)
             if queryset is None:
@@ -1458,11 +1480,11 @@ def _pin_validator_querysets(serializer: DRFField, alias: str, *, path: str = ""
         if isinstance(field, serializers.BaseSerializer):
             _pin_validator_querysets(field, alias, path=field_path)
             return
-        child = getattr(field, "child", None)
-        if isinstance(child, serializers.Field):
+        child: object = getattr(field, "child", None)
+        if is_drf_field(child):
             _pin_field(child, f"{field_path}.child")
-        child_relation = getattr(field, "child_relation", None)
-        if isinstance(child_relation, serializers.Field):
+        child_relation: object = getattr(field, "child_relation", None)
+        if is_drf_field(child_relation):
             _pin_field(child_relation, f"{field_path}.child_relation")
 
     owner = f"{serializer_name}{f'.{path}' if path else ''}"
@@ -1471,7 +1493,7 @@ def _pin_validator_querysets(serializer: DRFField, alias: str, *, path: str = ""
         # A plain ``BaseSerializer`` (a read-only ``source="*"`` renderer, a list
         # child) declares no ``fields``; its own validators are pinned above.
         return
-    for field_name, field in serializer.fields.items():
+    for field_name, field in bound_fields(serializer).items():
         field_path = f"{path}.{field_name}" if path else field_name
         _pin_field(field, field_path)
 
@@ -1507,7 +1529,7 @@ def _scope_specs_over_serializer(
     pipeline = require_write_pipeline()
     for spec in specs:
         if spec.kind in (NESTED_SINGLE, NESTED_MULTI):
-            nested_field: DRFField | None = serializer.fields.get(spec.target_name)
+            nested_field: DRFField | None = bound_fields(serializer).get(spec.target_name)
             if nested_field is None:  # pragma: no cover - the agreement guard already required it.
                 continue
             child_serializer, _many = nested_serializer_child(nested_field)
@@ -1519,21 +1541,21 @@ def _scope_specs_over_serializer(
             continue
         if spec.kind not in (RELATION_SINGLE, RELATION_MULTI):
             continue
-        field: DRFField | None = serializer.fields.get(spec.target_name)
+        field: DRFField | None = bound_fields(serializer).get(spec.target_name)
         if field is None:  # pragma: no cover - the agreement guard already required it.
             continue
         # The agreement guard proved a relation spec's runtime field is a
         # PrimaryKeyRelatedField, or a ManyRelatedField over one.
         relation = cast(
             "serializers.PrimaryKeyRelatedField[models.Model]",
-            field.child_relation if isinstance(field, serializers.ManyRelatedField) else field,
+            child_relation_of(field) if isinstance(field, serializers.ManyRelatedField) else field,
         )
         # ``.all()`` normalizes a Manager to a QuerySet (preserving an explicit ``.using``);
         # the pin fails closed on a cross-alias author queryset BEFORE any validation runs.
         # The schema/runtime agreement guard already rejected a relation whose queryset
         # names no model, so the author queryset is set here.
         # basedpyright: drf-stubs types the attribute as a ``Manager``, whose ``__get__`` it binds
-        author_queryset = relation.queryset  # pyright: ignore[reportAttributeAccessIssue]
+        author_queryset = relation.queryset  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
         scoped = pin_write_queryset(
             cast("QuerySet[models.Model] | Manager[models.Model]", author_queryset).all(),
             pipeline.alias,
@@ -1657,9 +1679,7 @@ class _RelationIntentLedger:
     def record(self, path: str, value: _RelationSnapshot) -> None:
         self.records.setdefault(path, []).append(value)
 
-    # basedpyright: the record's shape (one identity or a list) follows spec.kind, which no
-    # checker correlates; the _OMITTED sentinel could be an Enum member
-    def consume(self, path: str) -> Any:  # pyright: ignore[reportExplicitAny]
+    def consume(self, path: str) -> _RelationSnapshot | Literal[_Omitted.OMITTED]:
         """Return the next recorded value for ``path``, or ``_OMITTED`` when none is pending."""
         index = self.counters.get(path, 0)
         entries = self.records.get(path)
@@ -1714,9 +1734,8 @@ def _relation_intent_snapshot(value: object) -> _RelationSnapshot:
     comparison against these captured primitives. A list relation snapshots one
     ``(object, pk, alias)`` tuple per row, in order.
     """
-    if isinstance(value, list):
-        rows: list[object] = value
-        return [_relation_object_identity(item) for item in rows]
+    if is_list(value):
+        return [_relation_object_identity(item) for item in value]
     return _relation_object_identity(value)
 
 
@@ -1762,7 +1781,7 @@ def _instrument_intent_specs(
 ) -> None:
     """Instrument one serializer level's relation fields, recursing into nested serializers."""
     for spec in specs:
-        field: DRFField | None = serializer.fields.get(spec.target_name)
+        field: DRFField | None = bound_fields(serializer).get(spec.target_name)
         if field is None:  # pragma: no cover - the agreement guard already required it.
             continue
         field_path = join_error_path(path, spec.target_name)
@@ -1853,10 +1872,10 @@ def _assert_intent_specs(
     Populates ``manifest`` at the TOP level only (``path == ""``): the captured canonical
     pk(s) per supplied relation source, for the post-save attestation.
     """
-    if not isinstance(validated_data, dict):  # pragma: no cover - DRF yields dicts here.
+    if not is_dict(validated_data):  # pragma: no cover - DRF yields dicts here.
         return
     for spec in specs:
-        field: DRFField | None = serializer.fields.get(spec.target_name)
+        field: DRFField | None = bound_fields(serializer).get(spec.target_name)
         if field is None:  # pragma: no cover - the agreement guard already required it.
             continue
         source = field.source or spec.target_name
@@ -1866,7 +1885,14 @@ def _assert_intent_specs(
             if value is None:
                 continue
             child_serializer, _many = nested_serializer_child(field)
-            items = value if spec.kind == NESTED_MULTI else [value]
+            # A ``many=True`` child validates to a list. Anything else a validator put there
+            # has no items to walk; a relation record its items made stays unconsumed, which
+            # ``_RelationIntentLedger.assert_fully_consumed`` refuses.
+            items: list[object] | tuple[object, ...] = (
+                (value if is_list_or_tuple(value) else ())
+                if spec.kind == NESTED_MULTI
+                else [value]
+            )
             for item in items:
                 _assert_intent_specs(
                     mutation_cls,
@@ -1908,16 +1934,20 @@ def _assert_intent_specs(
                 "validator injected a relation object around the visibility-scoped field "
                 "lookup. Relation values must come from the field's own validation.",
             )
+        # A single relation records one identity and a list relation one per row
+        # (``_relation_intent_snapshot``); a record of the other shape is no match.
+        single = recorded if isinstance(recorded, tuple) else None
+        rows = recorded if isinstance(recorded, list) else None
         if spec.kind == RELATION_SINGLE:
-            intact = _relation_identity_intact(value, recorded)
+            intact = single is not None and _relation_identity_intact(value, single)
         else:
             intact = (
-                isinstance(value, list)
-                and isinstance(recorded, list)
-                and len(value) == len(recorded)
+                is_list(value)
+                and rows is not None
+                and len(value) == len(rows)
                 and all(
                     _relation_identity_intact(item, expected)
-                    for item, expected in zip(value, recorded, strict=True)
+                    for item, expected in zip(value, rows, strict=True)
                 )
             )
         if not intact:
@@ -1931,10 +1961,10 @@ def _assert_intent_specs(
             # Record the CAPTURED canonical pk(s) for the top-level post-save
             # attestation - immutable primitives from the run_validation snapshot,
             # NOT the live object (whose pk a custom save() could mutate).
-            if spec.kind == RELATION_SINGLE:
-                manifest[spec.target_name] = recorded[1]
-            else:
-                manifest[spec.target_name] = frozenset(snap[1] for snap in recorded)
+            if single is not None:
+                manifest[spec.target_name] = single[1]
+            elif rows is not None:
+                manifest[spec.target_name] = frozenset(snap[1] for snap in rows)
 
 
 def _m2m_membership_snapshot(
@@ -2022,7 +2052,7 @@ def _attest_saved_relations(
     for spec in _write_surface_specs(mutation_cls):
         if spec.kind != RELATION_SINGLE or spec.target_name not in relation_pks:
             continue
-        field: DRFField | None = serializer.fields.get(spec.target_name)
+        field: DRFField | None = bound_fields(serializer).get(spec.target_name)
         source = (field.source if field is not None and field.source else None) or (
             spec.source or spec.target_name
         )
@@ -2281,7 +2311,7 @@ def _serializer_write_step(
     info: Info[object, object],
     instance: models.Model | None,
     provided_data: dict[str, object],
-) -> models.Model | list[FieldError]:
+) -> models.Model | StepFailure:
     """The serializer ``write_step``: construct -> validate -> save (spec-039 pipeline callback).
 
     Constructs the serializer through the ``get_serializer_kwargs`` hook + the
@@ -2290,7 +2320,7 @@ def _serializer_write_step(
     value-preserving ``serializer.save()`` closure inside a nested-``atomic``
     savepoint and the pinned-alias write phase (``save()`` called EXACTLY ONCE,
     captured via ``nonlocal``). Returns the saved object (the skeleton re-fetches
-    it by pk under the G2 plan) or a ``list[FieldError]`` on a validation / write
+    it by pk under the G2 plan) or a ``StepFailure`` on a validation / write
     failure - with the savepoint rolled back first, so a failed save leaves no
     partial write.
 
@@ -2358,7 +2388,7 @@ def _guarded_serializer_write(
     authorized_pk: object,
     hook_context: SerializerHookContext,
     written: list[_WrittenRow],
-) -> models.Model | list[FieldError]:
+) -> models.Model | StepFailure:
     """The write-step body, run inside the ``_write_witness`` guards."""
     # The pre-save M2M membership snapshot (update only), taken at write-step
     # entry - strictly AFTER authorization (relation membership is data an
@@ -2421,9 +2451,11 @@ def _guarded_serializer_write(
     ledger = _instrument_relation_intent(mutation_cls, serializer)
 
     if not serializer.is_valid():
-        return serializer_errors_to_field_errors(
-            serializer.errors,
-            build_error_key_map(mutation_cls._input_field_specs),
+        return StepFailure(
+            serializer_errors_to_field_errors(
+                serializer_errors(serializer),
+                build_error_key_map(mutation_cls._input_field_specs),
+            ),
         )
 
     # PROVE the final ``validated_data`` still carries the ledger-recorded objects
@@ -2484,14 +2516,18 @@ def _guarded_serializer_write(
         with transaction.atomic(using=alias):
             _do_save()
     except DRFValidationError as exc:
-        return serializer_errors_to_field_errors(
-            exc.detail,
-            build_error_key_map(mutation_cls._input_field_specs),
+        return StepFailure(
+            serializer_errors_to_field_errors(
+                exc.detail,
+                build_error_key_map(mutation_cls._input_field_specs),
+            ),
         )
     except DjangoValidationError as exc:
-        return validation_error_to_field_errors(exc, _save_time_error_key_map(mutation_cls))
+        return StepFailure(
+            validation_error_to_field_errors(exc, _save_time_error_key_map(mutation_cls)),
+        )
     except IntegrityError:
-        return integrity_error_field_errors()
+        return StepFailure(integrity_error_field_errors())
     # The saved result is validated BEFORE the pipeline re-fetches / trusts it: correct model,
     # DRF save-bookkeeping identity, non-null pk, pinned alias, witnessed pk-snapshotted
     # INSERT on create, and - on update - the pre-hook authorized-pk snapshot.
@@ -2547,20 +2583,20 @@ def _serializer_decode_step(
     mutation_cls: type[SerializerMutation],
     data: object,
     info: Info[object, object],
-) -> dict[str, object] | list[FieldError]:
+) -> dict[str, object] | StepFailure:
     """The serializer ``decode_step``: serializer-field-keyed decode (spec-039 pipeline callback).
 
     Decodes the bound input into a serializer-field-keyed ``provided_data`` (the
     ``_decode_serializer_data`` contract: type-check + visibility on every relation
     branch, ``Upload`` into ``data``). Returns ``provided_data`` for the write step,
-    or a ``list[FieldError]`` on a decode failure (the shared skeleton maps it to a
+    or a ``StepFailure`` on a decode failure (the shared skeleton maps it to a
     null-object payload). The ``instance`` the skeleton locates is not needed at
     decode (DRF's ``partial=True`` + the framework merge own the partial update at
     construction), so it is not threaded in.
     """
     provided_data, decode_error = _decode_serializer_data(mutation_cls, data, info)
     if decode_error is not None:
-        return [decode_error]
+        return StepFailure([decode_error])
     return provided_data
 
 

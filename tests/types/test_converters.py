@@ -36,6 +36,7 @@ Coverage knock-ons: these tests exercise ``convert_scalar``'s ``null``
 widening branch and ``registry.register_enum`` / ``get_enum``.
 """
 
+import datetime
 import enum
 import itertools
 import re
@@ -46,6 +47,7 @@ import pytest
 import strawberry
 from apps.scalars.models import MediaSpecimen, NullableScalarSpecimen, ScalarSpecimen
 from django.db import models
+from django.db.models.expressions import Combinable
 from strawberry.types import get_object_definition
 from typing_extensions import Never, override
 
@@ -79,9 +81,11 @@ from django_strawberry_framework.types.converters import (
     convert_scalar,
     scalar_for_field,
 )
-from tests._idioms import definition_raises
+from tests._idioms import definition_raises, resolver_function
 
 if TYPE_CHECKING:
+    from django.utils.choices import _ChoicesInput
+
     from django_strawberry_framework.utils.typing import ConcreteField
 
 
@@ -150,8 +154,12 @@ def choice_fixture_model() -> type[models.Model]:
     )
 
     class ChoiceFixture(models.Model):
-        status = models.TextField(choices=STATUS_CHOICES)
-        nullable_status = models.TextField(choices=STATUS_CHOICES, null=True)
+        status: "models.TextField[str | Combinable, str]" = models.TextField(
+            choices=STATUS_CHOICES,
+        )
+        nullable_status: "models.TextField[str | Combinable | None, str | None]" = (
+            models.TextField(choices=STATUS_CHOICES, null=True)
+        )
 
         class Meta:
             app_label = "test_choice_enums"
@@ -466,13 +474,38 @@ def test_choice_enum_name_derivation_wraps_a_hostile_type_name(
         convert_choices_to_enum(field, _HostileTypeName())  # pyright: ignore[reportArgumentType]
 
 
-def _blank_choice_model(*, choices: object, blank: bool = False, null: bool = False):
-    """Return a fresh model whose ``status`` column carries ``choices`` / ``blank`` / ``null``."""
+def _blank_choice_model(
+    *,
+    choices: object,
+    blank: bool = False,
+    null: bool = False,
+) -> type[models.Model]:
+    """Return a fresh model whose ``status`` column carries ``choices`` / ``blank`` / ``null``.
+
+    The nullable column is its own declaration because its annotation carries ``None``.
+    """
+    # basedpyright: the malformed choices some callers pass are the hostile input under test;
+    # django-stubs types choices as _ChoicesInput
+    hostile_choices: _ChoicesInput = choices  # pyright: ignore[reportAssignmentType]
+    if null:
+
+        class NullableBlankChoiceFixture(models.Model):
+            status: "models.TextField[str | Combinable | None, str | None]" = models.TextField(
+                choices=hostile_choices,
+                blank=blank,
+                null=True,
+            )
+
+            class Meta:
+                app_label = _unique_app_label("test_blank_choice_enums")
+
+        return NullableBlankChoiceFixture
 
     class BlankChoiceFixture(models.Model):
-        # basedpyright: the malformed choices some callers pass are the hostile input under test;
-        # django-stubs types choices as _ChoicesInput
-        status = models.TextField(choices=choices, blank=blank, null=null)  # pyright: ignore[reportArgumentType]
+        status: "models.TextField[str | Combinable, str]" = models.TextField(
+            choices=hostile_choices,
+            blank=blank,
+        )
 
         class Meta:
             app_label = _unique_app_label("test_blank_choice_enums")
@@ -548,14 +581,17 @@ def test_declared_empty_choice_is_not_duplicated_by_include_blank():
     assert _member_map(enum_cls) == {"BLANK": "", "good": "good"}
 
 
+_CHOICE_COLUMN_CASES: "list[tuple[models.Field[Never, object], bool, list[object]]]" = [
+    (models.TextField(choices=[("good", "Good")]), False, ["good"]),
+    (models.TextField(choices=[("good", "Good")], blank=True), True, ["", "good"]),
+    (models.TextField(choices=[("good", "Good"), ("", "Unassessed")]), False, ["good", ""]),
+    (models.IntegerField(choices=[(1, "One")], blank=True, null=True), False, [1]),
+]
+
+
 @pytest.mark.parametrize(
     ("field", "admits", "values"),
-    [
-        (models.TextField(choices=[("good", "Good")]), False, ["good"]),
-        (models.TextField(choices=[("good", "Good")], blank=True), True, ["", "good"]),
-        (models.TextField(choices=[("good", "Good"), ("", "Unassessed")]), False, ["good", ""]),
-        (models.IntegerField(choices=[(1, "One")], blank=True, null=True), False, [1]),
-    ],
+    _CHOICE_COLUMN_CASES,
     ids=[
         "text-strict",
         "text-blank",
@@ -744,25 +780,28 @@ class _Grade(models.TextChoices):
     GOOD = "good", "Good"
 
 
+_EMPTY_LABEL_CASES: "list[tuple[models.Field[Never, object], dict[str, object]]]" = [
+    (models.TextField(choices=_Condition.choices), {"good": "good", "worn": "worn"}),
+    (
+        models.TextField(choices=_Condition.choices, blank=True),
+        {"BLANK": "", "good": "good", "worn": "worn"},
+    ),
+    (
+        models.TextField(choices=_Condition.choices, null=True, blank=True),
+        {"BLANK": "", "good": "good", "worn": "worn"},
+    ),
+    (
+        models.IntegerField(choices=_Rank.choices, null=True, blank=True),
+        {"MEMBER_0": 0, "MEMBER_1": 1},
+    ),
+    (models.TextField(choices=_Grade.choices), {"BLANK": "", "good": "good"}),
+    (models.TextField(choices=[(None, "Unknown"), ("good", "Good")]), {"good": "good"}),
+]
+
+
 @pytest.mark.parametrize(
     ("field", "members"),
-    [
-        (models.TextField(choices=_Condition.choices), {"good": "good", "worn": "worn"}),
-        (
-            models.TextField(choices=_Condition.choices, blank=True),
-            {"BLANK": "", "good": "good", "worn": "worn"},
-        ),
-        (
-            models.TextField(choices=_Condition.choices, null=True, blank=True),
-            {"BLANK": "", "good": "good", "worn": "worn"},
-        ),
-        (
-            models.IntegerField(choices=_Rank.choices, null=True, blank=True),
-            {"MEMBER_0": 0, "MEMBER_1": 1},
-        ),
-        (models.TextField(choices=_Grade.choices), {"BLANK": "", "good": "good"}),
-        (models.TextField(choices=[(None, "Unknown"), ("good", "Good")]), {"good": "good"}),
-    ],
+    _EMPTY_LABEL_CASES,
     ids=[
         "text-strict",
         "text-blank",
@@ -836,7 +875,11 @@ def test_nullable_empty_label_choice_column_writes_null_as_null():
     from django_strawberry_framework import DjangoMutation, DjangoMutationField, DjangoSchema
 
     class EmptyLabelWriteOwner(models.Model):
-        status = models.TextField(choices=_Condition.choices, null=True, blank=True)
+        status: "models.TextField[str | Combinable | None, str | None]" = models.TextField(
+            choices=_Condition.choices,
+            null=True,
+            blank=True,
+        )
 
         class Meta:
             app_label = _unique_app_label("test_empty_label_choices")
@@ -907,7 +950,7 @@ def test_choices_holding_only_the_empty_option_are_empty(choices: list[tuple[Non
     )
     with pytest.raises(ConfigurationError, match=f"^{message}$"):
         build_enum_from_choices(choices, "OnlyEmptyEnum", source_label="Fixture.status")
-    field = models.TextField(choices=choices, blank=True)
+    field: models.TextField[str | Combinable, str] = models.TextField(choices=choices, blank=True)
     field.set_attributes_from_name("status")
     with pytest.raises(ConfigurationError, match="holding only the empty option"):
         choice_column_values(field)
@@ -1320,7 +1363,7 @@ def test_convert_scalar_duration_field_raises_unsupported():
     """
 
     class _Owner(models.Model):
-        elapsed = models.DurationField()
+        elapsed: "models.DurationField[object, datetime.timedelta]" = models.DurationField()
 
         class Meta:
             app_label = _unique_app_label("test_choice_enums")
@@ -1345,7 +1388,7 @@ def test_convert_scalar_binary_field_raises_unsupported():
     """
 
     class _Owner(models.Model):
-        blob = models.BinaryField()
+        blob: "models.BinaryField[object, bytes | memoryview]" = models.BinaryField()
 
         class Meta:
             app_label = _unique_app_label("test_choice_enums")
@@ -2365,8 +2408,7 @@ def test_consumer_assigned_strawberry_field_relation_survives_always_defer():
         for field in get_object_definition(CategoryType, strict=True).fields
         if field.python_name == "items"
     )
-    assert items_field.base_resolver is not None
-    assert items_field.base_resolver.wrapped_func.__qualname__.endswith("CategoryType.items")
+    assert resolver_function(items_field).__qualname__.endswith("CategoryType.items")
 
 
 def test_relation_resolves_to_primary_type_when_target_model_has_multiple():

@@ -42,7 +42,7 @@ class ShelfRelationsForm(forms.ModelForm[models.Shelf]):
     refuses, so it earns the save-time field-keyed ``null`` error live.
     """
 
-    branch = forms.ModelChoiceField(
+    branch: forms.ModelChoiceField[models.Branch] = forms.ModelChoiceField(
         queryset=None,
         to_field_name="name",
     )

@@ -409,8 +409,8 @@ def python_docstring(path: Path) -> str:
 
 def paragraphs_from_text(text: str) -> list[str]:
     """Collapse blank-line-separated prose paragraphs into single lines."""
-    paragraphs = []
-    current = []
+    paragraphs: list[str] = []
+    current: list[str] = []
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
@@ -448,7 +448,7 @@ def first_line_violations(sentence: str) -> list[RuleViolation]:
     sentence terminator followed by whitespace before that final dot. The rules
     only split that one predicate into named causes.
     """
-    violations = []
+    violations: list[RuleViolation] = []
     if sentence.endswith(("!", "?")):
         violations.append(
             RuleViolation(
@@ -541,8 +541,8 @@ def first_line_report(path: Path) -> FirstLineReport:
 
 def markdown_paragraphs(path: Path) -> list[str]:
     """Return collapsed prose paragraphs from markdown, ignoring headings and fences."""
-    paragraphs = []
-    current = []
+    paragraphs: list[str] = []
+    current: list[str] = []
     in_fence = False
     for raw_line in path.read_text().splitlines():
         line = raw_line.strip()
@@ -778,7 +778,7 @@ def render_children(
     ignored_dirnames: frozenset[str] = NO_EXTRA_IGNORED_DIRNAMES,
 ) -> list[str]:
     """Render children under ``path`` using tree connector glyphs."""
-    lines = []
+    lines: list[str] = []
     children = sorted_children(path, ignored_dirnames=ignored_dirnames)
     for child, position in iter_tree_positions(children, prefix):
         if child.is_dir():
@@ -1031,7 +1031,7 @@ def _planned_paths_from_rows(rows: Iterable[_PlannedRow]) -> list[PlannedPath]:
     shipped: the clean checkout CI renders from does not carry it. The
     lowest-numbered ``wip``/``todo`` card owns each surviving entry.
     """
-    planned = []
+    planned: list[PlannedPath] = []
     for row in rows:
         if is_tree_member(REPO_ROOT / row.path):
             continue
@@ -1127,7 +1127,7 @@ def render_target_children(node: TargetNode, prefix: str = "") -> list[str]:
         (child for child in node.children.values() if child.is_dir),
         key=lambda child: child.name,
     )
-    lines = []
+    lines: list[str] = []
     for child, position in iter_tree_positions(files + dirs, prefix):
         lines.append(
             comment_line(
@@ -1455,7 +1455,7 @@ def docstring_module_paths(targets: Sequence[Path], package_dir: Path) -> list[P
 
 def format_first_line_reports(reports: Sequence[FirstLineReport]) -> list[str]:
     """Render ``--list-docstrings`` text rows: one line per module, reasons indented."""
-    lines = []
+    lines: list[str] = []
     for report in reports:
         row = " (folder row)" if report.is_folder_row else ""
         status = "FAIL" if report.violations else "ok"

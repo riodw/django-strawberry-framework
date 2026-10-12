@@ -39,7 +39,8 @@ def test_context_stash_round_trips_and_clears_object_dict_and_slots_mapping():
         def __delitem__(self, key: str):
             del self.values[key]
 
-    for context in (SimpleNamespace(), {}, SlotsMapping()):
+    dict_context: dict[str, object] = {}
+    for context in (SimpleNamespace(), dict_context, SlotsMapping()):
         stash_on_context(context, "dst_context_test", 42)
         assert get_context_value(context, "dst_context_test") == 42
         clear_context_key(context, "dst_context_test")
@@ -102,7 +103,7 @@ def test_context_none_short_circuits_and_skips_writes_and_clears():
 def test_context_distinguishes_explicit_none_from_missing_sentinel():
     """Stashing an explicit None value returns None rather than falling back to default."""
     obj_ctx = SimpleNamespace()
-    dict_ctx = {}
+    dict_ctx: dict[str, object] = {}
 
     stash_on_context(obj_ctx, "dst_context_test", None)
     stash_on_context(dict_ctx, "dst_context_test", None)
@@ -176,7 +177,7 @@ def test_restored_context_keys_round_trips_absent_present_and_none(make: Callabl
 
 def test_restored_context_keys_still_restores_when_the_body_raises():
     """Restoration runs in a ``finally``: a raising body leaves the context as found."""
-    context = {}
+    context: dict[str, object] = {}
     stash_on_context(context, "kept", "outer")
     with pytest.raises(RuntimeError, match="boom"):
         with restored_context_keys(context, "kept", "never-was"):

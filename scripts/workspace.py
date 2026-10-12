@@ -183,6 +183,8 @@ except ModuleNotFoundError:  # imported as ``scripts.workspace`` (repo root on p
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Mapping, Sequence
 
+    from typing_extensions import TypeIs
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_DIR = "django_strawberry_framework"
 COMPOSE_FILE = "docker-compose.postgres.yml"
@@ -554,12 +556,34 @@ def _write_json(path: Path, payload: object) -> None:
     temporary.replace(path)
 
 
+def _is_json_object(value: object) -> TypeIs[dict[str, object]]:
+    """Return whether a decoded JSON value is an object (JSON object keys are always strings)."""
+    return isinstance(value, dict)
+
+
+def _is_json_array(value: object) -> TypeIs[list[object]]:
+    """Return whether a decoded JSON value is an array."""
+    return isinstance(value, list)
+
+
+def _object_field(document: Mapping[str, object], key: str) -> dict[str, object]:
+    """Return the JSON object ``document`` holds under ``key``, or an empty one."""
+    value = document.get(key)
+    return value if _is_json_object(value) else {}
+
+
+def _array_field(document: Mapping[str, object], key: str) -> list[object]:
+    """Return the JSON array ``document`` holds under ``key``, or an empty one."""
+    value = document.get(key)
+    return value if _is_json_array(value) else []
+
+
 def _read_json_object(path: Path, default: Mapping[str, object]) -> Mapping[str, object]:
     """Return the JSON object this script wrote at ``path``, or ``default`` when it is absent."""
     if not path.exists():
         return default
-    document = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(document, dict):
+    document: object = json.loads(path.read_text(encoding="utf-8"))
+    if not _is_json_object(document):
         msg = f"{path} holds a JSON {type(document).__name__}, not the object this script writes"
         raise WorkspaceError(msg)
     return document
@@ -786,7 +810,7 @@ def _remove_unwanted(
         here = Path(directory)
         relative_dir = here.relative_to(destination).as_posix()
         prefix = "" if relative_dir == "." else f"{relative_dir}/"
-        keep_dirs = []
+        keep_dirs: list[str] = []
         for name in dirnames:
             relative = f"{prefix}{name}"
             if not prefix and name in preserved:
@@ -1084,7 +1108,7 @@ def copy_edits(
 ) -> list[str]:
     """Return the names a copy changed, added or deleted since its sync, caches excluded."""
     entries: dict[str, list[str | int]] = manifest.get("entries", {})
-    changed = []
+    changed: list[str] = []
     for name, (
         content_hash,
         size,
@@ -1163,17 +1187,37 @@ class Postgres:
         ids = self._docker("ps", "-q").split()
         if not ids:
             return None
-        found = []
-        for info in json.loads(self._docker("inspect", *ids)):
-            env = set(info.get("Config", {}).get("Env") or [])
+        found: list[tuple[str, str, str]] = []
+        inspected: object = json.loads(self._docker("inspect", *ids))
+        if not _is_json_array(inspected):
+            msg = f"docker inspect printed no JSON array: {inspected!r:.200}"
+            raise WorkspaceError(msg)
+        for info in inspected:
+            if not _is_json_object(info):
+                msg = f"docker inspect printed a non-object container entry: {info!r:.200}"
+                raise WorkspaceError(msg)
+            config = _object_field(info, "Config")
+            env = set(_array_field(config, "Env"))
             if f"POSTGRES_USER={PG_USER}" not in env or f"POSTGRES_DB={PG_USER}" not in env:
                 continue
-            bindings = (info.get("NetworkSettings", {}).get("Ports") or {}).get(PG_PORT) or []
+            bindings = _array_field(
+                _object_field(_object_field(info, "NetworkSettings"), "Ports"),
+                PG_PORT,
+            )
             if not bindings:
                 continue
-            labels = info.get("Config", {}).get("Labels") or {}
-            project = labels.get("com.docker.compose.project", "")
-            found.append((info["Id"][:12], bindings[0]["HostPort"], project))
+            container_id = info.get("Id")
+            first = bindings[0]
+            host_port = first.get("HostPort") if _is_json_object(first) else None
+            project = _object_field(config, "Labels").get("com.docker.compose.project", "")
+            if not (
+                isinstance(container_id, str)
+                and isinstance(host_port, str)
+                and isinstance(project, str)
+            ):
+                msg = f"docker inspect reported an unexpected container shape: {info!r:.200}"
+                raise WorkspaceError(msg)
+            found.append((container_id[:12], host_port, project))
         if len(found) > 1:
             msg = f"{len(found)} fakeshop Postgres containers run ({found}); stop all but one"
             raise WorkspaceError(msg)
@@ -1483,7 +1527,33 @@ def probe(directory: Path, env: dict[str, str]) -> _ProbeResult:
         detail = completed.stderr.decode("utf-8", "replace").strip()
         msg = f"the provenance probe failed in {directory}: {detail}"
         raise WorkspaceError(msg)
-    return json.loads(completed.stdout.decode("utf-8").strip().splitlines()[-1])
+    return _probe_result(json.loads(completed.stdout.decode("utf-8").strip().splitlines()[-1]))
+
+
+def _probe_result(document: object) -> _ProbeResult:
+    """Return the ``PROBE`` JSON line as a :class:`_ProbeResult`, refusing any other shape."""
+    if not _is_json_object(document):
+        msg = f"the provenance probe printed a non-object: {document!r:.200}"
+        raise WorkspaceError(msg)
+    executable = document.get("executable")
+    package_file = document.get("package_file")
+    raw_databases = document.get("databases")
+    if not (
+        isinstance(executable, str)
+        and (package_file is None or isinstance(package_file, str))
+        and _is_json_object(raw_databases)
+    ):
+        msg = f"the provenance probe printed an unexpected shape: {document!r:.200}"
+        raise WorkspaceError(msg)
+    databases: dict[str, _ProbeDatabase] = {}
+    for alias, conf in raw_databases.items():
+        engine = conf.get("ENGINE") if _is_json_object(conf) else None
+        name = conf.get("NAME") if _is_json_object(conf) else None
+        if not isinstance(engine, str) or not isinstance(name, str):
+            msg = f"the provenance probe printed an unexpected alias {alias!r}: {conf!r:.200}"
+            raise WorkspaceError(msg)
+        databases[alias] = {"ENGINE": engine, "NAME": name}
+    return {"executable": executable, "package_file": package_file, "databases": databases}
 
 
 def provenance_faults(
@@ -1493,21 +1563,22 @@ def provenance_faults(
     database: str | None,
 ) -> list[str]:
     """Return why a probe result is not this copy's provenance; empty when it is."""
-    faults = []
+    faults: list[str] = []
     package = found.get("package_file")
     if not package or not _is_within(Path(package), directory):
         faults.append(f"package would import from {package}, outside {directory}")
     executable = found.get("executable") or ""
     if not _is_within(Path(executable).parent, directory / ".venv"):
         faults.append(f"interpreter {executable} is not the copy's .venv")
-    for alias, conf in found.get("databases", {}).items():
+    for alias, conf in found["databases"].items():
         name, engine = conf["NAME"], conf["ENGINE"]
         if "postgresql" in engine:
             if cell != "pg" or name != database:
                 faults.append(f"alias {alias!r} opens Postgres {name!r}, not {database!r}")
         elif not _bench_common.is_memory_db_name(name) and not _is_within(Path(name), directory):
             faults.append(f"alias {alias!r} opens {name}, outside {directory}")
-    if cell == "pg" and found.get("databases", {}).get("default", {}).get("NAME") != database:
+    default = found["databases"].get("default")
+    if cell == "pg" and (None if default is None else default["NAME"]) != database:
         faults.append(f"cell pg did not select {database!r} for the default alias")
     return faults
 
@@ -1740,7 +1811,7 @@ def release(
             msg = f"{layout.flow}/{item}: a command still runs in {', '.join(busy)}"
             raise LockBusyError(msg)
         postgres = _running_postgres(layout.repo_root)
-        released = []
+        released: list[str] = []
         for slot in chosen:
             if postgres is not None:
                 postgres.drop_matching(layout.db_name(slot), exact=True)
@@ -1757,7 +1828,7 @@ def release(
 
 def gc(layout: Layout, *, force: bool = False) -> list[str]:
     """Delete the flow folder and its databases; stop Postgres when this script owns it idle."""
-    report = []
+    report: list[str] = []
     flow_dir = layout.flow_dir
     if flow_dir.exists():
         if not (flow_dir / MARKER_NAME).exists():
@@ -1819,29 +1890,83 @@ def status(repo_root: Path, flow: str | None) -> list[str]:
 
 
 class _LoggedRun(TypedDict):
-    """The run log fields :func:`audit_record` reads; execute and gate runs both write them."""
+    """The run log fields :func:`load_runs` and :func:`audit_record` read; every run writes them."""
 
+    run_id: str
     address: str
     directory: str
-    package_file: str
+    package_file: str | None
     package_digest: str
     cell: str
     databases: dict[str, str]
     copy_edits: list[str]
     shared_moves: list[str]
-    exit: int
+    exit: int | None
 
 
 def load_runs(layout: Layout) -> dict[str, _LoggedRun]:
     """Return every logged run of the flow by id."""
     if not layout.run_log.exists():
         return {}
-    runs = {}
+    runs: dict[str, _LoggedRun] = {}
     for line in layout.run_log.read_text(encoding="utf-8").splitlines():
         if line.strip():
-            record = json.loads(line)
+            record = _logged_run(json.loads(line), layout.run_log)
             runs[record["run_id"]] = record
     return runs
+
+
+def _logged_run(document: object, run_log: Path) -> _LoggedRun:
+    """Return one run log line as a :class:`_LoggedRun`, refusing any other shape.
+
+    ``package_file`` is ``None`` when the probe resolved no package, and ``exit``
+    is ``None`` for a run whose command never reported back.
+    """
+    if not _is_json_object(document):
+        msg = f"{run_log}: a run log line is not a JSON object: {document!r:.200}"
+        raise WorkspaceError(msg)
+    run_id = document.get("run_id")
+    address = document.get("address")
+    directory = document.get("directory")
+    package_digest = document.get("package_digest")
+    cell = document.get("cell")
+    package_file = document.get("package_file")
+    exit_code = document.get("exit")
+    raw_databases = document.get("databases")
+    copy_edits = document.get("copy_edits")
+    shared_moves = document.get("shared_moves")
+    if not (
+        isinstance(run_id, str)
+        and isinstance(address, str)
+        and isinstance(directory, str)
+        and isinstance(package_digest, str)
+        and isinstance(cell, str)
+        and (package_file is None or isinstance(package_file, str))
+        and (exit_code is None or (isinstance(exit_code, int) and not isinstance(exit_code, bool)))
+        and _is_json_object(raw_databases)
+        and all(isinstance(name, str) for name in raw_databases.values())
+        and _is_str_array(copy_edits)
+        and _is_str_array(shared_moves)
+    ):
+        msg = f"{run_log}: a run log line has an unexpected shape: {document!r:.200}"
+        raise WorkspaceError(msg)
+    return {
+        "run_id": run_id,
+        "address": address,
+        "directory": directory,
+        "package_file": package_file,
+        "package_digest": package_digest,
+        "cell": cell,
+        "databases": {alias: str(name) for alias, name in raw_databases.items()},
+        "copy_edits": copy_edits,
+        "shared_moves": shared_moves,
+        "exit": exit_code,
+    }
+
+
+def _is_str_array(value: object) -> TypeIs[list[str]]:
+    """Return whether a decoded JSON value is an array of strings."""
+    return _is_json_array(value) and all(isinstance(entry, str) for entry in value)
 
 
 def audit_record(repo_root: Path, record_path: Path) -> tuple[list[str], bool]:
@@ -1861,9 +1986,12 @@ def audit_record(repo_root: Path, record_path: Path) -> tuple[list[str], bool]:
             ok = False
             continue
         directory = Path(run["directory"])
-        faults = []
-        if not _is_within(Path(run["package_file"]), directory):
-            faults.append(f"package {run['package_file']} outside {directory}")
+        faults: list[str] = []
+        package_file = run["package_file"]
+        if package_file is None:
+            faults.append("no package `__file__` was recorded")
+        elif not _is_within(Path(package_file), directory):
+            faults.append(f"package {package_file} outside {directory}")
         for alias, name in run["databases"].items():
             inside = _is_within(Path(name), directory) or _bench_common.is_memory_db_name(name)
             if not inside and not name.startswith("ws_"):

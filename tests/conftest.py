@@ -46,6 +46,7 @@ from django.db.models import Model
 
 if TYPE_CHECKING:
     from django_strawberry_framework import ResourcePolicy
+    from django_strawberry_framework.resource_policy import _BudgetScope
 
 # Raw ``sqlite3.Connection`` handles opened while an event loop was running -
 # i.e. the context-local, per-asyncio-task connections that nothing else will
@@ -54,7 +55,7 @@ if TYPE_CHECKING:
 # pytest-django, so we never track (or touch) those. Appends only ever happen on
 # the main thread - the only thread that runs the event loop - so plain list
 # access is race-free here.
-_context_local_connections = []
+_context_local_connections: list[sqlite3.Connection] = []
 
 _original_get_new_connection = sqlite_base.DatabaseWrapper.get_new_connection
 
@@ -113,7 +114,7 @@ def arm_resource_budget() -> "Iterator[Callable[[object, ResourcePolicy], None]]
         end_resource_budget,
     )
 
-    scopes = []
+    scopes: list[_BudgetScope] = []
 
     def arm(context: object, policy: "ResourcePolicy") -> None:
         scopes.append(begin_resource_budget(context, policy))

@@ -36,6 +36,7 @@ import strawberry
 from apps.library.models import Patron
 from apps.products.models import Category, Entry, Item, Property
 from django.db import models
+from django.db.models.expressions import Combinable
 from django.utils.functional import Promise
 from django.utils.translation import gettext_lazy
 from strawberry import relay
@@ -68,7 +69,7 @@ from django_strawberry_framework.types.converters import (
     resolved_relation_annotation,
 )
 from django_strawberry_framework.types.relations import PendingRelationAnnotation
-from tests._idioms import definition_raises
+from tests._idioms import definition_raises, is_object_dict
 from tests.optimizer import _link_models
 
 CATEGORY_SCALAR_FIELDS = (
@@ -2045,15 +2046,21 @@ def _make_override_model():
     """
 
     class _OverrideOwner(models.Model):
-        text_value = models.TextField()
-        note = models.TextField(null=True)
-        status = models.TextField(choices=_OVERRIDE_STATUS_CHOICES)
-        nullable_status = models.TextField(choices=_OVERRIDE_STATUS_CHOICES, null=True)
-        partner = models.ForeignKey(
-            "self",
-            null=True,
-            on_delete=models.SET_NULL,
-            related_name="+",
+        text_value: "models.TextField[str | Combinable, str]" = models.TextField()
+        note: "models.TextField[str | Combinable | None, str | None]" = models.TextField(null=True)
+        status: "models.TextField[str | Combinable, str]" = models.TextField(
+            choices=_OVERRIDE_STATUS_CHOICES,
+        )
+        nullable_status: "models.TextField[str | Combinable | None, str | None]" = (
+            models.TextField(choices=_OVERRIDE_STATUS_CHOICES, null=True)
+        )
+        partner: "models.ForeignKey[_OverrideOwner | Combinable | None, _OverrideOwner | None]" = (
+            models.ForeignKey(
+                "self",
+                null=True,
+                on_delete=models.SET_NULL,
+                related_name="+",
+            )
         )
 
         class Meta:
@@ -3001,7 +3008,7 @@ def test_non_string_annotation_keys_raise_configuration_error():
             **kwargs: object,
         ):
             declared = namespace.get("__annotations__", {})
-            assert isinstance(declared, dict)
+            assert is_object_dict(declared)
             annotations = dict(declared)
             annotations[1] = StrawberryAuto()
             annotations["zz"] = StrawberryAuto()
@@ -3082,7 +3089,7 @@ def test_multi_column_forward_foreign_object_maps_to_its_related_type(
     )
     finalize_django_types()
 
-    carriers = {"p_tenant", "p_code"} if fields_spec == "__all__" else set()
+    carriers: set[str] = {"p_tenant", "p_code"} if fields_spec == "__all__" else set()
     assert set(child_type.__django_strawberry_definition__.field_map) == {
         "id",
         "name",

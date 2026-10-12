@@ -61,7 +61,7 @@ def test_generator_directives_are_materialized_once():
     Returning the generator itself would let Strawberry's lazy read find it
     already exhausted, silently dropping every directive from the SDL.
     """
-    seen = []
+    seen: list[str] = []
 
     def _gen():
         for tag in ("a", "b"):

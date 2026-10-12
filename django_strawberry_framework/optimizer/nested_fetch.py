@@ -83,7 +83,7 @@ from django.db.models.query import ModelIterable
 from typing_extensions import override
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
-from ..utils._queryset_private import chain_queryset
+from ..utils._queryset_private import chain_queryset, super_clone_queryset
 from ..utils.connections import assert_window_fetch_mode_for
 from ._context import active_nested_strategy
 from .join_taxonomy import RelationJoinDescriptor
@@ -179,12 +179,10 @@ class RecognizedFetchQuerySet(QuerySet[models.Model, models.Model]):
     _dst_window_signature: WindowSignature | None = None
 
     def _clone(self) -> RecognizedFetchQuerySet:
-        # basedpyright: django-stubs omits QuerySet._clone, reported as an unknown attribute
-        clone = super()._clone()  # pyright: ignore[reportAttributeAccessIssue]
+        clone = super_clone_queryset(RecognizedFetchQuerySet, self)
         setattr(clone, self._dst_spec_attr, getattr(self, self._dst_spec_attr))
         clone._dst_window_signature = self._dst_window_signature
-        # ``_clone`` returns an instance of ``type(self)``.
-        return cast("RecognizedFetchQuerySet", clone)
+        return clone
 
     @classmethod
     def rebind(cls, queryset: QuerySet[models.Model], spec: object) -> RecognizedFetchQuerySet:

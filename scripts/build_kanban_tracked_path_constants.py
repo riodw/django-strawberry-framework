@@ -93,10 +93,10 @@ def render_constants(file_paths: Sequence[str]) -> str:
     lines = [
         '"""Generated kanban allowlist of tracked repository paths (files + directories)."""',
         "",
-        "TRACKED_FILE_PATHS = (",
+        "TRACKED_FILE_PATHS: tuple[str, ...] = (",
         *(f"    {json.dumps(path)}," for path in file_paths),
         ")",
-        "TRACKED_DIRECTORY_PATHS = (",
+        "TRACKED_DIRECTORY_PATHS: tuple[str, ...] = (",
         *(f"    {json.dumps(path)}," for path in directory_paths),
         ")",
         "TRACKED_PATHS = TRACKED_DIRECTORY_PATHS + TRACKED_FILE_PATHS",

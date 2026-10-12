@@ -27,8 +27,9 @@ def backfill_card_glossary_terms(apps: StateApps, schema_editor: BaseDatabaseSch
     UUIDModel = apps.get_model("kanban", "UUIDModel")
     db_alias = schema_editor.connection.alias
 
-    mentions_by_path = {}
-    mentions_by_basename = {}
+    # ``(term_id, term_text, order)`` per mention, keyed by spec path and by its basename.
+    mentions_by_path: dict[object, list[tuple[object, object, object]]] = {}
+    mentions_by_basename: dict[object, list[tuple[object, object, object]]] = {}
     mentions = GlossarySpecMention.objects.using(db_alias).order_by(
         "spec_path",
         "order",
@@ -46,7 +47,7 @@ def backfill_card_glossary_terms(apps: StateApps, schema_editor: BaseDatabaseSch
             _basename(spec_path),
             [],
         )
-        seen_terms = set()
+        seen_terms: set[object] = set()
         order = 0
         for term_id, term_text, _mention_order in spec_mentions:
             if term_id in seen_terms:
@@ -138,7 +139,8 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="card",
             name="glossary_terms",
-            field=models.ManyToManyField(
+            # basedpyright: django-stubs ManyToManyField _To has no default; a string ``to`` cannot bind it
+            field=models.ManyToManyField(  # pyright: ignore[reportUnknownArgumentType]
                 blank=True,
                 related_name="kanban_cards",
                 through="kanban.CardGlossaryTerm",
@@ -317,7 +319,8 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="card",
             name="changed_files",
-            field=models.ManyToManyField(
+            # basedpyright: django-stubs ManyToManyField _To has no default; a string ``to`` cannot bind it
+            field=models.ManyToManyField(  # pyright: ignore[reportUnknownArgumentType]
                 blank=True,
                 related_name="cards",
                 to="kanban.packagefile",

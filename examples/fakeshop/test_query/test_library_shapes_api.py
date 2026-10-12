@@ -415,7 +415,7 @@ def test_patron_profile_annotations_connection_is_left_unplanned_and_fetched_per
 
 def _seed_distributors(count: int) -> list[models.Distributor]:
     """``count`` distributors with one consignment each, both numbered from zero."""
-    distributors = []
+    distributors: list[models.Distributor] = []
     for index in range(count):
         distributor = models.Distributor.objects.create(displayName=f"Distributor {index}")
         models.Consignment.objects.create(label=f"Consignment {index}", distributorRef=distributor)

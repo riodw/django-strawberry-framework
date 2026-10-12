@@ -538,7 +538,8 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="card",
             name="parity",
-            field=models.ManyToManyField(
+            # basedpyright: django-stubs ManyToManyField _To has no default; a string ``to`` cannot bind it
+            field=models.ManyToManyField(  # pyright: ignore[reportUnknownArgumentType]
                 blank=True,
                 related_name="cards",
                 through="kanban.ParityClaim",

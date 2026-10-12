@@ -147,7 +147,7 @@ def test_code_digest_moves_with_code_and_never_with_prose(
     original = 'def f(x):\n    """Return x."""\n    return x  # plain\n'
     reworded = 'def f(x):\n    """Return ``x``\n\n    unchanged.\n    """\n\n    return x\n'
     changed = 'def f(x):\n    """Return x."""\n    return x + 1\n'
-    paths = []
+    paths: list[Path] = []
     for name, text in (("a.py", original), ("b.py", reworded), ("c.py", changed)):
         paths.append(tmp_path / name)
         paths[-1].write_text(text, encoding="utf-8")

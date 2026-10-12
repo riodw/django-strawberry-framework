@@ -2102,8 +2102,8 @@ def test_a_refused_request_snapshots_the_transport_policy_exactly_once():
     _refuse_operation_document(context)
 
     assert policy.traversals == 1
-    assert type(context.allowed_operations) is tuple
     assert context.allowed_operations == (OperationType.QUERY,)
+    assert type(context.allowed_operations) is tuple
 
 
 def test_a_refused_request_never_asks_a_transport_policy_whether_it_is_empty():

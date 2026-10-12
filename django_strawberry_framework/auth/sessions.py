@@ -70,6 +70,8 @@ if TYPE_CHECKING:
 
     from django.contrib.sessions.backends.base import SessionBase
 
+    from ..utils.permissions import MutableChannelsScope
+
 # The single channels-ABSENT install hint for the auth transport (mirrors
 # ``routers.py::_CHANNELS_INSTALL_HINT`` but keyed to this feature so hint strings
 # stay single-sited at their owner, per ``utils/imports.py``). A Channels-shaped
@@ -247,7 +249,7 @@ def require_session(request: object, transport: Transport) -> SessionBase:
     return cast("SessionBase", session)
 
 
-def _require_mutable_scope(adapter: ChannelsRequestAdapter) -> MutableMapping[str, object]:
+def _require_mutable_scope(adapter: ChannelsRequestAdapter) -> MutableChannelsScope:
     """Return the adapter's scope as a ``MutableMapping``, or raise loudly.
 
     ``ChannelsRequestAdapter.scope`` is typed as a read-only ``Mapping``, but

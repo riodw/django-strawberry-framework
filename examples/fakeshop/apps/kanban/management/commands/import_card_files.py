@@ -34,8 +34,11 @@ the exports publish) or by ``card`` / ``title`` / ``number``. ``files`` is
 required; pass ``[]`` to clear links.
 """
 
+from __future__ import annotations
+
 import json
 import pathlib
+from typing import TYPE_CHECKING
 
 from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError, CommandParser
@@ -43,6 +46,24 @@ from django.db import transaction
 from typing_extensions import override
 
 from apps.kanban import models, services
+
+if TYPE_CHECKING:
+    from typing_extensions import TypeIs
+
+
+def _is_dict(value: object) -> TypeIs[dict[object, object]]:
+    """Whether a value is a ``dict``, its keys and values still unvalidated."""
+    return isinstance(value, dict)
+
+
+def _is_json_object(value: object) -> TypeIs[dict[str, object]]:
+    """Whether a decoded JSON value is an object (``json`` decodes every object key to ``str``)."""
+    return _is_dict(value) and all(isinstance(key, str) for key in value)
+
+
+def _is_json_array(value: object) -> TypeIs[list[object]]:
+    """Whether a decoded JSON value is an array, its items still unvalidated."""
+    return isinstance(value, list)
 
 
 class _DryRunRollbackError(Exception):
@@ -75,7 +96,7 @@ class Command(BaseCommand):
 
     def _validate_spec(self, spec: object) -> dict[str, object]:
         """Return a card spec dict after validating replacement-command shape."""
-        if not isinstance(spec, dict):
+        if not _is_json_object(spec):
             raise CommandError('Each entry in "cards" must be an object.')
         if self.files_key not in spec:
             raise CommandError(
@@ -88,11 +109,11 @@ class Command(BaseCommand):
         if not file_path.is_file():
             raise CommandError(f"File not found: {path}")
         try:
-            payload = json.loads(file_path.read_text(encoding="utf-8"))
+            payload: object = json.loads(file_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as error:
             raise CommandError(f"Invalid JSON in {path}: {error}") from error
-        cards = payload.get("cards") if isinstance(payload, dict) else None
-        if not isinstance(cards, list) or not cards:
+        cards = payload.get("cards") if _is_json_object(payload) else None
+        if not _is_json_array(cards) or not cards:
             raise CommandError('JSON must be an object with a non-empty "cards" array.')
         return cards
 

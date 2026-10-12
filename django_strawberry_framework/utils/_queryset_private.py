@@ -32,7 +32,7 @@ _QuerySetT = TypeVar("_QuerySetT", bound="models.QuerySet[models.Model, object]"
 def queryset_db(queryset: models.QuerySet[models.Model, object]) -> str | None:
     """Return the alias ``using()`` pinned, or ``None`` when the router decides."""
     # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    return queryset._db  # pyright: ignore[reportAttributeAccessIssue]
+    return queryset._db  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
 
 
 def set_queryset_db(queryset: models.QuerySet[models.Model, object], alias: str | None) -> None:
@@ -44,7 +44,7 @@ def set_queryset_db(queryset: models.QuerySet[models.Model, object], alias: str 
 def queryset_hints(queryset: models.QuerySet[models.Model, object]) -> dict[str, object]:
     """Return the router hints dict ``queryset`` holds (the object itself, not a copy)."""
     # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    return queryset._hints  # pyright: ignore[reportAttributeAccessIssue]
+    return queryset._hints  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
 
 
 def set_queryset_hints(
@@ -59,7 +59,7 @@ def set_queryset_hints(
 def queryset_fields(queryset: models.QuerySet[models.Model, object]) -> tuple[str, ...] | None:
     """Return the ``values()`` / ``values_list()`` field names, or ``None`` for model rows."""
     # basedpyright: django-stubs omits QuerySet._fields, reported as an unknown attribute
-    return queryset._fields  # pyright: ignore[reportAttributeAccessIssue]
+    return queryset._fields  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
 
 
 def set_queryset_fields(
@@ -77,7 +77,7 @@ def queryset_prefetch_lookups(
     """Return the ``prefetch_related`` lookups ``queryset`` will run, in order."""
     # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
     # unknown attribute
-    return queryset._prefetch_related_lookups  # pyright: ignore[reportAttributeAccessIssue]
+    return queryset._prefetch_related_lookups  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
 
 
 def set_queryset_prefetch_lookups(
@@ -137,7 +137,17 @@ def set_queryset_query(queryset: models.QuerySet[models.Model, object], query: Q
     queryset._query = query  # pyright: ignore[reportAttributeAccessIssue]
 
 
+def super_clone_queryset(owner: type[_QuerySetT], queryset: _QuerySetT) -> _QuerySetT:
+    """Return ``super(owner, queryset)._clone()``: the clone the class after ``owner`` makes.
+
+    For a ``QuerySet`` subclass's own ``_clone`` override, which extends the copy its
+    superclass makes.
+    """
+    # basedpyright: django-stubs omits QuerySet._clone, reported as an unknown attribute
+    return super(owner, queryset)._clone()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
+
+
 def chain_queryset(queryset: _QuerySetT) -> _QuerySetT:
     """Return Django's ``_chain()`` clone of ``queryset``: same class, same state."""
     # basedpyright: django-stubs omits QuerySet._chain, reported as an unknown attribute
-    return queryset._chain()  # pyright: ignore[reportAttributeAccessIssue]
+    return queryset._chain()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]

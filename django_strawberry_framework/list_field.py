@@ -12,13 +12,14 @@ import inspect
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from types import GenericAlias
-from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast, get_args
+from typing import TYPE_CHECKING, Literal, TypeVar, cast, get_args
 
 import strawberry
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.expressions import (
+    BaseExpression,
     Case,
     Col,
     CombinedExpression,
@@ -90,6 +91,7 @@ from .resource_policy import (
 )
 from .types import DjangoType
 from .types.base import _is_relay_shaped
+from .utils._narrowing import is_list_or_tuple, is_set_or_frozenset
 from .utils.directives import validated_field_directives
 from .utils.execution_mode import async_execution, operation_is_async
 from .utils.querysets import (
@@ -730,15 +732,6 @@ _APPROVED_ORDER_NODES = (
     _TRANSPARENT_ORDER_EXPRESSIONS | _APPROVED_ORDER_FUNCTIONS | _APPROVED_ORDER_AGGREGATES
 )
 
-#: The container shapes a predicate's right-hand side arrives in: ``__in`` takes a
-#: sequence and ``__range`` a pair, and each member is compiled into the statement.
-_ORDER_VALUE_CONTAINERS = (
-    list,
-    tuple,
-    set,
-    frozenset,
-)
-
 
 def _resolve_order_field_path(
     opts: Options[models.Model] | None,
@@ -904,11 +897,15 @@ def _is_deterministic_order_name(
     return _is_deterministic_order_field_path(query, col, opts, seen, prefix)
 
 
+def _f_reference_name(reference: models.F) -> str:
+    """Return the field path an ``F`` names (the ``name`` its ``__init__`` stores)."""
+    # basedpyright: django-stubs omits ``F.name``, so the read is an unknown attribute
+    return reference.name  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
+
+
 def _is_deterministic_order_term(
     query: Query,
-    # basedpyright: narrowed only through the stored ``type(term)`` alias, which no checker
-    # follows; the F arm reads F.name, which django-stubs does not declare
-    term: Any,  # pyright: ignore[reportExplicitAny]
+    term: object,
     opts: Options[models.Model] | None = None,
     seen: frozenset[tuple[type[models.Model], str]] = _NO_SEEN_EDGES,
     prefix: str = "",
@@ -975,13 +972,15 @@ def _is_deterministic_order_term(
     """
     if hasattr(term, "resolve_expression"):
         node = type(term)
-        if node is models.F:
-            return _is_deterministic_order_reference(query, term.name, prefix)
-        if node is models.Q:
+        if type(term) is models.F:
+            return _is_deterministic_order_reference(query, _f_reference_name(term), prefix)
+        if type(term) is models.Q:
             return _is_deterministic_order_condition(query, term, opts, seen, prefix)
         if node in _READABLE_ORDER_LEAVES:
             return True
-        if node not in _APPROVED_ORDER_NODES:
+        # Every approved node is a ``BaseExpression`` subclass, so the instance test only
+        # states for the reader of ``get_source_expressions`` what the membership proved.
+        if node not in _APPROVED_ORDER_NODES or not isinstance(term, BaseExpression):
             return False
         return all(
             _is_deterministic_order_term(query, source, opts, seen, prefix)
@@ -1012,10 +1011,11 @@ def _is_deterministic_order_value(
     """
     if hasattr(value, "resolve_expression"):
         return _is_deterministic_order_term(query, value, opts, seen, prefix)
-    if isinstance(value, _ORDER_VALUE_CONTAINERS):
-        members: list[object] | tuple[object, ...] | set[object] | frozenset[object] = value
+    # The container shapes a predicate's right-hand side arrives in: ``__in`` takes a
+    # sequence and ``__range`` a pair, and each member is compiled into the statement.
+    if is_list_or_tuple(value) or is_set_or_frozenset(value):
         return all(
-            _is_deterministic_order_value(query, member, opts, seen, prefix) for member in members
+            _is_deterministic_order_value(query, member, opts, seen, prefix) for member in value
         )
     return True
 

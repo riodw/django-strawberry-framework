@@ -37,7 +37,7 @@ import itertools
 from collections.abc import Generator, Iterator
 from enum import Enum
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 import pytest
 import strawberry
@@ -70,6 +70,14 @@ from django_strawberry_framework.testing.relay import global_id_for
 from django_strawberry_framework.utils.querysets import SyncMisuseError, visible_related_object
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
 from tests._info import make_info, unread_info
+
+if TYPE_CHECKING:
+    from django.db.models.expressions import Combinable
+
+    # Each field's descriptor types as django-stubs declares them (set type, get type), spelled
+    # out because the checker runs without the django-stubs mypy plugin that would infer them.
+    _Int: TypeAlias = models.IntegerField[float | int | str | Combinable, int]
+    _Text: TypeAlias = models.TextField[str | Combinable, str]
 
 
 @pytest.fixture(autouse=True)
@@ -1048,7 +1056,7 @@ def test_perform_mutate_override_runs_only_on_success():
     ``createBranchWithShelf`` (the write). This throwaway pins the override
     call list, which no shipped form exposes.
     """
-    calls = []
+    calls: list[object] = []
 
     class ContactForm(forms.Form):
         message = forms.CharField()
@@ -1389,7 +1397,8 @@ def test_decode_relation_single_empty_value_passes_through():
 def test_decode_relation_multi_empty_values_return_empty_list():
     """An explicit ``null`` or empty list on an M2M returns ``[]`` and never iterates ``None`` (Finding 4)."""
     field = forms.ModelMultipleChoiceField(queryset=library_models.Genre.objects.all())
-    for empty in (None, []):
+    empties: tuple[None, list[object]] = (None, [])
+    for empty in empties:
         assert field.queryset is not None
         decoded, error = form_resolvers._decode_form_relation_multi(
             empty,
@@ -1674,11 +1683,14 @@ def test_decode_form_relation_multi_rejects_non_collection_sequences():
         memoryview(b"view"),
         {"key": "val"},
     ):
+        form_field: forms.ModelMultipleChoiceField[models.Model] = forms.ModelMultipleChoiceField(
+            queryset=None,
+        )
         val, err = _decode_form_relation_multi(
             bad,
             graphql_name="genres",
             related_model=library_models.Genre,
-            form_field=forms.ModelMultipleChoiceField(queryset=None),
+            form_field=form_field,
             info=unread_info(),
         )
         assert val is None
@@ -1888,6 +1900,26 @@ def _blank_choice_model(name: str, column: models.Field[object, object]) -> type
 
 _NULL_PICK_ERROR = {"field": "pick", "messages": ["This field cannot be null."], "codes": ["null"]}
 
+# One unattached column per case below: ``_blank_choice_model`` binds each to its own model class.
+_INTEGER_PICK_ON_CREATE: models.Field[object, object] = models.IntegerField(
+    choices=[(1, "One"), (2, "Two")],
+    blank=True,
+)
+_DECIMAL_PICK: models.Field[object, object] = models.DecimalField(
+    max_digits=4,
+    decimal_places=2,
+    choices=[(decimal.Decimal("1.50"), "Low"), (decimal.Decimal("2.50"), "High")],
+    blank=True,
+)
+_DATE_PICK: models.Field[object, object] = models.DateField(
+    choices=[(datetime.date(2026, 1, 1), "New year")],
+    blank=True,
+)
+_INTEGER_PICK_ON_UPDATE: models.Field[object, object] = models.IntegerField(
+    choices=[(1, "One"), (2, "Two")],
+    blank=True,
+)
+
 
 @pytest.mark.parametrize(
     (
@@ -1898,33 +1930,28 @@ _NULL_PICK_ERROR = {"field": "pick", "messages": ["This field cannot be null."],
     ),
     [
         pytest.param(
-            models.IntegerField(choices=[(1, "One"), (2, "Two")], blank=True),
+            _INTEGER_PICK_ON_CREATE,
             "create",
             {},
             None,
             id="integer-create-omitted-no-default",
         ),
         pytest.param(
-            models.DecimalField(
-                max_digits=4,
-                decimal_places=2,
-                choices=[(decimal.Decimal("1.50"), "Low"), (decimal.Decimal("2.50"), "High")],
-                blank=True,
-            ),
+            _DECIMAL_PICK,
             "create",
             {"pick": None},
             None,
             id="decimal-create-null",
         ),
         pytest.param(
-            models.DateField(choices=[(datetime.date(2026, 1, 1), "New year")], blank=True),
+            _DATE_PICK,
             "create",
             {"pick": None},
             None,
             id="date-create-null",
         ),
         pytest.param(
-            models.IntegerField(choices=[(1, "One"), (2, "Two")], blank=True),
+            _INTEGER_PICK_ON_UPDATE,
             "update",
             {"pick": None},
             2,
@@ -1985,7 +2012,7 @@ def test_modelform_blank_choice_filled_in_by_model_save_writes():
     """
 
     class FilledPickRow(models.Model):
-        pick = models.IntegerField(choices=[(1, "One"), (2, "Two")], blank=True)
+        pick: _Int = models.IntegerField(choices=[(1, "One"), (2, "Two")], blank=True)
 
         class Meta:
             app_label = "products"
@@ -1994,7 +2021,9 @@ def test_modelform_blank_choice_filled_in_by_model_save_writes():
         @override
         # basedpyright: verbatim forward to Model.save; object fails its typed params
         def save(self, *args: Any, **kwargs: Any) -> None:  # pyright: ignore[reportExplicitAny]
-            if self.pick == "":
+            # basedpyright: django-stubs types the column read as its get type (int), but Django
+            # stores an assigned value unconverted, and the form assigned its cleaned "" here
+            if self.pick == "":  # pyright: ignore[reportUnnecessaryComparison]
                 self.pick = 2
             super().save(*args, **kwargs)
 
@@ -2027,8 +2056,8 @@ def test_modelform_unrelated_save_value_error_propagates():
     """
 
     class FailingPickRow(models.Model):
-        pick = models.IntegerField(choices=[(1, "One"), (2, "Two")], blank=True)
-        note = models.TextField(blank=True)
+        pick: _Int = models.IntegerField(choices=[(1, "One"), (2, "Two")], blank=True)
+        note: _Text = models.TextField(blank=True)
 
         class Meta:
             app_label = "products"

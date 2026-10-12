@@ -1583,14 +1583,15 @@ def _hint_prefetch_over_pk_set(
             f"Prefetch queryset is combined ({defect[1]}); "
             + _COMBINED_WHAT.format(model=inner.model.__name__, detail=defect[1]),
         )
-    queryset: models.QuerySet[models.Model] = models.QuerySet(
+    rebuilt: models.QuerySet[models.Model] = models.QuerySet(
         model=inner.model,
         query=rewritten,
         using=queryset_db(inner),
         # django-stubs types hint values as model instances (the ``instance`` hint Django
         # itself writes); a router hint can carry any value.
         hints=cast("dict[str, models.Model]", dict(queryset_hints(inner))),
-    ).prefetch_related(*queryset_prefetch_lookups(inner))
+    )
+    queryset = rebuilt.prefetch_related(*queryset_prefetch_lookups(inner))
     return Prefetch(prefetch.prefetch_through, queryset=queryset, to_attr=prefetch.to_attr)
 
 

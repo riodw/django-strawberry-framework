@@ -58,6 +58,7 @@ Critical contract pins (do not violate without an explicit spec revision):
 
 import os
 from collections.abc import Callable, Iterator
+from typing import TypeGuard
 
 import pytest
 
@@ -588,6 +589,11 @@ def test_post_orderset_equal_but_distinct_hint_token_rejected_under_identity_rou
     assert _branch_sql(shard_ctx.captured_queries) == []
 
 
+def _is_exact_dict(value: object) -> TypeGuard[dict[object, object]]:
+    """Whether a router hint is exactly a ``dict`` (a subclass is not a tenant token)."""
+    return type(value) is dict
+
+
 class _NestedTenantRouter:
     """Routes by state INSIDE the tenant hint object, which is ordinary router code.
 
@@ -598,7 +604,11 @@ class _NestedTenantRouter:
 
     def db_for_read(self, model: type[Model], **hints: object) -> str | None:
         token = hints.get("tenant")
-        return token["alias"] if type(token) is dict else None
+        if not _is_exact_dict(token):
+            return None
+        alias = token["alias"]
+        assert type(alias) is str, token
+        return alias
 
     def db_for_write(self, model: type[Model], **hints: object) -> str | None:
         return None

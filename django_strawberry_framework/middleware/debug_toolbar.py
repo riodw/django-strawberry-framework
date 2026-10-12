@@ -61,6 +61,7 @@ from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from typing_extensions import override
 
+from django_strawberry_framework.utils._narrowing import is_dict
 from django_strawberry_framework.utils.imports import require_optional_module
 
 if TYPE_CHECKING:
@@ -137,6 +138,7 @@ if not apps.is_installed("debug_toolbar"):
 from debug_toolbar.middleware import (  # noqa: E402
     DebugToolbarMiddleware as _DebugToolbarMiddleware,
 )
+from debug_toolbar.panels import Panel  # noqa: E402
 from debug_toolbar.toolbar import DebugToolbar  # noqa: E402
 from django.core.serializers.json import DjangoJSONEncoder  # noqa: E402
 from django.http.request import HttpRequest  # noqa: E402
@@ -153,11 +155,24 @@ _HTML_TYPES = {"text/html", "application/xhtml+xml"}
 _IS_GRAPHIQL = "_is_graphiql"
 
 
+def _is_graphiql_request(request: HttpRequest) -> bool:
+    """Return whether ``process_view`` stamped ``request`` as resolved to a Strawberry view."""
+    stamped: object = getattr(request, _IS_GRAPHIQL, False)
+    return stamped is True
+
+
+def _panel_title(panel: Panel) -> object:
+    """Return a panel's full-screen ``title`` (a string, or a callable producing one)."""
+    # basedpyright: debug-toolbar leaves ``Panel.title`` unannotated and its base body only
+    # raises ``NotImplementedError``, so the checker reads the property as Unknown
+    return panel.title  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+
+
 def _get_payload(
     request: HttpRequest,  # noqa: ARG001 - upstream-verbatim signature (spec-042 Decision 6)
     response: HttpResponse,
     toolbar: DebugToolbar,
-) -> dict[str, object] | None:
+) -> dict[object, object] | None:
     """Build the ``debugToolbar`` payload for a JSON operation response, or ``None``.
 
     ``None`` when the toolbar assigned no ``request_id`` (nothing to reference),
@@ -180,11 +195,9 @@ def _get_payload(
         payload: object = json.loads(content, object_pairs_hook=collections.OrderedDict)
     except (json.JSONDecodeError, LookupError, UnicodeError):
         return None
-    if not isinstance(payload, dict):
+    if not is_dict(payload):
         return None
-    # A decoded JSON object: every key is a ``str`` (``json.loads`` builds objects from
-    # string-keyed pairs), every value whatever the response carried.
-    document: dict[str, object] = payload
+    document = payload
 
     panels: collections.OrderedDict[str, dict[str, object]] = collections.OrderedDict()
     debug_toolbar: collections.OrderedDict[str, object] = collections.OrderedDict(
@@ -197,7 +210,7 @@ def _get_payload(
         if panel.panel_id == "TemplatesPanel":
             continue
 
-        title: object = panel.title if panel.has_content else None
+        title = _panel_title(panel) if panel.has_content else None
 
         subtitle = panel.nav_subtitle
         panels[panel.panel_id] = {
@@ -280,7 +293,7 @@ class DebugToolbarMiddleware(_DebugToolbarMiddleware):
 
         content_type = response.get("Content-Type", "").split(";")[0]
         is_html = content_type in _HTML_TYPES
-        is_graphiql = getattr(request, _IS_GRAPHIQL, False)
+        is_graphiql = _is_graphiql_request(request)
 
         if is_html and is_graphiql and response.status_code == 200:
             template = render_to_string("django_strawberry_framework/debug_toolbar.html")

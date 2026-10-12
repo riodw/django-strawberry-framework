@@ -1369,7 +1369,9 @@ class SetCardFiles(_ServiceErrorMixin):
     def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         del info
         data = form.cleaned_data
-        paths = data.get("paths") or []
+        # The ``JSON`` scalar admits any value; the service rejects anything but a list
+        # (an absent value clears the links), so a falsy non-list never reads as empty.
+        paths: object = data.get("paths")
         if data["kind"] == models.CARD_PATH_LINK_CHANGED:
             services.set_card_changed_files(data["card"], paths)
         else:

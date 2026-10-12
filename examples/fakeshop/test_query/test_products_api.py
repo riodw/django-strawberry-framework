@@ -2426,7 +2426,7 @@ def test_products_items_entries_key_membership_never_matches_a_hidden_entry(
     assert ids == [_global_id("products.item", pk) for pk in sorted(expected)]
 
 
-_ENTRY_PROPERTY_KEY_ROWS = {
+_ENTRY_PROPERTY_KEY_ROWS: dict[str, tuple[str, list[str]]] = {
     "flat-isnull-true": ("{ propertyId: { isNull: true } }", ["secret"]),
     "flat-isnull-false": ("{ propertyId: { isNull: false } }", ["sibling"]),
     "nested-twin-isnull-true": ("{ property: { id: { isNull: true } } }", []),

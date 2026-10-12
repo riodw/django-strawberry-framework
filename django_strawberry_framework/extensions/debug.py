@@ -856,7 +856,9 @@ class DjangoDebugExtension(_OperationBoundExtension[_DebugOperationState]):
         no-``debug``-key contract). The diagnostic's own failures degrade
         inside ``_build_payload`` and never raise from here.
         """
-        result = state.execution_context.result
+        # basedpyright: Strawberry's schema/_graphql_core.py rebinds its graphql-core 3.3 result
+        # aliases in an ImportError fallback, so ExecutionContext.result carries Unknown
+        result = state.execution_context.result  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         if isinstance(result, GraphQLExecutionResult):
             state.payload = _build_payload(state.snapshots or [], result)
 

@@ -18,7 +18,7 @@ import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeAlias, TypedDict, cast
+from typing import TYPE_CHECKING, TypeAlias, TypedDict, TypeGuard, cast
 
 import pytest
 import strawberry
@@ -1210,6 +1210,16 @@ def _offset_guard_schema():
     return DjangoSchema(query=_OffsetGuardQuery, config=strawberry_config())
 
 
+def _pass_through(method: Callable[..., object]) -> Callable[..., object]:
+    """``method`` as a blind forwarding target that binds none of its own overloads.
+
+    A recorder hands its arguments on untouched, so no single overload of the
+    wrapped method describes the call; seen through this signature, the call
+    answers ``object`` instead of an overload the arguments cannot select.
+    """
+    return method
+
+
 def _record_table_sql(monkeypatch: pytest.MonkeyPatch, table: str = "library_branch") -> list[str]:
     """Record every statement against ``table`` the request compiles, whichever thread runs it.
 
@@ -1227,11 +1237,9 @@ def _record_table_sql(monkeypatch: pytest.MonkeyPatch, table: str = "library_bra
     the query's own filter, so an instrument must not ask one for its SQL.
     """
     recorded: list[str] = []
-    original_execute_sql = SQLCompiler.execute_sql
+    original_execute_sql = _pass_through(SQLCompiler.execute_sql)
 
-    # basedpyright: blind forwarder into the overloaded SQLCompiler.execute_sql; an ``object``
-    # argument matches none of its Literal ``result_type`` overloads
-    def _recording_execute_sql(self: SQLCompiler, *args: Any, **kwargs: Any) -> object:  # pyright: ignore[reportExplicitAny]
+    def _recording_execute_sql(self: SQLCompiler, *args: object, **kwargs: object) -> object:
         if type(self) is SQLCompiler:
             try:
                 sql = self.as_sql()[0]
@@ -2059,12 +2067,21 @@ async def test_async_holder_branches_a_malformed_apply_async_result_names_its_ow
         assert substring in message, message
 
 
+def _is_exact_dict(value: object) -> TypeGuard[dict[object, object]]:
+    """Whether a router hint is exactly a ``dict`` (a subclass is not a tenant token)."""
+    return type(value) is dict
+
+
 class _NestedTenantRouter:
     """Routes by state INSIDE the tenant hint object - ordinary, legal router code."""
 
     def db_for_read(self, model: type[models.Model], **hints: object) -> str | None:
         token = hints.get("tenant")
-        return token["alias"] if type(token) is dict else None
+        if not _is_exact_dict(token):
+            return None
+        alias = token["alias"]
+        assert type(alias) is str, token
+        return alias
 
     def db_for_write(self, model: type[models.Model], **hints: object):
         return None
@@ -2544,7 +2561,7 @@ def _hostile_branch_hook(
     **kwargs: object,
 ) -> models.QuerySet[library_models.Branch]:
     """Apply the visibility predicate through unbound ``QuerySet.filter``."""
-    return models.QuerySet.filter(
+    return models.QuerySet[library_models.Branch].filter(
         _HostileBranchQuerySet(model=library_models.Branch),
         city="Boston",
     )

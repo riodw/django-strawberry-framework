@@ -387,7 +387,7 @@ def test_clear_runs_owner_registered_subsystem_callback(fresh_registry: TypeRegi
     """
     callbacks = dict(_subsystem_clears)
     _subsystem_clears.clear()
-    calls = []
+    calls: list[str] = []
 
     def clear_probe():
         calls.append("cleared")
@@ -416,7 +416,7 @@ def test_type_teardowns_run_in_reverse_order_once_before_registration_drops(
     class CategoryType:
         pass
 
-    calls = []
+    calls: list[str] = []
     fresh_registry.register(Category, CategoryType)
 
     def record(label: str):
@@ -610,11 +610,11 @@ def test_finalize_is_idempotent(monkeypatch: pytest.MonkeyPatch):
     A live request never sees a half-finalized registry. Live sibling for a successful compose:
     ``examples/fakeshop/test_query/test_schema_composition_api.py``.
     """
-    calls = []
+    calls: list[type[object]] = []
     original_type = strawberry.type
 
     # basedpyright: verbatim forward to strawberry.type; object fails its typed params
-    def counting_type(type_cls: type, **kwargs: Any):  # pyright: ignore[reportExplicitAny]
+    def counting_type(type_cls: type[object], **kwargs: Any):  # pyright: ignore[reportExplicitAny]
         calls.append(type_cls)
         return original_type(type_cls, **kwargs)
 
@@ -687,13 +687,13 @@ def test_finalize_skips_definitions_marked_finalized_when_registry_is_unfinalize
     A live request never sees a half-finalized registry. Live sibling for a successful compose:
     ``examples/fakeshop/test_query/test_schema_composition_api.py``.
     """
-    attach_calls = []
-    type_calls = []
+    attach_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    type_calls: list[tuple[type[object], dict[str, object]]] = []
 
     def counting_attach(*args: object, **kwargs: object):
         attach_calls.append((args, kwargs))
 
-    def counting_type(type_cls: type, **kwargs: object):
+    def counting_type(type_cls: type[object], **kwargs: object):
         type_calls.append((type_cls, kwargs))
 
     monkeypatch.setattr(finalizer_module, "_attach_relation_resolvers", counting_attach)
@@ -1773,7 +1773,7 @@ def test_audit_runs_once_per_build(monkeypatch: pytest.MonkeyPatch):
     schema with two types and no primary never builds. No live sibling for the raise; composition
     success is ``examples/fakeshop/test_query/test_schema_composition_api.py``.
     """
-    calls = []
+    calls: list[None] = []
     original = registry.models_with_multiple_types
 
     def spy():

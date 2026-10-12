@@ -264,13 +264,22 @@ def test_a_report_listing_no_symbol_is_a_measurement_error_not_a_stale_allowlist
     ]
 
 
+#: The empty parts of a report entry: no symbols, no general diagnostics, no per-symbol ones.
+_NO_SYMBOLS: list[dict[str, object]] = []
+_NO_GENERAL: list[dict[str, str]] = []
+_NO_DIAGNOSTICS: list[dict[str, object]] = []
+
+
 @pytest.mark.parametrize(
     ("symbols", "general"),
     [
-        ([], [{"file": "", "message": "No py.typed file found"}]),
-        ([], [{"file": "", "severity": "error"}]),
-        ([{"category": "variable", "diagnostics": []}], []),
-        ([{"name": "django_strawberry_framework.logger", "diagnostics": [{"message": "m"}]}], []),
+        (_NO_SYMBOLS, [{"file": "", "message": "No py.typed file found"}]),
+        (_NO_SYMBOLS, [{"file": "", "severity": "error"}]),
+        ([{"category": "variable", "diagnostics": _NO_DIAGNOSTICS}], _NO_GENERAL),
+        (
+            [{"name": "django_strawberry_framework.logger", "diagnostics": [{"message": "m"}]}],
+            _NO_GENERAL,
+        ),
         (
             [
                 {
@@ -278,7 +287,7 @@ def test_a_report_listing_no_symbol_is_a_measurement_error_not_a_stale_allowlist
                     "diagnostics": [{"severity": "error"}],
                 },
             ],
-            [],
+            _NO_GENERAL,
         ),
         (
             [
@@ -287,7 +296,7 @@ def test_a_report_listing_no_symbol_is_a_measurement_error_not_a_stale_allowlist
                     "diagnostics": [{"severity": 1, "message": "m"}],
                 },
             ],
-            [],
+            _NO_GENERAL,
         ),
     ],
     ids=[

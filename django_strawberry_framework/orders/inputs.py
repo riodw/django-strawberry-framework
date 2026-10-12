@@ -45,6 +45,7 @@ from ..utils.strings import graphql_camel_name
 
 if TYPE_CHECKING:
     from ..types.definition import DjangoTypeDefinition
+    from ..utils.inputs import SetInputNamespace
     from .base import RelatedOrder
     from .sets import OrderSet
 
@@ -142,12 +143,7 @@ class Ordering(enum.Enum):
 # leaves class objects parked in ``orders.inputs.__dict__``.
 _materialized_names: dict[str, type[object]]
 _field_specs: dict[tuple[type[OrderSet], str], FieldSpec]
-(
-    _materialized_names,
-    _field_specs,
-    _materialize_input,
-    _clear_input_namespace,
-) = make_set_input_namespace(
+_namespace: SetInputNamespace[OrderSet] = make_set_input_namespace(
     INPUTS_MODULE_PATH,
     "OrderSet",
     factory_module="django_strawberry_framework.orders.factories",
@@ -156,6 +152,7 @@ _field_specs: dict[tuple[type[OrderSet], str], FieldSpec]
     set_module="django_strawberry_framework.orders.sets",
     set_class_name="OrderSet",
 )
+_materialized_names, _field_specs, _materialize_input, _clear_input_namespace = _namespace
 
 
 def _get_concrete_field_names_for_order(model: object) -> list[str]:

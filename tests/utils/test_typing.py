@@ -34,8 +34,11 @@ def test_typing_exports_all():
     """``django_strawberry_framework.utils.typing`` exports expected public symbols."""
     assert typing_module.__all__ == (
         "MAX_TYPE_WRAPPER_DEPTH",
+        "graphql_type_of",
         "is_async_callable",
+        "is_graphql_list",
         "is_marked_coroutine_function",
+        "return_type_of",
         "schema_config_from_info",
         "strawberry_schema_from_info",
         "strawberry_schema_from_schema",

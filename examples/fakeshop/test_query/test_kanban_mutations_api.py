@@ -360,7 +360,9 @@ def test_verify_card_item_happy_path():
     item.refresh_from_db()
     assert item.is_complete is True
     assert item.verified_at is not None
-    assert item.verification_kind.key == "manual"
+    verification_kind = item.verification_kind
+    assert verification_kind is not None
+    assert verification_kind.key == "manual"
 
 
 @pytest.mark.django_db
@@ -405,7 +407,9 @@ def test_record_and_finish_work_attempt_happy_path():
     assert "errors" not in finished, finished
     assert finished["data"]["finishWorkAttempt"]["ok"] is True
     attempt.refresh_from_db()
-    assert attempt.outcome.key == "succeeded"
+    outcome = attempt.outcome
+    assert outcome is not None
+    assert outcome.key == "succeeded"
     assert attempt.ended_at is not None
 
 
@@ -475,6 +479,38 @@ def test_set_card_files_outside_root_envelope():
     envelope = payload["data"]["setCardFiles"]
     assert envelope["ok"] is False
     assert envelope["errors"][0]["codes"] == ["tracked_path_outside_roots"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("bad", [0, False])
+def test_set_card_files_rejects_a_falsy_non_list_without_clearing_links(bad: object):
+    # The ``paths`` JSON scalar admits any value; a falsy non-list is a malformed
+    # input rejected by the service, never read as the empty list that clears links.
+    card = kf.make_card(status=kf.make_status("todo"))
+    path = "django_strawberry_framework/mutations_ws3b_live_probe.py"
+    client = _staff_client()
+    mutation = (
+        "mutation($d: SetCardFilesFormInput!) { setCardFiles(data: $d) "
+        "{ ok errors { field codes } } }"
+    )
+    seeded = _run(
+        mutation,
+        {"d": {"cardId": _card_gid(card), "kind": "predicted", "paths": [path]}},
+        client=client,
+    )
+    assert seeded["data"]["setCardFiles"]["ok"] is True
+
+    payload = _run(
+        mutation,
+        {"d": {"cardId": _card_gid(card), "kind": "predicted", "paths": bad}},
+        client=client,
+    )
+
+    assert "errors" not in payload, payload
+    envelope = payload["data"]["setCardFiles"]
+    assert envelope["ok"] is False
+    assert envelope["errors"][0]["codes"] == ["invalid_tracked_path"]
+    assert card.path_links.filter(path__path=path, kind="predicted").exists()
 
 
 # An allowlisted package path (constants.py TRACKED_FILE_PATHS) so the strict

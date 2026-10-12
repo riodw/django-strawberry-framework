@@ -167,7 +167,9 @@ def _debug_toolbar_cache_state() -> Generator[None]:
     from debug_toolbar import middleware as dt_middleware
     from debug_toolbar.toolbar import DebugToolbar
 
-    dt_middleware.show_toolbar_func_or_path.cache_clear()
+    # basedpyright: django-debug-toolbar annotates show_toolbar_func_or_path as returning a
+    # bare ``Callable``, so its ``@cache`` wrapper is partially Unknown
+    dt_middleware.show_toolbar_func_or_path.cache_clear()  # pyright: ignore[reportUnknownMemberType]
     saved_panel_classes = DebugToolbar._panel_classes
     saved_urlpatterns = DebugToolbar._urlpatterns
     DebugToolbar._panel_classes = None
@@ -175,7 +177,9 @@ def _debug_toolbar_cache_state() -> Generator[None]:
     try:
         yield
     finally:
-        dt_middleware.show_toolbar_func_or_path.cache_clear()
+        # basedpyright: django-debug-toolbar annotates show_toolbar_func_or_path as returning a
+        # bare ``Callable``, so its ``@cache`` wrapper is partially Unknown
+        dt_middleware.show_toolbar_func_or_path.cache_clear()  # pyright: ignore[reportUnknownMemberType]
         DebugToolbar._panel_classes = saved_panel_classes
         DebugToolbar._urlpatterns = saved_urlpatterns
 

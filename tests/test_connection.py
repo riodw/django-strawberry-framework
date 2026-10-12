@@ -95,6 +95,7 @@ from django_strawberry_framework.utils._queryset_private import (
     set_queryset_deferred_filter,
     set_queryset_hints,
 )
+from tests._idioms import declare_django_type
 from tests._info import make_info
 
 _M = TypeVar("_M", bound=models.Model)
@@ -124,7 +125,7 @@ def _isolate_global_registry() -> Iterator[None]:
     _connection_type_cache.clear()
 
 
-def _make_node_type(name: str, *, total_count: bool | None) -> type:
+def _make_node_type(name: str, *, total_count: bool | None) -> type[DjangoType]:
     """Build a Relay-Node-shaped ``DjangoType`` over ``Category`` for a test.
 
     ``total_count`` controls the opt-in: ``True`` / ``False`` declares
@@ -138,10 +139,10 @@ def _make_node_type(name: str, *, total_count: bool | None) -> type:
     }
     if total_count is not None:
         meta_attrs["connection"] = {"total_count": total_count}
-    return type(name, (DjangoType,), {"Meta": type("Meta", (), meta_attrs)})
+    return declare_django_type(name, {"Meta": type("Meta", (), meta_attrs)})
 
 
-def _schema_for(node_type: type) -> strawberry.Schema:
+def _schema_for(node_type: type[DjangoType]) -> strawberry.Schema:
     """Build an in-process schema exposing ``items`` as a connection over ``node_type``.
 
     The connection type comes from ``_connection_type_for`` so the schema
@@ -187,7 +188,7 @@ def test_first_and_last_raises_graphql_error():
     ``info``: only the schema's ``relay_max_results`` is read ahead of the guard.
     """
     with pytest.raises(GraphQLError, match="mutually exclusive"):
-        DjangoConnection.resolve_connection([], info=make_info(), first=1, last=1)
+        DjangoConnection[object].resolve_connection([], info=make_info(), first=1, last=1)
 
 
 def test_first_and_last_guard_on_generated_subclass():
@@ -244,11 +245,10 @@ def test_generated_connection_name_uses_graphql_type_name_not_python_name():
     canonical surface name, ``Meta.name`` when set) keeps them distinct.
     """
 
-    def _dup_named_node(meta_name: str, model: type) -> type:
+    def _dup_named_node(meta_name: str, model: type[models.Model]) -> type[DjangoType]:
         # Identical Python ``__name__`` ("NodeType") for BOTH; distinct Meta.name.
-        return type(
+        return declare_django_type(
             "NodeType",
-            (DjangoType,),
             {
                 "Meta": type(
                     "Meta",
@@ -474,11 +474,11 @@ def _make_sidecar_node_type(
     namespace: dict[str, object] = {"Meta": type("Meta", (), meta_attrs)}
     if get_queryset is not None:
         namespace["get_queryset"] = classmethod(get_queryset)
-    return type(name, (DjangoType,), namespace)
+    return declare_django_type(name, namespace)
 
 
 def _field_schema(
-    node_type: type,
+    node_type: type[DjangoType],
     *,
     resolver: Callable[..., object] | None = None,
     optimizer: DjangoOptimizerExtension | None = None,
@@ -509,7 +509,7 @@ def _field_schema(
     )
 
 
-def _capture_info(node_type: type):
+def _capture_info(node_type: type[DjangoType]):
     """Return a real resolver ``Info`` captured from an in-process execution.
 
     The composition-pipeline helpers (``_pipeline_sync`` / ``_finalize_queryset``)
@@ -584,9 +584,8 @@ def test_connection_field_rejects_non_callable_resolver():
 
 def test_connection_field_requires_relay_node():
     """A non-Relay ``DjangoType`` raises ``ConfigurationError`` naming ``relay.Node``."""
-    non_relay = type(
+    non_relay = declare_django_type(
         "NonRelayNode",
-        (DjangoType,),
         {"Meta": type("Meta", (), {"model": Category, "fields": ("id", "name"), "name": "NRN"})},
     )
     with pytest.raises(ConfigurationError, match="relay.Node"):
@@ -890,7 +889,8 @@ def test_guard_non_queryset_iterable_admits_getitem_only_sequence():
 
     class LegacySequence:
         def __getitem__(self, index: int) -> object:
-            return [][index]
+            empty: list[object] = []
+            return empty[index]
 
     _guard_non_queryset_iterable(LegacySequence())  # does not raise
     with pytest.raises(GraphQLError, match="plain iterable"):
@@ -1444,7 +1444,7 @@ def _make_relation_node_type(
     fields: tuple[str, ...],
     model: type[models.Model] = Category,
     list_relations: tuple[str, ...] = (),
-) -> type:
+) -> type[DjangoType]:
     """Build a bare Relay-Node ``DjangoType`` (no sidecars) exposing ``fields``.
 
     The optimizer tests below reach a relation under ``edges { node }``; the
@@ -1464,9 +1464,8 @@ def _make_relation_node_type(
     }
     if list_relations:
         meta_attrs["relation_shapes"] = dict.fromkeys(list_relations, "both")
-    return type(
+    return declare_django_type(
         name,
-        (DjangoType,),
         {"Meta": type("Meta", (), meta_attrs)},
     )
 
@@ -1604,11 +1603,15 @@ def test_nested_connection_unplanned_raises_under_strictness():
 # =============================================================================
 
 
-def _node_over(model: type, name: str, *, fields: tuple[str, ...] = ("id", "name")) -> type:
+def _node_over(
+    model: type[models.Model],
+    name: str,
+    *,
+    fields: tuple[str, ...] = ("id", "name"),
+) -> type[DjangoType]:
     """Build a minimal registered ``DjangoType`` over ``model`` (no Relay needed)."""
-    return type(
+    return declare_django_type(
         name,
-        (DjangoType,),
         {"Meta": type("Meta", (), {"model": model, "fields": fields, "name": name})},
     )
 
@@ -2117,7 +2120,7 @@ def test_registry_clear_also_clears_connection_type_cache():
 # =============================================================================
 
 
-def _make_cascading_item_node(name: str) -> type:
+def _make_cascading_item_node(name: str) -> type[DjangoType]:
     """Relay-Node ``DjangoType`` over ``Item`` (forward FK ``category``) that cascades.
 
     ``_make_sidecar_node_type`` is hardcoded to ``Category`` (the chain TOP, no
@@ -2131,9 +2134,8 @@ def _make_cascading_item_node(name: str) -> type:
     def get_queryset(cls: type[DjangoType], queryset: models.QuerySet[Item], info: object):
         return apply_cascade_permissions(cls, queryset, info)
 
-    return type(
+    return declare_django_type(
         name,
-        (DjangoType,),
         {
             "Meta": type(
                 "Meta",
@@ -2295,7 +2297,7 @@ def _hostile_visibility_hook(
     info: object,
 ) -> models.QuerySet[Category]:
     """Return the hostile subclass carrying a genuine ``is_private=False`` predicate."""
-    return models.QuerySet.filter(_HostileConnQuerySet(model=Category), is_private=False)
+    return models.QuerySet[Category].filter(_HostileConnQuerySet(model=Category), is_private=False)
 
 
 def _seed_public_private_categories() -> list[str]:
@@ -2669,11 +2671,10 @@ def _counting_node_type(
     return CountingMeta(name, (DjangoType,), namespace)
 
 
-def _item_node_type(name: str) -> type:
+def _item_node_type(name: str) -> type[DjangoType]:
     """Build a Relay-Node ``DjangoType`` over ``Item`` to serve as a decoy definition."""
-    return type(
+    return declare_django_type(
         name,
-        (DjangoType,),
         {
             "Meta": type(
                 "Meta",
@@ -2795,9 +2796,8 @@ def test_a_synthesized_relation_connection_is_built_from_the_registrys_definitio
             primary = True
 
     _counting_node_type("RelationChildNode", model=Item, decoy_slot=decoy_slot, reads=reads)
-    decoy = type(
+    decoy = declare_django_type(
         "RelationChildDecoyNode",
-        (DjangoType,),
         {
             "Meta": type(
                 "Meta",
@@ -2926,9 +2926,8 @@ def _planned_relation_schema(
         reads=reads,
         get_queryset=None if hook_calls is None else _hook,
     )
-    decoy = type(
+    decoy = declare_django_type(
         f"OptimizedChildDecoy{suffix}",
-        (DjangoType,),
         {
             "Meta": type(
                 "Meta",
@@ -3391,14 +3390,14 @@ def test_connection_visibility_serves_a_combinator_hook_with_and_without_a_sidec
 )
 def test_connection_serves_a_combined_sidecar_result_as_its_primary_key_set(
     monkeypatch: pytest.MonkeyPatch,
-    set_class: type,
+    set_class: type[object],
     query: str,
 ):
     """A sidecar ``apply_sync`` returning a union is windowed as the rows it selects."""
     services.seed_data(2)
 
     def _a_or_b_union(
-        cls: type,
+        cls: type[object],
         value: object,
         queryset: models.QuerySet[Category],
         info: object,

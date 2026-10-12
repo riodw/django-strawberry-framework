@@ -53,6 +53,7 @@ from .consumers import (
     resolved_revalidation_window,
 )
 from .exceptions import ConfigurationError, describe_value
+from .utils._narrowing import is_class
 from .utils.imports import CHANNELS_FLOOR, STRAWBERRY_FLOOR, require_optional_module
 
 if TYPE_CHECKING:
@@ -363,7 +364,7 @@ def _websocket_application(
             schema=schema,
             revalidation_window=revalidation_window,
         )
-    if isinstance(candidate, type):
+    if is_class(candidate):
         if issubclass(candidate, base_consumer_class):
             return candidate.as_asgi(schema=schema)
     elif callable(candidate):
@@ -565,7 +566,9 @@ def _build_router_class_uncached() -> type[ProtocolTypeRouter]:
                         AllowedHostsOriginValidator(  # pyright: ignore[reportArgumentType]
                             AuthMiddlewareStack(
                                 URLRouter(
-                                    [
+                                    # basedpyright: the route list holds the ``re_path`` call
+                                    # its own suppressed overload error leaves Unknown (below)
+                                    [  # pyright: ignore[reportUnknownArgumentType]
                                         # basedpyright: django-stubs' ``re_path`` has no overload
                                         # taking an ASGI application, and channels-stubs'
                                         # ``URLRouter`` accepts only its check-only

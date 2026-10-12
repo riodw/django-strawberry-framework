@@ -49,6 +49,7 @@ from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.mutations.inputs import CREATE, PARTIAL
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.rest_framework import inputs as serializer_inputs
+from django_strawberry_framework.rest_framework.accessors import base_fields, bound_fields
 from django_strawberry_framework.rest_framework.inputs import (
     SERIALIZER_INPUTS_MODULE_PATH,
     NestedSerializerConfig,
@@ -78,11 +79,22 @@ from django_strawberry_framework.utils.inputs import normalize_field_name_sequen
 from tests._idioms import bind_unparented, definition_raises
 
 if TYPE_CHECKING:
+    from typing import TypeAlias, TypeVar
+
     from django_strawberry_framework.rest_framework.serializer_converter import (
         DRFField,
         DRFSerializer,
     )
     from django_strawberry_framework.utils.typing import ConcreteField
+
+    _M = TypeVar("_M", bound=models.Model)
+    # DRF's stubs type a related field's constructor as returning it or a ``ManyRelatedField``.
+    _PkRelation: TypeAlias = (
+        serializers.RelatedField[_M, _M, object] | serializers.ManyRelatedField
+    )
+    _SlugRelation: TypeAlias = (
+        serializers.RelatedField[_M, str, str] | serializers.ManyRelatedField
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -101,7 +113,7 @@ def _isolate_registry_and_ledger() -> Iterator[None]:
 
 def _field_map(input_cls: type) -> dict[str, StrawberryField]:
     """Return ``python_name -> StrawberryField`` for a built input class."""
-    return {f.python_name: f for f in input_cls.__strawberry_definition__.fields}
+    return {f.python_name: f for f in get_object_definition(input_cls, strict=True).fields}
 
 
 def _is_optional(field: StrawberryField) -> bool:
@@ -351,7 +363,7 @@ def test_create_input_required_and_optional_shapes():
 
     # ``is_private`` has a model default, so DRF reports it ``required=False`` -> optional + UNSET.
     assert _is_optional(fields["is_private"])
-    assert fields["is_private"].default is UNSET
+    assert fields["is_private"].default_value is UNSET
 
 
 def test_partial_input_all_fields_optional():
@@ -362,7 +374,7 @@ def test_partial_input_all_fields_optional():
     fields = _field_map(par)
     for name in ("name", "category_id", "is_private"):
         assert _is_optional(fields[name]), name
-        assert fields[name].default is UNSET, name
+        assert fields[name].default_value is UNSET, name
 
 
 def test_serializer_only_field_included():
@@ -401,7 +413,9 @@ def test_serializer_only_relation_to_relay_target_uses_globalid():
     relay_target, _ = _make_relay_target()
 
     class PickSer(serializers.Serializer[object]):
-        target = serializers.PrimaryKeyRelatedField(queryset=relay_target.objects.all())
+        target: _PkRelation[library_models.Genre] = serializers.PrimaryKeyRelatedField(
+            queryset=relay_target.objects.all(),
+        )
 
     cre, _, _, _ = _build_serializer_inputs(PickSer)
     fields = _field_map(cre)
@@ -481,7 +495,7 @@ def test_get_fields_hook_allow_blank_over_strict_choice_column_refused():
 
         @override
         def get_fields(self) -> dict[str, DRFField]:
-            fields = super().get_fields()
+            fields: dict[str, DRFField] = base_fields(super())
             assert isinstance(fields["circulation_status"], serializers.ChoiceField)
             fields["circulation_status"].allow_blank = True
             return fields
@@ -642,7 +656,7 @@ def test_allow_null_difference_yields_distinct_descriptor_names():
             x = serializers.CharField()
             note = serializers.CharField(required=True, allow_null=allow_null)
 
-        return dict(_HookSer().fields)
+        return dict(bound_fields(_HookSer()))
 
     # Both hook shapes ({x, note}) diverge from Ser's default ({x}), so each takes a
     # descriptor-derived name; ``note`` is required in both (nullability driven only by
@@ -667,7 +681,7 @@ def test_description_difference_yields_distinct_descriptor_names():
                 max_length=max_length,
             )
 
-        return dict(_HookSer().fields)
+        return dict(bound_fields(_HookSer()))
 
     cre_a, shape_a, _, _ = _build_serializer_inputs(
         Ser,
@@ -915,7 +929,7 @@ def test_required_non_null_field_is_required_with_no_default():
     field = _field_map(cre)["nick"]
     assert not _is_optional(field)  # bare T (non-null)
     # No UNSET default: GraphQL itself enforces presence + non-null for this field.
-    assert field.default is not UNSET
+    assert field.default_value is not UNSET
 
 
 def test_field_with_default_is_optional_no_fabricated_default():
@@ -928,7 +942,7 @@ def test_field_with_default_is_optional_no_fabricated_default():
     field = _field_map(cre)["note"]
     assert _is_optional(field)
     # The GraphQL default is UNSET (omittable), NOT the DRF ``"x"`` default.
-    assert field.default is UNSET
+    assert field.default_value is UNSET
 
 
 # ---------------------------------------------------------------------------
@@ -941,7 +955,7 @@ def test_relation_id_attr_collision_is_fail_loud():
     _register_products_types()
 
     class CollidingSer(serializers.Serializer[object]):
-        category = serializers.PrimaryKeyRelatedField(
+        category: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
             queryset=product_models.Category.objects.all(),
         )
         category_id = serializers.IntegerField()
@@ -1097,7 +1111,7 @@ def _category_attname_alias_serializer() -> type[serializers.ModelSerializer[pro
     """``category`` beside ``cat`` (``source="category_id"``): two spellings of one FK."""
 
     class AttnameWriteSer(serializers.ModelSerializer[product_models.Item]):
-        cat = serializers.PrimaryKeyRelatedField(
+        cat: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
             source="category_id",
             queryset=product_models.Category.objects.all(),
         )
@@ -1203,7 +1217,7 @@ def test_multiple_schema_time_problems_aggregate_into_one_error():
 
     class MultiBadSer(serializers.ModelSerializer[product_models.Item]):
         # A non-PK relation (unsupported) ...
-        slug_rel = serializers.SlugRelatedField(
+        slug_rel: _SlugRelation[product_models.Category] = serializers.SlugRelatedField(
             slug_field="name",
             queryset=product_models.Category.objects.all(),
         )
@@ -1229,7 +1243,7 @@ def test_single_schema_time_problem_raises_verbatim():
     _register_products_types()
 
     class OneBadSer(serializers.ModelSerializer[product_models.Item]):
-        slug_rel = serializers.SlugRelatedField(
+        slug_rel: _SlugRelation[product_models.Category] = serializers.SlugRelatedField(
             slug_field="name",
             queryset=product_models.Category.objects.all(),
         )
@@ -1335,8 +1349,10 @@ def test_schema_fingerprint_sensitive_to_choices_and_help_text():
     class C2(serializers.Serializer[object]):
         color = serializers.ChoiceField(choices=[("b", "B")])
 
-    assert serializer_schema_fingerprint(dict(C1().fields)) != serializer_schema_fingerprint(
-        dict(C2().fields),
+    assert serializer_schema_fingerprint(
+        dict(bound_fields(C1())),
+    ) != serializer_schema_fingerprint(
+        dict(bound_fields(C2())),
     )
 
     class H1(serializers.Serializer[object]):
@@ -1345,8 +1361,10 @@ def test_schema_fingerprint_sensitive_to_choices_and_help_text():
     class H2(serializers.Serializer[object]):
         note = serializers.CharField(help_text="two")
 
-    assert serializer_schema_fingerprint(dict(H1().fields)) != serializer_schema_fingerprint(
-        dict(H2().fields),
+    assert serializer_schema_fingerprint(
+        dict(bound_fields(H1())),
+    ) != serializer_schema_fingerprint(
+        dict(bound_fields(H2())),
     )
 
 
@@ -1365,8 +1383,8 @@ def test_schema_fingerprint_sensitive_to_converter_extras():
         )
 
     assert serializer_schema_fingerprint(
-        {"wrapped": ModelFieldA().fields["wrapped"]},
-    ) != serializer_schema_fingerprint({"wrapped": ModelFieldB().fields["wrapped"]})
+        {"wrapped": bound_fields(ModelFieldA())["wrapped"]},
+    ) != serializer_schema_fingerprint({"wrapped": bound_fields(ModelFieldB())["wrapped"]})
 
     class ListA(serializers.Serializer[object]):
         items = serializers.ListField(child=serializers.IntegerField())
@@ -1374,8 +1392,10 @@ def test_schema_fingerprint_sensitive_to_converter_extras():
     class ListB(serializers.Serializer[object]):
         items = serializers.ListField(child=serializers.CharField())
 
-    assert serializer_schema_fingerprint(dict(ListA().fields)) != serializer_schema_fingerprint(
-        dict(ListB().fields),
+    assert serializer_schema_fingerprint(
+        dict(bound_fields(ListA())),
+    ) != serializer_schema_fingerprint(
+        dict(bound_fields(ListB())),
     )
 
 
@@ -1412,8 +1432,10 @@ def test_schema_fingerprint_sensitive_to_listfield_choice_child_values():
     class C2(serializers.Serializer[object]):
         tags = serializers.ListField(child=serializers.ChoiceField(choices=[("b", "B")]))
 
-    assert serializer_schema_fingerprint(dict(C1().fields)) != serializer_schema_fingerprint(
-        dict(C2().fields),
+    assert serializer_schema_fingerprint(
+        dict(bound_fields(C1())),
+    ) != serializer_schema_fingerprint(
+        dict(bound_fields(C2())),
     )
 
 
@@ -1434,10 +1456,12 @@ def test_schema_fingerprint_sensitive_to_choice_allow_blank():
     class Blank(serializers.Serializer[object]):
         color = serializers.ChoiceField(choices=[("r", "R")], allow_blank=True)
 
-    assert _fingerprint_choices(Strict().fields["color"]) == (("r",), False)
-    assert _fingerprint_choices(Blank().fields["color"]) == (("r",), True)
-    assert serializer_schema_fingerprint(dict(Strict().fields)) != serializer_schema_fingerprint(
-        dict(Blank().fields),
+    assert _fingerprint_choices(bound_fields(Strict())["color"]) == (("r",), False)
+    assert _fingerprint_choices(bound_fields(Blank())["color"]) == (("r",), True)
+    assert serializer_schema_fingerprint(
+        dict(bound_fields(Strict())),
+    ) != serializer_schema_fingerprint(
+        dict(bound_fields(Blank())),
     )
 
 
@@ -1459,8 +1483,10 @@ def test_schema_fingerprint_sensitive_to_list_child_allow_null(
     class Nullable(serializers.Serializer[object]):
         tags = serializers.ListField(child=child_cls(allow_null=True))
 
-    assert serializer_schema_fingerprint(dict(Strict().fields)) != serializer_schema_fingerprint(
-        dict(Nullable().fields),
+    assert serializer_schema_fingerprint(
+        dict(bound_fields(Strict())),
+    ) != serializer_schema_fingerprint(
+        dict(bound_fields(Nullable())),
     )
 
 
@@ -1641,7 +1667,7 @@ def test_nested_cycle_guard_fails_loud():
 
         @override
         def get_fields(self) -> dict[str, DRFField]:
-            fields = super().get_fields()
+            fields: dict[str, DRFField] = base_fields(super())
             fields["me"] = SelfNest()
             return fields
 
@@ -1801,8 +1827,8 @@ def test_recursive_fingerprint_sensitive_to_nested_shape_change():
 
     # Opt the nested field in: only then does the fingerprint descend.
     configs = {"detail": NestedSerializerConfig()}
-    fp_a = serializer_schema_fingerprint(dict(ParentA().fields), nested_configs=configs)
-    fp_b = serializer_schema_fingerprint(dict(ParentB().fields), nested_configs=configs)
+    fp_a = serializer_schema_fingerprint(dict(bound_fields(ParentA())), nested_configs=configs)
+    fp_b = serializer_schema_fingerprint(dict(bound_fields(ParentB())), nested_configs=configs)
     assert fp_a != fp_b
     # The recursion actually descended into the child map (not a shallow marker): ``extra`` shows up.
     assert "extra" in repr(fp_b)
@@ -1818,14 +1844,17 @@ def test_recursive_fingerprint_terminates_on_nested_cycle():
 
         @override
         def get_fields(self) -> dict[str, DRFField]:
-            fields = super().get_fields()
+            fields: dict[str, DRFField] = base_fields(super())
             fields["me"] = SelfNest()
             return fields
 
     # Opt ``me`` in at two levels so the recursion re-enters SelfNest and hits the on-path cycle
     # guard - an unopted nested field is not descended into at all.
     configs = {"me": NestedSerializerConfig(nested_fields={"me": NestedSerializerConfig()})}
-    fingerprint = serializer_schema_fingerprint(dict(SelfNest().fields), nested_configs=configs)
+    fingerprint = serializer_schema_fingerprint(
+        dict(bound_fields(SelfNest())),
+        nested_configs=configs,
+    )
     # It terminated (no RecursionError) and the nested axis carries the cycle marker.
     flat = repr(fingerprint)
     assert "<cycle>" in flat
@@ -1868,7 +1897,7 @@ def test_fingerprint_skips_read_only_nested_serializer():
         child = RaisingChild(read_only=True)
 
     # No RuntimeError: the read-only nested field is dropped before fingerprinting.
-    fingerprint = serializer_schema_fingerprint(dict(Parent().fields))
+    fingerprint = serializer_schema_fingerprint(dict(bound_fields(Parent())))
     # Only the writable ``name`` field is fingerprinted (the read-only child is absent).
     assert len(fingerprint) == 1
     assert fingerprint[0][0] == "name"
@@ -1888,7 +1917,7 @@ def test_fingerprint_wraps_nested_fields_error_as_configuration_error():
 
     with pytest.raises(ConfigurationError, match="Could not materialize the nested serializer"):
         serializer_schema_fingerprint(
-            dict(Parent().fields),
+            dict(bound_fields(Parent())),
             nested_configs={"child": NestedSerializerConfig()},
         )
 
@@ -1915,7 +1944,7 @@ def test_fingerprint_unopted_nested_raising_child_is_shallow_not_materialized():
         child = RaisingChild()  # writable but NOT opted in
 
     # No nested_configs -> the unopted child is a shallow marker, not descended into (no RuntimeError).
-    fingerprint = serializer_schema_fingerprint(dict(Parent().fields))
+    fingerprint = serializer_schema_fingerprint(dict(bound_fields(Parent())))
     child_entry = next(entry for entry in fingerprint if entry[0] == "child")
     assert child_entry[-1] == ("<unopted-nested>", "RaisingChild", False)
     # The canonical opt-in error surfaces from the field walk, not the materialization wrap.
@@ -1981,7 +2010,7 @@ def test_fingerprint_propagates_nested_configuration_error_unwrapped():
 
     with pytest.raises(ConfigurationError) as exc:
         serializer_schema_fingerprint(
-            dict(Parent().fields),
+            dict(bound_fields(Parent())),
             nested_configs={"child": NestedSerializerConfig()},
         )
     # The WHOLE message, never a substring of it: the double-wrap this docstring rules out
@@ -2008,7 +2037,7 @@ def test_fingerprint_propagates_deep_nested_configuration_error_unwrapped():
     # propagation is a per-LEVEL contract: a top-level row cannot observe the arm at depth 2.
     with pytest.raises(ConfigurationError) as exc:
         serializer_schema_fingerprint(
-            dict(Parent().fields),
+            dict(bound_fields(Parent())),
             nested_configs={
                 "child": NestedSerializerConfig(
                     nested_fields={"grandchild": NestedSerializerConfig()},
@@ -2081,7 +2110,7 @@ def test_resolve_injected_field_specs_unknown_field_raises_configuration_error()
     class S(serializers.Serializer[object]):
         a = serializers.CharField()
 
-    field_map = dict(S().fields)
+    field_map = dict(bound_fields(S()))
     with pytest.raises(ConfigurationError, match="not in the serializer's schema-time field map"):
         resolve_injected_field_specs(S, field_map, ("non_existent",), operation_kind=CREATE)
 
@@ -2143,16 +2172,16 @@ def test_fingerprint_relation_target():
     """_fingerprint_relation_target resolves target model qualname for single/many relations, else None."""
 
     class RelSer(serializers.Serializer[object]):
-        category = serializers.PrimaryKeyRelatedField(
+        category: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
             queryset=product_models.Category.objects.all(),
         )
-        categories = serializers.PrimaryKeyRelatedField(
+        categories: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=product_models.Category.objects.all(),
         )
         plain = serializers.CharField()
 
-    fields = dict(RelSer().fields)
+    fields = dict(bound_fields(RelSer()))
     assert _fingerprint_relation_target(fields["category"]) == "apps.products.models.Category"
     assert _fingerprint_relation_target(fields["categories"]) == "apps.products.models.Category"
     assert _fingerprint_relation_target(fields["plain"]) is None
@@ -2166,7 +2195,7 @@ def test_runtime_validated_data_fields_defaults_and_supplied():
         opt_def = serializers.CharField(default="default_val")
         ro = serializers.CharField(read_only=True)
 
-    fields = dict(SampleSer().fields)
+    fields = dict(bound_fields(SampleSer()))
     res1 = runtime_validated_data_fields(fields, supplied_fields={"req"}, apply_defaults=False)
     assert set(res1) == {"req"}
 
@@ -2200,7 +2229,7 @@ def test_resolve_injected_field_specs_valid():
         injected_str = serializers.CharField()
         injected_int = serializers.IntegerField()
 
-    field_map = dict(InjectedSer().fields)
+    field_map = dict(bound_fields(InjectedSer()))
     assert resolve_injected_field_specs(InjectedSer, field_map, None, operation_kind=CREATE) == []
     assert resolve_injected_field_specs(InjectedSer, field_map, (), operation_kind=CREATE) == []
 

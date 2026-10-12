@@ -43,6 +43,7 @@ from typing_extensions import override
 
 from django_strawberry_framework.conf import testing_endpoint_setting
 from django_strawberry_framework.exceptions import _safe_arg_repr
+from django_strawberry_framework.utils._narrowing import is_dict, is_list_or_tuple
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Generator, Mapping
@@ -340,8 +341,8 @@ class _GraphQLTestClientBase(BaseGraphQLTestClient, Generic[_ClientT]):
                         f"multipart object paths are dot-separated non-empty names, so the "
                         f"emitted map entry could never name a GraphQL variable.",
                     )
-                if isinstance(current, (list, tuple)):
-                    array: list[object] | tuple[object, ...] = current
+                if is_list_or_tuple(current):
+                    array = current
                     # Multipart operation paths use ``object-path`` numeric segments:
                     # a list index is its canonical non-negative decimal rendering.
                     # Guard the conversion itself because digit-like Unicode and very
@@ -369,7 +370,7 @@ class _GraphQLTestClientBase(BaseGraphQLTestClient, Generic[_ClientT]):
                             f"{size}-item array.",
                         )
                     current = array[index]
-                elif isinstance(current, dict):
+                elif is_dict(current):
                     if segment not in current:
                         raise AssertionError(
                             f"files= path {_safe_arg_repr(key)} has no matching placeholder in "
@@ -381,7 +382,7 @@ class _GraphQLTestClientBase(BaseGraphQLTestClient, Generic[_ClientT]):
                     # purpose: every placeholder failure here is one malformed
                     # test call, raised as the same type as the sibling guards so
                     # ``pytest.raises(AssertionError)`` catches every bad shape.
-                    raise AssertionError(  # noqa: TRY004 - uniform guard type, not a runtime TypeError
+                    raise AssertionError(
                         f"files= path {_safe_arg_repr(key)} has no matching placeholder in "
                         f"variables: cannot descend into {_safe_arg_repr(segment)} (the value "
                         f"there is not a dict or list).",

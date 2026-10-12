@@ -139,8 +139,7 @@ def test_null_boolean_validating_subclass_generates_required_input():
     field = get_object_definition(input_cls, strict=True).fields[0]
     assert not isinstance(field.type, StrawberryOptional)
 
-    # basedpyright: a GraphQL argument; Strawberry reads its type from the __annotations__ assigned below
-    def resolve_probe(inp):  # pyright: ignore[reportMissingParameterType, reportUnknownParameterType]
+    def resolve_probe(inp: object) -> int:
         del inp
         return 1
 
@@ -212,7 +211,7 @@ def test_model_choice_field_is_relation_single():
     primary ``DjangoType``), so a ``queryset=None`` field suffices here; the
     Relay-vs-raw-pk id-type assertions live in ``test_inputs.py``.
     """
-    field = forms.ModelChoiceField(queryset=None)
+    field: forms.ModelChoiceField[models.Model] = forms.ModelChoiceField(queryset=None)
     conversion = convert_form_field(field)
     assert conversion.kind == RELATION_SINGLE
     assert conversion.annotation is None
@@ -220,7 +219,9 @@ def test_model_choice_field_is_relation_single():
 
 def test_model_multiple_choice_field_is_relation_multi():
     """``ModelMultipleChoiceField`` -> kind ``relation_multi`` (precedes the single check)."""
-    field = forms.ModelMultipleChoiceField(queryset=None)
+    field: forms.ModelMultipleChoiceField[models.Model] = forms.ModelMultipleChoiceField(
+        queryset=None,
+    )
     conversion = convert_form_field(field)
     assert conversion.kind == RELATION_MULTI
     assert conversion.annotation is None

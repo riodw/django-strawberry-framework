@@ -22,11 +22,10 @@ import re
 import subprocess
 from collections.abc import Iterable
 from pathlib import Path
-from typing import TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
 
 import pytest
 import yaml
-from graphql_client import JSONObject
 
 # The repo-wide Python sweep below borrows this repo's existing definition of the
 # first-party source trees rather than re-listing them, so the two cannot drift
@@ -39,6 +38,9 @@ from graphql_client import JSONObject
 # construction, so the gate cannot pass in a clean CI checkout and fail on a
 # developer machine.
 from scripts.check_citations import SOURCE_TREES, iter_python_sources
+
+if TYPE_CHECKING:
+    from typing_extensions import TypeIs
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
@@ -55,7 +57,8 @@ IMAGE_REFERENCE = re.compile(
 # and therefore already covered by the commit under review.
 LOCAL_ACTION_PREFIX = "./"
 
-_YAMLMapping: TypeAlias = JSONObject
+# A YAML mapping's keys are not all strings: the bare ``on:`` trigger key parses as ``True``.
+_YAMLMapping: TypeAlias = "dict[object, object]"
 
 
 def _workflow_paths():
@@ -64,8 +67,35 @@ def _workflow_paths():
     return paths
 
 
-def _load(path: Path):
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
+def _is_mapping(node: object) -> "TypeIs[_YAMLMapping]":
+    """Return whether a parsed YAML node is a mapping."""
+    return isinstance(node, dict)
+
+
+def _is_sequence(node: object) -> "TypeIs[list[object]]":
+    """Return whether a parsed YAML node is a sequence."""
+    return isinstance(node, list)
+
+
+def _load(path: Path) -> object:
+    """Parse one YAML file into its untyped node tree."""
+    document: object = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return document
+
+
+def _workflow(path: Path) -> _YAMLMapping:
+    """Parse one workflow file, which is a mapping at its root."""
+    workflow = _load(path)
+    assert _is_mapping(workflow), f"{path.name}: workflow is not a mapping"
+    return workflow
+
+
+def _mapping(node: object) -> _YAMLMapping:
+    """Read a YAML node as a mapping; an absent or empty node reads as an empty one."""
+    if not node:
+        return {}
+    assert _is_mapping(node), f"expected a YAML mapping, got {node!r}"
+    return node
 
 
 WORKFLOW_PATHS = _workflow_paths()
@@ -73,18 +103,21 @@ WORKFLOW_IDS = [path.name for path in WORKFLOW_PATHS]
 
 
 def _jobs(workflow: _YAMLMapping) -> _YAMLMapping:
-    return workflow.get("jobs") or {}
+    return _mapping(workflow.get("jobs"))
 
 
-def _steps(job: _YAMLMapping) -> list[_YAMLMapping]:
-    return job.get("steps") or []
+def _steps(job: _YAMLMapping) -> list[object]:
+    steps = job.get("steps")
+    if not steps:
+        return []
+    assert _is_sequence(steps), f"expected a YAML sequence of steps, got {steps!r}"
+    return steps
 
 
 @pytest.mark.parametrize("path", WORKFLOW_PATHS, ids=WORKFLOW_IDS)
 def test_workflow_parses(path: Path):
     """Every workflow is loadable YAML with at least one job."""
-    workflow = _load(path)
-    assert isinstance(workflow, dict), f"{path.name}: workflow is not a mapping"
+    workflow = _workflow(path)
     assert _jobs(workflow), f"{path.name}: declares no jobs"
 
 
@@ -96,7 +129,7 @@ def test_workflow_declares_top_level_read_only_permissions(path: Path):
     may be write-all. Declaring ``contents: read`` at the top level makes any
     wider grant an explicit, reviewable job-level override.
     """
-    workflow = _load(path)
+    workflow = _workflow(path)
     permissions = workflow.get("permissions")
     assert permissions == {"contents": "read"}, (
         f"{path.name}: top-level permissions must be exactly "
@@ -113,10 +146,10 @@ def test_no_job_grants_repository_write(path: Path):
     step in the job, including third-party actions and the dependency tree they
     install.
     """
-    workflow = _load(path)
+    workflow = _workflow(path)
     for name, job in _jobs(workflow).items():
-        permissions = (job or {}).get("permissions")
-        if not isinstance(permissions, dict):
+        permissions = _mapping(job).get("permissions")
+        if not _is_mapping(permissions):
             continue
         assert permissions.get("contents") != "write", (
             f"{path.name}: job {name!r} grants contents: write; no CI job here "
@@ -132,9 +165,9 @@ def test_every_job_declares_a_timeout(path: Path):
     suite. Without ``timeout-minutes`` a hung download or a deadlocked test holds
     a runner for GitHub's six-hour default.
     """
-    workflow = _load(path)
-    for name, job in _jobs(workflow).items():
-        job = job or {}
+    workflow = _workflow(path)
+    for name, node in _jobs(workflow).items():
+        job = _mapping(node)
         if "uses" in job:
             # A reusable-workflow call cannot set timeout-minutes; the timeout
             # belongs to the jobs inside the called workflow.
@@ -155,9 +188,9 @@ def test_every_job_declares_a_runner(path: Path):
     cannot see this: a job that lost ``runs-on`` while keeping
     ``timeout-minutes`` still satisfies that row.
     """
-    workflow = _load(path)
-    for name, job in _jobs(workflow).items():
-        job = job or {}
+    workflow = _workflow(path)
+    for name, node in _jobs(workflow).items():
+        job = _mapping(node)
         if "uses" in job:
             # A reusable-workflow call names no runner; the called workflow's own
             # jobs declare theirs, exactly as they declare their timeouts.
@@ -174,11 +207,16 @@ def test_every_external_action_is_pinned_to_a_full_commit_sha(path: Path):
     CI is whatever the tag points at today. A full-SHA pin is the only immutable
     reference GitHub offers.
     """
-    workflow = _load(path)
+    workflow = _workflow(path)
     for name, job in _jobs(workflow).items():
-        for index, step in enumerate(_steps(job or {})):
-            uses = (step or {}).get("uses")
-            if not uses or uses.startswith(LOCAL_ACTION_PREFIX):
+        for index, step in enumerate(_steps(_mapping(job))):
+            uses = _mapping(step).get("uses")
+            if not uses:
+                continue
+            assert isinstance(uses, str), (
+                f"{path.name}: job {name!r} step {index} 'uses' is {uses!r}"
+            )
+            if uses.startswith(LOCAL_ACTION_PREFIX):
                 continue
             _, separator, reference = uses.partition("@")
             assert separator, f"{path.name}: job {name!r} step {index} 'uses: {uses}' has no ref"
@@ -218,13 +256,16 @@ def test_checkout_steps_do_not_persist_credentials(path: Path):
     the credential has no consumer and only widens the blast radius of a
     compromised dependency.
     """
-    workflow = _load(path)
+    workflow = _workflow(path)
     for name, job in _jobs(workflow).items():
-        for index, step in enumerate(_steps(job or {})):
-            uses = (step or {}).get("uses") or ""
+        for index, step in enumerate(_steps(_mapping(job))):
+            uses = _mapping(step).get("uses") or ""
+            assert isinstance(uses, str), (
+                f"{path.name}: job {name!r} step {index} 'uses' is {uses!r}"
+            )
             if not uses.startswith("actions/checkout@"):
                 continue
-            options = (step or {}).get("with") or {}
+            options = _mapping(_mapping(step).get("with"))
             assert options.get("persist-credentials") is False, (
                 f"{path.name}: job {name!r} step {index} checks out without "
                 "'persist-credentials: false'"
@@ -282,8 +323,8 @@ def test_dependency_audit_workflow_runs_on_pull_request_and_a_schedule():
     A PR-only audit cannot see a vulnerability published against a dependency
     that is already locked; a schedule-only audit lets one merge first.
     """
-    workflow = _load(WORKFLOW_DIR / "dependency-audit.yml")
-    triggers = workflow[True] if True in workflow else workflow["on"]
+    workflow = _workflow(WORKFLOW_DIR / "dependency-audit.yml")
+    triggers = _mapping(workflow[True] if True in workflow else workflow["on"])
     assert "pull_request" in triggers, "dependency audit must run on pull requests"
     assert triggers.get("schedule"), "dependency audit must run on a schedule"
 
@@ -339,7 +380,7 @@ def _forbidden_optimizer_entries(source: str, label: str) -> list[tuple[int, str
         )
 
     call_funcs = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
-    sequence_elements = set()
+    sequence_elements: set[int] = set()
     for node in ast.walk(tree):
         if isinstance(node, (ast.List, ast.Tuple)):
             sequence_elements.update(id(element) for element in node.elts)

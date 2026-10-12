@@ -34,6 +34,18 @@ from __future__ import annotations
 from typing import TypeVar, overload
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from ._narrowing import (
+    dict_items,
+    frozenset_iter,
+    is_dict,
+    is_frozenset,
+    is_list,
+    is_set,
+    is_tuple,
+    list_iter,
+    set_iter,
+    tuple_iter,
+)
 
 __all__ = ["base_container_values", "canonical_sort_key"]
 
@@ -70,16 +82,16 @@ def base_container_values(value: object) -> tuple[object, ...]:
     the refusal fires only for a future caller that widened its gate without
     deciding how an arbitrary iterable should be read.
     """
-    if isinstance(value, dict):
-        return tuple(dict.items(value))
-    if isinstance(value, set):
-        return tuple(set.__iter__(value))
-    if isinstance(value, frozenset):
-        return tuple(frozenset.__iter__(value))
-    if isinstance(value, list):
-        return tuple(list.__iter__(value))
-    if isinstance(value, tuple):
-        return tuple(tuple.__iter__(value))
+    if is_dict(value):
+        return tuple(dict_items(value))
+    if is_set(value):
+        return tuple(set_iter(value))
+    if is_frozenset(value):
+        return tuple(frozenset_iter(value))
+    if is_list(value):
+        return tuple(list_iter(value))
+    if is_tuple(value):
+        return tuple(tuple_iter(value))
     raise ConfigurationError(
         f"Cannot canonically read a {_safe_type_name(value)} value: only the built-in "
         "dict / set / frozenset / list / tuple containers (and their subclasses) have a "

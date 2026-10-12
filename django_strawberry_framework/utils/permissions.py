@@ -42,6 +42,7 @@ from django.db.models.constants import LOOKUP_SEP
 from django.http import HttpRequest
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from ._narrowing import dict_items, is_dict, is_mapping, mapping_get
 from .input_values import (
     LEAF,
     RELATED,
@@ -59,11 +60,23 @@ from .relations import leading_relation_hops
 from .strings import flatten_lookup_path
 
 if TYPE_CHECKING:
+    from collections.abc import MutableMapping
+    from typing import TypeAlias
+
     from django.db import models
 
     from ..sets_mixins import ActiveInputPermissionMixin
     from ..types.base import DjangoType
     from .input_values import FieldSpecMap, RelatedBranch
+
+    #: A Channels connection scope as the adapter holds it. A scope its producer typed
+    #: is ``str``-keyed (an ASGI scope); one read reflectively off a context object is
+    #: proven a ``Mapping`` only, since walking a hostile mapping's keys to prove them
+    #: strings would dispatch its ``__iter__``. The adapter reads it by ``str`` key, which
+    #: both forms answer.
+    ChannelsScope: TypeAlias = Mapping[str, object] | Mapping[object, object]
+    #: A ``ChannelsScope`` proven mutable, for the per-scope state the package stores on it.
+    MutableChannelsScope: TypeAlias = MutableMapping[str, object] | MutableMapping[object, object]
 
 # Recourse text shared by every ``check_<field>_permission`` async-guard raise. A
 # filter / order permission gate is fired synchronously (on the async surface it
@@ -123,19 +136,26 @@ class ChannelsRequestAdapter:
     require the optional ``channels`` dependency (spec-041 Decision 11).
     """
 
-    def __init__(self, request: object, scope: Mapping[str, object]) -> None:
+    def __init__(self, request: object, scope: ChannelsScope) -> None:
         self._request = request
         self._scope = scope
 
     @property
-    def scope(self) -> Mapping[str, object]:
+    def scope(self) -> ChannelsScope:
         """Return the resolved Channels connection scope."""
         return self._scope
 
     def _scope_value(self, key: str) -> object:
-        """Read a scope value without allowing a hostile mapping to escape raw."""
+        """Read a scope value without allowing a hostile mapping to escape raw.
+
+        ``Mapping.get``'s own body, spelled out: the item read, a missing key answered
+        ``None``. A subclass ``get`` override is never consulted.
+        """
         try:
-            return Mapping.get(self._scope, key)
+            try:
+                return self._scope[key]
+            except KeyError:
+                return None
         except BaseException as exc:
             raise ConfigurationError(
                 f"The Channels request scope could not be read while resolving its {key!r} value.",
@@ -156,20 +176,20 @@ class ChannelsRequestAdapter:
         return getattr(self._request, name)
 
 
-def _channels_scope(request: object) -> Mapping[str, object] | None:
+def _channels_scope(request: object) -> Mapping[object, object] | None:
     """Resolve Strawberry's HTTP or WebSocket Channels scope shape."""
     try:
         consumer: object = getattr(request, "consumer", None)
         scope: object = getattr(consumer, "scope", None)
     except BaseException:
         scope = None
-    if isinstance(scope, Mapping):
+    if is_mapping(scope):
         return scope
     try:
         scope = getattr(request, "scope", None)
     except BaseException:
         scope = None
-    if isinstance(scope, Mapping):
+    if is_mapping(scope):
         return scope
     return None
 
@@ -192,9 +212,9 @@ def _context_request(context: object) -> tuple[object, bool]:
     Returning the fact rather than deciding it keeps that ordering with its
     owner.
     """
-    if isinstance(context, Mapping):
+    if is_mapping(context):
         try:
-            return Mapping.get(context, "request"), True
+            return mapping_get(context, "request"), True
         except BaseException:
             return None, False
     try:
@@ -225,7 +245,7 @@ def _request_from_context(context: object) -> object:
     if isinstance(context, ChannelsRequestAdapter):
         return context
     request, readable = _context_request(context)
-    if isinstance(context, Mapping):
+    if is_mapping(context):
         # A mapping whose read RAISED is answered "no request", not "keep
         # looking": the fall-through below would otherwise re-enter the same
         # unreadable object through the adapter probe. The asymmetry is
@@ -845,19 +865,26 @@ def _related_declarations(cls: type[object], related_attr: str) -> tuple[tuple[s
     # No emptiness short-circuit: a truthiness test would dispatch a hostile
     # ``__bool__`` / ``__len__``, and an empty mapping already materializes to
     # ``()`` through the unbound read below.
-    # ``sets_mixins.py::collect_related_declarations`` stores the collection keyed by
-    # each declaration's class-attribute name.
-    declarations = cast("Mapping[str, object]", related)
     try:
-        items = (
-            dict.items(declarations) if isinstance(declarations, dict) else declarations.items()
-        )
-        return tuple(items)
+        items = tuple(dict_items(related)) if is_dict(related) else tuple(related.items())
     except BaseException as exc:
         raise ConfigurationError(
             f"{_safe_type_name(cls)} related permission declarations under "
             f"{related_attr!r} could not be read.",
         ) from exc
+    # ``sets_mixins.py::collect_related_declarations`` keys the collection by each
+    # declaration's class-attribute name; a hand-assigned collection is held to the same
+    # shape here, since the key becomes the hop's declared attribute name.
+    declarations: list[tuple[str, object]] = []
+    for declared_attr, related_obj in items:
+        if not isinstance(declared_attr, str):
+            raise ConfigurationError(
+                f"{_safe_type_name(cls)} related permission declarations under "
+                f"{related_attr!r} must be keyed by attribute name strings; got a "
+                f"{_safe_type_name(declared_attr)} key.",
+            )
+        declarations.append((declared_attr, related_obj))
+    return tuple(declarations)
 
 
 def run_active_input_permission_checks(

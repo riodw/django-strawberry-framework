@@ -55,8 +55,12 @@ from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from typing_extensions import override
+
+if TYPE_CHECKING:
+    from typing_extensions import TypeIs
 
 try:
     from scripts import _plan_common
@@ -509,6 +513,11 @@ def _signature(node: ast.AST) -> str:
     return ""
 
 
+def _is_list(value: object) -> TypeIs[list[object]]:
+    """Return whether an AST field value is a list of child entries."""
+    return isinstance(value, list)
+
+
 def _is_docstring_statement(node: ast.AST) -> bool:
     """Return whether an AST statement is a string docstring."""
     return (
@@ -698,14 +707,16 @@ class _LiteralVisitor(ast.NodeVisitor):
     def _visit_definition(self, node: ast.AST) -> None:
         """Visit every AST field while omitting only the leading docstring."""
         for field, value in ast.iter_fields(node):
-            if field == "body" and isinstance(value, list):
+            if field == "body" and _is_list(value):
                 for index, statement in enumerate(value):
-                    if index == 0 and _is_docstring_statement(statement):
+                    if not isinstance(statement, ast.AST) or (
+                        index == 0 and _is_docstring_statement(statement)
+                    ):
                         continue
                     self.visit(statement)
             elif isinstance(value, ast.AST):
                 self.visit(value)
-            elif isinstance(value, list):
+            elif _is_list(value):
                 for item in value:
                     if isinstance(item, ast.AST):
                         self.visit(item)

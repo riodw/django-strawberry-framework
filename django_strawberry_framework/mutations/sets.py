@@ -56,6 +56,7 @@ from typing_extensions import override
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_class_name
 from ..registry import register_subsystem_clear, registry
+from ..utils._narrowing import is_class
 from ..utils.imports import import_attr
 from ..utils.inputs import (
     InputFieldSpec,
@@ -379,7 +380,7 @@ def require_subclass(
     replace the ``ConfigurationError``. ``note`` is an optional second sentence
     (the ModelForm-vs-plain-Form redirect).
     """
-    if isinstance(value, type) and issubclass(value, expected):
+    if is_class(value) and issubclass(value, expected):
         return value
     message = (
         f"{base_label} {name}.Meta.{key} must be a {expected_label} subclass; "
@@ -402,7 +403,7 @@ def require_model_class(name: str, model: object, *, base_label: str) -> type[mo
     ``DjangoMutation {name} resolved model must be a Django model class``
     message stays byte-identical.
     """
-    if isinstance(model, type) and issubclass(model, models.Model):
+    if is_class(model) and issubclass(model, models.Model):
         return model
     raise ConfigurationError(
         f"{base_label} {name} resolved model must be a Django model class; got {_safe_arg_repr(model)}.",
@@ -1159,6 +1160,9 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
     # the abstract base's ``None``.
     if TYPE_CHECKING:
         _mutation_meta: ClassVar[_ValidatedMutationMeta]
+        #: The consumer's nested ``class Meta`` a concrete mutation declares (the
+        #: abstract base declares none, so there is no run-time default).
+        Meta: ClassVar[type]
     else:
         _mutation_meta = None
 

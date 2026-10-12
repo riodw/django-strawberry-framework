@@ -83,7 +83,7 @@ from __future__ import annotations
 
 import codecs
 from functools import wraps
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, overload
 
 from cross_web import DjangoHTTPRequestAdapter, HTTPException
 from django.conf import settings
@@ -103,11 +103,12 @@ from django_strawberry_framework._boundary_ordering import (
 from django_strawberry_framework._request_body import body_exceeds_limit
 from django_strawberry_framework.conf import max_request_body_bytes_setting
 from django_strawberry_framework.exceptions import ConfigurationError, describe_value
+from django_strawberry_framework.utils._narrowing import is_exact_tuple
 from django_strawberry_framework.utils.querysets import run_in_one_sync_boundary
 from django_strawberry_framework.utils.typing import is_marked_coroutine_function
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping
+    from collections.abc import Awaitable, Callable, Coroutine, Mapping
 
     from cross_web import AsyncHTTPRequestAdapter, SyncHTTPRequestAdapter
     from django.http import HttpRequest, HttpResponseBase
@@ -412,6 +413,95 @@ class _RawBodyRequestAdapter(DjangoHTTPRequestAdapter):
         return self.request.body
 
 
+@overload
+def _boundary_view(
+    upstream_view: Callable[..., Coroutine[object, object, HttpResponseBase]],
+) -> Callable[..., Coroutine[object, object, HttpResponseBase]]: ...
+@overload
+def _boundary_view(
+    upstream_view: Callable[..., HttpResponseBase],
+) -> Callable[..., HttpResponseBase]: ...
+def _boundary_view(upstream_view: Callable[..., object]) -> Callable[..., object]:
+    """Return a package view's upstream callback, stamped with the ordering protocol.
+
+    The ordering half of the body boundary (spec-046 Decision 18), stamped
+    once, here, so both views get it and a URLconf author cannot forget it.
+    The marks live on the callback the URL resolver holds, because that is the
+    object the chain reads them off - the CSRF middleware reads ``csrf_exempt``
+    there, and
+    ``middleware/request_body.py::GraphQLRequestBodyBoundaryMiddleware`` reads
+    its marker off the ``view_func`` it is handed. Putting them there rather
+    than on ``dispatch`` for ``View.as_view`` to copy means a consumer subclass
+    that overrides ``dispatch`` keeps the ordering too.
+
+    The small wrapper has one second job: when the chain prepared this exact
+    mount's view instance, ran ``setup``, and enforced its boundary, dispatch
+    continues on that instance instead of constructing and setting up a second
+    one. The opaque mount token makes the handoff exact even when ordinary
+    Django decorators copy the callback's attributes. Without it, request-local
+    cap state derived in ``setup`` could differ between the checked instance and
+    the dispatched one while the request stamp made the latter skip its own
+    boundary. ``functools.wraps`` preserves the transport's coroutine marking
+    and Django's ``view_class`` / ``view_initkwargs`` bookkeeping, which the
+    middleware still uses to prepare the instance.
+
+    ``csrf_exempt`` is the withdrawable exemption rather than a plain ``True``:
+    it is false for a request whose boundary a chain entry has already run
+    ahead of the CSRF check, so the deployment's configured CSRF class runs on
+    this endpoint like on any other view - and true for every other request,
+    including one whose callback that entry did not recognize, which keeps the
+    arrangement below intact rather than losing the ordering. See
+    :func:`_run_after_csrf_check` for why an exemption is what buys this
+    endpoint *more* CSRF ordering rather than less, and for the two shapes that
+    can still lose the ordering (a wrapper that drops the attributes, and a
+    consumer middleware that reads the body inbound).
+    """
+    mount = object()
+
+    # basedpyright: the view instance the middleware stored on the request (an untyped
+    # attribute); its dispatch is sync on one view, a coroutine on the other
+    def prepared_view(request: HttpRequest) -> Any:  # pyright: ignore[reportExplicitAny]
+        prepared = getattr(request, _BOUNDARY_PREPARED_VIEW, None)
+        if not is_exact_tuple(prepared) or len(prepared) != 2 or prepared[0] is not mount:
+            return None
+        delattr(request, _BOUNDARY_PREPARED_VIEW)
+        return prepared[1]
+
+    # The arm follows the callback Django will call, never ``view_is_async``: that
+    # reads the HTTP handlers, and ``AsyncGraphQLView`` defines none - its
+    # ``as_view`` marks the callback instead - so the async view gets a real
+    # coroutine function, which every async detector recognizes, not a sync one
+    # that is async only through the marker ``wraps`` copies. One name per arm, so
+    # neither def redeclares the other; ``wraps`` gives the returned callback
+    # upstream's ``__name__`` and ``__qualname__`` either way.
+    view: Callable[..., object]
+    if is_marked_coroutine_function(upstream_view):
+
+        @wraps(upstream_view)
+        async def async_view(request: HttpRequest, *args: object, **kwargs: object) -> object:
+            instance = prepared_view(request)
+            if instance is None:
+                return await upstream_view(request, *args, **kwargs)
+            return await instance.dispatch(request, *args, **kwargs)
+
+        view = async_view
+    else:
+
+        @wraps(upstream_view)
+        def sync_view(request: HttpRequest, *args: object, **kwargs: object) -> object:
+            instance = prepared_view(request)
+            if instance is None:
+                return upstream_view(request, *args, **kwargs)
+            return instance.dispatch(request, *args, **kwargs)
+
+        view = sync_view
+
+    setattr(view, _CSRF_EXEMPT, _CSRF_ORDERING_EXEMPTION)
+    setattr(view, _BOUNDARY_MARKER, True)
+    setattr(view, _BOUNDARY_MOUNT, mount)
+    return view
+
+
 class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
     """The package's raw-request-body boundary, shared by both package views.
 
@@ -538,92 +628,6 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
     #: rather than on each view so Django's ``as_view`` keyword guard admits it
     #: on both (``hasattr``, so an inherited attribute satisfies the guard).
     max_request_body_bytes: int | None = None
-
-    @classonlymethod
-    @override
-    # basedpyright: sync or coroutine callback; the override must return View's sync-only type
-    def as_view(cls, **initkwargs: object) -> Any:  # pyright: ignore[reportExplicitAny]  # noqa: N805 - Django's own signature
-        """Return upstream's view callback, stamped with the ordering protocol.
-
-        The ordering half of the body boundary (spec-046 Decision 18), stamped
-        once, here, so both views get it and a URLconf author cannot forget it.
-        The marks live on the callback the URL resolver holds, because that is the
-        object the chain reads them off - the CSRF middleware reads ``csrf_exempt``
-        there, and
-        ``middleware/request_body.py::GraphQLRequestBodyBoundaryMiddleware`` reads
-        its marker off the ``view_func`` it is handed. Putting them there rather
-        than on ``dispatch`` for ``View.as_view`` to copy means a consumer subclass
-        that overrides ``dispatch`` keeps the ordering too.
-
-        The small wrapper has one second job: when the chain prepared this exact
-        mount's view instance, ran ``setup``, and enforced its boundary, dispatch
-        continues on that instance instead of constructing and setting up a second
-        one. The opaque mount token makes the handoff exact even when ordinary
-        Django decorators copy the callback's attributes. Without it, request-local
-        cap state derived in ``setup`` could differ between the checked instance and
-        the dispatched one while the request stamp made the latter skip its own
-        boundary. ``functools.wraps`` preserves the transport's coroutine marking
-        and Django's ``view_class`` / ``view_initkwargs`` bookkeeping, which the
-        middleware still uses to prepare the instance.
-
-        ``csrf_exempt`` is the withdrawable exemption rather than a plain ``True``:
-        it is false for a request whose boundary a chain entry has already run
-        ahead of the CSRF check, so the deployment's configured CSRF class runs on
-        this endpoint like on any other view - and true for every other request,
-        including one whose callback that entry did not recognize, which keeps the
-        arrangement below intact rather than losing the ordering. See
-        :func:`_run_after_csrf_check` for why an exemption is what buys this
-        endpoint *more* CSRF ordering rather than less, and for the two shapes that
-        can still lose the ordering (a wrapper that drops the attributes, and a
-        consumer middleware that reads the body inbound).
-        """
-        # A coroutine function whenever upstream marks it one: django-stubs types
-        # ``View.as_view``'s sync callback only.
-        upstream_view: Callable[..., object] = super().as_view(**initkwargs)
-        mount = object()
-
-        # basedpyright: the view instance the middleware stored on the request (an untyped
-        # attribute); its dispatch is sync on one view, a coroutine on the other
-        def prepared_view(request: HttpRequest) -> Any:  # pyright: ignore[reportExplicitAny]
-            prepared = getattr(request, _BOUNDARY_PREPARED_VIEW, None)
-            if type(prepared) is not tuple or len(prepared) != 2 or prepared[0] is not mount:
-                return None
-            delattr(request, _BOUNDARY_PREPARED_VIEW)
-            return prepared[1]
-
-        # The arm follows the callback Django will call, never ``view_is_async``: that
-        # reads the HTTP handlers, and ``AsyncGraphQLView`` defines none - its
-        # ``as_view`` marks the callback instead - so the async view gets a real
-        # coroutine function, which every async detector recognizes, not a sync one
-        # that is async only through the marker ``wraps`` copies. One name per arm, so
-        # neither def redeclares the other; ``wraps`` gives the returned callback
-        # upstream's ``__name__`` and ``__qualname__`` either way.
-        view: Callable[..., object]
-        if is_marked_coroutine_function(upstream_view):
-
-            @wraps(upstream_view)
-            async def async_view(request: HttpRequest, *args: object, **kwargs: object) -> object:
-                instance = prepared_view(request)
-                if instance is None:
-                    return await upstream_view(request, *args, **kwargs)
-                return await instance.dispatch(request, *args, **kwargs)
-
-            view = async_view
-        else:
-
-            @wraps(upstream_view)
-            def sync_view(request: HttpRequest, *args: object, **kwargs: object) -> object:
-                instance = prepared_view(request)
-                if instance is None:
-                    return upstream_view(request, *args, **kwargs)
-                return instance.dispatch(request, *args, **kwargs)
-
-            view = sync_view
-
-        setattr(view, _CSRF_EXEMPT, _CSRF_ORDERING_EXEMPTION)
-        setattr(view, _BOUNDARY_MARKER, True)
-        setattr(view, _BOUNDARY_MOUNT, mount)
-        return view
 
     def _enforce_request_boundary(self, request: HttpRequest) -> None:
         """Run the whole pre-CSRF, pre-parse boundary, in the one order that is safe.
@@ -1062,7 +1066,7 @@ class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView[Context, RootValu
     The ordering half of the body boundary - the ``csrf_exempt`` mark on the
         callback ``as_view`` returns - comes from the shared mixin, so it cannot
         diverge between the two transports; see
-        ``_RequestBodyBoundaryMixin.as_view`` and :func:`_run_after_csrf_check`.
+        ``_boundary_view`` and :func:`_run_after_csrf_check`.
     """
 
     #: The package's own body source (see :class:`_RawBodyRequestAdapter`), so
@@ -1070,6 +1074,12 @@ class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView[Context, RootValu
     #: upstream-patch setting says. The async twin needs no override: upstream's
     #: async adapter already hands over raw bytes.
     request_adapter_class: type[DjangoHTTPRequestAdapter] = _RawBodyRequestAdapter
+
+    @classonlymethod
+    @override
+    def as_view(cls, **initkwargs: object) -> Callable[..., HttpResponseBase]:  # noqa: N805 - Django's own signature
+        """Return upstream's view callback, stamped with the ordering protocol (``_boundary_view``)."""
+        return _boundary_view(super().as_view(**initkwargs))
 
     @override
     def run(self, request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
@@ -1132,6 +1142,29 @@ class AsyncDjangoGraphQLView(_RequestBodyBoundaryMixin, AsyncGraphQLView[Context
     resolver - never performs the session and user lookup there. The sync view
     needs nothing: its hooks already run in a sync context.
     """
+
+    @classonlymethod
+    @override
+    # basedpyright: Strawberry (after django-stubs) types ``as_view``'s callback sync only; the
+    # callback it returns here is the coroutine function its own ``as_view`` marks it
+    def as_view(  # pyright: ignore[reportIncompatibleMethodOverride]
+        cls,  # noqa: N805 - Django's own signature
+        **initkwargs: object,
+    ) -> Callable[..., Coroutine[object, object, HttpResponseBase]]:
+        """Return upstream's coroutine view callback, stamped with the ordering protocol.
+
+        Strawberry's ``AsyncGraphQLView.as_view`` marks the callback a coroutine
+        function; an ``as_view`` placed between it and this view that drops the mark
+        would have Django call an async view synchronously, so it is refused here.
+        """
+        upstream_view = super().as_view(**initkwargs)
+        if not is_marked_coroutine_function(upstream_view):
+            raise ConfigurationError(
+                f"{cls.__qualname__}.as_view() needs a coroutine view callback, but the "
+                f"as_view it extends returned {describe_value(upstream_view)}; keep "
+                "AsyncGraphQLView.as_view's coroutine marking on the callback.",
+            )
+        return _boundary_view(upstream_view)
 
     @override
     # basedpyright: upstream overloads run(HttpRequest) to two response types; this must meet both

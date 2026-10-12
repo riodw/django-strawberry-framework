@@ -31,6 +31,7 @@ from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any, TypeGuard, TypeVar, cast, get_args, get_origin
 
 from asgiref.sync import iscoroutinefunction
+from graphql import GraphQLList, GraphQLNonNull
 from typing_extensions import Never
 
 if TYPE_CHECKING:
@@ -38,10 +39,12 @@ if TYPE_CHECKING:
 
     from django.db import models
     from graphql import (
+        GraphQLArgument,
         GraphQLEnumType,
+        GraphQLField,
+        GraphQLInputField,
         GraphQLInputObjectType,
         GraphQLInterfaceType,
-        GraphQLList,
         GraphQLObjectType,
         GraphQLResolveInfo,
         GraphQLScalarType,
@@ -52,6 +55,7 @@ if TYPE_CHECKING:
     from strawberry.schema import Schema
     from strawberry.schema.config import StrawberryConfig
     from strawberry.types.base import StrawberryType
+    from typing_extensions import TypeIs
 
     # The package's shared type aliases (type-checking only; nothing imports them
     # at runtime).
@@ -98,8 +102,11 @@ if TYPE_CHECKING:
 
 __all__ = (
     "MAX_TYPE_WRAPPER_DEPTH",
+    "graphql_type_of",
     "is_async_callable",
+    "is_graphql_list",
     "is_marked_coroutine_function",
+    "return_type_of",
     "schema_config_from_info",
     "strawberry_schema_from_info",
     "strawberry_schema_from_schema",
@@ -292,6 +299,43 @@ def unwrap_graphql_type(gql_type: object) -> object:
     )
 
 
+if TYPE_CHECKING:
+
+    def is_graphql_list(value: object, /) -> TypeIs[GraphQLList[GraphQLType]]:
+        """Return whether ``value`` is a graphql-core ``GraphQLList`` (its item read as ``GraphQLType``)."""
+        ...
+
+    def _is_graphql_non_null(value: object, /) -> TypeIs[GraphQLNonNull[_GraphQLNullableType]]:
+        """Return whether ``value`` is a graphql-core ``GraphQLNonNull``."""
+        ...
+
+else:
+    # The class's own ``__instancecheck__``: one check per walked value with no extra frame.
+    is_graphql_list = GraphQLList.__instancecheck__
+    _is_graphql_non_null = GraphQLNonNull.__instancecheck__
+
+
+def graphql_type_of(
+    definition: "GraphQLField | GraphQLArgument | GraphQLInputField",
+) -> "GraphQLType":
+    """Return a field / argument / input field definition's ``type``.
+
+    graphql-core 3.2 spells ``GraphQLOutputType`` / ``GraphQLInputType`` with the
+    bare generic ``GraphQLWrappingType``, so every ``definition.type`` read is
+    partially Unknown to the checker; this reads it once as the ``GraphQLType`` it is.
+    """
+    # basedpyright: graphql-core 3.2's GraphQLOutputType / GraphQLInputType unions list the
+    # bare generic GraphQLWrappingType, so the attribute reads as partially Unknown
+    return definition.type  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+
+
+def return_type_of(info: "GraphQLResolveInfo") -> "GraphQLType":
+    """Return ``info.return_type`` as the ``GraphQLType`` it is (see ``graphql_type_of``)."""
+    # basedpyright: graphql-core 3.2's GraphQLOutputType union lists the bare generic
+    # GraphQLWrappingType, so the attribute reads as partially Unknown
+    return info.return_type  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+
+
 def unwrap_non_null(gql_type: _T) -> "_T | _GraphQLNullableType":
     """Peel ONLY ``GraphQLNonNull`` layers, bounded; leave list wrappers in place.
 
@@ -306,12 +350,11 @@ def unwrap_non_null(gql_type: _T) -> "_T | _GraphQLNullableType":
     the ceiling can only be a hand-built or corrupt type, and an unbounded
     ``while`` on one hangs the request thread rather than failing.
     """
-    from graphql import GraphQLNonNull
-
+    current: _T | _GraphQLNullableType = gql_type
     for _ in range(MAX_TYPE_WRAPPER_DEPTH + 1):
-        if not isinstance(gql_type, GraphQLNonNull):
-            return gql_type
-        gql_type = gql_type.of_type
+        if not _is_graphql_non_null(current):
+            return current
+        current = current.of_type
     raise RuntimeError(
         f"unwrap_non_null: GraphQLNonNull wrapper stack exceeded "
         f"{MAX_TYPE_WRAPPER_DEPTH} layers; the type chain is likely cyclic or corrupt.",

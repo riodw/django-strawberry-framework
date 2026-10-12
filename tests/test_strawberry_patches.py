@@ -233,7 +233,7 @@ def test_patched_parse_json_passes_a_str_body_through_without_reencoding():
     encode-then-decode cycle being introduced on those paths.
     """
     body = '{"a": 1}'
-    seen = []
+    seen: list[str | bytes] = []
 
     def _recorder(view: object, data: str | bytes):
         seen.append(data)
@@ -605,7 +605,7 @@ def test_apply_fails_loudly_when_parse_query_params_source_is_unavailable():
     bytecode-only distribution would present). The validator must refuse
     to supersede a body it cannot verify.
     """
-    namespace = {}
+    namespace: dict[str, object] = {}
     exec("def _sourceless(self, params):\n    return dict(params)\n", namespace)
 
     with mock.patch.object(
@@ -681,7 +681,7 @@ def test_the_gated_workarounds_really_stop_hardening_when_opted_out(
     patches.apply()
     assert patches._patch_is_installed() is False
 
-    view = BaseView()
+    view: BaseView[object] = BaseView()
     assert view.parse_json("42") == 42
     assert view.parse_json("[1, 2, 3]") == [1, 2, 3]
     with pytest.raises(UnicodeDecodeError):

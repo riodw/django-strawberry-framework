@@ -72,7 +72,7 @@ def _info_for(user: object) -> strawberry.Info[object, object]:
     return make_info(context=SimpleNamespace(request=SimpleNamespace(user=user)))
 
 
-def _create_item_mutation() -> type:
+def _create_item_mutation():
     """A ``create`` ``DjangoMutation`` over the products ``Item`` model."""
 
     class CreateItem(DjangoMutation):
@@ -622,7 +622,7 @@ def test_walk_ignores_mid_request_pollution_of_the_class_permission_list():
             try:
                 # basedpyright: the hostile hook reaches the walked class's live permission list;
                 # the hook receives the class as type[object], which declares no _mutation_meta
-                mutation._mutation_meta.permission_classes.clear()  # pyright: ignore[reportAttributeAccessIssue]
+                mutation._mutation_meta.permission_classes.clear()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
             except AttributeError:  # tuple substrate: in-place mutation refused
                 events.append("pollution-refused")
                 return True
@@ -806,7 +806,9 @@ def test_whole_record_swap_and_deletion_on_a_real_mutation_class_are_sealed():
     original = sealed._mutation_meta
     hook_chosen = SimpleNamespace(permission_classes=())
     with pytest.raises(ConfigurationError, match="sealed and cannot be rebound"):
-        sealed._mutation_meta = hook_chosen
+        # basedpyright: the hook-chosen namespace is the hostile rebind under test; the slot is
+        # typed as the validated record
+        sealed._mutation_meta = hook_chosen  # pyright: ignore[reportAttributeAccessIssue]
     with pytest.raises(ConfigurationError, match="sealed and cannot be deleted"):
         del sealed._mutation_meta
     # The validated record survived both attempts, record identity included.
@@ -815,8 +817,8 @@ def test_whole_record_swap_and_deletion_on_a_real_mutation_class_are_sealed():
     assert sealed._mutation_meta.permission_classes == (DjangoModelPermission,)
     # Unrelated class attributes (the bind's outputs) stay writable and deletable:
     # the head seal narrows ONLY the ``_mutation_meta`` head.
-    sealed._primary_type = None
-    assert sealed._primary_type is None
+    sealed._primary_type = DjangoType
+    assert sealed._primary_type is DjangoType
     del sealed._primary_type
     assert "_primary_type" not in sealed.__dict__
 

@@ -28,7 +28,7 @@ in ``examples/fakeshop/test_query/test_transport_api.py``.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -44,7 +44,10 @@ from django_strawberry_framework.utils.sessions import (
 from tests._idioms import websocket_scope
 
 if TYPE_CHECKING:
-    from django_strawberry_framework.consumers import RevalidatingGraphQLWSConsumer
+    from django_strawberry_framework.consumers import (
+        RevalidatingGraphQLWSConsumer,
+        WebSocketAdapterShape,
+    )
 
 
 def _fresh_scope():
@@ -463,7 +466,7 @@ async def test_send_revalidated_hostile_ws_consumer_fails_closed():
     with patch.object(cmod, "_revoke_connection", new_callable=AsyncMock) as mock_revoke:
         # basedpyright: the socket whose ws_consumer read raises is the hostile input under test;
         # send_revalidated_operation_frame types the parameter as _GatedSocket
-        await cmod.send_revalidated_operation_frame(HostileWS(), {}, AsyncMock())  # pyright: ignore[reportArgumentType]
+        await cmod.send_revalidated_operation_frame(HostileWS(), {"type": "next"}, AsyncMock())  # pyright: ignore[reportArgumentType]
         mock_revoke.assert_awaited_once()
 
 
@@ -490,17 +493,9 @@ async def test_send_revalidated_hostile_scope_fails_closed():
 # ---------------------------------------------------------------------------
 
 
-class _RevalidatingAdapter(Protocol):
-    """What the rows read off the generated adapter: its consumer and ``send_json``."""
-
-    ws_consumer: RevalidatingGraphQLWSConsumer
-
-    async def send_json(self, message: object) -> None: ...
-
-
 def _build_consumer_and_adapter() -> tuple[
     RevalidatingGraphQLWSConsumer,
-    _RevalidatingAdapter,
+    WebSocketAdapterShape,
 ]:
     class FakeAdapter:
         async def send_json(self, message: object):
@@ -510,10 +505,21 @@ def _build_consumer_and_adapter() -> tuple[
             pass
 
     class FakeTransport:
-        pass
+        async def handle(self) -> None:
+            pass
+
+        async def handle_subscribe(self, message: object) -> None:
+            pass
 
     class FakeLegacy:
-        pass
+        async def handle(self) -> None:
+            pass
+
+        async def handle_start(self, message: object) -> None:
+            pass
+
+        async def handle_stop(self, message: object) -> None:
+            pass
 
     class FakeBase:
         graphql_transport_ws_handler_class = FakeTransport
@@ -523,6 +529,10 @@ def _build_consumer_and_adapter() -> tuple[
         def __init__(self, *a: object, **kw: object):
             pass
 
+        @classmethod
+        def as_asgi(cls, **initkwargs: object) -> object:
+            return cls
+
         async def disconnect(self, code: int):
             pass
 
@@ -530,14 +540,11 @@ def _build_consumer_and_adapter() -> tuple[
     # build_revalidating_consumer_class types the parameter as type[GraphQLWSConsumer]
     cls = cmod.build_revalidating_consumer_class(FakeBase)  # pyright: ignore[reportArgumentType]
     consumer = cls.__new__(cls)
-    # basedpyright: a stand-in scope dict; Channels types the consumer scope as its _ChannelScope
-    # TypedDict
-    consumer.scope = _fresh_scope()  # pyright: ignore[reportAttributeAccessIssue]
+    consumer.scope = _fresh_scope()
     consumer._revocation = cmod._ConnectionRevocation()
     consumer.revalidation_window = 0.0
     adapter_cls = cls.websocket_adapter_class
-    # basedpyright: upstream types websocket_adapter_class a Callable factory, not a class
-    adapter = adapter_cls.__new__(adapter_cls)  # pyright: ignore[reportCallIssue]
+    adapter = adapter_cls.__new__(adapter_cls)
     adapter.ws_consumer = consumer
     return consumer, adapter
 
@@ -551,9 +558,7 @@ async def test_send_json_hostile_message_get_fails_closed():
         adapter.ws_consumer.scope["user"] = Mock(is_authenticated=True)
         from django_strawberry_framework.utils.sessions import note_authenticated_actor
 
-        # basedpyright: Channels types the consumer scope as its _ChannelScope TypedDict, while
-        # note_authenticated_actor types the parameter as MutableMapping[str, object]
-        note_authenticated_actor(adapter.ws_consumer.scope)  # pyright: ignore[reportArgumentType]
+        note_authenticated_actor(adapter.ws_consumer.scope)
 
         class HostileMessage(dict[str, object]):
             @override
@@ -578,24 +583,22 @@ async def test_send_json_non_dict_message_does_not_escape(message: object):
         adapter.ws_consumer.scope["user"] = Mock(is_authenticated=True)
         from django_strawberry_framework.utils.sessions import note_authenticated_actor
 
-        # basedpyright: Channels types the consumer scope as its _ChannelScope TypedDict, while
-        # note_authenticated_actor types the parameter as MutableMapping[str, object]
-        note_authenticated_actor(adapter.ws_consumer.scope)  # pyright: ignore[reportArgumentType]
-        await adapter.send_json(message)
+        note_authenticated_actor(adapter.ws_consumer.scope)
+        # basedpyright: the non-mapping frame is the hostile input under test; the adapter
+        # types its message as a mapping
+        await adapter.send_json(message)  # pyright: ignore[reportArgumentType]
         assert consumer._revocation.revoked is True
 
 
 @pytest.mark.asyncio
 async def test_send_json_control_frame_hostile_scope_suppresses():
-    _, adapter = _build_consumer_and_adapter()
+    consumer, adapter = _build_consumer_and_adapter()
     hostile_scope = _fresh_scope()
     with patch(
         "django_strawberry_framework.consumers.actor_lease",
         side_effect=TypeError("hostile control scope"),
     ):
-        # basedpyright: a stand-in scope dict; Channels types the consumer scope as its
-        # _ChannelScope TypedDict
-        adapter.ws_consumer.scope = hostile_scope  # pyright: ignore[reportAttributeAccessIssue]
+        consumer.scope = hostile_scope
         await adapter.send_json({"type": "ping"})
 
 
@@ -646,7 +649,7 @@ async def test_send_revalidated_hostile_ws_consumer_with_failing_revoke_is_conta
     ) as mock_revoke:
         # basedpyright: the socket whose ws_consumer read raises is the hostile input under test;
         # send_revalidated_operation_frame types the parameter as _GatedSocket
-        await cmod.send_revalidated_operation_frame(HostileWS(), {}, AsyncMock())  # pyright: ignore[reportArgumentType]
+        await cmod.send_revalidated_operation_frame(HostileWS(), {"type": "next"}, AsyncMock())  # pyright: ignore[reportArgumentType]
         mock_revoke.assert_awaited_once()
 
 
@@ -759,7 +762,7 @@ async def test_send_revalidated_cancellation_in_hostile_ws_consumer_revoke_is_re
         with pytest.raises(asyncio.CancelledError):
             # basedpyright: the socket whose ws_consumer read raises is the hostile input under
             # test; send_revalidated_operation_frame types the parameter as _GatedSocket
-            await cmod.send_revalidated_operation_frame(HostileWS(), {}, AsyncMock())  # pyright: ignore[reportArgumentType]
+            await cmod.send_revalidated_operation_frame(HostileWS(), {"type": "next"}, AsyncMock())  # pyright: ignore[reportArgumentType]
 
 
 @pytest.mark.asyncio
@@ -1116,7 +1119,7 @@ def test_host_validation_case_insensitive_header():
 )
 def test_host_validation_server_absent_vs_null(server: object):
     """A falsy ``scope['server']`` uses the same ``unknown`` reconstruction as absence."""
-    scope = {"headers": [], "server": server}
+    scope: dict[str, object] = {"headers": [], "server": server}
     # basedpyright: the ill-typed server value is the input under test; asgiref's WebSocketScope
     # types server as tuple[str, int | None] | None
     req = cmod._host_validation_request(scope)  # pyright: ignore[reportArgumentType]
@@ -1407,7 +1410,7 @@ async def test_send_revalidated_hostile_ws_consumer_cancelled_propagates():
     with pytest.raises(asyncio.CancelledError):
         # basedpyright: the socket whose ws_consumer read raises is the hostile input under test;
         # send_revalidated_operation_frame types the parameter as _GatedSocket
-        await cmod.send_revalidated_operation_frame(HostileWS(), {}, AsyncMock())  # pyright: ignore[reportArgumentType]
+        await cmod.send_revalidated_operation_frame(HostileWS(), {"type": "next"}, AsyncMock())  # pyright: ignore[reportArgumentType]
 
 
 @pytest.mark.asyncio

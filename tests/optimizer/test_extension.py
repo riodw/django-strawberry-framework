@@ -42,7 +42,9 @@ from graphql import (
     GraphQLField,
     GraphQLObjectType,
     GraphQLResolveInfo,
+    GraphQLScalarType,
     GraphQLSchema,
+    GraphQLString,
     OperationDefinitionNode,
     OperationType,
 )
@@ -80,7 +82,13 @@ from tests._idioms import definition_raises
 from tests._info import make_info, response_path
 
 if TYPE_CHECKING:
+    from strawberry.types import ExecutionContext
+
+    from django_strawberry_framework.optimizer._context import PlanCacheKey
     from django_strawberry_framework.optimizer.selections import FragmentVisitKey
+
+#: The optimizer's document-key memo shape, for a test that swaps in an empty one.
+_DocKeyCache = OrderedDict[tuple[str, str | None], tuple[str, frozenset[str]]]
 
 
 def _as_partial_resolve_info(stand_in: object) -> GraphQLResolveInfo:
@@ -663,11 +671,10 @@ def test_resolve_model_returns_none_for_non_object_leaf():
 
 def _object_type_outside_schema(name: str) -> GraphQLObjectType:
     """A graphql-core object type ``name`` with one string field, in no Strawberry schema."""
-    object_type = GraphQLObjectType(
-        name,
-        {"value": GraphQLField(make_info()._raw_info.return_type)},
-    )
     # graphql-core's named-type constructor is typed to return any named type.
+    value_type = GraphQLString
+    assert isinstance(value_type, GraphQLScalarType)
+    object_type = GraphQLObjectType(name, {"value": GraphQLField(value_type)})
     assert isinstance(object_type, GraphQLObjectType)
     return object_type
 
@@ -1192,7 +1199,7 @@ def test_doc_key_cache_evicts_when_full(monkeypatch: pytest.MonkeyPatch):
     import django_strawberry_framework.optimizer.extension as extension_module
 
     monkeypatch.setattr(extension_module, "_MAX_DOC_KEY_CACHE_SIZE", 2)
-    monkeypatch.setattr(extension_module, "_doc_key_cache", OrderedDict())
+    monkeypatch.setattr(extension_module, "_doc_key_cache", _DocKeyCache())
 
     ops = [_operation(parse(f"query Q{i} {{ field{i} }}")) for i in range(3)]
     for op in ops:
@@ -1253,7 +1260,7 @@ def test_registry_clear_empties_the_document_key_cache(monkeypatch: pytest.Monke
 
     import django_strawberry_framework.optimizer.extension as extension_module
 
-    monkeypatch.setattr(extension_module, "_doc_key_cache", OrderedDict())
+    monkeypatch.setattr(extension_module, "_doc_key_cache", _DocKeyCache())
     extension_module._doc_cache_entry(_operation(parse("query Q { field }")), {})
     assert len(extension_module._doc_key_cache) == 1
 
@@ -1782,7 +1789,7 @@ def test_hashable_variable_value_safely_degrades_for_opaque_and_cyclic_values():
     assert isinstance(hash(first), int)
     assert first != second
 
-    cyclic = []
+    cyclic: list[object] = []
     cyclic.append(cyclic)
     assert isinstance(hash(_hashable_variable_value(cyclic)), int)
 
@@ -2131,7 +2138,7 @@ def test_cache_key_variable_name_collection_memoized_for_nested_fallbacks(
     # and the counter would read 0 whenever that sibling ran first. A fresh
     # mapping makes the first call a guaranteed MISS, which is what makes the
     # count below a measurement rather than an artifact of collection order.
-    monkeypatch.setattr(extension_module, "_doc_key_cache", OrderedDict())
+    monkeypatch.setattr(extension_module, "_doc_key_cache", _DocKeyCache())
 
     info = make_info(
         document=(
@@ -2784,7 +2791,7 @@ def test_optimizer_strictness_accepts_nested_planned_relation():
 def test_optimizer_nested_prefetch_with_custom_get_queryset_marks_uncacheable():
     """O4+O6: nested request-dependent prefetch plans are not cached."""
     services.seed_data(1)
-    calls = []
+    calls: list[object] = []
 
     class EntryType(DjangoType):
         class Meta:
@@ -3342,7 +3349,7 @@ def test_plan_stashed_on_dict_context():
     """B5: when context is a plain dict, plan is stashed via __setitem__."""
     from django_strawberry_framework.optimizer.extension import _stash_on_context
 
-    ctx = {}
+    ctx: dict[str, object] = {}
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     plan = OptimizationPlan(select_related=["category"])
@@ -3462,7 +3469,7 @@ def test_stash_on_read_only_mapping_is_silent():
     from django_strawberry_framework.optimizer.extension import _stash_on_context
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
-    ctx = MappingProxyType({})
+    ctx = MappingProxyType[str, object]({})
     plan = OptimizationPlan(prefetch_related=["items"])
     # Should not raise.
     _stash_on_context(ctx, "dst_optimizer_plan", plan)
@@ -3554,7 +3561,8 @@ def test_clear_optimizer_context_removes_all_keys_from_object_and_dict():
         stash_on_context,
     )
 
-    for ctx in (SimpleNamespace(), {}):
+    empty: dict[str, object] = {}
+    for ctx in (SimpleNamespace(), empty):
         stash_on_context(ctx, DST_OPTIMIZER_PLAN, object())
         stash_on_context(ctx, DST_OPTIMIZER_FK_ID_ELISIONS, frozenset({"k"}))
         stash_on_context(ctx, DST_OPTIMIZER_PLANNED, frozenset({"k"}))
@@ -3579,6 +3587,7 @@ def test_clear_optimizer_context_clears_slots_mapping_via_item_delete():
 
     class SlotsMapping:
         __slots__ = ("_data",)
+        _data: dict[str, object]
 
         def __init__(self) -> None:
             object.__setattr__(self, "_data", {})
@@ -3892,7 +3901,7 @@ def test_an_optimizer_that_settled_no_configuration_reads_the_zero_argument_shap
     )
 
 
-def _published_optimizer_keys(context: object):
+def _published_optimizer_keys(context: object) -> dict[str, object]:
     """Every optimizer stash currently readable off a request context object."""
     from django_strawberry_framework.optimizer._context import (
         DST_OPTIMIZER_KEYS,
@@ -3938,7 +3947,8 @@ def test_a_nested_operation_does_not_take_the_outer_operations_optimizer_state()
             model = Item
             fields = ("id", "name", "category")
 
-    seen = {}
+    seen_contexts: list[ExecutionContext] = []
+    seen_published: list[dict[str, object]] = []
 
     @strawberry.type
     class Query:
@@ -3956,8 +3966,8 @@ def test_a_nested_operation_does_not_take_the_outer_operations_optimizer_state()
                 context_value=info.context,
             )
             assert inner.errors is None, inner.errors
-            seen["context"] = (before, extension.execution_context)
-            seen["published"] = (published_before, _published_optimizer_keys(info.context))
+            seen_contexts.extend((before, extension.execution_context))
+            seen_published.extend((published_before, _published_optimizer_keys(info.context)))
             return "nested"
 
     finalize_django_types()
@@ -3971,8 +3981,9 @@ def test_a_nested_operation_does_not_take_the_outer_operations_optimizer_state()
     )
 
     assert outer.errors is None, outer.errors
-    before, after = seen["context"]
+    before, after = seen_contexts
     assert before is after
+    assert after.query is not None
     assert after.query.startswith("{ nest")
     assert outer.data is not None
     assert all(item["category"]["name"] for item in outer.data["allItems"])
@@ -3981,7 +3992,7 @@ def test_a_nested_operation_does_not_take_the_outer_operations_optimizer_state()
     # the inner execution neither erased what was on it nor published its own
     # plan and FK-id elisions there, and the outer operation's plan is what the
     # consumer can read off their request once it completes.
-    published_before, published_after = seen["published"]
+    published_before, published_after = seen_published
     assert published_after == published_before
     assert get_context_value(shared, DST_OPTIMIZER_PLAN) is not None
 
@@ -4040,7 +4051,7 @@ def test_an_operation_started_from_a_consumer_teardown_leaves_the_request_its_pl
         def all_items(self) -> QuerySet[Item]:
             return Item.objects.all()
 
-    seen = {}
+    seen: dict[str, list[dict[str, object]]] = {}
 
     class _Nester(SchemaExtension):
         """A consumer extension that runs its own operation once, at teardown."""
@@ -4175,7 +4186,7 @@ def test_on_execute_clears_reused_context_planned_keys_across_executions():
         context_value=shared,
     )
     assert r2.errors is None
-    planned = getattr(shared, "dst_optimizer_planned", frozenset())
+    planned = getattr(shared, "dst_optimizer_planned", frozenset[str]())
     assert "ItemType.category@allItems.category" not in planned
 
 
@@ -4266,7 +4277,7 @@ def test_optimizer_downgrades_select_related_for_custom_get_queryset():
     from django.db.models import Prefetch
 
     services.seed_data(1)
-    calls = []
+    calls: list[object] = []
 
     class CategoryType(DjangoType):
         class Meta:
@@ -4319,7 +4330,7 @@ def test_optimizer_downgrades_select_related_for_custom_get_queryset():
 def test_optimizer_does_not_cache_custom_get_queryset_prefetch_plans():
     """O6: request-dependent ``Prefetch`` querysets are rebuilt instead of cached."""
     services.seed_data(1)
-    calls = []
+    calls: list[object] = []
 
     class CategoryType(DjangoType):
         class Meta:
@@ -5141,7 +5152,7 @@ def test_nested_connection_fallback_publish_unions_parent_planned_set_end_to_end
         context_value=ctx,
     )
     assert result.errors is None, result.errors
-    planned = get_context_value(ctx, DST_OPTIMIZER_PLANNED, frozenset())
+    planned = get_context_value(ctx, DST_OPTIMIZER_PLANNED, frozenset[str]())
     assert _is_resolver_key_set(planned)
     # The parent's planned ``items`` resolver key survives the nested fallback's
     # publish (the union foundation) - it is NOT shrunk away.
@@ -5182,7 +5193,7 @@ def test_cascading_target_downgrades_join_to_prefetch():
 
     from django_strawberry_framework.permissions import apply_cascade_permissions
 
-    seen_users = []
+    seen_users: list[object] = []
 
     class CategoryType(DjangoType):
         class Meta:
@@ -5930,7 +5941,7 @@ def test_an_execution_frame_a_task_copied_answers_nothing_once_the_execution_end
         stash_for_optimizer(None, "probe", stash)
         plans_memo = execution_plan_memo()
         assert plans_memo is not None
-        plan_key = (
+        plan_key: PlanCacheKey = (
             "probe",
             frozenset(),
             Category,

@@ -76,7 +76,10 @@ import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
+
+if TYPE_CHECKING:
+    from typing_extensions import TypeIs
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "django_strawberry_framework"
@@ -166,7 +169,7 @@ class Verdict(NamedTuple):
 def completeness_score(report: Mapping[str, object]) -> float:
     """Return the report's completeness score, or raise when it carries none."""
     completeness = report.get("typeCompleteness")
-    if not isinstance(completeness, Mapping):
+    if not _is_json_object(completeness):
         raise MeasurementError("The basedpyright report carries no typeCompleteness section.")
     score = completeness.get("completenessScore")
     if isinstance(score, bool) or not isinstance(score, int | float):
@@ -192,16 +195,31 @@ def report_diagnostics(report: Mapping[str, object]) -> list[Diagnostic]:
 def _symbol_entries(report: Mapping[str, object]) -> list[Mapping[str, object]]:
     """The report's ``typeCompleteness.symbols`` entries, or none when it lists none."""
     completeness = report.get("typeCompleteness")
-    return _entries(completeness.get("symbols") if isinstance(completeness, Mapping) else None)
+    return _entries(completeness.get("symbols") if _is_json_object(completeness) else None)
 
 
 def _entries(value: object) -> list[Mapping[str, object]]:
     """The mapping entries of a report list, or none when the key is absent."""
     if value is None:
         return []
-    if not isinstance(value, list) or not all(isinstance(entry, Mapping) for entry in value):
+    if not _is_json_array(value):
         raise MeasurementError(f"Unexpected basedpyright report shape: {value!r:.200}")
-    return value
+    entries: list[Mapping[str, object]] = []
+    for entry in value:
+        if not _is_json_object(entry):
+            raise MeasurementError(f"Unexpected basedpyright report shape: {value!r:.200}")
+        entries.append(entry)
+    return entries
+
+
+def _is_json_object(value: object) -> TypeIs[dict[str, object]]:
+    """Return whether a decoded JSON value is an object (JSON object keys are always strings)."""
+    return isinstance(value, dict)
+
+
+def _is_json_array(value: object) -> TypeIs[list[object]]:
+    """Return whether a decoded JSON value is an array."""
+    return isinstance(value, list)
 
 
 def _text(entry: Mapping[str, object], key: str) -> str:
@@ -290,10 +308,10 @@ def format_report(verdict: Verdict) -> list[str]:
 def parse_report(stdout: str) -> dict[str, object]:
     """Parse basedpyright's ``--outputjson`` stdout, or raise when it is not a report."""
     try:
-        report = json.loads(stdout)
+        report: object = json.loads(stdout)
     except json.JSONDecodeError as error:
         raise MeasurementError(f"basedpyright printed no JSON report: {stdout[:500]!r}") from error
-    if not isinstance(report, dict):
+    if not _is_json_object(report):
         raise MeasurementError(f"basedpyright printed a non-object report: {stdout[:500]!r}")
     return report
 

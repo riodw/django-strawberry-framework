@@ -78,9 +78,12 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import NamedTuple, TypeGuard
+from typing import TYPE_CHECKING, NamedTuple, TypeGuard
 
 from typing_extensions import override
+
+if TYPE_CHECKING:
+    from typing_extensions import TypeIs
 
 DEFAULT_MARKERS = (
     "QuerySet",
@@ -1025,16 +1028,29 @@ def _collect_scopes(tree: ast.Module) -> list[_Scope]:
     return scopes
 
 
+def _is_list(value: object) -> TypeIs[list[object]]:
+    """Return whether an AST field value is a list of child entries."""
+    return isinstance(value, list)
+
+
+def _list_field(node: ast.AST, name: str) -> list[object]:
+    """Return the list an AST node holds under field ``name``, or none when it holds no list."""
+    value: object = getattr(node, name, None)
+    return value if _is_list(value) else []
+
+
 def _nested_statements(node: ast.AST) -> list[ast.stmt]:
     """Return statements nested in a compound statement's blocks (not in nested scopes)."""
     # Read by name across node classes, so an entry is unproven until narrowed below.
     candidates: list[object] = []
     for name in ("body", "orelse", "finalbody"):
-        candidates.extend(getattr(node, name, None) or [])
-    for handler in getattr(node, "handlers", None) or []:
-        candidates.extend(handler.body)
-    for case in getattr(node, "cases", None) or []:
-        candidates.extend(case.body)
+        candidates.extend(_list_field(node, name))
+    for handler in _list_field(node, "handlers"):
+        if isinstance(handler, ast.ExceptHandler):
+            candidates.extend(handler.body)
+    for case in _list_field(node, "cases"):
+        if isinstance(case, ast.match_case):
+            candidates.extend(case.body)
     return [statement for statement in candidates if isinstance(statement, ast.stmt)]
 
 
@@ -1070,7 +1086,7 @@ def _walk_scope(
                 yield from _walk_child(value, inner, depth)
         return
     for name, value in ast.iter_fields(node):
-        children = value if isinstance(value, list) else [value]
+        children: list[object] = value if _is_list(value) else [value]
         for child in children:
             if not isinstance(child, ast.AST):
                 continue
@@ -1143,7 +1159,7 @@ def _db_reason(call: ast.Call, markers: Sequence[str]) -> str | None:
 
 
 def _decorator_names(node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
-    names = []
+    names: list[str] = []
     for decorator in node.decorator_list:
         target = decorator.func if isinstance(decorator, ast.Call) else decorator
         names.append(_call_name(target) or ast.unparse(target))
@@ -1154,7 +1170,7 @@ def _hot_reasons(scope: _Scope) -> list[str]:
     node = scope.function_node
     if node is None:
         return []
-    reasons = []
+    reasons: list[str] = []
     if HOT_ENTRY_NAME.match(node.name):
         reasons.append(f"name `{node.name}`")
     arguments = node.args
@@ -1427,7 +1443,7 @@ def _import_time_work(tree: ast.Module) -> list[_ImportTimeRecord]:
 
 def _module_per_row(tree: ast.Module, markers: Sequence[str]) -> list[_Lead]:
     """Return per-row leads in module-level and class-body code."""
-    leads = []
+    leads: list[_Lead] = []
     for statement in _import_time_statements(tree.body):
         for node, loops, _depth in _walk_child(statement, (), 0):
             if not loops:
@@ -1750,7 +1766,7 @@ def _render_quick_scan(analysis: _Analysis, outline_only: bool) -> str:
 def _render_symbols(records: Sequence[_SymbolRecord], locator: _Locator) -> str:
     if not records:
         return "None."
-    lines = []
+    lines: list[str] = []
     for record in records:
         qualname = f"{record.parent}.{record.name}" if record.parent else record.name
         args = f"({record.args})" if record.kind != "class" else ""
@@ -1910,8 +1926,8 @@ def _render_literals(counter: Counter[str], cap: bool) -> str:
     duplicates = [(literal, count) for literal, count in counter.most_common() if count > 1]
     if not duplicates:
         return "None."
-    lines = []
-    literal_lines = []
+    lines: list[str] = []
+    literal_lines: list[str] = []
     for literal, count in duplicates:
         compact = literal.replace("\n", "\\n")
         if len(compact) > 90:

@@ -1178,7 +1178,7 @@ def test_auth_aliases_for_permission_classes_gates_alias_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """The explicit no-permissions opt-out grants no auth-alias access."""
-    calls = []
+    calls: list[None] = []
 
     def _resolve():
         calls.append(None)
@@ -1437,7 +1437,7 @@ def test_run_active_input_permission_checks_safely_handles_missing_target_attr()
             if fired is not None:
                 fired.add(f"check_{field_path}_permission")
 
-    fired = {}
+    fired: dict[type[object], set[str]] = {}
     run_active_input_permission_checks(
         _SampleFilter,
         {"duck": {"sub": 1}},

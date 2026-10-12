@@ -23,7 +23,8 @@ SCRIPTS = Path(_bench_common.__file__).resolve().parent
 @pytest.fixture
 def census(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     """Import ``scripts/census_test_models.py`` the way it runs: scripts dir on ``sys.path``."""
-    monkeypatch.syspath_prepend(str(SCRIPTS))
+    # basedpyright: pytest leaves MonkeyPatch.syspath_prepend's ``path`` parameter unannotated
+    monkeypatch.syspath_prepend(str(SCRIPTS))  # pyright: ignore[reportUnknownMemberType]
     return importlib.import_module("census_test_models")
 
 
@@ -305,9 +306,14 @@ class Base:
 @pytest.mark.parametrize(
     ("source", "models", "top_level"),
     [
-        pytest.param(SIBLING_SAME_NAME, ["Row"], set(), id="sibling-same-name"),
-        pytest.param(SIBLING_BASES, ["Base", "Child"], set(), id="sibling-bases"),
-        pytest.param(LOCAL_CLASS_SHADOWS_IMPORT, [], set(), id="local-class-shadows-import"),
+        pytest.param(SIBLING_SAME_NAME, ["Row"], set[str](), id="sibling-same-name"),
+        pytest.param(SIBLING_BASES, ["Base", "Child"], set[str](), id="sibling-bases"),
+        pytest.param(
+            LOCAL_CLASS_SHADOWS_IMPORT,
+            list[str](),
+            set[str](),
+            id="local-class-shadows-import",
+        ),
         pytest.param(
             INNER_PLAIN_SHADOWS_MODULE_MODEL,
             ["Base"],
@@ -318,7 +324,7 @@ class Base:
         pytest.param(
             TOP_LEVEL_PLAIN_NESTED_MODEL,
             ["Row"],
-            set(),
+            set[str](),
             id="top-level-plain-nested-model",
         ),
         pytest.param(
@@ -349,13 +355,13 @@ class Base:
         pytest.param(
             METHOD_SEES_MODULE_NOT_CLASS_MODEL,
             ["Base"],
-            set(),
+            set[str](),
             id="method-sees-module-not-class-model",
         ),
         pytest.param(
             CLASS_BODY_BASE_SEES_CLASS_BODY,
             ["Base", "Child"],
-            set(),
+            set[str](),
             id="class-body-base-sees-class-body",
         ),
         pytest.param(
@@ -379,7 +385,7 @@ class Base:
         pytest.param(
             TYPE_CALL_BEFORE_REBINDING,
             ["Base", "T"],
-            set(),
+            set[str](),
             id="type-call-before-rebinding",
         ),
         pytest.param(
@@ -388,15 +394,20 @@ class Base:
             {"Base"},
             id="type-call-before-declaration",
         ),
-        pytest.param(HEADER_DEFAULT, ["Base", "Child"], set(), id="header-default"),
-        pytest.param(HEADER_KW_DEFAULT, ["Base", "Child"], set(), id="header-kw-default"),
-        pytest.param(HEADER_DECORATOR, ["Base", "Child"], set(), id="header-decorator"),
-        pytest.param(CLASS_HEADER_BASES, ["Base", "Child"], set(), id="class-header-bases"),
-        pytest.param(CLASS_HEADER_KEYWORDS, ["Base", "Child"], set(), id="class-header-keywords"),
+        pytest.param(HEADER_DEFAULT, ["Base", "Child"], set[str](), id="header-default"),
+        pytest.param(HEADER_KW_DEFAULT, ["Base", "Child"], set[str](), id="header-kw-default"),
+        pytest.param(HEADER_DECORATOR, ["Base", "Child"], set[str](), id="header-decorator"),
+        pytest.param(CLASS_HEADER_BASES, ["Base", "Child"], set[str](), id="class-header-bases"),
+        pytest.param(
+            CLASS_HEADER_KEYWORDS,
+            ["Base", "Child"],
+            set[str](),
+            id="class-header-keywords",
+        ),
         pytest.param(
             CLASS_HEADER_DECORATOR,
             ["Base", "Child"],
-            set(),
+            set[str](),
             id="class-header-decorator",
         ),
         pytest.param(
@@ -408,7 +419,7 @@ class Base:
         pytest.param(
             FACTORY_BEFORE_REBINDING_SEES_FINAL,
             ["Base"],
-            set(),
+            set[str](),
             id="factory-before-rebinding-sees-final",
         ),
     ],

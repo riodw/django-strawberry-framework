@@ -57,7 +57,8 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="book",
             name="archive_genres",
-            field=models.ManyToManyField(
+            # basedpyright: django-stubs ManyToManyField _To has no default; a string ``to`` cannot bind it
+            field=models.ManyToManyField(  # pyright: ignore[reportUnknownArgumentType]
                 blank=True,
                 editable=False,
                 related_name="+",

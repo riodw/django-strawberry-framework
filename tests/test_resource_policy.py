@@ -52,7 +52,7 @@ import pickle
 import time
 from collections.abc import AsyncGenerator, Callable, Generator, Iterable, Iterator, Mapping
 from types import MappingProxyType, SimpleNamespace
-from typing import NewType
+from typing import NewType, SupportsIndex, TypeVar, overload
 
 import pytest
 import pytest_django
@@ -60,7 +60,7 @@ import strawberry
 from apps.products.models import Category, Item
 from apps.products.services import seed_data
 from asgiref.sync import sync_to_async
-from django.db.models import F, Func, QuerySet
+from django.db.models import F, Func, Manager, Model, QuerySet
 from django.db.models.sql import Query
 from graphql import GraphQLError, GraphQLSchema, StringValueNode, ValueNode, parse
 from graphql.language.token_kind import TokenKind
@@ -107,6 +107,9 @@ from django_strawberry_framework.resource_policy import (
 from django_strawberry_framework.schema import _consumer_extension_entries
 from django_strawberry_framework.utils.querysets import materialized_rows, normalized_row_source
 from tests._execution import make_execution_context
+
+_M = TypeVar("_M", bound=Model)
+_QuerySetT = TypeVar("_QuerySetT", bound="QuerySet[Model, object]")
 
 # ---------------------------------------------------------------------------
 # Construction and validation
@@ -633,7 +636,7 @@ def test_a_non_numeric_stashed_deadline_leaves_the_request_running():
 def test_a_future_deadline_leaves_the_request_running(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
 ):
-    context = {}
+    context: dict[str, object] = {}
     arm_resource_budget(context, ResourcePolicy(execution_deadline_seconds=60))
     check_deadline(SimpleNamespace(context=context))
 
@@ -647,7 +650,7 @@ def test_a_passed_deadline_reports_the_configured_seconds_not_the_clock(
     client can neither verify nor act on, and a wire field named ``limit``
     carrying a monotonic clock reading reads as a bound nobody configured.
     """
-    context = {}
+    context: dict[str, object] = {}
     arm_resource_budget(context, ResourcePolicy(execution_deadline_seconds=2.5))
     context[DST_RESOURCE_DEADLINE] = time.monotonic() - 1
     with pytest.raises(ResourceLimitExceeded) as caught:
@@ -1079,9 +1082,41 @@ def test_bounded_rows_bounds_a_mapping_shaped_result(
     assert bounded_rows(source, info) == ["a", "b"]
 
 
-@pytest.mark.parametrize("container", [list, tuple], ids=["list", "tuple"])
+class _SliceEscapingList(list[int]):
+    """A ``list`` subclass whose slice ignores its bounds and answers every member."""
+
+    @overload
+    def __getitem__(self, key: SupportsIndex) -> int: ...
+    @overload
+    def __getitem__(self, key: slice) -> list[int]: ...
+    @override
+    def __getitem__(self, key: SupportsIndex | slice) -> int | list[int]:
+        if isinstance(key, slice):
+            return list(self)
+        return super().__getitem__(key)
+
+
+class _SliceEscapingTuple(tuple[int, ...]):
+    """A ``tuple`` subclass whose slice ignores its bounds and answers every member."""
+
+    @overload
+    def __getitem__(self, key: SupportsIndex) -> int: ...
+    @overload
+    def __getitem__(self, key: slice) -> tuple[int, ...]: ...
+    @override
+    def __getitem__(self, key: SupportsIndex | slice) -> int | tuple[int, ...]:
+        if isinstance(key, slice):
+            return tuple(self)
+        return super().__getitem__(key)
+
+
+@pytest.mark.parametrize(
+    "container",
+    [_SliceEscapingList, _SliceEscapingTuple],
+    ids=["list", "tuple"],
+)
 def test_bounded_rows_does_not_let_a_sequence_subclass_answer_its_own_slice(
-    container: type[list[object]] | type[tuple[object, ...]],
+    container: type[_SliceEscapingList] | type[_SliceEscapingTuple],
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
 ):
     """A sequence type may override ``__getitem__``; the bound must not run through it.
@@ -1092,18 +1127,9 @@ def test_bounded_rows_does_not_let_a_sequence_subclass_answer_its_own_slice(
     only thing standing between a client and the whole table into a call the
     client's own object gets to decide the result of.
     """
-
-    # basedpyright: parametrized over list and tuple; a class statement cannot take a
-    # union base, so the base stays unannotated and the checker cannot type it
-    class _Escape(container):  # pyright: ignore[reportUntypedBaseClass, reportGeneralTypeIssues]
-        def __getitem__(self, key: int | slice) -> object:
-            if isinstance(key, slice):
-                return container(self)
-            return super().__getitem__(key)
-
     info = SimpleNamespace(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
-    assert bounded_rows(_Escape(range(10)), info) == [0, 1]
+    assert bounded_rows(container(range(10)), info) == [0, 1]
 
 
 @pytest.mark.parametrize(
@@ -2386,7 +2412,16 @@ def test_a_queryset_subclass_is_never_asked_what_it_has_already_fetched():
     assert materialized_rows(hostile) is None
 
 
-class _ProjectQuerySet(QuerySet[Category]):
+def _relation_source(manager: Manager[Item], queryset: _QuerySetT) -> _QuerySetT:
+    """Django's own ``_apply_rel_filters``: ``queryset`` carrying the relation's pending predicate."""
+    # basedpyright: django-stubs omits RelatedManager._apply_rel_filters, reported as an unknown
+    # attribute
+    source = manager._apply_rel_filters(queryset)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
+    assert isinstance(source, type(queryset))
+    return source
+
+
+class _ProjectQuerySet(QuerySet[_M]):
     """A project's own queryset class with no overrides.
 
     The shape ``QuerySet.as_manager()`` and ``Manager.from_queryset(...)`` put
@@ -2543,7 +2578,7 @@ def test_a_result_cache_that_is_not_a_list_is_refused_rather_than_carried(
     seed_data(6)
     info = SimpleNamespace(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
-    source = _ProjectQuerySet(model=Category)
+    source = _ProjectQuerySet[Category](model=Category)
     # basedpyright: the planted lying result cache is the hostile input under test; django-stubs
     # types the slot as a row list
     source._result_cache = _LyingResultCache()  # pyright: ignore[reportAttributeAccessIssue]
@@ -2563,7 +2598,7 @@ async def test_a_result_cache_that_is_not_a_list_is_refused_when_awaited(
     await sync_to_async(seed_data)(6)
     info = SimpleNamespace(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
-    source = _ProjectQuerySet(model=Category)
+    source = _ProjectQuerySet[Category](model=Category)
     # basedpyright: the planted lying result cache is the hostile input under test; django-stubs
     # types the slot as a row list
     source._result_cache = _LyingResultCache()  # pyright: ignore[reportAttributeAccessIssue]
@@ -2590,9 +2625,7 @@ def test_a_relation_source_from_a_project_queryset_class_keeps_its_relation_pred
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     parent = Category.objects.order_by("pk").first()
     assert parent is not None
-    # basedpyright: django-stubs omits RelatedManager._apply_rel_filters, reported as an unknown
-    # attribute
-    source = parent.items._apply_rel_filters(_ProjectQuerySet(model=Item))  # pyright: ignore[reportAttributeAccessIssue]
+    source = _relation_source(parent.items, _ProjectQuerySet[Item](model=Item))
     assert type(source) is _ProjectQuerySet
     assert object.__getattribute__(source, "__dict__")["_deferred_filter"] is not None
 
@@ -2604,9 +2637,7 @@ def test_a_relation_source_from_a_project_queryset_class_keeps_its_relation_pred
 
     rows = bounded_rows(source, info)
     assert list(rows) == list(parent.items.all())[:2]
-    # basedpyright: the rows are Items read through _ProjectQuerySet, which is declared over
-    # Category, so the checker reads each row as a Category
-    assert {row.category_id for row in rows} == {parent.pk}  # pyright: ignore[reportAttributeAccessIssue]
+    assert {row.category_id for row in rows} == {parent.pk}
 
 
 # ---------------------------------------------------------------------------
@@ -3147,7 +3178,7 @@ class _CountingList(list[object]):
 
     @override
     def __iter__(self) -> Iterator[object]:
-        for member in list.__iter__(self):
+        for member in super().__iter__():
             self.advances += 1
             yield member
 
@@ -3211,7 +3242,7 @@ def test_a_container_is_not_advanced_once_its_width_is_already_proven():
     deliberately the same typed rejection with the same charge. The poison
     beyond the last member stays as a second signal, not as the witness.
     """
-    advances = []
+    advances: list[int] = []
 
     def _members():
         for member in (1, 2, 3):
@@ -3265,7 +3296,7 @@ def test_a_custom_mapping_is_measurable_at_the_largest_bound_a_policy_admits():
         @override
         # basedpyright: a generator stands in for the items view so every read through it is observed
         def items(self) -> Iterator[tuple[str, object]]:  # pyright: ignore[reportIncompatibleMethodOverride]
-            yield from dict.items(self)
+            yield from super().items()
 
     _charge(
         "query T($p: JSON) { blob(payload: $p) }",
@@ -3323,7 +3354,7 @@ def test_a_container_whose_length_raises_is_still_measured():
 
 def test_a_mapping_is_charged_for_the_entries_the_walk_queues():
     """The mapping half of the same rule, on a ``dict`` subclass."""
-    advances = []
+    advances: list[tuple[str, object]] = []
 
     class _LyingWidth(dict[str, object]):
         @override
@@ -3333,7 +3364,7 @@ def test_a_mapping_is_charged_for_the_entries_the_walk_queues():
         @override
         # basedpyright: a generator stands in for the items view so every read through it is observed
         def items(self) -> Iterator[tuple[str, object]]:  # pyright: ignore[reportIncompatibleMethodOverride]
-            for pair in dict.items(self):
+            for pair in super().items():
                 advances.append(pair)
                 yield pair
 
@@ -3659,7 +3690,7 @@ def test_an_admitted_operation_keeps_whatever_validation_published(
 def test_the_context_is_cleared_even_when_the_document_scan_rejects():
     """A rejection must not leave a policy (or a deadline) on a reused context."""
     extension = DjangoResourcePolicyExtension(policy=ResourcePolicy(max_document_tokens=1))
-    context = {}
+    context: dict[str, object] = {}
     extension.execution_context = make_execution_context(context=context, query="{ a b c }")
     with pytest.raises(ResourceLimitExceeded):
         next(extension.on_operation())

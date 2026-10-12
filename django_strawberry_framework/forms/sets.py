@@ -76,6 +76,7 @@ from ..mutations.sets import (
     resolver_seams,
 )
 from ..registry import register_subsystem_clear
+from ..utils._narrowing import is_class
 from ..utils.inputs import make_shape_build_cache
 from .inputs import (
     FORM,
@@ -951,7 +952,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         # so a bare ``issubclass(_, forms.Form)`` gate would reject a ``ModelForm``
         # with a confusing "not a Form" message. The targeted reject names the
         # correct base.
-        if isinstance(form_class, type) and issubclass(form_class, forms.ModelForm):
+        if is_class(form_class) and issubclass(form_class, forms.ModelForm):
             raise ConfigurationError(
                 f"DjangoFormMutation {name}.Meta.form_class {form_class.__name__} is a "
                 "forms.ModelForm; use DjangoModelFormMutation for a ModelForm (it returns the "

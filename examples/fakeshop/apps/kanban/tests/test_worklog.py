@@ -38,7 +38,9 @@ def test_set_card_status_records_transition():
 
     card.refresh_from_db()
     assert card.status.key == "wip"
-    assert transition.from_status.key == "todo"
+    from_status = transition.from_status
+    assert from_status is not None
+    assert from_status.key == "todo"
     assert transition.to_status.key == "wip"
     assert transition.actor == actor
     assert transition.note == "starting"
@@ -93,7 +95,9 @@ def test_reopen_transition_is_allowed():
 
     transition = services.set_card_status(card, "todo", actor=actor)
 
-    assert transition.from_status.key == "done"
+    from_status = transition.from_status
+    assert from_status is not None
+    assert from_status.key == "done"
     assert transition.to_status.key == "todo"
 
 
@@ -115,7 +119,9 @@ def test_work_attempt_lifecycle():
     attempt.save(update_fields=["outcome", "ended_at"])
     attempt.refresh_from_db()
 
-    assert attempt.outcome.key == "succeeded"
+    outcome = attempt.outcome
+    assert outcome is not None
+    assert outcome.key == "succeeded"
     assert attempt.ended_at is not None
     assert attempt.uuid is not None
 
@@ -162,7 +168,9 @@ def test_card_item_verification_fields():
 
     assert item.verified_at is not None
     assert item.verified_by == actor
-    assert item.verification_kind.key == "coverage_gate"
+    verification_kind = item.verification_kind
+    assert verification_kind is not None
+    assert verification_kind.key == "coverage_gate"
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +315,9 @@ def test_verify_item_stamps_provenance_and_completes():
     assert item.is_complete is True
     assert item.verified_at is not None
     assert item.verified_by == actor
-    assert item.verification_kind.key == "test_run"
+    verification_kind = item.verification_kind
+    assert verification_kind is not None
+    assert verification_kind.key == "test_run"
 
 
 @pytest.mark.django_db
@@ -367,7 +377,9 @@ def test_record_and_finish_attempt():
     finished = services.finish_attempt(attempt, outcome_key="succeeded", summary="it worked")
 
     finished.refresh_from_db()
-    assert finished.outcome.key == "succeeded"
+    outcome = finished.outcome
+    assert outcome is not None
+    assert outcome.key == "succeeded"
     assert finished.ended_at is not None
     assert finished.summary == "it worked"
 
@@ -399,7 +411,9 @@ def test_finish_attempt_keeps_summary_and_accepts_explicit_end():
     attempt.refresh_from_db()
     assert attempt.summary == "original"
     assert attempt.ended_at == ended
-    assert attempt.outcome.key == "failed"
+    outcome = attempt.outcome
+    assert outcome is not None
+    assert outcome.key == "failed"
 
 
 @pytest.mark.django_db

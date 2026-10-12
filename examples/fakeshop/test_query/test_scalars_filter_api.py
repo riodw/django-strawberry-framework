@@ -242,12 +242,13 @@ def test_scalars_forward_fk_primary_key_follows_the_membership_rules():
     _seed_specimen("child", parent=root)
     missing = root.pk + 1000
 
-    for filter_input, labels in (
+    cases: tuple[tuple[dict[str, dict[str, int | list[int]]], list[str]], ...] = (
         ({"parent": {"exact": missing}}, []),
         ({"parent": {"in": [missing]}}, []),
         ({"parent": {"in": [missing, root.pk]}}, ["child"]),
         ({"parent": {"in": []}}, []),
-    ):
+    )
+    for filter_input, labels in cases:
         _assert_graphql_data(
             _BY_PARENT,
             {"allScalarSpecimens": [{"label": label} for label in labels]},

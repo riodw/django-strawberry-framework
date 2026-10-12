@@ -199,7 +199,7 @@ def term_link(term: GlossaryTermRef, *, label: str | None = None) -> str:
 
 def render_document(doc: GlossaryDocument) -> list[str]:
     """Render one non-term document section."""
-    lines = []
+    lines: list[str] = []
     if doc["includeHeading"]:
         lines.extend([f"## {doc['title']}", ""])
     body = doc.get("body", "").strip()
@@ -274,7 +274,7 @@ def render_term(term: GlossaryTerm) -> list[str]:
 
 def render_terms(terms: list[GlossaryTerm]) -> list[str]:
     """Render all glossary term entries."""
-    lines = []
+    lines: list[str] = []
     for term in sorted(terms, key=lambda value: (value["entryOrder"], value["titleSort"])):
         lines.extend(render_term(term))
     return lines
@@ -286,7 +286,7 @@ def render_markdown(glossary_data: GlossaryData) -> str:
     terms = glossary_data["terms"]
     memberships = glossary_data["categoryMemberships"]
 
-    rendered = []
+    rendered: list[str] = []
     preamble = docs.get("preamble")
     if preamble is not None:
         rendered.extend(render_document(preamble))

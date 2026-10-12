@@ -20,7 +20,7 @@ Two foundations every model leans on:
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
 from django.db import models
 from django.db.models.lookups import Exact
@@ -32,10 +32,14 @@ from .constraints import OneHotLinkCount
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+    from datetime import date, datetime
 
     from django.db.models.base import ModelBase
+    from django.db.models.expressions import Combinable
     from django.db.models.fields.related_descriptors import RelatedManager
     from typing_extensions import TypedDict, Unpack
+
+    from apps.glossary.models import GlossaryTerm
 
     class _SaveOptions(TypedDict, total=False):
         """``Model.save``'s keyword options, as a ``save`` override forwards them."""
@@ -47,6 +51,26 @@ if TYPE_CHECKING:
 
 
 _M = TypeVar("_M", bound=models.Model)
+
+if TYPE_CHECKING:
+    # Each field's descriptor types as django-stubs declares them (set type, get type), spelled
+    # out because the checker runs without the django-stubs mypy plugin that would infer them;
+    # ``null=True`` adds ``None`` to both.
+    _Bool: TypeAlias = models.BooleanField[bool | Combinable, bool]
+    _DateTime: TypeAlias = models.DateTimeField[str | datetime | date | Combinable, datetime]
+    _FK: TypeAlias = models.ForeignKey[_M | Combinable, _M]
+    _NullDateTime: TypeAlias = models.DateTimeField[
+        str | datetime | date | Combinable | None,
+        datetime | None,
+    ]
+    _NullFK: TypeAlias = models.ForeignKey[_M | Combinable | None, _M | None]
+    _NullOneToOne: TypeAlias = models.OneToOneField[_M | Combinable | None, _M | None]
+    _OneToOne: TypeAlias = models.OneToOneField[_M | Combinable, _M]
+    _PositiveInt: TypeAlias = models.PositiveIntegerField[float | int | str | Combinable, int]
+    _Slug: TypeAlias = models.SlugField[str | int | Combinable, str]
+    _Text: TypeAlias = models.TextField[str | Combinable, str]
+    # A primary key with a ``default`` also takes ``None`` on write: the default fills it.
+    _UUIDPrimaryKey: TypeAlias = models.UUIDField[str | uuid.UUID | None, uuid.UUID]
 
 DEPENDENCY_REFERENCE_KIND_KEYS = frozenset(
     {
@@ -140,8 +164,8 @@ def manager(
 class TimeStampedModel(models.Model):
     """Audit timestamps inherited by every kanban model."""
 
-    created_date = models.DateTimeField(auto_now_add=True, editable=False)
-    updated_date = models.DateTimeField(auto_now=True, editable=False)
+    created_date: _DateTime = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_date: _DateTime = models.DateTimeField(auto_now=True, editable=False)
 
     class Meta:
         abstract = True
@@ -156,9 +180,9 @@ class LookupBase(TimeStampedModel):
     than one abstract ancestor.
     """
 
-    key = models.SlugField(unique=True)
-    label = models.TextField()
-    order = models.PositiveIntegerField(default=0)
+    key: _Slug = models.SlugField(unique=True)
+    label: _Text = models.TextField()
+    order: _PositiveInt = models.PositiveIntegerField(default=0)
 
     # Reverse one-to-one Django adds from ``UUIDModel`` to every concrete lookup,
     # declared for the type checker.
@@ -181,8 +205,8 @@ class LookupBase(TimeStampedModel):
 class Milestone(LookupBase):
     """The development phase: ``alpha`` / ``beta`` / ``stable``."""
 
-    version_floor = models.TextField(blank=True, default="")
-    version_ceiling = models.TextField(blank=True, default="")
+    version_floor: _Text = models.TextField(blank=True, default="")
+    version_ceiling: _Text = models.TextField(blank=True, default="")
 
     class Meta(LookupBase.Meta):
         verbose_name = "milestone"
@@ -211,7 +235,7 @@ class RelativeSize(LookupBase):
     # The per-size effort blurb rendered as the ``## Relative size`` scale in
     # KANBAN.md / KANBAN.html, so the scale is derived from this table rather
     # than frozen in the board prose.
-    description = models.TextField(blank=True, default="")
+    description: _Text = models.TextField(blank=True, default="")
 
     class Meta(LookupBase.Meta):
         verbose_name = "relative size"
@@ -221,7 +245,7 @@ class RelativeSize(LookupBase):
 class Upstream(LookupBase):
     """A parity target: ``graphene_django`` (⚛️) / ``strawberry_django`` (🍓)."""
 
-    emoji = models.TextField(blank=True, default="")
+    emoji: _Text = models.TextField(blank=True, default="")
 
     class Meta(LookupBase.Meta):
         verbose_name = "upstream"
@@ -293,7 +317,7 @@ class Actor(LookupBase):
     agent sessions writing the same board.
     """
 
-    kind = models.SlugField(choices=ACTOR_KINDS, default=ACTOR_HUMAN)
+    kind: _Slug = models.SlugField(choices=ACTOR_KINDS, default=ACTOR_HUMAN)
 
     class Meta(LookupBase.Meta):
         verbose_name = "actor"
@@ -314,20 +338,22 @@ class Actor(LookupBase):
 class TargetVersion(TimeStampedModel):
     """The ``X.Y.Z`` a card ships / is planned to ship in (the "target number")."""
 
-    number = models.TextField(unique=True)
+    number: _Text = models.TextField(unique=True)
     # Structured ``X.Y.Z`` components kept consistent with ``number`` in
     # ``save()``. ``number`` stays canonical (the display string); the triple
     # exists so ordering is numeric (0.0.9 < 0.0.16, which a lexicographic sort
     # of ``number`` gets wrong at patch >= 10).
-    major = models.PositiveIntegerField(default=0)
-    minor = models.PositiveIntegerField(default=0)
-    patch = models.PositiveIntegerField(default=0)
-    milestone = models.ForeignKey(
+    major: _PositiveInt = models.PositiveIntegerField(default=0)
+    minor: _PositiveInt = models.PositiveIntegerField(default=0)
+    patch: _PositiveInt = models.PositiveIntegerField(default=0)
+    milestone: _FK[Milestone] = models.ForeignKey(
         Milestone,
         related_name="target_versions",
         on_delete=models.PROTECT,
     )
 
+    # Declared for the type checker (annotation-only; see ``Card``).
+    milestone_id: int | None
     # Reverse one-to-one Django adds from ``UUIDModel``, declared for the type checker.
     uuid: UUIDModel
 
@@ -377,15 +403,15 @@ class TargetVersion(TimeStampedModel):
 class SpecDoc(TimeStampedModel):
     """A spec file owned by exactly one kanban card."""
 
-    card = models.OneToOneField(
+    card: _OneToOne[Card] = models.OneToOneField(
         "Card",
         related_name="spec",
         on_delete=models.CASCADE,
     )
-    name = models.TextField(unique=True)
+    name: _Text = models.TextField(unique=True)
     # Repo-relative path to the spec file. The GitHub URL is derived from it at
     # read time (see :attr:`url`), so a repo rename never needs a data migration.
-    path = models.TextField(default="")
+    path: _Text = models.TextField(default="")
 
     # Declared for the type checker (annotation-only; see ``Card``).
     card_id: int | None
@@ -414,9 +440,9 @@ class TrackedPath(TimeStampedModel):
     Directory paths end with ``/`` and carry ``is_directory=True``.
     """
 
-    path = models.TextField(unique=True)
-    state = models.SlugField(choices=TRACKED_PATH_STATES, default=TRACKED_PATH_CURRENT)
-    is_directory = models.BooleanField(default=False)
+    path: _Text = models.TextField(unique=True)
+    state: _Slug = models.SlugField(choices=TRACKED_PATH_STATES, default=TRACKED_PATH_CURRENT)
+    is_directory: _Bool = models.BooleanField(default=False)
 
     # Reverse one-to-one Django adds from ``UUIDModel``, declared for the type checker.
     uuid: UUIDModel
@@ -471,48 +497,50 @@ def format_card_id(
 class Card(TimeStampedModel):
     """One board card. Every categorical line is a foreign key into a lookup."""
 
-    title = models.TextField(unique=True)
+    title: _Text = models.TextField(unique=True)
     # The NNN sequence number is intentionally unstable and recomputed when cards
     # reorder, but it is still globally unique on a board snapshot. Card
     # references should use ``title`` / ``slug``; the number exists for ordering.
-    number = models.PositiveIntegerField(unique=True)
+    number: _PositiveInt = models.PositiveIntegerField(unique=True)
 
-    status = models.ForeignKey(Status, related_name="cards", on_delete=models.PROTECT)
-    target_version = models.ForeignKey(
+    status: _FK[Status] = models.ForeignKey(Status, related_name="cards", on_delete=models.PROTECT)
+    target_version: _FK[TargetVersion] = models.ForeignKey(
         TargetVersion,
         related_name="cards",
         on_delete=models.PROTECT,
     )
-    priority = models.ForeignKey(
+    priority: _FK[Priority] = models.ForeignKey(
         Priority,
         related_name="cards",
         on_delete=models.PROTECT,
     )
-    relative_size = models.ForeignKey(
+    relative_size: _FK[RelativeSize] = models.ForeignKey(
         RelativeSize,
         related_name="cards",
         on_delete=models.PROTECT,
     )
-    planning_note = models.TextField(blank=True, default="")
+    planning_note: _Text = models.TextField(blank=True, default="")
 
-    parity = models.ManyToManyField(
+    parity: models.ManyToManyField[Upstream, ParityClaim] = models.ManyToManyField(
         Upstream,
         through="ParityClaim",
         related_name="cards",
         blank=True,
     )
-    labels = models.ManyToManyField(
+    labels: models.ManyToManyField[Label, models.Model] = models.ManyToManyField(
         "Label",
         related_name="cards",
         blank=True,
     )
-    glossary_terms = models.ManyToManyField(
-        "glossary.GlossaryTerm",
-        through="CardGlossaryTerm",
-        related_name="kanban_cards",
-        blank=True,
+    glossary_terms: models.ManyToManyField[GlossaryTerm, CardGlossaryTerm] = (
+        models.ManyToManyField(
+            "glossary.GlossaryTerm",
+            through="CardGlossaryTerm",
+            related_name="kanban_cards",
+            blank=True,
+        )
     )
-    changed_files = models.ManyToManyField(
+    changed_files: models.ManyToManyField[TrackedPath, CardPathLink] = models.ManyToManyField(
         TrackedPath,
         through="CardPathLink",
         related_name="cards",
@@ -677,26 +705,26 @@ class CardReference(TimeStampedModel):
     retyping them) so the block clears while the edge history is preserved.
     """
 
-    source_card = models.ForeignKey(
+    source_card: _FK[Card] = models.ForeignKey(
         Card,
         related_name="outgoing_references",
         on_delete=models.CASCADE,
     )
-    target_card = models.ForeignKey(
+    target_card: _FK[Card] = models.ForeignKey(
         Card,
         related_name="incoming_references",
         on_delete=models.CASCADE,
     )
-    kind = models.ForeignKey(
+    kind: _FK[CardReferenceKind] = models.ForeignKey(
         CardReferenceKind,
         related_name="card_references",
         on_delete=models.PROTECT,
     )
-    raw_text = models.TextField(blank=True, default="")
-    order = models.PositiveIntegerField(default=0)
+    raw_text: _Text = models.TextField(blank=True, default="")
+    order: _PositiveInt = models.PositiveIntegerField(default=0)
     # Stamped when a ``blocked_by`` edge stops gating because its target shipped
     # (set by ``services.set_card_status``). Null while the edge is still active.
-    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_at: _NullDateTime = models.DateTimeField(null=True, blank=True)
 
     # Declared for the type checker (annotation-only; see ``Card``).
     source_card_id: int | None
@@ -772,18 +800,18 @@ class CardReference(TimeStampedModel):
 class CardGlossaryTerm(TimeStampedModel):
     """A kanban card's ordered link to a canonical glossary term."""
 
-    card = models.ForeignKey(
+    card: _FK[Card] = models.ForeignKey(
         Card,
         related_name="glossary_links",
         on_delete=models.CASCADE,
     )
-    term = models.ForeignKey(
+    term: _FK[GlossaryTerm] = models.ForeignKey(
         "glossary.GlossaryTerm",
         related_name="kanban_card_links",
         on_delete=models.CASCADE,
     )
-    raw_text = models.TextField(blank=True, default="")
-    order = models.PositiveIntegerField(default=0)
+    raw_text: _Text = models.TextField(blank=True, default="")
+    order: _PositiveInt = models.PositiveIntegerField(default=0)
 
     # Declared for the type checker (annotation-only; see ``Card``).
     card_id: int | None
@@ -830,9 +858,21 @@ class CardGlossaryTerm(TimeStampedModel):
 class ParityClaim(TimeStampedModel):
     """A ``Card`` <-> ``Upstream`` edge carrying the parity ``level``."""
 
-    card = models.ForeignKey(Card, related_name="parity_claims", on_delete=models.CASCADE)
-    upstream = models.ForeignKey(Upstream, related_name="parity_claims", on_delete=models.PROTECT)
-    level = models.ForeignKey(ParityLevel, related_name="parity_claims", on_delete=models.PROTECT)
+    card: _FK[Card] = models.ForeignKey(
+        Card,
+        related_name="parity_claims",
+        on_delete=models.CASCADE,
+    )
+    upstream: _FK[Upstream] = models.ForeignKey(
+        Upstream,
+        related_name="parity_claims",
+        on_delete=models.PROTECT,
+    )
+    level: _FK[ParityLevel] = models.ForeignKey(
+        ParityLevel,
+        related_name="parity_claims",
+        on_delete=models.PROTECT,
+    )
 
     # Reverse one-to-one Django adds from ``UUIDModel``, declared for the type checker.
     uuid: UUIDModel
@@ -864,9 +904,13 @@ class CardPathLink(TimeStampedModel):
     reinterpretation of a bare M2M by the source card's status.
     """
 
-    card = models.ForeignKey(Card, related_name="path_links", on_delete=models.CASCADE)
-    path = models.ForeignKey(TrackedPath, related_name="card_links", on_delete=models.CASCADE)
-    kind = models.SlugField(choices=CARD_PATH_LINK_KINDS, default=CARD_PATH_LINK_PREDICTED)
+    card: _FK[Card] = models.ForeignKey(Card, related_name="path_links", on_delete=models.CASCADE)
+    path: _FK[TrackedPath] = models.ForeignKey(
+        TrackedPath,
+        related_name="card_links",
+        on_delete=models.CASCADE,
+    )
+    kind: _Slug = models.SlugField(choices=CARD_PATH_LINK_KINDS, default=CARD_PATH_LINK_PREDICTED)
 
     # Reverse one-to-one Django adds from ``UUIDModel``, declared for the type checker.
     uuid: UUIDModel
@@ -900,26 +944,30 @@ class CardPathLink(TimeStampedModel):
 class CardItem(TimeStampedModel):
     """One bullet from a card's section (Scope / Definition of done / ...)."""
 
-    card = models.ForeignKey(Card, related_name="items", on_delete=models.CASCADE)
-    section = models.ForeignKey(Section, related_name="items", on_delete=models.PROTECT)
-    text = models.TextField()
-    order = models.PositiveIntegerField(default=0)
+    card: _FK[Card] = models.ForeignKey(Card, related_name="items", on_delete=models.CASCADE)
+    section: _FK[Section] = models.ForeignKey(
+        Section,
+        related_name="items",
+        on_delete=models.PROTECT,
+    )
+    text: _Text = models.TextField()
+    order: _PositiveInt = models.PositiveIntegerField(default=0)
     # A general per-bullet checkbox: whether this bullet is done. Meaningful for
     # any section, not only ``definition_of_done`` items (the board tracks
     # completion of scope, test-plan, and other bullets the same way).
-    is_complete = models.BooleanField(default=False)
+    is_complete: _Bool = models.BooleanField(default=False)
     # Auditable verification state layered over the bare ``is_complete`` bool:
     # when a bullet was verified, by which actor, and how (test run / coverage
     # gate / manual / live query). Null until the bullet is verified.
-    verified_at = models.DateTimeField(null=True, blank=True)
-    verified_by = models.ForeignKey(
+    verified_at: _NullDateTime = models.DateTimeField(null=True, blank=True)
+    verified_by: _NullFK[Actor] = models.ForeignKey(
         "Actor",
         related_name="verified_items",
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
     )
-    verification_kind = models.ForeignKey(
+    verification_kind: _NullFK[VerificationKind] = models.ForeignKey(
         "VerificationKind",
         related_name="card_items",
         null=True,
@@ -959,8 +1007,8 @@ class CardItem(TimeStampedModel):
 class Label(TimeStampedModel):
     """An optional cross-cutting tag (``security`` / ``dx`` / ...)."""
 
-    key = models.SlugField(unique=True)
-    color = models.TextField(blank=True, default="")
+    key: _Slug = models.SlugField(unique=True)
+    color: _Text = models.TextField(blank=True, default="")
 
     # Reverse one-to-one Django adds from ``UUIDModel``, declared for the type checker.
     uuid: UUIDModel
@@ -987,22 +1035,26 @@ class CardTransition(TimeStampedModel):
     moved it. ``from_status`` is null for a card's first recorded transition.
     """
 
-    card = models.ForeignKey(Card, related_name="transitions", on_delete=models.CASCADE)
-    from_status = models.ForeignKey(
+    card: _FK[Card] = models.ForeignKey(Card, related_name="transitions", on_delete=models.CASCADE)
+    from_status: _NullFK[Status] = models.ForeignKey(
         Status,
         related_name="transitions_from",
         null=True,
         blank=True,
         on_delete=models.PROTECT,
     )
-    to_status = models.ForeignKey(
+    to_status: _FK[Status] = models.ForeignKey(
         Status,
         related_name="transitions_to",
         on_delete=models.PROTECT,
     )
-    actor = models.ForeignKey(Actor, related_name="transitions", on_delete=models.PROTECT)
-    note = models.TextField(blank=True, default="")
-    occurred_at = models.DateTimeField(default=timezone.now)
+    actor: _FK[Actor] = models.ForeignKey(
+        Actor,
+        related_name="transitions",
+        on_delete=models.PROTECT,
+    )
+    note: _Text = models.TextField(blank=True, default="")
+    occurred_at: _DateTime = models.DateTimeField(default=timezone.now)
 
     # Declared for the type checker (annotation-only; see ``Card``).
     from_status_id: int | None
@@ -1018,7 +1070,8 @@ class CardTransition(TimeStampedModel):
 
     @override
     def __str__(self) -> str:
-        origin = self.from_status.key if self.from_status_id else "(new)"
+        from_status = self.from_status
+        origin = from_status.key if from_status is not None else "(new)"
         return f"{self.card.title}: {origin} -> {self.to_status.key}"
 
 
@@ -1030,19 +1083,27 @@ class WorkAttempt(TimeStampedModel):
     until it finishes.
     """
 
-    card = models.ForeignKey(Card, related_name="work_attempts", on_delete=models.CASCADE)
-    actor = models.ForeignKey(Actor, related_name="work_attempts", on_delete=models.PROTECT)
-    started_at = models.DateTimeField(default=timezone.now)
-    ended_at = models.DateTimeField(null=True, blank=True)
-    outcome = models.ForeignKey(
+    card: _FK[Card] = models.ForeignKey(
+        Card,
+        related_name="work_attempts",
+        on_delete=models.CASCADE,
+    )
+    actor: _FK[Actor] = models.ForeignKey(
+        Actor,
+        related_name="work_attempts",
+        on_delete=models.PROTECT,
+    )
+    started_at: _DateTime = models.DateTimeField(default=timezone.now)
+    ended_at: _NullDateTime = models.DateTimeField(null=True, blank=True)
+    outcome: _NullFK[AttemptOutcome] = models.ForeignKey(
         AttemptOutcome,
         related_name="work_attempts",
         null=True,
         blank=True,
         on_delete=models.PROTECT,
     )
-    summary = models.TextField(blank=True, default="")
-    evidence = models.TextField(blank=True, default="")
+    summary: _Text = models.TextField(blank=True, default="")
+    evidence: _Text = models.TextField(blank=True, default="")
 
     # Declared for the type checker (annotation-only; see ``Card``).
     outcome_id: int | None
@@ -1058,8 +1119,9 @@ class WorkAttempt(TimeStampedModel):
 
     @override
     def __str__(self) -> str:
-        outcome = self.outcome.key if self.outcome_id else "in-progress"
-        return f"{self.card.title} attempt ({outcome})"
+        outcome = self.outcome
+        label = outcome.key if outcome is not None else "in-progress"
+        return f"{self.card.title} attempt ({label})"
 
 
 class Decision(TimeStampedModel):
@@ -1070,19 +1132,23 @@ class Decision(TimeStampedModel):
     earlier one it replaces (surfaced in reverse as ``superseded_by_set``).
     """
 
-    card = models.ForeignKey(
+    card: _NullFK[Card] = models.ForeignKey(
         Card,
         related_name="decisions",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
     )
-    actor = models.ForeignKey(Actor, related_name="decisions", on_delete=models.PROTECT)
-    question = models.TextField()
-    choice = models.TextField()
-    rationale = models.TextField(blank=True, default="")
-    decided_at = models.DateTimeField(default=timezone.now)
-    supersedes = models.ForeignKey(
+    actor: _FK[Actor] = models.ForeignKey(
+        Actor,
+        related_name="decisions",
+        on_delete=models.PROTECT,
+    )
+    question: _Text = models.TextField()
+    choice: _Text = models.TextField()
+    rationale: _Text = models.TextField(blank=True, default="")
+    decided_at: _DateTime = models.DateTimeField(default=timezone.now)
+    supersedes: _NullFK[Decision] = models.ForeignKey(
         "self",
         related_name="superseded_by_set",
         null=True,
@@ -1120,17 +1186,17 @@ class BoardDoc(TimeStampedModel):
     ``BoardDocCardReference`` for FK-backed card placeholders.
     """
 
-    namespace = models.SlugField(default="kanban")
-    key = models.SlugField()
-    kind = models.ForeignKey(
+    namespace: _Slug = models.SlugField(default="kanban")
+    key: _Slug = models.SlugField()
+    kind: _FK[BoardDocKind] = models.ForeignKey(
         BoardDocKind,
         related_name="docs",
         on_delete=models.PROTECT,
     )
-    title = models.TextField(blank=True, default="")
-    order = models.PositiveIntegerField(default=0)
-    body = models.TextField(blank=True, default="")
-    include_heading = models.BooleanField(default=True)
+    title: _Text = models.TextField(blank=True, default="")
+    order: _PositiveInt = models.PositiveIntegerField(default=0)
+    body: _Text = models.TextField(blank=True, default="")
+    include_heading: _Bool = models.BooleanField(default=True)
 
     # Declared for the type checker (annotation-only; see ``Card``).
     card_references: RelatedManager[BoardDocCardReference]
@@ -1166,18 +1232,18 @@ class BoardDocCardReference(TimeStampedModel):
     so prose references survive card renumbering and status/version moves.
     """
 
-    doc = models.ForeignKey(
+    doc: _FK[BoardDoc] = models.ForeignKey(
         BoardDoc,
         related_name="card_references",
         on_delete=models.CASCADE,
     )
-    card = models.ForeignKey(
+    card: _FK[Card] = models.ForeignKey(
         Card,
         related_name="board_doc_references",
         on_delete=models.CASCADE,
     )
-    raw_text = models.TextField(blank=True, default="")
-    order = models.PositiveIntegerField(default=0)
+    raw_text: _Text = models.TextField(blank=True, default="")
+    order: _PositiveInt = models.PositiveIntegerField(default=0)
 
     # Reverse one-to-one Django adds from ``UUIDModel``, declared for the type checker.
     uuid: UUIDModel
@@ -1271,191 +1337,191 @@ class UUIDModel(TimeStampedModel):
     :func:`_exactly_one_link_constraint`).
     """
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    id: _UUIDPrimaryKey = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    milestone = models.OneToOneField(
+    milestone: _NullOneToOne[Milestone] = models.OneToOneField(
         "Milestone",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    status = models.OneToOneField(
+    status: _NullOneToOne[Status] = models.OneToOneField(
         "Status",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    priority = models.OneToOneField(
+    priority: _NullOneToOne[Priority] = models.OneToOneField(
         "Priority",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    relativesize = models.OneToOneField(
+    relativesize: _NullOneToOne[RelativeSize] = models.OneToOneField(
         "RelativeSize",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    upstream = models.OneToOneField(
+    upstream: _NullOneToOne[Upstream] = models.OneToOneField(
         "Upstream",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    paritylevel = models.OneToOneField(
+    paritylevel: _NullOneToOne[ParityLevel] = models.OneToOneField(
         "ParityLevel",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    section = models.OneToOneField(
+    section: _NullOneToOne[Section] = models.OneToOneField(
         "Section",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    cardreferencekind = models.OneToOneField(
+    cardreferencekind: _NullOneToOne[CardReferenceKind] = models.OneToOneField(
         "CardReferenceKind",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    boarddockind = models.OneToOneField(
+    boarddockind: _NullOneToOne[BoardDocKind] = models.OneToOneField(
         "BoardDocKind",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    targetversion = models.OneToOneField(
+    targetversion: _NullOneToOne[TargetVersion] = models.OneToOneField(
         "TargetVersion",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    specdoc = models.OneToOneField(
+    specdoc: _NullOneToOne[SpecDoc] = models.OneToOneField(
         "SpecDoc",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    trackedpath = models.OneToOneField(
+    trackedpath: _NullOneToOne[TrackedPath] = models.OneToOneField(
         "TrackedPath",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    card = models.OneToOneField(
+    card: _NullOneToOne[Card] = models.OneToOneField(
         "Card",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    cardreference = models.OneToOneField(
+    cardreference: _NullOneToOne[CardReference] = models.OneToOneField(
         "CardReference",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    cardglossaryterm = models.OneToOneField(
+    cardglossaryterm: _NullOneToOne[CardGlossaryTerm] = models.OneToOneField(
         "CardGlossaryTerm",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    parityclaim = models.OneToOneField(
+    parityclaim: _NullOneToOne[ParityClaim] = models.OneToOneField(
         "ParityClaim",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    cardpathlink = models.OneToOneField(
+    cardpathlink: _NullOneToOne[CardPathLink] = models.OneToOneField(
         "CardPathLink",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    carditem = models.OneToOneField(
+    carditem: _NullOneToOne[CardItem] = models.OneToOneField(
         "CardItem",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    label = models.OneToOneField(
+    label: _NullOneToOne[Label] = models.OneToOneField(
         "Label",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    boarddoc = models.OneToOneField(
+    boarddoc: _NullOneToOne[BoardDoc] = models.OneToOneField(
         "BoardDoc",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    boarddoccardreference = models.OneToOneField(
+    boarddoccardreference: _NullOneToOne[BoardDocCardReference] = models.OneToOneField(
         "BoardDocCardReference",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    attemptoutcome = models.OneToOneField(
+    attemptoutcome: _NullOneToOne[AttemptOutcome] = models.OneToOneField(
         "AttemptOutcome",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    verificationkind = models.OneToOneField(
+    verificationkind: _NullOneToOne[VerificationKind] = models.OneToOneField(
         "VerificationKind",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    actor = models.OneToOneField(
+    actor: _NullOneToOne[Actor] = models.OneToOneField(
         "Actor",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    cardtransition = models.OneToOneField(
+    cardtransition: _NullOneToOne[CardTransition] = models.OneToOneField(
         "CardTransition",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    workattempt = models.OneToOneField(
+    workattempt: _NullOneToOne[WorkAttempt] = models.OneToOneField(
         "WorkAttempt",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    decision = models.OneToOneField(
+    decision: _NullOneToOne[Decision] = models.OneToOneField(
         "Decision",
         null=True,
         blank=True,

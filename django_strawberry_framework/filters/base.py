@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, TypeVar, cast
 
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models.options import Options
 from django.forms import (
     CharField,
     Field,
@@ -79,6 +80,7 @@ from ..sets_mixins import RelatedSetTargetMixin
 # cycle (spec-031). These are the single source of truth for the
 # strategy->payload-shape mapping shared with the encoder and the decoder.
 from ..types.relay import MODEL_LABEL_STRATEGIES, TYPE_NAME_STRATEGIES
+from ..utils._narrowing import is_class, is_list_or_tuple
 from ..utils.errors import (
     FILTER_INVALID_ERROR_CODE,
     GLOBALID_INVALID_ERROR_CODE,
@@ -171,7 +173,7 @@ def _install_empty_list_aware_method(
     # basedpyright: typeshed declares ``Filter.method`` a plain attribute; django-filter defines it
     # as a property, whose ``fset`` this reuses. It reports ``fset`` unknown on each arm of the
     # declared ``Callable | str | None``
-    TypedFilter.method.fset(filter_instance, value)  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue, reportOptionalMemberAccess]
+    TypedFilter.method.fset(filter_instance, value)  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue, reportOptionalMemberAccess, reportUnknownMemberType]
     if value is not None:
         # django-filter's own ``method`` setter shadows ``filter`` per instance the same way
         # (``self.filter = FilterMethod(self)``).
@@ -259,7 +261,7 @@ def _materialize_list_shaped_values(value: object, *, message: str, code: str) -
     so the fail-closed contract cannot drift between the three list-shaped
     consumers.
     """
-    if not isinstance(value, (list, tuple)):
+    if not is_list_or_tuple(value):
         raise GraphQLError(message, extensions=coded_error_extensions(code))
     try:
         return list(value)
@@ -418,7 +420,7 @@ class ArrayFilter(TypedFilter):
     # so it reports ``setter`` unknown on each arm of the declared ``Callable | str | None``, and
     # the decorator it cannot type as untyped
     @override
-    @TypedFilter.method.setter  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue, reportOptionalMemberAccess, reportUntypedFunctionDecorator]
+    @TypedFilter.method.setter  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue, reportOptionalMemberAccess, reportUntypedFunctionDecorator, reportUnknownMemberType]
     def method(self, value: object) -> None:
         """Swap in `ArrayFilterMethod` when a consumer `method=` is set."""
         _install_empty_list_aware_method(self, value, ArrayFilterMethod)
@@ -558,7 +560,7 @@ def validate_range(value: object) -> None:
     standard form-field contract); a one-element, three-element list, or
     non-sequence raises `ValidationError(code="invalid")`.
     """
-    if not isinstance(value, (list, tuple)) or len(value) != 2:
+    if not is_list_or_tuple(value) or len(value) != 2:
         raise ValidationError(
             "Invalid range specified: it needs to contain 2 values.",
             code="invalid",
@@ -579,7 +581,7 @@ class _RangeWidget(MultiWidget):
     @override
     def decompress(self, value: object) -> list[object]:
         """Split a two-element value, or two empty boxes when nothing is bound."""
-        if isinstance(value, (list, tuple)) and len(value) == 2:
+        if is_list_or_tuple(value) and len(value) == 2:
             return list(value)
         return [None, None]
 
@@ -639,7 +641,7 @@ class ListFilter(TypedFilter):
     # so it reports ``setter`` unknown on each arm of the declared ``Callable | str | None``, and
     # the decorator it cannot type as untyped
     @override
-    @TypedFilter.method.setter  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue, reportOptionalMemberAccess, reportUntypedFunctionDecorator]
+    @TypedFilter.method.setter  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue, reportOptionalMemberAccess, reportUntypedFunctionDecorator, reportUnknownMemberType]
     def method(self, value: object) -> None:
         """Swap in `ListFilterMethod` when a consumer `method=` is set."""
         _install_empty_list_aware_method(self, value, ListFilterMethod)
@@ -876,7 +878,7 @@ class IntegerRangeFilter(BaseRangeFilter, NumberFilter):
         from detonating inside ``len(value)`` / the unpack -- same containment
         as ``_materialize_list_shaped_values``.
         """
-        if not isinstance(value, (list, tuple)):
+        if not is_list_or_tuple(value):
             # Explicit empty / None / a non-sequence: keep django-filter's skip
             # (no bounds supplied).
             return qs
@@ -1377,8 +1379,8 @@ def _model_identity_column(model: object, to_field_name: str | None) -> Concrete
     as the key, a foreign key named as ``to_field_name``) is followed to the column that
     actually stores the value. ``None`` when ``model`` is not a resolved model.
     """
-    meta = getattr(model, "_meta", None)
-    if meta is None:
+    meta: object = getattr(model, "_meta", None)
+    if not isinstance(meta, Options):
         return None
     column = meta.get_field(to_field_name) if to_field_name else meta.pk
     while isinstance(column, models.ForeignKey):
@@ -1463,7 +1465,7 @@ class _RelationIdentityListField(Field):
         """
         if value is None:
             return None
-        if not isinstance(value, (list, tuple)):
+        if not is_list_or_tuple(value):
             raise ValidationError("Enter a list of values.", code="invalid_list")
         return list(value)
 
@@ -1674,7 +1676,7 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
         through the filter input builder. Mirrors the order twin's
         ``orders/base.py::RelatedOrder._validate_target``.
         """
-        if not (isinstance(resolved, type) and issubclass(resolved, _filter_set_class())):
+        if not (is_class(resolved) and issubclass(resolved, _filter_set_class())):
             # ``_bind_owner`` is the one writer of the owner slot, and it stores a set class.
             owner: type[object] | None = getattr(self, self._owner_attr, None)
             owner_label = (

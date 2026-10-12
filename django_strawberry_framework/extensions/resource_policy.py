@@ -86,6 +86,7 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, S
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar, cast
 
+import graphql
 from graphql import (
     DirectiveNode,
     FieldNode,
@@ -108,7 +109,6 @@ from graphql import (
     VariableNode,
     get_named_type,
     is_input_type,
-    type_from_ast,
 )
 from graphql.language.lexer import Lexer
 from graphql.language.source import Source
@@ -133,13 +133,20 @@ from ..resource_policy import (
     end_resource_budget,
     record_admission_rejection,
 )
+from ..utils._narrowing import (
+    is_exact_dict,
+    is_list_or_tuple,
+    is_mapping,
+    is_memoryview,
+    mapping_get,
+)
 from ..utils.context import (
     restored_context_keys,
 )
 from ..utils.inputs import RELATION_MULTI
 from ..utils.policies import copy_policy
 from ..utils.private_state import PrivateAuthority
-from ..utils.typing import unwrap_non_null
+from ..utils.typing import graphql_type_of, is_graphql_list, unwrap_non_null
 from .operation_state import OperationState, _OperationBoundExtension
 
 if TYPE_CHECKING:
@@ -333,8 +340,9 @@ def _mutation_input_specs(field_def: object) -> Mapping[str, InputFieldSpec] | N
     shape under which a spec says one thing and the wire another: the specs are
     recorded from the SAME merged input dataclass the schema materialized.
     """
-    strawberry_field: object = (getattr(field_def, "extensions", None) or {}).get(
-        _STRAWBERRY_DEFINITION_BACKREF,
+    extensions: object = getattr(field_def, "extensions", None)
+    strawberry_field = (
+        mapping_get(extensions, _STRAWBERRY_DEFINITION_BACKREF) if is_mapping(extensions) else None
     )
     resolver = getattr(getattr(strawberry_field, "base_resolver", None), "wrapped_func", None)
     mutation_cls = getattr(resolver, MUTATION_CLASS_MARKER, None)
@@ -544,8 +552,8 @@ class _ValueBudget:
             node_type = unwrap_non_null(node_type)
             if node_value is None:
                 continue
-            if isinstance(node_type, GraphQLList):
-                list_type: GraphQLList[GraphQLType] = node_type
+            if is_graphql_list(node_type):
+                list_type = node_type
                 if not self._charge_container(
                     node_value,
                     stack,
@@ -585,7 +593,7 @@ class _ValueBudget:
                         ),
                     )
                 continue
-            if isinstance(node_value, (list, tuple, Mapping)):
+            if is_list_or_tuple(node_value) or is_mapping(node_value):
                 # An untyped container: a JSON-shaped custom scalar, or a value
                 # whose Python shape does not match its declared input type.
                 # Charged for width and nodes, with no family classification -
@@ -642,11 +650,11 @@ class _ValueBudget:
         proved, at one past the limit, rather than enumerated in full so the
         refusal can quote an exact size nothing downstream will use.
         """
-        if isinstance(value, Mapping):
-            mapping: Mapping[object, object] = value
+        if is_mapping(value):
+            mapping = value
             if _closes_a_cycle(mapping, path):
                 return True
-            if type(mapping) is dict:
+            if is_exact_dict(mapping):
                 entries: Collection[tuple[object, object]] = mapping.items()
                 width = len(mapping)
             else:
@@ -692,9 +700,9 @@ class _ValueBudget:
                     ),
                 )
             return True
-        if not isinstance(value, (list, tuple)):
+        if not is_list_or_tuple(value):
             return False
-        sequence: list[object] | tuple[object, ...] = value
+        sequence = value
         if _closes_a_cycle(sequence, path):
             return True
         if type(sequence) in _EXACT_SEQUENCE_TYPES:
@@ -708,8 +716,8 @@ class _ValueBudget:
             width,
             "a list argument is wider than the policy allows",
         )
-        if isinstance(node_type, GraphQLList):
-            list_type: GraphQLList[GraphQLType] = node_type
+        if is_graphql_list(node_type):
+            list_type = node_type
             self._charge_list_family(
                 list_type.of_type,
                 width,
@@ -858,7 +866,7 @@ class _ValueBudget:
                 len(str.encode(value, "utf-8", errors="surrogatepass")),
                 "a scalar value is larger than the policy allows",
             )
-        elif isinstance(value, (bytes, bytearray, memoryview)):
+        elif isinstance(value, (bytes, bytearray)) or is_memoryview(value):
             self._reject(
                 "max_scalar_bytes",
                 memoryview(value).nbytes,
@@ -1095,11 +1103,10 @@ def _is_connection_type(candidate: object) -> bool:
     edges: GraphQLField | None = candidate.fields.get(_CONNECTION_MARKER_FIELD)
     if edges is None:
         return False
-    unwrapped = unwrap_non_null(edges.type)
-    if not isinstance(unwrapped, GraphQLList):
+    unwrapped = unwrap_non_null(graphql_type_of(edges))
+    if not is_graphql_list(unwrapped):
         return False
-    edge_list: GraphQLList[GraphQLType] = unwrapped
-    edge = get_named_type(edge_list.of_type)
+    edge = get_named_type(unwrapped.of_type)
     return isinstance(edge, GraphQLObjectType) and set(edge.fields) >= _EDGE_MARKER_FIELDS
 
 
@@ -1134,14 +1141,15 @@ def _type_system_directives(definition: Node) -> Iterator[DirectiveNode]:
             child: object = getattr(node, key, None)
             if isinstance(child, Node):
                 stack.append(child)
-            elif isinstance(child, (list, tuple)):
-                children: list[object] | tuple[object, ...] = child
-                stack.extend(item for item in children if isinstance(item, Node))
+            elif is_list_or_tuple(child):
+                stack.extend(item for item in child if isinstance(item, Node))
 
 
 def _declared_input_type(graphql_schema: GraphQLSchema, type_node: TypeNode) -> GraphQLType | None:
     """The input type a variable definition declares, or ``None`` when it names none."""
-    declared = type_from_ast(graphql_schema, type_node)
+    # basedpyright: graphql-core 3.2 overloads ``type_from_ast`` on the bare generic
+    # ``GraphQLList``, so the function reads as partially Unknown
+    declared = graphql.type_from_ast(graphql_schema, type_node)  # pyright: ignore[reportUnknownMemberType]
     return declared if is_input_type(declared) else None
 
 
@@ -1193,7 +1201,7 @@ class _DocumentWalk:
             if carried is None:
                 carried = dict.fromkeys(_variable_names(argument.value))
             self.values.charge(
-                None if argument_def is None else argument_def.type,
+                None if argument_def is None else graphql_type_of(argument_def),
                 value_from_ast_untyped(argument.value, carried),
                 in_mutation=self.in_mutation,
                 argument=argument.name.value,
@@ -1359,7 +1367,13 @@ class _DocumentWalk:
             )
             child_multiplier = multiplier
             if shape and field_def is not None:
-                rows = _collection_rows(self.policy, parent, field_def.type, node, self.variables)
+                rows = _collection_rows(
+                    self.policy,
+                    parent,
+                    graphql_type_of(field_def),
+                    node,
+                    self.variables,
+                )
                 if rows is not None:
                     child_multiplier = multiplier * rows
                     self.budget.charge_collection(child_multiplier)
@@ -1373,7 +1387,9 @@ class _DocumentWalk:
                 if id(node) in self.unshaped:
                     continue
                 self.unshaped.add(id(node))
-            child_parent = None if field_def is None else get_named_type(field_def.type)
+            child_parent = (
+                None if field_def is None else get_named_type(graphql_type_of(field_def))
+            )
             stack.extend(
                 (
                     selection,

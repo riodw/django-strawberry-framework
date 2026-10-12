@@ -50,7 +50,10 @@ def test_make_execution_context_defaults_to_an_unparsed_plain_schema_request():
     assert context.graphql_document is None
     assert context.operation_name is None
     assert context.pre_execution_errors is None
-    assert context.result is None
+    # basedpyright: Strawberry's schema/_graphql_core.py rebinds GraphQLExecutionResult in an
+    # ImportError fallback, so ExecutionContext.result carries Unknown under the <3.3 pin
+    result: object = context.result  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    assert result is None
     assert {operation.value for operation in context.allowed_operations} == {
         "query",
         "mutation",

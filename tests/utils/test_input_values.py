@@ -514,11 +514,11 @@ def test_related_declaration_mapping_treats_absent_and_none_as_no_declarations()
 @pytest.mark.parametrize(
     "bad",
     [
-        [],
+        list[object](),
         42,
         "nope",
         {"a": 1}.keys(),
-        set(),
+        set[object](),
     ],
 )
 def test_related_declaration_mapping_rejects_non_mappings(bad: object):

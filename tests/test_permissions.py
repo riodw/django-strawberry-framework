@@ -85,6 +85,7 @@ from django.contrib.auth.models import User
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection as db_connection
 from django.db import models
+from django.db.models.expressions import Combinable
 from django.http import HttpRequest
 from graphql import GraphQLError
 from strategy_schemas import make_django_type
@@ -111,6 +112,7 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils._queryset_private import (
     set_queryset_query,
 )
+from tests._idioms import is_object_dict
 from tests.optimizer import _link_models
 
 #: A ``get_queryset`` hook as ``_make_type`` installs it (``classmethod``-wrapped).
@@ -168,7 +170,7 @@ def _make_type(
     get_queryset: _Hook | None = None,
     fields: tuple[str, ...] = ("id",),
     primary: bool = True,
-):
+) -> type[DjangoType]:
     """Declare a ``DjangoType`` over ``model``, optionally with a cascading hook.
 
     ``get_queryset`` (when given) becomes the type's hook so
@@ -284,21 +286,36 @@ def test_longer_cycle_renders_full_path():
     """
 
     class RingA(models.Model):
-        b = models.ForeignKey("RingB", null=True, on_delete=models.CASCADE, related_name="+")
+        b: "models.ForeignKey[RingB | Combinable | None, RingB | None]" = models.ForeignKey(
+            "RingB",
+            null=True,
+            on_delete=models.CASCADE,
+            related_name="+",
+        )
 
         class Meta:
             app_label = "products"
             managed = False
 
     class RingB(models.Model):
-        c = models.ForeignKey("RingC", null=True, on_delete=models.CASCADE, related_name="+")
+        c: "models.ForeignKey[RingC | Combinable | None, RingC | None]" = models.ForeignKey(
+            "RingC",
+            null=True,
+            on_delete=models.CASCADE,
+            related_name="+",
+        )
 
         class Meta:
             app_label = "products"
             managed = False
 
     class RingC(models.Model):
-        a = models.ForeignKey(RingA, null=True, on_delete=models.CASCADE, related_name="+")
+        a: "models.ForeignKey[RingA | Combinable | None, RingA | None]" = models.ForeignKey(
+            RingA,
+            null=True,
+            on_delete=models.CASCADE,
+            related_name="+",
+        )
 
         class Meta:
             app_label = "products"
@@ -353,29 +370,48 @@ def test_cyclic_diamond_fails_closed():
     """
 
     class DmSource(models.Model):
-        left = models.ForeignKey("DmLeft", null=True, on_delete=models.CASCADE, related_name="+")
-        right = models.ForeignKey("DmRight", null=True, on_delete=models.CASCADE, related_name="+")
+        left: "models.ForeignKey[DmLeft | Combinable | None, DmLeft | None]" = models.ForeignKey(
+            "DmLeft",
+            null=True,
+            on_delete=models.CASCADE,
+            related_name="+",
+        )
+        right: "models.ForeignKey[DmRight | Combinable | None, DmRight | None]" = (
+            models.ForeignKey("DmRight", null=True, on_delete=models.CASCADE, related_name="+")
+        )
 
         class Meta:
             app_label = "products"
             managed = False
 
     class DmLeft(models.Model):
-        sink = models.ForeignKey("DmSink", null=True, on_delete=models.CASCADE, related_name="+")
+        sink: "models.ForeignKey[DmSink | Combinable | None, DmSink | None]" = models.ForeignKey(
+            "DmSink",
+            null=True,
+            on_delete=models.CASCADE,
+            related_name="+",
+        )
 
         class Meta:
             app_label = "products"
             managed = False
 
     class DmRight(models.Model):
-        sink = models.ForeignKey("DmSink", null=True, on_delete=models.CASCADE, related_name="+")
+        sink: "models.ForeignKey[DmSink | Combinable | None, DmSink | None]" = models.ForeignKey(
+            "DmSink",
+            null=True,
+            on_delete=models.CASCADE,
+            related_name="+",
+        )
 
         class Meta:
             app_label = "products"
             managed = False
 
     class DmSink(models.Model):
-        source = models.ForeignKey(DmSource, null=True, on_delete=models.CASCADE, related_name="+")
+        source: "models.ForeignKey[DmSource | Combinable | None, DmSource | None]" = (
+            models.ForeignKey(DmSource, null=True, on_delete=models.CASCADE, related_name="+")
+        )
 
         class Meta:
             app_label = "products"
@@ -408,30 +444,47 @@ def test_acyclic_diamond_composes_sink_through_both_branches():
     """
 
     class AdSource(models.Model):
-        name = models.TextField()
-        left = models.ForeignKey("AdLeft", null=True, on_delete=models.CASCADE, related_name="+")
-        right = models.ForeignKey("AdRight", null=True, on_delete=models.CASCADE, related_name="+")
+        name: "models.TextField[str | Combinable, str]" = models.TextField()
+        left: "models.ForeignKey[AdLeft | Combinable | None, AdLeft | None]" = models.ForeignKey(
+            "AdLeft",
+            null=True,
+            on_delete=models.CASCADE,
+            related_name="+",
+        )
+        right: "models.ForeignKey[AdRight | Combinable | None, AdRight | None]" = (
+            models.ForeignKey("AdRight", null=True, on_delete=models.CASCADE, related_name="+")
+        )
 
         class Meta:
             app_label = "products"
             managed = False
 
     class AdLeft(models.Model):
-        sink = models.ForeignKey("AdSink", null=True, on_delete=models.CASCADE, related_name="+")
+        sink: "models.ForeignKey[AdSink | Combinable | None, AdSink | None]" = models.ForeignKey(
+            "AdSink",
+            null=True,
+            on_delete=models.CASCADE,
+            related_name="+",
+        )
 
         class Meta:
             app_label = "products"
             managed = False
 
     class AdRight(models.Model):
-        sink = models.ForeignKey("AdSink", null=True, on_delete=models.CASCADE, related_name="+")
+        sink: "models.ForeignKey[AdSink | Combinable | None, AdSink | None]" = models.ForeignKey(
+            "AdSink",
+            null=True,
+            on_delete=models.CASCADE,
+            related_name="+",
+        )
 
         class Meta:
             app_label = "products"
             managed = False
 
     class AdSink(models.Model):
-        name = models.TextField()
+        name: "models.TextField[str | Combinable, str]" = models.TextField()
 
         class Meta:
             app_label = "products"
@@ -534,7 +587,7 @@ def test_gfk_default_walk_preflights_closed():
     visibility policy). The preflight raises BEFORE any target hook runs - the
     registered ``ContentType`` target's hook observes zero invocations.
     """
-    hook_calls = []
+    hook_calls: list[type[DjangoType]] = []
 
     def _counting_hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
         hook_calls.append(cls)
@@ -617,7 +670,7 @@ def test_mti_multiple_parent_links_both_cascade():
     """
 
     class MtiLeftBase(models.Model):
-        name = models.TextField()
+        name: "models.TextField[str | Combinable, str]" = models.TextField()
 
         class Meta:
             app_label = "products"
@@ -625,8 +678,8 @@ def test_mti_multiple_parent_links_both_cascade():
 
     class MtiRightBase(models.Model):
         # Explicit pk so the two inherited auto pks cannot clash on the child.
-        rid = models.AutoField(primary_key=True)
-        label = models.TextField()
+        rid: "models.AutoField[Combinable | int | str, int]" = models.AutoField(primary_key=True)
+        label: "models.TextField[str | Combinable, str]" = models.TextField()
 
         class Meta:
             app_label = "products"
@@ -694,7 +747,7 @@ def test_multi_db_subquery_pinned_to_caller_alias():
     # REAL RHS - rather than reconstructing a fresh ``.using(result.db)`` queryset in
     # the assertion, which would still pass against a broken default-alias build - is
     # what actually pins spec-034 Decision 8.
-    received_dbs = []
+    received_dbs: list[str] = []
 
     def _record_alias_hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
         received_dbs.append(qs.db)
@@ -896,7 +949,7 @@ class _CtTarget(models.Model):
     ``django_strawberry_framework/permissions.py::_edge_error_renderer``.
     """
 
-    name = models.TextField()
+    name: "models.TextField[str | Combinable, str]" = models.TextField()
 
     class Meta:
         app_label = "products"
@@ -906,7 +959,7 @@ class _CtTarget(models.Model):
 class _CtTargetChild(_CtTarget):
     """MTI child of the fixture target - an INCOMPATIBLE hook-return table."""
 
-    extra = models.TextField()
+    extra: "models.TextField[str | Combinable, str]" = models.TextField()
 
     # basedpyright: Django's ModelBase pops a concrete model's Meta (only an abstract model keeps
     # one), so _CtTarget has no Meta at run time for this one to subclass
@@ -918,7 +971,7 @@ class _CtTargetChild(_CtTarget):
 class _CtOther(models.Model):
     """An unrelated model - an INCOMPATIBLE hook-return table."""
 
-    name = models.TextField()
+    name: "models.TextField[str | Combinable, str]" = models.TextField()
 
     class Meta:
         app_label = "products"
@@ -926,8 +979,12 @@ class _CtOther(models.Model):
 
 
 class _CtParent(models.Model):
-    name = models.TextField()
-    target = models.ForeignKey(_CtTarget, on_delete=models.CASCADE, related_name="parents")
+    name: "models.TextField[str | Combinable, str]" = models.TextField()
+    target: "models.ForeignKey[_CtTarget | Combinable, _CtTarget]" = models.ForeignKey(
+        _CtTarget,
+        on_delete=models.CASCADE,
+        related_name="parents",
+    )
 
     class Meta:
         app_label = "products"
@@ -1246,7 +1303,7 @@ def test_hostile_hook_clone_override_is_neutralized_by_sealing_in_cascade():
         qs: models.QuerySet[models.Model],
         info: object,
     ) -> models.QuerySet[_CtTarget]:
-        return models.QuerySet.filter(
+        return models.QuerySet[_CtTarget].filter(
             _StickyQuerySet(model=_CtTarget, using=qs.db),
             name="visible",
         )
@@ -1278,14 +1335,15 @@ def test_hostile_values_override_end_to_end_is_neutralized_by_sealing():
             **expressions: object,
         ) -> object:  # re-projects the UNFILTERED set
             # basedpyright: django-stubs omits QuerySet._values, reported as an unknown attribute
-            return models.QuerySet._values(_CtTarget.objects.all(), *fields, **expressions)  # pyright: ignore[reportAttributeAccessIssue]
+            # whose call is therefore Unknown
+            return models.QuerySet._values(_CtTarget.objects.all(), *fields, **expressions)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
 
     def _hostile_hook(
         cls: type[DjangoType],
         qs: models.QuerySet[models.Model],
         info: object,
     ) -> models.QuerySet[_CtTarget]:
-        return models.QuerySet.filter(
+        return models.QuerySet[_CtTarget].filter(
             _ValuesEraser(model=_CtTarget, using=qs.db),
             name="visible",
         )
@@ -2128,8 +2186,13 @@ class _StaffOnlyCategoryOrder(OrderSet):
     @override
     def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
         # Mirror the active-input dict to the flat ordering tuples.
-        assert isinstance(input_value, dict)
-        return list(input_value.items())
+        assert is_object_dict(input_value)
+        pairs: list[tuple[str, Ordering | None]] = []
+        for key, direction in input_value.items():
+            assert isinstance(key, str)
+            assert direction is None or isinstance(direction, Ordering)
+            pairs.append((key, direction))
+        return pairs
 
 
 class _StaffOnlyItemFilter(FilterSet):

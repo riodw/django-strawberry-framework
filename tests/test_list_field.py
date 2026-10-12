@@ -415,7 +415,7 @@ def test_djangolistfield_default_directives_omitted_constructs() -> None:
     assert field is not None
 
 
-def _DirectiveHolderType() -> type:
+def _DirectiveHolderType() -> type[DjangoType]:
     """A concrete DjangoType the directives rows can bind (guards run first)."""
 
     class DirectiveHolderType(DjangoType):
@@ -795,8 +795,9 @@ async def test_async_completion_adapter_semantics():
     assert not hasattr(adapter, "__iter__")
 
     with pytest.raises(TypeError, match="is not iterable"):
-        # basedpyright: the test proves the async-only adapter refuses sync iteration
-        for _ in adapter:  # pyright: ignore[reportGeneralTypeIssues]
+        # basedpyright: the test proves the async-only adapter refuses sync iteration, so the
+        # loop variable of the refused iteration has no type
+        for _ in adapter:  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]
             pass
 
     rows = [r async for r in adapter]

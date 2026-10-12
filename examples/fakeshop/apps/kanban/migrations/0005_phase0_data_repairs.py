@@ -74,7 +74,8 @@ def _dedupe_and_renumber_references(
         # deleted row's old order -> the kept row's old order.
         kept_old_order_by_key: dict[tuple[int, int], int] = {}
         deleted_old_to_kept_old: dict[int, int] = {}
-        survivors = []
+        # ``(pk, old order)`` of each kept row, in existing order.
+        survivors: list[tuple[object, int]] = []
         for row in rows:
             key = (row.target_card_id, row.kind_id)
             if key in kept_old_order_by_key:
@@ -82,14 +83,14 @@ def _dedupe_and_renumber_references(
                 row.delete()
             else:
                 kept_old_order_by_key[key] = row.order
-                survivors.append(row)
+                survivors.append((row.pk, int(row.order)))
 
         # Renumber survivors contiguously from 0 by existing order.
         old_to_new: dict[int, int] = {}
-        for new_order, row in enumerate(survivors):
-            old_to_new[row.order] = new_order
-            if row.order != new_order:
-                manager.filter(pk=row.pk).update(order=new_order)
+        for new_order, (pk, old_order) in enumerate(survivors):
+            old_to_new[old_order] = new_order
+            if old_order != new_order:
+                manager.filter(pk=pk).update(order=new_order)
         # Deleted duplicates inherit the surviving row's new order.
         for deleted_old, kept_old in deleted_old_to_kept_old.items():
             old_to_new[deleted_old] = old_to_new[kept_old]

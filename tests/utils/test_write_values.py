@@ -10,7 +10,7 @@ relation ids, batched ``pk__in`` cost, duplicate members, and empty M2M clears l
 
 from collections.abc import Iterator
 from enum import Enum
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 
 import pytest
 import strawberry
@@ -46,6 +46,14 @@ from django_strawberry_framework.utils.write_values import (
 )
 from tests._idioms import module_binding
 from tests._info import make_info, unread_info
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from typing import TypeAlias
+
+    from django_strawberry_framework.mutations.inputs import FieldError
+
+    _FieldHandler: TypeAlias = Callable[[InputFieldSpec, object], FieldError | None]
 
 
 @strawberry.input
@@ -617,7 +625,7 @@ def test_decode_provided_fields_tolerates_unmapped_input_fields():
 
     dest: dict[str, object] = {}
     specs = [_spec(attr="name", kind=SCALAR, target="name")]
-    handlers = {}
+    handlers: dict[str, _FieldHandler] = {}
     scalar_handler = scalar_into(dest)
 
     error = decode_provided_fields(
@@ -634,7 +642,7 @@ def test_decode_provided_fields_handles_none_and_non_strawberry_data():
     """decode_provided_fields safely treats None and non-strawberry data as empty without crashing."""
     dest: dict[str, object] = {}
     specs = [_spec(attr="name", kind=SCALAR, target="name")]
-    handlers = {}
+    handlers: dict[str, _FieldHandler] = {}
     scalar_handler = scalar_into(dest)
 
     assert (
@@ -719,8 +727,8 @@ def test_decode_provided_fields_short_circuits_on_handler_error():
         _spec(attr="first", kind="fail_kind", target="first"),
         _spec(attr="second", kind=SCALAR, target="second"),
     ]
-    failing_handler_called = []
-    scalar_handler_called = []
+    failing_handler_called: list[tuple[str, object]] = []
+    scalar_handler_called: list[tuple[str, object]] = []
 
     def failing_handler(spec: InputFieldSpec, val: object):
         failing_handler_called.append((spec.input_attr, val))

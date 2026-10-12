@@ -101,7 +101,7 @@ def _registry(isolate_global_registry: None) -> None:
     return isolate_global_registry
 
 
-def _make_issue_type(name: str = "KeysetIssueNode", **meta_extra: object):
+def _make_issue_type(name: str = "KeysetIssueNode", **meta_extra: object) -> type[DjangoType]:
     return make_django_type(
         name,
         Issue,
@@ -475,7 +475,7 @@ def test_keyset_pages_a_foreign_object_term_by_seeking_over_its_carriers():
 
     @strawberry.type
     class Query:
-        children: DjangoConnection[pair_type] = DjangoConnectionField(pair_type)  # pyright: ignore[reportInvalidTypeForm]
+        children = DjangoConnectionField(pair_type)
 
     schema = strawberry.Schema(query=Query)
 

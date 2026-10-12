@@ -102,7 +102,10 @@ class RenamedRelationItemSerializer(serializers.ModelSerializer[Item]):
     """
 
     display_name = serializers.CharField(source="name")
-    category_pk = serializers.PrimaryKeyRelatedField(
+    # DRF's stubs type a related field's constructor as returning it or a ``ManyRelatedField``.
+    category_pk: (
+        serializers.RelatedField[Category, Category, object] | serializers.ManyRelatedField
+    ) = serializers.PrimaryKeyRelatedField(
         source="category",
         queryset=Category.objects.all(),
     )

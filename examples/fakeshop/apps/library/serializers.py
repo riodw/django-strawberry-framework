@@ -34,6 +34,7 @@ from django_strawberry_framework import (
     SerializerFieldConversion,
     register_serializer_field_converter,
 )
+from django_strawberry_framework.rest_framework.accessors import base_fields
 
 from .models import Book, Branch, Genre, Shelf
 
@@ -209,7 +210,7 @@ class TargetedShelfSerializer(serializers.ModelSerializer[Shelf]):
 
     @override
     def get_fields(self) -> FieldMap:
-        fields = super().get_fields()
+        fields: FieldMap = base_fields(super())
         if self._target_model is not None:
             fields["target"] = serializers.PrimaryKeyRelatedField(
                 queryset=self._target_model._default_manager.all(),
@@ -283,7 +284,7 @@ class NoteShelfSerializer(serializers.ModelSerializer[Shelf]):
 
     @override
     def get_fields(self) -> FieldMap:
-        fields = super().get_fields()
+        fields: FieldMap = base_fields(super())
         if self._note_allow_null is not None:
             fields["note"] = serializers.CharField(
                 required=True,
@@ -353,11 +354,15 @@ class HookNarrowedShelfSerializer(serializers.ModelSerializer[Shelf]):
     (a ``branchId`` raw-pk input, NOT an ``altBranches`` slug list) and the runtime decode.
     """
 
-    alt_branches = serializers.SlugRelatedField(
-        slug_field="name",
-        queryset=Branch.objects.all(),
-        many=True,
-        required=False,
+    # ``many=True`` makes the constructor return a ``ManyRelatedField``; DRF's stubs type
+    # the constructor as returning either shape.
+    alt_branches: serializers.RelatedField[Branch, str, str] | serializers.ManyRelatedField = (
+        serializers.SlugRelatedField(
+            slug_field="name",
+            queryset=Branch.objects.all(),
+            many=True,
+            required=False,
+        )
     )
 
     # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
@@ -607,10 +612,14 @@ class BookGenresSerializer(serializers.ModelSerializer[Book]):
     list may not be empty."). ``allow_empty=True`` opts this write surface into clearing.
     """
 
-    genres = serializers.PrimaryKeyRelatedField(
-        many=True,
-        queryset=Genre.objects.all(),
-        allow_empty=True,
+    # ``many=True`` makes the constructor return a ``ManyRelatedField``; DRF's stubs type
+    # the constructor as returning either shape.
+    genres: serializers.RelatedField[Genre, Genre, object] | serializers.ManyRelatedField = (
+        serializers.PrimaryKeyRelatedField(
+            many=True,
+            queryset=Genre.objects.all(),
+            allow_empty=True,
+        )
     )
 
     # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass

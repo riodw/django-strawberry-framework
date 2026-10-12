@@ -33,7 +33,7 @@ import decimal
 import inspect
 import uuid
 from collections import OrderedDict
-from collections.abc import Callable, Iterator, Mapping, Sequence, Set
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import suppress
 from typing import TYPE_CHECKING, NamedTuple, TypeVar, cast
 
@@ -55,6 +55,13 @@ from ..extensions.operation_state import (
     operation_is_nested as _operation_is_nested,
 )
 from ..registry import register_subsystem_clear, registry
+from ..utils._narrowing import (
+    is_abstract_set,
+    is_list,
+    is_mapping,
+    is_set_or_frozenset,
+    is_tuple,
+)
 from ..utils.private_state import PrivateAuthority
 from ..utils.querysets import (
     normalize_query_source,
@@ -62,13 +69,14 @@ from ..utils.querysets import (
     wrap_async_queryset_adapter,
 )
 from ..utils.typing import (
+    return_type_of,
+    unwrap_graphql_type,
+)
+from ..utils.typing import (
     strawberry_schema_from_info as _strawberry_schema_from_info,
 )
 from ..utils.typing import (
     strawberry_schema_from_schema as _strawberry_schema_from_schema,
-)
-from ..utils.typing import (
-    unwrap_graphql_type,
 )
 from . import logger
 from ._context import (
@@ -412,9 +420,9 @@ def _freeze_variable_value(value: object, active_containers: set[int]) -> "Froze
     try:
         if type(value) in _SAFE_CACHE_SCALAR_TYPES:
             return ("scalar", value_type_id, value)
-        is_mapping = isinstance(value, Mapping)
-        is_set = isinstance(value, Set)
-        is_sequence = isinstance(value, (list, tuple))
+        value_is_mapping = is_mapping(value)
+        value_is_set = is_abstract_set(value)
+        value_is_sequence = is_list(value) or is_tuple(value)
     except Exception:
         # ``Exception``, never ``BaseException`` - matching the container branch
         # below and the package's boundary policy: a hostile ``__class__`` or
@@ -423,7 +431,7 @@ def _freeze_variable_value(value: object, active_containers: set[int]) -> "Froze
         # being absorbed into a cache key.
         return ("opaque", value_type_id, object())
 
-    if not (is_mapping or is_set or is_sequence):
+    if not (value_is_mapping or value_is_set or value_is_sequence):
         # Do not probe ``hash(value)`` here. A custom scalar's hash/equality
         # implementation is consumer code and is not part of this boundary;
         # an opaque identity is the safe fallback for both hashable and
@@ -437,10 +445,9 @@ def _freeze_variable_value(value: object, active_containers: set[int]) -> "Froze
     try:
         try:
             # The three flags hold the ``isinstance`` verdicts taken once above, so a
-            # hostile ``__instancecheck__`` runs once; checkers do not narrow
-            # through a stored bool, so each branch restates its verdict.
-            if is_mapping:
-                mapping = cast("Mapping[object, object]", value)
+            # hostile ``__instancecheck__`` runs once.
+            if value_is_mapping:
+                mapping = value
                 return (
                     "mapping",
                     value_type_id,
@@ -453,7 +460,7 @@ def _freeze_variable_value(value: object, active_containers: set[int]) -> "Froze
                     ),
                 )
             members = cast("Iterable[object]", value)
-            if is_set:
+            if value_is_set:
                 return (
                     "set",
                     value_type_id,
@@ -850,7 +857,7 @@ def _resolve_model_from_return_type(info: "GraphQLResolveInfo") -> _OriginAndMod
     caller treats ``None`` as "nothing to optimize" and passes the
     queryset through unchanged.
     """
-    rt = unwrap_graphql_type(info.return_type)
+    rt = unwrap_graphql_type(return_type_of(info))
     # An unwrapped graphql-core type is a named type, whose ``name`` is a string.
     type_name: str | None = getattr(rt, "name", None)
     if type_name is None:
@@ -1477,7 +1484,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         overwriting it (spec-033 Decision 8).
         """
         existing = _optimizer_value(context, key)
-        if isinstance(existing, (frozenset, set)):
+        if is_set_or_frozenset(existing):
             # Subset early-out: a nested fallback connection re-publishes the
             # SAME plan once per parent row, so after the first row ``new`` is
             # already contained in the stash. Skipping the union avoids

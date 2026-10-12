@@ -21,7 +21,7 @@ import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol, get_args, get_origin, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, TypeAlias, get_args, get_origin, runtime_checkable
 
 import pytest
 import strawberry
@@ -83,7 +83,18 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.finalizer import finalize_django_types
 from django_strawberry_framework.types.relay import apply_interfaces
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
+from tests._idioms import is_object_list
 from tests._soft_dependency import blocked_modules
+
+if TYPE_CHECKING:
+    from django.db.models.expressions import Combinable
+
+    from django_strawberry_framework.utils.typing import ModelField
+
+    # Each field's descriptor types as django-stubs declares them (set type, get type),
+    # spelled out because the checker runs without the django-stubs mypy plugin.
+    _Char: TypeAlias = models.CharField[str | int | Combinable, str]
+    _Int: TypeAlias = models.IntegerField[float | int | str | Combinable, int]
 
 
 @runtime_checkable
@@ -92,6 +103,12 @@ class _ScratchInput(Protocol):
 
     name: str | None
     count: int | None
+
+
+class _IsNullBag(Protocol):
+    """The ``isNull`` sub-field of a generated relation filter bag."""
+
+    is_null: bool | None
 
 
 @pytest.fixture(autouse=True)
@@ -579,7 +596,7 @@ def test_convert_filter_to_input_annotation_handles_globalid_multiple_choice_fil
 
 def test_convert_filter_to_input_annotation_handles_range_filter():
     f = RangeFilter(field_name="value")
-    model_field = models.IntegerField()
+    model_field: _Int = models.IntegerField()
     annotation = convert_filter_to_input_annotation(f, model_field)
     non_none = [arg for arg in get_args(annotation) if arg is not type(None)]
     assert len(non_none) == 1
@@ -591,7 +608,7 @@ def test_convert_filter_to_input_annotation_handles_range_filter():
 
 def test_convert_filter_to_input_annotation_handles_list_filter():
     f = ListFilter(field_name="value")
-    model_field = models.IntegerField()
+    model_field: _Int = models.IntegerField()
     annotation = convert_filter_to_input_annotation(f, model_field)
     assert annotation == list[int] | None
 
@@ -600,7 +617,7 @@ def test_convert_filter_to_input_annotation_handles_choice_filter_via_converter_
     """`ChoiceFilter` reaches into ``convert_choices_to_enum`` via the model field."""
     # ``Book.circulation_status`` is a TextChoices field on the example model.
     f = ChoiceFilter()
-    model_field = library_models.Book._meta.get_field("circulation_status")
+    model_field: ModelField = library_models.Book._meta.get_field("circulation_status")
     annotation = convert_filter_to_input_annotation(f, model_field)
     non_none = [arg for arg in get_args(annotation) if arg is not type(None)]
     assert len(non_none) == 1
@@ -611,7 +628,7 @@ def test_convert_filter_to_input_annotation_handles_choice_filter_via_converter_
 
 def test_convert_filter_to_input_annotation_rejects_non_choices_derived_enum():
     f = ChoiceFilter()
-    model_field = models.CharField()  # No `choices` attribute set.
+    model_field: _Char = models.CharField()  # No `choices` attribute set.
     with pytest.raises(ConfigurationError):
         convert_filter_to_input_annotation(f, model_field)
 
@@ -889,8 +906,8 @@ def test_normalize_input_value_global_id_list():
     gid_b = relay.GlobalID(type_name="X", node_id="2")
     encoded = normalize_input_value(f, [gid_a, gid_b])
     assert encoded == [str(gid_a), str(gid_b)]
-    assert isinstance(encoded, list)
-    decoded = [relay.GlobalID.from_id(value) for value in encoded]
+    assert is_object_list(encoded)
+    decoded = [relay.GlobalID.from_id(value) for value in encoded if isinstance(value, str)]
     assert [(g.type_name, g.node_id) for g in decoded] == [("X", "1"), ("X", "2")]
 
 
@@ -1486,7 +1503,7 @@ def test_normalize_input_value_base_csv_filter_unwraps_elements():
 
 def test_convert_filter_to_input_annotation_derives_enum_for_choice_fields_on_list_and_csv_filters():
     """`_element_annotation` resolves choice enum for TypedFilter, ListFilter, and BaseCSVFilter."""
-    model_field = library_models.Book._meta.get_field("circulation_status")
+    model_field: ModelField = library_models.Book._meta.get_field("circulation_status")
 
     # TypedFilter
     tf = TypedFilter(field_name="circulation_status")
@@ -2156,8 +2173,7 @@ def test_relay_relation_isnull_generates_boolean_input_not_globalid_list():
     # String and reject the Boolean. The resolver's annotations are assigned as
     # real objects (not strings) so this module's ``from __future__ import
     # annotations`` cannot stringify the per-test bag class out of scope.
-    # basedpyright: the resolver's GraphQL argument type is assigned through __annotations__ below
-    def _probe(genres=None) -> str:  # pyright: ignore[reportMissingParameterType, reportUnknownParameterType]
+    def _probe(genres: _IsNullBag | None = None) -> str:
         if genres is None:
             return "omitted"
         return f"isNull={genres.is_null!r}"

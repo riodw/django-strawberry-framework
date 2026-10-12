@@ -98,11 +98,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
-from collections.abc import AsyncGenerator, Callable, MutableMapping
+from collections.abc import AsyncGenerator, Callable
 from typing import TYPE_CHECKING, TypeVar, cast
 
 if TYPE_CHECKING:
     from django.contrib.sessions.backends.base import SessionBase
+
+    from .permissions import MutableChannelsScope
 
 _ScopedT = TypeVar("_ScopedT")
 
@@ -155,7 +157,7 @@ class ScopeSingletonMessages:
 
 
 def scope_singleton(
-    scope: MutableMapping[str, object],
+    scope: MutableChannelsScope,
     key: str,
     *,
     factory: Callable[[], _ScopedT],
@@ -319,7 +321,7 @@ class ConnectionActorState:
         self.lock: asyncio.Lock = asyncio.Lock()
 
 
-def connection_actor_state(scope: MutableMapping[str, object]) -> ConnectionActorState:
+def connection_actor_state(scope: MutableChannelsScope) -> ConnectionActorState:
     """Return the scope's ``ConnectionActorState``, creating it on first use.
 
     Lazily created for the same reason the per-scope lock is: a scope arrives
@@ -337,7 +339,7 @@ def connection_actor_state(scope: MutableMapping[str, object]) -> ConnectionActo
     )
 
 
-def note_authenticated_actor(scope: MutableMapping[str, object]) -> None:
+def note_authenticated_actor(scope: MutableChannelsScope) -> None:
     """Latch that this connection has carried an authenticated actor.
 
     Write-once in meaning: the flag is only ever set, never cleared, which is
@@ -346,12 +348,12 @@ def note_authenticated_actor(scope: MutableMapping[str, object]) -> None:
     connection_actor_state(scope).authenticated_provenance = True
 
 
-def connection_was_authenticated(scope: MutableMapping[str, object]) -> bool:
+def connection_was_authenticated(scope: MutableChannelsScope) -> bool:
     """Whether an authenticated actor has ever been observed on this connection."""
     return connection_actor_state(scope).authenticated_provenance
 
 
-def actor_lease(scope: MutableMapping[str, object]) -> asyncio.Lock:
+def actor_lease(scope: MutableChannelsScope) -> asyncio.Lock:
     """Return the connection's actor lease, to be held with ``async with``.
 
     The transport side of the shared primitive: ``consumers.py``'s two
@@ -387,7 +389,7 @@ def actor_lease(scope: MutableMapping[str, object]) -> asyncio.Lock:
 
 @contextlib.asynccontextmanager
 async def actor_transition(
-    scope: MutableMapping[str, object],
+    scope: MutableChannelsScope,
     *,
     was_authenticated: bool,
 ) -> AsyncGenerator[None, None]:

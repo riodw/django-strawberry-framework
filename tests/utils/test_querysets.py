@@ -21,7 +21,7 @@ import zoneinfo
 from collections.abc import Callable, Generator, Iterable
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 import pytest
 import pytest_django
@@ -57,6 +57,7 @@ from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.mutations import resolvers as mutation_resolvers
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.utils._narrowing import is_exact_dict
 from django_strawberry_framework.utils._queryset_private import (
     queryset_db,
     queryset_fields,
@@ -127,7 +128,10 @@ from django_strawberry_framework.utils.querysets import (
     visible_related_objects,
 )
 from django_strawberry_framework.utils.write_transaction import write_pipeline
-from tests._idioms import module_binding
+from tests._idioms import is_object_list, module_binding
+
+if TYPE_CHECKING:
+    from django.db.models.expressions import Combinable
 
 
 def test_safe_class_name_falls_back_for_non_string_metaclass_name_metadata():
@@ -481,7 +485,7 @@ def test_hostile_source_all_override_is_neutralized_by_sealing():
         def all(self):  # would be a predicate-dropping clone if ever dispatched
             return Category.objects.all()
 
-    sticky = models.QuerySet.filter(_StickySource(model=Category), name="visible")
+    sticky = models.QuerySet[Category].filter(_StickySource(model=Category), name="visible")
     result = apply_type_visibility_sync(_sync_type(), sticky, info=None)
     assert type(result) is models.QuerySet  # sealed - not the hostile subclass
     assert "visible" in str(result.query)  # the source predicate survived sealing
@@ -755,7 +759,7 @@ def test_hostile_result_all_override_is_neutralized_by_sealing():
         def all(self):  # a predicate-dropping clone if ever dispatched
             return Category.objects.all()
 
-    sticky = models.QuerySet.filter(_StickyResult(model=Category), name="visible")
+    sticky = models.QuerySet[Category].filter(_StickyResult(model=Category), name="visible")
     result = apply_type_visibility_sync(_sync_hook_type(sticky), Category.objects.all(), info=None)
     assert type(result) is models.QuerySet
     assert "visible" in str(result.query)
@@ -795,7 +799,7 @@ def test_predicate_dropping_all_override_source_is_neutralized_by_sealing():
         def all(self):
             return Category.objects.all()  # would drop whatever WHERE the source carried
 
-    hostile = models.QuerySet.filter(_DropFilter(model=Category), name="visible")
+    hostile = models.QuerySet[Category].filter(_DropFilter(model=Category), name="visible")
     result = apply_type_visibility_sync(_sync_type(), hostile, info=None)
     assert type(result) is models.QuerySet
     assert "visible" in str(result.query)
@@ -932,7 +936,7 @@ def test_pending_deferred_filter_over_foreign_query_never_dispatches():
     """
     from django.db.models import sql
 
-    dispatched = []
+    dispatched: list[Q] = []
 
     class _AddQSpy(sql.Query):
         @override
@@ -940,7 +944,7 @@ def test_pending_deferred_filter_over_foreign_query_never_dispatches():
             dispatched.append(q_object)
             return super().add_q(q_object, reuse_all)
 
-    result = models.QuerySet(model=Category)
+    result: models.QuerySet[Category] = models.QuerySet(model=Category)
     set_queryset_query(result, _AddQSpy(Category))
     set_queryset_deferred_filter(result, (False, (), {"name": "later"}))
     _, defect = _seal_or_defect(result, Category, None)
@@ -959,7 +963,7 @@ def test_deferred_filter_never_dispatches_instance_shadowed_inplace():
     unbound ``sql.Query.add_q`` and never looks the helper up on the candidate. The spy
     must never fire, and the clean genuine query still seals with the predicate baked in.
     """
-    dispatched = []
+    dispatched: list[tuple[object, object, object]] = []
 
     def _spy_inplace(negate: object, args: object, kwargs: object):  # must never run
         dispatched.append((negate, args, kwargs))
@@ -987,14 +991,14 @@ def test_deferred_filter_never_dispatches_instance_shadowed_add_q():
     """
     from django.db.models import sql
 
-    dispatched = []
+    dispatched: list[Q] = []
 
     def _spy_add_q(q: Q):  # must never run
         dispatched.append(q)
 
     query = sql.Query(Category)
     query.__dict__["add_q"] = _spy_add_q
-    result = models.QuerySet(model=Category)
+    result: models.QuerySet[Category] = models.QuerySet(model=Category)
     set_queryset_query(result, query)
     set_queryset_deferred_filter(result, (False, (), {"name": "later"}))
     _, defect = _seal_or_defect(result, Category, None)
@@ -1032,7 +1036,7 @@ class _ForeignDeferredValue:
     [
         ((False, ()), "_PendingFilterQuerySet deferred filter is malformed"),
         ((1, (), {"name": "x"}), "_PendingFilterQuerySet deferred filter negate is a int"),
-        ((False, (), []), "_PendingFilterQuerySet deferred filter kwargs is a list"),
+        ((False, (), list[object]()), "_PendingFilterQuerySet deferred filter kwargs is a list"),
         (
             (False, (), {"name": _ForeignDeferredValue()}),
             "_PendingFilterQuerySet deferred filter 'name' is a _ForeignDeferredValue",
@@ -1085,7 +1089,7 @@ def test_a_deferred_filter_negate_is_refused_without_reaching_its_own_bool():
     ``__bool__`` whether the relation predicate is negated, which is consumer
     dispatch inside a helper that runs genuine Django code alone.
     """
-    dispatched = []
+    dispatched: list[bool] = []
 
     class _NegateSpy:
         def __bool__(self):  # must never run
@@ -1392,7 +1396,7 @@ async def test_predicate_dropping_override_result_is_neutralized_async():
         def all(self):
             return Category.objects.all()
 
-    shaped: models.QuerySet[Category] = models.QuerySet.filter(
+    shaped: models.QuerySet[Category] = models.QuerySet[Category].filter(
         _DropFilter(model=Category),
         name="visible",
     )
@@ -1609,9 +1613,9 @@ def test_hostile_prefetch_synthetic_row_never_materializes():
     )
     sealed = apply_type_visibility_sync(_identity_hook_type(), source, info=None)
     (materialized,) = list(sealed)
-    # basedpyright: Prefetch(to_attr=...) sets the attribute on each row at run time; the model
-    # class does not declare it
-    assert [item.name for item in materialized.pf] == ["item-real"]  # pyright: ignore[reportAttributeAccessIssue]
+    prefetched: object = vars(materialized)["pf"]  # Prefetch(to_attr=...) sets it per row
+    assert is_object_list(prefetched)
+    assert [item.name if isinstance(item, Item) else item for item in prefetched] == ["item-real"]
 
 
 def test_string_and_default_prefetch_lookups_pass_through():
@@ -2107,7 +2111,7 @@ def test_exact_wherenode_shadowed_clone_never_dispatches():
     """
     from django.db.models.sql.where import WhereNode
 
-    fired = []
+    fired: list[str] = []
 
     def _spy_clone():  # must never run
         fired.append("clone")
@@ -2131,7 +2135,7 @@ def test_shadowed_leaf_as_sql_never_dispatches():
     """
     from django.db.models import Value
 
-    fired = []
+    fired: list[str] = []
 
     def _spy_as_sql(
         compiler: SQLCompiler,
@@ -2160,7 +2164,7 @@ def test_lookup_direct_rhs_attribute_hook_never_dispatches():
     RHS is then omitted from the returned operands entirely. The raw ``lhs`` /
     ``rhs`` walk classifies the value statically instead.
     """
-    fired = []
+    fired: list[str] = []
 
     class _HookedRhs:
         def __init__(self, log: list[str]):
@@ -2251,7 +2255,7 @@ def test_lookup_direct_rhs_date_subclass_normalizes_to_exact_date():
     reconstruction replaces it with a framework-owned exact ``datetime.date`` whose
     methods are the interpreter's own.
     """
-    fired = []
+    fired: list[str] = []
 
     class _LoudDate(datetime.date):
         @override
@@ -2309,7 +2313,7 @@ def test_lookup_direct_rhs_property_shadowed_subclass_normalizes_safely():
     never resolved, and the exact value rebuilt from the base slots is the one the
     interpreter itself would report.
     """
-    fired = []
+    fired: list[str] = []
 
     class _ShadowedDate(datetime.date):
         @property
@@ -2456,7 +2460,7 @@ def test_lookup_expression_rhs_still_recurses():
     An RHS whose type exposes ``as_sql`` is what Django dispatches at compile time, so
     it recurses through the ordinary expression walk rather than the inert-data rules.
     """
-    fired = []
+    fired: list[str] = []
 
     class _HostileRhs(models.Func):
         @override
@@ -2487,7 +2491,7 @@ def test_lookup_hostile_lhs_fails_closed():
     The LHS is always an expression the compiler dispatches, so the raw-state operand
     walk recurses it under the same rule as any other node.
     """
-    fired = []
+    fired: list[str] = []
 
     class _HostileLhs(models.Func):
         @override
@@ -2519,7 +2523,7 @@ def test_hostile_order_by_expression_fails_closed():
     dispatches ``as_sql`` on; the old inventory never walked it, so a consumer
     ordering expression rode through to compile time.
     """
-    fired = []
+    fired: list[str] = []
 
     class _HostileOrder(models.Func):
         @override
@@ -2661,7 +2665,7 @@ def test_deferred_filter_hostile_resolve_expression_never_dispatches():
     """
     from django.db.models import Value
 
-    fired = []
+    fired: list[str] = []
 
     class _HostileValue:
         conditional = True
@@ -2726,7 +2730,7 @@ def test_hostile_query_container_subclass_fails_closed():
     other containers); a ``dict`` SUBCLASS with an overridden ``.copy()`` would
     dispatch mid-clone. Each container is required to be exactly the builtin.
     """
-    fired = []
+    fired: list[str] = []
 
     class _HostileRefcount(dict[str, int]):
         @override
@@ -2864,7 +2868,7 @@ def test_deferred_str_subclass_expression_never_dispatches():
     genuine-Django proof and is rejected before ``add_q`` can dispatch its
     ``resolve_expression``.
     """
-    fired = []
+    fired: list[str] = []
 
     class _EvilStr(str):
         def resolve_expression(self, query: object, *args: object, **kwargs: object):
@@ -2934,7 +2938,7 @@ def test_dynamic_as_vendor_shadow_never_dispatches():
     """
     from django.db.models import Value
 
-    fired = []
+    fired: list[str] = []
 
     def _spy_as_sqlite(
         compiler: SQLCompiler,
@@ -2989,7 +2993,7 @@ def test_func_extra_template_parameter_object_fails_closed():
     while the compiler assembles SQL, after the seal returned. The template-parameter rule
     admits only exact inert scalars there, so the seal fails closed and nothing dispatches.
     """
-    fired = []
+    fired: list[str] = []
 
     class _HostileTemplateParam:
         @override
@@ -2998,10 +3002,11 @@ def test_func_extra_template_parameter_object_fails_closed():
             return "UPPER"
 
     source = Category.objects.all()
+    text_field: models.TextField[str | Combinable, str] = models.TextField()
     ann = models.Func(
         models.Value("x"),
         function=_HostileTemplateParam(),
-        output_field=models.TextField(),
+        output_field=text_field,
     )
     source.query.annotations = {"c": ann}
     sealed, defect = _seal_or_defect(source, Category, None)
@@ -3017,11 +3022,12 @@ def test_func_extra_string_template_parameter_seals():
     admitted: they are rendered by the interpreter's own formatting, not by consumer code.
     """
     source = Category.objects.all()
+    text_field: models.TextField[str | Combinable, str] = models.TextField()
     source.query.annotations = {
         "c": models.Func(
             models.Value("x"),
             function="UPPER",
-            output_field=models.TextField(),
+            output_field=text_field,
             precision=1,
             suffix=None,
         ),
@@ -3056,7 +3062,8 @@ def test_func_extra_non_inert_template_state_fails_closed(extra: object, detail:
     inert scalars is state the ``%`` interpolation would render through its own protocol.
     """
     source = Category.objects.all()
-    ann = models.Func(models.Value("x"), output_field=models.TextField())
+    text_field: models.TextField[str | Combinable, str] = models.TextField()
+    ann = models.Func(models.Value("x"), output_field=text_field)
     ann.__dict__["extra"] = extra
     source.query.annotations = {"c": ann}
     sealed, defect = _seal_or_defect(source, Category, None)
@@ -3122,7 +3129,7 @@ def test_extra_order_by_none_and_string_sequence_seal():
 
 def test_query_extra_select_executable_sql_fails_closed_before_clone():
     """A tampered ``Query.extra`` SQL object cannot execute during sealing or compilation."""
-    fired = []
+    fired: list[str] = []
 
     class _HostileSQL:
         @override
@@ -3189,7 +3196,7 @@ def test_query_extra_select_hostile_params_fail_closed():
 
 def test_extra_where_executable_sql_fails_closed_before_clone():
     """An ``ExtraWhere`` raw fragment is validated despite having no expression children."""
-    fired = []
+    fired: list[str] = []
 
     class _HostileSQL:
         @override
@@ -3216,7 +3223,7 @@ def test_extra_where_non_sequence_sqls_fails_closed():
     whole-container type gate runs first, so a hostile ``__iter__`` never fires at all
     (asserted) -- an element-wise walk would already have dispatched it.
     """
-    fired = []
+    fired: list[str] = []
 
     class _EvilSqls:
         def __iter__(self):  # must never run
@@ -3243,7 +3250,7 @@ def test_extra_where_non_sequence_params_fails_closed():
     where a sequence-like object -- whose ``__iter__`` would otherwise run when
     ``as_sql`` builds ``list(self.params or ())`` -- fails closed untouched.
     """
-    fired = []
+    fired: list[str] = []
 
     class _EvilParams:
         def __iter__(self):  # must never run
@@ -3304,7 +3311,7 @@ def test_filtered_relation_hostile_resolved_condition_never_dispatches():
     which is not reachable from ``alias_map`` alone. The join walk recurses it through the
     ``where``-tree walk, so a buried hostile leaf is rejected.
     """
-    fired = []
+    fired: list[str] = []
 
     class _BuriedHostile(models.Func):
         @override
@@ -3324,7 +3331,7 @@ def test_filtered_relation_hostile_resolved_condition_never_dispatches():
     assert join.filtered_relation is not None
     # basedpyright: django-stubs omits FilteredRelation.resolved_condition, reported as an unknown
     # attribute
-    join.filtered_relation.resolved_condition.children.append(_BuriedHostile(models.F("name")))  # pyright: ignore[reportAttributeAccessIssue]
+    join.filtered_relation.resolved_condition.children.append(_BuriedHostile(models.F("name")))  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     sealed, defect = _seal_or_defect(frq, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "where clause carries a _BuriedHostile node")
@@ -3374,7 +3381,7 @@ def test_module_spoofing_metaclass_is_not_invoked_and_fails_closed():
     provenance read that is meant to reject the type; ``type.__getattribute__`` resolves
     both names without dispatching the metaclass hook.
     """
-    fired = []
+    fired: list[str] = []
 
     class _NoisyMeta(type):
         @override
@@ -3436,7 +3443,7 @@ def test_retained_state_field_wrong_shape_fails_closed(field: str, value: object
 
 def test_hostile_hints_bool_and_iter_never_dispatch():
     """A ``_hints`` dict subclass with a hostile ``__bool__`` / ``__iter__`` fails closed."""
-    fired = []
+    fired: list[str] = []
 
     class _EvilHints(dict[str, object]):
         def __bool__(self):  # must never run
@@ -3719,6 +3726,15 @@ def test_slotted_genuine_django_node_fails_closed():
     assert defect == ("untrusted", "annotation 'flag' is a SafeString with no instance state")
 
 
+def _explain_info(format_name: str, options: dict[str, object]) -> object:
+    """Build Django's ``ExplainInfo``, read from ``django.db.models.sql.query`` where it lives."""
+    from django.db.models.sql import query as sql_query_module
+
+    explain_info_cls = module_binding(sql_query_module, "ExplainInfo")
+    assert callable(explain_info_cls)
+    return explain_info_cls(format_name, options)
+
+
 def test_slotted_django_namedtuple_in_an_unenumerated_slot_fails_closed():
     """A Django namedtuple carrying a MUTABLE member is refused, not retained by reference.
 
@@ -3734,15 +3750,9 @@ def test_slotted_django_namedtuple_in_an_unenumerated_slot_fails_closed():
     A slotted object has no slot-by-slot rebuild, so it takes the admitted-bound-value
     rule, which has no representation for a namedtuple and refuses it.
     """
-    # basedpyright: django-stubs omits ExplainInfo from django.db.models.sql.query, where Django
-    # defines it
-    from django.db.models.sql.query import (
-        ExplainInfo,  # pyright: ignore[reportAttributeAccessIssue]
-    )
-
     source = Category.objects.filter(is_private=False)
     str(source.query)
-    source.query.explain_info = ExplainInfo("text", {"analyze": True})
+    source.query.explain_info = _explain_info("text", {"analyze": True})
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet binds a ExplainInfo bound value")
@@ -3786,16 +3796,11 @@ def test_reconstruction_never_grows_the_retained_type_set_with_a_planted_type():
     in a process, which is growth attributable to the schema and not to any planted value.
     Snapshotting after it leaves the assertion measuring only what the planted value adds.
     """
-    # basedpyright: django-stubs omits ExplainInfo from django.db.models.sql.query, where Django
-    # defines it
-    from django.db.models.sql.query import (
-        ExplainInfo,  # pyright: ignore[reportAttributeAccessIssue]
-    )
     from django.utils.safestring import SafeString
 
     _seal_or_defect(Category.objects.filter(is_private=False), Category, None)
     before = frozenset(_RETAINED_TYPES)
-    for planted in (ExplainInfo("text", {"analyze": True}), SafeString("self")):
+    for planted in (_explain_info("text", {"analyze": True}), SafeString("self")):
         source = Category.objects.filter(is_private=False)
         str(source.query)
         source.query.explain_info = planted
@@ -3813,7 +3818,7 @@ def test_hostile_case_container_fails_closed_before_its_iterator_runs():
     goes unnoticed. Expression-owned state is validated first, so the iterator never
     runs.
     """
-    fired = []
+    fired: list[str] = []
 
     class _HostileCases(list[object]):
         @override
@@ -3847,7 +3852,7 @@ def test_hostile_alias_refcount_payload_fails_closed():
     composition -- a consumer callback holding the sealed query. Payloads are pinned
     to their exact Django shape, not only the container type and its keys.
     """
-    fired = []
+    fired: list[str] = []
 
     class _HostileCount(int):
         @override
@@ -4011,7 +4016,7 @@ def test_mutating_a_candidate_filtered_relation_cannot_change_the_sealed_join():
     assert source_join.filtered_relation is not None
     # basedpyright: django-stubs omits FilteredRelation.resolved_condition, reported as an unknown
     # attribute
-    source_join.filtered_relation.resolved_condition.children[0].rhs = True  # pyright: ignore[reportAttributeAccessIssue]
+    source_join.filtered_relation.resolved_condition.children[0].rhs = True  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     assert sealed.query.sql_with_params() == before
     assert source.query.sql_with_params() != source_before
 
@@ -4057,8 +4062,8 @@ def test_sealed_query_shares_no_ast_node_with_the_candidate():
     assert (
         # basedpyright: django-stubs omits Query._filtered_relations, reported as an unknown
         # attribute
-        sealed.query._filtered_relations["visible"]  # pyright: ignore[reportAttributeAccessIssue]
-        is not source.query._filtered_relations["visible"]  # pyright: ignore[reportAttributeAccessIssue]
+        sealed.query._filtered_relations["visible"]  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+        is not source.query._filtered_relations["visible"]  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     )
     sealed_join = _join_with_filtered_relation(sealed.query)
     source_join = _join_with_filtered_relation(source.query)
@@ -4069,8 +4074,8 @@ def test_sealed_query_shares_no_ast_node_with_the_candidate():
     assert (
         # basedpyright: django-stubs omits FilteredRelation.resolved_condition, reported as an
         # unknown attribute
-        sealed_join.filtered_relation.resolved_condition  # pyright: ignore[reportAttributeAccessIssue]
-        is not source_join.filtered_relation.resolved_condition  # pyright: ignore[reportAttributeAccessIssue]
+        sealed_join.filtered_relation.resolved_condition  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+        is not source_join.filtered_relation.resolved_condition  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     )
 
 
@@ -4284,7 +4289,7 @@ def test_value_payload_plain_data_subclass_normalizes_to_exact_value():
     override fired during normalization, so no consumer method survives into the sealed
     query's compile path.
     """
-    fired = []
+    fired: list[str] = []
 
     class _PayloadChoices(models.TextChoices):
         KEEP = "keep", "Keep"
@@ -4435,13 +4440,14 @@ def test_value_payload_literals_seal_and_rows_survive():
     assert [row.name for row in rows] == ["lit_row"]
     # basedpyright: annotate() sets the annotation on each row at run time; the model class does
     # not declare it
-    assert rows[0].flag == 1  # pyright: ignore[reportAttributeAccessIssue]
-    assert rows[0].label == "x"  # pyright: ignore[reportAttributeAccessIssue]
+    annotated: dict[str, object] = vars(rows[0])
+    assert annotated["flag"] == 1
+    assert annotated["label"] == "x"
 
 
 def test_non_class_model_with_convincing_meta_fails_closed():
     """An OBJECT exposing ``_meta.concrete_model`` is not a model and fails closed unrun."""
-    fired = []
+    fired: list[str] = []
 
     class _HookedMeta:
         @property
@@ -4464,7 +4470,7 @@ def test_non_class_model_with_convincing_meta_fails_closed():
 
 def test_non_model_class_with_convincing_meta_fails_closed():
     """A non-model CLASS exposing ``_meta.concrete_model`` fails closed unrun."""
-    fired = []
+    fired: list[str] = []
 
     class _HookedMeta:
         @property
@@ -4764,10 +4770,11 @@ def test_bake_deferred_non_sequence_args_fails_closed():
     from django.db.models import sql
 
     rebuilt = sql.Query.clone(Item.objects.all().query)
-    assert _bake_deferred_filter_or_defect(rebuilt, (False, object(), {}), "QuerySet") == (
-        "untrusted",
-        "QuerySet deferred filter args is a object",
-    )
+    assert _bake_deferred_filter_or_defect(
+        rebuilt,
+        (False, object(), dict[str, object]()),
+        "QuerySet",
+    ) == ("untrusted", "QuerySet deferred filter args is a object")
 
 
 def test_bake_deferred_prohibited_kwargs_fails_closed():
@@ -4811,7 +4818,7 @@ def test_bake_deferred_hostile_arg_fails_closed():
     rebuilt = sql.Query.clone(Item.objects.all().query)
     assert _bake_deferred_filter_or_defect(
         rebuilt,
-        (False, (_HostileLeaf(),), {}),
+        (False, (_HostileLeaf(),), dict[str, object]()),
         "QuerySet",
     ) == ("untrusted", "QuerySet deferred filter arg is a _HostileLeaf")
 
@@ -5149,10 +5156,12 @@ class _ProxyTargetHolder(models.Model):
     ``django_strawberry_framework/utils/querysets.py::_sealed_prefetch_related_lookups``.
     """
 
-    cat = models.ForeignKey(
-        _ProxyTargetCategory,
-        related_name="+",
-        on_delete=models.DO_NOTHING,
+    cat: "models.ForeignKey[_ProxyTargetCategory | Combinable, _ProxyTargetCategory]" = (
+        models.ForeignKey(
+            _ProxyTargetCategory,
+            related_name="+",
+            on_delete=models.DO_NOTHING,
+        )
     )
 
     class Meta:
@@ -5267,8 +5276,11 @@ def test_prefetch_relation_target_unresolvable_paths_fail_open():
         ``django_strawberry_framework/utils/querysets.py::_prefetch_relation_target_or_none``.
         """
 
-        name = models.TextField(default="")
-        rel = models.ForeignKey("missing_app.Missing", on_delete=models.CASCADE)
+        name: "models.TextField[str | Combinable, str]" = models.TextField(default="")
+        rel: "models.ForeignKey[models.Model | Combinable, models.Model]" = models.ForeignKey(
+            "missing_app.Missing",
+            on_delete=models.CASCADE,
+        )
 
         class Meta:
             app_label = "products"
@@ -5325,8 +5337,11 @@ def test_prefetch_child_unresolvable_relation_paths_fail_open():
         Django.
         """
 
-        name = models.TextField(default="")
-        rel = models.ForeignKey("missing_app.Missing", on_delete=models.CASCADE)
+        name: "models.TextField[str | Combinable, str]" = models.TextField(default="")
+        rel: "models.ForeignKey[models.Model | Combinable, models.Model]" = models.ForeignKey(
+            "missing_app.Missing",
+            on_delete=models.CASCADE,
+        )
 
         class Meta:
             app_label = "products"
@@ -5441,7 +5456,7 @@ def test_prefetch_relation_target_resolves_every_installed_default_accessor():
     """
     from django.apps import apps
 
-    unresolved = []
+    unresolved: list[tuple[str, str, str]] = []
     for model in apps.get_models():
         for field in model._meta.get_fields():
             if not (field.is_relation and field.auto_created and not field.concrete):
@@ -5560,10 +5575,7 @@ def test_seal_serves_a_combinator_as_a_single_table_primary_key_membership_query
     assert sql.startswith(f'SELECT "{table}"."id"')
     assert sql.endswith(f'ORDER BY "{table}"."name" DESC')
     assert [row.pk for row in _rows_of(Category, sealed)] == [
-        # basedpyright: django-stubs leaves a model field's value type unsolved without its mypy
-        # plugin, so Category.name reads Unknown
-        row.pk
-        for row in sorted((first, second), key=lambda c: c.name, reverse=True)  # pyright: ignore[reportUnknownLambdaType]
+        row.pk for row in sorted((first, second), key=lambda c: c.name, reverse=True)
     ]
 
 
@@ -5778,7 +5790,7 @@ def test_bound_value_normalizers_mirror_the_inert_inventory():
 def test_seal_require_unevaluated():
     """Populated _result_cache produces an 'unevaluated' defect when require_unevaluated=True."""
     qs = Category.objects.all()
-    policy_uneval = _SealPolicy(
+    policy_uneval: _SealPolicy[models.Model] = _SealPolicy(
         require_model_rows=True,
         reject_sliced=True,
         rewrite_combined=True,
@@ -5904,7 +5916,7 @@ def test_visibility_defect_messages():
 
     evaluated_qs = Category.objects.all()
     evaluated_qs._result_cache = []
-    policy_uneval = _SealPolicy(require_unevaluated=True)
+    policy_uneval: _SealPolicy[models.Model] = _SealPolicy(require_unevaluated=True)
     with pytest.raises(
         ConfigurationError,
         match="with the 'evaluated' defect .* declares no wording for",
@@ -6488,7 +6500,10 @@ class _NestedAliasRouter:
     def db_for_read(self, model: type[models.Model], **hints: object) -> str | None:
         _NestedAliasRouter.calls.append("read")
         token = hints.get("tenant")
-        return token["alias"] if type(token) is dict else None
+        if not is_exact_dict(token):
+            return None
+        alias = token["alias"]
+        return alias if isinstance(alias, str) else None
 
     def db_for_write(self, model: type[models.Model], **hints: object) -> str | None:
         _NestedAliasRouter.calls.append("write")

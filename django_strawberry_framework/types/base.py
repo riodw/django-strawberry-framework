@@ -67,6 +67,7 @@ from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_text, _safe_t
 from ..optimizer.field_meta import FieldMeta
 from ..optimizer.hints import OptimizerHint
 from ..registry import registry
+from ..utils._narrowing import is_class, is_dict, is_list_or_tuple, is_mapping
 from ..utils.relations import is_single_column_foreign_key
 from ..utils.typing import is_async_callable
 from .converters import _field_output_type_for, convert_field_output
@@ -175,7 +176,7 @@ def _validate_set_sidecar(
     short-circuit; this owns only the subclass check and the
     ``must be {article} {expected.__name__} subclass`` wording.
     """
-    if not (isinstance(sidecar_class, type) and issubclass(sidecar_class, expected)):
+    if not (is_class(sidecar_class) and issubclass(sidecar_class, expected)):
         raise ConfigurationError(
             f"{model.__name__}.Meta.{meta_key} must be {article} {expected.__name__} subclass; "
             f"got {_safe_arg_repr(sidecar_class)}",
@@ -271,7 +272,7 @@ def _validate_connection(
     """
     if connection is None:
         return None
-    if not isinstance(connection, dict):
+    if not is_dict(connection):
         raise ConfigurationError(
             f"{model.__name__}.Meta.connection must be a dict; got {_safe_arg_repr(connection)}",
         )
@@ -283,17 +284,23 @@ def _validate_connection(
             f"[{', '.join(unknown_labels)}]. "
             "Only 'total_count' is recognized in 0.0.9.",
         )
-    if "total_count" in connection and not isinstance(connection["total_count"], bool):
-        raise ConfigurationError(
-            f"{model.__name__}.Meta.connection['total_count'] must be a bool; "
-            f"got {_safe_arg_repr(connection['total_count'])}",
-        )
+    # The returned options are built from the checks: the one recognized key, under its
+    # own exact name, holding the bool it was proven to be.
+    options: dict[str, bool] = {}
+    if "total_count" in connection:
+        total_count = connection["total_count"]
+        if not isinstance(total_count, bool):
+            raise ConfigurationError(
+                f"{model.__name__}.Meta.connection['total_count'] must be a bool; "
+                f"got {_safe_arg_repr(total_count)}",
+            )
+        options["total_count"] = total_count
     if not relay_shaped:
         raise ConfigurationError(
             f"{model.__name__}.Meta.connection {_RELAY_NODE_GATE_LEAD} "
             f"{_RELAY_NODE_GATE_INHERIT_TAIL}",
         )
-    return dict(connection)
+    return options
 
 
 def _is_str_tuple(entries: tuple[object, ...]) -> "TypeIs[tuple[str, ...]]":
@@ -381,11 +388,12 @@ def _validate_relation_shapes(
     """
     if value is None:
         return None
-    if not isinstance(value, dict):
+    if not is_dict(value):
         raise ConfigurationError(
             f"{model.__name__}.Meta.relation_shapes must be a dict mapping relation "
             f"field names to shapes; got {_safe_arg_repr(value)}",
         )
+    shapes: dict[str, str] = {}
     for key, shape in value.items():
         if not isinstance(key, str):
             raise ConfigurationError(
@@ -401,11 +409,12 @@ def _validate_relation_shapes(
                 f"got unknown shape {_safe_arg_repr(shape)}; valid shapes are "
                 f"{sorted(RELATION_SHAPE_VALUES)}.",
             )
+        shapes[key] = shape
     if not relay_shaped:
         raise ConfigurationError(
             f"{model.__name__}.Meta.relation_shapes {_RELAY_NODE_GATE_LEAD} or remove the key.",
         )
-    return dict(value)
+    return shapes
 
 
 # The three positional parameters a ``callable`` GlobalID encoder must accept.
@@ -1115,20 +1124,21 @@ def _meta_optimizer_hints(meta: object, model: type[models.Model]) -> dict[str, 
     value = _meta_attr(meta, "optimizer_hints")
     if value is None:
         return {}
-    if not isinstance(value, Mapping):
+    if not is_mapping(value):
         raise ConfigurationError(
             f"{model.__name__}.Meta.optimizer_hints must be a mapping of field names to OptimizerHint "
             f"instances, got {type(value).__name__}.",
         )
     # One pass over the consumer mapping: the keys checked are the keys returned.
-    plain = dict(value)
-    for key in plain:
+    hints: dict[str, object] = {}
+    for key, hint in dict(value).items():
         if not isinstance(key, str):
             raise ConfigurationError(
                 f"{model.__name__}.Meta.optimizer_hints keys must be field name strings; "
                 f"got {_safe_arg_repr(key)}.",
             )
-    return plain
+        hints[key] = hint
+    return hints
 
 
 def _format_unknown_fields_error(
@@ -1249,12 +1259,11 @@ def _validate_interfaces(meta: object, model: type[models.Model]) -> tuple[type[
         return ()
     if isinstance(raw, str):
         raise ConfigurationError(_interfaces_shape_error(model, "a string"))
-    if isinstance(raw, type):
+    if is_class(raw):
         # Consumer-declared entries stay unproven until the loop below checks each one.
         entries: tuple[object, ...] = (raw,)
-    elif isinstance(raw, (tuple, list)):
-        raw_entries: Sequence[object] = raw
-        entries = tuple(raw_entries)
+    elif is_list_or_tuple(raw):
+        entries = tuple(raw)
     else:
         raise ConfigurationError(_interfaces_shape_error(model, type(raw).__name__))
     if entries == ():
@@ -1279,7 +1288,7 @@ def _validate_interfaces(meta: object, model: type[models.Model]) -> tuple[type[
                     f"{model.__name__}.Meta.interfaces entry {label} is "
                     f"{description}. {_RELAY_NON_INTERFACE_REMEDIATION}",
                 )
-        if not isinstance(entry, type):
+        if not is_class(entry):
             raise ConfigurationError(
                 f"{model.__name__}.Meta.interfaces must contain interface classes, "
                 f"got {_safe_arg_repr(entry)}.",

@@ -1030,7 +1030,9 @@ def test_the_extension_replaces_a_result_that_rejects_safe_field_adoption(
 
     extension._process_result(result, DEFAULT_ERROR_POLICY)
 
-    degraded = context.result
+    # basedpyright: Strawberry's schema/_graphql_core.py rebinds GraphQLExecutionResult in an
+    # ImportError fallback, so ExecutionContext.result carries Unknown under the <3.3 pin
+    degraded: object = context.result  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
     assert degraded is not result
     assert isinstance(degraded, StrawberryExecutionResult)
     assert degraded.data is None

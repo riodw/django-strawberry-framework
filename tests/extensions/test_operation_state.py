@@ -39,7 +39,7 @@ from collections.abc import (
     Iterable,
 )
 from types import SimpleNamespace
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 import pytest
 import strawberry
@@ -78,6 +78,14 @@ from django_strawberry_framework.utils.execution_mode import (
 from django_strawberry_framework.utils.operation_lease import OperationLease
 from tests._execution import make_execution_context
 
+if TYPE_CHECKING:
+    from typing_extensions import TypeIs
+
+
+def _is_list(value: object) -> TypeIs[list[object]]:
+    """Return whether a recorded slot holds a ``list`` (subclasses included)."""
+    return isinstance(value, list)
+
 
 class _NestingSeen(TypedDict):
     """The nesting answer of each operation run, and whether the inner one has run."""
@@ -100,7 +108,7 @@ class _Probe(_OperationBoundExtension[OperationState]):
 
     def __init__(self) -> None:
         super().__init__()
-        self.seen: list[object] = []
+        self.seen: list[ExecutionContext | tuple[str, ExecutionContext | None] | None] = []
 
     @override
     def on_operation(self):
@@ -232,7 +240,7 @@ def test_result_collection_reads_the_operations_own_state():
     state would answer for no operation - and the way back from that is to leave
     the payload on the shared extension, which is the stale-payload disclosure.
     """
-    probe_holder = []
+    probe_holder: list[_Probe] = []
 
     class _Recording(_Probe):
         def __init__(self) -> None:
@@ -253,7 +261,7 @@ def test_result_collection_reads_the_operations_own_state():
 @pytest.mark.asyncio
 async def test_result_collection_reads_the_operations_own_state_on_the_async_path():
     """The async twin, whose collection can also run inside an early-return scope."""
-    probe_holder = []
+    probe_holder: list[_Probe] = []
 
     class _Recording(_Probe):
         def __init__(self) -> None:
@@ -873,7 +881,7 @@ async def test_a_surviving_task_that_starts_its_own_operation_ends_with_nothing_
         @strawberry.field
         def spawn_hello(self, info: strawberry.Info) -> str:
             rows = seen.get("nested_rows", [])
-            assert isinstance(rows, list)
+            assert _is_list(rows)
             seen["nested_rows"] = [*rows, operation_is_nested()]
             return "hi"
 
@@ -1101,7 +1109,7 @@ def _ticking_schema(
             try:
                 for index in range(frames):
                     frame_rows = seen["rows"]
-                    assert isinstance(frame_rows, list)
+                    assert _is_list(frame_rows)
                     frame_rows.append(
                         (
                             operation_is_nested(),
@@ -1561,7 +1569,7 @@ def _mode_schema(seen: dict[str, object]):
         @strawberry.field
         def mode(self) -> str:
             rows = seen.setdefault("rows", [])
-            assert isinstance(rows, list)
+            assert _is_list(rows)
             rows.append(current_operation_mode())
             seen.setdefault("copied", contextvars.copy_context())
             return "read"
@@ -1659,7 +1667,7 @@ async def test_every_frame_of_a_stream_carries_the_operations_mode():
             """Record the mode this frame is produced under, then yield it."""
             for index in range(2):
                 rows = seen["rows"]
-                assert isinstance(rows, list)
+                assert _is_list(rows)
                 rows.append(current_operation_mode())
                 yield f"tick-{index}"
 
@@ -1692,7 +1700,7 @@ async def test_a_cancelled_stream_leaves_no_mode_bound():
             """Yield forever, so cancellation is the only way out."""
             while True:
                 rows = seen["rows"]
-                assert isinstance(rows, list)
+                assert _is_list(rows)
                 rows.append(current_operation_mode())
                 yield "tick"
 

@@ -46,7 +46,7 @@ from functools import partial
 import strawberry
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from strawberry.schema.name_converter import NameConverter
-from strawberry.types.base import StrawberryList, StrawberryOptional
+from strawberry.types.base import StrawberryList, StrawberryOptional, StrawberryType
 from strawberry.types.enum import StrawberryEnumDefinition
 from strawberry.types.field import UNRESOLVED
 from strawberry.types.object_type import StrawberryObjectDefinition
@@ -582,6 +582,17 @@ def _consumer_converter_label(definition: "DjangoTypeDefinition", name: str) -> 
     return f"consumer {source} ({kind})"
 
 
+def _converter_type_name(name_converter: NameConverter, definition: StrawberryType) -> str:
+    """Render ``definition``'s GraphQL name through ``name_converter.from_type``.
+
+    Through the converter rather than its per-kind methods, so a consumer
+    ``NameConverter`` overriding ``from_type`` still decides every name.
+    """
+    # basedpyright: Strawberry annotates ``NameConverter.from_type`` with the bare generic
+    # ``StrawberryDirective``, so the bound method reads as partially Unknown
+    return name_converter.from_type(definition)  # pyright: ignore[reportUnknownMemberType]
+
+
 def _sdl_type_name(
     type_cls: type[DjangoType],
     definition: "DjangoTypeDefinition",
@@ -614,7 +625,7 @@ def _sdl_type_name(
     )
     if strawberry_definition is None:
         return definition.graphql_type_name
-    return name_converter.from_type(strawberry_definition)
+    return _converter_type_name(name_converter, strawberry_definition)
 
 
 def _scalar_name(
@@ -634,7 +645,7 @@ def _scalar_name(
     """
     scalar_definition = scalar_map.get(scalar) if scalar_map is not None else None
     if scalar_definition is not None:
-        return name_converter.from_type(scalar_definition)
+        return _converter_type_name(name_converter, scalar_definition)
     mapped = _GRAPHQL_SCALAR_NAMES.get(scalar)
     if mapped is not None:
         return mapped
@@ -652,7 +663,7 @@ def _scalar_name(
     ):
         strawberry_type = scalar
     if strawberry_type is not None:
-        return name_converter.from_type(strawberry_type)
+        return _converter_type_name(name_converter, strawberry_type)
     return getattr(scalar, "__name__", None) or str(scalar)
 
 

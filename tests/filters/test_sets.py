@@ -23,7 +23,7 @@ import pickle
 import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from typing import TYPE_CHECKING, NamedTuple, TypeVar
+from typing import TYPE_CHECKING, NamedTuple, TypeAlias, TypeVar
 from unittest import mock
 
 import pytest
@@ -109,13 +109,41 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.sets_mixins import collect_related_declarations
 from django_strawberry_framework.types.relay import SyncMisuseError, apply_interfaces
 from django_strawberry_framework.utils.relations import classify_path
-from tests._idioms import definition_raises
+from tests._idioms import definition_raises, is_object_dict
 from tests.optimizer import _link_models
 
 if TYPE_CHECKING:
+    from django.db.models.expressions import Combinable
+    from typing_extensions import TypeIs
+
     from django_strawberry_framework.utils.typing import ModelField
 
 _M = TypeVar("_M", bound=django_models.Model)
+
+if TYPE_CHECKING:
+    # Each field's descriptor types as django-stubs declares them (set type, get type), spelled
+    # out because the checker runs without the django-stubs mypy plugin that would infer them;
+    # ``null=True`` adds ``None`` to both.
+    _FK: TypeAlias = django_models.ForeignKey[_M | Combinable, _M]
+    _O2O: TypeAlias = django_models.OneToOneField[_M | Combinable, _M]
+    _NullInt: TypeAlias = django_models.IntegerField[
+        float | int | str | Combinable | None,
+        int | None,
+    ]
+    _NullText: TypeAlias = django_models.TextField[str | Combinable | None, str | None]
+    _Text: TypeAlias = django_models.TextField[str | Combinable, str]
+
+
+def _is_model_choice_field(field: object) -> TypeIs[ModelChoiceField[django_models.Model]]:
+    """Return whether ``field`` is a ``ModelChoiceField`` (multiple-choice subclass included)."""
+    return isinstance(field, ModelChoiceField)
+
+
+def _is_model_multiple_choice_field(
+    field: object,
+) -> TypeIs[ModelMultipleChoiceField[django_models.Model]]:
+    """Return whether ``field`` is a ``ModelMultipleChoiceField``."""
+    return isinstance(field, ModelMultipleChoiceField)
 
 
 def _snapshot(filterset_class: type[FilterSet]) -> ExpansionSnapshot:
@@ -170,7 +198,7 @@ class _CrDesk(django_models.Model):
     the check runs at expansion and reads no table.
     """
 
-    name = django_models.TextField()
+    name: _Text = django_models.TextField()
 
     class Meta:
         app_label = "products"
@@ -180,7 +208,7 @@ class _CrDesk(django_models.Model):
 class _CrKioskDesk(_CrDesk):
     """An MTI child declaring its own unique ``kiosk_code``."""
 
-    kiosk_code = django_models.TextField(unique=True)
+    kiosk_code: _Text = django_models.TextField(unique=True)
 
     # basedpyright: Django's ModelBase pops a concrete model's Meta (only an abstract model keeps
     # one), so _CrDesk has no Meta at run time for this one to subclass
@@ -192,7 +220,7 @@ class _CrKioskDesk(_CrDesk):
 class _CrOwnKeyDesk(_CrDesk):
     """An MTI child keyed on its own ``code``, so its parent link is not its primary key."""
 
-    code = django_models.TextField(primary_key=True)
+    code: _Text = django_models.TextField(primary_key=True)
 
     # basedpyright: Django's ModelBase pops a concrete model's Meta (only an abstract model keeps
     # one), so _CrDesk has no Meta at run time for this one to subclass
@@ -209,33 +237,37 @@ class _CrLamp(django_models.Model):
     ``_CrKioskDesk.kiosk_code``.
     """
 
-    desk = django_models.ForeignKey(
+    desk: _FK[_CrDesk] = django_models.ForeignKey(
         _CrDesk,
         on_delete=django_models.CASCADE,
         related_name="lamps",
     )
-    spare_desk = django_models.OneToOneField(
+    spare_desk: _O2O[_CrDesk] = django_models.OneToOneField(
         _CrDesk,
         on_delete=django_models.CASCADE,
         related_name="spare_lamp",
     )
-    desks = django_models.ManyToManyField(_CrDesk, related_name="shared_lamps")
-    kiosk = django_models.ForeignKey(
+    desks: django_models.ManyToManyField[_CrDesk, django_models.Model] = (
+        django_models.ManyToManyField(_CrDesk, related_name="shared_lamps")
+    )
+    kiosk: _FK[_CrKioskDesk] = django_models.ForeignKey(
         _CrKioskDesk,
         on_delete=django_models.CASCADE,
         to_field="kiosk_code",
         related_name="kiosk_lamps",
     )
-    spare_kiosk = django_models.OneToOneField(
+    spare_kiosk: _O2O[_CrKioskDesk] = django_models.OneToOneField(
         _CrKioskDesk,
         on_delete=django_models.CASCADE,
         to_field="kiosk_code",
         related_name="spare_kiosk_lamp",
     )
-    kiosks = django_models.ManyToManyField(
-        _CrKioskDesk,
-        through="CrLampKiosk",
-        related_name="shared_kiosk_lamps",
+    kiosks: django_models.ManyToManyField[_CrKioskDesk, CrLampKiosk] = (
+        django_models.ManyToManyField(
+            _CrKioskDesk,
+            through="CrLampKiosk",
+            related_name="shared_kiosk_lamps",
+        )
     )
 
     class Meta:
@@ -246,8 +278,8 @@ class _CrLamp(django_models.Model):
 class CrLampKiosk(django_models.Model):
     """The ``_CrLamp.kiosks`` join row, keyed to the kiosk desk by its ``kiosk_code``."""
 
-    lamp = django_models.ForeignKey(_CrLamp, on_delete=django_models.CASCADE)
-    kiosk = django_models.ForeignKey(
+    lamp: _FK[_CrLamp] = django_models.ForeignKey(_CrLamp, on_delete=django_models.CASCADE)
+    kiosk: _FK[_CrKioskDesk] = django_models.ForeignKey(
         _CrKioskDesk,
         on_delete=django_models.CASCADE,
         to_field="kiosk_code",
@@ -2541,7 +2573,11 @@ def test_pre_snapshot_filterset_degrades_to_old_behavior(monkeypatch: pytest.Mon
     # Expand ``base_filters`` (so the flat leaf is a real form field) THEN force
     # the pre-snapshot state.
     BookGenreFilter.get_filters()
-    monkeypatch.setattr(BookGenreFilter, "_expansion_snapshot", classmethod(lambda cls: None))
+
+    def _no_snapshot(cls: type[FilterSet]) -> None:
+        return None
+
+    monkeypatch.setattr(BookGenreFilter, "_expansion_snapshot", classmethod(_no_snapshot))
     bare = BookGenreFilter(
         data={"genres__name__icontains": "cardio"},
         queryset=library_models.Book.objects.order_by("id"),
@@ -3295,7 +3331,7 @@ def test_c4_integer_in_over_to_many_path():
             fields = {"books__id": ["in"]}
 
     outer = library_models.Genre.objects.order_by("id")
-    cases = {
+    cases: dict[str, tuple[list[int], list[int]]] = {
         "empty-set": ([], []),
         "mixed-valid-invalid": ([b1.pk, 99999999], [g1.pk]),
         "all-invalid": ([88888888, 99999999], []),
@@ -5039,9 +5075,9 @@ def test_apply_sync_dict_valued_scalar_filter_fails_loud():
 
 
 def test_range_patch_dict_values_still_merge_positional_keys():
-    """The range-patch guard exempts the two range primitives.
+    """The dict-value rejection exempts the two range primitives.
 
-    ``_require_range_patch_filter`` must stay silent for the framework
+    ``FilterSet._reject_dict_form_value`` must never fire for the framework
     ``RangeFilter`` (and django-filter's own ``RangeFilter``): their dict
     return IS the documented positional ``{<field>_0, <field>_1}`` patch.
     """
@@ -6556,7 +6592,7 @@ def test_collect_related_declarations_honors_base_tombstone():
     declaration = Declaration("ShelfFilter")
 
     class Base(FilterSet):
-        related_declarations = OrderedDict(probe=declaration)
+        related_declarations: OrderedDict[str, Declaration] = OrderedDict(probe=declaration)
         all_declarations = {"probe": object()}
 
     class Child(Base):
@@ -8635,7 +8671,7 @@ def test_m2m_extra_only_shadow_is_consumer_owned():
     assert "genres" not in _snapshot(BookFilter).candidates
     # OBSERVABLE: the consumer's restricted queryset survived generation (a GlobalID
     # replacement would have stripped it as a model-choice-only extra).
-    assert isinstance(leaf.field, ModelMultipleChoiceField)
+    assert _is_model_multiple_choice_field(leaf.field)
     assert leaf.field.queryset is not None
     assert leaf.field.queryset.count() == 0
 
@@ -8662,7 +8698,7 @@ def test_fk_extra_only_shadow_is_consumer_owned():
     assert record.origin == "override_generated"
     assert "shelf" not in _snapshot(BookFilter).candidates
     # OBSERVABLE: the consumer's non-default to_field target survived.
-    assert isinstance(leaf.field, ModelChoiceField)
+    assert _is_model_choice_field(leaf.field)
     assert leaf.field.to_field_name == "code"
 
 
@@ -8695,7 +8731,7 @@ def test_extra_only_shadow_survives_related_filter_expansion():
     assert record is not None
     assert record.origin == "override_generated"
     assert "book__genres" not in _snapshot(LoanParentFilter).candidates
-    assert isinstance(leaf.field, ModelMultipleChoiceField)
+    assert _is_model_multiple_choice_field(leaf.field)
     assert leaf.field.queryset is not None
     assert leaf.field.queryset.count() == 0
 
@@ -8967,11 +9003,13 @@ def test_public_filter_defaults_matches_upstream_django_filter_table():
         pkg_provider = package[field_type]["extra"]
         assert callable(pkg_provider), field_type.__name__
         pkg_extra = pkg_provider(sample)
-        assert isinstance(pkg_extra, dict), field_type.__name__
+        assert is_object_dict(pkg_extra), field_type.__name__
         assert set(up_extra) == set(pkg_extra), field_type.__name__
         assert up_extra.get("to_field_name") == pkg_extra.get("to_field_name"), field_type.__name__
         assert up_extra.get("null_label") == pkg_extra.get("null_label"), field_type.__name__
-        assert up_extra["queryset"].model is pkg_extra["queryset"].model, field_type.__name__
+        pkg_queryset = pkg_extra["queryset"]
+        assert isinstance(pkg_queryset, QuerySet), field_type.__name__
+        assert up_extra["queryset"].model is pkg_queryset.model, field_type.__name__
 
 
 # ======================================================================
@@ -9268,7 +9306,7 @@ def test_replacement_preserves_restricted_queryset_and_wire_shape():
     assert not isinstance(leaf, GlobalIDMultipleChoiceFilter)
     # The restricted queryset survived generation (a GlobalID replacement would have
     # stripped it as a model-choice-only extra), and the wire-shape ``required`` too.
-    assert isinstance(leaf.field, ModelMultipleChoiceField)
+    assert _is_model_multiple_choice_field(leaf.field)
     assert leaf.field.queryset is not None
     assert leaf.field.queryset.count() == 0
     assert leaf.field.required is True
@@ -9546,7 +9584,7 @@ def _genuine_dynamic_csv_class(lookup: str) -> type[Filter]:
     """
     from django.db import models as dj_models
 
-    field = dj_models.CharField() if lookup == "in" else dj_models.FloatField()
+    field: ModelField = dj_models.CharField() if lookup == "in" else dj_models.FloatField()
     dynamic_class, _params = FilterSet.filter_for_lookup(field, lookup)
     assert dynamic_class is not None
     return dynamic_class
@@ -9590,9 +9628,9 @@ def test_genuine_dynamic_concrete_in_and_range_resolve_to_sequence_profile():
     class _UnauditedIn(BaseInFilter, _UnauditedScalar):
         pass
 
-    assert (
-        _family_profile_for(object.__new__(concrete_in.__bases__[1])) is _SEQUENCE_LOOKUP_PROFILE
-    )
+    inner_in = concrete_in.__bases__[1]
+    assert issubclass(inner_in, Filter)
+    assert _family_profile_for(object.__new__(inner_in)) is _SEQUENCE_LOOKUP_PROFILE
     assert _family_profile_for(object.__new__(concrete_in)) is _SEQUENCE_LOOKUP_PROFILE
     assert _family_profile_for(object.__new__(concrete_range)) is _SEQUENCE_LOOKUP_PROFILE
     wrapped_unaudited = membership_in_filter_class(_UnauditedIn)
@@ -11095,7 +11133,7 @@ def test_apply_async_awaits_the_hop_of_relation_key_and_exclude_leaves(
 
     from asgiref.sync import sync_to_async
 
-    calls = []
+    calls: list[object] = []
 
     async def _visible_books(
         cls: type[DjangoType],
@@ -11127,7 +11165,7 @@ def test_apply_async_awaits_the_hop_of_relation_key_and_exclude_leaves(
 @pytest.mark.django_db
 def test_inactive_relation_key_leaf_runs_no_get_queryset():
     """A relation-key leaf the filter skips (an omitted value) constrains nothing and derives nothing."""
-    calls = []
+    calls: list[object] = []
 
     def _visible_books(
         cls: type[DjangoType],
@@ -11249,7 +11287,7 @@ def test_to_many_relation_key_filters_compare_the_visible_target_key(
         {filter_name: value(target)},
         library_models.Genre.objects.all(),
     )
-    expected = {genres["mixed"].pk, genres["plain"].pk} if book == "visible_x" else set()
+    expected: set[int] = {genres["mixed"].pk, genres["plain"].pk} if book == "visible_x" else set()
     assert got == expected
 
 
@@ -12273,7 +12311,7 @@ def test_undeclared_path_reentering_the_root_model_reads_the_bound_types_hook(sp
         "key-of-secret": {"books__shelf": {"exact": shelves["secret"].pk}},
         "key-of-private": {"books__shelf": {"exact": shelves["private"].pk}},
     }[spelling]
-    expected = set() if spelling == "key-of-private" else {shelves["secret"].pk}
+    expected: set[int] = set() if spelling == "key-of-private" else {shelves["secret"].pk}
     assert _applied(ShelfKeys, filter_input, library_models.Shelf.objects.all()) == expected
 
 
@@ -12337,18 +12375,21 @@ def _shelf_branch_world():
     return BookParent, shelves, open_branch, restricted, books
 
 
+_EXCLUDED_EMPTY_MEMBERSHIP_CASES: list[tuple[dict[str, object], set[str]]] = [
+    ({"code_out": []}, {"North", "Hidden", "Empty"}),
+    ({"not_": {"code_out": []}}, set()),
+    ({"or_": [{"code_out": []}, {"name": {"exact": "North"}}]}, {"North", "Hidden", "Empty"}),
+    ({"and_": [{"code_out": []}, {"name": {"exact": "North"}}]}, {"North"}),
+    ({"codes_out": []}, {"North", "Hidden", "Empty"}),
+    ({"not_": {"codes_out": []}}, set()),
+    ({"or_": [{"codes_out": []}, {"name": {"exact": "North"}}]}, {"North", "Hidden", "Empty"}),
+]
+
+
 @pytest.mark.django_db
 @pytest.mark.parametrize(
     ("filter_input", "expected"),
-    [
-        ({"code_out": []}, {"North", "Hidden", "Empty"}),
-        ({"not_": {"code_out": []}}, set()),
-        ({"or_": [{"code_out": []}, {"name": {"exact": "North"}}]}, {"North", "Hidden", "Empty"}),
-        ({"and_": [{"code_out": []}, {"name": {"exact": "North"}}]}, {"North"}),
-        ({"codes_out": []}, {"North", "Hidden", "Empty"}),
-        ({"not_": {"codes_out": []}}, set()),
-        ({"or_": [{"codes_out": []}, {"name": {"exact": "North"}}]}, {"North", "Hidden", "Empty"}),
-    ],
+    _EXCLUDED_EMPTY_MEMBERSHIP_CASES,
     ids=[
         "flat",
         "not",
@@ -12641,7 +12682,7 @@ def test_walked_leaf_restriction_compiles_on_the_parent_database_alias(declared:
 
     A declared hop and an undeclared one alike.
     """
-    seen = []
+    seen: list[str] = []
 
     def get_queryset(
         cls: type[DjangoType],
@@ -12871,7 +12912,7 @@ def test_expanded_leaf_under_an_mti_subclass_child_set_runs_where_its_path_resol
     Active it matches only through a visible desk, as its nested twin does;
     inactive it constrains nothing and runs no ``get_queryset``.
     """
-    calls = []
+    calls: list[object] = []
 
     def get_queryset(
         cls: type[DjangoType],
@@ -13313,7 +13354,7 @@ class _GradedSpecimen(django_models.Model):
         LOW = 1, "Low"
         HIGH = 2, "High"
 
-    grade = django_models.IntegerField(choices=Grade.choices, blank=True, null=True)
+    grade: _NullInt = django_models.IntegerField(choices=Grade.choices, blank=True, null=True)
 
     class Meta:
         managed = False
@@ -13413,8 +13454,8 @@ class _NullableConditionSpecimen(django_models.Model):
     row, while django-filter's empty-value skip keeps it.
     """
 
-    code = django_models.TextField()
-    condition = django_models.TextField(
+    code: _Text = django_models.TextField()
+    condition: _NullText = django_models.TextField(
         choices=[("good", "Good"), ("worn", "Worn")],
         null=True,
         blank=True,
@@ -13582,7 +13623,7 @@ class _StatusSpecimen(django_models.Model):
     Query-build only (``managed = False``): the tests read the compiled ``WHERE`` node.
     """
 
-    status = django_models.TextField(
+    status: _Text = django_models.TextField(
         choices=[("null", "Null"), (" padded ", "Padded"), ("ok", "Ok")],
         blank=True,
     )

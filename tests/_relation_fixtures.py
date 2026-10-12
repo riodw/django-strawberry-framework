@@ -18,14 +18,22 @@ never enter any GraphQL schema. The ``Rp`` prefix keeps the class and table
 names distinct from the inline test models declared elsewhere in the suite.
 """
 
+from __future__ import annotations
+
 import contextlib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias
 
 from django.db import models
 from django.db.backends.base.base import BaseDatabaseWrapper
 
 if TYPE_CHECKING:
+    from django.db.models.expressions import Combinable
     from django.db.models.fields.related_descriptors import RelatedManager
+
+    # Each field's descriptor types as django-stubs declares them (set type, get type), spelled
+    # out because the checker runs without the django-stubs mypy plugin that would infer them.
+    _Char: TypeAlias = models.CharField[str | int | Combinable, str]
+    _Int: TypeAlias = models.IntegerField[float | int | str | Combinable, int]
 
 
 class RpCompositeParent(models.Model):
@@ -43,12 +51,12 @@ class RpCompositeParent(models.Model):
     against a real composite-pk table.
     """
 
-    tenant_id = models.IntegerField()
-    code = models.CharField(max_length=32)
+    tenant_id: _Int = models.IntegerField()
+    code: _Char = models.CharField(max_length=32)
     pk = models.CompositePrimaryKey("tenant_id", "code")
-    label = models.CharField(max_length=64)
+    label: _Char = models.CharField(max_length=64)
     # Reverse accessor Django adds at class creation, declared for the type checker.
-    children: "RelatedManager[RpCompositeChild]"
+    children: RelatedManager[RpCompositeChild]
 
     class Meta:
         app_label = "products"
@@ -70,10 +78,10 @@ class RpCompositeChild(models.Model):
     Assigning ``parent=<instance>`` populates both carrier columns.
     """
 
-    parent_tenant_id = models.IntegerField()
-    parent_code = models.CharField(max_length=32)
-    name = models.CharField(max_length=64)
-    parent = models.ForeignObject(
+    parent_tenant_id: _Int = models.IntegerField()
+    parent_code: _Char = models.CharField(max_length=32)
+    name: _Char = models.CharField(max_length=64)
+    parent: models.ForeignObject[RpCompositeParent, RpCompositeParent] = models.ForeignObject(
         RpCompositeParent,
         on_delete=models.CASCADE,
         from_fields=["parent_tenant_id", "parent_code"],

@@ -52,6 +52,7 @@ from django_strawberry_framework.orders.sets import (
 from django_strawberry_framework.types.base import DjangoType
 from django_strawberry_framework.utils.querysets import model_for
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
+from tests._idioms import is_object_list
 
 _M = TypeVar("_M", bound=Model)
 
@@ -1486,12 +1487,13 @@ def test_input_has_active_terms_contract(input_value: object, expected: bool):
         "__ACTIVE_SHELF_BOOK_INPUT__": [BookInput(shelf=ShelfInput(code=Ordering.DESC))],
     }
 
-    if isinstance(input_value, list) and input_value and isinstance(input_value[0], str):
-        resolved_input = []
+    resolved_input: object = input_value
+    if is_object_list(input_value) and input_value and isinstance(input_value[0], str):
+        resolved: list[object] = []
         for sentinel in input_value:
-            resolved_input.extend(sentinel_map[sentinel])
-    else:
-        resolved_input = input_value
+            assert isinstance(sentinel, str)
+            resolved.extend(sentinel_map[sentinel])
+        resolved_input = resolved
 
     assert BookOrder._input_has_active_terms(resolved_input) is expected
 
@@ -1776,7 +1778,7 @@ def test_public_apply_never_writes_the_consumer_context():
     marker = object()
     plain = {"request": HttpRequest(), "consumer_marker": marker}
     guarded = GuardedContext()
-    dict.__setitem__(guarded, "request", HttpRequest())
+    dict[str, object].__setitem__(guarded, "request", HttpRequest())
     TitleInput = _keyword_constructor(OrderArgumentsFactory(TitleOrder).arguments)
     order_input = [TitleInput(title=Ordering.ASC)]
 

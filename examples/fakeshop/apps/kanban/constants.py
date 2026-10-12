@@ -1,6 +1,6 @@
 """Generated kanban allowlist of tracked repository paths (files + directories)."""
 
-TRACKED_FILE_PATHS = (
+TRACKED_FILE_PATHS: tuple[str, ...] = (
     "django_strawberry_framework/__init__.py",
     "django_strawberry_framework/_boundary_ordering.py",
     "django_strawberry_framework/_cross_web_patches.py",
@@ -75,6 +75,7 @@ TRACKED_FILE_PATHS = (
     "django_strawberry_framework/relay.py",
     "django_strawberry_framework/resource_policy.py",
     "django_strawberry_framework/rest_framework/__init__.py",
+    "django_strawberry_framework/rest_framework/accessors.py",
     "django_strawberry_framework/rest_framework/hook_context.py",
     "django_strawberry_framework/rest_framework/inputs.py",
     "django_strawberry_framework/rest_framework/resolvers.py",
@@ -98,6 +99,7 @@ TRACKED_FILE_PATHS = (
     "django_strawberry_framework/types/relay.py",
     "django_strawberry_framework/types/resolvers.py",
     "django_strawberry_framework/utils/__init__.py",
+    "django_strawberry_framework/utils/_narrowing.py",
     "django_strawberry_framework/utils/_queryset_private.py",
     "django_strawberry_framework/utils/canonical.py",
     "django_strawberry_framework/utils/connections.py",
@@ -212,6 +214,7 @@ TRACKED_FILE_PATHS = (
     "tests/filters/test_factories.py",
     "tests/filters/test_finalizer.py",
     "tests/filters/test_inputs.py",
+    "tests/filters/test_operator_bag_reads.py",
     "tests/filters/test_sets.py",
     "tests/forms/__init__.py",
     "tests/forms/test_converter.py",
@@ -231,6 +234,7 @@ TRACKED_FILE_PATHS = (
     "tests/mutations/test_permissions.py",
     "tests/mutations/test_resolvers.py",
     "tests/mutations/test_sets.py",
+    "tests/mutations/test_step_failure.py",
     "tests/mutations/test_write_transaction.py",
     "tests/optimizer/__init__.py",
     "tests/optimizer/_builders.py",
@@ -259,6 +263,7 @@ TRACKED_FILE_PATHS = (
     "tests/orders/test_inputs.py",
     "tests/orders/test_sets.py",
     "tests/rest_framework/__init__.py",
+    "tests/rest_framework/test_accessors.py",
     "tests/rest_framework/test_converter.py",
     "tests/rest_framework/test_dry_import_ratchet.py",
     "tests/rest_framework/test_inputs.py",
@@ -279,6 +284,8 @@ TRACKED_FILE_PATHS = (
     "tests/test_ci_governance.py",
     "tests/test_clean_up.py",
     "tests/test_connection.py",
+    "tests/test_connection_window_rows.py",
+    "tests/test_consumer_base_check.py",
     "tests/test_consumers.py",
     "tests/test_count_queries.py",
     "tests/test_cross_web_patches.py",
@@ -294,6 +301,7 @@ TRACKED_FILE_PATHS = (
     "tests/test_keyset_connection.py",
     "tests/test_lateral_pg_parity.py",
     "tests/test_list_field.py",
+    "tests/test_model_field_annotations.py",
     "tests/test_permissions.py",
     "tests/test_pg_explain_artifact_footer.py",
     "tests/test_predicate_pg_explain.py",
@@ -312,6 +320,7 @@ TRACKED_FILE_PATHS = (
     "tests/test_sets_mixins.py",
     "tests/test_strawberry_patches.py",
     "tests/test_views.py",
+    "tests/test_views_async_callback.py",
     "tests/test_workspace.py",
     "tests/testing/__init__.py",
     "tests/testing/test_client.py",
@@ -323,6 +332,7 @@ TRACKED_FILE_PATHS = (
     "tests/types/fixtures/lazy_relation_target_module.py",
     "tests/types/fixtures/shelf_module.py",
     "tests/types/test_base.py",
+    "tests/types/test_choice_entry_shapes.py",
     "tests/types/test_converters.py",
     "tests/types/test_definition_order.py",
     "tests/types/test_definition_order_schema.py",
@@ -348,6 +358,7 @@ TRACKED_FILE_PATHS = (
     "tests/utils/test_permissions.py",
     "tests/utils/test_policies.py",
     "tests/utils/test_querysets.py",
+    "tests/utils/test_related_declaration_keys.py",
     "tests/utils/test_relation_reentry.py",
     "tests/utils/test_relations.py",
     "tests/utils/test_sessions.py",
@@ -355,7 +366,7 @@ TRACKED_FILE_PATHS = (
     "tests/utils/test_typing.py",
     "tests/utils/test_write_values.py",
 )
-TRACKED_DIRECTORY_PATHS = (
+TRACKED_DIRECTORY_PATHS: tuple[str, ...] = (
     "django_strawberry_framework/",
     "django_strawberry_framework/auth/",
     "django_strawberry_framework/extensions/",

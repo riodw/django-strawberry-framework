@@ -27,13 +27,13 @@ def _backfill_path_from_url(apps: StateApps, schema_editor: BaseDatabaseSchemaEd
     SpecDoc = apps.get_model("kanban", "SpecDoc")
     manager = SpecDoc.objects.using(schema_editor.connection.alias)
     prefix = f"{SPEC_URL_PREFIX}/"
-    unmatched = []
+    unmatched: list[str] = []
     for row in manager.all():
         url = row.url or ""
         if url.startswith(prefix):
             manager.filter(pk=row.pk).update(path=url[len(prefix) :])
         else:
-            unmatched.append(row.name)
+            unmatched.append(str(row.name))
             manager.filter(pk=row.pk).update(path=url)
     if unmatched:
         warnings.warn(

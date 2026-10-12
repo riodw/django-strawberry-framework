@@ -534,7 +534,7 @@ def test_consumer_overrides_receive_the_decoded_node_id_string():
     """
     services.seed_data(1)
     row = Category.objects.order_by("pk").first()
-    received = []
+    received: list[str | list[str]] = []
 
     class CategoryNode(DjangoType):
         class Meta:

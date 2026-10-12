@@ -33,11 +33,13 @@ from django_strawberry_framework import (
     DjangoConnectionField,
     DjangoListField,
     DjangoOptimizerExtension,
+    DjangoType,
     finalize_django_types,
     strawberry_config,
 )
 from django_strawberry_framework.connection import _connection_type_cache
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.utils._narrowing import is_dict, is_list
 
 from ._link_models import (
     LnkColumnChild,
@@ -63,7 +65,7 @@ def link_tables() -> Iterator[None]:
 
 
 def _parent_visibility(
-    cls: type,
+    cls: type[DjangoType],
     queryset: QuerySet[LnkParent],
     info: object,
     **kwargs: object,
@@ -302,21 +304,35 @@ def test_conflicting_alias_connection_loads_the_parent_link_columns(link_tables:
     assert queries == 1 + 4 * 2
 
 
-def _leaf(node: _WireData) -> str:
+def _leaf(node: object) -> str:
+    assert is_dict(node)
     leaf = node.get("name", node.get("label"))
     assert isinstance(leaf, str)
     return leaf
+
+
+def _related_nodes(related: object) -> list[object]:
+    """One wire row's related rows: a list field's items, or a connection's edge nodes."""
+    if is_list(related):
+        return related
+    assert is_dict(related)
+    edges = related["edges"]
+    assert is_list(edges)
+    nodes: list[object] = []
+    for edge in edges:
+        assert is_dict(edge)
+        nodes.append(edge["node"])
+    return nodes
 
 
 def _m2m_rows(data: _WireData) -> list[list[str]]:
     """Each root row's related leaves, from a list field or a connection's edges."""
     root = data.get("parents", data.get("tags"))
     assert root is not None
-    rows = []
+    rows: list[list[str]] = []
     for row in root:
         related = next(value for key, value in row.items() if key not in {"label", "name"})
-        nodes = related if isinstance(related, list) else [e["node"] for e in related["edges"]]
-        rows.append([_leaf(node) for node in nodes])
+        rows.append([_leaf(node) for node in _related_nodes(related)])
     return rows
 
 
@@ -357,7 +373,7 @@ def _pair_parent_schema(*, optimizer: bool, route: str) -> strawberry.Schema:
     forces a ``Prefetch``; ``"hint"`` assigns a resolver and opts back into
     planning with ``OptimizerHint.prefetch_related()``.
     """
-    from django_strawberry_framework import DjangoType, OptimizerHint
+    from django_strawberry_framework import OptimizerHint
 
     registry.clear()
     _connection_type_cache.clear()
@@ -372,10 +388,13 @@ def _pair_parent_schema(*, optimizer: bool, route: str) -> strawberry.Schema:
     if route == "hint":
         child_meta["optimizer_hints"] = {"parent": OptimizerHint.prefetch_related()}
 
-        def _parent(root: LnkPairChild) -> parent_type | None:
+        def _parent(root: LnkPairChild) -> LnkParent | None:
             return root.parent
 
-        child_namespace["parent"] = strawberry.field(resolver=_parent)
+        child_namespace["parent"] = strawberry.field(
+            resolver=_parent,
+            graphql_type=parent_type | None,
+        )
     child_namespace["Meta"] = type("Meta", (), child_meta)
     child_type = type("LnkPairChildType", (DjangoType,), child_namespace)
     finalize_django_types()
@@ -588,11 +607,10 @@ def test_generated_two_column_forward_link_round_trips_through_the_reverse_side(
     siblings = {"pa": ["a1", "a2", "a3"], "pb": ["b1"]}
     for row in data["pairs"]:
         related = next(value for key, value in row["parent"].items() if key != "label")
-        nodes = related if isinstance(related, list) else [e["node"] for e in related["edges"]]
         expected = siblings[row["parent"]["label"]]
-        if not isinstance(related, list):
+        if not is_list(related):
             expected = expected[:2]
-        assert [node["name"] for node in nodes] == expected
+        assert [_leaf(node) for node in _related_nodes(related)] == expected
     assert len(sql) == queries
 
 

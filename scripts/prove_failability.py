@@ -210,6 +210,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import takewhile
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from typing_extensions import TypeIs
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SCRATCH_PREFIX = "failability-"
@@ -330,6 +334,7 @@ def pytest_sessionfinish(session):
         record["error"] = f"{record.get('error', '')} databases: {error!r}".strip()
     _emit(record)
 '''
+
 FORBIDDEN_SCOPE_FRAGMENT = "--cov"
 # Fragments that stop the run early. A truncated run reports a count for a row set
 # that is not the scope it names, with a countable exit code and every recorded field
@@ -775,7 +780,7 @@ class ProofResult:
         if self.outcome is None:
             return ()
         reasons: list[str] = []
-        parts = []
+        parts: list[str] = []
         if self.outcome.error_node_ids:
             parts.append(f"{len(self.outcome.error_node_ids)} in the mutant run")
         if self.baseline is not None and self.baseline.error_node_ids:
@@ -817,7 +822,7 @@ class ProofResult:
 
     def _provenance_reasons(self, position: str, run: RunOutcome) -> list[str]:
         """Return why ``run`` did not measure the tree this script mutated, if it did not."""
-        reasons = []
+        reasons: list[str] = []
         foreign = sorted(
             {
                 record.package_file
@@ -901,11 +906,26 @@ def _uncountable_run_reason(position: str, code: int) -> str:
     return f"{position} exited {code} ({reading}); {consequence}"
 
 
+def _is_json_object(value: object) -> TypeIs[dict[str, object]]:
+    """Return whether a decoded JSON value is an object (JSON object keys are always strings)."""
+    return isinstance(value, dict)
+
+
+def _is_json_array(value: object) -> TypeIs[list[object]]:
+    """Return whether a decoded JSON value is an array."""
+    return isinstance(value, list)
+
+
+def _is_str_list(value: object) -> TypeIs[list[str]]:
+    """Return whether a decoded JSON value is an array of strings."""
+    return _is_json_array(value) and all(isinstance(line, str) for line in value)
+
+
 def _join_lines(value: object, field: str, label: str) -> str:
     """Return ``value`` as text, joining a list of lines with newlines."""
     if isinstance(value, str):
         return value
-    if isinstance(value, list) and all(isinstance(line, str) for line in value):
+    if _is_str_list(value):
         return "\n".join(value)
     raise ManifestError(f"{label}: {field!r} must be a string or a list of strings")
 
@@ -1082,10 +1102,10 @@ def _process_is_running(pid: object) -> bool:
 def _read_json_marker(path: Path) -> dict[str, object]:
     """Return a marker's JSON object, or an empty one when it is unreadable."""
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
+        document: object = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    return document if isinstance(document, dict) else {}
+    return document if _is_json_object(document) else {}
 
 
 def _describe_live_marker(marker: Path) -> str:
@@ -1103,8 +1123,8 @@ def _describe_live_marker(marker: Path) -> str:
     files = payload.get("files")
     restores = [
         str(item.get("restore_with"))
-        for item in (files if isinstance(files, list) else ())
-        if isinstance(item, dict) and item.get("restore_with")
+        for item in (files if _is_json_array(files) else ())
+        if _is_json_object(item) and item.get("restore_with")
     ]
     restore_text = f" ({'; '.join(restores)})" if restores else ""
     return f"live-mutation marker {marker} exists{restore_text}: {writer}"
@@ -1251,12 +1271,12 @@ def _parse_sites(raw_entry: dict[str, object], label: str, base: Path) -> tuple[
                 "into a site",
             )
         raw_sites = raw_entry["sites"]
-        if not isinstance(raw_sites, list) or not raw_sites:
+        if not _is_json_array(raw_sites) or not raw_sites:
             raise ManifestError(f"{label}: 'sites' must be a non-empty list of site objects")
         collected: list[MutationSite] = []
         for index, raw_site in enumerate(raw_sites, 1):
             site_label = f"{label}: sites[{index}]"
-            if not isinstance(raw_site, dict):
+            if not _is_json_object(raw_site):
                 raise ManifestError(f"{site_label}: each site must be an object")
             unknown = sorted(set(raw_site) - SITE_KEYS)
             if unknown:
@@ -1284,7 +1304,7 @@ def _parse_entry(raw_entry: object, position: int, base: Path | None = None) -> 
     manifest's directory when read through :func:`load_manifest`.
     """
     label = f"proofs[{position}]"
-    if not isinstance(raw_entry, dict):
+    if not _is_json_object(raw_entry):
         raise ManifestError(f"{label}: each proof entry must be an object")
     unknown = sorted(set(raw_entry) - ENTRY_KEYS)
     if unknown:
@@ -1298,9 +1318,9 @@ def _parse_entry(raw_entry: object, position: int, base: Path | None = None) -> 
     _refuse_label_targets_disagreement(label, targets)
     single_anchor = "sites" not in raw_entry and sites[0].kind == ANCHOR_KIND
     raw_scope = raw_entry.get("scope")
-    if not isinstance(raw_scope, list) or not raw_scope:
+    if not _is_json_array(raw_scope) or not raw_scope:
         raise ManifestError(f"{label}: 'scope' must be a non-empty list of pytest arguments")
-    scope = []
+    scope: list[str] = []
     for argument in raw_scope:
         if not isinstance(argument, str) or not argument:
             raise ManifestError(f"{label}: every 'scope' argument must be a non-empty string")
@@ -1309,17 +1329,20 @@ def _parse_entry(raw_entry: object, position: int, base: Path | None = None) -> 
     mutation = raw_entry.get("mutation")
     if mutation is not None and not isinstance(mutation, str):
         raise ManifestError(f"{label}: 'mutation' must be a string when given")
-    expect_failing = None
+    expect_failing: tuple[str, ...] | None = None
     if "expect_failing" in raw_entry:
         raw_expected = raw_entry["expect_failing"]
-        if not isinstance(raw_expected, list) or not all(
-            isinstance(pattern, str) and pattern for pattern in raw_expected
-        ):
+        patterns: tuple[str, ...] = ()
+        if _is_json_array(raw_expected):
+            patterns = tuple(
+                pattern for pattern in raw_expected if isinstance(pattern, str) and pattern
+            )
+        if not _is_json_array(raw_expected) or len(patterns) != len(raw_expected):
             raise ManifestError(
                 f"{label}: 'expect_failing' must be a list of non-empty node ids or glob "
                 "patterns ([] declares that nothing may fail)",
             )
-        expect_failing = tuple(raw_expected)
+        expect_failing = patterns
     first = sites[0]
     if single_anchor:
         derived = _describe_mutation(first.anchor, first.replacement)
@@ -1522,16 +1545,16 @@ def _one_line(text: str, limit: int = 120) -> str:
 def load_manifest(manifest_path: Path) -> tuple[tuple[ProofEntry, ...], str | None]:
     """Return the manifest's proof entries and its optional scratch-root override."""
     try:
-        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+        document: object = json.loads(manifest_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
         raise ManifestError(f"{manifest_path}: invalid JSON: {error}") from error
-    if not isinstance(document, dict):
+    if not _is_json_object(document):
         raise ManifestError(f"{manifest_path}: the manifest must be a JSON object")
     unknown = sorted(set(document) - MANIFEST_KEYS)
     if unknown:
         raise ManifestError(f"{manifest_path}: unknown key(s) {unknown}")
     raw_proofs = document.get("proofs")
-    if not isinstance(raw_proofs, list) or not raw_proofs:
+    if not _is_json_array(raw_proofs) or not raw_proofs:
         raise ManifestError(f"{manifest_path}: 'proofs' must be a non-empty list")
     scratch_root = document.get("scratch_root")
     if scratch_root is not None and not isinstance(scratch_root, str):
@@ -1667,17 +1690,27 @@ def _read_probe(path: Path) -> tuple[tuple[tuple[str, str], ...], tuple[Provenan
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         if not raw_line.strip():
             continue
-        record = json.loads(raw_line)
+        record: object = json.loads(raw_line)
+        if not _is_json_object(record):
+            raise RuntimeError(f"{path}: probe line is not a JSON object: {raw_line[:200]!r}")
         if record.get("kind") == "provenance":
+            package_file = record.get("package_file")
+            error = record.get("error")
+            raw_databases = record.get("databases")
+            databases: dict[str, object] = {}
+            if raw_databases:
+                if not _is_json_object(raw_databases):
+                    raise RuntimeError(f"{path}: probe 'databases' is not a JSON object")
+                databases = raw_databases
             observed = Provenance(
                 role=str(record.get("role")),
-                package_file=record.get("package_file"),
+                package_file=None if package_file is None else str(package_file),
                 package_imported_by_run=bool(record.get("package_imported_by_run")),
-                databases=tuple(sorted((record.get("databases") or {}).items())),
+                databases=tuple(sorted((alias, str(name)) for alias, name in databases.items())),
                 executable=str(record.get("executable")),
                 cwd=str(record.get("cwd")),
                 rootpath=str(record.get("rootpath")),
-                error=record.get("error"),
+                error=None if error is None else str(error),
             )
             if observed not in provenance:
                 provenance.append(observed)
@@ -1930,7 +1963,7 @@ def _plan_files(entry: ProofEntry) -> tuple[PlannedFile, ...]:
     its file alone. A failing site is named by position when there are several.
     """
     sites = entry.mutation_sites
-    planned = []
+    planned: list[PlannedFile] = []
     for target in entry.targets:
         on_target = tuple(site for site in sites if site.target == target)
         original = target.read_bytes()
@@ -1985,7 +2018,7 @@ def _restore_every_file(
     restored; the first failure is raised once every file has been attempted,
     and the marker names every file that failed.
     """
-    records = []
+    records: list[FileRecord] = []
     failures: list[tuple[PlannedFile, Path, RestoreProofError]] = []
     for planned, pristine in zip(plan, pristines, strict=True):
         try:
@@ -2063,7 +2096,7 @@ def _verdict(result: ProofResult) -> str:
         if result.entry.sites:
             return "every site applies to the file as it stands (no run; --check-anchors-only)"
         return "anchor matches exactly once (no run; --check-anchors-only)"
-    notes = []
+    notes: list[str] = []
     invalid = result.invalid_count_reason
     if invalid is not None:
         notes.append(f"**INVALID COUNT - {invalid}**")
@@ -2087,7 +2120,7 @@ def _expectation_verdict(expectation: Expectation, failed_count: int) -> str:
         return (
             f"pinned: the {failed_count} failing row(s) are exactly the declared `expect_failing`"
         )
-    parts = []
+    parts: list[str] = []
     if expectation.missing:
         missing = ", ".join(f"`{pattern}`" for pattern in expectation.missing)
         parts.append(f"declared but not failing: {missing}")

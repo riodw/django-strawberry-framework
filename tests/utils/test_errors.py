@@ -510,7 +510,7 @@ def test_errors_module_performs_no_settings_reads():
     source = Path(errors_module.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source, filename="errors.py")
 
-    hits = []
+    hits: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute) and node.attr in ("DEBUG", "settings"):
             hits.append(f"attr {node.attr} @ line {node.lineno}")

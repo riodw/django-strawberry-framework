@@ -19,7 +19,8 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass
-from typing import TypeAlias, TypeVar
+from datetime import datetime
+from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
 from django.db import models as django_models
 from django.db import transaction
@@ -34,6 +35,9 @@ from apps.kanban.constants import (
     TRACKED_FILE_PATHS,
     TRACKED_PATH_SET,
 )
+
+if TYPE_CHECKING:
+    from typing_extensions import TypeIs
 
 _M = TypeVar("_M", bound=django_models.Model)
 # What ``models.manager`` returns for ``Card``: the default manager or an
@@ -201,11 +205,21 @@ def _normalize_tracked_path(value: object, *, field_name: str) -> str:
     return path
 
 
+def _is_list(value: object) -> TypeIs[list[object]]:
+    """Whether importer input is a JSON array, its items still unvalidated."""
+    return isinstance(value, list)
+
+
+def _is_dict(value: object) -> TypeIs[dict[object, object]]:
+    """Whether importer input is a JSON object, its keys and values still unvalidated."""
+    return isinstance(value, dict)
+
+
 def _tracked_paths(values: object, *, field_name: str) -> list[str]:
     """Return sorted unique normalized tracked paths from importer input."""
     if values in (None, ""):
         return []
-    if not isinstance(values, list):
+    if not _is_list(values):
         raise KanbanServiceError(
             f'"{field_name}" must be a list of repo-relative paths.',
             code="invalid_tracked_path",
@@ -464,7 +478,7 @@ def resolve_card(identifier: object, *, using: str | None = None) -> models.Card
     ``code="unresolvable_card"``; a duplicate title raises ``code="ambiguous_card"``.
     """
     card_manager = _manager(models.Card, using)
-    if isinstance(identifier, dict):
+    if _is_dict(identifier):
         if "uuid" in identifier:
             return _resolve_by_uuid(card_manager, identifier["uuid"])
         if "slug" in identifier:
@@ -855,7 +869,7 @@ def verify_item(
     *,
     actor: object,
     kind: models.VerificationKind | str,
-    at: object = None,
+    at: datetime | None = None,
 ) -> models.CardItem:
     """Record auditable verification of a card item and mark it complete.
 
@@ -923,7 +937,7 @@ def finish_attempt(
     *,
     outcome_key: str,
     summary: str | None = None,
-    ended_at: object = None,
+    ended_at: datetime | None = None,
 ) -> models.WorkAttempt:
     """Close a :class:`~models.WorkAttempt`, stamping its outcome and ``ended_at``.
 

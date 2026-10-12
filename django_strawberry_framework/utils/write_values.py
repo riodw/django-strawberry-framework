@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from strawberry import relay
 
+from ._narrowing import is_list
 from .errors import FIELD_ERROR_CODE_INVALID, field_error, relation_field_error
 from .inputs import FILE, RELATION_MULTI, RELATION_SINGLE, iter_provided_input_fields
 from .querysets import (
@@ -112,7 +113,7 @@ def raw_choice_value(value: object) -> object:
     client-controlled nesting) never carries a member. The list is rebuilt, never mutated
     in place.
     """
-    if isinstance(value, list):
+    if is_list(value):
         return [_raw_choice_scalar(element) for element in value]
     return _raw_choice_scalar(value)
 

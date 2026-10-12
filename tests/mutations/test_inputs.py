@@ -45,6 +45,7 @@ injective narrowed type name (``django_strawberry_framework/utils/inputs.py::pas
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import re
 from collections.abc import Callable, Iterable, Iterator
@@ -102,7 +103,15 @@ from tests._idioms import module_binding
 from tests.optimizer import _link_models
 
 if TYPE_CHECKING:
+    from typing import TypeAlias
+
+    from django.db.models.expressions import Combinable
+
     from django_strawberry_framework.utils.typing import ConcreteField
+
+    # The field's descriptor types as django-stubs declares them (set type, get type), spelled
+    # out because the checker runs without the django-stubs mypy plugin that would infer them.
+    _Int: TypeAlias = models.IntegerField[float | int | str | Combinable, int]
 
 
 @pytest.fixture(autouse=True)
@@ -137,9 +146,18 @@ def _unique_app_label() -> str:
     return f"test_mutation_inputs__{next(_app_label_counter)}"
 
 
-def _field_map(input_cls: type) -> dict[str, StrawberryField]:
+def _field_map(input_cls: type[object]) -> dict[str, StrawberryField]:
     """Return ``python_name -> StrawberryField`` for a built input class."""
-    return {f.python_name: f for f in input_cls.__strawberry_definition__.fields}
+    return {f.python_name: f for f in get_object_definition(input_cls, strict=True).fields}
+
+
+def _default_of(field: dataclasses.Field[object]) -> object:
+    """The dataclass default the input's generated constructor fills an omitted field with.
+
+    ``StrawberryField`` subclasses the bare ``dataclasses.Field``, so reading ``default`` off it
+    directly inherits the unsolved type parameter; read as a ``Field[object]`` it is a value.
+    """
+    return field.default
 
 
 def _is_optional(field: StrawberryField) -> bool:
@@ -291,11 +309,11 @@ def test_create_input_required_and_optional_shapes():
 
     assert _is_optional(fields["description"])
     assert _inner_type(fields["description"]) is str
-    assert fields["description"].default is UNSET
+    assert _default_of(fields["description"]) is UNSET
 
     assert _is_optional(fields["is_private"])
     assert _inner_type(fields["is_private"]) is bool
-    assert fields["is_private"].default is UNSET
+    assert _default_of(fields["is_private"]) is UNSET
     assert fields["is_private"].graphql_name == "isPrivate"
 
     # The auto pk / timestamps never reach the input.
@@ -315,7 +333,7 @@ def test_partial_input_all_fields_optional_and_unset():
         "is_private",
     ):
         assert _is_optional(fields[name]), name
-        assert fields[name].default is UNSET, name
+        assert _default_of(fields[name]) is UNSET, name
 
 
 def test_create_input_name_is_canonical_model_input():
@@ -663,11 +681,15 @@ def test_fk_id_attr_collision_with_m2m_is_fail_loud():
     carries, and it alone drives the input-attr arm of
     ``django_strawberry_framework/mutations/inputs.py::_reject_generated_input_collisions``.
     """
-    relay_target, _ = _make_relay_target()
+    _make_relay_target()
 
     class Owner(models.Model):
-        category = models.ForeignKey(relay_target, on_delete=models.CASCADE, related_name="+")
-        category_id = models.ManyToManyField(relay_target, related_name="+")
+        category: models.ForeignKey[library_models.Genre | Combinable, library_models.Genre] = (
+            models.ForeignKey(library_models.Genre, on_delete=models.CASCADE, related_name="+")
+        )
+        category_id: models.ManyToManyField[library_models.Genre, models.Model] = (
+            models.ManyToManyField(library_models.Genre, related_name="+")
+        )
 
         class Meta:
             app_label = _unique_app_label()
@@ -710,8 +732,8 @@ def test_camel_case_graphql_name_collision_is_fail_loud():
     """
 
     class CamelCollide(models.Model):
-        foo_bar = models.IntegerField()
-        fooBar = models.IntegerField()  # noqa: N815 - intentional collision fixture
+        foo_bar: _Int = models.IntegerField()
+        fooBar: _Int = models.IntegerField()  # noqa: N815 - intentional collision fixture
 
         class Meta:
             app_label = _unique_app_label()
@@ -779,8 +801,8 @@ def test_digit_boundary_columns_do_not_silently_collide_in_generated_input():
     """
 
     class DigitBoundary(models.Model):
-        field_2 = models.IntegerField()
-        field2 = models.IntegerField()
+        field_2: _Int = models.IntegerField()
+        field2: _Int = models.IntegerField()
 
         class Meta:
             app_label = _unique_app_label()
@@ -799,8 +821,8 @@ def test_digit_boundary_columns_do_not_silently_collide_in_generated_input():
     # ``from __future__ import annotations`` stringizes source-level annotations,
     # so set the resolver's ``__annotations__`` to real objects to reference the
     # generated input class as a schema-field argument type.
-    # basedpyright: a GraphQL argument; Strawberry reads its type from the __annotations__ assigned below
-    def _probe(inp) -> int:  # pyright: ignore[reportMissingParameterType, reportUnknownParameterType]
+    # The ``object`` annotation is replaced below; Strawberry reads the argument type from there.
+    def _probe(inp: object) -> int:
         return 1
 
     _probe.__annotations__ = {"inp": input_cls, "return": int}
@@ -900,8 +922,8 @@ def test_type_name_digit_boundary_narrowings_stay_distinct():
     full = ("not_the_narrowed_set",)
 
     class DigitBoundary(models.Model):
-        field_2 = models.IntegerField()
-        field2 = models.IntegerField()
+        field_2: _Int = models.IntegerField()
+        field2: _Int = models.IntegerField()
 
         class Meta:
             app_label = _unique_app_label()
@@ -942,8 +964,8 @@ def test_type_name_digit_boundary_narrowings_stay_distinct():
     materialize_mutation_input_class(left.__name__, left)
     materialize_mutation_input_class(right.__name__, right)  # must not collide
 
-    # basedpyright: GraphQL arguments; Strawberry reads their types from the __annotations__ assigned below
-    def _probe(left_inp, right_inp) -> int:  # pyright: ignore[reportMissingParameterType, reportUnknownParameterType]
+    # The ``object`` annotations are replaced below; Strawberry reads the argument types from there.
+    def _probe(left_inp: object, right_inp: object) -> int:
         return 1
 
     _probe.__annotations__ = {"left_inp": left, "right_inp": right, "return": int}
@@ -1077,7 +1099,7 @@ def test_optional_file_column_defaults_to_unset(column: str):
         operation_kind=CREATE,
         primary_type=_media_specimen_node(),
     )
-    assert _field_map(cls)[column].default is UNSET
+    assert _default_of(_field_map(cls)[column]) is UNSET
 
 
 def test_file_field_narrowed_by_meta_fields_and_exclude():

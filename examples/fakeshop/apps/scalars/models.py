@@ -53,14 +53,64 @@ each field's true producing row in its converter column.
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
 from django.db import models
 from typing_extensions import override
 
 if TYPE_CHECKING:
+    from datetime import date, datetime, time
+    from uuid import UUID
+
     from django.db.backends.base.base import BaseDatabaseWrapper
+    from django.db.models.expressions import Combinable
     from django.db.models.fields.related_descriptors import RelatedManager
+
+    _M = TypeVar("_M", bound=models.Model)
+
+    # Each field's descriptor types as django-stubs declares them (set type, get type), spelled
+    # out because the checker runs without the django-stubs mypy plugin that would infer them;
+    # ``null=True`` adds ``None`` to both.
+    _BigInt: TypeAlias = models.BigIntegerField[float | int | str | Combinable, int]
+    _Bool: TypeAlias = models.BooleanField[bool | Combinable, bool]
+    _Date: TypeAlias = models.DateField[str | date | Combinable, date]
+    _DateTime: TypeAlias = models.DateTimeField[str | datetime | date | Combinable, datetime]
+    _Decimal: TypeAlias = models.DecimalField[str | float | Decimal | Combinable, Decimal]
+    _Float: TypeAlias = models.FloatField[float | int | str | Combinable, float]
+    _Int: TypeAlias = models.IntegerField[float | int | str | Combinable, int]
+    _NullBigInt: TypeAlias = models.BigIntegerField[
+        float | int | str | Combinable | None,
+        int | None,
+    ]
+    _NullBool: TypeAlias = models.BooleanField[bool | Combinable | None, bool | None]
+    _NullDate: TypeAlias = models.DateField[str | date | Combinable | None, date | None]
+    _NullDateTime: TypeAlias = models.DateTimeField[
+        str | datetime | date | Combinable | None,
+        datetime | None,
+    ]
+    _NullDecimal: TypeAlias = models.DecimalField[
+        str | float | Decimal | Combinable | None,
+        Decimal | None,
+    ]
+    _NullFK: TypeAlias = models.ForeignKey[_M | Combinable | None, _M | None]
+    _NullFloat: TypeAlias = models.FloatField[float | int | str | Combinable | None, float | None]
+    _NullPositiveBigInt: TypeAlias = models.PositiveBigIntegerField[
+        float | int | str | Combinable | None,
+        int | None,
+    ]
+    _NullText: TypeAlias = models.TextField[str | Combinable | None, str | None]
+    _NullTime: TypeAlias = models.TimeField[str | time | datetime | Combinable | None, time | None]
+    _NullUUID: TypeAlias = models.UUIDField[str | UUID | None, UUID | None]
+    _PositiveBigInt: TypeAlias = models.PositiveBigIntegerField[
+        float | int | str | Combinable,
+        int,
+    ]
+    _Text: TypeAlias = models.TextField[str | Combinable, str]
+    _Time: TypeAlias = models.TimeField[str | time | datetime | Combinable, time]
+    _UUID: TypeAlias = models.UUIDField[str | UUID, UUID]
+    # A JSON column decodes to whatever its decoder returns, and takes any value its encoder
+    # accepts: django-stubs leaves both open, so neither side narrows past ``object``.
+    _JSON: TypeAlias = models.JSONField[object, object]
 
 
 class ScalarSpecimenTag(models.Model):
@@ -75,8 +125,8 @@ class ScalarSpecimenTag(models.Model):
     the source specimen.
     """
 
-    label = models.TextField(unique=True)
-    active = models.BooleanField(default=True)
+    label: _Text = models.TextField(unique=True)
+    active: _Bool = models.BooleanField(default=True)
 
     # Reverse accessor Django adds at class creation, declared for the type checker.
     tagged_specimens: RelatedManager[ScalarSpecimen]
@@ -97,34 +147,34 @@ class ScalarSpecimen(models.Model):
     # ``label`` is a TextField rather than a generated identity column so each
     # row carries a human-readable handle inside the test response (the live
     # HTTP test pins each field's wire format against this label).
-    label = models.TextField(unique=True)
-    flag = models.BooleanField(default=False)
-    score = models.FloatField(default=0.0)
-    price = models.DecimalField(
+    label: _Text = models.TextField(unique=True)
+    flag: _Bool = models.BooleanField(default=False)
+    score: _Float = models.FloatField(default=0.0)
+    price: _Decimal = models.DecimalField(
         max_digits=20,
         decimal_places=4,
         default=Decimal("0.0000"),
     )
-    occurred_on = models.DateField()
-    occurred_at = models.DateTimeField()
-    occurred_time = models.TimeField()
-    payload = models.JSONField(default=dict)
-    external_id = models.UUIDField()
+    occurred_on: _Date = models.DateField()
+    occurred_at: _DateTime = models.DateTimeField()
+    occurred_time: _Time = models.TimeField()
+    payload: _JSON = models.JSONField(default=dict)
+    external_id: _UUID = models.UUIDField()
     # Signed 64-bit; exercises the ``BigIntegerField -> BigInt`` converter
     # entry directly (the library app's ``Patron.lifetime_fines_cents`` hits
     # the same entry; both stay because the scalar coverage app is the place
     # that pins every entry in one query).
-    signed_big = models.BigIntegerField(default=0)
+    signed_big: _BigInt = models.BigIntegerField(default=0)
     # Unsigned 64-bit; exercises the ``PositiveBigIntegerField -> BigInt``
     # converter entry. Wire scalar is the same ``BigInt`` as the signed entry
     # but the converter table row is distinct.
-    unsigned_big = models.PositiveBigIntegerField(default=0)
+    unsigned_big: _PositiveBigInt = models.PositiveBigIntegerField(default=0)
     # Self-referential FK. Lets the example exercise nullable-FK selection,
     # reverse-FK (``children``) traversal, and recursive
     # ``select_related`` / ``prefetch_related`` planning against a model
     # whose relation target is itself. Distinct from the library app, where
     # every relation crosses a model boundary.
-    parent = models.ForeignKey(
+    parent: _NullFK[ScalarSpecimen] = models.ForeignKey(
         "self",
         null=True,
         blank=True,
@@ -138,7 +188,7 @@ class ScalarSpecimen(models.Model):
     # ``active=True`` filter), and the planner must record a
     # ``Prefetch(queryset=...)`` instead. ``on_delete=SET_NULL`` so
     # detaching a tag survives the cascade.
-    tag = models.ForeignKey(
+    tag: _NullFK[ScalarSpecimenTag] = models.ForeignKey(
         ScalarSpecimenTag,
         null=True,
         blank=True,
@@ -172,27 +222,27 @@ class NullableScalarSpecimen(models.Model):
     ``test_query/test_scalars_api.py::test_scalars_set_null_ondelete_detaches_partner_in_http_query``.
     """
 
-    label = models.TextField(unique=True, null=True, blank=True)
-    flag = models.BooleanField(null=True, blank=True)
-    score = models.FloatField(null=True, blank=True)
-    price = models.DecimalField(
+    label: _NullText = models.TextField(unique=True, null=True, blank=True)
+    flag: _NullBool = models.BooleanField(null=True, blank=True)
+    score: _NullFloat = models.FloatField(null=True, blank=True)
+    price: _NullDecimal = models.DecimalField(
         max_digits=20,
         decimal_places=4,
         null=True,
         blank=True,
     )
-    occurred_on = models.DateField(null=True, blank=True)
-    occurred_at = models.DateTimeField(null=True, blank=True)
-    occurred_time = models.TimeField(null=True, blank=True)
-    payload = models.JSONField(null=True, blank=True)
-    external_id = models.UUIDField(null=True, blank=True)
-    signed_big = models.BigIntegerField(null=True, blank=True)
-    unsigned_big = models.PositiveBigIntegerField(null=True, blank=True)
+    occurred_on: _NullDate = models.DateField(null=True, blank=True)
+    occurred_at: _NullDateTime = models.DateTimeField(null=True, blank=True)
+    occurred_time: _NullTime = models.TimeField(null=True, blank=True)
+    payload: _JSON = models.JSONField(null=True, blank=True)
+    external_id: _NullUUID = models.UUIDField(null=True, blank=True)
+    signed_big: _NullBigInt = models.BigIntegerField(null=True, blank=True)
+    unsigned_big: _NullPositiveBigInt = models.PositiveBigIntegerField(null=True, blank=True)
     # Cross-model link: a ``NullableScalarSpecimen`` may point at one
     # ``ScalarSpecimen``. ``SET_NULL`` rather than ``CASCADE`` because every
     # field this model declares is ``null=True``: losing the target must
     # clear the FK, never delete the mirror row.
-    partner = models.ForeignKey(
+    partner: _NullFK[ScalarSpecimen] = models.ForeignKey(
         "scalars.ScalarSpecimen",
         null=True,
         blank=True,
@@ -253,7 +303,7 @@ class MediaSpecimen(models.Model):
     ``null=True`` (it is deliberately not ``blank``).
     """
 
-    label = models.TextField(unique=True)
+    label: _Text = models.TextField(unique=True)
     attachment = models.FileField(upload_to="scalar_media/files/")
     image = models.ImageField(upload_to="scalar_media/images/")
     optional_attachment = models.FileField(upload_to="scalar_media/files/", blank=True)
@@ -279,17 +329,17 @@ class OverrideSpecimen(models.Model):
     """
 
     # Overridden by an assigned ``@strawberry.field`` resolver.
-    label = models.TextField()
+    label: _Text = models.TextField()
     # Overridden by an annotation-only ``quantity: float | None`` (the
     # ``IntegerField`` would auto-convert to ``Int!``).
-    quantity = models.IntegerField(default=0)
+    quantity: _Int = models.IntegerField(default=0)
     # Overridden by the ``score: int = strawberry.field(resolver=...)`` overlap.
-    score = models.IntegerField(default=0)
+    score: _Int = models.IntegerField(default=0)
     # Unsupported column; surfaced only via the consumer ``token: str`` annotation.
     token = Base36Field()
     # Declared as ``note: auto`` - selected and inferred (``TextField`` -> ``String!``)
     # rather than overridden, so the auto ``SCALAR_MAP`` converter still produces it.
-    note = models.TextField(blank=True, default="")
+    note: _Text = models.TextField(blank=True, default="")
 
     @override
     def __str__(self) -> str:

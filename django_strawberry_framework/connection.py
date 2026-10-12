@@ -54,7 +54,17 @@ from collections.abc import (
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from types import GenericAlias
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, NamedTuple, Protocol, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Generic,
+    NamedTuple,
+    Protocol,
+    TypeGuard,
+    TypeVar,
+    cast,
+)
 
 import strawberry
 from django.db import models
@@ -105,6 +115,7 @@ from .optimizer.selections import (
 from .registry import register_subsystem_clear
 from .resource_policy import check_deadline
 from .types.resolvers import _check_n1
+from .utils._narrowing import is_list
 from .utils.connections import (
     CONNECTION_FILTER_KWARG,
     CONNECTION_ORDER_KWARG,
@@ -2096,8 +2107,12 @@ def _build_connection_resolver(
     return _resolve
 
 
-def _window_rows_are_annotated(rows: list[object]) -> bool:
-    """Return whether every row carries the windowed-prefetch row number.
+def _window_rows_are_annotated(rows: list[object]) -> TypeGuard[list[models.Model]]:
+    """Return whether every row is a model instance carrying the windowed-prefetch row number.
+
+    The rows are served as the page's nodes, so a row that is not a model instance
+    (an object a consumer wrote under the reserved ``to_attr`` that happens to carry
+    the attribute) disqualifies the list like a missing annotation does.
 
     Upstream's own integrity probe (``resolve_optimized_connection_by_prefetch``
     falls back on a missing annotation): a ``to_attr`` list whose rows lack
@@ -2115,7 +2130,9 @@ def _window_rows_are_annotated(rows: list[object]) -> bool:
     aware page and flag construction.
     """
     try:
-        return all(hasattr(row, WINDOW_ROW_NUMBER) for row in rows)
+        return all(
+            isinstance(row, models.Model) and hasattr(row, WINDOW_ROW_NUMBER) for row in rows
+        )
     except (
         TypeError,
         ValueError,
@@ -2227,11 +2244,7 @@ def _build_relation_connection_resolver(
             filter_input=filter_input,
             order_by_input=order_by_input,
         )
-        if (
-            isinstance(window_rows, list)
-            and no_sidecar
-            and _window_rows_are_annotated(window_rows)
-        ):
+        if is_list(window_rows) and no_sidecar and _window_rows_are_annotated(window_rows):
             # Hand off the windowed page. The marker carries a fallback factory
             # (NOT a prebuilt connection - that would be fed back through
             # ``resolve_connection`` as the node iterable) so ``resolve_connection``

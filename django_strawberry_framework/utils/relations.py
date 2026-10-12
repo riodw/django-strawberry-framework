@@ -17,6 +17,7 @@ from django_strawberry_framework.exceptions import (
     PathResolutionError,
     _safe_type_name,
 )
+from django_strawberry_framework.utils._narrowing import is_list_or_tuple
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence, Sized
@@ -806,9 +807,9 @@ class RelationLink:
 
 def _link_field_tuple(value: object, *, lenient: bool) -> tuple[ConcreteField, ...] | None:
     """Return ``value`` as a tuple of column fields, or ``None`` when it is not one."""
-    if not isinstance(value, (tuple, list)):
+    if not is_list_or_tuple(value):
         return None
-    fields = cast("tuple[object, ...]", tuple(value))
+    fields = tuple(value)
     for field in fields:
         if type(relation_attr(field, "attname", None, lenient=lenient)) is not str:
             return None

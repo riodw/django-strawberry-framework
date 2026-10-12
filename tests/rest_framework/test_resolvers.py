@@ -44,7 +44,7 @@ import inspect
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from types import MappingProxyType, SimpleNamespace
-from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, ClassVar, Protocol, cast, runtime_checkable
 
 import pytest
 import pytest_django
@@ -55,12 +55,13 @@ from apps.products.services import seed_data
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
-from django.db.models import QuerySet
+from django.db.models import Model, QuerySet
 from django.http import HttpRequest
 from rest_framework import serializers
 from rest_framework.exceptions import ErrorDetail
 from rest_framework.validators import UniqueTogetherValidator, UniqueValidator
 from strawberry import relay
+from strawberry.types.base import StrawberryContainer, get_object_definition
 from typing_extensions import override
 
 from django_strawberry_framework import (
@@ -74,8 +75,17 @@ from django_strawberry_framework import (
 )
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY
+from django_strawberry_framework.mutations.resolvers import StepFailure
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.rest_framework import resolvers as serializer_resolvers
+from django_strawberry_framework.rest_framework.accessors import (
+    base_fields,
+    bound_fields,
+    child_relation_of,
+    declared_fields_of,
+    list_child_of,
+    serializer_errors,
+)
 from django_strawberry_framework.rest_framework.hook_context import (
     SerializerHookContext,
     UploadMetadata,
@@ -86,6 +96,7 @@ from django_strawberry_framework.rest_framework.serializer_converter import (
     SCALAR,
 )
 from django_strawberry_framework.testing.relay import global_id_for
+from django_strawberry_framework.utils._narrowing import is_class, is_list, is_mapping, is_tuple
 from django_strawberry_framework.utils._queryset_private import (
     queryset_db,
 )
@@ -105,13 +116,24 @@ from tests._generated_inputs import keyword_constructor as _keyword_constructor
 from tests._info import make_info, unread_info
 
 if TYPE_CHECKING:
+    from typing import TypeAlias, TypeVar
+
     from django_strawberry_framework.mutations.inputs import FieldError
     from django_strawberry_framework.rest_framework.resolvers import _WrittenRow
     from django_strawberry_framework.rest_framework.serializer_converter import (
         DRFField,
+        DRFRelatedField,
         DRFSerializer,
     )
     from django_strawberry_framework.utils.errors import ErrorKeyMap
+
+    _ModelT = TypeVar("_ModelT", bound=Model)
+
+    # A declared ``PrimaryKeyRelatedField``: drf-stubs type its constructor as returning the
+    # single relation or, under ``many=True``, a ``ManyRelatedField``.
+    _PkRelation: TypeAlias = (
+        serializers.RelatedField[_ModelT, _ModelT, object] | serializers.ManyRelatedField
+    )
 
 
 def _hook_ctx(operation: str = "create", alias: str = "default", instance_pk: object = None):
@@ -138,25 +160,26 @@ class _ErrorEnvelope(Protocol):
     errors: list[FieldError]
 
 
-def _related_queryset(relation: object):
+def _related_queryset(relation: object) -> QuerySet[Model, object]:
     """The ``QuerySet`` a ``RelatedField`` holds (the scope pass never leaves a manager)."""
     assert isinstance(relation, serializers.RelatedField)
-    # basedpyright: drf-stubs types the attribute as a ``Manager``, whose ``__get__`` it binds
-    queryset = relation.queryset  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: drf-stubs types the attribute as a ``Manager``, whose ``__get__`` it binds, so
+    # the read is an access error of Unknown type
+    queryset = relation.queryset  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
     assert isinstance(queryset, QuerySet)
     return queryset
 
 
-def _child_relation(
-    field: object,
-) -> serializers.RelatedField[
-    library_models.Branch,
-    library_models.Branch,
-    object,
-]:
+def _child_relation(field: object) -> DRFRelatedField:
     """The per-member ``child_relation`` of a ``many=True`` relation field."""
     assert isinstance(field, serializers.ManyRelatedField)
-    return field.child_relation
+    return child_relation_of(field)
+
+
+def _validator_queryset_db(validator: UniqueValidator | UniqueTogetherValidator) -> str | None:
+    """The alias a DRF uniqueness validator's queryset is pinned to (``None``: router decides)."""
+    # basedpyright: drf-stubs types both validators' ``queryset`` as the bare generic ``QuerySet``
+    return queryset_db(validator.queryset)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
 
 
 @pytest.fixture(autouse=True)
@@ -525,7 +548,7 @@ def _bind_item_serializer_mutation(
 @pytest.mark.django_db
 def test_serializer_save_is_called_exactly_once_and_refetch_uses_returned_object():
     """`serializer.save()` is called EXACTLY once; the value-preserving closure captures the return."""
-    calls = []
+    calls: list[int] = []
 
     class SpyItemSerializer(serializers.ModelSerializer[product_models.Item]):
         # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
@@ -584,8 +607,8 @@ def test_save_time_drf_validation_error_uses_recursive_flattener_not_flat_mapper
             None,
             {"name": "OK", "category": category.pk},
         )
-    assert isinstance(result, list)
-    assert [(fe.field, fe.messages) for fe in result] == [("name", ["drf save-time"])]
+    assert isinstance(result, StepFailure)
+    assert [(fe.field, fe.messages) for fe in result.errors] == [("name", ["drf save-time"])]
 
 
 @pytest.mark.django_db
@@ -615,10 +638,10 @@ def test_save_time_django_validation_error_uses_flat_mapper_not_detail():
             None,
             {"name": "OK", "category": category.pk},
         )
-    assert isinstance(result, list)
+    assert isinstance(result, StepFailure)
     # The flat Django mapper reads `error_dict` (NOT a DRF `.detail`); the model name `name`
     # is the serializer field `name`, whose GraphQL input name is also `name`.
-    assert [(fe.field, fe.messages) for fe in result] == [("name", ["django save-time"])]
+    assert [(fe.field, fe.messages) for fe in result.errors] == [("name", ["django save-time"])]
 
 
 @pytest.mark.django_db
@@ -657,8 +680,8 @@ def test_save_time_django_validation_error_keys_a_source_rename_to_its_input_nam
             None,
             {"full_name": "OK", "category": category.pk},
         )
-    assert isinstance(result, list)
-    assert [(fe.field, fe.path, fe.messages) for fe in result] == [
+    assert isinstance(result, StepFailure)
+    assert [(fe.field, fe.path, fe.messages) for fe in result.errors] == [
         ("fullName", ["fullName"], ["bad name"]),
         ("description", ["description"], ["bad description"]),
     ]
@@ -698,8 +721,8 @@ def test_save_time_django_validation_error_keys_a_serializer_only_field_to_its_i
             None,
             {"name": "OK", "category": category.pk, "review_note": "n"},
         )
-    assert isinstance(result, list)
-    assert [(fe.field, fe.path, fe.messages) for fe in result] == [
+    assert isinstance(result, StepFailure)
+    assert [(fe.field, fe.path, fe.messages) for fe in result.errors] == [
         ("reviewNote", ["reviewNote"], ["bad note"]),
     ]
 
@@ -715,7 +738,7 @@ def test_save_time_django_validation_error_keys_a_renamed_relation_by_both_colum
     """
 
     class RenamedRefRaisingSerializer(serializers.ModelSerializer[product_models.Item]):
-        category_ref = serializers.PrimaryKeyRelatedField(
+        category_ref: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
             source="category",
             queryset=product_models.Category.objects.all(),
         )
@@ -744,8 +767,8 @@ def test_save_time_django_validation_error_keys_a_renamed_relation_by_both_colum
             None,
             {"name": "OK", "category_ref": category.pk},
         )
-    assert isinstance(result, list)
-    assert [(fe.field, fe.messages) for fe in result] == [
+    assert isinstance(result, StepFailure)
+    assert [(fe.field, fe.messages) for fe in result.errors] == [
         ("categoryRefId", ["on the FK"]),
         ("categoryRefId", ["on the column"]),
     ]
@@ -778,8 +801,8 @@ def test_save_time_integrity_error_maps_to_all_sentinel_envelope():
             None,
             {"name": "OK", "category": category.pk},
         )
-    assert isinstance(result, list)
-    assert [fe.field for fe in result] == [NON_FIELD_ERROR_KEY]
+    assert isinstance(result, StepFailure)
+    assert [fe.field for fe in result.errors] == [NON_FIELD_ERROR_KEY]
 
 
 # ===========================================================================
@@ -1431,19 +1454,33 @@ def test_flattener_bare_error_detail_preserves_code():
 # ===========================================================================
 
 
-def _agreement_specs(**overrides: object):
-    """Build a single ``InputFieldSpec`` (defaults to a scalar ``code``) for the guard tests."""
-    from django_strawberry_framework.utils.inputs import InputFieldSpec
+class _AgreementFake:
+    """The bound-mutation spec slots the schema/runtime agreement guard reads."""
 
+    _input_field_specs: ClassVar[list[InputFieldSpec]] = []
+    _injected_field_specs: ClassVar[list[InputFieldSpec]] = []
+
+
+class _AgreementFakeWithMeta(_AgreementFake):
+    """An agreement fake that also carries a ``_mutation_meta`` snapshot."""
+
+    _mutation_meta: ClassVar[object] = None
+
+
+def _agreement_spec(**overrides: object) -> InputFieldSpec:
+    """A single ``InputFieldSpec`` (defaults to a scalar ``code``) for the guard tests."""
     base = InputFieldSpec(input_attr="code", graphql_name="code", target_name="code", kind=SCALAR)
-    return type(
-        "FakeMut",
-        (),
-        {
-            "_input_field_specs": [dataclasses.replace(base, **overrides)],
-            "_injected_field_specs": [],
-        },
-    )
+    return dataclasses.replace(base, **overrides)
+
+
+def _agreement_specs(**overrides: object) -> type[_AgreementFake]:
+    """Build a fake mutation carrying one ``_agreement_spec`` and no ``_mutation_meta``."""
+    spec = _agreement_spec(**overrides)
+
+    class FakeMut(_AgreementFake):
+        _input_field_specs: ClassVar[list[InputFieldSpec]] = [spec]
+
+    return FakeMut
 
 
 def _shelf_model_serializer():
@@ -1559,13 +1596,15 @@ def test_agreement_guard_raises_when_relation_shape_wrong():
         )
 
 
-def _agreement_specs_with_meta(meta: object, **overrides: object):
+def _agreement_specs_with_meta(meta: object, **overrides: object) -> type[_AgreementFakeWithMeta]:
     """``_agreement_specs`` plus a ``_mutation_meta``, for the requiredness/annotation tail."""
-    fake = _agreement_specs(**overrides)
-    # basedpyright: the type()-built fake declares only the spec slots; the snapshot is attached
-    # afterwards so the absent-attribute case stays expressible
-    fake._mutation_meta = meta  # pyright: ignore[reportAttributeAccessIssue]
-    return fake
+    spec = _agreement_spec(**overrides)
+
+    class FakeMut(_AgreementFakeWithMeta):
+        _input_field_specs: ClassVar[list[InputFieldSpec]] = [spec]
+        _mutation_meta: ClassVar[object] = meta
+
+    return FakeMut
 
 
 def test_agreement_guard_rejects_a_missing_mutation_meta_snapshot():
@@ -1592,9 +1631,7 @@ def test_agreement_guard_rejects_a_none_mutation_meta_snapshot():
     absent attribute; both leave the permit path through the one rejection.
     """
     fake = _agreement_specs_with_meta(None, required=True)
-    # basedpyright: the type()-built fake declares only the spec slots; the snapshot is attached
-    # afterwards so the absent-attribute case stays expressible
-    assert fake._mutation_meta is None  # pyright: ignore[reportAttributeAccessIssue]
+    assert fake._mutation_meta is None
 
     with pytest.raises(ConfigurationError, match="no validated Meta snapshot"):
         serializer_resolvers._assert_schema_runtime_agreement(
@@ -2019,7 +2056,7 @@ def test_injected_serializer_choice_field_agrees_on_update_operation():
             model = library_models.Shelf
             fields = ("code", "branch", "status")
 
-    field_map = dict(StatusShelfSer().fields)
+    field_map = dict(bound_fields(StatusShelfSer()))
     update_specs = resolve_injected_field_specs(
         StatusShelfSer,
         field_map,
@@ -2177,10 +2214,8 @@ def test_injected_data_hook_cannot_mutate_nested_client_containers():
             # A nested list is a tuple and a nested dict a MappingProxyType: the
             # in-place mutations a mutable clone merely ISOLATED are now
             # structurally impossible.
-            with pytest.raises(AttributeError):
-                # basedpyright: the append on the frozen view's nested tuple is the rejected operation
-                # under test
-                data["genre_ids"].append(999)  # pyright: ignore[reportAttributeAccessIssue]
+            # A frozen nested list is a tuple: no in-place ``append`` exists to call.
+            assert not hasattr(data["genre_ids"], "append")
             with pytest.raises(TypeError):
                 # basedpyright: a nested value of the frozen view is a read-only proxy typed
                 # object; the test proves item assignment raises TypeError
@@ -2214,10 +2249,12 @@ def test_relation_queryset_scope_pins_unregistered_raw_pk_relation_without_visib
     from django_strawberry_framework.utils.inputs import InputFieldSpec
 
     class BranchSer(serializers.Serializer[object]):
-        branch = serializers.PrimaryKeyRelatedField(queryset=library_models.Branch.objects.all())
+        branch: _PkRelation[library_models.Branch] = serializers.PrimaryKeyRelatedField(
+            queryset=library_models.Branch.objects.all(),
+        )
 
     serializer = BranchSer()
-    field = serializer.fields["branch"]
+    field = bound_fields(serializer)["branch"]
     fake = type(
         "RawPkMut",
         (),
@@ -2252,7 +2289,9 @@ def test_relation_queryset_scope_locks_when_pipeline_locks():
     from django_strawberry_framework.utils.inputs import InputFieldSpec
 
     class BranchSer(serializers.Serializer[object]):
-        branch = serializers.PrimaryKeyRelatedField(queryset=library_models.Branch.objects.all())
+        branch: _PkRelation[library_models.Branch] = serializers.PrimaryKeyRelatedField(
+            queryset=library_models.Branch.objects.all(),
+        )
 
     serializer = BranchSer()
     fake = type(
@@ -2277,7 +2316,7 @@ def test_relation_queryset_scope_locks_when_pipeline_locks():
             serializer,
             info=unread_info(),
         )
-    scoped = _related_queryset(serializer.fields["branch"])
+    scoped = _related_queryset(bound_fields(serializer)["branch"])
     assert scoped.query.select_for_update is True
     assert queryset_db(scoped) == "default"
 
@@ -2310,7 +2349,9 @@ def test_relation_queryset_scope_covers_injected_relation_specs():
     hidden = library_models.Branch.objects.create(name="HiddenInjected", city="c")
 
     class BranchSer(serializers.Serializer[object]):
-        branch = serializers.PrimaryKeyRelatedField(queryset=library_models.Branch.objects.all())
+        branch: _PkRelation[library_models.Branch] = serializers.PrimaryKeyRelatedField(
+            queryset=library_models.Branch.objects.all(),
+        )
 
     def _fake():
         return type(
@@ -2337,7 +2378,7 @@ def test_relation_queryset_scope_covers_injected_relation_specs():
             locked,
             info=unread_info(),
         )
-    scoped = _related_queryset(locked.fields["branch"])
+    scoped = _related_queryset(bound_fields(locked)["branch"])
     assert queryset_db(scoped) == "default"
     assert scoped.query.select_for_update is True
 
@@ -2348,7 +2389,7 @@ def test_relation_queryset_scope_covers_injected_relation_specs():
             unlocked,
             info=unread_info(),
         )
-    visible_scoped = _related_queryset(unlocked.fields["branch"])
+    visible_scoped = _related_queryset(bound_fields(unlocked)["branch"])
     assert visible in visible_scoped  # visibility-allowed row admitted
     assert hidden not in visible_scoped  # visibility-hidden row intersected OUT
 
@@ -2358,7 +2399,7 @@ def test_relation_queryset_scope_cross_alias_author_queryset_fails_closed():
     from django_strawberry_framework.utils.inputs import InputFieldSpec
 
     class BranchSer(serializers.Serializer[object]):
-        branch = serializers.PrimaryKeyRelatedField(
+        branch: _PkRelation[library_models.Branch] = serializers.PrimaryKeyRelatedField(
             queryset=library_models.Branch.objects.using("other").all(),
         )
 
@@ -2406,14 +2447,14 @@ def test_relation_queryset_scope_handles_many_related_field():
             return queryset.exclude(name="HiddenScope")
 
     class BranchesSer(serializers.Serializer[object]):
-        branches = serializers.PrimaryKeyRelatedField(
+        branches: _PkRelation[library_models.Branch] = serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=library_models.Branch.objects.all(),
         )
 
     del BranchT
     serializer = BranchesSer()
-    field = serializer.fields["branches"]
+    field = bound_fields(serializer)["branches"]
     fake = type(
         "ManyMut",
         (),
@@ -2468,10 +2509,10 @@ def test_relation_queryset_scope_is_isolated_between_concurrent_serializer_insta
             return queryset.filter(city=info.context.request.visibility_city)
 
     class BranchSer(serializers.Serializer[object]):
-        branch = serializers.PrimaryKeyRelatedField(
+        branch: _PkRelation[library_models.Branch] = serializers.PrimaryKeyRelatedField(
             queryset=library_models.Branch.objects.all(),
         )
-        branches = serializers.PrimaryKeyRelatedField(
+        branches: _PkRelation[library_models.Branch] = serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=library_models.Branch.objects.all(),
         )
@@ -2500,9 +2541,9 @@ def test_relation_queryset_scope_is_isolated_between_concurrent_serializer_insta
         (),
         {"_input_field_specs": specs, "_injected_field_specs": []},
     )
-    declared_single_queryset = _related_queryset(BranchSer._declared_fields["branch"])
+    declared_single_queryset = _related_queryset(declared_fields_of(BranchSer)["branch"])
     declared_many_queryset = _related_queryset(
-        _child_relation(BranchSer._declared_fields["branches"]),
+        _child_relation(declared_fields_of(BranchSer)["branches"]),
     )
 
     def _scope_for(visibility_city: str):
@@ -2527,10 +2568,10 @@ def test_relation_queryset_scope_is_isolated_between_concurrent_serializer_insta
         left_serializer = left_future.result(timeout=10)
         right_serializer = right_future.result(timeout=10)
 
-    left_single = left_serializer.fields["branch"]
-    right_single = right_serializer.fields["branch"]
-    left_many = _child_relation(left_serializer.fields["branches"])
-    right_many = _child_relation(right_serializer.fields["branches"])
+    left_single = bound_fields(left_serializer)["branch"]
+    right_single = bound_fields(right_serializer)["branch"]
+    left_many = _child_relation(bound_fields(left_serializer)["branches"])
+    right_many = _child_relation(bound_fields(right_serializer)["branches"])
 
     assert left_single is not right_single
     assert left_many is not right_many
@@ -2544,9 +2585,9 @@ def test_relation_queryset_scope_is_isolated_between_concurrent_serializer_insta
     assert list(_related_queryset(right_many).values_list("name", flat=True)) == [
         "ConcurrentRight",
     ]
-    assert _related_queryset(BranchSer._declared_fields["branch"]) is declared_single_queryset
+    assert _related_queryset(declared_fields_of(BranchSer)["branch"]) is declared_single_queryset
     assert (
-        _related_queryset(_child_relation(BranchSer._declared_fields["branches"]))
+        _related_queryset(_child_relation(declared_fields_of(BranchSer)["branches"]))
         is declared_many_queryset
     )
 
@@ -2559,7 +2600,7 @@ def test_relation_queryset_scope_is_isolated_between_concurrent_serializer_insta
 def _validated_serializer(serializer_cls: type[DRFSerializer], data: dict[str, object]):
     """Construct + validate a serializer so ``validated_data`` is populated."""
     serializer = serializer_cls(data=data)
-    assert serializer.is_valid(), serializer.errors
+    assert serializer.is_valid(), serializer_errors(serializer)
     return serializer
 
 
@@ -2670,10 +2711,10 @@ def test_save_kwargs_hook_cannot_mutate_validated_data_by_identity():
             # basedpyright: a nested value of the frozen view is a read-only proxy typed object;
             # the test proves item assignment raises TypeError
             data["meta_blob"]["mode"] = "evil"  # pyright: ignore[reportIndexIssue]
-        with pytest.raises(AttributeError):
-            # basedpyright: a nested value of the frozen view is typed object; the test reaches its
-            # frozen tuple to prove append raises AttributeError
-            data["meta_blob"]["tags"].append("evil")  # pyright: ignore[reportIndexIssue]
+        meta_blob = data["meta_blob"]
+        assert is_mapping(meta_blob)
+        # The blob's frozen nested list is a tuple: no in-place ``append`` exists to call.
+        assert not hasattr(meta_blob["tags"], "append")
         return {}
 
     mutation_cls = _bind_item_serializer_mutation(BlobItemSerializer)
@@ -2733,8 +2774,8 @@ def test_save_kwargs_hook_validation_error_maps_to_field_error_envelope():
             None,
             {"name": "OK", "category": category.pk},
         )
-    assert isinstance(result, list)
-    assert [(fe.field, fe.messages) for fe in result] == [
+    assert isinstance(result, StepFailure)
+    assert [(fe.field, fe.messages) for fe in result.errors] == [
         ("name", ["from the save-kwargs hook"]),
     ]
 
@@ -2957,10 +2998,8 @@ def test_merged_kwargs_hook_cannot_mutate_nested_client_containers():
         hook_context: SerializerHookContext,
     ) -> dict[str, object]:
         # A mutable copy merely ISOLATED these; the frozen view makes them impossible.
-        with pytest.raises(AttributeError):
-            # basedpyright: the append on the frozen view's nested tuple is the rejected operation
-            # under test
-            data["genre_ids"].append(999)  # pyright: ignore[reportAttributeAccessIssue]
+        # A frozen nested list is a tuple: no in-place ``append`` exists to call.
+        assert not hasattr(data["genre_ids"], "append")
         with pytest.raises(TypeError):
             # basedpyright: a nested value of the frozen view is a read-only proxy typed object;
             # the test proves item assignment raises TypeError
@@ -3280,14 +3319,17 @@ def test_frozen_hook_view_survives_json_depth_beyond_the_recursion_limit():
 
     view = serializer_resolvers._frozen_hook_view({"blob": deep})
 
-    original, frozen = deep, view["blob"]
+    original: object = deep
+    frozen: object = view["blob"]
     for _ in range(depth):
-        assert isinstance(frozen, tuple)  # an IMMUTABLE container at EVERY depth
-        assert isinstance(original, list)
+        assert is_tuple(frozen)  # an IMMUTABLE container at EVERY depth
+        assert is_list(original)
         original, frozen = original[0], frozen[0]
     assert frozen == ({"leaf": "ok"},)
-    assert isinstance(frozen, tuple)
-    assert dict(frozen[0]) == {"leaf": "ok"}
+    assert is_tuple(frozen)
+    leaf = frozen[0]
+    assert is_mapping(leaf)
+    assert dict(leaf) == {"leaf": "ok"}
 
     # An immutable scalar top-level value passes through by reference (safe: unmutable).
     assert serializer_resolvers._frozen_hook_view("scalar") == "scalar"
@@ -4066,7 +4108,7 @@ def test_validator_querysets_are_recursively_pinned_to_write_alias():
                 UniqueValidator(queryset=product_models.Item.objects.all()),
             ],
         )
-        category = serializers.PrimaryKeyRelatedField(
+        category: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
             queryset=product_models.Category.objects.all(),
         )
         child = ChildSerializer()
@@ -4082,17 +4124,17 @@ def test_validator_querysets_are_recursively_pinned_to_write_alias():
     serializer = ParentSerializer(data={})
     serializer_resolvers._pin_validator_querysets(serializer, "shard_b")
 
-    name_validator = serializer.fields["name"].validators[0]
+    name_validator = bound_fields(serializer)["name"].validators[0]
     together_validator = serializer.validators[0]
     assert isinstance(name_validator, UniqueValidator)
     assert isinstance(together_validator, UniqueTogetherValidator)
-    assert queryset_db(name_validator.queryset) == "shard_b"
-    assert queryset_db(together_validator.queryset) == "shard_b"
-    child = serializer.fields["child"]
+    assert _validator_queryset_db(name_validator) == "shard_b"
+    assert _validator_queryset_db(together_validator) == "shard_b"
+    child = bound_fields(serializer)["child"]
     assert isinstance(child, serializers.Serializer)
-    child_validator = child.fields["name"].validators[0]
+    child_validator = bound_fields(child)["name"].validators[0]
     assert isinstance(child_validator, UniqueValidator)
-    assert queryset_db(child_validator.queryset) == "shard_b"
+    assert _validator_queryset_db(child_validator) == "shard_b"
 
 
 @pytest.mark.django_db
@@ -4145,22 +4187,22 @@ def test_validator_queryset_pinning_replaces_shared_validator_per_serializer_ins
 
     shard_serializer = SharedValidatorSerializer(data={})
     default_serializer = SharedValidatorSerializer(data={})
-    assert shard_serializer.fields["name"].validators[0] is shared
-    assert default_serializer.fields["name"].validators[0] is shared
+    assert bound_fields(shard_serializer)["name"].validators[0] is shared
+    assert bound_fields(default_serializer)["name"].validators[0] is shared
 
     serializer_resolvers._pin_validator_querysets(shard_serializer, "shard_b")
     serializer_resolvers._pin_validator_querysets(default_serializer, "default")
 
-    shard_validator = shard_serializer.fields["name"].validators[0]
-    default_validator = default_serializer.fields["name"].validators[0]
+    shard_validator = bound_fields(shard_serializer)["name"].validators[0]
+    default_validator = bound_fields(default_serializer)["name"].validators[0]
     assert shard_validator is not shared
     assert default_validator is not shared
     assert shard_validator is not default_validator
     assert isinstance(shard_validator, UniqueValidator)
     assert isinstance(default_validator, UniqueValidator)
-    assert queryset_db(shard_validator.queryset) == "shard_b"
-    assert queryset_db(default_validator.queryset) == "default"
-    assert queryset_db(shared.queryset) is None
+    assert _validator_queryset_db(shard_validator) == "shard_b"
+    assert _validator_queryset_db(default_validator) == "default"
+    assert _validator_queryset_db(shared) is None
 
 
 def test_list_field_child_validator_querysets_are_pinned_and_isolated():
@@ -4175,20 +4217,20 @@ def test_list_field_child_validator_querysets_are_pinned_and_isolated():
     serializer_resolvers._pin_validator_querysets(shard_serializer, "shard_b")
     serializer_resolvers._pin_validator_querysets(default_serializer, "default")
 
-    shard_tags = shard_serializer.fields["tags"]
-    default_tags = default_serializer.fields["tags"]
+    shard_tags = bound_fields(shard_serializer)["tags"]
+    default_tags = bound_fields(default_serializer)["tags"]
     assert isinstance(shard_tags, serializers.ListField)
     assert isinstance(default_tags, serializers.ListField)
-    shard_validator = shard_tags.child.validators[0]
-    default_validator = default_tags.child.validators[0]
+    shard_validator = list_child_of(shard_tags).validators[0]
+    default_validator = list_child_of(default_tags).validators[0]
     assert shard_validator is not shared
     assert default_validator is not shared
     assert shard_validator is not default_validator
     assert isinstance(shard_validator, UniqueValidator)
     assert isinstance(default_validator, UniqueValidator)
-    assert queryset_db(shard_validator.queryset) == "shard_b"
-    assert queryset_db(default_validator.queryset) == "default"
-    assert queryset_db(shared.queryset) is None
+    assert _validator_queryset_db(shard_validator) == "shard_b"
+    assert _validator_queryset_db(default_validator) == "default"
+    assert _validator_queryset_db(shared) is None
 
 
 def test_runtime_context_field_source_collision_fails_before_validation():
@@ -4199,7 +4241,7 @@ def test_runtime_context_field_source_collision_fails_before_validation():
 
         @override
         def get_fields(self) -> dict[str, DRFField]:
-            fields = super().get_fields()
+            fields: dict[str, DRFField] = base_fields(super())
             if self.context.get("inject_hidden"):
                 fields["hidden_name"] = serializers.HiddenField(default="server", source="name")
             return fields
@@ -4264,7 +4306,7 @@ def test_runtime_context_star_source_field_is_rejected_before_validation():
 
         @override
         def get_fields(self) -> dict[str, DRFField]:
-            fields = super().get_fields()
+            fields: dict[str, DRFField] = base_fields(super())
             if self.context.get("inject_star"):
                 # A defaulted whole-object field genuinely contributes to validated_data
                 # at runtime (it needs no client value), so it can overwrite ``name``.
@@ -4309,7 +4351,7 @@ def _contextual_attname_item_serializer() -> type[
 
         @override
         def get_fields(self) -> dict[str, DRFField]:
-            fields = super().get_fields()
+            fields: dict[str, DRFField] = base_fields(super())
             if self.context.get("request") is not None:
                 fields["cat"] = serializers.PrimaryKeyRelatedField(
                     source="category_id",
@@ -4466,12 +4508,12 @@ def test_relation_queryset_scope_composes_with_author_queryset():
     other = library_models.Branch.objects.create(name="ScopeOther", city="other")
 
     class SingleSer(serializers.Serializer[object]):
-        branch = serializers.PrimaryKeyRelatedField(
+        branch: _PkRelation[library_models.Branch] = serializers.PrimaryKeyRelatedField(
             queryset=library_models.Branch.objects.filter(city="allowed"),
         )
 
     class ManySer(serializers.Serializer[object]):
-        branches = serializers.PrimaryKeyRelatedField(
+        branches: _PkRelation[library_models.Branch] = serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=library_models.Branch.objects.filter(city="allowed"),
         )
@@ -4500,7 +4542,7 @@ def test_relation_queryset_scope_composes_with_author_queryset():
             single,
             info=unread_info(),
         )
-    single_qs = _related_queryset(single.fields["branch"])
+    single_qs = _related_queryset(bound_fields(single)["branch"])
     assert allowed in single_qs  # visible AND author-allowed
     assert other not in single_qs  # visible but author-DISALLOWED - the author's filter survives
 
@@ -4528,7 +4570,7 @@ def test_relation_queryset_scope_composes_with_author_queryset():
             many,
             info=unread_info(),
         )
-    many_qs = _related_queryset(_child_relation(many.fields["branches"]))
+    many_qs = _related_queryset(_child_relation(bound_fields(many)["branches"]))
     assert allowed in many_qs
     assert other not in many_qs
 
@@ -4559,10 +4601,14 @@ def _nested_single_input_and_specs():
     return cls, list(shape.field_specs)
 
 
-def _nested_child_input_cls(top_cls: type):
+def _nested_child_input_cls(top_cls: type[object]) -> Callable[..., object]:
     """Return the nested input class referenced by the top input's ``detail`` field."""
-    field = next(f for f in top_cls.__strawberry_definition__.fields if f.python_name == "detail")
-    return getattr(field.type, "of_type", field.type)
+    definition = get_object_definition(top_cls, strict=True)
+    field = next(f for f in definition.fields if f.python_name == "detail")
+    field_type = field.type
+    child_cls = field_type.of_type if isinstance(field_type, StrawberryContainer) else field_type
+    assert is_class(child_cls)
+    return _keyword_constructor(child_cls)
 
 
 def test_decode_nested_single_recurses_into_child():
@@ -4789,7 +4835,7 @@ def _genres_serializer(**extra: object):
     """A Book serializer exposing title + genres (allow_empty so [] clears)."""
 
     class GenresSerializer(serializers.ModelSerializer[library_models.Book]):
-        genres = serializers.PrimaryKeyRelatedField(
+        genres: _PkRelation[library_models.Genre] = serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=library_models.Genre.objects.all(),
             allow_empty=True,
@@ -4846,7 +4892,7 @@ def test_object_validator_injecting_a_relation_value_is_rejected():
     hidden = library_models.Genre.objects.create(name="InjectHidden")
 
     class InjectingSerializer(serializers.ModelSerializer[library_models.Book]):
-        genres = serializers.PrimaryKeyRelatedField(
+        genres: _PkRelation[library_models.Genre] = serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=library_models.Genre.objects.all(),
             allow_empty=True,
@@ -4880,7 +4926,7 @@ def test_object_validator_popping_a_supplied_relation_is_rejected():
     """A validator POPPING a client-supplied relation fails closed: intent must not be dropped."""
 
     class PoppingSerializer(serializers.ModelSerializer[library_models.Book]):
-        genres = serializers.PrimaryKeyRelatedField(
+        genres: _PkRelation[library_models.Genre] = serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=library_models.Genre.objects.all(),
             allow_empty=True,
@@ -4918,7 +4964,7 @@ def test_field_validator_substituting_a_renamed_source_relation_is_rejected():
     hidden = product_models.Category.objects.create(name="RenamedHidden")
 
     class RenamedSwapSerializer(serializers.ModelSerializer[product_models.Item]):
-        group = serializers.PrimaryKeyRelatedField(
+        group: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
             source="category",
             queryset=product_models.Category.objects.all(),
         )
@@ -4948,7 +4994,7 @@ def test_custom_pk_field_relation_stays_supported_by_the_ledger():
     """A custom ``pk_field`` transformation passes: the ledger verifies the RESOLVED object."""
 
     class StringPkSerializer(serializers.ModelSerializer[product_models.Item]):
-        category = serializers.PrimaryKeyRelatedField(
+        category: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
             queryset=product_models.Category.objects.all(),
             pk_field=serializers.CharField(),  # a supported transformation, not a ban target
         )
@@ -4977,7 +5023,7 @@ def test_object_validator_mutating_a_resolved_relation_pk_in_place_is_rejected()
     hidden = product_models.Category.objects.create(name="InPlaceHidden")
 
     class MutatingSerializer(serializers.ModelSerializer[product_models.Item]):
-        category = serializers.PrimaryKeyRelatedField(
+        category: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
             queryset=product_models.Category.objects.all(),
         )
 
@@ -5090,7 +5136,7 @@ def test_custom_update_replacing_the_validated_m2m_set_fails_attestation():
     stray = library_models.Genre.objects.create(name="AttestStray")
 
     class ReplacingSerializer(serializers.ModelSerializer[library_models.Book]):
-        genres = serializers.PrimaryKeyRelatedField(
+        genres: _PkRelation[library_models.Genre] = serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=library_models.Genre.objects.all(),
             allow_empty=True,
@@ -5126,7 +5172,7 @@ def test_custom_update_rewriting_an_omitted_partial_m2m_fails_attestation():
     """An OMITTED partial-update M2M must stay byte-identical to its pre-save membership."""
 
     class SneakySerializer(serializers.ModelSerializer[library_models.Book]):
-        genres = serializers.PrimaryKeyRelatedField(
+        genres: _PkRelation[library_models.Genre] = serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=library_models.Genre.objects.all(),
             allow_empty=True,
@@ -5214,8 +5260,8 @@ def test_save_failure_after_partial_writes_rolls_back_to_the_savepoint():
             None,
             {"name": "SavepointItem", "category": category.pk},
         )
-    assert isinstance(result, list)
-    assert [(fe.field, fe.messages) for fe in result] == [("name", ["post-write failure"])]
+    assert isinstance(result, StepFailure)
+    assert [(fe.field, fe.messages) for fe in result.errors] == [("name", ["post-write failure"])]
     # PROVEN in-transaction: the savepoint rollback removed the partial INSERT.
     assert not product_models.Item.objects.filter(name="SavepointItem").exists()
 
@@ -5343,7 +5389,9 @@ def test_nested_relation_substitution_is_rejected_per_item():
     hidden = genres[2]
 
     class ChildSerializer(serializers.Serializer[object]):
-        genre = serializers.PrimaryKeyRelatedField(queryset=library_models.Genre.objects.all())
+        genre: _PkRelation[library_models.Genre] = serializers.PrimaryKeyRelatedField(
+            queryset=library_models.Genre.objects.all(),
+        )
 
         def validate_genre(self, value: library_models.Genre):
             if value.pk == genres[1].pk:
@@ -5378,7 +5426,7 @@ def test_nested_relation_substitution_is_rejected_per_item():
         _as_serializer_mutation(fake_mut),
         serializer,
     )
-    assert serializer.is_valid(), serializer.errors
+    assert serializer.is_valid(), serializer_errors(serializer)
     with pytest.raises(ConfigurationError, match="replaced a visibility-checked relation"):
         serializer_resolvers._assert_relation_intent(
             _as_serializer_mutation(fake_mut),
@@ -5394,7 +5442,7 @@ def test_nested_relation_substitution_is_rejected_per_item():
         _as_serializer_mutation(fake_mut),
         serializer,
     )
-    assert serializer.is_valid(), serializer.errors
+    assert serializer.is_valid(), serializer_errors(serializer)
     serializer_resolvers._assert_relation_intent(
         _as_serializer_mutation(fake_mut),
         serializer,
@@ -5411,7 +5459,7 @@ def test_nested_relation_substitution_is_rejected_per_item():
         _as_serializer_mutation(fake_mut),
         serializer,
     )
-    assert serializer.is_valid(), serializer.errors
+    assert serializer.is_valid(), serializer_errors(serializer)
     serializer_resolvers._assert_relation_intent(
         _as_serializer_mutation(fake_mut),
         serializer,
@@ -5431,7 +5479,9 @@ def test_nested_relation_nulled_after_validation_is_rejected():
     genre = library_models.Genre.objects.create(name="NulledNestedGenre")
 
     class ChildSerializer(serializers.Serializer[object]):
-        genre = serializers.PrimaryKeyRelatedField(queryset=library_models.Genre.objects.all())
+        genre: _PkRelation[library_models.Genre] = serializers.PrimaryKeyRelatedField(
+            queryset=library_models.Genre.objects.all(),
+        )
 
     class NullingParentSerializer(serializers.Serializer[object]):
         items = ChildSerializer(many=True)
@@ -5464,7 +5514,7 @@ def test_nested_relation_nulled_after_validation_is_rejected():
         _as_serializer_mutation(fake_mut),
         serializer,
     )
-    assert serializer.is_valid(), serializer.errors
+    assert serializer.is_valid(), serializer_errors(serializer)
     with pytest.raises(ConfigurationError, match="removed from validated_data before the write"):
         serializer_resolvers._assert_relation_intent(
             _as_serializer_mutation(fake_mut),
@@ -5789,7 +5839,8 @@ def test_serializer_errors_to_field_errors_never_returns_empty_envelope():
     assert empty_dict_errors[0].messages == ["Validation failed without error details."]
     assert empty_dict_errors[0].codes == ["invalid"]
 
-    list_empty_dicts = serializer_resolvers.serializer_errors_to_field_errors([{}, {}], {})
+    empty_dicts: list[dict[str, object]] = [{}, {}]
+    list_empty_dicts = serializer_resolvers.serializer_errors_to_field_errors(empty_dicts, {})
     assert len(list_empty_dicts) == 1
     assert list_empty_dicts[0].field == NON_FIELD_ERROR_KEY
     assert list_empty_dicts[0].messages == ["Validation failed without error details."]
@@ -6035,7 +6086,7 @@ def test_serializer_errors_to_field_errors_direct_leaf():
 
 
 def test_serializer_decode_step_returns_field_errors_on_decode_failure():
-    """_serializer_decode_step wraps decode error into a list of field errors."""
+    """_serializer_decode_step wraps a decode error into a ``StepFailure``."""
 
     class DummyMutation:
         _input_field_specs = [
@@ -6052,7 +6103,7 @@ def test_serializer_decode_step_returns_field_errors_on_decode_failure():
         "not_a_dataclass",
         unread_info(),
     )
-    assert isinstance(res, list)
-    assert len(res) == 1
-    assert res[0].field == NON_FIELD_ERROR_KEY
-    assert res[0].messages == ["Invalid input object."]
+    assert isinstance(res, StepFailure)
+    assert len(res.errors) == 1
+    assert res.errors[0].field == NON_FIELD_ERROR_KEY
+    assert res.errors[0].messages == ["Invalid input object."]

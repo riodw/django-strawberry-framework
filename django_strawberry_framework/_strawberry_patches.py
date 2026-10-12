@@ -380,6 +380,7 @@ import textwrap
 from typing import TYPE_CHECKING, NamedTuple, TypeVar, cast
 
 from .conf import upstream_patches_enabled
+from .utils._narrowing import is_dict, is_list
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -708,10 +709,9 @@ def _translated_parse_json(self: "_AnyBaseView", data: "str | bytes") -> object:
 
 def _is_operation_batch(parsed: object) -> "TypeGuard[list[dict[object, object]]]":
     """Whether ``parsed`` is a JSON array whose every element is an object."""
-    if not isinstance(parsed, list):
+    if not is_list(parsed):
         return False
-    items: list[object] = parsed
-    return all(isinstance(item, dict) for item in items)
+    return all(is_dict(item) for item in parsed)
 
 
 def _patched_parse_json(
@@ -776,7 +776,7 @@ def _patched_parse_json(
     other exception - is passed through untouched.
     """
     parsed = _translated_parse_json(self, data)
-    if isinstance(parsed, dict):
+    if is_dict(parsed):
         return parsed
     if _is_operation_batch(parsed):
         return parsed

@@ -49,7 +49,7 @@ import logging
 import sys
 import tempfile
 import threading
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Coroutine, Generator
 from io import BytesIO
 from typing import Any, TypeAlias
 from unittest import mock
@@ -116,6 +116,7 @@ from django_strawberry_framework.views import (
     _RawBodyRequestAdapter,
     _resolved_max_request_body_bytes,
 )
+from tests._idioms import is_object_dict
 from tests._soft_dependency import evicted_modules, simulated_absence
 
 # Captured at import so the ``channels``-absence test can compare UPSTREAM's own
@@ -149,6 +150,22 @@ class Query:
 
 
 SCHEMA = strawberry.Schema(query=Query)
+
+
+def _view_class_of(view: Callable[..., object]) -> type[object]:
+    """Django's ``view_class`` bookkeeping, read out of the ``as_view`` callback's namespace."""
+    view_class: object = vars(view)["view_class"]
+    assert isinstance(view_class, type)
+    return view_class
+
+
+def _view_initkwargs_of(view: Callable[..., object]) -> dict[str, object]:
+    """Django's ``view_initkwargs`` bookkeeping, read out of the ``as_view`` callback's namespace."""
+    initkwargs: object = vars(view)["view_initkwargs"]
+    assert is_object_dict(initkwargs)
+    named = {key: value for key, value in initkwargs.items() if isinstance(key, str)}
+    assert len(named) == len(initkwargs)
+    return named
 
 
 def test_views_module_imports_with_channels_absent():
@@ -244,8 +261,8 @@ def test_every_upstream_as_view_kwarg_still_binds_on_the_package_views(view_clas
         multipart_uploads_enabled=True,
     )
 
-    assert view.view_class is view_class
-    assert view.view_initkwargs == {
+    assert _view_class_of(view) is view_class
+    assert _view_initkwargs_of(view) == {
         "schema": SCHEMA,
         "graphql_ide": None,
         "allow_queries_via_get": False,
@@ -298,18 +315,23 @@ async def test_async_as_view_dispatches_fresh_and_middleware_prepared_instances(
     """
 
     class RecordingAsyncView(AsyncDjangoGraphQLView):
+        marker = "fresh"
+
         @override
         async def dispatch(self, request: HttpRequest, *args: object, **kwargs: object):
-            return HttpResponse(getattr(self, "marker", "fresh"))
+            return HttpResponse(self.marker)
 
     callback = RecordingAsyncView.as_view(schema=SCHEMA)
 
     fresh_request = RequestFactory().get("/graphql/")
     fresh_response = await callback(fresh_request)
+    assert isinstance(fresh_response, HttpResponse)
     assert fresh_response.content == b"fresh"
 
     prepared_request = RequestFactory().get("/graphql/")
-    prepared = callback.view_class(**callback.view_initkwargs)
+    assert _view_class_of(callback) is RecordingAsyncView
+    assert _view_initkwargs_of(callback) == {"schema": SCHEMA}
+    prepared = RecordingAsyncView(schema=SCHEMA)
     prepared.marker = "prepared"
     prepared.setup(prepared_request)
     setattr(
@@ -318,6 +340,7 @@ async def test_async_as_view_dispatches_fresh_and_middleware_prepared_instances(
         (getattr(callback, _BOUNDARY_MOUNT), prepared),
     )
     prepared_response = await callback(prepared_request)
+    assert isinstance(prepared_response, HttpResponse)
     assert prepared_response.content == b"prepared"
     assert not hasattr(prepared_request, _BOUNDARY_PREPARED_VIEW)
 
@@ -352,6 +375,7 @@ async def test_the_async_view_evaluates_the_lazy_actor_off_the_loop_without_ause
 
     response = await AsyncDjangoGraphQLView.as_view(schema=SCHEMA)(request)
 
+    assert isinstance(response, HttpResponse)
     assert response.status_code == 200
     assert json.loads(response.content) == {"data": {"ping": "pong"}}
     assert len(evaluating_threads) == 1
@@ -572,7 +596,7 @@ def test_the_cap_keyword_binds_through_as_view_on_both_classes(view_class: _View
 
     view = view_class.as_view(schema=SCHEMA, max_request_body_bytes=4096)
 
-    assert view.view_initkwargs == {"schema": SCHEMA, "max_request_body_bytes": 4096}
+    assert _view_initkwargs_of(view) == {"schema": SCHEMA, "max_request_body_bytes": 4096}
 
 
 def _capped_view(limit: int | None, view_class: _ViewClass = DjangoGraphQLView):
@@ -778,7 +802,7 @@ class _RecordingStream:
 
     def __init__(self, raw: bytes):
         self._buffer = BytesIO(raw)
-        self.requested = []
+        self.requested: list[int] = []
         self.delivered = 0
         self.closed = False
 
@@ -927,7 +951,7 @@ class _ForeignInitialPositionStream(_UndeclaredSeekableStream):
 
     def __init__(self, raw: bytes):
         super().__init__(raw)
-        self.seeks = []
+        self.seeks: list[tuple[int, int]] = []
 
     @override
     def tell(self):
@@ -1397,7 +1421,7 @@ def test_a_non_seekable_under_limit_body_is_handed_back_as_a_rewound_stream(
     assert hasattr(request, "_body") is False
     # basedpyright: django-stubs omits HttpRequest._read_started, which HttpRequest.read reads; the
     # omission reads as an unknown attribute
-    assert request._read_started is False  # pyright: ignore[reportAttributeAccessIssue]
+    assert request._read_started is False  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     assert isinstance(request._stream, BytesIO)
     assert stream.closed is True
     assert stream.delivered == len(_UNDER_LIMIT_BODY)
@@ -2180,7 +2204,7 @@ def test_the_package_view_hands_upstream_a_str_for_a_bytes_body(view_class: _Vie
     contract adds no encoding sniffer.
     """
     view = view_class(schema=SCHEMA)
-    seen = []
+    seen: list[str | bytes] = []
 
     def _recorder(self: object, data: str | bytes):
         seen.append(data)
@@ -2205,7 +2229,7 @@ def test_the_package_view_passes_a_str_body_through_by_identity(view_class: _Vie
     """
     view = view_class(schema=SCHEMA)
     body = '{"a": 1}'
-    seen = []
+    seen: list[str | bytes] = []
 
     def _recorder(self: object, data: str | bytes):
         seen.append(data)
@@ -2683,23 +2707,31 @@ def test_the_view_callback_of_both_views_carries_the_csrf_exempt_mark(view_class
     itself would still be enforced - twice - so the ordering has no other witness
     than this attribute and the live parser sentinel.
 
-    The single owner is asserted too: both transports resolve ``as_view`` to the
-    shared mixin, which is what makes it impossible for one of them to be exempt
-    and the other not. And the marking must not cost the async transport its
+    The single owner is asserted too: both transports' ``as_view`` hand upstream's
+    callback to ``views._boundary_view``, and the exemption is the one shared
+    withdrawable object, which is what makes it impossible for one of them to be
+    exempt and the other not. And the marking must not cost the async transport its
     coroutine dispatch, so the async row re-asserts what
     ``test_async_view_as_view_is_a_real_coroutine_function`` states - here in
     the presence of the wrapper that could have dropped it - along with the
     ``as_view`` bookkeeping ``functools.wraps`` carries through.
     """
     from django_strawberry_framework import views as views_module
+    from django_strawberry_framework._boundary_ordering import _CSRF_ORDERING_EXEMPTION
 
-    view = view_class.as_view(schema=SCHEMA)
+    with mock.patch.object(
+        views_module,
+        "_boundary_view",
+        wraps=views_module._boundary_view,
+    ) as boundary_view:
+        view = view_class.as_view(schema=SCHEMA)
 
-    assert bool(view.csrf_exempt) is True
+    boundary_view.assert_called_once()
+    assert vars(view)["csrf_exempt"] is _CSRF_ORDERING_EXEMPTION
+    assert bool(vars(view)["csrf_exempt"]) is True
     assert getattr(view, _BOUNDARY_MARKER) is True
-    assert view_class.as_view.__func__ is views_module._RequestBodyBoundaryMixin.as_view.__func__
-    assert view.view_class is view_class
-    assert view.view_initkwargs == {"schema": SCHEMA}
+    assert _view_class_of(view) is view_class
+    assert _view_initkwargs_of(view) == {"schema": SCHEMA}
     assert is_marked_coroutine_function(view) is (view_class is AsyncDjangoGraphQLView)
 
 
@@ -2837,7 +2869,9 @@ class _SetupWithoutRequestView(DjangoGraphQLView):
 _SETUP_WITHOUT_REQUEST_CALLBACK = _SetupWithoutRequestView.as_view(schema=SCHEMA)
 
 
-def _wrapper_copying_only_csrf_exempt(view: Callable[..., HttpResponseBase]):
+def _wrapper_copying_only_csrf_exempt(
+    view: Callable[..., HttpResponseBase | Coroutine[object, object, HttpResponseBase]],
+):
     """A hand-written wrapper of the shape ``as_view``'s docstring names as live.
 
     It forwards the call and copies ``csrf_exempt`` - the one mark a callback
@@ -2870,7 +2904,9 @@ def _wrapper_copying_only_csrf_exempt(view: Callable[..., HttpResponseBase]):
             *args: object,
             **kwargs: object,
         ) -> HttpResponseBase:
-            return view(request, *args, **kwargs)
+            response = view(request, *args, **kwargs)
+            assert isinstance(response, HttpResponseBase)
+            return response
 
         wrapped = sync_wrapped
 
@@ -2920,7 +2956,7 @@ class _NotAPackageView:
 
 
 #: Every call the factory below receives, so a row can assert it received none.
-_VIEW_CLASS_FACTORY_CALLS = []
+_VIEW_CLASS_FACTORY_CALLS: list[dict[str, object]] = []
 
 
 def _boundary_the_factory_carries(request: HttpRequest):
@@ -2965,7 +3001,7 @@ def _marked_callback_with_a_callable_view_class(request: HttpRequest):
 
 #: Every construction the foreign class below receives, so a row can assert it
 #: received none.
-_FOREIGN_VIEW_CONSTRUCTIONS = []
+_FOREIGN_VIEW_CONSTRUCTIONS: list[dict[str, object]] = []
 
 
 class _ForeignButBuildableView:
@@ -3079,7 +3115,7 @@ def _marked_callback_with_a_raising_boundary_descriptor(request: HttpRequest):
 
 #: Every boundary run the minimal view class below received, so a row can assert
 #: the middleware ran the boundary it probed the class for.
-_MINIMAL_BOUNDARY_RUNS = []
+_MINIMAL_BOUNDARY_RUNS: list[HttpRequest] = []
 
 
 class _MinimalBoundaryViewClass:
@@ -3358,7 +3394,7 @@ async def test_the_middleware_passes_a_non_package_view_through_untouched():
 
     The middleware is a project-wide chain entry, and it holds no opinion about any
     view but the package's. Recognition is by the marker attribute
-    ``_RequestBodyBoundaryMixin.as_view`` stamps rather than by an ``issubclass``
+    ``views._boundary_view`` stamps rather than by an ``issubclass``
     check, which is also what keeps the two modules independent of each other:
     neither ``views.py`` nor the middleware module imports the other, and both reach
     the marker through ``_boundary_ordering.py``.
@@ -3385,7 +3421,7 @@ async def test_the_view_does_not_measure_a_body_the_chain_already_measured(
     body it carries is still the client's, byte for byte, after passing through both
     owners.
     """
-    seen = []
+    seen: list[tuple[object, bytes]] = []
     body = json.dumps({"query": "{ ping }"}).encode()
 
     class _Recording(DjangoGraphQLView):

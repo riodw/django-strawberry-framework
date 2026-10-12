@@ -266,7 +266,7 @@ def _package_view_instance(view_func: object) -> object:
 
     The recognition is one decision and it ends at the boundary, because the
     boundary is the answer: the marker
-    ``views.py::_RequestBodyBoundaryMixin.as_view`` stamps, a ``view_class`` that
+    ``views.py::_boundary_view`` stamps, a ``view_class`` that
     is a class, a ``view_initkwargs`` mapping - Django's own ``as_view``
     bookkeeping, and what makes the built instance carry the mount's own
     ``max_request_body_bytes`` - a ``view_class`` that itself carries the boundary

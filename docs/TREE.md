@@ -271,6 +271,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── inputs.py                 # Order input namespace, direction enum, and input-data adapters.
 │   └── sets.py                   # ``OrderSet`` + ``OrderSetMetaclass`` - declaration, validation, and the apply pipeline.
 ├── rest_framework/    # DRF serializer mutations: generated inputs, conversion, binding, and execution behind an import guard.
+│   ├── accessors.py              # Typed reads of the DRF attributes djangorestframework-stubs declares with bare generics.
 │   ├── hook_context.py           # The frozen serializer-hook context + upload metadata.
 │   ├── inputs.py                 # DRF-serializer-derived ``@strawberry.input`` generation substrate.
 │   ├── resolvers.py              # The sync + async serializer-mutation resolver pipeline.
@@ -292,6 +293,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── relay.py                  # Internal Relay helpers - interface injection, node resolver defaults, and GlobalID strategies.
 │   └── resolvers.py              # Generated relation and file-field resolvers for finalized ``DjangoType`` classes.
 └── utils/    # Cross-cutting infrastructure shared across django-strawberry-framework subsystems.
+    ├── _narrowing.py             # Narrowing predicates and typed base slots for values whose type is only ``object``.
     ├── _queryset_private.py      # Typed reads and writes of the ``QuerySet`` state Django keeps in private attributes.
     ├── canonical.py              # Hostile-safe primitives for canonically reading consumer-controlled containers.
     ├── connections.py            # Shared connection contracts for sidecars, fetch modes, offset cursors, windows, and page bounds.
@@ -406,6 +408,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   └── sets.py                   # ``OrderSet`` + ``OrderSetMetaclass`` - declaration, validation, and the apply pipeline.
 ├── permissions/    # planned by TODO-BETA-064-0.1.4 - Cascade-permission package migration plus opt-in node-sentinel redaction (``Meta.redaction_mode``).
 ├── rest_framework/    # DRF serializer mutations: generated inputs, conversion, binding, and execution behind an import guard.
+│   ├── accessors.py              # Typed reads of the DRF attributes djangorestframework-stubs declares with bare generics.
 │   ├── hook_context.py           # The frozen serializer-hook context + upload metadata.
 │   ├── inputs.py                 # DRF-serializer-derived ``@strawberry.input`` generation substrate.
 │   ├── resolvers.py              # The sync + async serializer-mutation resolver pipeline.
@@ -427,6 +430,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── relay.py                  # Internal Relay helpers - interface injection, node resolver defaults, and GlobalID strategies.
 │   └── resolvers.py              # Generated relation and file-field resolvers for finalized ``DjangoType`` classes.
 └── utils/    # Cross-cutting infrastructure shared across django-strawberry-framework subsystems.
+    ├── _narrowing.py             # Narrowing predicates and typed base slots for values whose type is only ``object``.
     ├── _queryset_private.py      # Typed reads and writes of the ``QuerySet`` state Django keeps in private attributes.
     ├── canonical.py              # Hostile-safe primitives for canonically reading consumer-controlled containers.
     ├── connections.py            # Shared connection contracts for sidecars, fetch modes, offset cursors, windows, and page bounds.
@@ -487,6 +491,8 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_ci_governance.py         # Governance tests for the CI workflow definitions.
 ├── test_clean_up.py              # Script tests for clean_up generated-artifact deletion boundaries.
 ├── test_connection.py            # DjangoConnection tests for generated types, fields, resolvers, sidecars, optimization, and pagination.
+├── test_connection_window_rows.py  # The windowed-prefetch hand-off accepts only model rows as a connection window.
+├── test_consumer_base_check.py   # The revalidating consumer factory proves its bases carry the hooks it overrides.
 ├── test_consumers.py             # Hostile-input containment for the WebSocket consumer.
 ├── test_count_queries.py         # Script tests for the N+1 detector's verdict and comparison logic.
 ├── test_cross_web_patches.py     # Tests for the ``cross_web`` non-UTF-8 request-body patch.
@@ -502,6 +508,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_keyset_connection.py     # Package-side keyset connection tests for class-cached cursor state, defensive window fallbacks, order-state derivation, and nested-planner helpers.
 ├── test_lateral_pg_parity.py     # Postgres lateral-fetch tests for parity, SQL shape, cleanup, custom joins, adaptation, and index seeks.
 ├── test_list_field.py            # Package-side DjangoListField tests for construction-time validation, helper mechanics, and internals a live request cannot express.
+├── test_model_field_annotations.py  # Model field annotations agree with the fields they annotate.
 ├── test_permissions.py           # Package-only cascade-permission pins that no live GraphQL request can express.
 ├── test_pg_explain_artifact_footer.py  # The PG EXPLAIN artifact carries a regenerable, valid link-definition footer.
 ├── test_predicate_pg_explain.py  # Postgres planner regression for the row-preserving to-many filter predicates.
@@ -520,6 +527,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_sets_mixins.py           # Pins for set-family mixins shared by ``FilterSet`` and ``OrderSet``.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
 ├── test_views.py                 # Package-tier contracts for the package's Django GraphQL views.
+├── test_views_async_callback.py  # The async package view's ``as_view`` returns a coroutine view callback, or refuses.
 ├── test_workspace.py             # Repo-tooling tests for the agentflow workspace tool's copies, pool, evidence and cleanup.
 ├── auth/    # Package-internal tests for the opt-in auth subsystem.
 │   ├── _helpers.py               # Shared auth-test helpers hoisted out of the individual test modules.
@@ -538,6 +546,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_factories.py         # FilterArgumentsFactory tests for BFS input generation.
 │   ├── test_finalizer.py         # Finalizer tests for filter binding, owner-aware materialization, and orphan validation.
 │   ├── test_inputs.py            # Filter input-generation tests for lookup naming, field construction, normalization, references, and reset.
+│   ├── test_operator_bag_reads.py  # A dict operator bag is classified and read through one base read of its pairs.
 │   ├── test_sets.py              # FilterSet tests for Meta validation, relations, Relay fields, permissions, visibility, and logic trees.
 │   └── fixtures/    # Fixture modules for filter lazy resolution and cyclic input-generation tests.
 │       └── filtersets.py         # Fixture FilterSet declarations for cross-module lazy resolution and self-referential cycle handling.
@@ -559,6 +568,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_permissions.py       # ``DjangoModelPermission`` class behavior + write-auth enforcement.
 │   ├── test_resolvers.py         # Write-pipeline resolver tests.
 │   ├── test_sets.py              # ``DjangoMutation`` base, ``Meta`` validation, registration, and the phase-2.5 bind.
+│   ├── test_step_failure.py      # The write skeleton tells a failed step from a step whose product is a list.
 │   └── test_write_transaction.py # The mutation write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
 ├── optimizer/    # Package tests for optimizer plans, application, extensions, selections, and nested-fetch strategies.
 │   ├── _builders.py              # Shared builders for the optimizer test package.
@@ -587,6 +597,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_inputs.py            # Order input tests for Ordering enum, input materialization, reset, and normalization.
 │   └── test_sets.py              # OrderSet tests for Meta collection, validation, sync/async apply, and permission scope.
 ├── rest_framework/    # Package-internal DRF serializer-mutation tests.
+│   ├── test_accessors.py         # The typed DRF reads every package module (and its tests) go through.
 │   ├── test_converter.py         # Converter tests for the DRF serializer-field -> Strawberry annotation registry.
 │   ├── test_dry_import_ratchet.py  # The serializer flavor IMPORTS its shared substrate; it never redefines it.
 │   ├── test_inputs.py            # Serializer-derived input tests for the generated ``<Serializer>Input`` / ``PartialInput``.
@@ -599,6 +610,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   └── test_wrap.py              # Connection-method wrapping tests for cooperative consumer instrumentation.
 ├── types/    # Package tests for the DjangoType subsystem.
 │   ├── test_base.py              # DjangoType tests for Meta validation, scalar mapping, relations, registry, and get_queryset.
+│   ├── test_choice_entry_shapes.py  # A choice entry is unpacked as a pair only once it is proven iterable.
 │   ├── test_converters.py        # Converter tests for scalars, enums, relations, PostgreSQL containers, and file/image output objects.
 │   ├── test_definition_order.py  # Declaration-order traps and Relay id-annotation rules no GraphQL request observes.
 │   ├── test_definition_order_schema.py  # Schema-build tests for definition-order-independent DjangoType finalization.
@@ -628,6 +640,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
     ├── test_permissions.py       # Tests for input permissions, relation-path gates, and Django/Channels request decoding.
     ├── test_policies.py          # ``utils/policies.py::resolve_policy`` - the shared schema-construction resolver.
     ├── test_querysets.py         # Tests for the shared query-source / visibility substrate (``utils/querysets.py``).
+    ├── test_related_declaration_keys.py  # The permission walk's related-declaration read holds a collection to attribute-name keys.
     ├── test_relation_reentry.py  # A relation path re-entering the bound set's table reads the bound type (``relation_target_type``).
     ├── test_relations.py         # Relation utility tests for kinds, many-side detection, instance accessors, and package re-exports.
     ├── test_sessions.py          # Behavioral tests for the session-engine resolver and connection actor lease.
@@ -756,6 +769,8 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_ci_governance.py         # Governance tests for the CI workflow definitions.
 ├── test_clean_up.py              # Script tests for clean_up generated-artifact deletion boundaries.
 ├── test_connection.py            # DjangoConnection tests for generated types, fields, resolvers, sidecars, optimization, and pagination.
+├── test_connection_window_rows.py  # The windowed-prefetch hand-off accepts only model rows as a connection window.
+├── test_consumer_base_check.py   # The revalidating consumer factory proves its bases carry the hooks it overrides.
 ├── test_consumers.py             # Hostile-input containment for the WebSocket consumer.
 ├── test_count_queries.py         # Script tests for the N+1 detector's verdict and comparison logic.
 ├── test_cross_web_patches.py     # Tests for the ``cross_web`` non-UTF-8 request-body patch.
@@ -771,6 +786,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_keyset_connection.py     # Package-side keyset connection tests for class-cached cursor state, defensive window fallbacks, order-state derivation, and nested-planner helpers.
 ├── test_lateral_pg_parity.py     # Postgres lateral-fetch tests for parity, SQL shape, cleanup, custom joins, adaptation, and index seeks.
 ├── test_list_field.py            # Package-side DjangoListField tests for construction-time validation, helper mechanics, and internals a live request cannot express.
+├── test_model_field_annotations.py  # Model field annotations agree with the fields they annotate.
 ├── test_permissions.py           # Package-only cascade-permission pins that no live GraphQL request can express.
 ├── test_pg_explain_artifact_footer.py  # The PG EXPLAIN artifact carries a regenerable, valid link-definition footer.
 ├── test_predicate_pg_explain.py  # Postgres planner regression for the row-preserving to-many filter predicates.
@@ -789,6 +805,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_sets_mixins.py           # Pins for set-family mixins shared by ``FilterSet`` and ``OrderSet``.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
 ├── test_views.py                 # Package-tier contracts for the package's Django GraphQL views.
+├── test_views_async_callback.py  # The async package view's ``as_view`` returns a coroutine view callback, or refuses.
 ├── test_workspace.py             # Repo-tooling tests for the agentflow workspace tool's copies, pool, evidence and cleanup.
 ├── aggregates/    # planned by TODO-BETA-062-0.1.3 - Mirrored package tests for the aggregates subsystem.
 ├── auth/    # Package-internal tests for the opt-in auth subsystem.
@@ -809,6 +826,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_factories.py         # FilterArgumentsFactory tests for BFS input generation.
 │   ├── test_finalizer.py         # Finalizer tests for filter binding, owner-aware materialization, and orphan validation.
 │   ├── test_inputs.py            # Filter input-generation tests for lookup naming, field construction, normalization, references, and reset.
+│   ├── test_operator_bag_reads.py  # A dict operator bag is classified and read through one base read of its pairs.
 │   ├── test_pg_full_text.py      # planned by TODO-BETA-061-0.1.2 - Postgres full-text search filter primitives.
 │   ├── test_search_fields.py     # planned by TODO-BETA-060-0.1.2 - `Meta.search_fields` support.
 │   ├── test_sets.py              # FilterSet tests for Meta validation, relations, Relay fields, permissions, visibility, and logic trees.
@@ -833,6 +851,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_permissions.py       # ``DjangoModelPermission`` class behavior + write-auth enforcement.
 │   ├── test_resolvers.py         # Write-pipeline resolver tests.
 │   ├── test_sets.py              # ``DjangoMutation`` base, ``Meta`` validation, registration, and the phase-2.5 bind.
+│   ├── test_step_failure.py      # The write skeleton tells a failed step from a step whose product is a list.
 │   └── test_write_transaction.py # The mutation write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
 ├── optimizer/    # Package tests for optimizer plans, application, extensions, selections, and nested-fetch strategies.
 │   ├── _builders.py              # Shared builders for the optimizer test package.
@@ -861,6 +880,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_inputs.py            # Order input tests for Ordering enum, input materialization, reset, and normalization.
 │   └── test_sets.py              # OrderSet tests for Meta collection, validation, sync/async apply, and permission scope.
 ├── rest_framework/    # Package-internal DRF serializer-mutation tests.
+│   ├── test_accessors.py         # The typed DRF reads every package module (and its tests) go through.
 │   ├── test_converter.py         # Converter tests for the DRF serializer-field -> Strawberry annotation registry.
 │   ├── test_dry_import_ratchet.py  # The serializer flavor IMPORTS its shared substrate; it never redefines it.
 │   ├── test_inputs.py            # Serializer-derived input tests for the generated ``<Serializer>Input`` / ``PartialInput``.
@@ -873,6 +893,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   └── test_wrap.py              # Connection-method wrapping tests for cooperative consumer instrumentation.
 ├── types/    # Package tests for the DjangoType subsystem.
 │   ├── test_base.py              # DjangoType tests for Meta validation, scalar mapping, relations, registry, and get_queryset.
+│   ├── test_choice_entry_shapes.py  # A choice entry is unpacked as a pair only once it is proven iterable.
 │   ├── test_converters.py        # Converter tests for scalars, enums, relations, PostgreSQL containers, and file/image output objects.
 │   ├── test_definition_order.py  # Declaration-order traps and Relay id-annotation rules no GraphQL request observes.
 │   ├── test_definition_order_schema.py  # Schema-build tests for definition-order-independent DjangoType finalization.
@@ -902,6 +923,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
     ├── test_permissions.py       # Tests for input permissions, relation-path gates, and Django/Channels request decoding.
     ├── test_policies.py          # ``utils/policies.py::resolve_policy`` - the shared schema-construction resolver.
     ├── test_querysets.py         # Tests for the shared query-source / visibility substrate (``utils/querysets.py``).
+    ├── test_related_declaration_keys.py  # The permission walk's related-declaration read holds a collection to attribute-name keys.
     ├── test_relation_reentry.py  # A relation path re-entering the bound set's table reads the bound type (``relation_target_type``).
     ├── test_relations.py         # Relation utility tests for kinds, many-side detection, instance accessors, and package re-exports.
     ├── test_sessions.py          # Behavioral tests for the session-engine resolver and connection actor lease.

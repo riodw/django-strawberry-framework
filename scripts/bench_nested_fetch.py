@@ -177,7 +177,7 @@ def _run(
     result = schema.execute_sync(document)  # warmup + correctness check
     if result.errors:
         raise SystemExit(f"benchmark query failed: {result.errors}")
-    samples = []
+    samples: list[float] = []
     with capture_queries() as ctx:
         counted = schema.execute_sync(document)
     query_count = len(ctx)

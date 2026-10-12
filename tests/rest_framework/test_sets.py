@@ -73,6 +73,7 @@ from django_strawberry_framework.mutations.inputs import (
 )
 from django_strawberry_framework.mutations.sets import iter_mutations
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.rest_framework.accessors import base_fields, bound_fields
 from django_strawberry_framework.rest_framework.inputs import (
     SERIALIZER_INPUTS_MODULE_PATH,
     NestedSerializerConfig,
@@ -88,8 +89,22 @@ from tests._idioms import definition_raises
 from tests._info import unread_info
 
 if TYPE_CHECKING:
+    from typing import TypeAlias, TypeVar
+
+    from django.db.models.expressions import Combinable
+
     from django_strawberry_framework.rest_framework.hook_context import SerializerHookContext
     from django_strawberry_framework.rest_framework.serializer_converter import DRFField
+
+    _M = TypeVar("_M", bound=models.Model)
+    # DRF's stubs type a related field's constructor as returning it or a ``ManyRelatedField``.
+    _PkRelation: TypeAlias = (
+        serializers.RelatedField[_M, _M, object] | serializers.ManyRelatedField
+    )
+
+    # A column's descriptor types as django-stubs declares them (set type, get type), spelled out
+    # because the checker runs without the django-stubs mypy plugin that would infer them.
+    _Char: TypeAlias = models.CharField[str | int | Combinable, str]
 
 
 @pytest.fixture(autouse=True)
@@ -713,7 +728,7 @@ def _grouped_shelf_model():
     """A fresh model whose ``status`` column declares Django's grouped-choices form."""
 
     class GroupedShelf(models.Model):
-        status = models.CharField(
+        status: _Char = models.CharField(
             max_length=8,
             choices=[("Fiction", [("a", "A"), ("b", "B")]), ("Other", [("c", "C")])],
         )
@@ -1123,7 +1138,7 @@ def _alias_serializer(
 
 def _item_attname_alias_serializer() -> type[serializers.ModelSerializer[models.Model]]:
     """``Item``'s ``category`` beside ``cat`` (``source="category_id"``): one FK, two writers."""
-    cat = serializers.PrimaryKeyRelatedField(
+    cat: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
         source="category_id",
         queryset=product_models.Category.objects.all(),
     )
@@ -1316,7 +1331,7 @@ def test_distinct_model_fields_stay_separate_write_targets_at_class_creation(
 
 def _input_fields(input_cls: type) -> dict[str, StrawberryField]:
     """Return ``python_name -> StrawberryField`` for a materialized input class."""
-    return {f.python_name: f for f in input_cls.__strawberry_definition__.fields}
+    return {f.python_name: f for f in get_object_definition(input_cls, strict=True).fields}
 
 
 def test_serializer_meta_optional_fields_is_not_the_public_api():
@@ -1345,7 +1360,7 @@ def test_serializer_meta_optional_fields_is_not_the_public_api():
     assert input_cls is not None
     fields = _input_fields(input_cls)
     # ``name`` stays REQUIRED: the serializer-level optional_fields has no effect.
-    assert fields["name"].default is not strawberry.UNSET
+    assert fields["name"].default_value is not strawberry.UNSET
 
 
 def test_mutation_optional_fields_unknown_name_raises_at_class_creation():
@@ -1386,7 +1401,7 @@ def test_get_serializer_for_schema_classmethod_override_drives_bind():
         @override
         def get_fields(self) -> dict[str, DRFField]:
             _ = self.context["tenant"]  # KeyError under no-arg default discovery
-            return super().get_fields()
+            return base_fields(super())
 
     class CreateCtxItem(SerializerMutation):
         class Meta:
@@ -1397,7 +1412,7 @@ def test_get_serializer_for_schema_classmethod_override_drives_bind():
         @override
         def get_serializer_for_schema(cls) -> dict[str, DRFField]:
             # The override supplies the context the default no-arg discovery lacks.
-            return dict(CtxItemSerializer(context={"tenant": "t"}).fields)
+            return dict(bound_fields(CtxItemSerializer(context={"tenant": "t"})))
 
     finalize_django_types()
     assert CreateCtxItem._input_class is not None
@@ -1422,7 +1437,7 @@ def test_schema_hook_rejects_invalid_field_map_at_class_creation(
 ):
     """The schema hook's mapping/field-name contract fails typed at class creation."""
     serializer_cls = _item_serializer()
-    fields = dict(serializer_cls().fields)
+    fields = dict(bound_fields(serializer_cls()))
     field_map = map_factory(fields)
 
     with pytest.raises(ConfigurationError, match=message):
@@ -1714,7 +1729,7 @@ def test_nondeterministic_schema_hook_raises_at_bind():
         @classmethod
         @override
         def get_serializer_for_schema(cls) -> dict[str, DRFField]:
-            fields = dict(serializer_cls().fields)
+            fields = dict(bound_fields(serializer_cls()))
             if drift["drop"]:
                 # Drop a field ONLY on the post-validation call -> a nondeterministic shape.
                 del fields["description"]
@@ -1742,7 +1757,7 @@ def test_deterministic_schema_hook_binds_without_drift_error():
         @classmethod
         @override
         def get_serializer_for_schema(cls) -> dict[str, DRFField]:
-            return dict(serializer_cls().fields)
+            return dict(bound_fields(serializer_cls()))
 
     finalize_django_types()  # no raise
     assert StableMut._input_class is not None
@@ -1889,7 +1904,7 @@ def test_input_type_name_runs_the_determinism_guard():
         @classmethod
         @override
         def get_serializer_for_schema(cls) -> dict[str, DRFField]:
-            fields = dict(serializer_cls().fields)
+            fields = dict(bound_fields(serializer_cls()))
             if drift["drop"]:
                 del fields["description"]
             return fields
@@ -1955,7 +1970,7 @@ def _category_field_map(
             def create(self, validated_data: dict[str, object]) -> NoReturn:
                 raise AssertionError("never called; the nested-write check reads its presence")
 
-    return CategorySer, dict(CategorySer().fields)
+    return CategorySer, dict(bound_fields(CategorySer()))
 
 
 def test_validate_nested_fields_none_returns_none():
@@ -2195,7 +2210,7 @@ def test_validate_nested_fields_empty_mapping_requires_no_write_override():
         "M",
         ItemInlineless,
         "create",
-        dict(ItemInlineless().fields),
+        dict(bound_fields(ItemInlineless())),
         {},
     )
     assert result == {}
@@ -2595,7 +2610,7 @@ def test_nested_fields_cycle_raises_configuration_error_at_class_creation():
 
         @override
         def get_fields(self) -> dict[str, DRFField]:
-            fields = super().get_fields()
+            fields: dict[str, DRFField] = base_fields(super())
             fields["parent"] = RecursiveCategorySerializer()
             return fields
 
@@ -2638,9 +2653,10 @@ def test_mutual_nested_fields_cycle_raises_configuration_error_at_class_creation
         def create(self, validated_data: dict[str, object]):
             return product_models.Item.objects.create(**validated_data)
 
-    MutCategorySerializer._declared_fields["item"] = MutItemSerializer()
+    # basedpyright: drf-stubs type _declared_fields as dict[str, Field] over the bare generic Field
+    MutCategorySerializer._declared_fields["item"] = MutItemSerializer()  # pyright: ignore[reportUnknownMemberType]
 
-    cycle_cat = {}
+    cycle_cat: dict[str, NestedSerializerConfig] = {}
     config_item = NestedSerializerConfig(nested_fields=cycle_cat)
     config_cat = NestedSerializerConfig(nested_fields={"item": config_item})
     cycle_cat["category"] = config_cat

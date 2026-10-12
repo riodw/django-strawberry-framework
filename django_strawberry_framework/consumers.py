@@ -367,13 +367,15 @@ import contextlib
 import math
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast, get_origin
 
 from django.core.exceptions import DisallowedHost
 from django.http import HttpRequest
+from typing_extensions import override
 
 from . import logger
 from .exceptions import ConfigurationError, describe_value
+from .utils._narrowing import is_class
 from .utils.sessions import (
     actor_lease,
     connection_was_authenticated,
@@ -394,6 +396,7 @@ if TYPE_CHECKING:
     from django.contrib.sessions.backends.base import SessionBase
     from strawberry.channels import GraphQLWSConsumer
     from strawberry.schema import BaseSchema
+    from typing_extensions import TypeIs
 
     class _RevocationOwner(Protocol):
         """The consumer as the stop-aware result source reads it: its revocation state."""
@@ -461,6 +464,61 @@ if TYPE_CHECKING:
         # which answers only the result-source names upstream reads from it
         @schema.setter
         def schema(self, value: _StopAwareSchema, /) -> None: ...  # pyright: ignore[reportPropertyTypeMismatch]
+
+    # The three upstream classes ``build_revalidating_consumer_class`` derives from, as the
+    # subclasses it builds use them. The factory reads each off the base consumer at run
+    # time and proves the hooks it overrides are there (``_declares_hooks``) before
+    # deriving from it; these shapes are what that proof lets the checker assume.
+    class _HandlerShape:
+        """An upstream protocol handler: its consumer, its socket, its schema and its loop."""
+
+        view: _RevalidatedConsumer
+        websocket: _GatedSocket
+        connection_acknowledged: bool
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            """Upstream's handler initializer, forwarded verbatim."""
+
+        @property
+        def schema(self) -> BaseSchema: ...
+
+        # basedpyright: the slot is read as upstream's schema and overwritten with the wrapper
+        @schema.setter
+        def schema(self, value: _StopAwareSchema, /) -> None: ...  # pyright: ignore[reportPropertyTypeMismatch]
+
+        async def handle(self) -> None:
+            """Upstream's message loop."""
+
+    class _TransportWSHandlerShape(_HandlerShape):
+        """The ``graphql-transport-ws`` handler's admission hook."""
+
+        async def handle_subscribe(self, message: Mapping[str, object]) -> None:
+            """Upstream's ``subscribe`` frame handler."""
+
+    class _GraphQLWSHandlerShape(_HandlerShape):
+        """The legacy ``graphql-ws`` handler's admission hooks and its task registry."""
+
+        tasks: Mapping[object, object]
+
+        async def handle_start(self, message: Mapping[str, object]) -> None:
+            """Upstream's ``start`` frame handler."""
+
+        async def handle_stop(self, message: Mapping[str, object]) -> None:
+            """Upstream's ``stop`` frame handler."""
+
+    class WebSocketAdapterShape:
+        """The WebSocket adapter a package consumer installs: its consumer, its sends, its close."""
+
+        ws_consumer: _RevalidatedConsumer
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            """Upstream's adapter initializer, forwarded verbatim."""
+
+        async def send_json(self, message: Mapping[str, object]) -> None:
+            """Write one protocol frame."""
+
+        async def close(self, *, code: int, reason: str) -> None:
+            """Close the socket with the WebSocket close ``code`` and ``reason``."""
 
 
 #: The outgoing frame a revalidated send hands to the transport unchanged.
@@ -663,15 +721,26 @@ if TYPE_CHECKING:
 
         revalidation_window: float
         _revocation: _ConnectionRevocation
+        # basedpyright: channels-stubs types the scope as its closed ``_ChannelScope``
+        # TypedDict; Channels' scope is a plain dict that its middleware and the package
+        # both extend with their own keys (the actor lease, the session lock)
+        scope: MutableMapping[str, object]  # pyright: ignore[reportIncompatibleVariableOverride]
+        # The three gated classes the package consumer installs over upstream's.
+        # basedpyright: upstream types each slot over its own handler / adapter classes; the
+        # package consumer installs the subclasses these shapes describe
+        graphql_transport_ws_handler_class: type[_TransportWSHandlerShape]  # pyright: ignore[reportIncompatibleVariableOverride]
+        # basedpyright: as above, upstream's legacy handler slot
+        graphql_ws_handler_class: type[_GraphQLWSHandlerShape]  # pyright: ignore[reportIncompatibleVariableOverride]
+        websocket_adapter_class: type[WebSocketAdapterShape]
 
         # basedpyright: a checker-only declaration whose body never runs; the factory's
         # function-local ``GraphQLWebSocketConsumer.__init__`` is the one that calls the base
-        def __init__(  # pyright: ignore[reportMissingSuperCall]
-            self,
-            *args: object,
-            revalidation_window: float = _DEFAULT_REVALIDATION_WINDOW,
-            **kwargs: object,
-        ) -> None: ...
+        def __init__(self, *args: object, **kwargs: object) -> None:  # pyright: ignore[reportMissingSuperCall]
+            """Upstream's initializer, forwarded verbatim.
+
+            The generated consumer's own ``__init__`` takes the ``revalidation_window``
+            initkwarg before forwarding the rest here, so this level declares none.
+            """
 
 
 class _ConnectionRevocation:
@@ -1524,7 +1593,9 @@ class _StopAwareSchema:
         The seam ``graphql-transport-ws`` reads, for EVERY operation type rather
         than subscriptions alone.
         """
-        return self._stoppable(await self._schema.stream(*args, **kwargs))
+        # basedpyright: Strawberry's schema/_graphql_core.py rebinds its graphql-core 3.3 result
+        # aliases in an ImportError fallback, so ``BaseSchema.stream``'s result carries Unknown
+        return self._stoppable(await self._schema.stream(*args, **kwargs))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
 
     def _stoppable(self, source: AsyncGenerator[object, None]) -> AsyncGenerator[object, None]:
         """Wrap one upstream result source in the connection's stop-and-mask seam.
@@ -1702,6 +1773,47 @@ async def _refreshed_actor(scope: Mapping[str, object]) -> object:
     return await get_user({"session": store})  # pyright: ignore[reportArgumentType]
 
 
+def _declares_hooks(base: object, hooks: tuple[str, ...]) -> bool:
+    """Return whether ``base`` - a class, or a subscripted generic alias of one - defines ``hooks``.
+
+    Upstream's handler attributes are subscripted generic aliases
+    (``BaseGraphQLTransportWSHandler[Context, RootValue]``); a class statement derives
+    from one through ``__mro_entries__``, so the proof reads the alias's origin class.
+    """
+    origin: object = get_origin(base) or base
+    return is_class(origin) and all(callable(getattr(origin, hook, None)) for hook in hooks)
+
+
+def _class_attribute(owner: type[object], name: str) -> object:
+    """Read ``name`` off ``owner`` as the unproven ``object`` it is until a predicate checks it."""
+    return getattr(owner, name)
+
+
+def _is_consumer_base(base: object) -> TypeIs[type[RevalidatingGraphQLWSConsumer]]:
+    """Whether ``base`` can be the revalidating consumer's base (its teardown and mount exist).
+
+    What the factory's subclass adds - the revalidation window, the revocation state
+    and the three gated classes - is declared by that subclass itself, so the base
+    only has to bring the hooks it extends.
+    """
+    return _declares_hooks(base, ("disconnect", "as_asgi"))
+
+
+def _is_transport_ws_handler_base(base: object) -> TypeIs[type[_TransportWSHandlerShape]]:
+    """Whether ``base`` can be the ``graphql-transport-ws`` handler base (its hooks exist)."""
+    return _declares_hooks(base, ("handle", "handle_subscribe"))
+
+
+def _is_graphql_ws_handler_base(base: object) -> TypeIs[type[_GraphQLWSHandlerShape]]:
+    """Whether ``base`` can be the legacy ``graphql-ws`` handler base (its hooks exist)."""
+    return _declares_hooks(base, ("handle", "handle_start", "handle_stop"))
+
+
+def _is_websocket_adapter_base(base: object) -> TypeIs[type[WebSocketAdapterShape]]:
+    """Whether ``base`` can be the WebSocket adapter base (its send and close exist)."""
+    return _declares_hooks(base, ("send_json", "close"))
+
+
 def build_revalidating_consumer_class(
     base_consumer_cls: type[GraphQLWSConsumer],
 ) -> type[RevalidatingGraphQLWSConsumer]:
@@ -1723,15 +1835,30 @@ def build_revalidating_consumer_class(
     ``__mro_entries__`` and is the correct shape here - it imports none of the
     three modules and tracks an upstream re-point automatically.
     """
-    # Each base is read off ``base_consumer_cls`` at run time (see above), so it has
-    # no static type to name here. The two handler attributes are read by name: upstream
-    # declares each as an instance variable typed over the view's own ``Context`` /
-    # ``RootValue`` type variables, which a read through the class leaves unbound.
-    # basedpyright: typed, it rejects the object-typed __init__ forward and every hook override
-    transport_ws_handler_base: Any = getattr(  # pyright: ignore[reportExplicitAny]  # noqa: B009
+    # Each base is read off ``base_consumer_cls`` at run time (see above) and proven to
+    # carry the hooks its subclass overrides before anything derives from it. The
+    # attributes are read by name: upstream declares the two handlers as instance
+    # variables typed over the view's own ``Context`` / ``RootValue`` type variables,
+    # which a read through the class leaves unbound, and the adapter as a factory.
+    consumer_base: object = base_consumer_cls
+    transport_ws_handler_base = _class_attribute(
         base_consumer_cls,
         "graphql_transport_ws_handler_class",
     )
+    graphql_ws_handler_base = _class_attribute(base_consumer_cls, "graphql_ws_handler_class")
+    websocket_adapter_base = _class_attribute(base_consumer_cls, "websocket_adapter_class")
+    if not (
+        _is_consumer_base(consumer_base)
+        and _is_transport_ws_handler_base(transport_ws_handler_base)
+        and _is_graphql_ws_handler_base(graphql_ws_handler_base)
+        and _is_websocket_adapter_base(websocket_adapter_base)
+    ):
+        raise ConfigurationError(
+            f"{describe_value(base_consumer_cls)} is not a Strawberry Channels GraphQLWSConsumer: "
+            "its graphql_transport_ws_handler_class, graphql_ws_handler_class and "
+            "websocket_adapter_class must be the classes whose hooks the revalidating "
+            "consumer overrides.",
+        )
 
     class _RevalidatingTransportWSHandler(transport_ws_handler_base):
         """``graphql-transport-ws``: revalidated admission, stoppable results."""
@@ -1743,11 +1870,13 @@ def build_revalidating_consumer_class(
         # ``message`` is upstream's ``SubscribeMessage`` TypedDict; annotated as
         # the client-supplied mapping it is at run time, so the factory keeps
         # importing nothing from upstream's deep protocol-types modules.
+        @override
         async def handle_subscribe(self, message: Mapping[str, object]) -> None:
             if not await revalidate_operation_actor(self):
                 return
             await super().handle_subscribe(message)
 
+        @override
         async def handle(self) -> None:
             """Contain a message-loop escape, closing under the code that fits its cause.
 
@@ -1776,9 +1905,6 @@ def build_revalidating_consumer_class(
                 # subclasses included - no hand-maintained list can drift.
                 await _contain_message_loop_failure(self, exc, "graphql-transport-ws")
 
-    # basedpyright: typed, it rejects the object-typed __init__ forward and every hook override
-    graphql_ws_handler_base: Any = getattr(base_consumer_cls, "graphql_ws_handler_class")  # pyright: ignore[reportExplicitAny]  # noqa: B009
-
     class _RevalidatingGraphQLWSHandler(graphql_ws_handler_base):
         """Legacy ``graphql-ws``: revalidated admission, stoppable results."""
 
@@ -1787,12 +1913,14 @@ def build_revalidating_consumer_class(
             _install_stop_aware_schema(self)
 
         # ``message`` is upstream's ``StartMessage`` TypedDict; see above.
+        @override
         async def handle_start(self, message: Mapping[str, object]) -> None:
             if not await revalidate_operation_actor(self):
                 return
             await super().handle_start(message)
 
         # ``message`` is upstream's ``StopMessage`` TypedDict; see above.
+        @override
         async def handle_stop(self, message: Mapping[str, object]) -> None:
             """Stop the named operation; a ``stop`` for an id not running is a no-op.
 
@@ -1814,6 +1942,7 @@ def build_revalidating_consumer_class(
                 return
             await super().handle_stop(message)
 
+        @override
         async def handle(self) -> None:
             """The legacy handler's identical loop containment.
 
@@ -1828,9 +1957,6 @@ def build_revalidating_consumer_class(
             except Exception as exc:
                 await _contain_message_loop_failure(self, exc, "legacy graphql-ws")
 
-    # basedpyright: upstream types websocket_adapter_class a Callable factory, not a class
-    websocket_adapter_base: Any = base_consumer_cls.websocket_adapter_class  # pyright: ignore[reportExplicitAny]
-
     class _RevocationGatedWebSocketAdapter(websocket_adapter_base):
         """The outbound checkpoint, on the seam both protocols share.
 
@@ -1842,6 +1968,7 @@ def build_revalidating_consumer_class(
 
         # ``message`` is a protocol frame mapping on either protocol, annotated
         # the way the handler hooks above annotate theirs.
+        @override
         async def send_json(self, message: Mapping[str, object]) -> None:
             """Revalidate an information-bearing frame; write nothing once revoked.
 
@@ -1960,9 +2087,6 @@ def build_revalidating_consumer_class(
                 )
                 return
 
-    # basedpyright: typed, it rejects the object-typed __init__ forward and every hook override
-    consumer_base: Any = base_consumer_cls  # pyright: ignore[reportExplicitAny]
-
     class GraphQLWebSocketConsumer(consumer_base):
         """The package's WebSocket GraphQL consumer: upstream plus revalidation.
 
@@ -2027,6 +2151,7 @@ def build_revalidating_consumer_class(
             self._revocation = _ConnectionRevocation()
             super().__init__(*args, **kwargs)
 
+        @override
         async def disconnect(self, code: int) -> None:
             """Let upstream tear the connection down, then settle its close attempt.
 

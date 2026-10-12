@@ -16,35 +16,51 @@ the catalog's guarded reference, a hold that keeps an item from being deleted
 while it stands.
 """
 
-from typing import TYPE_CHECKING
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
 from django.db import models
 from typing_extensions import override
 
 if TYPE_CHECKING:
+    from datetime import date, datetime
+
+    from django.db.models.expressions import Combinable
     from django.db.models.fields.related_descriptors import RelatedManager
+
+    _M = TypeVar("_M", bound=models.Model)
+
+    # Each field's descriptor types as django-stubs declares them (set type, get type), spelled
+    # out because the checker runs without the django-stubs mypy plugin that would infer them;
+    # ``null=True`` adds ``None`` to both.
+    _Bool: TypeAlias = models.BooleanField[bool | Combinable, bool]
+    _DateTime: TypeAlias = models.DateTimeField[str | datetime | date | Combinable, datetime]
+    _FK: TypeAlias = models.ForeignKey[_M | Combinable, _M]
+    _NullFK: TypeAlias = models.ForeignKey[_M | Combinable | None, _M | None]
+    _Text: TypeAlias = models.TextField[str | Combinable, str]
 
 
 class Category(models.Model):
     """A Faker provider (e.g. ``bank``, ``person``, ``address``)."""
 
-    name = models.TextField(unique=True)
-    description = models.TextField(
+    name: _Text = models.TextField(unique=True)
+    description: _Text = models.TextField(
         blank=True,
         default="",
     )
-    is_private = models.BooleanField(default=False)
-    created_date = models.DateTimeField(
+    is_private: _Bool = models.BooleanField(default=False)
+    created_date: _DateTime = models.DateTimeField(
         auto_now_add=True,
         editable=False,
     )
-    updated_date = models.DateTimeField(
+    updated_date: _DateTime = models.DateTimeField(
         auto_now=True,
         editable=False,
     )
 
     # Reverse accessor Django adds at class creation, declared for the type checker.
-    items: "RelatedManager[Item]"
+    items: RelatedManager[Item]
 
     class Meta:
         verbose_name = "Category"
@@ -58,12 +74,12 @@ class Category(models.Model):
 class Item(models.Model):
     """A generated instance produced from a category's Faker provider."""
 
-    name = models.TextField()
-    description = models.TextField(
+    name: _Text = models.TextField()
+    description: _Text = models.TextField(
         blank=True,
         default="",
     )
-    category = models.ForeignKey(
+    category: _FK[Category] = models.ForeignKey(
         Category,
         related_name="items",
         on_delete=models.CASCADE,
@@ -81,12 +97,12 @@ class Item(models.Model):
         null=True,
         blank=True,
     )
-    is_private = models.BooleanField(default=False)
-    created_date = models.DateTimeField(
+    is_private: _Bool = models.BooleanField(default=False)
+    created_date: _DateTime = models.DateTimeField(
         auto_now_add=True,
         editable=False,
     )
-    updated_date = models.DateTimeField(
+    updated_date: _DateTime = models.DateTimeField(
         auto_now=True,
         editable=False,
     )
@@ -112,22 +128,22 @@ class Item(models.Model):
 class Property(models.Model):
     """A Faker method on a category's provider (e.g. ``iban``, ``first_name``)."""
 
-    name = models.TextField()
-    description = models.TextField(
+    name: _Text = models.TextField()
+    description: _Text = models.TextField(
         blank=True,
         default="",
     )
-    category = models.ForeignKey(
+    category: _FK[Category] = models.ForeignKey(
         Category,
         related_name="properties",
         on_delete=models.CASCADE,
     )
-    is_private = models.BooleanField(default=False)
-    created_date = models.DateTimeField(
+    is_private: _Bool = models.BooleanField(default=False)
+    created_date: _DateTime = models.DateTimeField(
         auto_now_add=True,
         editable=False,
     )
-    updated_date = models.DateTimeField(
+    updated_date: _DateTime = models.DateTimeField(
         auto_now=True,
         editable=False,
     )
@@ -153,29 +169,29 @@ class Property(models.Model):
 class Entry(models.Model):
     """The value Faker produced for one ``(item, property)`` pair."""
 
-    value = models.TextField()
-    description = models.TextField(
+    value: _Text = models.TextField()
+    description: _Text = models.TextField(
         blank=True,
         default="",
     )
-    property = models.ForeignKey(
+    property: _FK[Property] = models.ForeignKey(
         Property,
         related_name="entries",
         on_delete=models.CASCADE,
     )
-    item = models.ForeignKey(
+    item: _FK[Item] = models.ForeignKey(
         Item,
         related_name="entries",
         on_delete=models.CASCADE,
     )
     # Key column Django adds beside ``item``, declared for the type checker.
     item_id: int
-    is_private = models.BooleanField(default=False)
-    created_date = models.DateTimeField(
+    is_private: _Bool = models.BooleanField(default=False)
+    created_date: _DateTime = models.DateTimeField(
         auto_now_add=True,
         editable=False,
     )
-    updated_date = models.DateTimeField(
+    updated_date: _DateTime = models.DateTimeField(
         auto_now=True,
         editable=False,
     )
@@ -209,14 +225,14 @@ class ItemHold(models.Model):
     ``full_clean`` into a NOT NULL violation.
     """
 
-    reason = models.TextField()
-    item = models.ForeignKey(
+    reason: _Text = models.TextField()
+    item: _FK[Item] = models.ForeignKey(
         Item,
         related_name="holds",
         on_delete=models.PROTECT,
         blank=True,
     )
-    substitute = models.ForeignKey(
+    substitute: _NullFK[Item] = models.ForeignKey(
         Item,
         related_name="substitute_holds",
         on_delete=models.RESTRICT,

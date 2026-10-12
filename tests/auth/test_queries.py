@@ -15,7 +15,7 @@ is earned in
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Coroutine, Iterable, Iterator
 from unittest import mock
 
 import pytest
@@ -517,11 +517,11 @@ def test_awaitable_is_authenticated_is_closed_and_read_as_anonymous():
 @pytest.mark.django_db
 def test_legacy_callable_returning_an_awaitable_is_closed_and_read_as_anonymous():
     """A legacy ``is_authenticated()`` returning a coroutine is closed, not awaited."""
-    captured = []
+    captured: list[Coroutine[object, object, bool]] = []
 
     class _AsyncCallableIsAuth:
-        def is_authenticated(self):
-            async def _pending():  # closed, never awaited
+        def is_authenticated(self) -> Coroutine[object, object, bool]:
+            async def _pending() -> bool:  # closed, never awaited
                 return True
 
             coro = _pending()
@@ -567,7 +567,7 @@ async def test_async_gated_me_forces_the_lazy_user_inside_the_one_sync_boundary(
     ``sync_to_async(thread_sensitive=True)`` worker, the forced load succeeds and
     the recorded gate ``instance`` is the real user row.
     """
-    seen = {}
+    seen: dict[str, object] = {}
 
     class RecordingGate:
         def has_permission(
@@ -577,7 +577,7 @@ async def test_async_gated_me_forces_the_lazy_user_inside_the_one_sync_boundary(
             operation: str,
             data: object,
             instance: object = None,
-        ):
+        ) -> bool:
             seen.update(operation=operation, data=data, instance=instance)
             return True
 

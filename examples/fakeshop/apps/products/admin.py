@@ -169,7 +169,7 @@ class ItemAdmin(admin.ModelAdmin[Item]):
         if delete_target:
             try:
                 result = delete_data(delete_target)
-                parts = []
+                parts: list[str] = []
                 if result["categories"]:
                     parts.append(f"{result['categories']} categories")
                 if result["properties"]:

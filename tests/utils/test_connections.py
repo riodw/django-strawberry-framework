@@ -100,7 +100,7 @@ def test_offset_window_applies_request_page_ceiling_to_plan_cap(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
 ):
     """The optimizer window cannot fetch past the request's page-size policy."""
-    context = {}
+    context: dict[str, object] = {}
     arm_resource_budget(context, ResourcePolicy(max_page_size=5))
     info = make_info(context=context, config=StrawberryConfig(relay_max_results=100))
 

@@ -54,7 +54,7 @@ def _make_node_type(
     strategy: "GlobalIDStrategy | None" = None,
     interfaces: tuple[type, ...] = (relay.Node,),
     primary: bool = False,
-):
+) -> type[DjangoType]:
     """Build a (by default Relay-Node-shaped) ``DjangoType`` over ``model``."""
     meta_attrs: dict[str, object] = {"model": model, "fields": ("id", "name"), "name": name}
     if interfaces:
@@ -63,7 +63,9 @@ def _make_node_type(
         meta_attrs["globalid_strategy"] = strategy
     if primary:
         meta_attrs["primary"] = True
-    return type(name, (DjangoType,), {"Meta": type("Meta", (), meta_attrs)})
+    node_type = type(name, (DjangoType,), {"Meta": type("Meta", (), meta_attrs)})
+    assert issubclass(node_type, DjangoType)
+    return node_type
 
 
 def _schema_with_row(node_type: type, model: type[models.Model]) -> strawberry.Schema:
@@ -125,7 +127,7 @@ def test_global_id_for_type_plus_model_strategy():
 # ---------------------------------------------------------------------------
 
 
-def _callable_strategy_type():
+def _callable_strategy_type() -> type[DjangoType]:
     """A Relay type whose ``Meta.globalid_strategy`` is a consumer callable."""
 
     def _encoder(type_cls: type[DjangoType], model: type[models.Model], root: object):
@@ -134,7 +136,7 @@ def _callable_strategy_type():
     return _make_node_type("CategoryNode", strategy=_encoder)
 
 
-def _custom_override_type():
+def _custom_override_type() -> type[DjangoType]:
     """A Relay type with a consumer ``resolve_typename`` override (stamped ``custom``)."""
 
     class CategoryNode(DjangoType):
@@ -156,7 +158,7 @@ def _custom_override_type():
     ids=["callable", "custom"],
 )
 def test_global_id_for_callable_or_custom_raises(
-    build_type: Callable[[], type],
+    build_type: Callable[[], type[DjangoType]],
     expected_classification: str,
 ):
     """``callable`` / ``custom`` encoders need a live root -> raise."""

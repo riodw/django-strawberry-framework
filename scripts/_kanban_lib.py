@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, TypeAlias, TypedDict, cast
 if TYPE_CHECKING:
     from _typeshed import SupportsRichComparison
     from django.db.backends.base.base import BaseDatabaseWrapper
+    from typing_extensions import TypeIs
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FAKESHOP_ROOT = REPO_ROOT / "examples" / "fakeshop"
@@ -419,6 +420,16 @@ def board_row_counts() -> dict[str, dict[int, int]]:
     return counts
 
 
+def _is_json_object(value: object) -> TypeIs[dict[str, object]]:
+    """Return whether a decoded JSON value is an object (JSON object keys are always strings)."""
+    return isinstance(value, dict)
+
+
+def _is_json_array(value: object) -> TypeIs[list[object]]:
+    """Return whether a decoded JSON value is an array."""
+    return isinstance(value, list)
+
+
 def truncation_defects(
     cards: Sequence[Mapping[str, object]],
     expected: dict[str, dict[int, int]],
@@ -448,7 +459,7 @@ def truncation_defects(
             continue
         for payload_key in CARD_NESTED_LISTS:
             nested = card.get(payload_key)
-            found = len(nested) if isinstance(nested, list) else 0
+            found = len(nested) if _is_json_array(nested) else 0
             owed = expected.get(payload_key, {}).get(number, 0)
             if found != owed:
                 defects.append(
@@ -579,13 +590,21 @@ def fetch_graphql_data(query: str, *, required_lists: tuple[str, ...]) -> dict[s
         body = response.content.decode("utf-8", errors="replace")
         raise RuntimeError(f"GraphQL request failed with HTTP {response.status_code}:\n{body}")
 
-    payload = response.json()
-    if payload.get("errors"):
-        raise RuntimeError(json.dumps(payload["errors"], indent=2, sort_keys=True))
+    payload: object = response.json()
+    if not _is_json_object(payload):
+        raise TypeError("GraphQL response body is not a JSON object.")
+    errors = payload.get("errors")
+    if errors:
+        raise RuntimeError(json.dumps(errors, indent=2, sort_keys=True))
 
-    data = payload.get("data") or {}
+    raw_data = payload.get("data")
+    data: dict[str, object] = {}
+    if raw_data:
+        if not _is_json_object(raw_data):
+            raise TypeError("GraphQL response data is not a JSON object.")
+        data = raw_data
     for key in required_lists:
-        if not isinstance(data.get(key), list):
+        if not _is_json_array(data.get(key)):
             raise TypeError(f"GraphQL response did not include data.{key} as a list.")
     return data
 

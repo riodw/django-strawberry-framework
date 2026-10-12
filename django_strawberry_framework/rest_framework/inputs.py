@@ -80,6 +80,7 @@ from ..utils.inputs import (
     resolve_effective_fields,
 )
 from ..utils.strings import graphql_camel_name
+from .accessors import child_relation_of
 from .serializer_converter import (
     NESTED_MULTI,
     NESTED_SINGLE,
@@ -402,7 +403,7 @@ def _fingerprint_relation_target(field: DRFField) -> str | None:
     ``queryset.model``; a non-relation field yields ``None``.
     """
     if isinstance(field, serializers.ManyRelatedField):
-        field = field.child_relation
+        field = child_relation_of(field)
     if isinstance(field, serializers.RelatedField):
         # drf-stubs: ``RelatedField.queryset`` is a ``QuerySet`` / ``Manager`` (or ``None``).
         model: type[models.Model] | None = getattr(getattr(field, "queryset", None), "model", None)

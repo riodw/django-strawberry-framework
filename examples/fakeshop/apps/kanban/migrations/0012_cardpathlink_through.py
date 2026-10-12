@@ -165,7 +165,8 @@ class Migration(migrations.Migration):
                 migrations.AlterField(
                     model_name="card",
                     name="changed_files",
-                    field=models.ManyToManyField(
+                    # basedpyright: django-stubs ManyToManyField _To has no default; a string ``to`` cannot bind it
+                    field=models.ManyToManyField(  # pyright: ignore[reportUnknownArgumentType]
                         blank=True,
                         related_name="cards",
                         through="kanban.CardPathLink",

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
@@ -10,23 +10,52 @@ from django.db import models
 from typing_extensions import override
 
 if TYPE_CHECKING:
+    from datetime import date
+
+    from django.db.models.expressions import Combinable
     from django.db.models.fields.related_descriptors import (
         ManyRelatedManager,
         RelatedManager,
         ReverseManyToOneDescriptor,
     )
 
+    _M = TypeVar("_M", bound=models.Model)
+
+    # Each field's descriptor types as django-stubs declares them (set type, get type), spelled
+    # out because the checker runs without the django-stubs mypy plugin that would infer them;
+    # ``null=True`` adds ``None`` to both.
+    _BigInt: TypeAlias = models.BigIntegerField[float | int | str | Combinable, int]
+    _Bool: TypeAlias = models.BooleanField[bool | Combinable, bool]
+    _Char: TypeAlias = models.CharField[str | int | Combinable, str]
+    _FK: TypeAlias = models.ForeignKey[_M | Combinable, _M]
+    _Int: TypeAlias = models.IntegerField[float | int | str | Combinable, int]
+    _NullDate: TypeAlias = models.DateField[str | date | Combinable | None, date | None]
+    _NullFK: TypeAlias = models.ForeignKey[_M | Combinable | None, _M | None]
+    _NullPositiveInt: TypeAlias = models.PositiveIntegerField[
+        float | int | str | Combinable | None,
+        int | None,
+    ]
+    _NullText: TypeAlias = models.TextField[str | Combinable | None, str | None]
+    _OneToOne: TypeAlias = models.OneToOneField[_M | Combinable, _M]
+    _PositiveInt: TypeAlias = models.PositiveIntegerField[float | int | str | Combinable, int]
+    _PositiveSmallInt: TypeAlias = models.PositiveSmallIntegerField[
+        float | int | str | Combinable,
+        int,
+    ]
+    _Slug: TypeAlias = models.SlugField[str | int | Combinable, str]
+    _Text: TypeAlias = models.TextField[str | Combinable, str]
+
 
 class TaggedItem(models.Model):
     """A generic tag attached to any library-domain object."""
 
-    tag = models.SlugField()
-    content_type = models.ForeignKey(
+    tag: _Slug = models.SlugField()
+    content_type: _FK[ContentType] = models.ForeignKey(
         ContentType,
         related_name="library_tagged_items",
         on_delete=models.CASCADE,
     )
-    object_id = models.PositiveIntegerField()
+    object_id: _PositiveInt = models.PositiveIntegerField()
     content_object = GenericForeignKey("content_type", "object_id")
 
     class Meta:
@@ -48,8 +77,8 @@ class TaggedItem(models.Model):
 class Branch(models.Model):
     """A physical library branch that owns shelves."""
 
-    name = models.TextField(unique=True)
-    city = models.TextField(blank=True, default="")
+    name: _Text = models.TextField(unique=True)
+    city: _Text = models.TextField(blank=True, default="")
     # Test substrate: package tests use this virtual relation to pin
     # GenericRelation support without exposing it in the public example schema.
     tags = GenericRelation(
@@ -112,12 +141,12 @@ class BranchNote(models.Model):
     relation declared to a proxy is the shape that distinguishes them.
     """
 
-    branch = models.ForeignKey(
+    branch: _FK[ProxyBranch] = models.ForeignKey(
         ProxyBranch,
         related_name="notes",
         on_delete=models.CASCADE,
     )
-    body = models.TextField()
+    body: _Text = models.TextField()
 
     @override
     def __str__(self) -> str:
@@ -140,11 +169,11 @@ class Shelf(models.Model):
         MIDDLE = 2, "Middle"
         UPPER = 3, "Upper"
 
-    code = models.TextField()
-    topic = models.TextField(blank=True, default="")
+    code: _Text = models.TextField()
+    topic: _Text = models.TextField(blank=True, default="")
     # A blank-admitting choice column: an unassessed shelf stores ``""``, so the
     # generated enum carries a ``BLANK`` member beside the declared conditions.
-    condition = models.CharField(
+    condition: _Char = models.CharField(
         max_length=20,
         choices=Condition.choices,
         blank=True,
@@ -154,12 +183,12 @@ class Shelf(models.Model):
     # form field for it cleans an empty submission to ``""``, which only ``save()``
     # refuses, so an explicit ``null`` through the ModelForm mutation exercises the
     # save-time mapping onto the field-keyed ``null`` error.
-    tier = models.PositiveSmallIntegerField(
+    tier: _PositiveSmallInt = models.PositiveSmallIntegerField(
         choices=Tier.choices,
         blank=True,
         default=Tier.MIDDLE,
     )
-    branch = models.ForeignKey(
+    branch: _FK[Branch] = models.ForeignKey(
         Branch,
         related_name="shelves",
         on_delete=models.CASCADE,
@@ -169,7 +198,7 @@ class Shelf(models.Model):
     # ``BranchType`` primary, so the generated input is a raw pk list (not a
     # GlobalID), and the form/model mutations decode it through the same
     # visibility-scoped get_queryset path the single FK uses. Optional.
-    alt_branches = models.ManyToManyField(
+    alt_branches: models.ManyToManyField[Branch, models.Model] = models.ManyToManyField(
         Branch,
         blank=True,
         related_name="alt_shelves",
@@ -206,14 +235,14 @@ class ShelfLabel(models.Model):
     ``shelf`` the way Django's ``order_by("shelf")`` does, by both carriers.
     """
 
-    text = models.TextField()
-    branch = models.ForeignKey(
+    text: _Text = models.TextField()
+    branch: _FK[Branch] = models.ForeignKey(
         Branch,
         related_name="shelf_labels",
         on_delete=models.CASCADE,
     )
-    shelf_code = models.TextField()
-    shelf = models.ForeignObject(
+    shelf_code: _Text = models.TextField()
+    shelf: models.ForeignObject[Shelf, Shelf] = models.ForeignObject(
         Shelf,
         from_fields=[
             "branch",
@@ -235,7 +264,7 @@ class ShelfLabel(models.Model):
 class Genre(models.Model):
     """A genre used to group books."""
 
-    name = models.TextField(unique=True)
+    name: _Text = models.TextField(unique=True)
     # Reverse accessor Django adds at class creation, declared for the type checker.
     books: ManyRelatedManager[Book]
 
@@ -252,28 +281,28 @@ class Book(models.Model):
         CHECKED_OUT = "checked_out", "Checked out"
         REPAIR = "repair", "Repair"
 
-    title = models.TextField()
-    subtitle = models.TextField(blank=True, null=True)
-    circulation_status = models.CharField(
+    title: _Text = models.TextField()
+    subtitle: _NullText = models.TextField(blank=True, null=True)
+    circulation_status: _Char = models.CharField(
         max_length=20,
         choices=CirculationStatus.choices,
         default=CirculationStatus.AVAILABLE,
     )
-    shelf = models.ForeignKey(
+    shelf: _FK[Shelf] = models.ForeignKey(
         Shelf,
         related_name="books",
         on_delete=models.CASCADE,
     )
     # Key column Django adds beside ``shelf``, declared for the type checker.
     shelf_id: int
-    genres = models.ManyToManyField(
+    genres: models.ManyToManyField[Genre, models.Model] = models.ManyToManyField(
         Genre,
         related_name="books",
     )
     # Genres a cataloguer archived the book under. Maintained by the catalogue
     # import, never by a client, so ``editable=False`` keeps it out of every
     # generated write input while the editable ``genres`` beside it stays in.
-    archive_genres = models.ManyToManyField(
+    archive_genres: models.ManyToManyField[Genre, models.Model] = models.ManyToManyField(
         Genre,
         related_name="+",
         editable=False,
@@ -301,14 +330,14 @@ class Book(models.Model):
 class Patron(models.Model):
     """A library patron who can borrow books."""
 
-    name = models.TextField(unique=True)
-    email = models.TextField(blank=True, default="")
+    name: _Text = models.TextField(unique=True)
+    email: _Text = models.TextField(blank=True, default="")
     # Signed 64-bit counter exercising the package's ``BigIntegerField -> BigInt``
     # converter entry end-to-end. Cents so values past 2^31-1 are realistic
     # for a long-running patron (>$21M in lifetime fines is plausible only as
     # a stress value, which is exactly the point - proves the wire format
     # survives values outside JSON's safe-integer range).
-    lifetime_fines_cents = models.BigIntegerField(default=0)
+    lifetime_fines_cents: _BigInt = models.BigIntegerField(default=0)
     # Reverse accessors Django adds at class creation, declared for the type checker;
     # ``loans`` as the descriptor itself, since it is also read on the class.
     card: MembershipCard
@@ -322,12 +351,12 @@ class Patron(models.Model):
 class MembershipCard(models.Model):
     """One-to-one membership card for a patron."""
 
-    patron = models.OneToOneField(
+    patron: _OneToOne[Patron] = models.OneToOneField(
         Patron,
         related_name="card",
         on_delete=models.CASCADE,
     )
-    barcode = models.TextField(unique=True)
+    barcode: _Text = models.TextField(unique=True)
 
     @override
     def __str__(self) -> str:
@@ -337,7 +366,7 @@ class MembershipCard(models.Model):
 class Periodical(models.Model):
     """A periodical whose issues paginate with keyset (value) cursors."""
 
-    name = models.TextField(unique=True)
+    name: _Text = models.TextField(unique=True)
 
     @override
     def __str__(self) -> str:
@@ -357,16 +386,16 @@ class Issue(models.Model):
     for anonymous viewers without leaking embargoed rows).
     """
 
-    periodical = models.ForeignKey(
+    periodical: _FK[Periodical] = models.ForeignKey(
         Periodical,
         related_name="issues",
         on_delete=models.CASCADE,
     )
     # Key column Django adds beside ``periodical``, declared for the type checker.
     periodical_id: int
-    number = models.IntegerField()
-    title = models.TextField()
-    embargoed = models.BooleanField(default=False)
+    number: _Int = models.IntegerField()
+    title: _Text = models.TextField()
+    embargoed: _Bool = models.BooleanField(default=False)
 
     class Meta:
         constraints = [
@@ -395,17 +424,17 @@ class Loan(models.Model):
     # exercising the public Django manager shape through every real loan relation.
     objects = LoanQuerySet.as_manager()
 
-    book = models.ForeignKey(
+    book: _FK[Book] = models.ForeignKey(
         Book,
         related_name="loans",
         on_delete=models.CASCADE,
     )
-    patron = models.ForeignKey(
+    patron: _FK[Patron] = models.ForeignKey(
         Patron,
         related_name="loans",
         on_delete=models.CASCADE,
     )
-    note = models.TextField(blank=True, default="")
+    note: _Text = models.TextField(blank=True, default="")
 
     class Meta:
         constraints = [
@@ -432,8 +461,8 @@ class Publisher(models.Model):
     join to the publisher row even when only the id is selected.
     """
 
-    name = models.TextField(unique=True)
-    house_code = models.TextField(unique=True)
+    name: _Text = models.TextField(unique=True)
+    house_code: _Text = models.TextField(unique=True)
 
     @override
     def __str__(self) -> str:
@@ -452,15 +481,15 @@ class Edition(models.Model):
     house on a jointly issued edition, carrying it on a relation.
     """
 
-    isbn_13 = models.TextField(primary_key=True)
-    isbn_10 = models.TextField(blank=True, default="")
-    imprint = models.TextField(blank=True, default="")
-    publisher = models.ForeignKey(
+    isbn_13: _Text = models.TextField(primary_key=True)
+    isbn_10: _Text = models.TextField(blank=True, default="")
+    imprint: _Text = models.TextField(blank=True, default="")
+    publisher: _FK[Publisher] = models.ForeignKey(
         Publisher,
         related_name="editions",
         on_delete=models.CASCADE,
     )
-    publisher_2 = models.ForeignKey(
+    publisher_2: _NullFK[Publisher] = models.ForeignKey(
         Publisher,
         related_name="editions_2",
         on_delete=models.SET_NULL,
@@ -482,21 +511,21 @@ class Printing(models.Model):
     over it must resolve before the window can be planned.
     """
 
-    edition = models.ForeignKey(
+    edition: _FK[Edition] = models.ForeignKey(
         Edition,
         related_name="printings",
         on_delete=models.CASCADE,
     )
     # Key column Django adds beside ``edition``, declared for the type checker.
     edition_id: str
-    publisher_2 = models.ForeignKey(
+    publisher_2: _NullFK[Publisher] = models.ForeignKey(
         Publisher,
         related_name="printings_2",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
     )
-    run_size = models.IntegerField(default=0)
+    run_size: _Int = models.IntegerField(default=0)
 
     class Meta:
         # The leading columns of a publisher's ``printings_2`` window, so each
@@ -526,7 +555,7 @@ class PatronProfile(models.Model):
     and the join it needs cannot be skipped.
     """
 
-    patron = models.OneToOneField(
+    patron: _OneToOne[Patron] = models.OneToOneField(
         Patron,
         related_name="profile",
         on_delete=models.CASCADE,
@@ -534,9 +563,9 @@ class PatronProfile(models.Model):
     )
     # Key column Django adds beside ``patron``, declared for the type checker.
     patron_id: int
-    address_2 = models.TextField(blank=True, default="")
-    postal_code = models.TextField(blank=True, default="")
-    favorite_genre = models.ForeignKey(
+    address_2: _Text = models.TextField(blank=True, default="")
+    postal_code: _Text = models.TextField(blank=True, default="")
+    favorite_genre: _NullFK[Genre] = models.ForeignKey(
         Genre,
         to_field="name",
         related_name="favoring_profiles",
@@ -568,12 +597,12 @@ class Annotation(models.Model):
 
     objects = AnnotationManager()
 
-    profile = models.ForeignKey(
+    profile: _FK[PatronProfile] = models.ForeignKey(
         PatronProfile,
         related_name="annotations",
         on_delete=models.CASCADE,
     )
-    body = models.TextField()
+    body: _Text = models.TextField()
 
     @override
     def __str__(self) -> str:
@@ -589,7 +618,7 @@ class Distributor(models.Model):
     relation ``consignmentItems`` carries the same shape on a relation.
     """
 
-    displayName = models.TextField(unique=True)  # noqa: N815
+    displayName: _Text = models.TextField(unique=True)  # noqa: N815
 
     # Reverse accessor Django adds at class creation, declared for the type checker.
     consignmentItems: RelatedManager[Consignment]  # noqa: N815
@@ -607,8 +636,8 @@ class Consignment(models.Model):
     published spelling.
     """
 
-    label = models.TextField()
-    distributorRef = models.ForeignKey(  # noqa: N815
+    label: _Text = models.TextField()
+    distributorRef: _FK[Distributor] = models.ForeignKey(  # noqa: N815
         Distributor,
         related_name="consignmentItems",
         on_delete=models.CASCADE,
@@ -622,7 +651,7 @@ class Consignment(models.Model):
 class TitledEntry(models.Model):
     """Abstract base for catalogue records listed alphabetically by title."""
 
-    title = models.TextField()
+    title: _Text = models.TextField()
 
     class Meta:
         abstract = True
@@ -649,7 +678,7 @@ class ReadingListEntry(TitledEntry):
     parent's ``Meta.ordering`` - and the model carries no default order at all.
     """
 
-    reading_list = models.ForeignKey(
+    reading_list: _FK[ReadingList] = models.ForeignKey(
         ReadingList,
         related_name="entries",
         on_delete=models.CASCADE,
@@ -676,9 +705,9 @@ class Venue(models.Model):
     closing a nullable foreign-key cycle between the two models.
     """
 
-    name = models.TextField()
-    opened_on = models.DateField(null=True, blank=True)
-    lead_ticket = models.ForeignKey(
+    name: _Text = models.TextField()
+    opened_on: _NullDate = models.DateField(null=True, blank=True)
+    lead_ticket: _NullFK[RepairTicket] = models.ForeignKey(
         "RepairTicket",
         related_name="+",
         on_delete=models.SET_NULL,
@@ -699,7 +728,7 @@ class Venue(models.Model):
 class LendingDesk(Venue):
     """A staffed desk: a ``Venue`` whose own table holds only its local columns."""
 
-    window_count = models.IntegerField(default=0)
+    window_count: _Int = models.IntegerField(default=0)
 
     # Reverse accessor Django adds at class creation, declared for the type checker.
     selfservedesk: SelfServeDesk
@@ -708,7 +737,7 @@ class LendingDesk(Venue):
 class SelfServeDesk(LendingDesk):
     """A kiosk desk, the third level of the ``Venue`` inheritance chain."""
 
-    kiosk_code = models.TextField()
+    kiosk_code: _Text = models.TextField()
 
 
 class OpenVenueManager(models.Manager["OpenVenue"]):
@@ -741,8 +770,8 @@ class RepairTicket(models.Model):
     ``Meta.ordering``, so that accessor carries no default order.
     """
 
-    code = models.TextField(unique=True)
-    venue = models.ForeignKey(
+    code: _Text = models.TextField(unique=True)
+    venue: _FK[Venue] = models.ForeignKey(
         Venue,
         on_delete=models.CASCADE,
     )
@@ -759,8 +788,8 @@ class VenueBadge(models.Model):
     is the default ``venuebadge``.
     """
 
-    code = models.TextField(unique=True)
-    venue = models.OneToOneField(
+    code: _Text = models.TextField(unique=True)
+    venue: _OneToOne[Venue] = models.OneToOneField(
         Venue,
         on_delete=models.CASCADE,
     )
@@ -777,8 +806,8 @@ class VenueSponsor(models.Model):
     through the default ``venuesponsor_set`` accessor.
     """
 
-    name = models.TextField(unique=True)
-    venues = models.ManyToManyField(
+    name: _Text = models.TextField(unique=True)
+    venues: models.ManyToManyField[Venue, models.Model] = models.ManyToManyField(
         Venue,
         blank=True,
     )
@@ -819,8 +848,8 @@ class VisibleBranch(Branch):
 class BranchSignage(models.Model):
     """A sign mounted at a branch, declared against the filtering ``VisibleBranch`` proxy."""
 
-    code = models.TextField(unique=True)
-    branch = models.ForeignKey(
+    code: _Text = models.TextField(unique=True)
+    branch: _FK[VisibleBranch] = models.ForeignKey(
         VisibleBranch,
         related_name="signage",
         on_delete=models.CASCADE,
@@ -844,30 +873,30 @@ class CirculationDesk(models.Model):
     table, a pair of columns, or the other model's column.
     """
 
-    name = models.TextField(unique=True)
-    branch = models.ForeignKey(
+    name: _Text = models.TextField(unique=True)
+    branch: _FK[Branch] = models.ForeignKey(
         Branch,
         related_name="circulation_desks",
         on_delete=models.CASCADE,
     )
-    shelf = models.OneToOneField(
+    shelf: _OneToOne[Shelf] = models.OneToOneField(
         Shelf,
         related_name="circulation_desk",
         on_delete=models.CASCADE,
     )
-    genres = models.ManyToManyField(
+    genres: models.ManyToManyField[Genre, models.Model] = models.ManyToManyField(
         Genre,
         related_name="circulation_desks",
         blank=True,
     )
-    content_type = models.ForeignKey(
+    content_type: _NullFK[ContentType] = models.ForeignKey(
         ContentType,
         related_name="library_circulation_desks",
         on_delete=models.CASCADE,
         null=True,
         blank=True,
     )
-    object_id = models.PositiveIntegerField(null=True, blank=True)
+    object_id: _NullPositiveInt = models.PositiveIntegerField(null=True, blank=True)
     content_object = GenericForeignKey("content_type", "object_id")
     tags = GenericRelation(
         TaggedItem,
@@ -885,8 +914,8 @@ class CirculationDesk(models.Model):
 class DeskShift(models.Model):
     """A staffed shift at a circulation desk, reached from the desk as ``children``."""
 
-    name = models.TextField()
-    desk = models.ForeignKey(
+    name: _Text = models.TextField()
+    desk: _FK[CirculationDesk] = models.ForeignKey(
         CirculationDesk,
         related_name="children",
         on_delete=models.CASCADE,
@@ -900,8 +929,8 @@ class DeskShift(models.Model):
 class DeskProfile(models.Model):
     """A circulation desk's service profile, reached from the desk as ``profile``."""
 
-    code = models.TextField(unique=True)
-    desk = models.OneToOneField(
+    code: _Text = models.TextField(unique=True)
+    desk: _OneToOne[CirculationDesk] = models.OneToOneField(
         CirculationDesk,
         related_name="profile",
         on_delete=models.CASCADE,

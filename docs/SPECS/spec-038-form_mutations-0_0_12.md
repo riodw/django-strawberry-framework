@@ -1474,7 +1474,7 @@ transaction is opened and pinned to one write alias
 step cannot silently write through a second connection; and an immutable
 `authorized_pk` / `target_state` snapshot is captured right after the locate, so a
 later step cannot retarget the write to a row the caller was not authorized for. A
-step returning a `list[FieldError]` marks the block for rollback, so a partial write
+step returning a `StepFailure` (its `errors: list[FieldError]`) marks the block for rollback, so a partial write
 followed by a validation failure never commits.
 
 Rationale companion: [Decision 8][rationale-d8].

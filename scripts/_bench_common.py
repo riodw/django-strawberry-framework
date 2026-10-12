@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from collections.abc import Generator, Mapping, Sequence
 
     from django.test.utils import CaptureQueriesContext
+    from typing_extensions import TypeIs
 
     from django_strawberry_framework.optimizer.extension import DjangoOptimizerExtension
 
@@ -480,6 +481,16 @@ def load_graphql_document(path: str | Path) -> str:
     return Path(path).read_text(encoding="utf-8")
 
 
+def _is_json_object(value: object) -> TypeIs[dict[str, object]]:
+    """Return whether a decoded JSON value is an object (JSON object keys are always strings)."""
+    return isinstance(value, dict)
+
+
+def _is_json_array(value: object) -> TypeIs[list[object]]:
+    """Return whether a decoded JSON value is an array."""
+    return isinstance(value, list)
+
+
 def parse_variables(raw: str | None) -> dict[str, object] | None:
     """Parse a ``--variables`` JSON object, refusing any other JSON value.
 
@@ -488,8 +499,8 @@ def parse_variables(raw: str | None) -> dict[str, object] | None:
     """
     if raw is None:
         return None
-    value = json.loads(raw)
-    if not isinstance(value, dict):
+    value: object = json.loads(raw)
+    if not _is_json_object(value):
         msg = f"--variables must be a JSON object, got {type(value).__name__}"
         raise TypeError(msg)
     return value
@@ -501,11 +512,13 @@ def root_row_count(data: object) -> int | None:
     A query-count verdict is evidence only when the parent rows under it grew,
     so scripts print this beside every count.
     """
-    if not isinstance(data, dict):
+    if not _is_json_object(data):
         return None
     for value in data.values():
-        if isinstance(value, list):
+        if _is_json_array(value):
             return len(value)
-        if isinstance(value, dict) and isinstance(value.get("edges"), list):
-            return len(value["edges"])
+        if _is_json_object(value):
+            edges = value.get("edges")
+            if _is_json_array(edges):
+                return len(edges)
     return None

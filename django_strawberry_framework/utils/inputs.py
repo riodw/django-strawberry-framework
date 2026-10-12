@@ -41,6 +41,7 @@ from django.db import models as django_models
 from typing_extensions import override
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from ._narrowing import dict_items, is_dict, is_mapping, is_set_or_frozenset
 from .canonical import base_container_values, canonical_sort_key
 from .imports import import_attr_if_importable
 
@@ -61,7 +62,7 @@ _SpecT = TypeVar("_SpecT", bound="_NamedInputSpec")
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
-    from typing import Protocol
+    from typing import Protocol, TypeAlias
 
     from strawberry.types.base import StrawberryObjectDefinition, WithStrawberryObjectDefinition
     from strawberry.types.field import StrawberryField
@@ -88,6 +89,16 @@ if TYPE_CHECKING:
 
         def clear(self) -> None:
             """Drop every entry the ledger holds."""
+
+    #: ``make_set_input_namespace``'s ``(ledger, field_specs, materialize_fn, clear_fn)``
+    #: quartet for one set family. The family's set class appears only in the result, so
+    #: each caller states it by annotating the result with this alias.
+    SetInputNamespace: TypeAlias = tuple[
+        dict[str, type[object]],
+        dict[tuple[type[_FactorySetT], str], "GeneratedInputFieldSpec"],
+        Callable[[str, type[object]], None],
+        Callable[[], None],
+    ]
 
 
 @dataclass(frozen=True)
@@ -464,12 +475,7 @@ def make_set_input_namespace(
     collision_registry_attr: str,
     set_module: str,
     set_class_name: str,
-) -> tuple[
-    dict[str, type[object]],
-    dict[tuple[type[_FactorySetT], str], GeneratedInputFieldSpec],
-    Callable[[str, type[object]], None],
-    Callable[[], None],
-]:
+) -> SetInputNamespace[_FactorySetT]:
     """Return the set-family ``(ledger, field_specs, materialize_fn, clear_fn)`` quartet.
 
     The heavy spec-027 / spec-028 Decision 9 sibling of ``make_input_namespace``.
@@ -567,12 +573,12 @@ def canonicalize_set_meta_fields(fields: object) -> object:
     bags keep key insertion order and sort set-valued lookup lists. Ordered
     ``list`` / ``tuple`` and scalar ``"__all__"`` pass through unchanged.
     """
-    if isinstance(fields, (set, frozenset)):
+    if is_set_or_frozenset(fields):
         return _sorted_meta_values(fields)
-    if isinstance(fields, dict):
+    if is_dict(fields):
         return {
-            key: (_sorted_meta_values(value) if isinstance(value, (set, frozenset)) else value)
-            for key, value in dict.items(fields)
+            key: (_sorted_meta_values(value) if is_set_or_frozenset(value) else value)
+            for key, value in dict_items(fields)
         }
     return fields
 
@@ -814,7 +820,7 @@ def normalize_field_name_sequence(
             f"{flavor} Meta.fields / Meta.exclude must be a sequence of field "
             f"names, not a bare string: {_safe_arg_repr(value)}.",
         )
-    if isinstance(value, (set, frozenset)):
+    if is_set_or_frozenset(value):
         raise ConfigurationError(
             f"{flavor} Meta.{label} must be an ordered sequence of field name "
             f"strings (a list or tuple), not an unordered {type(value).__name__}: "
@@ -1049,7 +1055,7 @@ def build_strawberry_input_class(
             ) from exc
         try:
             kwargs: dict[str, object] = (
-                dict(dict.items(raw_kwargs))
+                dict(dict_items(raw_kwargs))
                 if isinstance(raw_kwargs, dict)
                 else ({} if raw_kwargs is None else dict(raw_kwargs))
             )
@@ -1525,7 +1531,7 @@ class GeneratedInputArgumentsFactory(Generic[_FactorySetT]):
                 self._build_class_type(set_cls)
 
             related_map: object = getattr(set_cls, self._related_attr, {}) or {}
-            if isinstance(related_map, Mapping):
+            if is_mapping(related_map):
                 for related in related_map.values():
                     # A related declaration's target property admits only ``None`` or the
                     # family's set class (``RelatedSetTargetMixin._validate_target``).

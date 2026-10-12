@@ -71,8 +71,23 @@ if TYPE_CHECKING:
     from django.views import View
     from strawberry.schema.name_converter import HasGraphQLName
     from strawberry.types.arguments import StrawberryArgument
+    from typing_extensions import TypeIs
 
 _ListResolver: TypeAlias = Callable[[object, strawberry.Info[object, object]], object]
+
+
+def _is_dict(value: object) -> TypeIs[dict[object, object]]:
+    """Whether a parsed payload value is a JSON object, its members still unchecked."""
+    return isinstance(value, dict)
+
+
+def _error_extension(error: object, key: str) -> object:
+    """One wire error's ``extensions[key]``, ``None`` when either level is absent."""
+    assert _is_dict(error), error
+    extensions = error.get("extensions")
+    return extensions.get(key) if _is_dict(extensions) else None
+
+
 _ShelfCarry: TypeAlias = Callable[
     [models.QuerySet[library_models.Shelf]],
     models.QuerySet[library_models.Shelf],
@@ -1466,9 +1481,10 @@ def test_shipped_branches_offset_rejects_a_bare_database_function_order(
         queryset: models.QuerySet[library_models.Branch],
         info: object,
     ):
-        return queryset.order_by(
-            Func(function="RANDOM", arity=0, output_field=models.FloatField()),
+        output_field: models.FloatField[float | int | str | Combinable, float] = (
+            models.FloatField()
         )
+        return queryset.order_by(Func(function="RANDOM", arity=0, output_field=output_field))
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_bare_function_ordering))
 
@@ -3570,8 +3586,8 @@ def test_holder_nullability_propagation_over_none_source(
     payload = _post_sync(schema, query)
     assert payload["data"] == data, payload
     assert [
-        (error["message"], (error.get("extensions") or {}).get("reason"))
-        for error in payload.get("errors", [])
+        (error["message"], _error_extension(error, "reason"))
+        for error in payload.get("errors", ())
     ] == errors, payload
 
 
@@ -4113,7 +4129,7 @@ def _hostile_branch_hook(
     **kwargs: object,
 ) -> models.QuerySet[library_models.Branch]:
     """Apply the visibility predicate through unbound ``QuerySet.filter``."""
-    return models.QuerySet.filter(
+    return models.QuerySet[library_models.Branch].filter(
         _HostileBranchQuerySet(model=library_models.Branch),
         city="Boston",
     )

@@ -40,12 +40,12 @@ unify the two.
 """
 
 from collections.abc import Mapping
-from typing import cast
 
 from django.conf import settings as django_settings
 from django.test.signals import setting_changed
 
 from django_strawberry_framework.exceptions import ConfigurationError, _safe_type_name
+from django_strawberry_framework.utils._narrowing import is_exact_dict, is_mapping
 
 DJANGO_SETTINGS_KEY = "DJANGO_STRAWBERRY_FRAMEWORK"
 _DISPATCH_UID = "django_strawberry_framework.conf.reload_settings"
@@ -194,19 +194,17 @@ def _normalize_user_settings(value: object) -> dict[object, object]:
     if value is None:
         return {}
     try:
-        is_mapping = isinstance(value, Mapping)
+        value_is_mapping = is_mapping(value)
     except Exception as exc:
         raise ConfigurationError(
             f"`{DJANGO_SETTINGS_KEY}` must be a mapping or None; got {_safe_type_name(value)}.",
         ) from exc
-    if not is_mapping:
+    if not value_is_mapping:
         raise ConfigurationError(
             f"`{DJANGO_SETTINGS_KEY}` must be a mapping or None; got {_safe_type_name(value)}.",
         )
-    # basedpyright: the aliased ``is_mapping`` check narrows ``value`` only to
-    # ``Mapping[Unknown, Unknown]``; the cast types its keys and values ``object``.
-    mapping = cast("Mapping[object, object]", value)
-    if type(mapping) is dict:
+    mapping = value
+    if is_exact_dict(mapping):
         return mapping
     try:
         return dict(mapping)
@@ -420,23 +418,21 @@ def upstream_patches_enabled(dependency: str) -> bool:
     if type(configured) is bool:
         return configured
     try:
-        is_mapping = isinstance(configured, Mapping)
+        configured_is_mapping = is_mapping(configured)
     except Exception as exc:
         raise ConfigurationError(
             f"`{APPLY_UPSTREAM_PATCHES_KEY}` must be a bool or a mapping of dependency names "
             f"to bools; got {_safe_type_name(configured)}.",
         ) from exc
-    if is_mapping:
+    if configured_is_mapping:
         try:
             # Defensive copy FIRST so hostile __iter__/__getitem__/__get__
             # and one-shot generators cannot diverge between validation and
             # the final ``get``. ``dict()`` iteration is the single
             # consumption point; the plain copy is then the only object
             # validated and read.
-            # basedpyright: the aliased ``is_mapping`` check narrows ``configured`` only to
-            # ``Mapping[Unknown, Unknown]``; the cast types its entries ``object``.
             try:
-                plain = dict(cast("Mapping[object, object]", configured))
+                plain = dict(configured)
             except Exception as exc:
                 raise ConfigurationError(
                     f"`{APPLY_UPSTREAM_PATCHES_KEY}` is not a valid mapping; iteration failed.",
@@ -446,7 +442,8 @@ def upstream_patches_enabled(dependency: str) -> bool:
             # ``TypeError`` on mixed unorderable key types instead of the
             # promised ``ConfigurationError`` (the
             # ``types/base.py::_validate_relation_shapes`` key-guard precedent).
-            for name in plain:
+            keyed: dict[str, object] = {}
+            for name, entry in plain.items():
                 try:
                     is_str = isinstance(name, str)
                 except Exception as exc:
@@ -459,22 +456,22 @@ def upstream_patches_enabled(dependency: str) -> bool:
                         f"`{APPLY_UPSTREAM_PATCHES_KEY}` keys must be dependency name strings; "
                         f"got {name!r}.",
                     )
-            # Every key was just proven a ``str`` by the loop above.
-            keyed = cast("dict[str, object]", plain)
+                keyed[name] = entry
             unknown = set(keyed) - UPSTREAM_PATCH_DEPENDENCIES
             if unknown:
                 raise ConfigurationError(
                     f"`{APPLY_UPSTREAM_PATCHES_KEY}` names unknown patch dependencies "
                     f"{sorted(unknown)}; valid names are {sorted(UPSTREAM_PATCH_DEPENDENCIES)}.",
                 )
+            flags: dict[str, bool] = {}
             for name, value in keyed.items():
                 if type(value) is not bool:
                     raise ConfigurationError(
                         f"`{APPLY_UPSTREAM_PATCHES_KEY}[{name!r}]` must be a bool; "
                         f"got {_safe_type_name(value)}.",
                     )
-            # Every value was just proven an exact ``bool`` by the loop above.
-            return cast("bool", keyed.get(dependency, True))
+                flags[name] = value
+            return flags.get(dependency, True)
         except ConfigurationError:
             raise
         except Exception as exc:

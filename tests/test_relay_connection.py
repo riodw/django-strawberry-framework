@@ -23,6 +23,7 @@ nested ``pageInfo``, and shipped SDL field presence live in
 """
 
 import inspect
+from typing import get_args
 
 import pytest
 import pytest_django
@@ -32,6 +33,7 @@ from apps.products.models import Category, Item, Property
 from django.db import connection as db_connection
 from django.db import models as djmodels
 from django.db.models import ForeignObjectRel
+from django.db.models.expressions import Combinable
 from django.http import HttpRequest
 from strategy_schemas import make_django_type
 from strawberry import relay
@@ -56,6 +58,7 @@ from django_strawberry_framework.filters import FilterSet, filter_input_type
 from django_strawberry_framework.orders import OrderSet
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.finalizer import _register_relation_connection_teardown
+from tests._idioms import declare_django_type
 from tests._info import make_info
 
 
@@ -103,7 +106,7 @@ def _isolate_global_registry(isolate_global_registry: None) -> None:
 _make_type = make_django_type
 
 
-def _schema_with_root(declaring_type: type, *, field_name: str = "objs"):
+def _schema_with_root(declaring_type: type[DjangoType], *, field_name: str = "objs"):
     """Finalize and build a schema exposing ``field_name: [declaring_type!]!``.
 
     The root field lists every row of the declaring type's model in pk order
@@ -514,10 +517,12 @@ def test_registry_clear_preserves_replacement_for_synthesized_connection():
     finalize_django_types()
 
     replacement = object()
-    category_type.items_connection = replacement
+    # The consumer rebinds the synthesized attribute after finalization; the class declares
+    # no such attribute, so the write and the read go through the class itself.
+    type.__setattr__(category_type, "items_connection", replacement)
     registry.clear()
 
-    assert category_type.items_connection is replacement
+    assert vars(category_type)["items_connection"] is replacement
 
 
 def test_relation_connection_teardown_restores_owned_annotations_in_place():
@@ -671,7 +676,7 @@ def test_registry_clear_removes_synthesized_state_before_different_shape_rebuild
 
     assert "items_connection" not in old_category_type.__dict__
     assert "items_connection" not in old_category_type.__annotations__
-    assert old_category_type.__annotations__["items"].__args__ == (item_type,)
+    assert get_args(old_category_type.__annotations__["items"]) == (item_type,)
     assert "items" in old_category_type.__dict__
     assert old_definition.relation_connections is None
 
@@ -990,12 +995,12 @@ def test_divergent_alias_per_key_window_preferred_over_shared():
     _make_type("BookType", Book, ("id", "title"))
     genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
     finalize_django_types()
-    model = genre_type.__django_strawberry_definition__.model
+    assert genre_type.__django_strawberry_definition__.model is Genre
 
     def _resolver() -> list[djmodels.Model]:
-        objs = list(model._default_manager.all().order_by("pk"))
+        objs = list(Genre.objects.order_by("pk"))
         for obj in objs:
-            books = list(obj.books.all().order_by("pk"))
+            books = list(obj.books.order_by("pk"))
             per_key = [books[1]]  # "b"
             shared = [books[0], books[2]]  # "a", "c"
             for number, row in enumerate(per_key, start=1):
@@ -1005,8 +1010,8 @@ def test_divergent_alias_per_key_window_preferred_over_shared():
             # ``$``-delimited attrs are not identifier syntax - set via
             # ``setattr``, exactly as Django's prefetch machinery lands them.
             setattr(obj, "_dst_books$x_connection", per_key)
-            obj._dst_books_connection = shared
-        return objs
+            vars(obj)["_dst_books_connection"] = shared
+        return [*objs]
 
     query_cls = strawberry.type(
         type(
@@ -1384,15 +1389,19 @@ def test_fast_path_non_pk_ordering_applies_explicit_deterministic_order_by():
     from django.test.utils import CaptureQueriesContext
 
     class OConnTag(djmodels.Model):
-        name = djmodels.TextField()
+        name: "djmodels.TextField[str | Combinable, str]" = djmodels.TextField()
 
         class Meta:
             app_label = "products"
             managed = False
 
     class OConnPost(djmodels.Model):
-        title = djmodels.TextField()
-        tag = djmodels.ForeignKey(OConnTag, related_name="posts", on_delete=djmodels.CASCADE)
+        title: "djmodels.TextField[str | Combinable, str]" = djmodels.TextField()
+        tag: "djmodels.ForeignKey[OConnTag | Combinable, OConnTag]" = djmodels.ForeignKey(
+            OConnTag,
+            related_name="posts",
+            on_delete=djmodels.CASCADE,
+        )
 
         class Meta:
             app_label = "products"
@@ -1427,9 +1436,8 @@ def test_fast_path_non_pk_ordering_applies_explicit_deterministic_order_by():
         )
 
         def _build(*, optimizer: bool):
-            type(
+            declare_django_type(
                 "OConnPostType",
-                (DjangoType,),
                 {
                     "Meta": type(
                         "Meta",
@@ -1546,9 +1554,8 @@ def test_fast_path_fires_for_reverse_fk_without_related_name(
     assert isinstance(repairticket_rel, ForeignObjectRel)
     assert repairticket_rel.get_accessor_name() == "repairticket_set"
 
-    type(
+    declare_django_type(
         "RepairTicketNode",
-        (DjangoType,),
         {
             "Meta": type(
                 "Meta",
@@ -1960,15 +1967,15 @@ def test_fallback_when_annotations_missing():
     _make_type("BookType", Book, ("id", "title"))
     genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
     finalize_django_types()
-    model = genre_type.__django_strawberry_definition__.model
+    assert genre_type.__django_strawberry_definition__.model is Genre
 
     def _resolver() -> list[djmodels.Model]:
-        objs = list(model._default_manager.all().order_by("pk"))
+        objs = list(Genre.objects.order_by("pk"))
         # Plant an UNANNOTATED list at the package-reserved to_attr (a consumer
         # prefetch shape); the resolver must NOT consume it as a window.
         for obj in objs:
-            obj._dst_books_connection = list(obj.books.all())
-        return objs
+            vars(obj)["_dst_books_connection"] = list(obj.books.all())
+        return [*objs]
 
     query_cls = strawberry.type(
         type(
@@ -2211,9 +2218,8 @@ def test_nested_fallback_does_not_clobber_fk_id_elisions():
 
     # ``BookType`` exposes its forward FK ``shelf`` (a ``{ id }``-only selection
     # elides it) and the M2M ``genres`` (the fallback nested connection target).
-    type(
+    declare_django_type(
         "ShelfType",
-        (DjangoType,),
         {
             "Meta": type(
                 "Meta",
@@ -2228,9 +2234,8 @@ def test_nested_fallback_does_not_clobber_fk_id_elisions():
             model = Genre
             fields = {"name": ["exact"]}
 
-    type(
+    declare_django_type(
         "GenreType",
-        (DjangoType,),
         {
             "Meta": type(
                 "Meta",
@@ -2557,9 +2562,8 @@ def _shelves_with_consumer_books_schema(
     meta_ns: dict[str, object] = {"model": Shelf, "fields": ("id", "code", "books")}
     if books_hint is not None:
         meta_ns["optimizer_hints"] = {"books": books_hint}
-    shelf_type = type(
+    shelf_type = declare_django_type(
         "ShelfType",
-        (DjangoType,),
         {
             "__annotations__": {},
             "books": strawberry.field(resolver=_curated_books, graphql_type=list[BookType]),

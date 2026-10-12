@@ -1804,8 +1804,9 @@ def test_assign_m2m_integrity_error_contained_in_envelope():
     ):
         decoded: _ModelDecoded = (cat, [("fake_m2m", [1, 2])], [])
         with managed_write_transaction("default"), open_write_pipeline(CreateCategoryMutation):
-            errors = resolvers._model_write_step(CreateCategoryMutation, None, decoded)
-        assert isinstance(errors, list)
+            failure = resolvers._model_write_step(CreateCategoryMutation, None, decoded)
+        assert isinstance(failure, resolvers.StepFailure)
+        errors = failure.errors
         assert len(errors) == 1
         assert errors[0].field == NON_FIELD_ERROR_KEY
         assert errors[0].codes == ["constraint"]

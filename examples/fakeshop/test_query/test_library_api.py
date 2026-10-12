@@ -5406,7 +5406,7 @@ def test_secondary_book_global_id_refetches_as_primary_book_type_over_http(
     assert default_sdl.status_code == 200
     default_payload = default_sdl.json()
     assert "errors" not in default_payload, default_payload
-    interfaces = default_payload["data"]["__type"]["interfaces"] or []
+    interfaces = default_payload["data"]["__type"]["interfaces"] or ()
     assert "Node" not in {entry["name"] for entry in interfaces}
 
 
@@ -6186,7 +6186,7 @@ def test_library_loans_connection_mixed_or_paginates_row_preserved_roots_over_ht
         # ``LoanType`` is a Relay Node under the flag, so ``node { id }`` is a
         # model-anchored GlobalID (``base64("library.loan:<pk>")``); decode it
         # back to the raw pk.
-        pks = []
+        pks: list[int] = []
         for edge in conn["edges"]:
             type_name, node_id = _decode_global_id(edge["node"]["id"])
             assert type_name == "library.loan", type_name
@@ -7386,8 +7386,12 @@ def _hostile_book_hook(
     **kwargs: object,
 ) -> QuerySet[models.Book]:
     """Seed the real repair-exclusion through unbound ``QuerySet.filter``."""
-    return QuerySet.filter(_HostileBookQuerySet(model=models.Book)).exclude(
-        circulation_status=models.Book.CirculationStatus.REPAIR,
+    return (
+        QuerySet[models.Book]
+        .filter(_HostileBookQuerySet(model=models.Book))
+        .exclude(
+            circulation_status=models.Book.CirculationStatus.REPAIR,
+        )
     )
 
 
@@ -11297,10 +11301,17 @@ def test_update_book_via_custom_input_saves_circulation_status_choice_value():
     assert book.circulation_status == models.Book.CirculationStatus.CHECKED_OUT
 
 
+#: ``updateBookViaCustomInput`` ``data`` additions and the genre names left on the book.
+_GENRES_OMIT_VS_EMPTY: list[tuple[dict[str, list[str]], set[str]]] = [
+    ({}, {"KeepGenre"}),
+    ({"genres": []}, set()),
+]
+
+
 @pytest.mark.django_db
 @pytest.mark.parametrize(
     ("data_extra", "expected_names"),
-    [({}, {"KeepGenre"}), ({"genres": []}, set())],
+    _GENRES_OMIT_VS_EMPTY,
     ids=["omit", "empty-list"],
 )
 def test_update_book_via_custom_input_genres_omit_vs_empty_list(

@@ -106,6 +106,7 @@ from ..utils.inputs import RELATION_SINGLE as RELATION_SINGLE
 from ..utils.inputs import SCALAR as SCALAR
 from ..utils.inputs import FieldConversionBase, InputFieldSpec
 from ..utils.strings import graphql_camel_name, pascal_case
+from .accessors import child_relation_of, declared_fields_of, is_serializer, list_child_of
 
 if TYPE_CHECKING:
     from typing import TypeAlias
@@ -119,6 +120,9 @@ if TYPE_CHECKING:
     # consumer's ``ModelSerializer[Item]``.
     # basedpyright: drf-stubs' Field TypeVars are invariant; no other argument takes every field
     DRFField: TypeAlias = serializers.Field[Any, Any, Any, Any]  # pyright: ignore[reportExplicitAny]
+    # basedpyright: drf-stubs' RelatedField TypeVars are invariant; no other argument takes
+    # every relation field
+    DRFRelatedField: TypeAlias = serializers.RelatedField[Any, Any, Any]  # pyright: ignore[reportExplicitAny]
     # basedpyright: invariant instance TypeVar; a consumer's ModelSerializer[Item] must be accepted
     DRFBaseSerializer: TypeAlias = serializers.BaseSerializer[Any]  # pyright: ignore[reportExplicitAny]
     # basedpyright: invariant instance TypeVar; a consumer's ModelSerializer[Item] must be accepted
@@ -384,7 +388,7 @@ def _reject_unsupported_relation_field(field: DRFField) -> None:
     """
     field_name = getattr(field, "field_name", None)
     if isinstance(field, serializers.ManyRelatedField):
-        child = field.child_relation
+        child = child_relation_of(field)
         if not isinstance(child, serializers.PrimaryKeyRelatedField):
             raise ConfigurationError(
                 f"Serializer field {field_name!r} is a ManyRelatedField wrapping a "
@@ -453,7 +457,7 @@ def _list_annotation(field: serializers.ListField, element: object) -> object:
     and the choice-child enum upgrade so the element rule has one owner. A converted scalar
     annotation or a generated enum is a runtime annotation.
     """
-    if field.child.allow_null:
+    if list_child_of(field).allow_null:
         element = cast("OptionalWidenable", element) | None
     return GenericAlias(list, (element,))
 
@@ -844,7 +848,7 @@ def serializer_only_relation_annotation(
     # ``convert_serializer_field`` classifies only a ``ManyRelatedField`` as ``RELATION_MULTI``,
     # and a bound field (read off a serializer's ``.fields``) always carries its name.
     related_field = (
-        cast("serializers.ManyRelatedField", field).child_relation
+        child_relation_of(cast("serializers.ManyRelatedField", field))
         if kind == RELATION_MULTI
         else field
     )
@@ -878,10 +882,10 @@ def _is_consumer_declared(field: DRFField) -> bool:
     policy uses to tell a consumer's EXPLICIT serializer contract from a
     model-backed auto-generated field.
     """
-    parent = getattr(field, "parent", None)
-    if parent is None:
+    parent: object = getattr(field, "parent", None)
+    if not is_serializer(parent):
         return False
-    return field.field_name in getattr(type(parent), "_declared_fields", {})
+    return field.field_name in declared_fields_of(type(parent))
 
 
 def _scalar_name(scalar: object) -> str:

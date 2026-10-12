@@ -79,6 +79,7 @@ from typing_extensions import override
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..utils.errors import FIELD_ERROR_CODE_CONFLICT, field_error
+from ._narrowing import is_dict, is_list_or_tuple, is_set_or_frozenset
 from ._queryset_private import queryset_db
 from .canonical import base_container_values, canonical_sort_key
 
@@ -89,6 +90,7 @@ if TYPE_CHECKING:
     from django.db import models
     from django.db.backends.base.base import BaseDatabaseWrapper
     from django.db.models import QuerySet
+    from typing_extensions import TypeIs
 
     from ..mutations.inputs import FieldError
     from ..mutations.sets import WriteMutationClass
@@ -831,6 +833,20 @@ _MUTABLE_SNAPSHOT_TYPES = (
 )
 
 
+def _is_mutable_snapshot_value(
+    value: object,
+) -> TypeIs[
+    dict[object, object]
+    | list[object]
+    | set[object]
+    | frozenset[object]
+    | tuple[object, ...]
+    | bytearray
+]:
+    """Return whether ``value`` is one of the ``_MUTABLE_SNAPSHOT_TYPES`` (subclasses included)."""
+    return isinstance(value, _MUTABLE_SNAPSHOT_TYPES)
+
+
 class _ValueSnapshot:
     """Base for a by-VALUE field snapshot that knows how to re-compare itself.
 
@@ -1007,16 +1023,7 @@ def _field_fingerprint(value: object) -> str:
                 "drift detection (exceeded the node budget). Reject rather than risk an "
                 "unbounded walk of consumer-controlled data.",
             )
-        is_container = isinstance(
-            item,
-            (
-                dict,
-                list,
-                tuple,
-                set,
-                frozenset,
-            ),
-        )
+        is_container = is_dict(item) or is_list_or_tuple(item) or is_set_or_frozenset(item)
         if not is_container:
             # Bytes / bytearray land here too (they are not containers): the
             # leaf renderer reads their base buffer, never ``bytes(item)``.
@@ -1038,12 +1045,11 @@ def _field_fingerprint(value: object) -> str:
         # values fingerprint the SAME - and a drift check that cannot tell
         # them apart is the fail-open this walk exists to prevent. Each branch reads
         # the container it has narrowed, so a ``dict`` answers its ``(key, value)`` pairs.
-        if isinstance(item, dict):
-            entries: dict[object, object] = item
+        if is_dict(item):
             parts.append("{")
             stack.append(_SnapshotClose("}", container_id))
             for key, member in sorted(
-                base_container_values(entries),
+                base_container_values(item),
                 key=lambda pair: canonical_sort_key(pair[0]),
                 reverse=True,
             ):
@@ -1053,18 +1059,16 @@ def _field_fingerprint(value: object) -> str:
                 stack.append(member)
                 stack.append(_SnapshotClose("=v"))
                 stack.append(key)
-        elif isinstance(item, (list, tuple)):
-            sequence: list[object] | tuple[object, ...] = item
+        elif is_list_or_tuple(item):
             parts.append("[")
             stack.append(_SnapshotClose("]", container_id))
-            stack.extend(reversed(base_container_values(sequence)))
+            stack.extend(reversed(base_container_values(item)))
         else:
             # The container check above leaves a ``set`` / ``frozenset`` as the only kind here.
-            members: set[object] | frozenset[object] = item
             parts.append("s{")
             stack.append(_SnapshotClose("}s", container_id))
             stack.extend(
-                sorted(base_container_values(members), key=canonical_sort_key, reverse=True),
+                sorted(base_container_values(item), key=canonical_sort_key, reverse=True),
             )
     return "".join(parts)
 
@@ -1073,7 +1077,7 @@ def _snapshot_field_value(value: object) -> object:
     """Snapshot a field value by value: fingerprint containers, name-capture files, alias scalars."""
     if isinstance(value, FieldFile):
         return _FileNameSnapshot(value.name)
-    if isinstance(value, _MUTABLE_SNAPSHOT_TYPES):
+    if _is_mutable_snapshot_value(value):
         return _FieldFingerprint(_field_fingerprint(value))
     return value
 

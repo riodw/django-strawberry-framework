@@ -18,7 +18,7 @@ content-type negotiation), which ``TestClient`` exists to abstract away.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, TypeAlias
 
 from django.test import Client
@@ -29,6 +29,12 @@ from django_strawberry_framework.testing import TestClient
 # basedpyright: live suites chain subscripts into a parsed response (``data["a"]["b"][0]``);
 # a recursive JSON alias would turn every hop of every chain into a narrowing site
 JSONObject: TypeAlias = dict[str, Any]  # pyright: ignore[reportExplicitAny]
+#: A JSON value a test writes as an expected literal (what a response decodes to). The
+#: container arms are the read-only ``Sequence`` / ``Mapping`` so an expected value a test
+#: builds first (``list[dict[str, str]]``) still matches: ``list`` / ``dict`` are invariant.
+JSONValue: TypeAlias = (
+    "str | int | float | bool | Sequence[JSONValue] | Mapping[str, JSONValue] | None"
+)
 
 
 def post_graphql(
@@ -100,7 +106,7 @@ def assert_graphql_success(
 
 def assert_graphql_data(
     query: str,
-    expected: Mapping[str, object],
+    expected: Mapping[str, JSONValue],
     *,
     client: Client | None = None,
     variables: Mapping[str, object] | None = None,

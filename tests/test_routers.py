@@ -127,7 +127,7 @@ from collections.abc import (
 )
 from io import BytesIO
 from pathlib import Path
-from types import SimpleNamespace
+from types import CoroutineType, SimpleNamespace
 from typing import TYPE_CHECKING, Any, NoReturn, Protocol, TypeAlias, TypeGuard
 from urllib.parse import urlparse
 
@@ -163,8 +163,8 @@ import django_strawberry_framework.routers as routers_module
 from django_strawberry_framework.error_policy import DEFAULT_ERROR_POLICY
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.utils import sessions as session_store_module
-from django_strawberry_framework.utils.permissions import request_from_info
-from tests._idioms import websocket_scope
+from django_strawberry_framework.utils.permissions import ChannelsRequestAdapter, request_from_info
+from tests._idioms import is_object_dict, is_object_list, websocket_scope
 from tests._soft_dependency import blocked_modules, evicted_modules, simulated_absence
 
 if TYPE_CHECKING:
@@ -276,8 +276,8 @@ class _OperationController:
 
     def __init__(self):
         self.started = asyncio.Event()
-        self.gates = defaultdict(asyncio.Event)
-        self.emitted = []
+        self.gates: defaultdict[int, asyncio.Event] = defaultdict(asyncio.Event)
+        self.emitted: list[str] = []
         self.finalized = False
 
     def release(self, index: int):
@@ -296,7 +296,7 @@ _BURST_RESULTS = 2000
 #: receive. A module-level registry rather than a resolver closure because the
 #: schema is built once at import time; every row uses its own channel name, and
 #: the autouse fixture clears the registry so no Event outlives its event loop.
-_CONTROLLERS = {}
+_CONTROLLERS: dict[str, _OperationController] = {}
 
 
 @pytest.fixture(autouse=True)
@@ -324,6 +324,20 @@ def _controlled_query(channel: str):
     return f'{{ controlledPing(channel: "{channel}") }}'
 
 
+def _ws_request(info: strawberry.Info) -> ChannelsRequestAdapter:
+    """The request ``request_from_info`` resolves for a WebSocket operation: the scope adapter."""
+    request = request_from_info(info, family_label="FilterSet")
+    assert isinstance(request, ChannelsRequestAdapter), type(request)
+    return request
+
+
+def _scope_actor(request: ChannelsRequestAdapter) -> AbstractUser | AnonymousUser:
+    """The adapter's scope actor: the ``AuthMiddlewareStack`` user or a revalidated refresh."""
+    actor = request.user
+    assert isinstance(actor, (AbstractUser, AnonymousUser)), type(actor)
+    return actor
+
+
 @strawberry.type
 class Query:
     @strawberry.field
@@ -333,18 +347,13 @@ class Query:
     @strawberry.field
     def username(self, info: strawberry.Info) -> str:
         """The authenticated-session probe: the session actor's username."""
-        request = request_from_info(info, family_label="FilterSet")
-        # basedpyright: request_from_info returns object; the WebSocket request adapter exposes the
-        # scope actor as .user
-        return request.user.username  # pyright: ignore[reportAttributeAccessIssue]
+        return _scope_actor(_ws_request(info)).username
 
     @strawberry.field
     def actor(self, info: strawberry.Info) -> str:
         """Read the scope-backed actor without requiring HTTP-only attributes."""
-        request = request_from_info(info, family_label="FilterSet")
-        # basedpyright: request_from_info returns object; the WebSocket request adapter exposes the
-        # scope actor as .user
-        return f"{type(request).__name__}|{request.user.is_anonymous}"  # pyright: ignore[reportAttributeAccessIssue]
+        request = _ws_request(info)
+        return f"{type(request).__name__}|{_scope_actor(request).is_anonymous}"
 
     @strawberry.field
     def actor_identity(self, info: strawberry.Info) -> str:
@@ -356,10 +365,8 @@ class Query:
         connect-time actor and a revalidation-refreshed one are distinguishable
         without any ORM work in the resolver.
         """
-        request = request_from_info(info, family_label="FilterSet")
-        # basedpyright: request_from_info returns object; the WebSocket request adapter exposes the
-        # scope actor as .user
-        return f"{request.user.username}|{request.user.is_staff}"  # pyright: ignore[reportAttributeAccessIssue]
+        actor = _scope_actor(_ws_request(info))
+        return f"{actor.username}|{actor.is_staff}"
 
     @strawberry.field
     async def controlled_ping(self, channel: str) -> str:
@@ -1065,6 +1072,29 @@ def _actor_lease_held(consumer: AsyncConsumer):
     return _actor_lease(consumer).locked()
 
 
+def _connection_scope(consumer: AsyncConsumer) -> Mapping[str, object]:
+    """The connection's ASGI scope as the plain mapping the package reads and writes.
+
+    channels-stubs types it as the ``_ChannelScope`` TypedDict, which names neither the
+    package's own scope keys nor the ``AnonymousUser`` a logout installs.
+    """
+    return consumer.scope
+
+
+def _connection_actor(consumer: AsyncConsumer) -> AbstractBaseUser | AnonymousUser:
+    """The actor the connection's scope holds right now (connect-time, refreshed or logged out)."""
+    actor = _connection_scope(consumer).get("user")
+    assert isinstance(actor, (AbstractBaseUser, AnonymousUser)), type(actor)
+    return actor
+
+
+def _message_loop_task(consumer: "GraphQLWSConsumer") -> asyncio.Task[object] | None:
+    """The consumer's message-loop task, which ``websocket_connect`` creates and never clears."""
+    # basedpyright: Strawberry declares GraphQLWSConsumer.run_task as a bare asyncio.Task
+    task: asyncio.Task[object] | None = consumer.run_task  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    return task
+
+
 class _RevalidationProbe:
     """Count the revalidation's session reads, and optionally hold or poison one."""
 
@@ -1148,7 +1178,7 @@ class _CloseProbe:
     """
 
     def __init__(self):
-        self.calls = []
+        self.calls: list[tuple[int | None, str | None]] = []
         self.entered = asyncio.Event()
         self.park: asyncio.Event | None = None
         self.failures = 0
@@ -1299,12 +1329,12 @@ class _OutboundGateProbe:
     """What the outbound checkpoint did: who entered, whose lease, and when it sent."""
 
     def __init__(self):
-        self.entries = []
-        self.frame_types = []
-        self.from_run_task = []
-        self.tasks = []
-        self.consumers = []
-        self.sends_under_lease = []
+        self.entries: list[object] = []
+        self.frame_types: list[object] = []
+        self.from_run_task: list[bool] = []
+        self.tasks: list[asyncio.Task[object]] = []
+        self.consumers: list[GraphQLWSConsumer] = []
+        self.sends_under_lease: list[bool] = []
         self.reached_send = asyncio.Event()
         self.hold_before_send: asyncio.Event | None = None
 
@@ -1368,8 +1398,10 @@ def _record_outbound_gate(monkeypatch: pytest.MonkeyPatch):
         assert isinstance(consumer, GraphQLWSConsumer)
         probe.entries.append(message["id"])
         probe.frame_types.append(message.get("type"))
-        probe.from_run_task.append(asyncio.current_task() is consumer.run_task)
-        probe.tasks.append(asyncio.current_task())
+        probe.from_run_task.append(asyncio.current_task() is _message_loop_task(consumer))
+        operation_task = asyncio.current_task()
+        assert operation_task is not None
+        probe.tasks.append(operation_task)
         probe.consumers.append(consumer)
 
         async def observing_send(payload: dict[str, object]):
@@ -1774,8 +1806,8 @@ def test_concurrent_first_class_access_returns_one_cached_class(monkeypatch: pyt
     second_entered = threading.Event()
     ready = threading.Barrier(2)
     calls = 0
-    results = []
-    errors = []
+    results: list[type[ProtocolTypeRouter]] = []
+    errors: list[BaseException] = []
 
     def synchronized_guard():
         nonlocal calls
@@ -2016,7 +2048,7 @@ def test_an_injected_consumer_factory_is_called_with_the_schema_and_mounted():
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
-    received = {}
+    received: dict[str, object] = {}
 
     def factory(**kwargs: object):
         received.update(kwargs)
@@ -2101,7 +2133,7 @@ def test_an_async_factory_is_rejected_and_the_refused_coroutine_is_closed():
     assert _ASYNC_FACTORY_SUBSTRING in message
     assert "returned coroutine" in message
 
-    coroutines = []
+    coroutines: list[CoroutineType[object, object, object]] = []
 
     def wrapping_factory(*, schema: object):
         coroutine = async_factory(schema=schema)
@@ -2565,7 +2597,7 @@ async def test_schema_object_passes_through_unchanged_with_extensions_intact():
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
-    fired = []
+    fired: list[str] = []
 
     class RecordingExtension(SchemaExtension):
         @override
@@ -2640,15 +2672,21 @@ def _django_http_host_verdict(
     package delegates. ``None`` means ``DisallowedHost``, i.e. "Django refuses this
     host", which is the exact condition the WebSocket validator turns into a denial.
     """
-    headers = {}
+    headers: dict[str, str] = {}
     if host is not None:
         headers["host"] = host
     if forwarded_host is not None:
         headers["x-forwarded-host"] = forwarded_host
-    environ = {}
-    if server is not None:
-        environ["SERVER_NAME"], environ["SERVER_PORT"] = server[0], str(server[1])
-    request = RequestFactory().get("/", headers=headers, **environ)
+    factory = RequestFactory()
+    if server is None:
+        request = factory.get("/", headers=headers)
+    else:
+        request = factory.get(
+            "/",
+            headers=headers,
+            SERVER_NAME=server[0],
+            SERVER_PORT=str(server[1]),
+        )
     try:
         return request.get_host()
     except DisallowedHost:
@@ -3369,8 +3407,8 @@ async def test_a_hostile_host_is_denied_before_the_auth_stack_and_the_consumer(
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``
     (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
-    reached = []
-    auth_stack_entries = []
+    reached: list[str] = []
+    auth_stack_entries: list[str] = []
     original_call = CookieMiddleware.__call__
 
     async def recording_call(
@@ -3414,7 +3452,7 @@ async def test_an_injected_consumer_is_denied_by_both_handshake_boundaries():
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``
     (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
-    reached = []
+    reached: list[str] = []
 
     def _recording_consumer(schema: object):
         return _recording_websocket_application(reached)
@@ -3473,7 +3511,7 @@ def test_root_package_and_star_import_stay_channels_free(_simulate_channels_abse
     """
     mod = importlib.import_module("django_strawberry_framework")
     assert mod is django_strawberry_framework
-    namespace = {}
+    namespace: dict[str, object] = {}
     exec("from django_strawberry_framework import *", namespace)
     assert "DjangoGraphQLProtocolRouter" not in namespace
     # ``__all__`` names the lazy symbol, so ``import *`` reaches for it and
@@ -4249,7 +4287,7 @@ async def test_a_valid_session_keeps_a_running_subscription_emitting_every_resul
         await _send_operation(communicator, _controlled_subscription("control"), op_id="1")
         await _reached(controller.started, "the operation was never admitted")
 
-        received = []
+        received: list[object] = []
         for index in range(2):
             controller.release(index)
             message = await communicator.receive_json_from(timeout=10)
@@ -4327,7 +4365,7 @@ async def test_every_subscription_event_is_masked_before_it_reaches_the_wire(
     router = _router(_masking_schema())
     _operation_frame, success_frame = _PROTOCOL_FRAMES[subprotocol]
 
-    correlation_ids = []
+    correlation_ids: list[str] = []
     async with _open_ws(router, subprotocol=subprotocol) as communicator:
         await _send_operation(communicator, _LEAKY_SUBSCRIPTION, op_id="1")
         for _ in range(2):
@@ -4341,9 +4379,9 @@ async def test_every_subscription_event_is_masked_before_it_reaches_the_wire(
             assert error["message"] == DEFAULT_ERROR_POLICY.message, error
             # The failing field is still named: the client wrote the query.
             assert error["path"] == ["leaky", "boom"], error
-            correlation_ids.append(
-                error["extensions"][DEFAULT_ERROR_POLICY.correlation_extension_key],
-            )
+            correlation_id = error["extensions"][DEFAULT_ERROR_POLICY.correlation_extension_key]
+            assert isinstance(correlation_id, str), error
+            correlation_ids.append(correlation_id)
 
     assert all(_CORRELATION_ID_PATTERN.fullmatch(value) for value in correlation_ids)
     assert len(set(correlation_ids)) == 2, correlation_ids
@@ -4774,14 +4812,23 @@ async def test_control_frame_send_serializes_with_a_concurrent_revocation():
     """
     entered = asyncio.Event()
     release = asyncio.Event()
-    sent = []
+    sent: list[object] = []
 
     class TransportHandler:
+        async def handle(self):
+            return None
+
         async def handle_subscribe(self, message: object):
             return None
 
     class LegacyHandler:
+        async def handle(self):
+            return None
+
         async def handle_start(self, message: object):
+            return None
+
+        async def handle_stop(self, message: object):
             return None
 
     class Adapter:
@@ -4793,10 +4840,20 @@ async def test_control_frame_send_serializes_with_a_concurrent_revocation():
             await release.wait()
             sent.append(message)
 
+        async def close(self, code: int, reason: str):
+            return None
+
     class BaseConsumer:
         graphql_transport_ws_handler_class = TransportHandler
         graphql_ws_handler_class = LegacyHandler
         websocket_adapter_class = Adapter
+
+        @classmethod
+        def as_asgi(cls, **initkwargs: object) -> object:
+            return cls
+
+        async def disconnect(self, code: int):
+            return None
 
     # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
     # build_revalidating_consumer_class types the parameter as type[GraphQLWSConsumer]
@@ -4805,9 +4862,7 @@ async def test_control_frame_send_serializes_with_a_concurrent_revocation():
         _revocation=consumers_module._ConnectionRevocation(),
         scope={},
     )
-    # basedpyright: the builder declares upstream's GraphQLWSConsumer, whose adapter factory takes
-    # (consumer, request, response); this fake base's adapter takes the consumer alone
-    adapter = consumer_class.websocket_adapter_class(consumer)  # pyright: ignore[reportCallIssue]
+    adapter = consumer_class.websocket_adapter_class(consumer)
 
     send_task = asyncio.create_task(adapter.send_json({"type": "pong"}))
     await _reached(entered, "the delegated control frame never reached upstream send")
@@ -4927,8 +4982,10 @@ async def test_the_subscription_limit_error_frame_is_gated_from_the_connections_
     assert gate.from_run_task == [True], gate.from_run_task
     assert probe.reads == _UPSTREAM_SUBSCRIPTION_LIMIT + 2
     # The guard's direction: the message loop was left to unwind normally.
-    assert consumer.run_task.done()
-    assert not consumer.run_task.cancelled()
+    run_task = _message_loop_task(consumer)
+    assert run_task is not None
+    assert run_task.done()
+    assert not run_task.cancelled()
 
 
 # ---------------------------------------------------------------------------
@@ -5254,7 +5311,7 @@ class _ParkedCloseWebSocket:
     """
 
     def __init__(self):
-        self.closes = []
+        self.closes: list[tuple[int | None, str | None]] = []
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
 
@@ -5804,9 +5861,11 @@ def test_the_stop_aware_schema_covers_every_upstream_schema_read():
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     sources = _upstream_handler_sources()
-    reads = set()
+    reads: set[str] = set()
     for source in sources:
-        reads.update(re.findall(r"self\.schema\.(\w+)", source))
+        for attribute in re.findall(r"self\.schema\.(\w+)", source):
+            assert isinstance(attribute, str), attribute
+            reads.add(attribute)
         assert not re.search(r"(isinstance|type)\(\s*(self\.)?schema\b", source), (
             "upstream now type-tests the schema it was handed, which a wrapper cannot satisfy"
         )
@@ -6015,7 +6074,7 @@ async def test_a_same_socket_logout_stops_a_running_subscription_on_both_protoco
         consumer = gate.consumers[0]
         await _logout_on_this_socket(_logout_schema, consumer)
         # The logout really did change the connection's actor identity.
-        assert consumer.scope["user"].is_anonymous
+        assert _connection_actor(consumer).is_anonymous
 
         controller.release(1)
         closed, frames = await _drain_until_close(communicator)
@@ -6165,16 +6224,14 @@ async def test_a_same_socket_logout_cannot_complete_across_a_parked_protected_se
         logout_task = asyncio.create_task(_logout_on_this_socket(_logout_schema, consumer))
 
         def _logout_holds_the_scope_lock() -> object:
-            return (
-                consumer.scope.get(_SCOPE_LOCK_KEY) is not None
-                and consumer.scope[_SCOPE_LOCK_KEY].locked()
-            )
+            lock = _connection_scope(consumer).get(_SCOPE_LOCK_KEY)
+            return isinstance(lock, asyncio.Lock) and lock.locked()
 
         await _wait_until(
             _logout_holds_the_scope_lock,
             lambda: "the logout never reached the scope session lock",
         )
-        assert consumer.scope["user"].is_authenticated
+        assert _connection_actor(consumer).is_authenticated
         # A real round trip through the executor thread, so the logout has had
         # every chance to finish if nothing were holding it back.
         assert await _session_row_still_exists(session_key)
@@ -6186,7 +6243,7 @@ async def test_a_same_socket_logout_cannot_complete_across_a_parked_protected_se
         assert first["payload"]["data"] == {"controlled": "parked-send-1"}
         await logout_task
         assert not await _session_row_still_exists(session_key)
-        assert consumer.scope["user"].is_anonymous
+        assert _connection_actor(consumer).is_anonymous
 
         controller.release(1)
         closed, frames = await _drain_until_close(communicator)
@@ -6273,8 +6330,10 @@ async def test_a_transition_in_flight_denies_both_checkpoints_inside_a_positive_
 
         # The three preconditions that make a cache hit genuinely available here.
         assert _actor_lease_held(consumer)
-        assert consumer.scope["user"].is_authenticated
-        window_age = time.monotonic() - consumer.scope[consumers_module._REVALIDATED_AT_SCOPE_KEY]
+        assert _connection_actor(consumer).is_authenticated
+        revalidated_at = _connection_scope(consumer)[consumers_module._REVALIDATED_AT_SCOPE_KEY]
+        assert isinstance(revalidated_at, float), revalidated_at
+        window_age = time.monotonic() - revalidated_at
         assert 0.0 <= window_age < 3600.0, window_age
 
         # Admission and the outbound gate, both driven into the open transition.
@@ -6440,7 +6499,7 @@ def _handler_class(consumer_class: type, name: str) -> type:
 def _mounted_handler(handler_class: type, websocket: object):
     """Instantiate one generated handler class against a scripted websocket."""
 
-    kwargs = {
+    kwargs: dict[str, object] = {
         "view": SimpleNamespace(),
         "websocket": websocket,
         "context": {},
@@ -6648,7 +6707,7 @@ async def test_a_non_string_query_delivered_over_a_socket_does_not_break_the_loo
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     operation_frame, success_frame = _PROTOCOL_FRAMES[subprotocol]
-    rejected = []
+    rejected: list[dict[object, object]] = []
     served = False
     async with _open_ws(_router(), subprotocol=subprotocol) as communicator:
         await communicator.send_json_to(
@@ -6659,7 +6718,8 @@ async def test_a_non_string_query_delivered_over_a_socket_does_not_break_the_loo
             message = await communicator.receive_output(timeout=10)
             if message["type"] == "websocket.close":
                 raise AssertionError("the message loop died on the non-string query")
-            payload = json.loads(message["text"])
+            payload: object = json.loads(message["text"])
+            assert is_object_dict(payload), payload
             if payload.get("id") == "1":
                 rejected.append(payload)
             elif payload.get("type") == success_frame and payload.get("id") == "2":
@@ -6669,10 +6729,18 @@ async def test_a_non_string_query_delivered_over_a_socket_does_not_break_the_loo
 
     assert served, "the loop must still serve a well-formed operation"
     assert [frame["type"] for frame in rejected] == ["error"], rejected
-    errors = rejected[0]["payload"]
+    error_payload = rejected[0]["payload"]
     # graphql-transport-ws carries a list of errors, legacy graphql-ws one error.
-    errors = errors if isinstance(errors, list) else [errors]
-    assert [error["message"] for error in errors] == [DEFAULT_ERROR_POLICY.message], errors
+    if subprotocol == _TRANSPORT_WS:
+        assert is_object_list(error_payload), error_payload
+        errors = error_payload
+    else:
+        errors = [error_payload]
+    messages: list[object] = []
+    for error in errors:
+        assert is_object_dict(error), error
+        messages.append(error["message"])
+    assert messages == [DEFAULT_ERROR_POLICY.message], error_payload
 
 
 # The cancellation and raising-close arms of the loop containment are not
@@ -6696,7 +6764,7 @@ class _ScriptedTransport:
     ):
         self._iter_exception = iter_exception
         self._close_exception = close_exception
-        self.closes = []
+        self.closes: list[tuple[int, str]] = []
 
     def iter_json(self, *, ignore_parsing_errors: bool = False):
         exception = self._iter_exception

@@ -29,20 +29,44 @@ and scripted-cursor execution (``tests/optimizer/test_lateral_fetch.py``).
 Everything here is ``@pytest.mark.pg``.
 """
 
-from operator import itemgetter
+from typing import Protocol, TypeVar, runtime_checkable
 
 import pytest
 import strawberry
 from apps.library.models import Book, Branch, Genre, Loan, Patron, Shelf
 from django.db import connection as db_connection
 from django.db.models import Model, QuerySet
+from django.db.models.expressions import Combinable
 from django.test.utils import CaptureQueriesContext
 from strategy_schemas import build_strategy_schema, make_django_type
 from strawberry.relay.utils import to_base64
 
 from django_strawberry_framework import DjangoListField, DjangoType, finalize_django_types
+from tests._idioms import is_object_dict, is_object_list
 
 pytestmark = [pytest.mark.pg, pytest.mark.django_db]
+
+
+_RowT = TypeVar("_RowT", bound=Model)
+
+
+def _prefetched_rows(instance: Model, to_attr: str, model: type[_RowT]) -> list[_RowT]:
+    """The rows a ``Prefetch(to_attr=...)`` planted on ``instance``, each checked to be a ``model``.
+
+    The model class declares no such attribute; Django's prefetch writes it onto the instance.
+    """
+    rows: object = vars(instance)[to_attr]
+    assert is_object_list(rows)
+    typed = [row for row in rows if isinstance(row, model)]
+    assert len(typed) == len(rows)
+    return typed
+
+
+@runtime_checkable
+class _Closeable(Protocol):
+    """A raw database connection handle, as the stray-connection registry holds them."""
+
+    def close(self) -> None: ...
 
 
 @pytest.fixture(autouse=True)
@@ -123,7 +147,7 @@ def _seed_library():
     shelf_b = Shelf.objects.create(code="B", branch=branch)
     Shelf.objects.create(code="C", branch=branch)
     genres = [Genre.objects.create(name=f"g{index}") for index in range(3)]
-    books = []
+    books: list[Book] = []
     for index in range(5):
         book = Book.objects.create(title=f"a{index}", shelf=shelf_a)
         book.genres.add(genres[index % 3], genres[(index + 1) % 3])
@@ -141,8 +165,12 @@ def _canonical(data: dict[str, object] | None) -> dict[str, list[object]]:
     assert data is not None
     canonical: dict[str, list[object]] = {}
     for root, parents in data.items():
-        assert isinstance(parents, list)
-        canonical[root] = sorted(parents, key=itemgetter("id"))
+        assert is_object_list(parents)
+        rows = [parent for parent in parents if is_object_dict(parent)]
+        assert len(rows) == len(parents)
+        # Any total order serves: both sides of a parity check are sorted the same way.
+        ordered = sorted(rows, key=lambda row: str(row["id"]))
+        canonical[root] = [*ordered]
     return canonical
 
 
@@ -451,11 +479,12 @@ def test_stray_executor_thread_connections_are_tracked_for_session_close():
     from django.db import connections as django_connections
     from django.db.backends.postgresql import base as postgres_base
 
-    # basedpyright: the root conftest's Postgres wrapper plants the registry on the backend module
-    # at run time; the module declares no such attribute
-    registry_list = postgres_base._dst_stray_connection_registry  # pyright: ignore[reportAttributeAccessIssue]
+    # The root conftest's Postgres wrapper plants the registry on the backend module at run
+    # time; the module declares no such attribute, so it is read out of the module namespace.
+    registry_list: object = vars(postgres_base)["_dst_stray_connection_registry"]
+    assert is_object_list(registry_list)
     before = len(registry_list)
-    failures = []
+    failures: list[Exception] = []
 
     def _open_and_close_on_worker_thread():
         try:
@@ -471,7 +500,9 @@ def test_stray_executor_thread_connections_are_tracked_for_session_close():
     assert len(registry_list) > before
     # The wrapper closed its handle already; the session drain re-closing it
     # must be a harmless no-op (idempotent close is the drain's contract).
-    registry_list[-1].close()
+    newest = registry_list[-1]
+    assert isinstance(newest, _Closeable)
+    newest.close()
 
 
 # =============================================================================
@@ -1021,10 +1052,9 @@ def test_keyset_json_seek_uses_field_adapter_on_postgres(
         loaded = ScalarSpecimen.objects.prefetch_related(planned_prefetch).get(pk=parent.pk)
     lateral_sql = next(entry["sql"] for entry in captured if "CROSS JOIN LATERAL" in entry["sql"])
     assert sql_fragment in lateral_sql
-    # basedpyright: Prefetch(to_attr=...) sets the attribute on each row at run time; the model
-    # class does not declare it
-    assert [row.label for row in loaded._dst_children_connection] == expected_labels  # pyright: ignore[reportAttributeAccessIssue]
-    assert all(isinstance(row.payload, dict) for row in loaded._dst_children_connection)  # pyright: ignore[reportAttributeAccessIssue]
+    window = _prefetched_rows(loaded, "_dst_children_connection", ScalarSpecimen)
+    assert [row.label for row in window] == expected_labels
+    assert all(isinstance(row.payload, dict) for row in window)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1046,8 +1076,8 @@ def test_lateral_custom_through_joins_the_foreign_key_target_column():
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     class NaturalChild(models.Model):
-        code = models.TextField(unique=True)
-        rank = models.IntegerField()
+        code: "models.TextField[str | Combinable, str]" = models.TextField(unique=True)
+        rank: "models.IntegerField[float | int | str | Combinable, int]" = models.IntegerField()
 
         class Meta:
             app_label = "library"
@@ -1055,11 +1085,13 @@ def test_lateral_custom_through_joins_the_foreign_key_target_column():
             db_table = "lateral_natural_child"
 
     class NaturalParent(models.Model):
-        name = models.TextField()
-        children = models.ManyToManyField(
-            NaturalChild,
-            through="NaturalMembership",
-            related_name="natural_parents",
+        name: "models.TextField[str | Combinable, str]" = models.TextField()
+        children: "models.ManyToManyField[NaturalChild, NaturalMembership]" = (
+            models.ManyToManyField(
+                NaturalChild,
+                through="NaturalMembership",
+                related_name="natural_parents",
+            )
         )
 
         class Meta:
@@ -1068,8 +1100,11 @@ def test_lateral_custom_through_joins_the_foreign_key_target_column():
             db_table = "lateral_natural_parent"
 
     class NaturalMembership(models.Model):
-        parent = models.ForeignKey(NaturalParent, on_delete=models.CASCADE)
-        child = models.ForeignKey(
+        parent: "models.ForeignKey[NaturalParent | Combinable, NaturalParent]" = models.ForeignKey(
+            NaturalParent,
+            on_delete=models.CASCADE,
+        )
+        child: "models.ForeignKey[NaturalChild | Combinable, NaturalChild]" = models.ForeignKey(
             NaturalChild,
             db_column="child_code",
             on_delete=models.CASCADE,
@@ -1119,9 +1154,8 @@ def test_lateral_custom_through_joins_the_foreign_key_target_column():
             entry["sql"] for entry in captured if "CROSS JOIN LATERAL" in entry["sql"]
         )
         assert '"__dst_child"."code" = "__dst_through"."child_code"' in lateral_sql
-        # basedpyright: Prefetch(to_attr=...) sets the attribute on each row at run time; the model
-        # class does not declare it
-        assert [row.code for row in loaded._dst_children_connection] == ["code-0", "code-1"]  # pyright: ignore[reportAttributeAccessIssue]
+        window = _prefetched_rows(loaded, "_dst_children_connection", NaturalChild)
+        assert [row.code for row in window] == ["code-0", "code-1"]
     finally:
         with db_connection.schema_editor() as schema_editor:
             schema_editor.delete_model(NaturalMembership)

@@ -44,7 +44,7 @@ class Command(BaseCommand):
 
         result = delete_data(target)
 
-        parts = []
+        parts: list[str] = []
         if result["categories"]:
             parts.append(f"{result['categories']} categories")
         if result["properties"]:

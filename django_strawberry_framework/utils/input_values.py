@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, NoReturn, cast
 
 from ..exceptions import ConfigurationError, _safe_type_name
+from ._narrowing import dict_get, dict_items, is_dict, is_list, is_mapping, list_iter
 
 if TYPE_CHECKING:
     from typing import TypeAlias
@@ -104,8 +105,8 @@ def iter_input_items(input_value: object) -> list[tuple[str, object]] | None:
     ``utils/permissions.py`` so the existing
     ``from ..utils.permissions import iter_input_items`` consumers keep working.
     """
-    if isinstance(input_value, dict):
-        pairs = dict.items(input_value)
+    if is_dict(input_value):
+        pairs = dict_items(input_value)
         return [(_field_name(name, input_value=input_value), value) for name, value in pairs]
     try:
         dataclass_fields: object = getattr(input_value, "__dataclass_fields__", None)
@@ -113,7 +114,7 @@ def iter_input_items(input_value: object) -> list[tuple[str, object]] | None:
         raise _walk_error(input_value, "its dataclass metadata could not be read") from exc
     if dataclass_fields is None:
         return None
-    if not isinstance(dataclass_fields, Mapping):
+    if not is_mapping(dataclass_fields):
         raise ConfigurationError(
             "Could not traverse set input of type "
             f"{_safe_type_name(input_value)}: its dataclass metadata is not a mapping.",
@@ -143,8 +144,8 @@ def input_field_value(input_value: object, name: str) -> object:
     composes this with ``is_inactive_value`` instead of re-spelling the sniff.
     """
     field_name = _field_name(name, input_value=input_value)
-    if isinstance(input_value, dict):
-        return dict.get(input_value, field_name)
+    if is_dict(input_value):
+        return dict_get(input_value, field_name)
     try:
         return getattr(input_value, field_name, None)
     except BaseException as exc:
@@ -330,7 +331,7 @@ def related_declaration_mapping(owner: object, related_attr: str) -> Mapping[obj
         raise RelatedDeclarationError("unreadable") from exc
     if related is None:
         return {}
-    if not isinstance(related, Mapping):
+    if not is_mapping(related):
         raise RelatedDeclarationError("not_mapping", related)
     return related
 
@@ -368,12 +369,12 @@ def iter_active_fields(
         raise _walk_error(input_value, "the traversal configuration could not be read") from exc
     if is_inactive_value(input_value, unset_sentinel=unset_sentinel):
         return
-    if handle_top_level_list and isinstance(input_value, list):
-        elements = list.__iter__(input_value)
+    if handle_top_level_list and is_list(input_value):
+        elements = list_iter(input_value)
         for element in elements:
             if is_inactive_value(element, unset_sentinel=unset_sentinel):
                 continue
-            if isinstance(element, list) or iter_input_items(element) is None:
+            if is_list(element) or iter_input_items(element) is None:
                 raise ConfigurationError(
                     "Order input list elements must be mapping or dataclass values; "
                     f"received {_safe_type_name(element)}.",

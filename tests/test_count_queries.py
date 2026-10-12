@@ -24,7 +24,8 @@ SCRIPTS = Path(_bench_common.__file__).resolve().parent
 @pytest.fixture
 def count_queries(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     """Import ``scripts/count_queries.py`` the way it runs: scripts dir on ``sys.path``."""
-    monkeypatch.syspath_prepend(str(SCRIPTS))
+    # basedpyright: pytest leaves MonkeyPatch.syspath_prepend's ``path`` parameter unannotated
+    monkeypatch.syspath_prepend(str(SCRIPTS))  # pyright: ignore[reportUnknownMemberType]
     return importlib.import_module("count_queries")
 
 

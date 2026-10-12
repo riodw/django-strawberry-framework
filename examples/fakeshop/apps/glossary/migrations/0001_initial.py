@@ -324,7 +324,8 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="glossaryterm",
             name="related_terms",
-            field=models.ManyToManyField(
+            # basedpyright: django-stubs ManyToManyField _To has no default; a string ``to`` cannot bind it
+            field=models.ManyToManyField(  # pyright: ignore[reportUnknownArgumentType]
                 blank=True,
                 related_name="related_from",
                 through="glossary.GlossaryTermLink",

@@ -73,6 +73,7 @@ from ..sets_mixins import (
     should_cache_expansion,
 )
 from ..types.relay import implements_relay_node
+from ..utils._narrowing import dict_items, is_dict, is_list_or_tuple
 from ..utils.errors import FILTER_INVALID_ERROR_CODE, coded_error_extensions
 from ..utils.input_values import (
     DEFAULT_SET_INPUT_TRAVERSAL_DEPTH,
@@ -136,6 +137,7 @@ from .inputs import (
     FormKeyedFilter,
     LogicOperatorDescriptor,
     _field_specs,
+    _RangeFormPatch,
     filter_lookup_table,
     normalize_input_value,
 )
@@ -1457,8 +1459,10 @@ def _relation_key_value(value: object, attname: str) -> object:
     """
     if isinstance(value, models.Model):
         return getattr(value, attname)
-    if isinstance(value, (list, tuple, models.QuerySet)):
-        return [_relation_key_value(member, attname) for member in iter(value)]
+    if is_list_or_tuple(value):
+        return [_relation_key_value(member, attname) for member in value]
+    if isinstance(value, models.QuerySet):
+        return [_relation_key_value(member, attname) for member in value]
     return value
 
 
@@ -2940,7 +2944,7 @@ class FilterSet(
         if is_inactive_value(value, unset_sentinel=UNSET):
             return
         op = LOGIC_OPERATORS_BY_WIRE.get(wire_key)
-        is_sequence = isinstance(value, (list, tuple))
+        is_sequence = is_list_or_tuple(value)
         if op is not None and not op.is_sequence:
             if is_sequence:
                 raise ConfigurationError(
@@ -2956,9 +2960,7 @@ class FilterSet(
                 f"list of filter inputs, got a {type(value).__name__}. Wrap the "
                 f"clauses as '{wire_key}: [{{...}}]'.",
             )
-        # basedpyright: ``is_sequence`` held, but the aliased ``isinstance`` narrows ``value`` only
-        # to ``list[Unknown] | tuple[Unknown, ...]``; the cast types its elements ``object``.
-        for element in cast("list[object] | tuple[object, ...]", value):
+        for element in value:
             cls._validate_logic_element_shape(wire_key, element)
 
     @classmethod
@@ -3025,9 +3027,9 @@ class FilterSet(
         * a field or lookup the lookup table does not hold raises instead
           of being written as a form key django-filter ignores;
         * a dict value that survives ``normalize_input_value`` on a
-          NON-range filter raises via ``_require_range_patch_filter`` --
-          the dict patch shape is reserved for the positional range
-          patch, and any other dict would be splatted into unknown
+          NON-range filter raises via ``_reject_dict_form_value`` --
+          only the positional range patch (its own ``_RangeFormPatch``
+          type) merges, and any other dict would be splatted into unknown
           form-data keys the form silently ignores (the
           explicit-filter-applies-nothing failure mode).
         """
@@ -3054,7 +3056,7 @@ class FilterSet(
                 "skip every check_* permission gate.",
             )
 
-        lookups_by_attr = (
+        lookups_by_attr: Mapping[str, Mapping[str, FormKeyedFilter]] = (
             filter_lookup_table(cls).by_input_attr if cls._meta.model is not None else {}
         )
 
@@ -3086,10 +3088,11 @@ class FilterSet(
                 field.raw_value,
             ):
                 normalized = normalize_input_value(filter_instance, value, field_name=form_key)
-                if isinstance(normalized, dict):
+                if isinstance(normalized, _RangeFormPatch):
                     # Range-filter patch: positional form keys for one lookup.
-                    cls._require_range_patch_filter(filter_instance, form_key, value)
                     data.update(normalized)
+                elif isinstance(normalized, dict):
+                    cls._reject_dict_form_value(filter_instance, form_key, value)
                 else:
                     # An element-binding integer ``__in`` is range-coerced (and
                     # empty-aware) by ``IntegerInFilter`` at filter time, not here
@@ -3152,18 +3155,18 @@ class FilterSet(
         return entries
 
     @classmethod
-    def _require_range_patch_filter(
+    def _reject_dict_form_value(
         cls,
         filter_instance: Filter,
         form_key: str,
         lookup_value: object,
-    ) -> None:
-        """Fail loud when a NON-range filter's normalized value is a dict patch.
+    ) -> NoReturn:
+        """Fail loud when a filter's normalized value is a dict other than the range patch.
 
-        ``normalize_input_value`` returns a ``dict`` patch for exactly one
+        ``normalize_input_value`` returns a multi-key patch for exactly one
         legitimate shape: the range family's positional
-        ``{<field>_0, <field>_1}`` patch. A dict coming back from any OTHER
-        filter class means the raw value was itself a dict-shaped garbage
+        ``{<field>_0, <field>_1}`` patch, typed ``_RangeFormPatch``. A plain dict
+        coming back from a filter means the raw value was itself a dict-shaped garbage
         value that the catch-all normalization passed through verbatim --
         a partial operator bag with unknown keys
         (``{"name": {"nope": "x"}}``), a wire-spelled lookup the python-attr
@@ -3175,15 +3178,13 @@ class FilterSet(
         request returns unfiltered rows -- the same
         explicit-filter-applies-nothing failure the dict-bag walker exists to
         close. Only range-kind filters legitimately consume a multi-key patch,
-        so only they may merge.
+        and their arm always builds the typed patch, so only it merges.
 
         No generated input annotation for a non-range filter accepts an
         object, so a dict here never comes off the wire: it is always a
         malformed programmatic input (the mapping form of ``apply_sync`` /
         ``filter``), which is why rejecting it cannot break a typed query.
         """
-        if isinstance(filter_instance, (RangeFilter, django_filters.RangeFilter)):
-            return
         raise ConfigurationError(
             f"FilterSet {cls.__qualname__}: filter {form_key!r} received a dict "
             f"value ({_safe_arg_repr(lookup_value)}) but "
@@ -3248,11 +3249,22 @@ class FilterSet(
         # Disambiguate by the keys: a dict is an operator bag only when
         # EVERY key names a known lookup attr (``_LOOKUP_PYTHON_ATTRS``
         # - ``start`` / ``end`` are absent). Strawberry-input dataclass
-        # bags (the schema-driven path) always delegate unchanged.
-        if isinstance(raw_value, dict):
-            if raw_value and all(key in _LOOKUP_PYTHON_ATTRS for key in raw_value):
-                return list(raw_value.items())
-            return None
+        # bags (the schema-driven path) always delegate unchanged. The pairs
+        # are read once through the base ``dict.items`` slot and each key is
+        # reduced to an exact ``str`` before the membership test, so a dict
+        # subclass cannot report one set of pairs to the classification and
+        # another to the normalizer, and a key's own ``__eq__`` / ``__hash__``
+        # never answers for a lookup name.
+        if is_dict(raw_value):
+            pairs: list[tuple[str, object]] = []
+            for key, value in dict_items(raw_value):
+                if not isinstance(key, str):
+                    return None
+                lookup_attr = str.__str__(key)
+                if lookup_attr not in _LOOKUP_PYTHON_ATTRS:
+                    return None
+                pairs.append((lookup_attr, value))
+            return pairs or None
         return FilterSet._iter_input_items(raw_value)
 
     @classmethod
@@ -3791,7 +3803,7 @@ class FilterSet(
         form will run. A leaf is supplied when present and not ``None`` /
         ``UNSET``, whether or not the filter then skips its value.
         """
-        lookups_by_attr = (
+        lookups_by_attr: Mapping[str, Mapping[str, FormKeyedFilter]] = (
             filter_lookup_table(cls).by_input_attr if cls._meta.model is not None else {}
         )
         filters: list[tuple[str, Filter]] = []
@@ -4593,7 +4605,7 @@ class FilterSet(
         whatever the override returns (every row when it adds nothing), not the identity.
         """
         q = models.Q()
-        if not isinstance(tree_data, dict) or not tree_data:
+        if not is_dict(tree_data) or not tree_data:
             return q
         if _depth > cls._MAX_LOGIC_DEPTH:
             cls._raise_logic_depth_exceeded()

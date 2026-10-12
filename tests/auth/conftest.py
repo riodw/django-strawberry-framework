@@ -27,10 +27,10 @@ def _sync_boundary_spy(monkeypatch: pytest.MonkeyPatch) -> list[Callable[..., ob
     resolves the module-global name at call time, so patching the module attribute
     is observed.
     """
-    calls = []
+    calls: list[Callable[..., object]] = []
     real = run_in_one_sync_boundary
 
-    async def _spy(fn: Callable[..., object], *args: object, **kwargs: object):
+    async def _spy(fn: Callable[..., object], *args: object, **kwargs: object) -> object:
         calls.append(fn)
         return await real(fn, *args, **kwargs)
 

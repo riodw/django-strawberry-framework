@@ -105,6 +105,15 @@ from django.db.models.query import (
 from django.db.models.sql.where import ExtraWhere, WhereNode
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from ._narrowing import (
+    is_class,
+    is_exact_dict,
+    is_exact_list,
+    is_exact_list_or_tuple,
+    is_exact_set_or_frozenset,
+    is_exact_tuple,
+    is_exact_tuple_or_list,
+)
 from ._queryset_private import (
     queryset_db,
     set_queryset_fields,
@@ -123,7 +132,6 @@ if TYPE_CHECKING:
     from typing import Literal, Protocol, TypeAlias
 
     from django.db.models.query import BaseIterable
-    from typing_extensions import TypeIs
 
     from ..filters.sets import FilterSet
     from ..orders.sets import OrderSet
@@ -671,15 +679,6 @@ def _base_table_defect(query: object, concrete: type[models.Model]) -> str | Non
     return None
 
 
-def _is_class(value: object) -> TypeIs[type[object]]:
-    """Return whether ``value`` IS a class, asked of its real type.
-
-    ``issubclass(type(value), type)`` rather than ``isinstance(value, type)``: the real
-    type cannot be restated by a ``__class__`` property on the value.
-    """
-    return issubclass(type(value), type)
-
-
 class VisibleRowExists(Exists):
     """The framework's visibility test over related rows: Django's ``Exists``, under its own name.
 
@@ -892,7 +891,7 @@ def _template_params_defect(
     if "extra" not in node_dict:
         return None
     extra = node_dict["extra"]
-    if not _is_exact_dict(extra):
+    if not is_exact_dict(extra):
         return ("untrusted", f"{label} extra is a {_safe_type_name(extra)}")
     for key, value in extra.items():
         if type(key) is not str:
@@ -944,7 +943,7 @@ def _raw_sql_params_defect(params: object, label: str) -> tuple[str, str] | None
     exact builtin sequence shapes Django creates and the same exact inert leaf types the
     expression-graph proof accepts.
     """
-    if not _is_exact_sequence(params):
+    if not is_exact_list_or_tuple(params):
         return ("untrusted", f"{label} params is a {_safe_type_name(params)}")
     for param in params:
         if not _is_inert_value(param):
@@ -1156,35 +1155,6 @@ def _is_plain_container_value(value: object) -> TypeGuard[_PlainContainer]:
     return _is_plain_container(type(value))
 
 
-def _is_exact_dict(value: object) -> TypeGuard[dict[object, object]]:
-    """Return whether ``value`` is EXACTLY a builtin ``dict`` (never a subclass)."""
-    return type(value) is dict
-
-
-def _is_exact_tuple(value: object) -> TypeGuard[tuple[object, ...]]:
-    """Return whether ``value`` is EXACTLY a builtin ``tuple`` (never a subclass)."""
-    return type(value) is tuple
-
-
-def _is_exact_sequence(value: object) -> TypeGuard[list[object] | tuple[object, ...]]:
-    """Return whether ``value`` is EXACTLY a builtin ``list`` or ``tuple``."""
-    return type(value) in (list, tuple)
-
-
-def _is_exact_tuple_or_list(value: object) -> TypeGuard[list[object] | tuple[object, ...]]:
-    """``_is_exact_sequence`` comparing ``tuple`` first, for the sites that test in that order.
-
-    ``in`` compares by equality, so the order decides which class a metaclass ``__eq__``
-    is asked about first; each site keeps its own.
-    """
-    return type(value) in (tuple, list)
-
-
-def _is_exact_set(value: object) -> TypeGuard[set[object] | frozenset[object]]:
-    """Return whether ``value`` is EXACTLY a builtin ``set`` or ``frozenset``."""
-    return type(value) in (set, frozenset)
-
-
 def _expr_mapping_key_detail(label: str, key: object) -> str:  # noqa: ARG001 - shared detail signature
     """Non-string mapping-key detail for the expression-graph walk.
 
@@ -1224,7 +1194,7 @@ def _container_defect(
     state = walk.begin(value_id)
     if state is not _WalkState.ENTERED:
         return _walk_short_circuit(state, f"{label} contains a reference cycle")
-    if _is_exact_dict(value):
+    if is_exact_dict(value):
         for key, item in value.items():
             if type(key) is not str:
                 return ("untrusted", key_detail(label, key))
@@ -1453,7 +1423,7 @@ def _expr_sequence_defect(holder: object, walk: _GraphWalk, label: str) -> tuple
     """
     if holder is None or type(holder) is bool:
         return None
-    if not _is_exact_sequence(holder):
+    if not is_exact_list_or_tuple(holder):
         return ("untrusted", f"query {label} is a {_safe_type_name(holder)}")
     for item in holder:
         if type(item) is str:
@@ -1477,7 +1447,7 @@ def _raw_sql_sequence_defect(holder: object, label: str) -> tuple[str, str] | No
     """
     if holder is None:
         return None
-    if not _is_exact_tuple_or_list(holder):
+    if not is_exact_tuple_or_list(holder):
         return ("untrusted", f"query {label} is a {_safe_type_name(holder)}")
     for item in holder:
         if type(item) is not str:
@@ -1552,7 +1522,7 @@ def _where_tree_defect(node: object, walk: _GraphWalk) -> tuple[str, str] | None
     if connector is not None and type(connector) is not str:
         return ("untrusted", f"where node connector is a {_safe_type_name(connector)}")
     children = node_dict.get("children")
-    if children is not None and not _is_exact_sequence(children):
+    if children is not None and not is_exact_list_or_tuple(children):
         return ("untrusted", f"where node children is a {_safe_type_name(children)}")
     for child in children or ():
         child_defect = _where_tree_defect(child, walk)
@@ -1573,7 +1543,7 @@ def _select_related_defect(select_related: object) -> tuple[str, str] | None:
     """
     if isinstance(select_related, bool):
         return None
-    if not _is_exact_dict(select_related):
+    if not is_exact_dict(select_related):
         return ("untrusted", f"select_related is a {_safe_type_name(select_related)}")
     for key, value in select_related.items():
         if type(key) is not str:
@@ -1640,10 +1610,9 @@ def _query_payload_defect(query: object) -> tuple[str, str] | None:
             return ("untrusted", f"query external_aliases[{alias!r}] is a {_safe_type_name(flag)}")
     table_map: dict[str, object] = getattr(query, "table_map", None) or {}
     for table, aliases in table_map.items():
-        if type(aliases) is not list:
+        if not is_exact_list(aliases):
             return ("untrusted", f"query table_map[{table!r}] is a {_safe_type_name(aliases)}")
-        alias_list: list[object] = aliases
-        for table_alias in alias_list:
+        for table_alias in aliases:
             if type(table_alias) is not str:
                 return (
                     "untrusted",
@@ -1845,7 +1814,7 @@ def _normalized_uuid(value: uuid.UUID) -> uuid.UUID:
     """Return an exact ``uuid.UUID`` rebuilt from a UUID subclass's integer slot."""
     # basedpyright: typeshed declares UUID.int an instance attribute, not its __slots__ descriptor,
     # so it reads ``UUID.int`` as an ``int`` with no ``__get__``
-    return uuid.UUID(int=int.__index__(uuid.UUID.int.__get__(value)))  # pyright: ignore[reportAttributeAccessIssue]
+    return uuid.UUID(int=int.__index__(uuid.UUID.int.__get__(value)))  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
 
 
 # Plain-data bases a bound value may descend from, each paired with the primitive that
@@ -2234,7 +2203,7 @@ def _query_container_defect(query: object) -> tuple[str, str] | None:
         value: object = getattr(query, attr, None)
         if value is None:
             continue
-        if not _is_exact_dict(value):
+        if not is_exact_dict(value):
             return ("untrusted", f"query {attr} is a {_safe_type_name(value)}")
         for key in value:
             if type(key) is not str:
@@ -2246,7 +2215,7 @@ def _query_container_defect(query: object) -> tuple[str, str] | None:
         value = getattr(query, attr, None)
         if value is None:
             continue
-        if not _is_exact_set(value):
+        if not is_exact_set_or_frozenset(value):
             return ("untrusted", f"query {attr} is a {_safe_type_name(value)}")
         for member in value:
             if type(member) is not str:
@@ -2255,12 +2224,12 @@ def _query_container_defect(query: object) -> tuple[str, str] | None:
         extra: object = getattr(query, attr, None)
         if extra is None:
             continue
-        if not _is_exact_dict(extra):
+        if not is_exact_dict(extra):
             return ("untrusted", f"query {attr} is a {_safe_type_name(extra)}")
         for alias, payload in extra.items():
             if type(alias) is not str:
                 return ("untrusted", f"query {attr} has a non-string key")
-            if not _is_exact_tuple(payload) or len(payload) != 2:
+            if not is_exact_tuple(payload) or len(payload) != 2:
                 return ("untrusted", f"query {attr}[{alias!r}] has a malformed payload")
             statement, params = payload
             if type(statement) is not str:
@@ -2509,7 +2478,9 @@ def _rebuilt_prefetch_or_defect(
         return None, ("untrusted", f"{cls_name} prefetch path is not an exact str")
     if to_attr is not None and type(to_attr) is not str:
         return None, ("untrusted", f"{cls_name} prefetch to_attr is not an exact str or None")
-    rebuilt: _SealedPrefetch = Prefetch.__new__(Prefetch)
+    # basedpyright: ``Prefetch`` is generic only in django-stubs, so the bare class allocated
+    # here (it is not subscriptable at runtime) has no bound lookup parameter
+    rebuilt: _SealedPrefetch = Prefetch.__new__(Prefetch)  # pyright: ignore[reportUnknownVariableType]
     rebuilt_state: dict[str, object] = object.__getattribute__(rebuilt, "__dict__")
     rebuilt_state["prefetch_through"] = through
     rebuilt_state["prefetch_to"] = prefetch_to
@@ -2675,7 +2646,7 @@ def _sealed_prefetch_related_lookups(
     # loop below (spec-045 Decision 1).
     if lookups is None:
         return (), None
-    if not _is_exact_tuple_or_list(lookups):
+    if not is_exact_tuple_or_list(lookups):
         return None, ("untrusted", f"{cls_name} prefetch lookups is a {_safe_type_name(lookups)}")
     sealed_entries: list[str | _SealedPrefetch] = []
     for entry in lookups:
@@ -2826,7 +2797,7 @@ def _deferred_value_defect(value: object, walk: _GraphWalk, label: str) -> tuple
         for child in q_children:
             if type(child) is models.Q:
                 child_defect = _deferred_value_defect(child, walk, label)
-            elif _is_exact_tuple(child) and len(child) == 2 and type(child[0]) is str:
+            elif is_exact_tuple(child) and len(child) == 2 and type(child[0]) is str:
                 child_defect = _deferred_value_defect(child[1], walk, label)
             else:
                 return ("untrusted", f"{label} Q child is a {_safe_type_name(child)}")
@@ -2878,7 +2849,7 @@ def _bake_deferred_filter_or_defect(
     """
     # Exact-shape gate BEFORE the unpack: tuple unpacking dispatches ``__iter__``,
     # so an arbitrary object planted in the slot must be rejected without iteration.
-    if not _is_exact_tuple(deferred) or len(deferred) != 3:
+    if not is_exact_tuple(deferred) or len(deferred) != 3:
         return ("untrusted", f"{cls_name} deferred filter is malformed")
     negate, args, kwargs = deferred
     if type(negate) is not bool:
@@ -2888,9 +2859,9 @@ def _bake_deferred_filter_or_defect(
         # contract is that it runs genuine Django code over pre-proven arguments.
         # Django stores an exact ``bool`` here, so every other shape fails closed.
         return ("untrusted", f"{cls_name} deferred filter negate is a {_safe_type_name(negate)}")
-    if not _is_exact_dict(kwargs):
+    if not is_exact_dict(kwargs):
         return ("untrusted", f"{cls_name} deferred filter kwargs is a {_safe_type_name(kwargs)}")
-    if not _is_exact_tuple_or_list(args):
+    if not is_exact_tuple_or_list(args):
         return ("untrusted", f"{cls_name} deferred filter args is a {_safe_type_name(args)}")
     if PROHIBITED_FILTER_KWARGS.intersection(kwargs):
         return ("untrusted", f"{cls_name} deferred filter carries prohibited kwargs")
@@ -2939,14 +2910,14 @@ def _queryset_state_defect(state: Mapping[str, object], cls_name: str) -> tuple[
         return ("untrusted", f"{cls_name}._db is a {_safe_type_name(db)}")
     hints = state.get("_hints")
     if hints is not None:
-        if not _is_exact_dict(hints):
+        if not is_exact_dict(hints):
             return ("untrusted", f"{cls_name}._hints is a {_safe_type_name(hints)}")
         for key in hints:
             if type(key) is not str:
                 return ("untrusted", f"{cls_name}._hints has a non-string key")
     fields = state.get("_fields")
     if fields is not None:
-        if not _is_exact_tuple(fields):
+        if not is_exact_tuple(fields):
             return ("untrusted", f"{cls_name}._fields is a {_safe_type_name(fields)}")
         for name in fields:
             if type(name) is not str:
@@ -3107,7 +3078,7 @@ def _routing_hints_equal(cand_hints: object, orig_hints: object) -> bool:
         return True
     if cand_hints is None or orig_hints is None:
         return False
-    if not _is_exact_dict(cand_hints) or not _is_exact_dict(orig_hints):
+    if not is_exact_dict(cand_hints) or not is_exact_dict(orig_hints):
         return False
     if len(cand_hints) != len(orig_hints):
         return False
@@ -3185,7 +3156,7 @@ def _snapshot_routing_intent(queryset: object, method_name: str) -> _RoutingInte
         hints = dict(hints)
     if db is not None:
         return _RoutingIntent(db=db, hints=hints, effective_alias=db)
-    if not (isinstance(model, type) and issubclass(model, models.Model)):
+    if not (is_class(model) and issubclass(model, models.Model)):
         raise ConfigurationError(
             f"{method_name} could not resolve the source QuerySet's effective database "
             f"alias: its model is {_safe_type_name(model)}, so no router answer can be "
@@ -3219,7 +3190,7 @@ def _safe_routing_repr(value: object) -> str:
         return "None"
     if type(value) is str:
         return repr(value)
-    if _is_exact_dict(value):
+    if is_exact_dict(value):
         items: list[str] = []
         for k in sorted(value.keys(), key=str):
             k_repr = repr(k) if type(k) is str else _safe_arg_repr(k)
@@ -3670,9 +3641,8 @@ def _pk_membership_query_or_defect(
     if lost is not None:
         return None, ("combined", f"{query.combinator}: {lost}")
     combined: models.QuerySet[models.Model] = models.QuerySet(model=model, query=query)
-    rewritten: models.QuerySet[models.Model] = models.QuerySet(model=model).filter(
-        pk__in=combined.order_by().values("pk"),
-    )
+    unfiltered: models.QuerySet[models.Model] = models.QuerySet(model=model)
+    rewritten = unfiltered.filter(pk__in=combined.order_by().values("pk"))
     if query.order_by:
         rewritten = rewritten.order_by(
             *(_rewrite_order_term(entry, model) for entry in query.order_by),
@@ -4067,7 +4037,7 @@ def _row_source_model(state: Mapping[str, object], origin: str) -> type[models.M
     ``issubclass`` call safe to reach.
     """
     model = state.get("model")
-    if not _is_class(model) or not issubclass(model, models.Model):
+    if not is_class(model) or not issubclass(model, models.Model):
         raise ConfigurationError(
             f"{_sentence_start(origin)} a QuerySet subclass whose model is "
             f"{_safe_type_name(model)}; the row bound rebuilds a framework-owned "
@@ -4151,10 +4121,15 @@ def materialized_rows(value: object) -> list[object] | None:
     and the rows it does hold reach a caller through ``normalized_row_source``'s
     rebuild, which carries them onto a queryset this package built.
     """
-    if type(value) is not models.QuerySet:
+    if not _is_exact_queryset(value):
         return None
     # An exact ``QuerySet``'s ``_result_cache`` slot: its fetched rows, or ``None``.
     return cast("list[object] | None", _readable_queryset_state(value).get("_result_cache"))
+
+
+def _is_exact_queryset(value: object) -> TypeGuard[models.QuerySet[models.Model, object]]:
+    """Return whether ``value`` is EXACTLY Django's ``QuerySet`` (never a subclass)."""
+    return type(value) is models.QuerySet
 
 
 def _readable_queryset_state(

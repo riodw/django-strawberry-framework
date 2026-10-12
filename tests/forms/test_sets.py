@@ -985,7 +985,7 @@ def test_non_callable_get_form_fields_is_configuration_error(
 ):
     """A malformed hook declaration fails as typed configuration, not raw ``TypeError``."""
     form_cls = _contact_form() if mutation_base is DjangoFormMutation else _item_model_form()
-    meta_attrs = (
+    meta_attrs: dict[str, object] = (
         {"form_class": form_cls, "permission_classes": []}
         if mutation_base is DjangoFormMutation
         else {"form_class": form_cls, "operation": "create"}
@@ -1011,7 +1011,7 @@ def test_plain_function_get_form_fields_hook_is_configuration_error(
     names the contract, the exception type, and the underlying detail.
     """
     form_cls = _contact_form() if mutation_base is DjangoFormMutation else _item_model_form()
-    meta_attrs = (
+    meta_attrs: dict[str, object] = (
         {"form_class": form_cls, "permission_classes": []}
         if mutation_base is DjangoFormMutation
         else {"form_class": form_cls, "operation": "create"}
@@ -1045,7 +1045,7 @@ def test_raising_get_form_fields_body_is_configuration_error(
     declaration as a raw error; the original exception rides ``__cause__``.
     """
     form_cls = _contact_form() if mutation_base is DjangoFormMutation else _item_model_form()
-    meta_attrs = (
+    meta_attrs: dict[str, object] = (
         {"form_class": form_cls, "permission_classes": []}
         if mutation_base is DjangoFormMutation
         else {"form_class": form_cls, "operation": "create"}
@@ -1140,7 +1140,7 @@ def test_zero_arg_and_staticmethod_get_form_fields_hooks_are_accepted(
     """
     _declare_products_primaries()
     form_cls = _contact_form() if mutation_base is DjangoFormMutation else _item_model_form()
-    meta_attrs = (
+    meta_attrs: dict[str, object] = (
         {"form_class": form_cls, "permission_classes": []}
         if mutation_base is DjangoFormMutation
         else {"form_class": form_cls, "operation": "create"}
@@ -1156,8 +1156,11 @@ def test_zero_arg_and_staticmethod_get_form_fields_hooks_are_accepted(
         {"get_form_fields": hook, "Meta": type("Meta", (), meta_attrs)},
     )
     finalize_django_types()
+    assert issubclass(mutation_cls, (DjangoFormMutation, DjangoModelFormMutation))
+    assert mutation_cls._input_class is not None
     assert {
-        field.python_name for field in mutation_cls._input_class.__strawberry_definition__.fields
+        field.python_name
+        for field in get_object_definition(mutation_cls._input_class, strict=True).fields
     } == {"message"}
 
 
@@ -1170,7 +1173,7 @@ def test_malformed_get_form_fields_return_is_configuration_error(
     """Malformed hook returns fail through the typed configuration boundary for both bases."""
 
     form_cls = _contact_form() if mutation_base is DjangoFormMutation else _item_model_form()
-    meta_attrs = (
+    meta_attrs: dict[str, object] = (
         {"form_class": form_cls, "permission_classes": []}
         if mutation_base is DjangoFormMutation
         else {"form_class": form_cls, "operation": "create"}
@@ -1331,7 +1334,9 @@ def test_modelform_mutation_rejects_non_class_meta(invalid_meta: object):
 
         @definition_raises
         class BadModelMeta(DjangoModelFormMutation):
-            Meta = invalid_meta
+            # basedpyright: the non-class Meta is the hostile input under test; DjangoMutation
+            # declares Meta as a class
+            Meta = invalid_meta  # pyright: ignore[reportAssignmentType]
 
 
 @pytest.mark.parametrize(
@@ -1340,7 +1345,7 @@ def test_modelform_mutation_rejects_non_class_meta(invalid_meta: object):
         [],
         {},
         {"a": 1},
-        set(),
+        set[object](),
         123,
         True,
         None,

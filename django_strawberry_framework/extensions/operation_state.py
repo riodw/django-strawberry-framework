@@ -969,7 +969,9 @@ class DjangoExtensionsRunner(SchemaExtensionsRunner):
     # basedpyright: returns _BoundScope, not the base's StreamResultContextManager
     def on_stream_result(self, result: object) -> Any:  # pyright: ignore[reportExplicitAny]
         """The streaming-result scope, bound so the runner's contract is complete."""
-        return _BoundScope(self._scope(), self._operation_states, super().on_stream_result(result))
+        # basedpyright: Strawberry's schema/_graphql_core.py rebinds its graphql-core 3.3 result
+        # aliases in an ImportError fallback, so StreamExecutionResult carries Unknown
+        return _BoundScope(self._scope(), self._operation_states, super().on_stream_result(result))  # pyright: ignore[reportUnknownMemberType]
 
     @contextlib.contextmanager
     def resumed(self) -> Generator[None, None, None]:

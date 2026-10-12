@@ -7,7 +7,8 @@ and ``examples/fakeshop/test_query/test_uploads_api.py``.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from collections.abc import Callable
+from dataclasses import dataclass
 
 import pytest
 from django import forms
@@ -293,10 +294,17 @@ class _Conv(FieldConversionBase):
     __slots__ = ()
 
 
+@dataclass(frozen=True)
+class _FlagField:
+    """A flavor field reduced to the requiredness flag the converters read."""
+
+    required: bool
+
+
 def test_make_scalar_converter_defaults_to_field_required():
     """Omitted ``required_of`` reads ``field.required`` (the serializer default)."""
-    convert = make_scalar_converter(_Conv, str)
-    result = convert(SimpleNamespace(required=True))
+    convert: Callable[[_FlagField], _Conv] = make_scalar_converter(_Conv, str)
+    result = convert(_FlagField(required=True))
     assert isinstance(result, _Conv)
     assert result.annotation is str
     assert result.kind == SCALAR
@@ -305,8 +313,12 @@ def test_make_scalar_converter_defaults_to_field_required():
 
 def test_make_scalar_converter_uses_required_of_when_given():
     """``required_of`` is the form NullBoolean seam: it wins over ``field.required``."""
-    convert = make_scalar_converter(_Conv, bool | None, required_of=lambda _f: False)
-    result = convert(SimpleNamespace(required=True))
+    convert: Callable[[_FlagField], _Conv] = make_scalar_converter(
+        _Conv,
+        bool | None,
+        required_of=lambda _f: False,
+    )
+    result = convert(_FlagField(required=True))
     assert result.annotation == (bool | None)
     assert result.kind == SCALAR
     assert result.required is False
@@ -314,14 +326,18 @@ def test_make_scalar_converter_uses_required_of_when_given():
 
 def test_make_kind_converter_emits_fixed_kind_and_annotation():
     """Kind prechecks (file / multi-choice) share the same closure as scalar rows."""
-    convert = make_kind_converter(_Conv, FILE)
-    result = convert(SimpleNamespace(required=False))
+    convert: Callable[[_FlagField], _Conv] = make_kind_converter(_Conv, FILE)
+    result = convert(_FlagField(required=False))
     assert result.annotation is None
     assert result.kind == FILE
     assert result.required is False
 
-    listed = make_kind_converter(_Conv, SCALAR, annotation=list[str])
-    listed_result = listed(SimpleNamespace(required=True))
+    listed: Callable[[_FlagField], _Conv] = make_kind_converter(
+        _Conv,
+        SCALAR,
+        annotation=list[str],
+    )
+    listed_result = listed(_FlagField(required=True))
     assert listed_result.annotation == list[str]
     assert listed_result.kind == SCALAR
 

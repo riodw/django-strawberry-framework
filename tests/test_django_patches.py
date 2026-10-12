@@ -44,7 +44,8 @@ cursor before ``tearDownClass``.
 """
 
 import importlib
-from typing import NoReturn
+from types import FunctionType
+from typing import TYPE_CHECKING, NoReturn
 from unittest import mock
 
 import pytest
@@ -54,6 +55,14 @@ from django.test.testcases import SimpleTestCase, TestCase, TransactionTestCase
 
 from django_strawberry_framework import _django_patches
 from tests._idioms import call_remove_databases_failures, remove_databases_failures_function
+
+if TYPE_CHECKING:
+    from typing_extensions import TypeIs
+
+
+def _is_test_case_classmethod(value: object) -> "TypeIs[classmethod[SimpleTestCase, ..., object]]":
+    """Whether ``value`` is a ``classmethod`` descriptor, the shape every captured upstream has."""
+    return isinstance(value, classmethod)
 
 
 def _database_failure(wrapped: object):
@@ -275,7 +284,7 @@ def test_unpatched_remove_databases_failures_crashes_on_non_wrapper(
     # Premise check: the import-time capture is genuinely upstream's
     # method, not this package's patch (the module is imported - and the
     # capture taken - before ``apply()`` ever runs).
-    assert isinstance(captured, classmethod)
+    assert _is_test_case_classmethod(captured)
     assert captured.__func__.__module__ == "django.test.testcases"
 
     # ``monkeypatch`` saves the class ``__dict__`` entry, so teardown puts the patch
@@ -342,22 +351,26 @@ def test_apply_fails_loudly_when_upstream_body_drifts(monkeypatch: pytest.Monkey
     monkeypatch.setattr(SimpleTestCase, "_remove_databases_failures", classmethod(_foreign))
     assert _django_patches._patch_is_installed() is False
 
-    def _drifted(cls: type[SimpleTestCase]):
-        """A (cls)-shaped upstream whose body renamed the method list."""
-        for alias in connections:
-            if alias in cls.databases:
-                continue
-            connection = connections[alias]
-            # basedpyright: the renamed method list is the upstream drift under test;
-            # SimpleTestCase declares no such attribute
-            for name, _ in cls._forbidden_connection_methods:  # pyright: ignore[reportAttributeAccessIssue]
-                method = getattr(connection, name)
-                setattr(connection, name, method.wrapped)
+    class _DriftedShape:
+        # The slots the body reads; bare annotations create no attribute.
+        databases: set[str]
+        _forbidden_connection_methods: tuple[tuple[str, str], ...]
+
+        @classmethod
+        def _remove_databases_failures(cls):
+            """A (cls)-shaped upstream whose body renamed the method list."""
+            for alias in connections:
+                if alias in cls.databases:
+                    continue
+                connection = connections[alias]
+                for name, _ in cls._forbidden_connection_methods:
+                    method = getattr(connection, name)
+                    setattr(connection, name, method.wrapped)
 
     with mock.patch.object(
         _django_patches,
         "_original_remove_databases_failures",
-        classmethod(_drifted),
+        _DriftedShape.__dict__["_remove_databases_failures"],
     ):
         with pytest.raises(RuntimeError, match="upstream body"):
             _django_patches.apply()
@@ -452,9 +465,8 @@ def test_validation_refuses_an_unaudited_upstream_body():
         def _remove_databases_failures(cls):
             for alias in connections:
                 if alias not in cls.databases:
-                    # basedpyright: the unaudited body is only compared as source, never run;
-                    # Django declares no reset_disallowed_methods
-                    connections[alias].reset_disallowed_methods()  # pyright: ignore[reportAttributeAccessIssue]
+                    # Only compared as source, never run: closing is no audited body's step.
+                    connections[alias].close()
 
     with mock.patch.object(
         _django_patches,
@@ -597,14 +609,13 @@ def test_apply_fails_loudly_when_upstream_source_is_unavailable():
     bytecode-only Django distribution would present). The validator
     must refuse to supersede a body it cannot verify.
     """
-    namespace = {}
+    namespace: dict[str, object] = {}
     exec("def _sourceless(cls):\n    pass\n", namespace)
+    sourceless = namespace["_sourceless"]
+    assert isinstance(sourceless, FunctionType)
+    descriptor: classmethod[SimpleTestCase, ..., object] = classmethod(sourceless)
 
-    with mock.patch.object(
-        _django_patches,
-        "_original_remove_databases_failures",
-        classmethod(namespace["_sourceless"]),
-    ):
+    with mock.patch.object(_django_patches, "_original_remove_databases_failures", descriptor):
         with pytest.raises(RuntimeError, match="upstream body"):
             _django_patches.apply()
 

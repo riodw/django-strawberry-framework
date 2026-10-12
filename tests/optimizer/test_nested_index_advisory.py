@@ -69,7 +69,7 @@ from django.contrib.postgres.indexes import (
 )
 from django.db import models
 from django.db.models import QuerySet
-from django.db.models.expressions import Col
+from django.db.models.expressions import Col, Combinable
 from django.db.models.functions import Lower
 from django.db.models.options import Options
 from django.db.models.sql.query import Query
@@ -136,8 +136,12 @@ class _IdxParent(models.Model):
 class _IdxChildBare(models.Model):
     """Child with only the ForeignKey auto-index (no ``Meta.indexes``)."""
 
-    parent = models.ForeignKey(_IdxParent, on_delete=models.CASCADE, related_name="bare")
-    title = models.CharField(max_length=50)
+    parent: "models.ForeignKey[_IdxParent | Combinable, _IdxParent]" = models.ForeignKey(
+        _IdxParent,
+        on_delete=models.CASCADE,
+        related_name="bare",
+    )
+    title: "models.CharField[str | int | Combinable, str]" = models.CharField(max_length=50)
 
     class Meta:
         app_label = "tests"
@@ -148,8 +152,12 @@ class _IdxChildBare(models.Model):
 class _IdxChildComposite(models.Model):
     """Child carrying a composite index covering the window's leading columns."""
 
-    parent = models.ForeignKey(_IdxParent, on_delete=models.CASCADE, related_name="composite")
-    title = models.CharField(max_length=50)
+    parent: "models.ForeignKey[_IdxParent | Combinable, _IdxParent]" = models.ForeignKey(
+        _IdxParent,
+        on_delete=models.CASCADE,
+        related_name="composite",
+    )
+    title: "models.CharField[str | int | Combinable, str]" = models.CharField(max_length=50)
 
     class Meta:
         app_label = "tests"
@@ -161,8 +169,12 @@ class _IdxChildComposite(models.Model):
 class _IdxChildExpr(models.Model):
     """Child whose only index is an expression index (no ``.fields``)."""
 
-    parent = models.ForeignKey(_IdxParent, on_delete=models.CASCADE, related_name="expr")
-    title = models.CharField(max_length=50)
+    parent: "models.ForeignKey[_IdxParent | Combinable, _IdxParent]" = models.ForeignKey(
+        _IdxParent,
+        on_delete=models.CASCADE,
+        related_name="expr",
+    )
+    title: "models.CharField[str | int | Combinable, str]" = models.CharField(max_length=50)
 
     class Meta:
         app_label = "tests"
@@ -174,8 +186,12 @@ class _IdxChildExpr(models.Model):
 class _IdxChildMixed(models.Model):
     """Child whose index mirrors a mixed-direction order ``title ASC, id DESC``."""
 
-    parent = models.ForeignKey(_IdxParent, on_delete=models.CASCADE, related_name="mixed")
-    title = models.CharField(max_length=50)
+    parent: "models.ForeignKey[_IdxParent | Combinable, _IdxParent]" = models.ForeignKey(
+        _IdxParent,
+        on_delete=models.CASCADE,
+        related_name="mixed",
+    )
+    title: "models.CharField[str | int | Combinable, str]" = models.CharField(max_length=50)
 
     class Meta:
         app_label = "tests"
@@ -187,8 +203,12 @@ class _IdxChildMixed(models.Model):
 class _IdxChildReversed(models.Model):
     """Child whose index is the FULL reverse of an ascending order ``title, id``."""
 
-    parent = models.ForeignKey(_IdxParent, on_delete=models.CASCADE, related_name="reversed")
-    title = models.CharField(max_length=50)
+    parent: "models.ForeignKey[_IdxParent | Combinable, _IdxParent]" = models.ForeignKey(
+        _IdxParent,
+        on_delete=models.CASCADE,
+        related_name="reversed",
+    )
+    title: "models.CharField[str | int | Combinable, str]" = models.CharField(max_length=50)
 
     class Meta:
         app_label = "tests"
@@ -205,8 +225,12 @@ class _IdxChildPartial(models.Model):
     NOT be read as covering - it leaves absence UNPROVEN instead.
     """
 
-    parent = models.ForeignKey(_IdxParent, on_delete=models.CASCADE, related_name="partial")
-    title = models.CharField(max_length=50)
+    parent: "models.ForeignKey[_IdxParent | Combinable, _IdxParent]" = models.ForeignKey(
+        _IdxParent,
+        on_delete=models.CASCADE,
+        related_name="partial",
+    )
+    title: "models.CharField[str | int | Combinable, str]" = models.CharField(max_length=50)
 
     class Meta:
         app_label = "tests"
@@ -229,8 +253,12 @@ class _IdxChildUniqueConstraint(models.Model):
     NOT be told to create the same physical index again.
     """
 
-    parent = models.ForeignKey(_IdxParent, on_delete=models.CASCADE, related_name="uniqc")
-    title = models.CharField(max_length=50)
+    parent: "models.ForeignKey[_IdxParent | Combinable, _IdxParent]" = models.ForeignKey(
+        _IdxParent,
+        on_delete=models.CASCADE,
+        related_name="uniqc",
+    )
+    title: "models.CharField[str | int | Combinable, str]" = models.CharField(max_length=50)
 
     class Meta:
         app_label = "tests"
@@ -244,8 +272,12 @@ class _IdxChildUniqueConstraint(models.Model):
 class _IdxChildPartialUniqueConstraint(models.Model):
     """Child whose only unique constraint is PARTIAL (a ``condition``) -> uninspectable."""
 
-    parent = models.ForeignKey(_IdxParent, on_delete=models.CASCADE, related_name="uniqcpartial")
-    title = models.CharField(max_length=50)
+    parent: "models.ForeignKey[_IdxParent | Combinable, _IdxParent]" = models.ForeignKey(
+        _IdxParent,
+        on_delete=models.CASCADE,
+        related_name="uniqcpartial",
+    )
+    title: "models.CharField[str | int | Combinable, str]" = models.CharField(max_length=50)
 
     class Meta:
         app_label = "tests"
@@ -270,8 +302,12 @@ class _IdxChildOpclassUniqueConstraint(models.Model):
     exactly the ``Index.opclasses`` case one level up.
     """
 
-    parent = models.ForeignKey(_IdxParent, on_delete=models.CASCADE, related_name="uniqcopclass")
-    title = models.CharField(max_length=50)
+    parent: "models.ForeignKey[_IdxParent | Combinable, _IdxParent]" = models.ForeignKey(
+        _IdxParent,
+        on_delete=models.CASCADE,
+        related_name="uniqcopclass",
+    )
+    title: "models.CharField[str | int | Combinable, str]" = models.CharField(max_length=50)
 
     class Meta:
         app_label = "tests"
@@ -289,8 +325,12 @@ class _IdxChildOpclassUniqueConstraint(models.Model):
 class _IdxChildUniqueTogether(models.Model):
     """Child covering the window via legacy ``unique_together``."""
 
-    parent = models.ForeignKey(_IdxParent, on_delete=models.CASCADE, related_name="uniqt")
-    title = models.CharField(max_length=50)
+    parent: "models.ForeignKey[_IdxParent | Combinable, _IdxParent]" = models.ForeignKey(
+        _IdxParent,
+        on_delete=models.CASCADE,
+        related_name="uniqt",
+    )
+    title: "models.CharField[str | int | Combinable, str]" = models.CharField(max_length=50)
 
     class Meta:
         app_label = "tests"
@@ -308,8 +348,12 @@ class _IdxChildCheckConstraint(models.Model):
     absent, unaffected by the constraint's presence.
     """
 
-    parent = models.ForeignKey(_IdxParent, on_delete=models.CASCADE, related_name="ckc")
-    title = models.CharField(max_length=50)
+    parent: "models.ForeignKey[_IdxParent | Combinable, _IdxParent]" = models.ForeignKey(
+        _IdxParent,
+        on_delete=models.CASCADE,
+        related_name="ckc",
+    )
+    title: "models.CharField[str | int | Combinable, str]" = models.CharField(max_length=50)
 
     class Meta:
         app_label = "tests"
@@ -328,8 +372,12 @@ class _IdxChildUniqueConstraintMigrationLag(models.Model):
     absence stays unproven instead of trusting a stale unique shape.
     """
 
-    parent = models.ForeignKey(_IdxParent, on_delete=models.CASCADE, related_name="uclag")
-    title = models.CharField(max_length=50)
+    parent: "models.ForeignKey[_IdxParent | Combinable, _IdxParent]" = models.ForeignKey(
+        _IdxParent,
+        on_delete=models.CASCADE,
+        related_name="uclag",
+    )
+    title: "models.CharField[str | int | Combinable, str]" = models.CharField(max_length=50)
 
     class Meta:
         app_label = "tests"
@@ -347,8 +395,12 @@ class _IdxChildUniqueTogetherMigrationLag(models.Model):
     leaves the shape uninspectable, so absence stays unproven.
     """
 
-    parent = models.ForeignKey(_IdxParent, on_delete=models.CASCADE, related_name="utlag")
-    title = models.CharField(max_length=50)
+    parent: "models.ForeignKey[_IdxParent | Combinable, _IdxParent]" = models.ForeignKey(
+        _IdxParent,
+        on_delete=models.CASCADE,
+        related_name="utlag",
+    )
+    title: "models.CharField[str | int | Combinable, str]" = models.CharField(max_length=50)
 
     class Meta:
         app_label = "tests"
@@ -367,8 +419,12 @@ class _IdxChildGin(models.Model):
     connector-only window, but a window that also orders must fall to UNKNOWN.
     """
 
-    parent = models.ForeignKey(_IdxParent, on_delete=models.CASCADE, related_name="gin")
-    title = models.CharField(max_length=50)
+    parent: "models.ForeignKey[_IdxParent | Combinable, _IdxParent]" = models.ForeignKey(
+        _IdxParent,
+        on_delete=models.CASCADE,
+        related_name="gin",
+    )
+    title: "models.CharField[str | int | Combinable, str]" = models.CharField(max_length=50)
 
     class Meta:
         app_label = "tests"
@@ -380,10 +436,16 @@ class _IdxChildGin(models.Model):
 class _IdxMtiTagBase(models.Model):
     """Unmanaged multi-table-inheritance parent declaring a generic foreign key."""
 
-    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+")
-    object_id = models.PositiveIntegerField()
+    content_type: "models.ForeignKey[ContentType | Combinable, ContentType]" = models.ForeignKey(
+        ContentType,
+        on_delete=models.CASCADE,
+        related_name="+",
+    )
+    object_id: "models.PositiveIntegerField[float | int | str | Combinable, int]" = (
+        models.PositiveIntegerField()
+    )
     content_object = GenericForeignKey("content_type", "object_id")
-    label = models.TextField()
+    label: "models.TextField[str | Combinable, str]" = models.TextField()
 
     class Meta:
         app_label = "tests"
@@ -393,13 +455,17 @@ class _IdxMtiTagBase(models.Model):
 class _IdxMtiTag(_IdxMtiTagBase):
     """Multi-table child inheriting the generic link columns, which stay on the parent table."""
 
-    tag_base = models.OneToOneField(
-        _IdxMtiTagBase,
-        on_delete=models.CASCADE,
-        parent_link=True,
-        primary_key=True,
+    tag_base: "models.OneToOneField[_IdxMtiTagBase | Combinable, _IdxMtiTagBase]" = (
+        models.OneToOneField(
+            _IdxMtiTagBase,
+            on_delete=models.CASCADE,
+            parent_link=True,
+            primary_key=True,
+        )
     )
-    rank = models.IntegerField(default=0)
+    rank: "models.IntegerField[float | int | str | Combinable, int]" = models.IntegerField(
+        default=0,
+    )
 
     # basedpyright: Django's ModelBase pops a concrete model's Meta (only an abstract model keeps
     # one), so _IdxMtiTagBase has no Meta at run time for this one to subclass

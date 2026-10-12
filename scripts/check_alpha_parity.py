@@ -48,7 +48,7 @@ def main() -> int:
         ).count()
         if n_parity and n_justification:
             continue
-        missing = []
+        missing: list[str] = []
         if not n_parity:
             missing.append("no parity link")
         if not n_justification:

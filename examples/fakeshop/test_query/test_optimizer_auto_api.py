@@ -11,6 +11,7 @@ requests.
 """
 
 from collections.abc import Callable, Iterator
+from typing import TypeAlias
 
 import pytest
 import strawberry
@@ -305,7 +306,10 @@ query {
 }
 """
 
-_HINT_PAGE_DATA = {
+#: One shelf's nested ``booksConnection`` window: ``edges`` of ``{"node": {"title": ...}}``.
+_HintPage: TypeAlias = dict[str, list[dict[str, dict[str, str]]]]
+
+_HINT_PAGE_DATA: dict[str, list[dict[str, str | _HintPage]]] = {
     "shelves": [
         {
             "code": "A",

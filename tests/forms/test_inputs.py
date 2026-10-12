@@ -78,6 +78,8 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils.inputs import InputFieldSpec
 
 if TYPE_CHECKING:
+    from django.db.models import Model
+
     from django_strawberry_framework.forms.inputs import FormClass
 
 
@@ -106,7 +108,7 @@ def _isolate_registry_and_ledger() -> Iterator[None]:
 
 def _field_map(input_cls: type) -> dict[str, StrawberryField]:
     """Return ``python_name -> StrawberryField`` for a built input class."""
-    return {f.python_name: f for f in input_cls.__strawberry_definition__.fields}
+    return {f.python_name: f for f in get_object_definition(input_cls, strict=True).fields}
 
 
 def _is_optional(field: StrawberryField) -> bool:
@@ -369,7 +371,7 @@ def test_create_input_required_and_optional_shapes():
 
     # ``is_private`` (BooleanField, not required) is optional + UNSET.
     assert _is_optional(fields["is_private"])
-    assert fields["is_private"].default is UNSET
+    assert fields["is_private"].default_value is UNSET
 
 
 def test_partial_input_model_backed_optional_extra_field_still_required():
@@ -381,7 +383,7 @@ def test_partial_input_model_backed_optional_extra_field_still_required():
     # Model-backed fields are forced optional + UNSET in the partial input.
     for name in ("name", "category_id", "is_private"):
         assert _is_optional(fields[name]), name
-        assert fields[name].default is UNSET, name
+        assert fields[name].default_value is UNSET, name
 
     # The non-model required ``confirm`` keeps its declared ``field.required``
     # (the load-bearing partial assertion).
@@ -417,7 +419,7 @@ def test_null_boolean_field_is_optional_even_when_django_required():
     cre, _, _, _ = build_form_inputs(FlagForm, operation_kind=FORM)
     fields = _field_map(cre)
     assert _is_optional(fields["flag"])
-    assert fields["flag"].default is UNSET
+    assert fields["flag"].default_value is UNSET
     assert not _is_optional(fields["name"])
 
 
@@ -467,7 +469,7 @@ def test_column_backed_null_boolean_is_optional():
     cre, _, _, _ = build_form_inputs(NullableSpecimenForm, operation_kind=CREATE)
     fields = _field_map(cre)
     assert _is_optional(fields["flag"])
-    assert fields["flag"].default is UNSET
+    assert fields["flag"].default_value is UNSET
 
 
 def test_create_guard_ignores_django_required_null_boolean():
@@ -1161,8 +1163,7 @@ def test_digit_boundary_form_fields_survive_distinct_in_sdl():
         ("field2", "field2"),
     }
 
-    # basedpyright: a GraphQL argument; Strawberry reads its type from the __annotations__ assigned below
-    def _probe(inp) -> int:  # pyright: ignore[reportMissingParameterType, reportUnknownParameterType]
+    def _probe(inp: object) -> int:
         return 1
 
     _probe.__annotations__ = {"inp": cre, "return": int}
@@ -1191,7 +1192,7 @@ def test_model_choice_field_with_none_queryset_is_fail_loud():
     """
 
     class LateQuerysetForm(forms.Form):
-        target = forms.ModelChoiceField(queryset=None)
+        target: forms.ModelChoiceField[Model] = forms.ModelChoiceField(queryset=None)
 
     with pytest.raises(ConfigurationError) as exc:
         build_form_inputs(LateQuerysetForm, operation_kind=FORM)

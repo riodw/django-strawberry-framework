@@ -87,6 +87,7 @@ from ..mutations.sets import (
 from ..mutations.sets import (
     _validate_permission_classes as _validate_mutation_permission_classes,
 )
+from ..utils._narrowing import is_mapping
 from ..utils.inputs import normalize_field_name_sequence
 from .inputs import (
     SERIALIZER_INPUTS_MODULE_PATH,
@@ -154,13 +155,13 @@ def _validate_schema_field_map(name: str, field_map: object) -> dict[str, DRFFie
     configuration error instead of leaking ``AttributeError`` / ``TypeError`` during class
     creation or finalization.
     """
-    if not isinstance(field_map, Mapping):
+    if not is_mapping(field_map):
         raise ConfigurationError(
             f"SerializerMutation {name}.get_serializer_for_schema() must return a mapping of "
             f"field name -> DRF serializers.Field; got {_safe_arg_repr(field_map)}.",
         )
     # Keys and values stay ``object`` until the per-entry guards below.
-    schema_map: Mapping[object, object] = field_map
+    schema_map = field_map
     try:
         entries = tuple(schema_map.items())
     except BaseException as exc:

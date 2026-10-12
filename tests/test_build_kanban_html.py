@@ -81,13 +81,13 @@ def test_a_card_ref_the_shell_cannot_resolve_is_reported(text: str) -> None:
 
 def test_a_computed_token_resolves_in_a_board_doc_body_but_not_in_card_text() -> None:
     """Only ``BoardDoc`` bodies get the computed set; neither export fills card text."""
-    assert unresolvable_placeholders("{{active_version}}", reference_orders=set()) == [
+    assert unresolvable_placeholders("{{active_version}}", reference_orders=set[int]()) == [
         "{{active_version}}",
     ]
     assert (
         unresolvable_placeholders(
             "{{active_version}}",
-            reference_orders=set(),
+            reference_orders=set[int](),
             computed_tokens={"active_version"},
         )
         == []

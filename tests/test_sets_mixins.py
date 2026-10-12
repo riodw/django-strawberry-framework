@@ -344,7 +344,7 @@ def test_related_set_target_mixin_gates_resolved_targets_at_the_seam():
     class _FamilyTarget:
         pass
 
-    validated = []
+    validated: list[object] = []
 
     class _FutureFamily(RelatedSetTargetMixin):
         _target_attr = "_target"
@@ -791,7 +791,7 @@ def test_order_normalizer_consumes_the_family_permission_traversal(
     from django_strawberry_framework.sets_mixins import ActiveInputPermissionAttrs
 
     sentinel = object()
-    captured = {}
+    captured: dict[str, SetInputTraversal] = {}
 
     def _spy(set_cls: type[object], input_value: object, config: SetInputTraversal):
         captured["config"] = config

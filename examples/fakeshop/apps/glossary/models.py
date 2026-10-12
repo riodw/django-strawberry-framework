@@ -9,20 +9,34 @@ live as rows.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
 from django.db import models
 from typing_extensions import override
 
 if TYPE_CHECKING:
+    from datetime import date, datetime
+
+    from django.db.models.expressions import Combinable
     from django.db.models.fields.related_descriptors import RelatedManager
+
+    _M = TypeVar("_M", bound=models.Model)
+
+    # Each field's descriptor types as django-stubs declares them (set type, get type), spelled
+    # out because the checker runs without the django-stubs mypy plugin that would infer them;
+    # ``null=True`` adds ``None`` to both.
+    _DateTime: TypeAlias = models.DateTimeField[str | datetime | date | Combinable, datetime]
+    _FK: TypeAlias = models.ForeignKey[_M | Combinable, _M]
+    _PositiveInt: TypeAlias = models.PositiveIntegerField[float | int | str | Combinable, int]
+    _Slug: TypeAlias = models.SlugField[str | int | Combinable, str]
+    _Text: TypeAlias = models.TextField[str | Combinable, str]
 
 
 class TimeStampedModel(models.Model):
     """Audit timestamps inherited by every glossary model."""
 
-    created_date = models.DateTimeField(auto_now_add=True, editable=False)
-    updated_date = models.DateTimeField(auto_now=True, editable=False)
+    created_date: _DateTime = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_date: _DateTime = models.DateTimeField(auto_now=True, editable=False)
 
     class Meta:
         abstract = True
@@ -31,10 +45,10 @@ class TimeStampedModel(models.Model):
 class LookupBase(TimeStampedModel):
     """Common shape for glossary lookup tables."""
 
-    key = models.SlugField(unique=True)
-    label = models.TextField()
-    order = models.PositiveIntegerField(default=0)
-    description = models.TextField(blank=True, default="")
+    key: _Slug = models.SlugField(unique=True)
+    label: _Text = models.TextField()
+    order: _PositiveInt = models.PositiveIntegerField(default=0)
+    description: _Text = models.TextField(blank=True, default="")
 
     class Meta(TimeStampedModel.Meta):
         abstract = True
@@ -70,25 +84,27 @@ class GlossaryCategory(LookupBase):
 class GlossaryTerm(TimeStampedModel):
     """One glossary entry with a stable markdown anchor."""
 
-    title = models.TextField(unique=True)
-    title_sort = models.TextField()
-    anchor = models.SlugField(max_length=200, unique=True)
-    status = models.ForeignKey(
+    title: _Text = models.TextField(unique=True)
+    title_sort: _Text = models.TextField()
+    anchor: _Slug = models.SlugField(max_length=200, unique=True)
+    status: _FK[GlossaryStatus] = models.ForeignKey(
         GlossaryStatus,
         related_name="terms",
         on_delete=models.PROTECT,
     )
-    status_text = models.TextField()
-    body = models.TextField(blank=True, default="")
-    entry_order = models.PositiveIntegerField(default=0)
-    index_order = models.PositiveIntegerField(default=0)
-    categories = models.ManyToManyField(
-        GlossaryCategory,
-        through="GlossaryCategoryMembership",
-        related_name="terms",
-        blank=True,
+    status_text: _Text = models.TextField()
+    body: _Text = models.TextField(blank=True, default="")
+    entry_order: _PositiveInt = models.PositiveIntegerField(default=0)
+    index_order: _PositiveInt = models.PositiveIntegerField(default=0)
+    categories: models.ManyToManyField[GlossaryCategory, GlossaryCategoryMembership] = (
+        models.ManyToManyField(
+            GlossaryCategory,
+            through="GlossaryCategoryMembership",
+            related_name="terms",
+            blank=True,
+        )
     )
-    related_terms = models.ManyToManyField(
+    related_terms: models.ManyToManyField[GlossaryTerm, GlossaryTermLink] = models.ManyToManyField(
         "self",
         through="GlossaryTermLink",
         symmetrical=False,
@@ -148,7 +164,7 @@ class GlossaryTerm(TimeStampedModel):
 class GlossaryAlias(TimeStampedModel):
     """Alternate spelling or prose label that resolves to a canonical term."""
 
-    term = models.ForeignKey(
+    term: _FK[GlossaryTerm] = models.ForeignKey(
         GlossaryTerm,
         related_name="aliases",
         on_delete=models.CASCADE,
@@ -156,8 +172,8 @@ class GlossaryAlias(TimeStampedModel):
     # Key column Django adds beside ``term``, declared for the type checker;
     # ``None`` until assigned on an unsaved row.
     term_id: int | None
-    label = models.TextField()
-    normalized = models.TextField()
+    label: _Text = models.TextField()
+    normalized: _Text = models.TextField()
 
     class Meta(TimeStampedModel.Meta):
         ordering = [
@@ -201,12 +217,12 @@ class GlossaryTermLinkKind(LookupBase):
 class GlossaryTermLink(TimeStampedModel):
     """A normalized in-glossary edge such as a ``See also`` reference."""
 
-    source_term = models.ForeignKey(
+    source_term: _FK[GlossaryTerm] = models.ForeignKey(
         GlossaryTerm,
         related_name="outgoing_links",
         on_delete=models.CASCADE,
     )
-    target_term = models.ForeignKey(
+    target_term: _FK[GlossaryTerm] = models.ForeignKey(
         GlossaryTerm,
         related_name="incoming_links",
         on_delete=models.CASCADE,
@@ -214,13 +230,13 @@ class GlossaryTermLink(TimeStampedModel):
     # Key column Django adds beside ``target_term``, declared for the type checker;
     # ``None`` until assigned on an unsaved row.
     target_term_id: int | None
-    kind = models.ForeignKey(
+    kind: _FK[GlossaryTermLinkKind] = models.ForeignKey(
         GlossaryTermLinkKind,
         related_name="links",
         on_delete=models.PROTECT,
     )
-    raw_label = models.TextField(blank=True, default="")
-    order = models.PositiveIntegerField(default=0)
+    raw_label: _Text = models.TextField(blank=True, default="")
+    order: _PositiveInt = models.PositiveIntegerField(default=0)
 
     class Meta(TimeStampedModel.Meta):
         ordering = [
@@ -263,12 +279,12 @@ class GlossaryTermLink(TimeStampedModel):
 class GlossaryCategoryMembership(TimeStampedModel):
     """Ordered membership of one term in one browse category."""
 
-    category = models.ForeignKey(
+    category: _FK[GlossaryCategory] = models.ForeignKey(
         GlossaryCategory,
         related_name="memberships",
         on_delete=models.CASCADE,
     )
-    term = models.ForeignKey(
+    term: _FK[GlossaryTerm] = models.ForeignKey(
         GlossaryTerm,
         related_name="category_memberships",
         on_delete=models.CASCADE,
@@ -277,7 +293,7 @@ class GlossaryCategoryMembership(TimeStampedModel):
     # ``None`` until assigned on an unsaved row.
     category_id: int | None
     term_id: int | None
-    order = models.PositiveIntegerField(default=0)
+    order: _PositiveInt = models.PositiveIntegerField(default=0)
 
     class Meta(TimeStampedModel.Meta):
         ordering = [
@@ -311,7 +327,7 @@ class GlossaryCategoryMembership(TimeStampedModel):
 class GlossarySpecMention(TimeStampedModel):
     """A spec terms-CSV row resolved to a canonical glossary term."""
 
-    term = models.ForeignKey(
+    term: _FK[GlossaryTerm] = models.ForeignKey(
         GlossaryTerm,
         related_name="spec_mentions",
         on_delete=models.CASCADE,
@@ -319,10 +335,10 @@ class GlossarySpecMention(TimeStampedModel):
     # Key column Django adds beside ``term``, declared for the type checker;
     # ``None`` until assigned on an unsaved row.
     term_id: int | None
-    spec_path = models.TextField()
-    term_text = models.TextField()
-    notes = models.TextField(blank=True, default="")
-    order = models.PositiveIntegerField(default=0)
+    spec_path: _Text = models.TextField()
+    term_text: _Text = models.TextField()
+    notes: _Text = models.TextField(blank=True, default="")
+    order: _PositiveInt = models.PositiveIntegerField(default=0)
 
     class Meta(TimeStampedModel.Meta):
         ordering = [
@@ -363,7 +379,7 @@ class GlossarySpecMention(TimeStampedModel):
 class GlossarySourceLink(TimeStampedModel):
     """A non-glossary link embedded in a term body."""
 
-    term = models.ForeignKey(
+    term: _FK[GlossaryTerm] = models.ForeignKey(
         GlossaryTerm,
         related_name="source_links",
         on_delete=models.CASCADE,
@@ -371,10 +387,10 @@ class GlossarySourceLink(TimeStampedModel):
     # Key column Django adds beside ``term``, declared for the type checker;
     # ``None`` until assigned on an unsaved row.
     term_id: int | None
-    label = models.TextField()
-    target = models.TextField()
-    kind = models.TextField(blank=True, default="")
-    order = models.PositiveIntegerField(default=0)
+    label: _Text = models.TextField()
+    target: _Text = models.TextField()
+    kind: _Text = models.TextField(blank=True, default="")
+    order: _PositiveInt = models.PositiveIntegerField(default=0)
 
     class Meta(TimeStampedModel.Meta):
         ordering = [

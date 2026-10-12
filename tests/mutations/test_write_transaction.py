@@ -75,7 +75,7 @@ from django_strawberry_framework.utils.write_transaction import (
     resolve_write_alias,
     write_pipeline,
 )
-from tests._idioms import definition_raises
+from tests._idioms import definition_raises, is_object_dict
 from tests._info import make_info
 
 if TYPE_CHECKING:
@@ -618,14 +618,17 @@ class _HygieneWebsocketCommunicator(WebsocketCommunicator):
     """
 
     @override
-    async def send_input(self, message: object):
-        return await AsgirefApplicationCommunicator.send_input(self, message)
+    async def send_input(self, message: object) -> None:
+        # basedpyright: asgiref leaves send_input's message parameter unannotated, so the base
+        # method reads as partially Unknown
+        await AsgirefApplicationCommunicator.send_input(self, message)  # pyright: ignore[reportUnknownMemberType]
 
     @override
     async def receive_output(self, timeout: float = 1) -> dict[str, object]:
         # basedpyright: asgiref leaves timeout unannotated, so the checker infers int from its
-        # default; the runtime accepts the float channels' communicator passes
-        return await AsgirefApplicationCommunicator.receive_output(self, timeout)  # pyright: ignore[reportArgumentType]
+        # default (the runtime accepts the float channels' communicator passes), and leaves the
+        # return unannotated, so the received message reads as Unknown
+        return await AsgirefApplicationCommunicator.receive_output(self, timeout)  # pyright: ignore[reportArgumentType, reportUnknownVariableType]
 
 
 class _NoHttpApplication(ASGIHandler):
@@ -693,13 +696,23 @@ async def _receive_result(communicator: WebsocketCommunicator, *, op_id: str = "
     return frame
 
 
+def _json_member(container: object, key: str) -> object:
+    """``container[key]`` of a JSON object; a missing or empty container has no members."""
+    if not container:
+        return None
+    assert is_object_dict(container), container
+    return container.get(key)
+
+
 def _reported_name(frame: _JSONFrame) -> str | None:
     """The node name a success frame reports, or ``None`` for anything else."""
-    payload = frame.get("payload") or {}
-    if frame.get("type") != "next" or payload.get("errors"):
+    payload: object = frame.get("payload")
+    if frame.get("type") != "next" or _json_member(payload, "errors"):
         return None
-    node = ((payload.get("data") or {}).get("write0") or {}).get("node") or {}
-    return node.get("name")
+    write = _json_member(_json_member(payload, "data"), "write0")
+    name = _json_member(_json_member(write, "node"), "name")
+    assert name is None or isinstance(name, str), name
+    return name
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1025,7 +1038,7 @@ async def test_every_success_payload_under_steady_pings_is_a_committed_row():
 
         pinging = asyncio.create_task(_ping_steadily())
         try:
-            reported = []
+            reported: list[str | None] = []
             for index, name in enumerate(names):
                 await _send_create(writer, name, op_id=str(index))
                 reported.append(_reported_name(await _receive_result(writer, op_id=str(index))))
@@ -1919,6 +1932,8 @@ def test_snapshot_target_state_fingerprints_mutable_container_values():
     )
 
     instance = ScalarSpecimen(payload={"tier": "gold", "tags": ["a"]})
+    payload = instance.payload
+    assert is_object_dict(payload)
 
     snapshot = snapshot_target_state(instance)
     # Captured as a structural fingerprint independent of the live container.
@@ -1930,13 +1945,13 @@ def test_snapshot_target_state_fingerprints_mutable_container_values():
         assert_no_target_drift("JsonCleanMut", instance)
         # Mutating the JSON value IN PLACE - a by-reference snapshot would alias
         # the very object being mutated and miss this; the fingerprint catches it.
-        instance.payload["tier"] = "platinum"
+        payload["tier"] = "platinum"
         with pytest.raises(ConfigurationError, match="mutated in memory"):
             assert_no_target_drift("JsonDriftMut", instance)
         # A value that cannot be RE-fingerprinted at all (a reference cycle
         # planted after the capture) still fails closed with the typed pipeline
         # error - never a raw exception, and never a silent pass.
-        instance.payload["self"] = instance.payload
+        payload["self"] = payload
         with pytest.raises(ConfigurationError, match="reference cycle"):
             assert_no_target_drift("JsonCycleMut", instance)
 
@@ -2003,7 +2018,9 @@ def test_assert_no_target_drift_fails_closed_on_a_hostile_eq():
     item = product_models.Item.objects.create(name="GuardEq", category=category)
     with write_pipeline("default", lock=False):
         require_write_pipeline().target_state = snapshot_target_state(item)
-        item.name = _RaisingEq()  # planted by the code the check polices
+        # basedpyright: the hostile value planted by the code the check polices is the input
+        # under test; the column's set type is str | Combinable
+        item.name = _RaisingEq()  # pyright: ignore[reportAttributeAccessIssue]
         with pytest.raises(ConfigurationError, match="mutated in memory"):
             assert_no_target_drift("GuardEqMut", item)
 

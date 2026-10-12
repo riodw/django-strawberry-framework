@@ -678,6 +678,60 @@ def test_audit_binds_cited_run_ids_and_fails_unknown_or_foreign_ones(
     assert lines[3].startswith("  FAIL review-20260101T000000-cccccc: no run log entry")
 
 
+def test_audit_fails_a_run_that_recorded_no_package_file_and_no_exit(
+    layout: workspace.Layout,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A run log line may hold ``null`` for both; the audit reports it, it does not crash."""
+
+    def _layout_base(_root: Path) -> Path:
+        return layout.base
+
+    monkeypatch.setattr(workspace, "workspace_base", _layout_base)
+    copy = layout.slot_dir("slot-1")
+    unresolved = {
+        "run_id": "review-20260924T120000-aaaaaa",
+        "address": "review/pkg/a.py/perf-1",
+        "directory": str(copy),
+        "package_file": None,
+        "package_digest": "sha256:" + "0" * 64,
+        "databases": {"default": str(copy / "examples" / "fakeshop" / "db.sqlite3")},
+        "cell": "default",
+        "exit": None,
+        "copy_edits": list[str](),
+        "shared_moves": list[str](),
+    }
+    _write(layout.run_log, json.dumps(unresolved) + "\n")
+    record = _write(tmp_path / "rev.md", "Proof: review-20260924T120000-aaaaaa.\n")
+
+    lines, ok = workspace.audit_record(layout.repo_root, record)
+
+    assert ok is False
+    assert lines[1].startswith("  FAIL review-20260924T120000-aaaaaa: review/pkg/a.py/perf-1")
+    assert "exit=None" in lines[1]
+    assert lines[1].endswith("[no package `__file__` was recorded]")
+
+
+def test_audit_refuses_a_run_log_line_missing_a_field(
+    layout: workspace.Layout,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A line without every field the audit reads is a malformed log, not a passing run."""
+
+    def _layout_base(_root: Path) -> Path:
+        return layout.base
+
+    monkeypatch.setattr(workspace, "workspace_base", _layout_base)
+    partial = {"run_id": "review-20260924T120000-aaaaaa", "address": "review/pkg/a.py/perf-1"}
+    _write(layout.run_log, json.dumps(partial) + "\n")
+    record = _write(tmp_path / "rev.md", "Proof: review-20260924T120000-aaaaaa.\n")
+
+    with pytest.raises(workspace.WorkspaceError, match="a run log line has an unexpected shape"):
+        workspace.audit_record(layout.repo_root, record)
+
+
 # --------------------------------------------------------------------------------------------
 # Postgres identity and database matching
 # --------------------------------------------------------------------------------------------
@@ -690,7 +744,10 @@ def test_postgres_finds_the_fakeshop_container_by_identity_not_port(
     inspect = [
         {
             "Id": "aaaaaaaaaaaa1111",
-            "Config": {"Env": ["POSTGRES_USER=medtrics", "POSTGRES_DB=medtrics"], "Labels": {}},
+            "Config": {
+                "Env": ["POSTGRES_USER=medtrics", "POSTGRES_DB=medtrics"],
+                "Labels": dict[str, str](),
+            },
             "NetworkSettings": {"Ports": {"5432/tcp": [{"HostPort": "2345"}]}},
         },
         {
@@ -1159,7 +1216,7 @@ def test_item_diff_gives_identical_bytes_from_two_clones_of_one_change(tmp_path:
     _git(origin, "init", "-q")
     _git(origin, "add", "-A")
     _git(origin, "commit", "-q", "-m", "initial")
-    diffs = []
+    diffs: list[str] = []
     for name in ("first-copy", "second"):
         clone = tmp_path / name
         _git(tmp_path, "clone", "-q", str(origin), str(clone))

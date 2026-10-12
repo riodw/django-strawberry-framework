@@ -7,8 +7,9 @@ Shipped filter/order input names live in
 """
 
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 import pytest
 import strawberry
@@ -45,6 +46,9 @@ from django_strawberry_framework.utils.inputs import (
 )
 from tests._idioms import module_binding
 from tests._soft_dependency import blocked_modules
+
+if TYPE_CHECKING:
+    from django_strawberry_framework.utils.inputs import SetInputNamespace
 
 # ---------------------------------------------------------------------------
 # build_strawberry_input_class
@@ -389,7 +393,7 @@ def test_make_set_input_namespace_returns_heavy_ledger_field_specs_materialize_c
     """
     module_path = __name__
     module = sys.modules[module_path]
-    ledger, field_specs, materialize, clear = make_set_input_namespace(
+    namespace: SetInputNamespace[ClassBasedTypeNameMixin] = make_set_input_namespace(
         module_path,
         "ProbeSet",
         factory_module="django_strawberry_framework.not_a_real_factory_module",
@@ -398,8 +402,12 @@ def test_make_set_input_namespace_returns_heavy_ledger_field_specs_materialize_c
         set_module="django_strawberry_framework.not_a_real_set_module",
         set_class_name="ProbeSet",
     )
+    ledger, field_specs, materialize, clear = namespace
     assert ledger == {}
     assert field_specs == {}
+
+    class _ProbeSet(ClassBasedTypeNameMixin):
+        pass
 
     class _ProbeInput:
         pass
@@ -407,7 +415,7 @@ def test_make_set_input_namespace_returns_heavy_ledger_field_specs_materialize_c
     materialize("ProbeSetInputType", _ProbeInput)
     assert ledger["ProbeSetInputType"] is _ProbeInput
     assert module.ProbeSetInputType is _ProbeInput
-    field_specs[(_ProbeInput, "title")] = GeneratedInputFieldSpec(
+    field_specs[(_ProbeSet, "title")] = GeneratedInputFieldSpec(
         python_attr="title",
         graphql_name="title",
         django_source_path="title",
@@ -581,11 +589,10 @@ def test_promote_set_meta_fields_writes_the_alias_onto_class_meta():
 
     class Meta:
         filter_fields = ["code"]
+        fields: ClassVar[list[str]]
 
     assert promote_set_meta_fields(Meta, fields_alias=FILTERSET_FIELDS_ALIAS) == ["code"]
-    # basedpyright: promote_set_meta_fields writes ``fields`` onto the class at run time; the
-    # checker sees only the declared body
-    assert Meta.fields == ["code"]  # pyright: ignore[reportAttributeAccessIssue]
+    assert Meta.fields == ["code"]
     assert Meta.filter_fields == ["code"]
 
 
@@ -610,7 +617,10 @@ def test_read_set_meta_fields_canonicalizes_sets_without_mutating_source():
 
 def test_make_shape_build_cache_returns_dict_and_clear():
     """``make_shape_build_cache`` returns a ``(dict, clear)`` pair; clear empties the dict."""
-    cache, clear = make_shape_build_cache()
+    cache_pair: tuple[dict[tuple[str, str, frozenset[str]], object], Callable[[], None]] = (
+        make_shape_build_cache()
+    )
+    cache, clear = cache_pair
     assert cache == {}
     cache[("Model", "create", frozenset({"a"}))] = object()
     assert len(cache) == 1

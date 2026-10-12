@@ -100,6 +100,7 @@ from graphql import GraphQLError
 from strawberry.relay.utils import from_base64, to_base64
 
 from .exceptions import ConfigurationError
+from .utils._narrowing import is_dict, is_list
 from .utils.imports import require_optional_module
 
 if TYPE_CHECKING:
@@ -579,17 +580,15 @@ def decode_keyset_cursor(
     if prefix != KEYSET_CURSOR_PREFIX:
         raise _invalid_cursor_error(argument)
     payload = _decrypt_cursor_payload(encrypted, argument)
-    if not isinstance(payload, dict):
-        raise _invalid_cursor_error(argument)
     # The decoded JSON object's keys and values are unchecked beyond the reads below.
-    fields: dict[object, object] = payload
-    if fields.get("o") != fingerprint:
+    if not is_dict(payload):
         raise _invalid_cursor_error(argument)
-    raw_values = fields.get("v")
-    if not isinstance(raw_values, list):
+    if payload.get("o") != fingerprint:
         raise _invalid_cursor_error(argument)
+    raw_list = payload.get("v")
     # Each element is checked by ``_deserialize_cursor_value``, which takes ``object``.
-    raw_list: list[object] = raw_values
+    if not is_list(raw_list):
+        raise _invalid_cursor_error(argument)
     if len(raw_list) != len(columns):
         raise _invalid_cursor_error(argument)
     return KeysetCursor(

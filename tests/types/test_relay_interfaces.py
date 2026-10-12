@@ -1278,7 +1278,7 @@ def test_resolve_id_attr_reads_stamp_without_rescanning(monkeypatch: pytest.Monk
     finalize_django_types()
     assert CategoryNode.__dict__["_dsf_relay_id_attr"] == "pk"
 
-    def _boom(cls: object):
+    def _boom(cls: type[relay.Node]):
         raise AssertionError("upstream scan must not run for a stamped type")
 
     monkeypatch.setattr(relay.Node, "resolve_id_attr", classmethod(_boom))

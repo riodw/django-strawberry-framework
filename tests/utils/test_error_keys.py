@@ -56,6 +56,7 @@ from django_strawberry_framework.auth import register_mutation
 from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing.relay import global_id_for
+from tests._idioms import is_object_list
 
 if TYPE_CHECKING:
     from django_strawberry_framework.rest_framework.serializer_converter import DRFSerializer
@@ -149,7 +150,7 @@ def _execute(
     for error in result.data["write"]["errors"]:
         field, path = error["field"], error["path"]
         assert isinstance(field, str)
-        assert isinstance(path, list)
+        assert is_object_list(path)
         keys.append((field, [str(segment) for segment in path]))
     return keys
 

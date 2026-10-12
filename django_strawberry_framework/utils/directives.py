@@ -35,19 +35,9 @@ propagating.
 from typing import Any
 
 from ..exceptions import ConfigurationError, _safe_type_name
+from ._narrowing import is_text_or_bytes
 
 __all__ = ("validated_field_directives",)
-
-# The types that are ``Iterable`` but whose elements are never directives.
-# ``bytearray`` and ``memoryview`` iterate into ``int`` exactly as ``bytes``
-# does, so they belong in the same reject arm rather than silently building a
-# field whose directives are integers.
-_CHAR_WISE_TYPES = (
-    str,
-    bytes,
-    bytearray,
-    memoryview,
-)
 
 
 # basedpyright: EAFP; ``tuple(directives)`` runs inside the surrounding try/except, which is
@@ -62,7 +52,10 @@ def validated_field_directives(label: str, directives: Any) -> tuple[object, ...
     The message wording is fixed across every caller on purpose: it is the one
     string a consumer greps for, and the callers' tests match on it.
     """
-    if isinstance(directives, _CHAR_WISE_TYPES):
+    # Text and bytes-like values are ``Iterable`` but their elements are never directives:
+    # ``bytearray`` and ``memoryview`` iterate into ``int`` exactly as ``bytes`` does, so
+    # they share the reject arm rather than silently building integer directives.
+    if is_text_or_bytes(directives):
         raise ConfigurationError(
             f"{label} directives must be a sequence of directive instances; "
             f"got {_safe_type_name(directives)}.",

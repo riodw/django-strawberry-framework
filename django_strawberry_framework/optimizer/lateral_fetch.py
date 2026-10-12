@@ -83,6 +83,7 @@ from django.db.models.sql.where import AND, WhereNode
 from typing_extensions import override
 
 from ..keyset import keyset_seek_sql
+from ..utils._narrowing import is_list_or_tuple
 from ..utils.connections import assert_window_fetch_mode_for, window_range_plan
 from .join_taxonomy import LateralJoinShape
 from .nested_fetch import (
@@ -944,7 +945,7 @@ def _parent_in_values(node: object, *, column: str, table: str) -> list[object] 
         return None
     # A qual carrying ``lookup_name`` is a ``Lookup``.
     rhs: object = cast("Lookup[object]", node).rhs
-    if not isinstance(rhs, (list, tuple)):
+    if not is_list_or_tuple(rhs):
         return None
     if any(hasattr(value, "resolve_expression") for value in rhs):
         return None

@@ -14,7 +14,7 @@ The protocol
 ------------
 
 :data:`_BOUNDARY_MARKER` is stamped on the view callback by
-``views.py::_RequestBodyBoundaryMixin.as_view`` and read by the boundary
+``views.py::_boundary_view`` and read by the boundary
 middleware. It says: *this callback mounts a package view whose body boundary a
 chain entry can run.* An attribute rather than a class check, so recognizing a
 package callback needs no import of the view classes.
@@ -26,7 +26,7 @@ once it has run that boundary, and read by
 measured, by a chain participant, before anything parsed it.*
 
 :data:`_BOUNDARY_MOUNT` identifies one callback returned by
-``views.py::_RequestBodyBoundaryMixin.as_view``. When the middleware prepares
+``views.py::_boundary_view``. When the middleware prepares
 that mount's view instance through Django's normal ``setup`` lifecycle, it puts
 the token and instance on the request under :data:`_BOUNDARY_PREPARED_VIEW`.
 The callback consumes only an instance carrying its own token. This makes the
@@ -63,7 +63,7 @@ if TYPE_CHECKING:
     from django.http import HttpRequest
 
 
-#: Stamped on the callback ``_RequestBodyBoundaryMixin.as_view`` returns, and the
+#: Stamped on the callback ``_boundary_view`` returns, and the
 #: only thing that makes a resolved view a package view as far as the boundary
 #: middleware is concerned. A callback that does not carry it is not one whose
 #: boundary that middleware can run, whatever else it carries.

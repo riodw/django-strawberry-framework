@@ -52,7 +52,8 @@ def package_tree(tmp_path: Path) -> Path:
 @pytest.fixture
 def importtime_report(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     """Import ``scripts/importtime_report.py`` the way it runs: scripts dir on ``sys.path``."""
-    monkeypatch.syspath_prepend(str(SCRIPTS))
+    # basedpyright: pytest leaves MonkeyPatch.syspath_prepend's ``path`` parameter unannotated
+    monkeypatch.syspath_prepend(str(SCRIPTS))  # pyright: ignore[reportUnknownMemberType]
     return importlib.import_module("importtime_report")
 
 
@@ -293,7 +294,8 @@ def test_reset_plan_cache_clears_the_plan_cache_and_the_document_key_cache(
     from django_strawberry_framework import DjangoOptimizerExtension
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
-    monkeypatch.setattr(extension_module, "_doc_key_cache", OrderedDict())
+    empty_cache: OrderedDict[tuple[str, str | None], tuple[str, frozenset[str]]] = OrderedDict()
+    monkeypatch.setattr(extension_module, "_doc_key_cache", empty_cache)
     operation = parse("query Q { field }").definitions[0]
     assert isinstance(operation, OperationDefinitionNode)
     extension_module._doc_cache_entry(operation, {})
@@ -311,7 +313,7 @@ def test_reset_plan_cache_clears_the_plan_cache_and_the_document_key_cache(
     ("data", "expected"),
     [
         ({"allThings": [1, 2, 3]}, 3),
-        ({"allItems": {"edges": [{}, {}]}}, 2),
+        ({"allItems": {"edges": [{"node": {"id": "1"}}, {"node": {"id": "2"}}]}}, 2),
         ({"scalar": 1}, None),
         (None, None),
     ],

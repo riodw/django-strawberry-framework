@@ -648,7 +648,7 @@ def test_apply_window_pagination_counted_keyset_serves_pre_seek_counts():
         keyset_seek=seek,
     )
     rows = list(windowed.filter(periodical_id__in=[populated.pk, drained.pk]))
-    by_partition = {}
+    by_partition: dict[int, list[Issue]] = {}
     for row in rows:
         by_partition.setdefault(row.periodical_id, []).append(row)
     populated_rows = by_partition[populated.pk]
@@ -814,7 +814,7 @@ def test_lateral_keyset_prepares_values_through_model_fields():
     spec = _lateral_spec(
         _plan_lateral(_issue_lateral_request(_issue_seek(), next_page_probe=True)),
     )
-    prepared = []
+    prepared: list[tuple[str, object]] = []
 
     def prepare_value(field: "ConcreteField", value: object):
         prepared.append((field.attname, value))

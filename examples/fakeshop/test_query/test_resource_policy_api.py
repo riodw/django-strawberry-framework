@@ -128,6 +128,7 @@ from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGrap
 
 if TYPE_CHECKING:
     from django.db.models.fields.related_descriptors import RelatedManager
+    from typing_extensions import TypeIs
 
 pytestmark = pytest.mark.urls(__name__)
 
@@ -588,7 +589,7 @@ class _AuthorityQuery:
         exception text on the wire exactly as writing the other widens a row
         count.
         """
-        found = []
+        found: list[str] = []
         for name, value in vars(info.schema).items():
             for kind, attribute in (
                 (ResourcePolicy, "resource_policy"),
@@ -608,7 +609,7 @@ class _AuthorityQuery:
     @strawberry.field
     def unmask(self, info: strawberry.Info) -> list[str]:
         """Turn masking off through every name on the schema that could carry it."""
-        turned_off = []
+        turned_off: list[str] = []
         for name, value in list(vars(info.schema).items()):
             policy = (
                 value if isinstance(value, ErrorPolicy) else getattr(value, "error_policy", None)
@@ -924,7 +925,7 @@ class _MembershipQuery:
         operation. Asked by content, so the row still means something when the
         name or the shape behind it changes.
         """
-        written = []
+        written: list[str] = []
         for name, value in sorted(vars(info.schema).items()):
             held = getattr(value, "__dict__", None)
             if not name.startswith("_django") or held is None:
@@ -940,7 +941,7 @@ def _write_entries(
     entries: tuple[Callable[[], SchemaExtension], ...],
 ) -> list[str]:
     """Write ``entries`` over every private name the schema carries."""
-    written = []
+    written: list[str] = []
     for name in sorted(vars(info.schema)):
         if name.startswith("_django"):
             info.schema.__dict__[name] = entries
@@ -1485,6 +1486,23 @@ def _rejection(payload: JSONObject):
     return extensions
 
 
+def _is_dict(value: object) -> TypeIs[dict[object, object]]:
+    """Whether a parsed payload value is a JSON object, its members still unchecked."""
+    return isinstance(value, dict)
+
+
+def _error_extension(error: object, key: str) -> object:
+    """One wire error's ``extensions[key]``, ``None`` when either level is absent."""
+    assert _is_dict(error), error
+    extensions = error.get("extensions")
+    return extensions.get(key) if _is_dict(extensions) else None
+
+
+def _is_json_object(value: object) -> TypeIs[JSONObject]:
+    """Whether a parsed body is a JSON object (a ``dict`` whose keys are all strings)."""
+    return _is_dict(value) and all(isinstance(key, str) for key in value)
+
+
 def _no_rejection(payload: JSONObject):
     """Assert ``payload`` carries no resource rejection (it may carry other errors).
 
@@ -1493,8 +1511,8 @@ def _no_rejection(payload: JSONObject):
     answer with a permission or validation error, and a row about a resource
     bound must not silently start asserting the auth contract instead.
     """
-    for error in payload.get("errors") or []:
-        assert (error.get("extensions") or {}).get("code") != RESOURCE_LIMIT_ERROR_CODE, payload
+    for error in payload.get("errors") or ():
+        assert _error_extension(error, "code") != RESOURCE_LIMIT_ERROR_CODE, payload
 
 
 # ---------------------------------------------------------------------------
@@ -4231,7 +4249,7 @@ async def _resolve(coroutine: Coroutine[object, object, Response]):
     return await coroutine
 
 
-def _entry_request(entry: tuple[str, str], query: str):
+def _entry_request(entry: tuple[str, str], query: str) -> JSONObject:
     """POST one document to a shared-entry mount through that entry's own view color.
 
     ``entry`` is the ``(spelling, color)`` key rather than the mount, because the
@@ -4245,7 +4263,9 @@ def _entry_request(entry: tuple[str, str], query: str):
         response = _await_response(
             AsyncTestClient().query(query, assert_no_errors=False, url=mount),
         )
-        return json.loads(response.response.content)
+        parsed: object = json.loads(response.response.content)
+        assert _is_json_object(parsed), parsed
+        return parsed
     return _post(mount, query)
 
 
@@ -4305,7 +4325,7 @@ def test_an_overlapping_request_does_not_admit_an_oversized_one(
     assert _ExecutionWitness.entered == []
 
     _OverlapCoordinator.armed = True
-    overlapped = {}
+    overlapped: dict[str, JSONObject] = {}
 
     def _run_oversized():
         overlapped["payload"] = _entry_request(entry, oversized)

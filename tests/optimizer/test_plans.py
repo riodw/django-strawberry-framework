@@ -306,12 +306,8 @@ class TestOptimizationPlanFinalize:
         # Tuple has no ``append``; mutation attempts raise AttributeError
         # rather than silently poisoning the plan-cache entry for the
         # next request.
-        import pytest
-
-        with pytest.raises(AttributeError):
-            # basedpyright: the append on the finalized tuple is the mutation under test; the plan
-            # declares the field as a read-only Sequence
-            plan.prefetch_related.append("new")  # pyright: ignore[reportAttributeAccessIssue]
+        assert isinstance(plan.prefetch_related, tuple)
+        assert not hasattr(plan.prefetch_related, "append")
 
     def test_finalize_is_idempotent(self):
         plan = OptimizationPlan(select_related=["a"]).finalize()

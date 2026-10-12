@@ -57,7 +57,7 @@ import logging
 import threading
 import warnings
 from collections import deque
-from collections.abc import Generator, Iterator
+from collections.abc import AsyncGenerator, Generator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
@@ -111,6 +111,14 @@ def _as_connection(stand_in: object) -> BaseDatabaseWrapper:
     # basedpyright: a stand-in connection carrying only the slots the code under test reads; the
     # capture seams type the parameter as BaseDatabaseWrapper
     return stand_in  # pyright: ignore[reportReturnType]
+
+
+async def _open_stream(schema: strawberry.Schema, query: str) -> AsyncGenerator[object, None]:
+    """``schema.stream(query)``, its frames typed ``object`` for each row to narrow."""
+    # basedpyright: Strawberry's schema/_graphql_core.py rebinds its graphql-core 3.3 result
+    # aliases in an ImportError fallback, so StreamResult carries Unknown under the <3.3 pin
+    stream: AsyncGenerator[object, None] = await schema.stream(query)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    return stream
 
 
 @strawberry.type
@@ -369,7 +377,7 @@ def test_coordinator_isolates_distinct_wrappers_for_one_alias(
     default_wrapper: BaseDatabaseWrapper,
 ):
     coordinator = _CursorCaptureCoordinator()
-    holder = {}
+    holder: dict[str, BaseDatabaseWrapper] = {}
 
     def _materialize_thread_local_wrapper():
         holder["wrapper"] = connections["default"]
@@ -438,7 +446,7 @@ def test_partial_acquisition_failure_unwinds_earlier_connections(
 
 
 def test_query_log_slicing_suffix_clamp_and_rollover():
-    log = deque(maxlen=5)
+    log: deque[dict[str, str]] = deque(maxlen=5)
     log.append({"sql": "pre-existing", "time": "0.001"})
     wrapper = SimpleNamespace(queries_log=log)
     snapshot = _ConnectionSnapshot(
@@ -581,7 +589,7 @@ async def test_async_validation_failure_with_raising_teardown_publishes_no_debug
 @override_settings(DEBUG=True)
 def test_generic_recovery_alone_calls_get_results_once():
     """A teardown failure on an EXECUTED operation is one recovery, one get_results call."""
-    calls = []
+    calls: list[int] = []
 
     class _CountingDebug(DjangoDebugExtension):
         @override
@@ -689,9 +697,11 @@ class _ResultMapPrepopulator(SchemaExtension):
     @override
     def on_operation(self):
         yield
-        assert self.execution_context.result is not None
-        assert isinstance(self.execution_context.result, GraphQLExecutionResult)
-        self.execution_context.result.extensions = {"sentinel": True}
+        # basedpyright: Strawberry's schema/_graphql_core.py rebinds GraphQLExecutionResult in an
+        # ImportError fallback, so ExecutionContext.result carries Unknown under the <3.3 pin
+        result: object = self.execution_context.result  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        assert isinstance(result, GraphQLExecutionResult)
+        result.extensions = {"sentinel": True}
 
 
 def test_extension_list_order_wins_same_key_collisions_sync():
@@ -806,7 +816,7 @@ async def test_async_overlapping_operations_share_the_wrapper_and_restore(
         else:
             raise AssertionError("coordinator never reached depth 2")
 
-        results = {}
+        results: dict[str, ExecutionResult] = {}
         for marker in completion_order:
             release_events[marker].set()
             results[marker] = await tasks[marker]
@@ -816,7 +826,9 @@ async def test_async_overlapping_operations_share_the_wrapper_and_restore(
 
     for marker in ("a", "b"):
         assert observed_wrappers[marker] is parent_wrapper  # inherited, not re-materialized
-        payload = results[marker].extensions["debug"]
+        extensions = results[marker].extensions
+        assert extensions is not None
+        payload = extensions["debug"]
         assert isinstance(payload["sql"], list)  # type only - async SQL fidelity not claimed
         assert [row["message"] for row in payload["exceptions"]] == [f"boom-{marker}"]
 
@@ -835,7 +847,7 @@ def test_nested_sync_operations_share_the_log_and_cross_attribute(
     default_wrapper: BaseDatabaseWrapper,
 ):
     original_flag = default_wrapper.force_debug_cursor
-    inner_holder = {}
+    inner_holder: dict[str, ExecutionResult] = {}
 
     @strawberry.type
     class _InnerQuery:
@@ -861,6 +873,7 @@ def test_nested_sync_operations_share_the_log_and_cross_attribute(
 
     assert outer_result.errors is None
     inner_result = inner_holder["result"]
+    assert inner_result.extensions is not None
     inner_sql = [row["sql"] for row in inner_result.extensions["debug"]["sql"]]
     assert outer_result.extensions is not None
     outer_sql = [row["sql"] for row in outer_result.extensions["debug"]["sql"]]
@@ -1336,7 +1349,7 @@ async def test_streaming_seam_publishes_the_payload_the_engine_reads():
         extensions=[lambda: DjangoDebugExtension(allow_unsafe_production=True)],
     )
 
-    source = await schema.stream("{ boom }")
+    source = await _open_stream(schema, "{ boom }")
     frames = [frame async for frame in source]
 
     assert len(frames) == 1
@@ -1367,7 +1380,7 @@ async def test_streaming_clean_operation_carries_both_lists():
         extensions=[lambda: DjangoDebugExtension(allow_unsafe_production=True)],
     )
 
-    source = await schema.stream("{ __typename }")
+    source = await _open_stream(schema, "{ __typename }")
     frames = [frame async for frame in source]
 
     assert isinstance(frames[0], ExecutionResult)
@@ -1384,12 +1397,14 @@ async def test_streaming_parse_failure_publishes_no_debug_key():
         extensions=[lambda: DjangoDebugExtension(allow_unsafe_production=True)],
     )
 
-    frames = []
-    async for result in await schema.stream("{ ok"):
+    frames: list[object] = []
+    async for result in await _open_stream(schema, "{ ok"):
         frames.append(result)
 
     assert frames
-    assert all("debug" not in (result.extensions or {}) for result in frames)
+    for result in frames:
+        assert isinstance(result, ExecutionResult)
+        assert "debug" not in (result.extensions or {})
 
 
 @override_settings(DEBUG=False)
@@ -1398,7 +1413,7 @@ async def test_streaming_fail_closed_gate_withholds_and_warns(caplog: pytest.Log
     schema = strawberry.Schema(query=_OkQuery, extensions=[DjangoDebugExtension])
 
     with caplog.at_level(logging.WARNING, logger="django_strawberry_framework"):
-        frames = [result async for result in await schema.stream("{ ok }")]
+        frames = [result async for result in await _open_stream(schema, "{ ok }")]
 
     assert len(frames) == 1
     assert isinstance(frames[0], ExecutionResult)

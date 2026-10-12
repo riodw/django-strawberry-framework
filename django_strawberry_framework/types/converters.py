@@ -78,6 +78,7 @@ from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_text, _safe_t
 from ..optimizer.field_meta import FieldMeta
 from ..registry import registry
 from ..scalars import BigInt
+from ..utils._narrowing import is_iterable, is_list_or_tuple
 from ..utils.imports import import_attr_if_importable
 from ..utils.strings import pascal_case
 
@@ -770,12 +771,14 @@ def _unpack_choice_entry(entry: object, *, source_label: str) -> tuple[object, o
             f"{source_label} declares a malformed choice {_safe_arg_repr(entry)}; "
             "choices must be a flat sequence of (value, label) pairs.",
         )
-    value: object
-    label: object
+    if not is_iterable(entry):
+        raise ConfigurationError(
+            f"{source_label} declares a malformed choice {_safe_arg_repr(entry)}; "
+            "choices must be a flat sequence of (value, label) pairs.",
+        )
     try:
-        # basedpyright: a choice entry is consumer-declared, so unpacking it IS the pair check;
-        # it rejects unpacking an ``object`` as not iterable
-        value, label = entry  # pyright: ignore[reportGeneralTypeIssues]
+        # A choice entry is consumer-declared, so unpacking it IS the pair check.
+        value, label = entry
     except BaseException as exc:
         raise ConfigurationError(
             f"{source_label} declares a malformed choice {_safe_arg_repr(entry)}; "
@@ -917,7 +920,7 @@ def choice_column_is_grouped(field: "ConcreteField") -> bool:
             f"Could not inspect choices for {_field_label(field)}.",
         ) from exc
     return any(
-        isinstance(entry, (list, tuple)) and len(entry) == 2 and _is_choice_group(entry[1])
+        is_list_or_tuple(entry) and len(entry) == 2 and _is_choice_group(entry[1])
         for entry in entries
     )
 

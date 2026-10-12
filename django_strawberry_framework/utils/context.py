@@ -32,6 +32,8 @@ import contextlib
 from collections.abc import Generator
 from typing import TYPE_CHECKING, Final, cast
 
+from ._narrowing import is_dict
+
 if TYPE_CHECKING:
     from collections.abc import Mapping, MutableMapping
 
@@ -93,7 +95,7 @@ def get_context_value(context: object, key: str, default: object = None) -> obje
     """
     if context is None:
         return default
-    if not isinstance(context, dict):
+    if not is_dict(context):
         try:
             val: object = getattr(context, key, MISSING)
         except Exception:
@@ -106,7 +108,7 @@ def get_context_value(context: object, key: str, default: object = None) -> obje
         if val is not MISSING:
             return val
     try:
-        if isinstance(context, dict):
+        if is_dict(context):
             found: object = context.get(key, default)
             return found
         # Item access is attempted on any context shape: one without ``__getitem__``

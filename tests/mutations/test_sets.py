@@ -1635,9 +1635,12 @@ def test_make_declaration_registry_dedupes_and_rejects_post_finalize():
     post-finalize reject; a fresh registry over a disjoint list still dedupes by
     identity and rejects a declaration after finalization.
     """
-    from django_strawberry_framework.mutations.sets import make_declaration_registry
+    from django_strawberry_framework.mutations.sets import (
+        DeclarationRegistry,
+        make_declaration_registry,
+    )
 
-    reg = make_declaration_registry("ProbeFlavor")
+    reg: DeclarationRegistry[type[object]] = make_declaration_registry("ProbeFlavor")
 
     class Probe:
         pass
@@ -2023,18 +2026,19 @@ def test_reject_unknown_meta_keys_rejects_non_class_meta(invalid_meta: object):
         reject_unknown_meta_keys("TestMutation", invalid_meta, frozenset())
 
 
-@pytest.mark.parametrize(
-    "invalid_op",
-    [
-        [],
-        {},
-        {"a": 1},
-        set(),
-        123,
-        True,
-        None,
-    ],
+# Each value an operation key can never be: unhashable containers and non-string scalars.
+_UNHASHABLE_AND_NON_STRING_OPERATIONS: tuple[object, ...] = (
+    list[object](),
+    dict[object, object](),
+    {"a": 1},
+    set[object](),
+    123,
+    True,
+    None,
 )
+
+
+@pytest.mark.parametrize("invalid_op", _UNHASHABLE_AND_NON_STRING_OPERATIONS)
 def test_require_non_delete_operation_rejects_unhashable_and_non_string_operation(
     invalid_op: object,
 ):
@@ -2052,18 +2056,7 @@ def test_require_non_delete_operation_rejects_unhashable_and_non_string_operatio
         )
 
 
-@pytest.mark.parametrize(
-    "invalid_op",
-    [
-        [],
-        {},
-        {"a": 1},
-        set(),
-        123,
-        True,
-        None,
-    ],
-)
+@pytest.mark.parametrize("invalid_op", _UNHASHABLE_AND_NON_STRING_OPERATIONS)
 def test_django_mutation_validate_meta_rejects_unhashable_and_non_string_operation(
     invalid_op: object,
 ):
@@ -2322,9 +2315,12 @@ def test_make_declaration_registry_identity_dedup_hostile_eq_safe_containment():
     ``is`` identity scan replaces the ``not in`` check. This keeps hostile
     __eq__ from escaping as a raw RuntimeError at class registration.
     """
-    from django_strawberry_framework.mutations.sets import make_declaration_registry
+    from django_strawberry_framework.mutations.sets import (
+        DeclarationRegistry,
+        make_declaration_registry,
+    )
 
-    reg = make_declaration_registry("ProbeRegistry")
+    reg: DeclarationRegistry[type[object]] = make_declaration_registry("ProbeRegistry")
 
     class HostileEqMeta(type):
         @override

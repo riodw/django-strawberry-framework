@@ -14,20 +14,37 @@ app so Django wires the reverse relations into ``_meta.get_fields()``;
 models of ``tests/_relation_fixtures.py`` these may enter a test schema.
 """
 
+from __future__ import annotations
+
 import contextlib
+from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
 from django.db import models
 from django.db.backends.base.base import BaseDatabaseWrapper
+
+if TYPE_CHECKING:
+    from django.db.models.expressions import Combinable
+
+    _M = TypeVar("_M", bound=models.Model)
+
+    # Each field's descriptor types as django-stubs declares them (set type, get type), spelled
+    # out because the checker runs without the django-stubs mypy plugin that would infer them;
+    # ``null=True`` adds ``None`` to both.
+    _FK: TypeAlias = models.ForeignKey[_M | Combinable, _M]
+    _Int: TypeAlias = models.IntegerField[float | int | str | Combinable, int]
+    _NullInt: TypeAlias = models.IntegerField[float | int | str | Combinable | None, int | None]
+    _NullText: TypeAlias = models.TextField[str | Combinable | None, str | None]
+    _Text: TypeAlias = models.TextField[str | Combinable, str]
 
 
 class LnkParent(models.Model):
     """A parent keyed three ways: pk, the ``(tenant, code)`` pair, and ``slug``."""
 
-    tenant = models.IntegerField()
-    code = models.TextField()
-    slug = models.TextField(unique=True)
-    label = models.TextField()
-    tags = models.ManyToManyField(
+    tenant: _Int = models.IntegerField()
+    code: _Text = models.TextField()
+    slug: _Text = models.TextField(unique=True)
+    label: _Text = models.TextField()
+    tags: models.ManyToManyField[LnkTag, LnkTagging] = models.ManyToManyField(
         "LnkTag",
         through="LnkTagging",
         through_fields=("parent", "tag"),
@@ -44,8 +61,8 @@ class LnkParent(models.Model):
 class LnkTag(models.Model):
     """An M2M target keyed by its non-pk unique ``code``."""
 
-    code = models.TextField(unique=True)
-    name = models.TextField()
+    code: _Text = models.TextField(unique=True)
+    name: _Text = models.TextField()
 
     class Meta:
         app_label = "products"
@@ -61,8 +78,16 @@ class LnkTagging(models.Model):
     primary key does not carry.
     """
 
-    parent = models.ForeignKey(LnkParent, on_delete=models.CASCADE, to_field="slug")
-    tag = models.ForeignKey(LnkTag, on_delete=models.CASCADE, to_field="code")
+    parent: _FK[LnkParent] = models.ForeignKey(
+        LnkParent,
+        on_delete=models.CASCADE,
+        to_field="slug",
+    )
+    tag: _FK[LnkTag] = models.ForeignKey(
+        LnkTag,
+        on_delete=models.CASCADE,
+        to_field="code",
+    )
 
     class Meta:
         app_label = "products"
@@ -73,10 +98,10 @@ class LnkTagging(models.Model):
 class LnkPairChild(models.Model):
     """A child joined on two carrier columns (``p_tenant``, ``p_code``)."""
 
-    p_tenant = models.IntegerField()
-    p_code = models.TextField()
-    name = models.TextField()
-    parent = models.ForeignObject(
+    p_tenant: _Int = models.IntegerField()
+    p_code: _Text = models.TextField()
+    name: _Text = models.TextField()
+    parent: models.ForeignObject[LnkParent, LnkParent] = models.ForeignObject(
         LnkParent,
         on_delete=models.CASCADE,
         from_fields=["p_tenant", "p_code"],
@@ -97,10 +122,10 @@ class LnkOptionalPairChild(models.Model):
     parent's declared and generated surfaces are those of the other children.
     """
 
-    p_tenant = models.IntegerField(null=True)
-    p_code = models.TextField(null=True)
-    name = models.TextField()
-    parent = models.ForeignObject(
+    p_tenant: _NullInt = models.IntegerField(null=True)
+    p_code: _NullText = models.TextField(null=True)
+    name: _Text = models.TextField()
+    parent: models.ForeignObject[LnkParent | None, LnkParent | None] = models.ForeignObject(
         LnkParent,
         on_delete=models.CASCADE,
         from_fields=["p_tenant", "p_code"],
@@ -118,9 +143,9 @@ class LnkOptionalPairChild(models.Model):
 class LnkColumnChild(models.Model):
     """A child joined through a one-column ``ForeignObject`` on the parent pk."""
 
-    p_id = models.IntegerField()
-    name = models.TextField()
-    parent = models.ForeignObject(
+    p_id: _Int = models.IntegerField()
+    name: _Text = models.TextField()
+    parent: models.ForeignObject[LnkParent, LnkParent] = models.ForeignObject(
         LnkParent,
         on_delete=models.CASCADE,
         from_fields=["p_id"],
@@ -137,8 +162,8 @@ class LnkColumnChild(models.Model):
 class LnkSlugChild(models.Model):
     """A child whose ``ForeignKey`` targets the parent's non-pk ``slug``."""
 
-    name = models.TextField()
-    parent = models.ForeignKey(
+    name: _Text = models.TextField()
+    parent: _FK[LnkParent] = models.ForeignKey(
         LnkParent,
         on_delete=models.CASCADE,
         to_field="slug",
@@ -154,9 +179,9 @@ class LnkSlugChild(models.Model):
 class LnkSlugObjectChild(models.Model):
     """A child joined through a one-column ``ForeignObject`` on the parent's non-pk ``slug``."""
 
-    p_slug = models.TextField()
-    name = models.TextField()
-    parent = models.ForeignObject(
+    p_slug: _Text = models.TextField()
+    name: _Text = models.TextField()
+    parent: models.ForeignObject[LnkParent, LnkParent] = models.ForeignObject(
         LnkParent,
         on_delete=models.CASCADE,
         from_fields=["p_slug"],

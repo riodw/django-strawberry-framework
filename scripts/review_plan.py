@@ -264,7 +264,7 @@ def _covering_item(path: str) -> str:
 
 def _init_field(root: Path, relatives: Sequence[str]) -> str:
     """Render the ``Init files:`` line naming each ``__init__.py`` and its definitions."""
-    entries = []
+    entries: list[str] = []
     for relative in relatives:
         names = _init_definitions(root, f"{PACKAGE_DIR}/{relative}")
         entry = f"`{relative}`"
@@ -337,7 +337,7 @@ def _resolve_scope(entries: Sequence[str], paths: Sequence[str]) -> tuple[str, .
     """Return the normalized scope, ``None`` for the whole package; fail closed."""
     if not entries:
         return None
-    normalized = []
+    normalized: list[str] = []
     for entry in entries:
         scope = _normalize_scope(entry)
         if not scope:
@@ -810,7 +810,7 @@ def _recorded_dirty(text: str) -> set[str]:
 
 def _ledger_paths(text: str) -> set[str]:
     """Return the ``Path`` cell of every ``## Owned changes`` row."""
-    paths = set()
+    paths: set[str] = set()
     for row in _section_bodies(text).get(LEDGER_HEADING, []):
         if not row.startswith("|"):
             continue
@@ -1012,7 +1012,7 @@ def _latest_tag(root: Path) -> str:
 def _head_blobs(root: Path) -> dict[str, str]:
     """Return ``path -> blob id`` for every package file at ``HEAD``."""
     output = _git(root, "ls-tree", "-r", "-z", "HEAD", "--", f":(top){PACKAGE_DIR}")
-    blobs = {}
+    blobs: dict[str, str] = {}
     for record in _nul_fields(output):
         meta, _, path = record.partition("\t")
         blobs[path] = meta.split()[2]

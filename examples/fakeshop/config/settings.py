@@ -124,7 +124,7 @@ INTERNAL_IPS = ["127.0.0.1"]
 # Templates
 # ---------------------------------------------------------------------------
 
-TEMPLATES = [
+TEMPLATES: list[dict[str, object]] = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
         "DIRS": [],

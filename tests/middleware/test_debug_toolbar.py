@@ -129,7 +129,7 @@ def test_package_and_middleware_imports_stay_clean_without_toolbar():
         # because the package marker imports nothing optional.
         parent = importlib.import_module(_PARENT)
         assert parent is sys.modules[_PARENT]
-        namespace = {}
+        namespace: dict[str, object] = {}
         exec("from django_strawberry_framework import *", namespace)
         assert "DebugToolbarMiddleware" not in namespace
 
@@ -412,9 +412,13 @@ def test_process_view_tolerates_non_class_view_class(middleware: DebugToolbarMid
     # namespace; this one forges it as a string.
     vars(view_func).update(view_class="not-a-class")
     middleware.process_view(request, view_func)
-    # basedpyright: the middleware stamps _is_graphiql on the request at run time; HttpRequest
-    # declares no such attribute
-    assert request._is_graphiql is False  # pyright: ignore[reportAttributeAccessIssue]
+    from django_strawberry_framework.middleware.debug_toolbar import (
+        _IS_GRAPHIQL,
+        _is_graphiql_request,
+    )
+
+    assert _IS_GRAPHIQL in vars(request)
+    assert _is_graphiql_request(request) is False
 
 
 # ---------------------------------------------------------------------------

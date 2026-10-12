@@ -28,11 +28,26 @@ it back as a protocol naming the call shapes the tests use: rows typed as ``mode
 ``info`` as ``object`` because the paths under test never read it. ``relay_hooks`` is the
 sync executor's shape; ``async_relay_hooks`` is the async one, where ``resolve_node`` and
 ``resolve_nodes`` return the coroutine the caller awaits.
+
+``declare_django_type`` is ``type(name, (DjangoType,), namespace)`` handed back as
+``type[DjangoType]``: the three-argument ``type`` call is typed as returning ``type``, so the
+helper checks the subclass relation it built and every later read of the class (its
+definition, its hooks) resolves.
+
+``resolver_function`` reads the function a Strawberry field's resolver wraps
+(``field.base_resolver.wrapped_func``), asserting the field has a resolver and the wrapped
+object is a plain function; Strawberry annotates ``base_resolver`` as the bare generic
+``StrawberryResolver``, so the one read that inherits its Unknown lives here.
+
+``is_object_dict`` / ``is_object_list`` narrow an ``object`` (a JSON payload, a GraphQL
+result, a hook's input) the way ``isinstance`` does at run time, but to ``dict[object,
+object]`` / ``list[object]``: a bare ``isinstance`` on an ``object`` narrows to the class
+over Unknown element types, which every later read inherits.
 """
 
 import inspect
-from collections.abc import Iterable
-from types import ModuleType
+from collections.abc import Iterable, Mapping
+from types import FunctionType, ModuleType
 from typing import TYPE_CHECKING, Literal, Protocol, TypeGuard, TypeVar, overload
 
 from django.db.models import Model, QuerySet
@@ -44,12 +59,42 @@ from django_strawberry_framework.utils.querysets import model_for
 
 if TYPE_CHECKING:
     from asgiref.typing import WebSocketScope
+    from strawberry.types.field import StrawberryField
+    from typing_extensions import TypeIs
 
     from django_strawberry_framework.rest_framework.serializer_converter import DRFField
 
 _ClassT = TypeVar("_ClassT", bound=type)
 _ModelT = TypeVar("_ModelT", bound=Model)
 _DRFFieldT = TypeVar("_DRFFieldT", bound="DRFField")
+
+
+def declare_django_type(name: str, namespace: Mapping[str, object]) -> type[DjangoType]:
+    """Declare ``class <name>(DjangoType)`` with ``namespace`` as its body, typed as such."""
+    declared = type(name, (DjangoType,), dict(namespace))
+    assert issubclass(declared, DjangoType)
+    return declared
+
+
+def resolver_function(field: "StrawberryField") -> FunctionType:
+    """The plain function ``field``'s resolver wraps (``base_resolver.wrapped_func``)."""
+    # basedpyright: Strawberry annotates StrawberryField.base_resolver as the bare generic
+    # StrawberryResolver, so the resolver and its wrapped function read as partially Unknown
+    resolver = field.base_resolver  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    assert resolver is not None
+    wrapped: object = resolver.wrapped_func  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    assert isinstance(wrapped, FunctionType)
+    return wrapped
+
+
+def is_object_dict(value: object) -> "TypeIs[dict[object, object]]":
+    """Whether ``value`` is a ``dict`` (subclasses included), its items typed ``object``."""
+    return isinstance(value, dict)
+
+
+def is_object_list(value: object) -> "TypeIs[list[object]]":
+    """Whether ``value`` is a ``list`` (subclasses included), its items typed ``object``."""
+    return isinstance(value, list)
 
 
 def definition_raises(cls: _ClassT) -> _ClassT:
@@ -78,9 +123,16 @@ def _remove_databases_failures_descriptor(
     ``inspect.getattr_static`` fetches the descriptor without binding it and the
     ``isinstance`` check makes the read assert the shape the callers use.
     """
-    descriptor = inspect.getattr_static(cls, "_remove_databases_failures")
-    assert isinstance(descriptor, classmethod)
+    descriptor: object = inspect.getattr_static(cls, "_remove_databases_failures")
+    assert _is_test_case_classmethod(descriptor)
     return descriptor
+
+
+def _is_test_case_classmethod(
+    value: object,
+) -> "TypeGuard[classmethod[SimpleTestCase, ..., object]]":
+    """Whether ``value`` is a ``classmethod`` descriptor (a ``SimpleTestCase`` one, by its owner)."""
+    return isinstance(value, classmethod)
 
 
 def remove_databases_failures_function(cls: type[SimpleTestCase]) -> object:
@@ -243,6 +295,7 @@ def bind_unparented(field: _DRFFieldT, name: str) -> _DRFFieldT:
     row holds directly has no serializer above it.
     """
     # basedpyright: drf-stubs types parent as BaseSerializer; the runtime accepts None (an
-    # unparented bound field)
-    field.bind(name, None)  # pyright: ignore[reportArgumentType]
+    # unparented bound field); drf-stubs also spells that parameter as the bare generic
+    # BaseSerializer, so bind reads as partially Unknown
+    field.bind(name, None)  # pyright: ignore[reportArgumentType, reportUnknownMemberType]
     return field

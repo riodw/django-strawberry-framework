@@ -855,9 +855,10 @@ cumulative cap,
 [Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared))
 and how those exact bytes become text (the strict UTF-8 wire contract,
 [Decision 9](#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode)).
-Answering them takes **four** overridden hooks, every decision body of which sits once on one
-shared private mixin; the count, and which two of the four are hosted on the mixin itself
-rather than declared per view, are stated once under *Helper-reuse obligations (DRY)*.
+Answering them takes **four** overridden hooks, every decision body of which sits once, on one
+shared private mixin or on the module-level `_boundary_view`; the count, and which one of the
+four is hosted on the mixin itself rather than declared per view, are stated once under
+*Helper-reuse obligations (DRY)*.
 
 The async view's second subject is the request actor. Django's `AuthenticationMiddleware`
 leaves `request.user` a `SimpleLazyObject` whose first read loads the session and the user
@@ -2109,10 +2110,12 @@ read would parse the body.
 3. otherwise enter a private continuation wrapped with Django's public `csrf_protect`, which
    delegates to Strawberry's inherited `run`.
 
-The exemption is stamped by the package, once, on the callback `as_view()` returns — a single
-override on the shared mixin, so both views get it and a URLconf author cannot forget it. That
-callback is a `functools.wraps` wrapper whose async arm is a real coroutine function, so
-`AsyncDjangoGraphQLView` keeps being dispatched on the event loop; when the chain prepared the
+The exemption is stamped by the package, once, on the callback `as_view()` returns — each
+view's `as_view` hands upstream's callback to the one private `views.py::_boundary_view`, so
+both views get it and a URLconf author cannot forget it. That callback is a `functools.wraps`
+wrapper whose async arm is a real coroutine function, so `AsyncDjangoGraphQLView` keeps being
+dispatched on the event loop (its `as_view` refuses, with a `ConfigurationError`, an upstream
+callback that is not marked a coroutine function); when the chain prepared the
 mount's view instance, the wrapper dispatches on that instance instead of building a second
 one.
 
@@ -2365,8 +2368,8 @@ wants a different Host policy configures `ALLOWED_HOSTS`, exactly as they would 
   ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).
 - **Neither CSRF arrangement reimplements any part of Django's check.** The fallback uses
   Django's two public decorators — `csrf_exempt` on the callback `as_view()` returns,
-  `csrf_protect` around the private continuation, one `as_view` override on the shared mixin so
-  the two views cannot diverge. The chain-supplied arrangement runs the deployment's own
+  `csrf_protect` around the private continuation, both views' `as_view` stamping through the
+  one `_boundary_view` so the two views cannot diverge. The chain-supplied arrangement runs the deployment's own
   configured CSRF class untouched, in its own chain position. No package-authored token
   validation, cookie rotation, or `Vary` handling exists anywhere, and the ordering audit
   resolves `MIDDLEWARE` entries by class and wraps none
@@ -2376,15 +2379,17 @@ wants a different Host policy configures `ALLOWED_HOSTS`, exactly as they would 
   [`request_from_info`][glossary-request_from_info] single-siting is preserved; this card
   adds **no** new request-context decoder, per that helper's hard single-siting rule.
 - **The view subclasses upstream rather than reimplementing it.** Four overridden hooks, and
-  **every decision body sits once on the one private `_RequestBodyBoundaryMixin` the two views
-  share** — that single-siting, not the placement of the override itself, is what stops the
-  sync and async colours diverging. Two of the four are hosted on the mixin directly, because
-  upstream spells them identically on both views: `as_view` for the CSRF ordering
-  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser))
-  and `parse_json` for the wire contract
+  **every decision body sits once, on the one private `_RequestBodyBoundaryMixin` the two views
+  share or on the module-level `_boundary_view`** — that single-siting, not the placement of
+  the override itself, is what stops the sync and async colours diverging. One of the four is
+  hosted on the mixin directly, because upstream spells it identically on both views:
+  `parse_json` for the wire contract
   ([Decision 9](#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode)).
-  The other two are declared on each concrete view, because upstream itself splits them by
-  colour and a mixin cannot be both: `run` for the cap
+  The other three are declared on each concrete view, because upstream itself splits them by
+  colour and a mixin cannot be both: `as_view` for the CSRF ordering, whose callback is a
+  coroutine function on the async view and whose stamping body is `_boundary_view`
+  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser)), `run` for
+  the cap
   ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)) and
   `parse_multipart` for the control-field guard
   ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).

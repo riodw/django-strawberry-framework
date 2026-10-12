@@ -590,7 +590,9 @@ def _register_relation_connection_teardown(
     lifecycle, not a general unfinalizer for Strawberry-decorated classes.
     """
     # The synthesized connection field is always built around a resolver.
-    generated_resolver = cast("StrawberryResolver[object]", field_obj.base_resolver).wrapped_func
+    # basedpyright: Strawberry types ``StrawberryResolver.wrapped_func`` with the bare generics
+    # ``staticmethod`` / ``classmethod``, so the read is partially Unknown
+    generated_resolver = cast("StrawberryResolver[object]", field_obj.base_resolver).wrapped_func  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
 
     def teardown() -> None:
         current: object = type_cls.__dict__.get(generated, _MISSING_CLASS_MEMBER)

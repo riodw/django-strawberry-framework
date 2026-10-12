@@ -71,6 +71,7 @@ products ``Mutation`` + ``config/schema.py`` wiring + the live
 from __future__ import annotations
 
 import datetime
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import strawberry
@@ -223,14 +224,25 @@ if TYPE_CHECKING:
 _MUTATION_ASYNC_RECOURSE = sync_pipeline_recourse("DjangoMutation")
 
 
+@dataclass(frozen=True)
+class StepFailure:
+    """A pipeline step's failure: the field errors ``run_write_pipeline_sync`` envelopes.
+
+    Its own type rather than a bare ``list[FieldError]``, so the skeleton tells a
+    failed ``decode_step`` / ``write_step`` from one whose product is itself a list.
+    """
+
+    errors: list[FieldError]
+
+
 def run_write_pipeline_sync(
     mutation_cls: WriteMutationClass,
     info: Info[object, object],
     data: object,
     id: object,  # noqa: A002
     *,
-    decode_step: Callable[[models.Model | None], _DecodedT | list[FieldError]],
-    write_step: Callable[[models.Model | None, _DecodedT], _SavedT | list[FieldError]],
+    decode_step: Callable[[models.Model | None], _DecodedT | StepFailure],
+    write_step: Callable[[models.Model | None, _DecodedT], _SavedT | StepFailure],
     tail_step: Callable[[_SavedT], object] | None = None,
 ) -> object:
     """The shared write orchestration every mutation flavor rides.
@@ -255,12 +267,12 @@ def run_write_pipeline_sync(
     3. **authorize BEFORE decode** (``authorize_or_raise(... instance=instance)``):
        the decode issues visibility-scoped relation queries, so running it pre-auth
        would let an unauthorized caller probe relation visibility by id;
-    4. ``decode_step(instance) -> decoded | list[FieldError]`` - the flavor's
-       relation-decode + payload build (returns a ``list[FieldError]`` on a decode
+    4. ``decode_step(instance) -> decoded | StepFailure`` - the flavor's
+       relation-decode + payload build (returns a ``StepFailure`` on a decode
        failure, mapped to the error envelope here);
-    5. ``write_step(instance, decoded) -> saved | list[FieldError]`` - the flavor's
+    5. ``write_step(instance, decoded) -> saved | StepFailure`` - the flavor's
        construct / validate / ``save()`` (M2M assignment etc.), returning the saved
-       object or a ``list[FieldError]`` on a validation / write failure;
+       object or a ``StepFailure`` on a validation / write failure;
     6. success tail - ``tail_step(saved)`` when supplied (delete's snapshot
        payload); else ``{ ok: true }`` for a model-less mutation; else
        ``refetch_optimized`` -> ``build_payload``.
@@ -272,7 +284,7 @@ def run_write_pipeline_sync(
     step; the serializer passes a serializer-field-keyed decode step and a
     ``serializer.is_valid`` -> ``save`` step; delete passes a no-op decode, a
     snapshot-then-delete write, and a snapshot ``tail_step``. A step returning a
-    ``list[FieldError]`` short-circuits to the error envelope AND marks the
+    ``StepFailure`` short-circuits to the error envelope AND marks the
     ``transaction.atomic()`` block for rollback - so a ``write_step`` that made a
     partial write and THEN raised a validation error (a custom
     ``serializer.save()`` that inserts a row, then raises) never commits the
@@ -389,12 +401,12 @@ def run_write_pipeline_sync(
                     )
 
             decoded = decode_step(instance)
-            if isinstance(decoded, list):
-                return _error_payload(decoded)
+            if isinstance(decoded, StepFailure):
+                return _error_payload(decoded.errors)
 
             saved = write_step(instance, decoded)
-            if isinstance(saved, list):
-                return _error_payload(saved)
+            if isinstance(saved, StepFailure):
+                return _error_payload(saved.errors)
 
             if tail_step is not None:
                 return tail_step(saved)
@@ -968,7 +980,7 @@ def _model_decode_step(
     instance: models.Model | None,
     specs: Sequence[InputFieldSpec],
     model_fields: ModelFieldIndex,
-) -> _ModelDecoded | _ModelDecodedWithExcluded | list[FieldError]:
+) -> _ModelDecoded | _ModelDecodedWithExcluded | StepFailure:
     """The model ``decode_step``: relation-decode + construct / ``setattr``.
 
     Decodes the input via ``_decode_relations`` (the ``036`` contract: type-check
@@ -976,7 +988,7 @@ def _model_decode_step(
     then either CONSTRUCTS a fresh ``model(**attrs)`` (create, ``instance is
     None``) or sets the provided attrs on the located row (update). Returns
     ``(constructed_instance, m2m_assignments, exclude)`` for the write step, or a
-    ``list[FieldError]`` on a decode failure (the skeleton maps it to a
+    ``StepFailure`` on a decode failure (the skeleton maps it to a
     null-object payload). ``exclude`` is the exclude-aware unprovided-field list
     for BOTH create and update - create excludes unprovided fields so their model
     defaults are not validated (mirroring ``Model.objects.create()``), update
@@ -1005,7 +1017,7 @@ def _model_decode_step(
         model_fields=model_fields,
     )
     if decode_error is not None:
-        return [decode_error]
+        return StepFailure([decode_error])
 
     if instance is None:
         target = model(**scalar_and_fk_attrs)
@@ -1028,7 +1040,7 @@ def _model_write_step(
     mutation_cls: type[DjangoMutation],
     instance: models.Model | None,
     decoded: _ModelDecoded,
-) -> models.Model | list[FieldError]:
+) -> models.Model | StepFailure:
     """The model ``write_step``: ``full_clean`` -> ``save`` -> M2M.
 
     From validation onward create and update run an IDENTICAL tail (the prior
@@ -1037,7 +1049,7 @@ def _model_write_step(
     M2M ``.set(...)`` assignment. ``mutation_cls`` supplies the bind-stashed specs the
     ``full_clean`` errors are keyed through. Returns the saved instance (the skeleton's
     ``refetch_optimized`` re-fetches it by pk under the G2 plan) or a
-    ``list[FieldError]`` on a validation / write failure. ``instance`` (the located
+    ``StepFailure`` on a validation / write failure. ``instance`` (the located
     update row, ``None`` for create) selects the save mode: a create saves the
     ``decoded`` target normally, an update saves it with ``force_update=True``
     (the 0.0.14 disappearing-row concurrency contract via ``forced_save_or_field_errors``).
@@ -1056,7 +1068,7 @@ def _model_write_step(
 
     clean_errors = _full_clean_or_field_errors(mutation_cls, target, exclude=exclude)
     if clean_errors is not None:
-        return clean_errors
+        return StepFailure(clean_errors)
 
     # The pinned-alias WRITE phase opens for exactly the save + M2M assignment:
     # everything before this point (full_clean included) is database-read-only
@@ -1072,11 +1084,11 @@ def _model_write_step(
             # forced update maps to the in-band ``conflict`` envelope.
             write_error = forced_save_or_field_errors(target)
         if write_error is not None:
-            return write_error
+            return StepFailure(write_error)
         try:
             _assign_m2m(target, m2m_assignments)
         except IntegrityError:
-            return integrity_error_field_errors()
+            return StepFailure(integrity_error_field_errors())
     return target
 
 
@@ -1147,7 +1159,7 @@ def _delete_write_step(
     mutation_cls: type[DjangoMutation],
     info: Info[object, object],
     instance: models.Model,
-) -> models.Model | list[FieldError] | None:
+) -> models.Model | StepFailure | None:
     """Snapshot the authorized row, then delete it (spec-036 snapshot-before-delete).
 
     The snapshot is the optimizer-planned re-fetch fully materialized (relations
@@ -1192,7 +1204,7 @@ def _delete_write_step(
     with pipeline_write_phase():
         delete_errors = _delete_or_field_errors(instance)
     if delete_errors is not None:
-        return delete_errors
+        return StepFailure(delete_errors)
     return snapshot
 
 

@@ -1515,8 +1515,10 @@ deliberate *non*-reuse carries its reason (the [`spec-040`][spec-040] /
 - **`_is_graphiql` is set on every request the middleware sees** (the
   attribute is written unconditionally in `process_view`), so `_postprocess`
   never needs a `hasattr` dance; requests that bypass `process_view`
-  (short-circuited by an earlier middleware) fall back to
-  `getattr(request, "_is_graphiql", False)` — upstream's exact read, kept.
+  (short-circuited by an earlier middleware) read as untagged:
+  `django_strawberry_framework/middleware/debug_toolbar.py::_is_graphiql_request`
+  is upstream's `getattr(request, "_is_graphiql", False)`, counting only the
+  `True` that `process_view` writes as tagged.
 - **Non-Strawberry GraphQL views are not tagged.** A consumer serving GraphQL
   through something that is not a `strawberry.django.views.BaseView` subclass
   gets stock toolbar behavior only (no injection). Documented as the

@@ -55,10 +55,27 @@ import tempfile
 import types
 from collections.abc import Iterable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from scripts import prove_failability
+
+if TYPE_CHECKING:
+    from typing_extensions import TypeIs
+
+
+def _is_json_object(value: object) -> "TypeIs[dict[str, object]]":
+    """Return whether a decoded JSON value is an object (JSON object keys are always strings)."""
+    return isinstance(value, dict)
+
+
+def _json_object(text: str) -> dict[str, object]:
+    """Decode ``text``, which every marker and report this script writes holds as one object."""
+    document: object = json.loads(text)
+    assert _is_json_object(document), f"expected a JSON object, got {document!r}"
+    return document
+
 
 SOURCE = """def gate(value):
     if value is None:
@@ -245,8 +262,9 @@ def test_the_mutated_text_is_what_the_scope_actually_runs_against(
     monkeypatch: pytest.MonkeyPatch,
 ):
     target = fake_repo / "package" / "views.py"
-    observed = {}
-    calls = []
+    observed: dict[str, str] = {}
+    markers: list[dict[str, object]] = []
+    calls: list[prove_failability.ProofEntry] = []
 
     def fake_run_scope(
         entry: prove_failability.ProofEntry,
@@ -258,8 +276,12 @@ def test_the_mutated_text_is_what_the_scope_actually_runs_against(
             # The baseline runs before the marker is written: nothing is mutated yet.
             assert not (scratch_root / prove_failability.ACTIVE_MARKER_NAME).exists()
         else:
-            observed["marker"] = json.loads(
-                (scratch_root / prove_failability.ACTIVE_MARKER_NAME).read_text(encoding="utf-8"),
+            markers.append(
+                _json_object(
+                    (scratch_root / prove_failability.ACTIVE_MARKER_NAME).read_text(
+                        encoding="utf-8",
+                    ),
+                ),
             )
         return prove_failability.RunOutcome((), (), "stubbed", 0)
 
@@ -269,8 +291,11 @@ def test_the_mutated_text_is_what_the_scope_actually_runs_against(
 
     assert observed["text1"] == SOURCE
     assert observed["text2"] == "def gate(value):\n    pass\n    return value\n"
-    assert observed["marker"]["mutated_file"] == str(target)
-    assert observed["marker"]["restore_from"].endswith("__package__views.py")
+    (marker,) = markers
+    assert marker["mutated_file"] == str(target)
+    restore_from = marker["restore_from"]
+    assert isinstance(restore_from, str)
+    assert restore_from.endswith("__package__views.py")
 
 
 def test_a_delete_entry_removes_the_anchor_text(
@@ -280,8 +305,8 @@ def test_a_delete_entry_removes_the_anchor_text(
     monkeypatch: pytest.MonkeyPatch,
 ):
     target = fake_repo / "package" / "views.py"
-    observed = {}
-    calls = []
+    observed: dict[str, str] = {}
+    calls: list[prove_failability.ProofEntry] = []
 
     def fake_run_scope(
         entry: prove_failability.ProofEntry,
@@ -471,9 +496,10 @@ def test_two_workspace_roots_under_one_scratch_root_never_share_pristine_marker_
     entry_b = _single_entry(tmp_path)
     directory_b = prove_failability._resolve_scratch_root(str(given))
     monkeypatch.setattr(prove_failability, "REPO_ROOT", fake_repo)
-    calls = []
-    probes = {"a": [], "b": []}
-    seen = {}
+    calls: list[prove_failability.ProofEntry] = []
+    probes: dict[str, list[Path]] = {"a": [], "b": []}
+    markers: dict[str, dict[str, object]] = {}
+    nested: dict[str, prove_failability.ProofResult] = {}
 
     def fake_run_scope(
         entry: prove_failability.ProofEntry,
@@ -486,11 +512,11 @@ def test_two_workspace_roots_under_one_scratch_root_never_share_pristine_marker_
         directory = directory_a if name == "a" else directory_b
         if calls.count(entry) == 2:
             marker = directory / prove_failability.ACTIVE_MARKER_NAME
-            seen[f"marker_{name}"] = json.loads(marker.read_text(encoding="utf-8"))
+            markers[name] = _json_object(marker.read_text(encoding="utf-8"))
         if name == "a" and calls.count(entry) == 2:
             monkeypatch.setattr(prove_failability, "REPO_ROOT", other_repo)
             try:
-                seen["result_b"] = prove_failability.execute_entry(entry_b, directory_b)
+                nested["b"] = prove_failability.execute_entry(entry_b, directory_b)
             finally:
                 monkeypatch.setattr(prove_failability, "REPO_ROOT", fake_repo)
         return prove_failability.RunOutcome((), (), "stubbed", 0)
@@ -504,14 +530,16 @@ def test_two_workspace_roots_under_one_scratch_root_never_share_pristine_marker_
     assert len(calls) == 4
     assert (fake_repo / "package" / "views.py").read_text(encoding="utf-8") == SOURCE
     assert (other_repo / "package" / "views.py").read_text(encoding="utf-8") == other_source
-    assert seen["result_b"].failure is None
-    restore_a = seen["marker_a"]["restore_from"]
-    restore_b = seen["marker_b"]["restore_from"]
+    assert nested["b"].failure is None
+    restore_a = markers["a"]["restore_from"]
+    restore_b = markers["b"]["restore_from"]
+    assert isinstance(restore_a, str)
+    assert isinstance(restore_b, str)
     assert restore_a != restore_b
     assert restore_a.startswith(str(directory_a))
     assert restore_b.startswith(str(directory_b))
     assert result_a.files[0].pristine == restore_a
-    assert seen["result_b"].files[0].pristine == restore_b
+    assert nested["b"].files[0].pristine == restore_b
     assert len(probes["a"]) == len(probes["b"]) == 2
     assert not set(probes["a"]) & set(probes["b"])
     assert all(directory_a in path.parents for path in probes["a"])
@@ -595,14 +623,14 @@ def test_without_a_scratch_root_every_run_gets_a_fresh_directory_named_in_header
     system_tmp = tmp_path / "system-tmp"
     system_tmp.mkdir()
     monkeypatch.setattr(tempfile, "tempdir", str(system_tmp))
-    documents = []
+    documents: list[dict[str, object]] = []
     for run in range(2):
         _four_failing_rows(monkeypatch)
         output = tmp_path / f"run-{run}.json"
 
         assert prove_failability.main([str(_manifest(tmp_path)), "--json", str(output)]) == 0
 
-        documents.append(json.loads(output.read_text(encoding="utf-8")))
+        documents.append(_json_object(output.read_text(encoding="utf-8")))
         directory = documents[-1]["scratch_root"]
         header = capsys.readouterr().err
         assert f"scratch root: {directory}" in header
@@ -610,7 +638,9 @@ def test_without_a_scratch_root_every_run_gets_a_fresh_directory_named_in_header
     first, second = (document["scratch_root"] for document in documents)
     assert first != second
     for document in documents:
-        directory = Path(document["scratch_root"])
+        scratch_root = document["scratch_root"]
+        assert isinstance(scratch_root, str)
+        directory = Path(scratch_root)
         assert directory.parent == system_tmp.resolve()
         assert directory.name.startswith(prove_failability.DEFAULT_SCRATCH_PREFIX)
         assert document["scratch_root_given"] is None
@@ -2127,7 +2157,7 @@ def test_every_site_is_live_during_the_mutant_run_and_every_file_is_restored(
     monkeypatch: pytest.MonkeyPatch,
 ):
     views, other = two_files
-    seen = []
+    seen: list[tuple[str, str]] = []
 
     def fake_run_scope(
         entry: prove_failability.ProofEntry,
@@ -2220,7 +2250,7 @@ def test_two_anchor_sites_on_one_file_apply_in_order(
     monkeypatch: pytest.MonkeyPatch,
 ):
     views = fake_repo / "package" / "views.py"
-    seen = []
+    seen: list[str] = []
 
     def fake_run_scope(
         entry: prove_failability.ProofEntry,
@@ -2316,7 +2346,7 @@ def test_a_pre_image_replaces_the_file_wholesale_and_is_restored(
     views = fake_repo / "package" / "views.py"
     (tmp_path / "inputs").mkdir()
     (tmp_path / "inputs" / "views.pre").write_text(PRE_IMAGE, encoding="utf-8")
-    seen = []
+    seen: list[str] = []
 
     def fake_run_scope(
         entry: prove_failability.ProofEntry,
@@ -2432,7 +2462,7 @@ def test_a_reverse_patch_restores_the_pre_image_while_the_scope_runs(
 ):
     views = fake_repo / "package" / "views.py"
     patch = _patch_file(tmp_path, PRE_IMAGE, SOURCE)
-    seen = []
+    seen: list[str] = []
 
     def fake_run_scope(
         entry: prove_failability.ProofEntry,
@@ -2628,10 +2658,10 @@ def test_a_scope_run_loads_the_probe_and_keeps_its_raw_output(
 ):
     entry = _single_entry(tmp_path)
     capture = prove_failability._new_capture(scratch_root, entry, "mutant")
-    calls = []
+    calls: list[tuple[list[str], dict[str, str] | None]] = []
 
-    def fake_subprocess_run(command: list[str], **kwargs: object):
-        calls.append((command, kwargs))
+    def fake_subprocess_run(command: list[str], *, env: dict[str, str] | None, **kwargs: object):
+        calls.append((command, env))
         capture.probe_output.write_text(
             json.dumps({"kind": "failed", "nodeid": COUNT_ROW, "crash": "t.py:9: assert 6 == 1"})
             + "\n"
@@ -2652,9 +2682,9 @@ def test_a_scope_run_loads_the_probe_and_keeps_its_raw_output(
 
     outcome = prove_failability._run_scope(entry, capture)
 
-    ((command, kwargs),) = calls
+    ((command, environment),) = calls
     assert command[-3:] == ["-p", prove_failability.PROBE_MODULE_NAME, "tests/test_x.py"]
-    environment = kwargs["env"]
+    assert environment is not None
     assert environment["PYTHONPATH"].split(os.pathsep)[0] == str(capture.probe_directory)
     assert environment[prove_failability.PROBE_OUTPUT_ENV] == str(capture.probe_output)
     assert (capture.probe_directory / "prove_failability_probe.py").read_text(
@@ -2721,7 +2751,7 @@ def test_the_json_record_carries_the_whole_mutation_blob_ids_and_provenance(
     long_line = "    return value  # " + "x" * 150
     target = fake_repo / "package" / "views.py"
     target.write_text(SOURCE.replace("    return value", long_line), encoding="utf-8")
-    calls = []
+    calls: list[prove_failability.RunCapture | None] = []
 
     def fake_run_scope(
         entry: prove_failability.ProofEntry,

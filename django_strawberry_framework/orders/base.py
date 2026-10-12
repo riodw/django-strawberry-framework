@@ -33,6 +33,7 @@ from ..exceptions import (
     _safe_type_name,
 )
 from ..sets_mixins import RelatedSetTargetMixin
+from ..utils._narrowing import is_class
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -133,7 +134,7 @@ class RelatedOrder(RelatedSetTargetMixin):
         builder). Mirrors the filter twin's
         ``filters/base.py::RelatedFilter._validate_target``.
         """
-        if not (isinstance(resolved, type) and issubclass(resolved, _order_set_class())):
+        if not (is_class(resolved) and issubclass(resolved, _order_set_class())):
             # ``_bind_owner`` is the one writer of the owner slot, and it stores a set class.
             owner: type[object] | None = getattr(self, self._owner_attr, None)
             owner_label = (

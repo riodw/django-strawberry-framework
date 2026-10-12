@@ -72,7 +72,7 @@ def scan_directory(root: Path) -> dict[str, tuple[int, int, int]]:
     Returns:
         dict mapping relative file path to (total, code, comments)
     """
-    results = {}
+    results: dict[str, tuple[int, int, int]] = {}
     for dirpath, dirnames, filenames in os.walk(root):
         # Prune skipped directories
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]

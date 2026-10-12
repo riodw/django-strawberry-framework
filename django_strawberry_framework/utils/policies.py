@@ -27,6 +27,7 @@ from dataclasses import fields
 from typing import TYPE_CHECKING, TypeVar
 
 from ..exceptions import ConfigurationError, describe_value
+from ._narrowing import is_mapping
 
 if TYPE_CHECKING:
     from _typeshed import DataclassInstance
@@ -149,7 +150,7 @@ def resolve_policy(
         # same terms. (Rejecting it here made the typed message name the policy
         # class as the received type while claiming it must be one.)
         return canonical_policy(overrides, policy_cls=policy_cls, display_name=display_name)
-    if not isinstance(overrides, Mapping):
+    if not is_mapping(overrides):
         raise ConfigurationError(
             f"The {display_name} must be {_article(policy_cls.__name__)} "
             f"{policy_cls.__name__} or a mapping of {unit} names to values; "
@@ -175,18 +176,18 @@ def resolve_policy(
     # typed rejection, not a bare ``TypeError`` from set membership or a
     # ``sorted()`` over mixed unorderable names (the
     # ``conf.py::upstream_patches_enabled`` key-guard precedent).
-    for name in plain:
-        # basedpyright: trust boundary: the mapping comes from consumer settings and can hold any
-        # key
-        if not isinstance(name, str):  # pyright: ignore[reportUnnecessaryIsInstance]
+    named: dict[str, object] = {}
+    for name, value in plain.items():
+        if not isinstance(name, str):
             raise ConfigurationError(
                 f"The {display_name} {unit} names must be strings; got {describe_value(name)}.",
             )
+        named[name] = value
     known = {field.name for field in fields(policy_cls)}
-    unknown = sorted(name for name in plain if name not in known)
+    unknown = sorted(name for name in named if name not in known)
     if unknown:
         raise ConfigurationError(
             f"Unknown {display_name.replace(' ', '-')} {unit}(s): {', '.join(unknown)}. "
             f"Valid {unit}s: {', '.join(sorted(known))}.",
         )
-    return policy_cls(**plain)
+    return policy_cls(**named)

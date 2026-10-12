@@ -44,6 +44,7 @@ from strawberry import UNSET, relay
 from ..conf import hide_flat_filters_setting
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..registry import register_subsystem_clear
+from ..utils._narrowing import is_dict, is_list_or_tuple
 from ..utils.converters import MRO_CONTINUE, convert_with_mro
 from ..utils.input_values import is_inactive_value
 from ..utils.inputs import (
@@ -89,6 +90,7 @@ if TYPE_CHECKING:
     from django_filters.filterset import FilterSetOptions
 
     from ..types.definition import DjangoTypeDefinition
+    from ..utils.inputs import SetInputNamespace
     from ..utils.typing import ConcreteField, ModelField
     from .sets import FilterSet
 
@@ -241,12 +243,7 @@ LOGIC_OPERATORS_BY_PYTHON_ATTR: Mapping[str, LogicOperatorDescriptor] = MappingP
 # ``utils/inputs.py::make_input_namespace``.
 _materialized_names: dict[str, type[object]]
 _field_specs: dict[tuple[type[FilterSet], str], FieldSpec]
-(
-    _materialized_names,
-    _field_specs,
-    _materialize_input,
-    _clear_input_namespace,
-) = make_set_input_namespace(
+_namespace: SetInputNamespace[FilterSet] = make_set_input_namespace(
     INPUTS_MODULE_PATH,
     "FilterSet",
     factory_module="django_strawberry_framework.filters.factories",
@@ -255,6 +252,7 @@ _field_specs: dict[tuple[type[FilterSet], str], FieldSpec]
     set_module="django_strawberry_framework.filters.sets",
     set_class_name="FilterSet",
 )
+_materialized_names, _field_specs, _materialize_input, _clear_input_namespace = _namespace
 
 
 # ---------------------------------------------------------------------------
@@ -783,7 +781,7 @@ def _require_list_container(
     keys-for-values swap). Returns ``raw_value``, narrowed to the list or
     tuple it proved, for the arm to iterate.
     """
-    if not isinstance(raw_value, (list, tuple)):
+    if not is_list_or_tuple(raw_value):
         raise ConfigurationError(
             f"{filter_instance.__class__.__name__} consumes a list of values for its "
             f"{filter_instance.field_name!r} input, but received a non-list container "
@@ -881,11 +879,21 @@ def _build_range_input_class(
     )
 
 
+class _RangeFormPatch(dict[str, object]):
+    """A range filter's positional form-data patch, ``{<name>_0, <name>_1}``.
+
+    The one multi-key shape ``normalize_input_value`` returns, under its own type so
+    the normalizer's caller (``filters/sets.py::FilterSet._normalize_input``) merges it
+    by type and never mistakes a dict a non-range filter passed through verbatim for
+    a patch.
+    """
+
+
 def _normalize_range_value(
     filter_instance: Filter,
     raw_value: object,
     field_name: str | None = None,
-) -> dict[str, object]:
+) -> _RangeFormPatch:
     """Return the positional form-data patch ``{<name>_0, <name>_1}`` for a RangeFilter.
 
     Per spec-027 Decision 4: Django's ``RangeWidget.value_from_datadict``
@@ -903,14 +911,10 @@ def _normalize_range_value(
     """
     base = field_name or filter_instance.field_name or "range"
     start: object = (
-        getattr(raw_value, "start", None)
-        if not isinstance(raw_value, dict)
-        else raw_value.get("start")
+        getattr(raw_value, "start", None) if not is_dict(raw_value) else raw_value.get("start")
     )
     end: object = (
-        getattr(raw_value, "end", None)
-        if not isinstance(raw_value, dict)
-        else raw_value.get("end")
+        getattr(raw_value, "end", None) if not is_dict(raw_value) else raw_value.get("end")
     )
     # Drop ``None``- and ``UNSET``-valued axes so partial-range inputs surface only
     # the supplied positional key. Django's ``RangeWidget.value_from_datadict``
@@ -920,7 +924,7 @@ def _normalize_range_value(
     # leaks ``UNSET`` into form-field cleaning -- the explicit
     # ``is_inactive_value`` rigor mirrors ``normalize_input_value``'s ``raw_value
     # is None or raw_value is UNSET`` entry guard.
-    patch: dict[str, object] = {}
+    patch = _RangeFormPatch()
     if not is_inactive_value(start, unset_sentinel=UNSET):
         patch[f"{base}_0"] = _unwrap_enum_member(start)
     if not is_inactive_value(end, unset_sentinel=UNSET):

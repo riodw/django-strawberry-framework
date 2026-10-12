@@ -20,19 +20,21 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     import strawberry
+    from django.db import models
 
+    from django_strawberry_framework import DjangoType
     from django_strawberry_framework.optimizer.nested_fetch import StrategySelection
 
 
 def make_django_type(
     name: str,
-    model: type,
+    model: type[models.Model],
     fields: tuple[str, ...],
     *,
     node: bool = True,
     meta_extra: Mapping[str, object] | None = None,
     namespace_extra: Mapping[str, object] | None = None,
-) -> type:
+) -> type[DjangoType]:
     """Declare a ``DjangoType`` over ``model`` (Relay-Node-shaped by default).
 
     The one ``type(name, (DjangoType,), {"Meta": ...})`` declaration core the
@@ -52,11 +54,13 @@ def make_django_type(
     namespace: dict[str, object] = {"Meta": type("Meta", (), meta_attrs)}
     if namespace_extra:
         namespace.update(namespace_extra)
-    return type(name, (DjangoType,), namespace)
+    declared = type(name, (DjangoType,), namespace)
+    assert issubclass(declared, DjangoType)
+    return declared
 
 
 def build_strategy_schema(
-    query_cls: type,
+    query_cls: type[object],
     strategy: StrategySelection | None,
 ) -> strawberry.Schema:
     """One ``strawberry.Schema`` over ``query_cls`` running ``strategy``.

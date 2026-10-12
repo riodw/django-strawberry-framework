@@ -17,7 +17,7 @@ import inspect
 import uuid
 from collections.abc import Iterable, Iterator, Sized
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 import django
 import pytest
@@ -25,6 +25,7 @@ from apps.products import services
 from apps.products.models import Category, Item
 from django.db import connection as db_connection
 from django.db.models import Model, QuerySet
+from django.db.models.expressions import Combinable
 from django.utils import timezone
 from typing_extensions import override
 
@@ -47,6 +48,8 @@ from django_strawberry_framework.types.resolvers import _make_relation_resolver
 from tests._info import make_info, response_path, unread_info
 
 if TYPE_CHECKING:
+    from django.db.models.fields.related_descriptors import ManyRelatedManager
+
     from django_strawberry_framework.utils.typing import ModelField
 
 
@@ -1797,7 +1800,7 @@ def _declare_mti_tag_models():
     from django.db import models
 
     class MtiTag(models.Model):
-        name = models.TextField()
+        name: "models.TextField[str | Combinable, str]" = models.TextField()
 
         class Meta:
             app_label = "library"
@@ -1805,8 +1808,11 @@ def _declare_mti_tag_models():
             db_table = "resolvers_mti_tag"
 
     class MtiPlace(models.Model):
-        name = models.TextField()
-        tags = models.ManyToManyField(MtiTag, db_table="resolvers_mti_place_tags")
+        name: "models.TextField[str | Combinable, str]" = models.TextField()
+        tags: "models.ManyToManyField[MtiTag, models.Model]" = models.ManyToManyField(
+            MtiTag,
+            db_table="resolvers_mti_place_tags",
+        )
 
         class Meta:
             app_label = "library"
@@ -1822,6 +1828,20 @@ def _declare_mti_tag_models():
             db_table = "resolvers_mti_shop"
 
     return MtiTag, MtiPlace, MtiShop
+
+
+@runtime_checkable
+class _TaggedRow(Protocol):
+    """An MTI fixture row carrying the ``tags`` many-to-many manager."""
+
+    tags: "ManyRelatedManager[Model, Model]"
+
+
+@runtime_checkable
+class _PlaceWithShop(Protocol):
+    """An MTI fixture parent row reaching its child through the ``mtishop`` accessor."""
+
+    mtishop: Model
 
 
 def _create_mti_tag_tables(*models_in_order: type[Model]):
@@ -1841,10 +1861,12 @@ def _seed_mti_tags(tag_model: type[Model], shop_model: type[Model]):
     alpha = tag_model.objects.create(name="Alpha")
     beta = tag_model.objects.create(name="Beta")
     hidden = tag_model.objects.create(name="Hidden")
-    # basedpyright: the MTI fixture model is built at run time and typed type[Model]; its tags
-    # many-to-many accessor is unknown to the checker
-    shop_model.objects.create(name="One").tags.add(alpha, beta, hidden)  # pyright: ignore[reportAttributeAccessIssue]
-    shop_model.objects.create(name="Two").tags.add(beta)  # pyright: ignore[reportAttributeAccessIssue]
+    one = shop_model.objects.create(name="One")
+    two = shop_model.objects.create(name="Two")
+    assert isinstance(one, _TaggedRow)
+    assert isinstance(two, _TaggedRow)
+    one.tags.add(alpha, beta, hidden)
+    two.tags.add(beta)
 
 
 def _shops_reached_through_prefetched_places(place_model: type[Model]) -> list[Model]:
@@ -1856,9 +1878,11 @@ def _shops_reached_through_prefetched_places(place_model: type[Model]) -> list[M
     ``_prefetched_objects_cache`` holds nothing.
     """
     places = place_model.objects.prefetch_related("tags").order_by("name")
-    # basedpyright: the MTI fixture model is built at run time and typed type[Model]; its mtishop
-    # child accessor is unknown to the checker
-    return [place.mtishop for place in places]  # pyright: ignore[reportAttributeAccessIssue]
+    shops: list[Model] = []
+    for place in places:
+        assert isinstance(place, _PlaceWithShop)
+        shops.append(place.mtishop)
+    return shops
 
 
 def _mti_tag_schema(

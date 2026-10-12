@@ -28,6 +28,7 @@ import strawberry
 from apps.library.models import Book, Genre, MembershipCard, Patron, Shelf
 from apps.products.models import Category, Entry, Item, Property
 from django.db import models
+from django.db.models.expressions import Combinable
 from strawberry import relay
 from strawberry.types import get_object_definition
 from strawberry.types.base import StrawberryObjectDefinition
@@ -38,7 +39,7 @@ from django_strawberry_framework import DjangoType, auto, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.base import _build_annotations
-from tests._idioms import definition_raises
+from tests._idioms import definition_raises, resolver_function
 
 # Dotted path of the module holding the ``strawberry.lazy`` relation-override
 # target. Bound once for the ``sys.modules`` eviction and the assertions; the
@@ -64,7 +65,7 @@ def _isolate_registry() -> Iterator[None]:
     registry.clear()
 
 
-def _strawberry_field(type_cls: type, field_name: str) -> StrawberryField:
+def _strawberry_field(type_cls: type[object], field_name: str) -> StrawberryField:
     """Return a finalized Strawberry field by Python name.
 
     Tests intentionally inspect Strawberry internals such as
@@ -73,7 +74,7 @@ def _strawberry_field(type_cls: type, field_name: str) -> StrawberryField:
     """
     return next(
         field
-        for field in type_cls.__strawberry_definition__.fields
+        for field in get_object_definition(type_cls, strict=True).fields
         if field.python_name == field_name
     )
 
@@ -279,8 +280,7 @@ def test_annotation_only_relation_override_keeps_generated_resolver():
     finalize_django_types()
 
     items_field = _strawberry_field(CategoryType, "items")
-    assert items_field.base_resolver is not None
-    assert items_field.base_resolver.wrapped_func.__name__ == "resolve_items"
+    assert resolver_function(items_field).__name__ == "resolve_items"
 
 
 def test_assigned_relation_field_override_keeps_consumer_resolver():
@@ -308,8 +308,7 @@ def test_assigned_relation_field_override_keeps_consumer_resolver():
     finalize_django_types()
 
     items_field = _strawberry_field(CategoryType, "items")
-    assert items_field.base_resolver is not None
-    assert items_field.base_resolver.wrapped_func.__qualname__.endswith("CategoryType.items")
+    assert resolver_function(items_field).__qualname__.endswith("CategoryType.items")
 
 
 def test_assigned_relation_field_resolver_kwarg_override_keeps_consumer_resolver():
@@ -360,14 +359,13 @@ def test_assigned_relation_field_resolver_kwarg_override_keeps_consumer_resolver
     finalize_django_types()
 
     items_field = _strawberry_field(CategoryType, "items")
-    assert items_field.base_resolver is not None
     # The pin for the consumer-assigned relation skip that
     # ``types/finalizer.py::finalize_django_types`` hands to
     # ``types/resolvers.py::_attach_relation_resolvers``: identity with the
     # consumer's own function, which flips to the generated relation resolver
     # the moment that skip stops holding. The SDL below is byte-identical
     # either way, so it corroborates the shape and never pins it.
-    assert items_field.base_resolver.wrapped_func is category_items
+    assert resolver_function(items_field) is category_items
 
     @strawberry.type
     class Query:
@@ -438,8 +436,7 @@ def test_cross_module_lazy_relation_override_types_the_field_as_the_referenced_c
     finalize_django_types()
 
     items_field = _strawberry_field(CategoryType, "items")
-    assert items_field.base_resolver is not None
-    assert items_field.base_resolver.wrapped_func.__name__ == "resolve_items"
+    assert resolver_function(items_field).__name__ == "resolve_items"
 
     @strawberry.type
     class Query:
@@ -507,8 +504,7 @@ def test_cross_module_lazy_relation_override_wins_over_the_registered_primary_ty
     finalize_django_types()
 
     items_field = _strawberry_field(CategoryType, "items")
-    assert items_field.base_resolver is not None
-    assert items_field.base_resolver.wrapped_func.__name__ == "resolve_items"
+    assert resolver_function(items_field).__name__ == "resolve_items"
 
     @strawberry.type
     class Query:
@@ -576,8 +572,7 @@ def test_assigned_scalar_field_override_keeps_consumer_resolver():
 
     finalize_django_types()
     name_field = _strawberry_field(CategoryType, "name")
-    assert name_field.base_resolver is not None
-    assert name_field.base_resolver.wrapped_func.__qualname__.endswith("CategoryType.name")
+    assert resolver_function(name_field).__qualname__.endswith("CategoryType.name")
 
 
 # ---------------------------------------------------------------------------
@@ -598,8 +593,8 @@ def test_camel_case_field_collision_raises():
     """
 
     class CamelCollide(models.Model):
-        foo_bar = models.IntegerField()
-        fooBar = models.IntegerField()  # noqa: N815 - intentional collision fixture
+        foo_bar: "models.IntegerField[float | int | str | Combinable, int]" = models.IntegerField()
+        fooBar: "models.IntegerField[float | int | str | Combinable, int]" = models.IntegerField()  # noqa: N815 - intentional collision fixture
 
         class Meta:
             managed = False
@@ -624,7 +619,7 @@ def test_explicit_graphql_field_name_collision_raises():
     """An explicit Strawberry name participates in the settled-surface audit."""
 
     class ExplicitNameCollision(models.Model):
-        foo_bar = models.IntegerField()
+        foo_bar: "models.IntegerField[float | int | str | Combinable, int]" = models.IntegerField()
 
         class Meta:
             app_label = "test_field_surface"
@@ -653,7 +648,9 @@ def test_relay_suppressed_pk_does_not_collide_with_real_consumer_field():
     """A selected pk removed by Relay is not part of the settled GraphQL surface."""
 
     class RenamedPrimaryKey(models.Model):
-        legacy_id = models.AutoField(primary_key=True)
+        legacy_id: "models.AutoField[Combinable | int | str, int]" = models.AutoField(
+            primary_key=True,
+        )
 
         class Meta:
             app_label = "test_field_surface"
@@ -682,15 +679,17 @@ def test_relation_connection_does_not_collide_with_relay_suppressed_pk():
     """A generated connection may reuse the Python name of a suppressed pk column."""
 
     class Target(models.Model):
-        name = models.CharField(max_length=20)
+        name: "models.CharField[str | int | Combinable, str]" = models.CharField(max_length=20)
 
         class Meta:
             app_label = "test_field_surface"
             managed = False
 
     class Source(models.Model):
-        items_connection = models.AutoField(primary_key=True)
-        items = models.ManyToManyField(Target)
+        items_connection: "models.AutoField[Combinable | int | str, int]" = models.AutoField(
+            primary_key=True,
+        )
+        items: "models.ManyToManyField[Target, models.Model]" = models.ManyToManyField(Target)
 
         class Meta:
             app_label = "test_field_surface"
@@ -750,7 +749,7 @@ def test_empty_field_surface_raises():
     """
 
     class EmptySurface(models.Model):
-        name = models.CharField(max_length=10)
+        name: "models.CharField[str | int | Combinable, str]" = models.CharField(max_length=10)
 
         class Meta:
             managed = False
@@ -993,7 +992,7 @@ def test_annotation_override_of_grouped_choices_field_is_allowed():
     """A consumer ``status: str`` annotation bypasses grouped-choices rejection."""
 
     class GroupedChoiceOwner(models.Model):
-        status = models.CharField(
+        status: "models.CharField[str | int | Combinable, str]" = models.CharField(
             max_length=32,
             choices=[("group1", [("a", "A"), ("b", "B")])],
         )
@@ -1018,7 +1017,10 @@ def test_annotation_override_does_not_populate_shared_enum_cache_for_co_resident
     """One overriding + one non-overriding type share enum from the non-overriding side alone."""
 
     class CoResidentChoiceOwner(models.Model):
-        status = models.CharField(max_length=32, choices=[("a", "A"), ("b", "B")])
+        status: "models.CharField[str | int | Combinable, str]" = models.CharField(
+            max_length=32,
+            choices=[("a", "A"), ("b", "B")],
+        )
 
         class Meta:
             app_label = "test_spec015_co_resident"
@@ -1380,8 +1382,7 @@ def test_same_module_string_forward_reference_annotation_survives_finalization()
         finalize_django_types()
 
         items_field = _strawberry_field(StringCategoryType, "items")
-        assert items_field.base_resolver is not None
-        assert items_field.base_resolver.wrapped_func.__name__ == "resolve_items"
+        assert resolver_function(items_field).__name__ == "resolve_items"
     finally:
         globals().pop("StringCategoryType", None)
         globals().pop("StringItemType", None)

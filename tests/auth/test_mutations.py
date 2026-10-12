@@ -89,7 +89,7 @@ from django_strawberry_framework.auth.mutations import (
 from django_strawberry_framework.auth.sessions import _SCOPE_LOCK_KEY
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.mutations.inputs import _materialized_names
-from django_strawberry_framework.mutations.resolvers import _model_decode_step
+from django_strawberry_framework.mutations.resolvers import StepFailure, _model_decode_step
 from django_strawberry_framework.mutations.sets import _mutation_registry
 from django_strawberry_framework.optimizer import DjangoOptimizerExtension
 from django_strawberry_framework.registry import (
@@ -99,14 +99,24 @@ from django_strawberry_framework.registry import (
 from django_strawberry_framework.utils.permissions import ChannelsRequestAdapter
 from django_strawberry_framework.utils.querysets import SyncMisuseError
 from django_strawberry_framework.utils.sessions import connection_actor_state
+from tests._idioms import resolver_function
 from tests._info import make_info, unread_info
 from tests.auth._helpers import _drain_until, _session_request
 
 if TYPE_CHECKING:
+    from typing import TypeAlias
+
     from channels.testing.http import _HTTPTestResponse
+    from django.db.models.expressions import Combinable
 
     from django_strawberry_framework.auth.mutations import _RegisterDecoded
     from django_strawberry_framework.mutations.inputs import FieldError
+
+    # Each field's descriptor types as django-stubs declares them (set type, get type), spelled
+    # out because the checker runs without the django-stubs mypy plugin that would infer them.
+    _Char: TypeAlias = djmodels.CharField[str | int | Combinable, str]
+    _Bool: TypeAlias = djmodels.BooleanField[bool | Combinable, bool]
+    _Email: TypeAlias = djmodels.EmailField[str | Combinable, str]
 
 
 @runtime_checkable
@@ -151,13 +161,6 @@ def _declared_holder(surface: str) -> auth_mutations._SealedAuthHolderMeta:
     holder = _declared_auth_surface(surface)
     assert isinstance(holder, auth_mutations._SealedAuthHolderMeta)
     return holder
-
-
-def _mutable_scope(adapter: ChannelsRequestAdapter) -> MutableMapping[str, object]:
-    """The adapter's connection scope, proven mutable as the connection-state helpers need."""
-    scope = adapter.scope
-    assert isinstance(scope, MutableMapping)
-    return scope
 
 
 class _AllowAll:
@@ -295,29 +298,45 @@ def _login_logout_schema(
     return _finalize_schema(Mutation, query_type=query_type, optimizer=optimizer)
 
 
+def _channels_scope(
+    scope_type: str = "http",
+    *,
+    store: SessionBase | None = None,
+    user: AbstractBaseUser | None = None,
+) -> dict[str, object]:
+    """Fabricate an ASGI connection scope carrying a session and an actor.
+
+    ``scope_type`` is the ASGI ``type`` (``"http"`` / ``"websocket"``); ``store``
+    defaults to a fresh ``DBSessionStore()`` and ``user`` to ``AnonymousUser()``
+    (fresh per call - never a shared mutable default), while tests that name their
+    own store/actor pass them explicitly. A test that inspects the per-connection
+    state the package stores on the scope keeps this dict and reads it back.
+    """
+    return {
+        "type": scope_type,
+        "session": store if store is not None else DBSessionStore(),
+        "user": user if user is not None else AnonymousUser(),
+    }
+
+
+def _channels_adapter_over(scope: dict[str, object]) -> ChannelsRequestAdapter:
+    """Build a ``ChannelsRequestAdapter`` over ``scope``."""
+    return ChannelsRequestAdapter(RequestFactory().post("/graphql/"), scope)
+
+
 def _channels_adapter(
     scope_type: str = "http",
     *,
     store: SessionBase | None = None,
     user: AbstractBaseUser | None = None,
-):
+) -> ChannelsRequestAdapter:
     """Build a ``ChannelsRequestAdapter`` over a fabricated ASGI scope.
 
     The ONE factory the Channels-transport tests share for the repeated
-    ``ChannelsRequestAdapter(RequestFactory().post("/graphql/"), {...})`` shape.
-    ``scope_type`` is the ASGI ``type`` (``"http"`` / ``"websocket"``); ``store``
-    defaults to a fresh ``DBSessionStore()`` and ``user`` to ``AnonymousUser()``
-    (fresh per call - never a shared mutable default), while tests that name their
-    own store/actor pass them explicitly.
+    ``ChannelsRequestAdapter(RequestFactory().post("/graphql/"), {...})`` shape;
+    the scope is ``_channels_scope``'s.
     """
-    return ChannelsRequestAdapter(
-        RequestFactory().post("/graphql/"),
-        {
-            "type": scope_type,
-            "session": store if store is not None else DBSessionStore(),
-            "user": user if user is not None else AnonymousUser(),
-        },
-    )
+    return _channels_adapter_over(_channels_scope(scope_type, store=store, user=user))
 
 
 def _auth_free_subprocess(body: str) -> None:
@@ -872,14 +891,14 @@ def test_bridged_async_body_is_a_real_coroutine_function():
 
 def test_auth_field_dispatch_splits_sync_and_async_resolver_bodies():
     """``_make_auth_field`` picks the sync body vs the async body by ``in_async_context``."""
-    sync_calls = []
-    async_calls = []
+    sync_calls: list[dict[str, object]] = []
+    async_calls: list[dict[str, object]] = []
 
-    def _sync_body(info: object, **kwargs: object):
+    def _sync_body(info: object, **kwargs: object) -> str:
         sync_calls.append(kwargs)
         return "sync"
 
-    async def _async_body(info: object, **kwargs: object):
+    async def _async_body(info: object, **kwargs: object) -> str:
         async_calls.append(kwargs)
         return "async"
 
@@ -893,9 +912,7 @@ def test_auth_field_dispatch_splits_sync_and_async_resolver_bodies():
         directives=(),
     )
     assert isinstance(field, StrawberryField)
-    assert field.base_resolver is not None
-    resolver = field.base_resolver.wrapped_func
-    assert inspect.isfunction(resolver)
+    resolver = resolver_function(field)
 
     # Sync execution stays synchronous: the plain sync body runs and returns a value.
     assert resolver(None, info=None) == "sync"
@@ -1110,7 +1127,7 @@ def test_gated_register_denies_with_the_standard_create_string():
 @pytest.mark.django_db
 def test_login_gate_sees_the_attempted_username_and_never_the_password():
     """The pinned gate payload: ``data = {"username": ...}``, ``instance=None``."""
-    seen = {}
+    seen: dict[str, object] = {}
 
     class RecordingGate:
         def has_permission(
@@ -1120,7 +1137,7 @@ def test_login_gate_sees_the_attempted_username_and_never_the_password():
             operation: str,
             data: object,
             instance: object = None,
-        ):
+        ) -> bool:
             seen.update(operation=operation, data=data, instance=instance)
             return True
 
@@ -1146,7 +1163,7 @@ def test_gate_introspecting_the_mutation_object_raises_on_the_model_less_fields(
     5); one keyed that way authorizes fine, one that introspects the object
     raises the request-time error the ``DenyAll`` precedent documents.
     """
-    seen_holders = []
+    seen_holders: list[type[object]] = []
 
     class InfoKeyedGate:
         def has_permission(
@@ -1156,7 +1173,7 @@ def test_gate_introspecting_the_mutation_object_raises_on_the_model_less_fields(
             operation: str,
             data: object,
             instance: object = None,
-        ):
+        ) -> bool:
             seen_holders.append(mutation)
             return operation == "logout"
 
@@ -1168,10 +1185,10 @@ def test_gate_introspecting_the_mutation_object_raises_on_the_model_less_fields(
             operation: str,
             data: object,
             instance: object = None,
-        ):
+        ) -> bool:
             # basedpyright: the Meta read on a holder that declares none is the request-time raise
             # under test
-            return mutation.Meta.model is not None  # pyright: ignore[reportAttributeAccessIssue]
+            return mutation.Meta.model is not None  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
 
     _declare_user_type()
 
@@ -1219,8 +1236,8 @@ def _privilege_required_user():
     """
 
     class PrivilegeRequiredUser(AbstractBaseUser):
-        username = djmodels.CharField(max_length=150)
-        is_staff = djmodels.BooleanField(default=False)
+        username: _Char = djmodels.CharField(max_length=150)
+        is_staff: _Bool = djmodels.BooleanField(default=False)
 
         USERNAME_FIELD = "username"
         REQUIRED_FIELDS = ["is_staff"]
@@ -1246,8 +1263,8 @@ def test_derive_register_fields_custom_username_and_required_fields():
     """
 
     class CustomLoginUser(AbstractBaseUser):
-        email = djmodels.EmailField(unique=True)
-        nickname = djmodels.CharField(max_length=50)
+        email: _Email = djmodels.EmailField(unique=True)
+        nickname: _Char = djmodels.CharField(max_length=50)
 
         USERNAME_FIELD = "email"
         # ``email`` repeats USERNAME_FIELD and ``password`` repeats the fixed
@@ -1296,8 +1313,8 @@ def test_derive_register_fields_rejects_unknown_names_via_editable_input_fields(
     """
 
     class BrokenRequiredUser(djmodels.Model):
-        handle = djmodels.CharField(max_length=50)
-        password = djmodels.CharField(max_length=128)
+        handle: _Char = djmodels.CharField(max_length=50)
+        password: _Char = djmodels.CharField(max_length=128)
 
         USERNAME_FIELD = "handle"
         REQUIRED_FIELDS = ("no_such_column",)
@@ -1321,8 +1338,8 @@ def test_derive_register_fields_rejects_a_non_string_username_field():
     """
 
     class NonStringLoginUser(djmodels.Model):
-        handle = djmodels.CharField(max_length=50)
-        password = djmodels.CharField(max_length=128)
+        handle: _Char = djmodels.CharField(max_length=50)
+        password: _Char = djmodels.CharField(max_length=128)
 
         USERNAME_FIELD = 7
         REQUIRED_FIELDS = ()
@@ -1365,7 +1382,7 @@ def test_exclusion_seam_captures_password_and_preserves_the_provided_marker():
         model_fields=model_fields,
     )
     # The decode succeeded (no field errors) and carried the captured excluded values.
-    assert isinstance(decoded, tuple)
+    assert not isinstance(decoded, StepFailure)
     assert len(decoded) == 4
     target, m2m_assignments, exclude, excluded_values = decoded
     # The raw value was captured out of the constructed attrs...
@@ -1400,6 +1417,7 @@ def test_model_decode_step_without_exclusion_keeps_the_historical_three_tuple():
         specs=specs,
         model_fields=model_fields,
     )
+    assert not isinstance(decoded, StepFailure)
     assert len(decoded) == 3
 
 
@@ -1431,8 +1449,9 @@ def test_register_with_explicit_none_password_returns_null_field_error():
         password: str | None = None
 
     data = _RegisterInput(username="testuser", email="u@example.com", password=None)
-    errors = _register_decode_step(rider, data, info=unread_info(), instance=None)
-    assert isinstance(errors, list)
+    failure = _register_decode_step(rider, data, info=unread_info(), instance=None)
+    assert isinstance(failure, StepFailure)
+    errors = failure.errors
     assert len(errors) == 1
     assert errors[0].field == "password"
     assert errors[0].codes == ["null"]
@@ -1449,8 +1468,9 @@ def test_register_write_step_none_password_defense_in_depth():
         [],
         None,
     )
-    errors = _register_write_step(DjangoMutation, None, decoded)
-    assert isinstance(errors, list)
+    failure = _register_write_step(DjangoMutation, None, decoded)
+    assert isinstance(failure, StepFailure)
+    errors = failure.errors
     assert len(errors) == 1
     assert errors[0].field == "password"
     assert errors[0].codes == ["null"]
@@ -1469,12 +1489,14 @@ def test_register_decode_step_with_unset_password_returns_none_password():
         password: str = strawberry.UNSET
 
     data = _RegisterInput(username="testuser", email="u@example.com", password=strawberry.UNSET)
-    user, _m2m, _exclude, raw_password = _register_decode_step(
+    decoded = _register_decode_step(
         rider,
         data,
         info=unread_info(),
         instance=None,
     )
+    assert not isinstance(decoded, StepFailure)
+    user, _m2m, _exclude, raw_password = decoded
     assert isinstance(user, User)
     assert user.username == "testuser"
     assert raw_password is None
@@ -1512,8 +1534,9 @@ def test_register_write_step_non_str_password_defense_in_depth(bad_password: obj
         [],
         bad_password,
     )
-    errors = _register_write_step(DjangoMutation, None, decoded)
-    assert isinstance(errors, list)
+    failure = _register_write_step(DjangoMutation, None, decoded)
+    assert isinstance(failure, StepFailure)
+    errors = failure.errors
     assert len(errors) == 1
     assert errors[0].field == "password"
     assert errors[0].codes == ["invalid"]
@@ -1920,7 +1943,7 @@ def _channels_router(schema: strawberry.Schema):
                 URLRouter(
                     # basedpyright: django-stubs' ``re_path`` has no overload taking an ASGI application:
                     # Channels' documented ``re_path`` routing idiom
-                    [re_path(graphql_path, GraphQLHTTPConsumer.as_asgi(schema=schema))],  # pyright: ignore[reportCallIssue, reportArgumentType]
+                    [re_path(graphql_path, GraphQLHTTPConsumer.as_asgi(schema=schema))],  # pyright: ignore[reportCallIssue, reportArgumentType, reportUnknownArgumentType]
                 ),
             ),
             "websocket": AllowedHostsOriginValidator(
@@ -1928,7 +1951,7 @@ def _channels_router(schema: strawberry.Schema):
                     URLRouter(
                         # basedpyright: django-stubs' ``re_path`` has no overload taking an ASGI application:
                         # Channels' documented ``re_path`` routing idiom
-                        [re_path(graphql_path, GraphQLWSConsumer.as_asgi(schema=schema))],  # pyright: ignore[reportCallIssue, reportArgumentType]
+                        [re_path(graphql_path, GraphQLWSConsumer.as_asgi(schema=schema))],  # pyright: ignore[reportCallIssue, reportArgumentType, reportUnknownArgumentType]
                     ),
                 ),
             ),
@@ -2450,7 +2473,8 @@ async def test_the_logout_teardown_holds_both_locks_in_the_documented_order(
     await _acreate_users(1)
     payload_cls = await database_sync_to_async(_logout_payload_cls)()
     user = await get_user_model().objects.aget(username="staff_1")
-    adapter = _channels_adapter(scope_type="websocket", user=user)
+    connection_scope = _channels_scope(scope_type="websocket", user=user)
+    adapter = _channels_adapter_over(connection_scope)
     native_logout = channels.auth.logout
     observed = {}
 
@@ -2474,7 +2498,7 @@ async def test_the_logout_teardown_holds_both_locks_in_the_documented_order(
     assert payload.ok
     assert observed == {"lease": True, "session_lock": True, "provenance": True}
     # Both are released on the way out, so the next checkpoint is not blocked.
-    assert not connection_actor_state(_mutable_scope(adapter)).lock.locked()
+    assert not connection_actor_state(connection_scope).lock.locked()
     session_lock = adapter.scope[_SCOPE_LOCK_KEY]
     assert isinstance(session_lock, asyncio.Lock)
     assert not session_lock.locked()
@@ -2486,13 +2510,14 @@ async def test_channels_logout_latches_the_provenance_of_the_actor_it_revoked():
     await _acreate_users(1)
     payload_cls = await database_sync_to_async(_logout_payload_cls)()
     user = await get_user_model().objects.aget(username="staff_1")
-    adapter = _channels_adapter(scope_type="websocket", user=user)
+    connection_scope = _channels_scope(scope_type="websocket", user=user)
+    adapter = _channels_adapter_over(connection_scope)
 
     payload = await auth_mutations._channels_logout(adapter, payload_cls)
 
     assert isinstance(payload, _LogoutPayload)
     assert payload.ok
-    state = connection_actor_state(_mutable_scope(adapter))
+    state = connection_actor_state(connection_scope)
     assert state.authenticated_provenance
     assert not state.lock.locked()
 
@@ -2507,13 +2532,14 @@ async def test_an_anonymous_channels_logout_latches_no_provenance():
     socket would then be closed by the very next one.
     """
     payload_cls = await database_sync_to_async(_logout_payload_cls)()
-    adapter = _channels_adapter(scope_type="websocket")
+    connection_scope = _channels_scope(scope_type="websocket")
+    adapter = _channels_adapter_over(connection_scope)
 
     payload = await auth_mutations._channels_logout(adapter, payload_cls)
 
     assert isinstance(payload, _LogoutPayload)
     assert payload.ok is False
-    state = connection_actor_state(_mutable_scope(adapter))
+    state = connection_actor_state(connection_scope)
     assert not state.authenticated_provenance
     assert not state.lock.locked()
 
@@ -2532,12 +2558,13 @@ async def test_a_failed_channels_logout_still_latches_provenance_and_frees_the_l
     await _acreate_users(1)
     payload_cls = await database_sync_to_async(_logout_payload_cls)()
     user = await get_user_model().objects.aget(username="staff_1")
-    adapter = _channels_adapter(scope_type="websocket", user=user)
+    connection_scope = _channels_scope(scope_type="websocket", user=user)
+    adapter = _channels_adapter_over(connection_scope)
 
     with _raising_logout_receiver(), pytest.raises(RuntimeError, match="logout-signal boom"):
         await auth_mutations._channels_logout(adapter, payload_cls)
 
-    state = connection_actor_state(_mutable_scope(adapter))
+    state = connection_actor_state(connection_scope)
     assert state.authenticated_provenance
     assert not state.lock.locked()
 
@@ -2916,7 +2943,7 @@ class _DeleteBeforeExplicitSaveStore(DBSessionStore):
     ):
         super().__init__(*args, **kwargs)
         self._on_before_explicit_save = on_before_explicit_save
-        self.save_calls = []
+        self.save_calls: list[bool] = []
 
     @override
     def save(self, must_create: bool = False):

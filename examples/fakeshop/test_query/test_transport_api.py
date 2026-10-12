@@ -114,6 +114,7 @@ if TYPE_CHECKING:
     from typing import TypeAlias
 
     from django.test.client import _MonkeyPatchedASGIResponse, _MonkeyPatchedWSGIResponse
+    from typing_extensions import TypeIs
 
     #: What either test client answers with, once awaited on the async side.
     _TestResponse: TypeAlias = _MonkeyPatchedWSGIResponse | _MonkeyPatchedASGIResponse
@@ -369,7 +370,7 @@ def _carrying_the_packages_csrf_mark(
     is still the row that runs against fakeshop's real ``/graphql/`` mount, where no
     scaffolding is involved at all.
     """
-    mark = view_class.as_view().csrf_exempt
+    mark = vars(view_class.as_view())["csrf_exempt"]
 
     def decorate(view: _ViewT) -> _ViewT:
         vars(view)["csrf_exempt"] = mark
@@ -658,7 +659,7 @@ def _asgi_post(
         {"type": "http.request", "body": fragment, "more_body": index < len(fragments) - 1}
         for index, fragment in enumerate(fragments)
     ]
-    sent = []
+    sent: list[Mapping[str, object]] = []
 
     async def receive():
         if pending:
@@ -675,11 +676,36 @@ def _asgi_post(
     asyncio.run(drive())
 
     start = next(message for message in sent if message["type"] == "http.response.start")
+    status = start["status"]
+    assert type(status) is int, start
     body = b"".join(
-        message.get("body", b"") for message in sent if message["type"] == "http.response.body"
+        _asgi_body(message) for message in sent if message["type"] == "http.response.body"
     )
-    headers = {name.decode(): value.decode() for name, value in start.get("headers", [])}
-    return start["status"], headers, body
+    return status, _asgi_headers(start.get("headers", ())), body
+
+
+def _is_list_or_tuple(value: object) -> "TypeIs[list[object] | tuple[object, ...]]":
+    """Whether an ASGI message member is a list or tuple, its items still unchecked."""
+    return isinstance(value, (list, tuple))
+
+
+def _asgi_body(message: Mapping[str, object]) -> bytes:
+    """One ``http.response.body`` message's ``body`` bytes (an absent key is empty)."""
+    body = message.get("body", b"")
+    assert isinstance(body, bytes), message
+    return body
+
+
+def _asgi_headers(raw: object) -> dict[str, str]:
+    """An ``http.response.start`` message's ``(name, value)`` byte pairs, decoded."""
+    assert _is_list_or_tuple(raw), raw
+    headers: dict[str, str] = {}
+    for pair in raw:
+        assert _is_list_or_tuple(pair) and len(pair) == 2, pair
+        name, value = pair
+        assert isinstance(name, bytes) and isinstance(value, bytes), pair
+        headers[name.decode()] = value.decode()
+    return headers
 
 
 # ---------------------------------------------------------------------------
@@ -789,7 +815,7 @@ def _multipart_bytes(
     FILE branch - a per-part charset on ``operations`` is ignored, which is
     precisely why the top-level declaration is the one the package checks.
     """
-    parts = []
+    parts: list[bytes] = []
     for name, raw in fields:
         disposition = f'Content-Disposition: form-data; name="{name}"'
         parts.append(
@@ -1044,7 +1070,7 @@ def test_csrf_is_enforced_on_a_cookie_authenticated_graphql_mutation(
     client.force_login(user)
     client.get("/graphql/", HTTP_ACCEPT="text/html")
 
-    extra = {}
+    extra: _PostExtra = {}
     if token_mode == "wrong":
         extra["HTTP_X_CSRFTOKEN"] = "n0tth3r1ghtt0k3n" * 4
     elif token_mode == "correct":
@@ -3121,7 +3147,7 @@ async def test_the_async_view_faces_the_same_complete_csrf_check():
     token = _csrf_token("/async-multipart/")
 
     with override_settings(ROOT_URLCONF=__name__):
-        answers = {}
+        answers: dict[str, _MonkeyPatchedASGIResponse] = {}
         for name, fields, keywords in _csrf_matrix_paths(token):
             answers[name] = await _post_multipart(
                 AsyncClient(enforce_csrf_checks=True),

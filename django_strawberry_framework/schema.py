@@ -94,13 +94,15 @@ from .extensions.operation_state import DjangoExtensionsRunner, _OperationModeMa
 from .extensions.resource_policy import AdmissionGuard, DjangoResourcePolicyExtension
 from .mutations.fields import MUTATION_CLASS_MARKER
 from .resource_policy import _PACKAGE_RESOURCE_POLICY, ResourcePolicy, resolve_resource_policy
+from .utils._narrowing import is_class, is_mapping, mapping_get
 from .utils.execution_mode import OperationMode, async_execution
 from .utils.policies import copy_policy
 from .utils.private_state import PrivateAuthority, PrivateMembership
 from .utils.write_transaction import managed_write_transaction, resolve_write_alias
 
 if TYPE_CHECKING:
-    from typing import Protocol
+    from collections.abc import AsyncGenerator
+    from typing import Protocol, TypeAlias
 
     from django.db.transaction import Atomic
     from graphql import FieldNode, GraphQLFieldMap, GraphQLObjectType
@@ -109,7 +111,12 @@ if TYPE_CHECKING:
     from strawberry.schema.schema import StreamResult
     from strawberry.types import ExecutionContext as StrawberryExecutionContext
     from strawberry.types import ExecutionResult as StrawberryExecutionResult
-    from typing_extensions import TypeIs
+
+    #: What ``DjangoSchema.stream`` yields: Strawberry's ``ExecutionResult`` (or its
+    #: ``PreExecutionError`` subclass) per frame. The raw incremental-delivery frames
+    #: Strawberry's ``StreamResult`` also names exist only on graphql-core 3.3, which
+    #: the package's ``graphql-core<3.3`` pin excludes.
+    DjangoStreamResult: TypeAlias = AsyncGenerator[StrawberryExecutionResult, None]
 
     from .mutations.sets import WriteMutationClass
 
@@ -231,8 +238,9 @@ class DjangoMutationExecutionContext(ExecutionContext):
         field_def = parent_fields.get(field_name)
         if field_def is None:  # introspection (``__typename``) has no field entry here.
             return None
-        strawberry_field: object = (getattr(field_def, "extensions", None) or {}).get(
-            "strawberry-definition",
+        extensions: object = getattr(field_def, "extensions", None)
+        strawberry_field = (
+            mapping_get(extensions, "strawberry-definition") if is_mapping(extensions) else None
         )
         base_resolver = getattr(strawberry_field, "base_resolver", None)
         wrapped = getattr(base_resolver, "wrapped_func", None)
@@ -868,7 +876,9 @@ class DjangoSchema(strawberry.Schema):
                 error_policy=resolved_error,
             ),
         )
-        super().__init__(*args, **kwargs)
+        # basedpyright: Strawberry's schema/_graphql_core.py rebinds its graphql-core 3.3 result aliases
+        # in an ImportError fallback, so Schema.__init__'s signature carries Unknown
+        super().__init__(*args, **kwargs)  # pyright: ignore[reportUnknownMemberType]
 
     @property
     @override
@@ -1211,11 +1221,44 @@ class DjangoSchema(strawberry.Schema):
         :class:`DjangoExtensionsRunner` owns and has nothing to say about
         anything else.
         """
-        source = super()._stream(execution_context, extensions_runner, *args, **kwargs)
+        # basedpyright: Strawberry's schema/_graphql_core.py rebinds its graphql-core 3.3 result aliases
+        # in an ImportError fallback, so StreamResult carries Unknown
+        source = super()._stream(execution_context, extensions_runner, *args, **kwargs)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         if issubclass(type(extensions_runner), DjangoExtensionsRunner):
-            # basedpyright: the exact-type check above is a narrowing it cannot read.
-            return cast("DjangoExtensionsRunner", extensions_runner).resumed_stream(source)
-        return source
+            # basedpyright: the exact-type check above is a narrowing it cannot read; the
+            # stream's frame type carries the StreamResult Unknown from Strawberry's alias rebinding
+            return cast("DjangoExtensionsRunner", extensions_runner).resumed_stream(source)  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]
+        # basedpyright: the StreamResult Unknown from Strawberry's alias rebinding, unchanged
+        return source  # pyright: ignore[reportUnknownVariableType]
+
+    @override
+    async def stream(
+        self,
+        query: str | None,
+        variable_values: dict[str, object] | None = None,
+        context_value: object = None,
+        root_value: object = None,
+        operation_name: str | None = None,
+        operation_extensions: dict[str, object] | None = None,
+        allowed_operation_types: Iterable[OperationType] | None = None,
+    ) -> DjangoStreamResult:
+        """Execute an operation and stream its result(s): Strawberry's ``stream``, typed.
+
+        Behavior is upstream's unchanged (``_stream`` above binds each frame); this
+        states the frame type the ``graphql-core<3.3`` pin leaves, ``DjangoStreamResult``.
+        """
+        # basedpyright: Strawberry's schema/_graphql_core.py rebinds its graphql-core 3.3 result
+        # aliases in an ImportError fallback, so StreamResult carries Unknown and names the
+        # placeholder incremental classes that fallback defines and never instantiates
+        return await super().stream(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportReturnType]
+            query,
+            variable_values,
+            context_value,
+            root_value,
+            operation_name,
+            operation_extensions,
+            allowed_operation_types,
+        )
 
 
 def _is_resolvable_extension_entry(entry: object) -> bool:
@@ -1395,15 +1438,10 @@ def _entry_resource_policy(
     extension's own canonical copy, read through the private record that holds
     it rather than off the object.
     """
-    if _is_class(entry):
+    if is_class(entry):
         return None
     policy = entry._policy
     return policy if type(policy) is ResourcePolicy else None
-
-
-def _is_class(entry: object) -> TypeIs[type[object]]:
-    """Whether ``entry`` IS a class, asked of ``type()`` so no ``__class__`` answers for it."""
-    return issubclass(type(entry), type)
 
 
 def _entry_type(entry: object) -> type[object]:
@@ -1415,7 +1453,7 @@ def _entry_type(entry: object) -> type[object]:
     pass for an entry that declares nothing. ``type()`` cannot be answered and
     cannot raise.
     """
-    return entry if _is_class(entry) else type(entry)
+    return entry if is_class(entry) else type(entry)
 
 
 def _extension_entry_matches(extension: object, extension_type: type[SchemaExtension]) -> bool:

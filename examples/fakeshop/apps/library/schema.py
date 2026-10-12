@@ -1779,7 +1779,7 @@ class CreateShelfViaHookNarrowedSerializer(SerializerMutation):
     def get_serializer_for_schema(cls) -> serializers.FieldMap:
         # Default no-arg discovery succeeds, so construct once and DROP the unsupported
         # alt_branches from its bound .fields - leaving the supported (code + branch) subset.
-        fields = dict(serializers.HookNarrowedShelfSerializer().fields)
+        fields: serializers.FieldMap = dict(serializers.HookNarrowedShelfSerializer().fields)
         del fields["alt_branches"]
         return fields
 
@@ -1915,7 +1915,7 @@ class UpdateBookGenresViaSerializer(SerializerMutation):
         permission_classes = (
             (DjangoModelPermission,)
             if getattr(settings, "FAKESHOP_TEST_BOOK_GENRES_REQUIRE_PERM", False)
-            else []
+            else ()
         )
 
 

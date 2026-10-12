@@ -8,6 +8,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import pytest
 from apps.kanban.models import Decision
@@ -61,6 +62,9 @@ from tests.optimizer._link_models import (
     LnkSlugObjectChild,
     LnkTag,
 )
+
+if TYPE_CHECKING:
+    from django.db.models.expressions import Combinable
 
 
 def _serving_field(
@@ -486,7 +490,7 @@ class _UrParent(models.Model):
     metadata is read).
     """
 
-    name = models.TextField()
+    name: "models.TextField[str | Combinable, str]" = models.TextField()
 
     class Meta:
         app_label = "test_relations_unique_reverse"
@@ -496,8 +500,8 @@ class _UrParent(models.Model):
 class _UrUniqueChild(models.Model):
     """A child whose ``ForeignKey(unique=True)`` gives ``_UrParent`` a single-valued reverse."""
 
-    note = models.TextField()
-    parent = models.ForeignKey(
+    note: "models.TextField[str | Combinable, str]" = models.TextField()
+    parent: "models.ForeignKey[_UrParent | Combinable, _UrParent]" = models.ForeignKey(
         _UrParent,
         on_delete=models.CASCADE,
         unique=True,
@@ -512,8 +516,8 @@ class _UrUniqueChild(models.Model):
 class _UrPlainChild(models.Model):
     """A child whose ordinary ``ForeignKey`` gives ``_UrParent`` a many-side reverse."""
 
-    note = models.TextField()
-    parent = models.ForeignKey(
+    note: "models.TextField[str | Combinable, str]" = models.TextField()
+    parent: "models.ForeignKey[_UrParent | Combinable, _UrParent]" = models.ForeignKey(
         _UrParent,
         on_delete=models.CASCADE,
         related_name="plain_children",

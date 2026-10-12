@@ -54,6 +54,7 @@ from ..sets_mixins import (
     require_re_readable_field_declaration,
     should_cache_expansion,
 )
+from ..utils._narrowing import is_exact_list, is_exact_tuple
 from ..utils.input_values import SetInputTraversal
 from ..utils.inputs import promote_set_meta_fields, read_set_meta_fields
 from ..utils.permissions import set_bound_type, walk_declared_relation_path
@@ -86,6 +87,7 @@ from .inputs import (
 
 if TYPE_CHECKING:
     from collections.abc import Collection
+    from typing import TypeGuard
 
     from django.db.models.expressions import OrderBy
     from typing_extensions import TypeIs
@@ -299,14 +301,23 @@ def _is_normalized_term(term: object) -> TypeIs[tuple[str, Ordering | None]]:
     Exact-type checks only, so no consumer ``__len__`` / ``__getitem__`` /
     ``__eq__`` fires while the term is inspected.
     """
-    if type(term) is not tuple:
+    if not is_exact_tuple(term):
         return False
-    members: tuple[object, ...] = term
+    members = term
     return (
         len(members) == 2
         and type(members[0]) is str
         and (members[1] is None or type(members[1]) is Ordering)
     )
+
+
+def _are_normalized_terms(terms: list[object]) -> TypeGuard[list[tuple[str, Ordering | None]]]:
+    """Return whether every member of ``terms`` passes ``_is_normalized_term``.
+
+    A ``TypeGuard`` (``list`` is invariant, so no ``TypeIs`` can narrow
+    ``list[object]``): a passing list is the caller's own list, never a copy.
+    """
+    return all(_is_normalized_term(term) for term in terms)
 
 
 def _validate_normalized_terms(
@@ -324,23 +335,22 @@ def _validate_normalized_terms(
     compare or ``__format__`` in ``get_flat_orders``. The outer container is
     rejected before it is iterated and a term before its members are read, so
     everything downstream operates on trusted primitives with deterministic
-    equality and no consumer hook left to fire.
+    equality and no consumer hook left to fire. A conforming list is returned as
+    given, never copied.
     """
-    if type(data) is not list:
+    if not is_exact_list(data):
         raise ConfigurationError(
             f"OrderSet {cls.__qualname__}._normalize_input returned invalid data "
             f"{_safe_arg_repr(data)}; expected a list of (field_path, direction) tuples.",
         )
-    terms: list[object] = data
-    for term in terms:
-        if not _is_normalized_term(term):
-            raise ConfigurationError(
-                f"OrderSet {cls.__qualname__}._normalize_input returned invalid term "
-                f"{_safe_arg_repr(term)}; expected a (field_path: str, direction: Ordering | None) tuple.",
-            )
-    # Every term passed ``_is_normalized_term`` above; no checker carries a
-    # per-element narrowing back onto the list.
-    return cast("list[tuple[str, Ordering | None]]", terms)
+    if _are_normalized_terms(data):
+        return data
+    # The guard failed, so some term is invalid: name the first one.
+    term = next(term for term in data if not _is_normalized_term(term))
+    raise ConfigurationError(
+        f"OrderSet {cls.__qualname__}._normalize_input returned invalid term "
+        f"{_safe_arg_repr(term)}; expected a (field_path: str, direction: Ordering | None) tuple.",
+    )
 
 
 def _order_paths(orderset: type[object]) -> Iterable[str]:

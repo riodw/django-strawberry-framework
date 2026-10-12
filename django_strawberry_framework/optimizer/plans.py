@@ -49,6 +49,7 @@ from ..keyset import (
     keyset_contract_error,
     order_fingerprint,
 )
+from ..utils._narrowing import is_dict
 from ..utils.connections import assert_window_fetch_mode, window_range_plan
 from ..utils.querysets import applied_order
 from ..utils.relations import instance_accessor, relation_kind
@@ -585,15 +586,15 @@ def _flatten_select_related(sr: object) -> set[str]:
       dotted lookup paths via recursive walk, e.g.
       ``{"category": {"parent": {}}}`` -> ``{"category", "category__parent"}``.
     """
-    if sr is False or sr is True or not isinstance(sr, dict):
+    if sr is False or sr is True or not is_dict(sr):
         return set()
     paths: set[str] = set()
 
-    def _walk(d: Mapping[str, object], prefix: str) -> None:
+    def _walk(d: dict[object, object], prefix: str) -> None:
         for key, child in d.items():
-            path = f"{prefix}__{key}" if prefix else key
+            path = f"{prefix}__{key}" if prefix else str(key)
             paths.add(path)
-            if isinstance(child, dict) and child:
+            if is_dict(child) and child:
                 _walk(child, path)
 
     _walk(sr, "")

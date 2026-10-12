@@ -66,6 +66,7 @@ from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.rest_framework import serializer_converter
+from django_strawberry_framework.rest_framework.accessors import bound_fields
 from django_strawberry_framework.rest_framework.serializer_converter import (
     FILE,
     RELATION_MULTI,
@@ -85,9 +86,26 @@ from tests._idioms import bind_unparented
 
 if TYPE_CHECKING:
     from pathlib import Path
+    from typing import TypeAlias, TypeVar
+
+    from django.db.models.expressions import Combinable
 
     from django_strawberry_framework.rest_framework.serializer_converter import DRFField
     from django_strawberry_framework.utils.typing import ConcreteField
+
+    _M = TypeVar("_M", bound=models.Model)
+    # DRF's stubs type a related field's constructor as returning it or a ``ManyRelatedField``.
+    _PkRelation: TypeAlias = (
+        serializers.RelatedField[_M, _M, object] | serializers.ManyRelatedField
+    )
+    _SlugRelation: TypeAlias = (
+        serializers.RelatedField[_M, str, str] | serializers.ManyRelatedField
+    )
+
+    # A column's descriptor types as django-stubs declares them (set type, get type), spelled out
+    # because the checker runs without the django-stubs mypy plugin that would infer them.
+    _Char: TypeAlias = models.CharField[str | int | Combinable, str]
+    _Int: TypeAlias = models.IntegerField[float | int | str | Combinable, int]
 
 
 @pytest.fixture
@@ -279,7 +297,7 @@ def test_serializer_only_many_related_field_maps_to_globalid_list():
     and the id type follows the Relay-vs-raw-pk rule against the target's primary.
     """
     relay_target, _ = _make_relay_target()
-    field = bind_unparented(
+    field: _PkRelation[library_models.Genre] = bind_unparented(
         serializers.PrimaryKeyRelatedField(many=True, queryset=relay_target.objects.all()),
         "targets",
     )
@@ -367,7 +385,7 @@ def test_resolve_serializer_field_rejects_nested_over_relation_column():
             model = product_models.Category
             fields = ("name", "items")
 
-    field = CategorySer().fields["items"]
+    field = bound_fields(CategorySer())["items"]
     with pytest.raises(ConfigurationError, match="opt-in only"):
         resolve_serializer_field(field, product_models.Category, "CategorySerInput")
 
@@ -380,7 +398,7 @@ def test_resolve_serializer_field_rejects_nested_over_relation_column():
 def test_primary_key_related_field_is_relation_single():
     """``PrimaryKeyRelatedField`` -> kind ``relation_single`` (annotation finalized at build site)."""
     _register_products_types()
-    field = bind_unparented(
+    field: _PkRelation[product_models.Category] = bind_unparented(
         serializers.PrimaryKeyRelatedField(queryset=product_models.Category.objects.all()),
         "category",
     )
@@ -392,7 +410,7 @@ def test_primary_key_related_field_is_relation_single():
 def test_many_related_field_is_relation_multi():
     """``PrimaryKeyRelatedField(many=True)`` (a ``ManyRelatedField``) -> kind ``relation_multi``."""
     _register_products_types()
-    field = bind_unparented(
+    field: _PkRelation[product_models.Category] = bind_unparented(
         serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=product_models.Category.objects.all(),
@@ -411,7 +429,7 @@ def test_slug_related_field_raises_non_pk_relation():
     no pk-based input shape, so it raises rather than silently misdecoding a pk.
     """
     _register_products_types()
-    field = bind_unparented(
+    field: _SlugRelation[product_models.Category] = bind_unparented(
         serializers.SlugRelatedField(
             slug_field="name",
             queryset=product_models.Category.objects.all(),
@@ -425,7 +443,7 @@ def test_slug_related_field_raises_non_pk_relation():
 def test_many_related_field_non_pk_child_raises():
     """A ``ManyRelatedField`` wrapping a non-PK child (``SlugRelatedField(many=True)``) fails loud."""
     _register_products_types()
-    field = bind_unparented(
+    field: _SlugRelation[product_models.Category] = bind_unparented(
         serializers.SlugRelatedField(
             many=True,
             slug_field="name",
@@ -518,7 +536,7 @@ def test_renamed_scalar_resolves_backing_column_via_source():
             model = product_models.Item
             fields = ("full_name",)
 
-    field = RenamedSer().fields["full_name"]
+    field = bound_fields(RenamedSer())["full_name"]
     # Backing column resolved via source, not declared name.
     column = backing_model_field(product_models.Item, field)
     assert column is not None
@@ -536,7 +554,7 @@ def test_renamed_relation_resolves_backing_column_and_id_like_name():
     _register_products_types()
 
     class RenamedSer(serializers.ModelSerializer[product_models.Item]):
-        category_pk = serializers.PrimaryKeyRelatedField(
+        category_pk: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
             queryset=product_models.Category.objects.all(),
             source="category",
         )
@@ -546,7 +564,7 @@ def test_renamed_relation_resolves_backing_column_and_id_like_name():
             model = product_models.Item
             fields = ("category_pk",)
 
-    field = RenamedSer().fields["category_pk"]
+    field = bound_fields(RenamedSer())["category_pk"]
     python_attr, _annotation, spec = resolve_serializer_field(field, product_models.Item, "X")
     assert python_attr == "category_pk"  # already id-like, no doubling
     assert spec.graphql_name == "categoryPk"
@@ -563,7 +581,7 @@ def test_model_backed_relation_cardinality_mismatch_raises():
     _register_products_types()
 
     class MismatchedSer(serializers.ModelSerializer[product_models.Item]):
-        category_ids = serializers.PrimaryKeyRelatedField(
+        category_ids: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=product_models.Category.objects.all(),
             source="category",
@@ -574,7 +592,7 @@ def test_model_backed_relation_cardinality_mismatch_raises():
             model = product_models.Item
             fields = ("category_ids",)
 
-    field = MismatchedSer().fields["category_ids"]
+    field = bound_fields(MismatchedSer())["category_ids"]
     with pytest.raises(ConfigurationError, match="cardinality"):
         resolve_serializer_field(field, product_models.Item, "X")
 
@@ -622,7 +640,7 @@ def test_many_pk_related_field_over_reverse_fk_column_emits_multi():
     _register_relay_shelf_primary()
 
     class BranchSer(serializers.ModelSerializer[library_models.Branch]):
-        shelves = serializers.PrimaryKeyRelatedField(
+        shelves: _PkRelation[library_models.Shelf] = serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=library_models.Shelf.objects.all(),
         )
@@ -632,7 +650,7 @@ def test_many_pk_related_field_over_reverse_fk_column_emits_multi():
             model = library_models.Branch
             fields = ("name", "shelves")
 
-    field = BranchSer().fields["shelves"]
+    field = bound_fields(BranchSer())["shelves"]
     assert isinstance(field, serializers.ManyRelatedField)
     _python_attr, annotation, spec = resolve_serializer_field(
         field,
@@ -655,7 +673,7 @@ def test_many_pk_related_field_over_generic_relation_column_emits_multi():
     assert tags_rel.one_to_many is True and tags_rel.many_to_many is False
 
     class BranchTagSer(serializers.ModelSerializer[library_models.Branch]):
-        tagged = serializers.PrimaryKeyRelatedField(
+        tagged: _PkRelation[library_models.TaggedItem] = serializers.PrimaryKeyRelatedField(
             many=True,
             source="tags",
             queryset=library_models.TaggedItem.objects.all(),
@@ -666,7 +684,7 @@ def test_many_pk_related_field_over_generic_relation_column_emits_multi():
             model = library_models.Branch
             fields = ("name", "tagged")
 
-    field = BranchTagSer().fields["tagged"]
+    field = bound_fields(BranchTagSer())["tagged"]
     _attr, annotation, spec = resolve_serializer_field(
         field,
         library_models.Branch,
@@ -691,7 +709,7 @@ def test_single_pk_related_field_over_reverse_o2o_column_emits_single():
     assert serializer_converter._model_relation_cardinality(rel) is False
 
     class PatronSer(serializers.ModelSerializer[library_models.Patron]):
-        card = serializers.PrimaryKeyRelatedField(
+        card: _PkRelation[library_models.MembershipCard] = serializers.PrimaryKeyRelatedField(
             queryset=library_models.MembershipCard.objects.all(),
         )
 
@@ -700,7 +718,7 @@ def test_single_pk_related_field_over_reverse_o2o_column_emits_single():
             model = library_models.Patron
             fields = ("name", "card")
 
-    field = PatronSer().fields["card"]
+    field = bound_fields(PatronSer())["card"]
     _attr, _annotation, spec = resolve_serializer_field(
         field,
         library_models.Patron,
@@ -716,7 +734,7 @@ def test_many_over_reverse_o2o_column_is_rejected():
     """many=True over a reverse OneToOneRel is a cardinality mismatch (a collection lie)."""
 
     class PatronSer(serializers.ModelSerializer[library_models.Patron]):
-        card = serializers.PrimaryKeyRelatedField(
+        card: _PkRelation[library_models.MembershipCard] = serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=library_models.MembershipCard.objects.all(),
         )
@@ -726,7 +744,7 @@ def test_many_over_reverse_o2o_column_is_rejected():
             model = library_models.Patron
             fields = ("name", "card")
 
-    field = PatronSer().fields["card"]
+    field = bound_fields(PatronSer())["card"]
     with pytest.raises(ConfigurationError, match="cardinality"):
         resolve_serializer_field(field, library_models.Patron, "ProbeInput")
 
@@ -746,7 +764,7 @@ def test_single_over_collection_column_is_rejected(
     """A single relation over a reverse FK or a many-to-many is a cardinality mismatch."""
 
     class SingleSer(serializers.ModelSerializer[models.Model]):
-        target = serializers.PrimaryKeyRelatedField(
+        target: _PkRelation[models.Model] = serializers.PrimaryKeyRelatedField(
             queryset=related_cls._default_manager.all(),
             source=column_name,
         )
@@ -756,7 +774,7 @@ def test_single_over_collection_column_is_rejected(
             model = model_cls
             fields = ("target",)
 
-    field = SingleSer().fields["target"]
+    field = bound_fields(SingleSer())["target"]
     assert not isinstance(field, serializers.ManyRelatedField)
     with pytest.raises(ConfigurationError, match="cardinality"):
         resolve_serializer_field(field, model_cls, "ProbeInput")
@@ -772,7 +790,7 @@ def test_model_backed_slug_related_field_raises():
     _register_products_types()
 
     class SlugSer(serializers.ModelSerializer[product_models.Item]):
-        category = serializers.SlugRelatedField(
+        category: _SlugRelation[product_models.Category] = serializers.SlugRelatedField(
             slug_field="name",
             queryset=product_models.Category.objects.all(),
         )
@@ -782,7 +800,7 @@ def test_model_backed_slug_related_field_raises():
             model = product_models.Item
             fields = ("category",)
 
-    field = SlugSer().fields["category"]
+    field = bound_fields(SlugSer())["category"]
     with pytest.raises(ConfigurationError, match="PrimaryKeyRelatedField"):
         resolve_serializer_field(field, product_models.Item, "X")
 
@@ -799,7 +817,7 @@ def test_dotted_source_on_model_column_field_raises():
             model = product_models.Item
             fields = ("nm",)
 
-    field = DottedSer().fields["nm"]
+    field = bound_fields(DottedSer())["nm"]
     with pytest.raises(ConfigurationError, match="dotted source"):
         backing_model_field(product_models.Item, field)
 
@@ -850,9 +868,11 @@ def test_serializer_only_relation_resolves_target_from_queryset_model():
     _register_products_types()
 
     class PlainSer(serializers.Serializer[object]):
-        cat = serializers.PrimaryKeyRelatedField(queryset=product_models.Category.objects.all())
+        cat: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
+            queryset=product_models.Category.objects.all(),
+        )
 
-    field = PlainSer().fields["cat"]
+    field = bound_fields(PlainSer())["cat"]
     python_attr, annotation, spec = resolve_serializer_field(field, None, "X")
     assert python_attr == "cat_id"
     assert spec.kind == RELATION_SINGLE
@@ -865,9 +885,11 @@ def test_serializer_only_relation_to_relay_target_uses_globalid():
     relay_target, _ = _make_relay_target()
 
     class PlainSer(serializers.Serializer[object]):
-        target = serializers.PrimaryKeyRelatedField(queryset=relay_target.objects.all())
+        target: _PkRelation[library_models.Genre] = serializers.PrimaryKeyRelatedField(
+            queryset=relay_target.objects.all(),
+        )
 
-    field = PlainSer().fields["target"]
+    field = bound_fields(PlainSer())["target"]
     _python_attr, annotation, _spec = resolve_serializer_field(field, None, "X")
     assert annotation is relay.GlobalID
 
@@ -881,9 +903,9 @@ def test_relation_with_no_backing_column_and_no_queryset_raises():
     _register_products_types()
 
     class PlainSer(serializers.Serializer[object]):
-        rel = serializers.PrimaryKeyRelatedField(read_only=True)
+        rel: _PkRelation[models.Model] = serializers.PrimaryKeyRelatedField(read_only=True)
 
-    field = PlainSer().fields["rel"]
+    field = bound_fields(PlainSer())["rel"]
     with pytest.raises(ConfigurationError, match="no concrete queryset.model"):
         resolve_serializer_field(field, None, "X")
 
@@ -898,7 +920,7 @@ def test_relation_target_with_no_registered_primary_raises():
             model = product_models.Item
             fields = ("category",)
 
-    field = ItemSer().fields["category"]
+    field = bound_fields(ItemSer())["category"]
     with pytest.raises(ConfigurationError, match="no registered primary DjangoType"):
         resolve_serializer_field(field, product_models.Item, "X")
 
@@ -1115,7 +1137,7 @@ def test_serializer_only_choicefield_becomes_enum():
     class ChoiceSer(serializers.Serializer[object]):
         color = serializers.ChoiceField(choices=[("r", "Red"), ("g", "Green")])
 
-    field = ChoiceSer().fields["color"]
+    field = bound_fields(ChoiceSer())["color"]
     _attr, annotation, spec = resolve_serializer_field(field, None, "X")
     assert spec.kind == SCALAR
     assert isinstance(annotation, type) and issubclass(annotation, Enum)
@@ -1128,7 +1150,7 @@ def test_serializer_only_multiple_choicefield_becomes_list_enum():
     class MultiSer(serializers.Serializer[object]):
         tags = serializers.MultipleChoiceField(choices=[("a", "A"), ("b", "B")])
 
-    field = MultiSer().fields["tags"]
+    field = bound_fields(MultiSer())["tags"]
     _attr, annotation, _spec = resolve_serializer_field(field, None, "X")
     assert get_origin(annotation) is list
     (inner,) = get_args(annotation)
@@ -1142,7 +1164,7 @@ def test_serializer_only_multiple_choicefield_allow_blank_enum_has_blank_member(
     class MultiSer(serializers.Serializer[object]):
         tags = serializers.MultipleChoiceField(choices=[("a", "A")], allow_blank=True)
 
-    field = MultiSer().fields["tags"]
+    field = bound_fields(MultiSer())["tags"]
     _attr, annotation, _spec = resolve_serializer_field(field, None, "X")
     (inner,) = get_args(annotation)
     assert {member.name: member.value for member in inner} == {"BLANK": "", "a": "a"}
@@ -1156,7 +1178,7 @@ def test_listfield_choice_child_allow_null_makes_the_enum_element_nullable():
             child=serializers.ChoiceField(choices=[("a", "A")], allow_null=True),
         )
 
-    field = ListSer().fields["tags"]
+    field = bound_fields(ListSer())["tags"]
     _attr, annotation, _spec = resolve_serializer_field(field, None, "X")
     (element,) = get_args(annotation)
     inner, none_type = get_args(element)
@@ -1173,7 +1195,7 @@ def test_listfield_multiple_choice_child_stays_list_of_list_str():
             child=serializers.MultipleChoiceField(choices=[("a", "A"), ("b", "B")]),
         )
 
-    field = ListSer().fields["groups"]
+    field = bound_fields(ListSer())["groups"]
     _attr, annotation, _spec = resolve_serializer_field(field, None, "X")
     assert annotation == list[list[str]]
 
@@ -1184,7 +1206,7 @@ def test_listfield_filepath_child_stays_list_str(tmp_path: Path):
     class ListSer(serializers.Serializer[object]):
         paths = serializers.ListField(child=serializers.FilePathField(path=str(tmp_path)))
 
-    field = ListSer().fields["paths"]
+    field = bound_fields(ListSer())["paths"]
     _attr, annotation, _spec = resolve_serializer_field(field, None, "X")
     assert annotation == list[str]
 
@@ -1200,7 +1222,7 @@ def test_declared_choicefield_allow_blank_over_model_column_enum_has_blank_membe
             model = library_models.Shelf
             fields = ("topic",)
 
-    field = DeclaredSer().fields["topic"]
+    field = bound_fields(DeclaredSer())["topic"]
     _attr, annotation, _spec = resolve_serializer_field(field, library_models.Shelf, "X")
     assert isinstance(annotation, type) and issubclass(annotation, Enum)
     assert {member.name: member.value for member in annotation} == {"BLANK": "", "x": "x"}
@@ -1239,7 +1261,7 @@ def test_declared_choice_allow_blank_over_strict_choice_column_refused():
             model = library_models.Book
             fields = ("circulation_status",)
 
-    field = BlankStatusSer().fields["circulation_status"]
+    field = bound_fields(BlankStatusSer())["circulation_status"]
     with pytest.raises(ConfigurationError) as exc_info:
         resolve_serializer_field(field, library_models.Book, "X")
     assert str(exc_info.value) == _value_refusal(
@@ -1266,7 +1288,7 @@ def test_source_mapped_choice_allow_blank_over_strict_choice_column_refused():
             model = library_models.Book
             fields = ("status",)
 
-    field = RenamedStatusSer().fields["status"]
+    field = bound_fields(RenamedStatusSer())["status"]
     with pytest.raises(ConfigurationError) as exc_info:
         resolve_serializer_field(field, library_models.Book, "X")
     assert str(exc_info.value) == _value_refusal(
@@ -1288,7 +1310,7 @@ def test_extra_kwargs_allow_blank_over_strict_choice_column_refused():
             fields = ("circulation_status",)
             extra_kwargs = {"circulation_status": {"allow_blank": True}}
 
-    field = ExtraBlankSer().fields["circulation_status"]
+    field = bound_fields(ExtraBlankSer())["circulation_status"]
     with pytest.raises(ConfigurationError) as exc_info:
         resolve_serializer_field(field, library_models.Book, "X")
     assert str(exc_info.value) == _value_refusal(
@@ -1358,7 +1380,7 @@ def test_declared_choice_value_missing_from_column_enum_refused(
             model = library_models.Book
             fields = ("circulation_status",)
 
-    field = ValueSer().fields["circulation_status"]
+    field = bound_fields(ValueSer())["circulation_status"]
     with pytest.raises(ConfigurationError) as exc_info:
         resolve_serializer_field(field, library_models.Book, "X")
     assert str(exc_info.value) == _value_refusal(
@@ -1370,13 +1392,9 @@ def test_declared_choice_value_missing_from_column_enum_refused(
     )
 
 
-def _integer_choice_column(
-    *,
-    blank: bool = False,
-    null: bool = False,
-) -> models.IntegerField[object, object]:
+def _integer_choice_column(*, blank: bool = False, null: bool = False) -> _Int:
     """An integer choice column bound to a real model (only ``__name__`` is read)."""
-    column = models.IntegerField(choices=[(1, "One"), (2, "Two")], blank=blank, null=null)
+    column: _Int = models.IntegerField(choices=[(1, "One"), (2, "Two")], blank=blank, null=null)
     column.set_attributes_from_name("rank")
     column.model = product_models.Category
     return column
@@ -1391,7 +1409,7 @@ def test_allow_blank_over_blank_integer_choice_column_refused_without_blank_reme
     column = _integer_choice_column(blank=True, null=True)
     with pytest.raises(ConfigurationError) as exc_info:
         serializer_converter._reject_choice_values_the_column_does_not_list(
-            RankSer().fields["rank"],
+            bound_fields(RankSer())["rank"],
             column,
         )
     assert str(exc_info.value) == _value_refusal(
@@ -1410,7 +1428,7 @@ def test_choice_values_compared_as_the_column_reads_them_back():
         rank = serializers.ChoiceField(choices=[("1", "One"), (2, "Two")])
 
     serializer_converter._reject_choice_values_the_column_does_not_list(
-        RankSer().fields["rank"],
+        bound_fields(RankSer())["rank"],
         _integer_choice_column(),
     )
 
@@ -1425,11 +1443,11 @@ def test_integer_choices_column_accepts_its_own_choices():
     class RankSer(serializers.Serializer[object]):
         rank = serializers.ChoiceField(choices=Rank.choices)
 
-    column = models.IntegerField(choices=Rank.choices)
+    column: _Int = models.IntegerField(choices=Rank.choices)
     column.set_attributes_from_name("rank")
     column.model = product_models.Category
     serializer_converter._reject_choice_values_the_column_does_not_list(
-        RankSer().fields["rank"],
+        bound_fields(RankSer())["rank"],
         column,
     )
 
@@ -1449,7 +1467,7 @@ def test_declared_choice_allow_blank_over_blank_choice_column_accepted():
             model = library_models.Shelf
             fields = ("condition",)
 
-    field = ConditionSer().fields["condition"]
+    field = bound_fields(ConditionSer())["condition"]
     _attr, annotation, _spec = resolve_serializer_field(field, library_models.Shelf, "X")
     assert isinstance(annotation, type) and issubclass(annotation, Enum)
     read_enum = convert_choices_to_enum(
@@ -1475,7 +1493,7 @@ def test_declared_choice_allow_blank_over_strict_non_choice_column_accepted():
             model = library_models.Book
             fields = ("title",)
 
-    field = TitleChoiceSer().fields["title"]
+    field = bound_fields(TitleChoiceSer())["title"]
     _attr, annotation, _spec = resolve_serializer_field(field, library_models.Book, "X")
     assert isinstance(annotation, type) and issubclass(annotation, Enum)
     assert {member.name: member.value for member in annotation} == {"BLANK": "", "dune": "dune"}
@@ -1492,7 +1510,7 @@ def test_serializer_only_choice_allow_blank_on_model_serializer_accepted():
             model = library_models.Book
             fields = ("mood",)
 
-    field = ExtraChoiceSer().fields["mood"]
+    field = bound_fields(ExtraChoiceSer())["mood"]
     _attr, annotation, _spec = resolve_serializer_field(field, library_models.Book, "X")
     assert isinstance(annotation, type) and issubclass(annotation, Enum)
     assert {member.name: member.value for member in annotation} == {"BLANK": "", "calm": "calm"}
@@ -1519,7 +1537,7 @@ def test_auto_model_serializer_over_empty_label_column_builds_the_read_enum():
             model = library_models.Shelf
             fields = ("condition",)
 
-    field = AutoConditionSer().fields["condition"]
+    field = bound_fields(AutoConditionSer())["condition"]
     assert isinstance(field, serializers.ChoiceField)
     assert None in field.choices
     _attr, annotation, _spec = resolve_serializer_field(field, library_models.Shelf, "X")
@@ -1547,7 +1565,7 @@ def test_serializer_only_choice_over_empty_label_choices_gets_no_none_member(all
     class MoodSer(serializers.Serializer[object]):
         mood = serializers.ChoiceField(choices=_Condition.choices, allow_null=allow_null)
 
-    field = MoodSer().fields["mood"]
+    field = bound_fields(MoodSer())["mood"]
     _attr, annotation, _spec = resolve_serializer_field(field, None, "EmptyLabelX")
     assert isinstance(annotation, type) and issubclass(annotation, Enum)
     assert {member.name: member.value for member in annotation} == {"good": "good", "worn": "worn"}
@@ -1568,7 +1586,7 @@ def test_serializer_only_multiple_choice_over_empty_label_choices_keeps_a_non_nu
     class TagsSer(serializers.Serializer[object]):
         tags = serializers.MultipleChoiceField(choices=_Condition.choices)
 
-    field = TagsSer().fields["tags"]
+    field = bound_fields(TagsSer())["tags"]
     _attr, annotation, _spec = resolve_serializer_field(field, None, "EmptyLabelTagsX")
     assert get_origin(annotation) is list
     (inner,) = get_args(annotation)
@@ -1670,7 +1688,7 @@ def test_multiple_choice_over_single_value_choice_column_refused(
     ``ListField`` with a choice child is refused the same way as a ``MultipleChoiceField``.
     """
     serializer_cls, field_name = make_serializer()
-    field = serializer_cls().fields[field_name]
+    field = bound_fields(serializer_cls())[field_name]
     assert isinstance(field, (serializers.MultipleChoiceField, serializers.ListField))
     with pytest.raises(ConfigurationError) as exc_info:
         resolve_serializer_field(field, library_models.Book, "X")
@@ -1716,7 +1734,7 @@ def test_multiple_choice_over_column_without_choices_accepted(
         (serializers.ModelSerializer,),
         {column_name: multi_field, "Meta": meta},
     )
-    field = serializer_cls().fields[column_name]
+    field = bound_fields(serializer_cls())[column_name]
     _attr, annotation, _spec = resolve_serializer_field(field, model, "X")
     assert get_origin(annotation) is list
     (inner,) = get_args(annotation)
@@ -1727,7 +1745,7 @@ class _FakeArrayField(models.Field[object, object]):
     """An ``ArrayField`` stand-in: ``django.contrib.postgres`` needs a Postgres driver."""
 
     # basedpyright: verbatim forward to Field.__init__; object fails its typed params
-    def __init__(self, base_field: models.Field[object, object], **kwargs: Any):  # pyright: ignore[reportExplicitAny]
+    def __init__(self, base_field: ConcreteField, **kwargs: Any):  # pyright: ignore[reportExplicitAny]
         super().__init__(**kwargs)
         self.base_field = base_field
 
@@ -1737,7 +1755,7 @@ def _array_choice_column(monkeypatch: pytest.MonkeyPatch, *, blank: bool = False
     from django_strawberry_framework.types import converters
 
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
-    element = models.CharField(max_length=5, choices=[("a", "A"), ("b", "B")], blank=blank)
+    element: _Char = models.CharField(max_length=5, choices=[("a", "A"), ("b", "B")], blank=blank)
     column = _FakeArrayField(element)
     for field in (column, element):
         field.set_attributes_from_name("tags")
@@ -1750,7 +1768,7 @@ def _multi_tags_field(**kwargs: Any) -> DRFField:  # pyright: ignore[reportExpli
     class TagsSer(serializers.Serializer[object]):
         tags = serializers.MultipleChoiceField(**kwargs)
 
-    return TagsSer().fields["tags"]
+    return bound_fields(TagsSer())["tags"]
 
 
 # basedpyright: verbatim forward to ChoiceField.__init__; object fails its typed params
@@ -1758,7 +1776,7 @@ def _list_choice_tags_field(**kwargs: Any) -> DRFField:  # pyright: ignore[repor
     class TagsSer(serializers.Serializer[object]):
         tags = serializers.ListField(child=serializers.ChoiceField(**kwargs))
 
-    return TagsSer().fields["tags"]
+    return bound_fields(TagsSer())["tags"]
 
 
 @pytest.mark.parametrize(
@@ -1848,7 +1866,7 @@ def test_multiple_choice_over_empty_label_array_base_accepted(monkeypatch: pytes
     from django_strawberry_framework.types import converters
 
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
-    element = models.CharField(max_length=5, choices=_Condition.choices)
+    element: _Char = models.CharField(max_length=5, choices=_Condition.choices)
     column = _FakeArrayField(element)
     for model_field in (column, element):
         model_field.set_attributes_from_name("tags")
@@ -1866,7 +1884,7 @@ def _grouped_choice_model():
     """A fresh model whose ``status`` column declares Django's grouped-choices form."""
 
     class GroupedShelf(models.Model):
-        status = models.CharField(max_length=8, choices=_GROUPED_CHOICES)
+        status: _Char = models.CharField(max_length=8, choices=_GROUPED_CHOICES)
 
         class Meta:
             app_label = "test_rest_framework_grouped_choices"
@@ -1888,7 +1906,7 @@ def _grouped_status_field(
         (serializers.ModelSerializer,),
         {"status": status, "Meta": meta},
     )
-    return serializer_cls().fields["status"]
+    return bound_fields(serializer_cls())["status"]
 
 
 @pytest.mark.parametrize(
@@ -1967,7 +1985,7 @@ def _grouped_read_enum_refusal(serializer_name: str, field_name: str, column: st
 def _generated_grouped_ser(model: type[models.Model]) -> DRFField:
     meta = type("Meta", (), {"model": model, "fields": ("status",)})
     serializer_cls = type("GeneratedSer", (serializers.ModelSerializer,), {"Meta": meta})
-    return serializer_cls().fields["status"]
+    return bound_fields(serializer_cls())["status"]
 
 
 def _declared_char_grouped_ser(model: type[models.Model]) -> DRFField:
@@ -1977,7 +1995,7 @@ def _declared_char_grouped_ser(model: type[models.Model]) -> DRFField:
         (serializers.ModelSerializer,),
         {"status": serializers.CharField(), "Meta": meta},
     )
-    return serializer_cls().fields["status"]
+    return bound_fields(serializer_cls())["status"]
 
 
 @pytest.mark.parametrize(
@@ -2010,7 +2028,7 @@ def _grouped_array_choice_column(monkeypatch: pytest.MonkeyPatch):
     from django_strawberry_framework.types import converters
 
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
-    element = models.CharField(max_length=8, choices=_GROUPED_CHOICES)
+    element: _Char = models.CharField(max_length=8, choices=_GROUPED_CHOICES)
     column = _FakeArrayField(element)
     for model_field in (column, element):
         model_field.set_attributes_from_name("tags")
@@ -2053,7 +2071,7 @@ def test_list_field_over_grouped_array_base_refused(monkeypatch: pytest.MonkeyPa
         (serializers.Serializer,),
         {"tags": serializers.ListField(child=serializers.CharField())},
     )
-    field = serializer_cls().fields["tags"]
+    field = bound_fields(serializer_cls())["tags"]
     with pytest.raises(ConfigurationError) as exc_info:
         serializer_converter._model_backed_scalar_annotation(field, column, "X")
     assert str(exc_info.value) == _grouped_read_enum_refusal(
@@ -2069,7 +2087,7 @@ def test_serializer_only_filepathfield_stays_str_not_enum():
     class PathSer(serializers.Serializer[object]):
         p = serializers.FilePathField(path="/tmp")
 
-    field = PathSer().fields["p"]
+    field = bound_fields(PathSer())["p"]
     _attr, annotation, _spec = resolve_serializer_field(field, None, "X")
     assert annotation is str
 
@@ -2081,7 +2099,7 @@ def test_serializer_only_choice_enum_dedupes_by_name():
         class ChoiceSer(serializers.Serializer[object]):
             color = serializers.ChoiceField(choices=[("r", "Red"), ("g", "Green")])
 
-        return resolve_serializer_field(ChoiceSer().fields["color"], None, "X")[1]
+        return resolve_serializer_field(bound_fields(ChoiceSer())["color"], None, "X")[1]
 
     assert _resolve() is _resolve()
 
@@ -2095,9 +2113,9 @@ def test_serializer_only_choice_enum_name_collision_with_diverging_members_raise
     class SerB(serializers.Serializer[object]):
         color = serializers.ChoiceField(choices=[("b", "Blue")])
 
-    resolve_serializer_field(SerA().fields["color"], None, "X")
+    resolve_serializer_field(bound_fields(SerA())["color"], None, "X")
     with pytest.raises(ConfigurationError, match="two different member sets"):
-        resolve_serializer_field(SerB().fields["color"], None, "X")
+        resolve_serializer_field(bound_fields(SerB())["color"], None, "X")
 
 
 # ---------------------------------------------------------------------------
@@ -2117,7 +2135,7 @@ def test_consumer_declared_scalar_disagreeing_with_column_raises():
             model = product_models.Item
             fields = ("name",)
 
-    field = MismatchSer().fields["name"]
+    field = bound_fields(MismatchSer())["name"]
     with pytest.raises(ConfigurationError, match="disagrees with the backing model column"):
         resolve_serializer_field(field, product_models.Item, "X")
 
@@ -2134,7 +2152,7 @@ def test_consumer_declared_scalar_agreeing_with_column_ok():
             model = product_models.Item
             fields = ("display_name",)
 
-    field = AgreeSer().fields["display_name"]
+    field = bound_fields(AgreeSer())["display_name"]
     _attr, annotation, spec = resolve_serializer_field(field, product_models.Item, "X")
     assert spec.kind == SCALAR
     assert annotation is str
@@ -2162,7 +2180,7 @@ def test_declared_model_backed_non_scalar_conversion_defers_to_model_annotation(
             model = product_models.Item
             fields = ("attachment",)
 
-    field = FileOverrideSer().fields["attachment"]
+    field = bound_fields(FileOverrideSer())["attachment"]
     _attr, annotation, spec = resolve_serializer_field(field, product_models.Item, "X")
     assert spec.kind == SCALAR
     assert annotation is str
@@ -2178,7 +2196,7 @@ def test_auto_generated_model_field_is_not_conflict_checked():
             model = product_models.Item
             fields = ("name",)
 
-    field = AutoSer().fields["name"]
+    field = bound_fields(AutoSer())["name"]
     _attr, annotation, spec = resolve_serializer_field(field, product_models.Item, "X")
     assert spec.kind == SCALAR
     assert annotation is str
@@ -2303,7 +2321,7 @@ def test_declared_choicefield_over_model_column_emits_serializer_enum():
             model = product_models.Item
             fields = ("status",)
 
-    field = ChoiceOverColumnSer().fields["status"]
+    field = bound_fields(ChoiceOverColumnSer())["status"]
     _attr, annotation, spec = resolve_serializer_field(field, product_models.Item, "X")
     assert isinstance(annotation, type) and issubclass(annotation, Enum)
     assert {member.value for member in annotation} == {"a", "b"}
@@ -2322,7 +2340,7 @@ def test_non_relation_field_over_relation_column_fails_loud():
             model = product_models.Item
             fields = ("category",)
 
-    field = BadRelSer().fields["category"]
+    field = bound_fields(BadRelSer())["category"]
     with pytest.raises(ConfigurationError, match="only PrimaryKeyRelatedField is supported"):
         resolve_serializer_field(field, product_models.Item, "BadRelInput")
 
@@ -2341,7 +2359,7 @@ def test_consumer_declared_scalar_disagreeing_with_choices_column_fails_loud():
             model = Book
             fields = ("circulation_status",)
 
-    field = BookStatusSer().fields["circulation_status"]
+    field = bound_fields(BookStatusSer())["circulation_status"]
     with pytest.raises(ConfigurationError, match="disagrees with the backing model column"):
         resolve_serializer_field(field, Book, "BookStatusSerInput")
 
@@ -2400,7 +2418,7 @@ def test_backing_model_field_nonexistent_column_returns_none():
             model = product_models.Item
             fields = ("extra",)
 
-    field = MissingFieldSer().fields["extra"]
+    field = bound_fields(MissingFieldSer())["extra"]
     assert backing_model_field(product_models.Item, field) is None
 
 
@@ -2415,7 +2433,7 @@ def test_resolve_serializer_field_model_backed_file_field():
             model = MediaSpecimen
             fields = ("attachment",)
 
-    field = MediaSpecimenSer().fields["attachment"]
+    field = bound_fields(MediaSpecimenSer())["attachment"]
     python_attr, annotation, spec = resolve_serializer_field(
         field,
         MediaSpecimen,
@@ -2433,7 +2451,7 @@ def test_resolve_serializer_field_column_less_file_field():
     class PlainFileSer(serializers.Serializer[object]):
         avatar = serializers.FileField()
 
-    field = PlainFileSer().fields["avatar"]
+    field = bound_fields(PlainFileSer())["avatar"]
     python_attr, annotation, spec = resolve_serializer_field(field, None, "PlainFileInput")
     assert python_attr == "avatar"
     assert annotation is Upload

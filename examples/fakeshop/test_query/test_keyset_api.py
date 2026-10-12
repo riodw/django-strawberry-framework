@@ -1243,7 +1243,8 @@ def _hook_order_schema(
         def parents(self) -> QuerySet[models.Periodical | models.Genre]:
             return parent_model.objects.order_by("name")
 
-    extensions = [lambda: DjangoOptimizerExtension(strictness=strictness)] if optimizer else []
+    optimizer_extension = DjangoOptimizerExtension(strictness=strictness) if optimizer else None
+    extensions = [lambda: optimizer_extension] if optimizer_extension is not None else []
     return strawberry.Schema(query=Query, config=strawberry_config(), extensions=extensions)
 
 
@@ -1743,7 +1744,9 @@ def test_reversed_non_unique_hook_order_compiles_the_pk_tiebreak_descending() ->
     assert [order in sql for sql in statements] == [True, True], statements
 
 
-_REVERSED_NESTED_PAGES = [
+_REVERSED_NESTED_PAGES: list[
+    tuple[str, tuple[list[str], list[str]], tuple[list[str], list[str]]]
+] = [
     ("id", (["3", "2"], ["1"]), (["1"], [])),
     ("title", (["1", "3"], ["2"]), (["1"], ["1"])),
     ("-id", (["1", "2"], ["3"]), (["1"], ["1"])),
@@ -2046,7 +2049,8 @@ def _twin_children_schema(*, optimizer: bool = True) -> strawberry.Schema:
         def specimens(self) -> QuerySet[ScalarSpecimen]:
             return ScalarSpecimen.objects.filter(parent__isnull=True)
 
-    extensions = [lambda: DjangoOptimizerExtension()] if optimizer else []
+    optimizer_extension = DjangoOptimizerExtension() if optimizer else None
+    extensions = [lambda: optimizer_extension] if optimizer_extension is not None else []
     return strawberry.Schema(query=Query, config=strawberry_config(), extensions=extensions)
 
 

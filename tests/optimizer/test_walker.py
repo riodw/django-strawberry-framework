@@ -9,6 +9,7 @@ windows are ``examples/fakeshop/test_query/test_single_parent_fastpath_api.py``.
 
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, Protocol, TypeVar, runtime_checkable
 
 import pytest
 import strawberry
@@ -62,6 +63,21 @@ from django_strawberry_framework.utils.querysets import _COMBINED_WHAT
 from tests._info import make_info
 
 from ._link_models import LnkPairChild, LnkParent, LnkSlugChild
+
+if TYPE_CHECKING:
+    from django_strawberry_framework.optimizer.nested_planner import _WindowPass
+
+_T = TypeVar("_T")
+
+
+@runtime_checkable
+class _WalkerTypeClass(Protocol):
+    """What the walker reads off a registered type class: its ``get_queryset`` override probe."""
+
+    @classmethod
+    def has_custom_get_queryset(cls) -> bool:
+        """Whether the type overrides ``get_queryset``."""
+        ...
 
 
 @pytest.fixture(autouse=True)
@@ -198,6 +214,18 @@ def _fragment_spread(
     )
 
 
+def _has_custom_get_queryset(type_cls: object) -> bool:
+    """The ``get_queryset`` override probe of a registered type class, real or synthetic."""
+    assert isinstance(type_cls, type)
+    assert issubclass(type_cls, _WalkerTypeClass)
+    return type_cls.has_custom_get_queryset()
+
+
+def _forward(target: Callable[..., object], *args: object, **kwargs: object) -> object:
+    """Call ``target`` with the arguments a monkeypatched stand-in received, verbatim."""
+    return target(*args, **kwargs)
+
+
 def _register_type_definition(
     model: type[Model],
     type_cls: type,
@@ -223,7 +251,7 @@ def _register_type_definition(
             if field_map is not None
             else {field.name: FieldMeta.from_django_field(field) for field in selected_fields},
             optimizer_hints=optimizer_hints or {},
-            has_custom_get_queryset=type_cls.has_custom_get_queryset(),
+            has_custom_get_queryset=_has_custom_get_queryset(type_cls),
         ),
     )
 
@@ -640,7 +668,7 @@ def test_forward_name_maps_build_once_per_type_and_converter(monkeypatch: pytest
     registry.clear()
     try:
         edition, edition_node = _declare_edition_node()
-        builds = []
+        builds: list[type[DjangoType] | None] = []
         real = walker_mod._graphql_names_by_python_name
 
         def spy(type_cls: type[DjangoType] | None, info: object):
@@ -1345,7 +1373,7 @@ def test_plan_uses_definition_custom_id_resolver_cache(monkeypatch: pytest.Monke
     _register_type_definition(Publisher, PublisherType)
     definition = registry.get_definition(PublisherType)
     assert definition is not None
-    calls = []
+    calls: list[str] = []
 
     def has_custom_id_resolver_for(pk_name: str):
         calls.append(pk_name)
@@ -1407,7 +1435,8 @@ def test_plan_downgrades_select_related_when_target_has_custom_get_queryset():
     """O6: a custom target ``get_queryset`` downgrades forward FK joins to ``Prefetch``."""
     registry.clear()
     info = make_info()._raw_info
-    calls = {}
+    seen_querysets: list[QuerySet[Category]] = []
+    seen_infos: list[object] = []
 
     class FilteredCategoryType(DjangoType):
         class Meta:
@@ -1417,8 +1446,8 @@ def test_plan_downgrades_select_related_when_target_has_custom_get_queryset():
         @override
         @classmethod
         def get_queryset(cls, queryset: QuerySet[Category], info: strawberry.Info):
-            calls["queryset"] = queryset
-            calls["info"] = info
+            seen_querysets.append(queryset)
+            seen_infos.append(info)
             return queryset.filter(is_private=False)
 
     del FilteredCategoryType
@@ -1440,8 +1469,8 @@ def test_plan_downgrades_select_related_when_target_has_custom_get_queryset():
     assert prefetch.prefetch_to == "category"
     assert prefetch.queryset is not None
     assert prefetch.queryset.model is Category
-    assert calls["queryset"].model is Category
-    hook_info = calls["info"]
+    assert seen_querysets[-1].model is Category
+    hook_info = seen_infos[-1]
     assert isinstance(hook_info, strawberry.Info)
     assert hook_info._raw_info is info
     assert hook_info.field_name == "field"
@@ -1474,7 +1503,7 @@ def test_plan_keeps_select_related_when_target_uses_default_get_queryset():
 def test_plan_prefetches_many_side_with_custom_target_get_queryset():
     """O6: many-side relations use filtered ``Prefetch`` when the target has visibility logic."""
     registry.clear()
-    calls = {}
+    calls: dict[str, QuerySet[Item]] = {}
 
     class FilteredItemType(DjangoType):
         class Meta:
@@ -1837,7 +1866,7 @@ def test_plan_rewrites_a_combined_prefetch_obj_hint_to_its_primary_key_set(
         category.pk: sorted(item.pk for item in category.items.all())
         for category in Category.objects.prefetch_related(planned)
     }
-    expected = {category.pk: [] for category in Category.objects.all()}
+    expected: dict[int, list[int]] = {category.pk: [] for category in Category.objects.all()}
     for item in (first, second):
         expected[item.category_id] = sorted([*expected[item.category_id], item.pk])
     assert served == expected
@@ -1991,7 +2020,7 @@ def test_plan_force_select_hint_uses_select_recursion():
 def test_plan_force_select_hint_downgrades_for_custom_target_get_queryset():
     """B4+O6: ``force_select`` cannot override target visibility hooks."""
     registry.clear()
-    calls = []
+    calls: list[strawberry.Info] = []
 
     class CategoryType(DjangoType):
         class Meta:
@@ -2748,7 +2777,7 @@ def _conn_sel(
     scalar_children: Iterable[str] | None = None,
 ):
     """Build a synthetic connection selection (``edges { node { ... } }`` wrapper)."""
-    children = []
+    children: list[SimpleNamespace] = []
     if scalar_children is not None:
         children.extend(_sel(child) for child in scalar_children)
     if node_selections is not None:
@@ -3177,8 +3206,7 @@ def test_relation_connections_slot_recorded_on_partial_finalize_rerun(
             # connection class, which must still succeed.
             if cls is GenreType:
                 raise RuntimeError("forced Phase 3 failure for re-entrancy test")
-            # basedpyright: verbatim forward to strawberry.type; object fails its overloads
-            return real_strawberry_type(cls, *args, **kwargs)  # pyright: ignore[reportArgumentType]
+            return _forward(real_strawberry_type, cls, *args, **kwargs)
 
         # Synthesis (Phase 2.5) runs before Phase 3; make Phase 3 raise so the
         # marker is set but ``finalized`` stays False.
@@ -4099,7 +4127,11 @@ def test_divergent_key_windows_shared_payload_uses_none_key():
     assert fallbacks == [(None, "sidecar arguments")]
 
     # ``last: 0`` plans the ``first: 0`` window.
-    first_zero = ([(None, ConnectionWindowBounds(offset=0, limit=0, reverse=False), None)], [], [])
+    first_zero: _WindowPass = (
+        [(None, ConnectionWindowBounds(offset=0, limit=0, reverse=False), None)],
+        [],
+        [],
+    )
     assert _divergent_key_windows({None: {"first": 0}}, info) == first_zero
     assert _divergent_key_windows({None: {"last": 0}}, info) == first_zero
 
@@ -5620,7 +5652,7 @@ def _shelf_types_with_consumer_books(
     def _curated_books(root: Shelf) -> list[Book]:
         return list(root.books.order_by("title")[:2])
 
-    namespace = {
+    namespace: dict[str, object] = {
         "__annotations__": {},
         "books": strawberry.field(resolver=_curated_books, graphql_type=list[BookType]),
         **(namespace_extra or {}),
@@ -5748,15 +5780,21 @@ def test_default_relations_still_plan_grandchildren_under_resolvers():
         registry.clear()
 
 
+def _candidate_list(field: Sequence[_T]) -> list[_T]:
+    """An unfinalized plan field as the list it is at run time."""
+    assert isinstance(field, list)
+    return field
+
+
 def _mutate_every_plan_field(plan: OptimizationPlan, label: str):
     """Make a strategy candidate visibly dirty across every construction field."""
-    # basedpyright: the in-place extend on the unfinalized candidate's list is the dirty mutation
-    # under test; the plan declares the field as a read-only Sequence
-    plan.select_related.extend([f"{label}_select", f"{label}_select"])  # pyright: ignore[reportAttributeAccessIssue]
-    plan.prefetch_related.extend([f"{label}_prefetch", f"{label}_prefetch"])  # pyright: ignore[reportAttributeAccessIssue]
-    plan.only_fields.extend([f"{label}_only", f"{label}_only"])  # pyright: ignore[reportAttributeAccessIssue]
-    plan.fk_id_elisions.extend([f"{label}_elision", f"{label}_elision"])  # pyright: ignore[reportAttributeAccessIssue]
-    plan.planned_resolver_keys.extend([f"{label}_planned", f"{label}_planned"])  # pyright: ignore[reportAttributeAccessIssue]
+    # The in-place extend on the unfinalized candidate's list is the dirty mutation under test;
+    # the plan declares each field as a read-only Sequence.
+    _candidate_list(plan.select_related).extend([f"{label}_select", f"{label}_select"])
+    _candidate_list(plan.prefetch_related).extend([f"{label}_prefetch", f"{label}_prefetch"])
+    _candidate_list(plan.only_fields).extend([f"{label}_only", f"{label}_only"])
+    _candidate_list(plan.fk_id_elisions).extend([f"{label}_elision", f"{label}_elision"])
+    _candidate_list(plan.planned_resolver_keys).extend([f"{label}_planned", f"{label}_planned"])
     plan.select_path_resolver_keys[f"{label}_select"] = (f"{label}_planned", f"{label}_planned")
     plan.cacheable = False
 

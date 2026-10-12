@@ -141,7 +141,9 @@ def test_venue_reverse_relations_use_default_accessors_and_close_a_nullable_cycl
     assert list(venue.repairticket_set.all()) == [ticket]
     assert venue.venuebadge == badge
     assert list(venue.venuesponsor_set.all()) == [sponsor]
-    assert Venue.objects.get(pk=venue.pk).lead_ticket.venue == venue
+    lead_ticket = Venue.objects.get(pk=venue.pk).lead_ticket
+    assert lead_ticket is not None
+    assert lead_ticket.venue == venue
     repairticket_rel = Venue._meta.get_field("repairticket")
     assert isinstance(repairticket_rel, ForeignObjectRel)
     assert repairticket_rel.get_accessor_name() == "repairticket_set"

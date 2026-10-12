@@ -111,6 +111,7 @@ from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist, Valida
 from django.forms.models import model_to_dict
 
 from ..mutations.resolvers import (
+    StepFailure,
     make_resolver_entries,
     run_write_pipeline_sync,
     save_or_field_errors,
@@ -131,6 +132,7 @@ if TYPE_CHECKING:
 
     from django.db import models
     from strawberry.types import Info
+    from typing_extensions import TypeIs
 
     from ..mutations.inputs import FieldError
     from ..mutations.resolvers import _AsyncResolverEntry, _SyncResolverEntry
@@ -183,19 +185,46 @@ def _to_form_key_value(obj: models.Model, form_field: forms.Field | None) -> obj
     return getattr(obj, "pk", obj)
 
 
+# Django's ``validators.EMPTY_VALUES``, spelled with element types (django-stubs declares
+# it ``Any``): what a form field without its own ``empty_values`` treats as empty.
+_EMPTY_VALUES: tuple[object, ...] = (
+    None,
+    "",
+    [],
+    (),
+    {},
+)
+
+
+if TYPE_CHECKING:
+    # Each model parameter is read-only here, so the ``Model`` bound covers every form
+    # and field.
+    _ModelFormAny: TypeAlias = forms.ModelForm[models.Model]
+    _ModelChoiceFieldAny: TypeAlias = forms.ModelChoiceField[models.Model]
+    _ModelMultipleChoiceFieldAny: TypeAlias = forms.ModelMultipleChoiceField[models.Model]
+else:
+    # None of the three has a ``__class_getitem__`` at runtime (only the
+    # ``django_stubs_ext`` patch adds one): each hint stays the bare class.
+    _ModelFormAny = forms.ModelForm
+    _ModelChoiceFieldAny = forms.ModelChoiceField
+    _ModelMultipleChoiceFieldAny = forms.ModelMultipleChoiceField
+
+
+def _is_model_choice_field(field: forms.Field) -> TypeIs[_ModelChoiceFieldAny]:
+    """``isinstance(field, forms.ModelChoiceField)``, its choices read as rows of ``Model``."""
+    return isinstance(field, forms.ModelChoiceField)
+
+
+def _is_model_multiple_choice_field(
+    field: forms.Field,
+) -> TypeIs[_ModelMultipleChoiceFieldAny]:
+    """``isinstance(field, forms.ModelMultipleChoiceField)``, its choices read as rows of ``Model``."""
+    return isinstance(field, forms.ModelMultipleChoiceField)
+
+
 def _is_empty_form_value(candidate: object, form_field: forms.Field | None) -> bool:
     """Return whether ``candidate`` matches the form field's empty values safely."""
-    empty_values: Container[object] = getattr(
-        form_field,
-        "empty_values",
-        (
-            None,
-            "",
-            [],
-            (),
-            {},
-        ),
-    )
+    empty_values: Container[object] = getattr(form_field, "empty_values", _EMPTY_VALUES)
     try:
         return candidate in empty_values
     except TypeError:
@@ -424,15 +453,15 @@ def _reconstruct_partial_data(
     for name, form_field in form_fields.items():
         if name in provided_data or isinstance(form_field, forms.FileField):
             continue
-        if isinstance(form_field, forms.ModelMultipleChoiceField) and name in m2m_field_names:
+        if _is_model_multiple_choice_field(form_field) and name in m2m_field_names:
             try:
                 related_objs = getattr(instance, name).all()
                 m2m_data[name] = [_to_form_key_value(obj, form_field) for obj in related_objs]
             except (AttributeError, ObjectDoesNotExist):
                 pass
         elif (
-            isinstance(form_field, forms.ModelChoiceField)
-            and not isinstance(form_field, forms.ModelMultipleChoiceField)
+            _is_model_choice_field(form_field)
+            and not _is_model_multiple_choice_field(form_field)
             and form_field.to_field_name
             and name in fk_field_names
         ):
@@ -486,7 +515,7 @@ def _modelform_decode_step(
     info: Info[object, object],
     *,
     instance: models.Model | None,
-) -> _DecodedForm | list[FieldError]:
+) -> _DecodedForm | StepFailure:
     """The form ``decode_step``: form-decode + (ModelForm update) partial reconstruction.
 
     Decodes the bound input into a FORM-field-keyed ``(provided_data,
@@ -494,12 +523,12 @@ def _modelform_decode_step(
     every relation branch), then - for update - reconstructs the full bound
     ``data=`` so a one-field change validates against the row's unchanged values.
     A plain form has no located instance, so reconstruction is skipped. Returns
-    ``(form_data, provided_files)`` for the write step, or a ``list[FieldError]``
+    ``(form_data, provided_files)`` for the write step, or a ``StepFailure``
     on a decode failure (the shared skeleton maps it to the error envelope).
     """
     provided_data, provided_files, decode_error = _decode_form_data(mutation_cls, data, info)
     if decode_error is not None:
-        return [decode_error]
+        return StepFailure([decode_error])
     if instance is not None:
         form_data = _reconstruct_partial_data(mutation_cls, instance, provided_data)
     else:
@@ -532,7 +561,7 @@ def _bound_form_or_field_errors(
 
 
 def _unstorable_blank_fields(
-    form: forms.ModelForm[models.Model],
+    form: _ModelFormAny,
 ) -> list[models.Field[object, object]]:
     """Return the form's columns holding a cleaned empty value the column cannot store.
 
@@ -563,7 +592,7 @@ def _unstorable_blank_fields(
 
 
 def _modelform_save_or_field_errors(
-    form: forms.ModelForm[models.Model],
+    form: _ModelFormAny,
     mutation_cls: type[DjangoModelFormMutation],
 ) -> list[FieldError] | None:
     """Run ``form.save()``; map a save-time failure to the envelope else ``None``.
@@ -602,7 +631,7 @@ def _modelform_write_step(
     info: Info[object, object],
     instance: models.Model | None,
     decoded: _DecodedForm,
-) -> models.Model | list[FieldError]:
+) -> models.Model | StepFailure:
     """The ``ModelForm`` ``write_step``: ``get_form`` -> ``is_valid`` -> ``form.save``.
 
     Constructs the form via the overridable ``get_form`` hook over the decoded bound
@@ -612,7 +641,7 @@ def _modelform_write_step(
     ``save_or_field_errors`` ``IntegrityError`` mapper plus the blank non-text
     choice column ``null`` mapping). Returns the saved instance (the skeleton's
     ``refetch_optimized`` re-fetches it by pk under the G2 plan) or a
-    ``list[FieldError]`` on a validation / write failure.
+    ``StepFailure`` on a validation / write failure.
     """
     bound = _bound_form_or_field_errors(
         mutation_cls,
@@ -622,7 +651,7 @@ def _modelform_write_step(
         instance=instance,
     )
     if bound[1] is not None:
-        return bound[1]
+        return StepFailure(bound[1])
     form = bound[0]
 
     # The pinned-alias WRITE phase opens for exactly ``form.save()``: the form
@@ -631,7 +660,7 @@ def _modelform_write_step(
     with pipeline_write_phase():
         write_error = _modelform_save_or_field_errors(form, mutation_cls)
     if write_error is not None:
-        return write_error
+        return StepFailure(write_error)
     # ``get_form`` returns a ``ModelForm[Any]`` (its model parameter is invariant),
     # whose ``instance`` is the saved row.
     return cast("models.Model", form.instance)
@@ -641,13 +670,12 @@ def _plain_form_write_step(
     mutation_cls: type[DjangoFormMutation],
     info: Info[object, object],
     decoded: _DecodedForm,
-) -> Literal[True] | list[FieldError]:
+) -> Literal[True] | StepFailure:
     """The plain-form ``write_step``: ``get_form`` -> ``is_valid`` -> ``perform_mutate``.
 
     Same construct/validate helper as ModelForm; the persist hook is
     ``perform_mutate`` (default ``form.save()`` if present, else no-op). Returns
-    a non-list sentinel on success so the skeleton's model-less tail builds
-    ``{ ok: true }``.
+    ``True`` on success so the skeleton's model-less tail builds ``{ ok: true }``.
     """
     holder = mutation_cls()
     bound = _bound_form_or_field_errors(
@@ -658,7 +686,7 @@ def _plain_form_write_step(
         instance=None,
     )
     if bound[1] is not None:
-        return bound[1]
+        return StepFailure(bound[1])
     form = bound[0]
 
     # ``perform_mutate`` is the only write window (mirrors ``form.save`` /
@@ -668,7 +696,7 @@ def _plain_form_write_step(
             lambda: holder.perform_mutate(form, info),
         )
     if write_error is not None:
-        return write_error
+        return StepFailure(write_error)
     return True
 
 
@@ -705,7 +733,7 @@ def _run_form_pipeline_sync(
         def plain_write_step(
             _instance: models.Model | None,
             decoded: _DecodedForm,
-        ) -> Literal[True] | list[FieldError]:
+        ) -> Literal[True] | StepFailure:
             return _plain_form_write_step(mutation_cls, info, decoded)
 
         write_step = plain_write_step
@@ -714,7 +742,7 @@ def _run_form_pipeline_sync(
         def modelform_write_step(
             instance: models.Model | None,
             decoded: _DecodedForm,
-        ) -> models.Model | list[FieldError]:
+        ) -> models.Model | StepFailure:
             return _modelform_write_step(mutation_cls, info, instance, decoded)
 
         write_step = modelform_write_step

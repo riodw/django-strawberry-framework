@@ -24,12 +24,6 @@ import pytest
 from apps.library.models import Book, Branch, Genre, Shelf
 from django.db.models import Model, Prefetch, QuerySet, Value
 
-# basedpyright: django-stubs omits _filter_prefetch_queryset from
-# django.db.models.fields.related_descriptors, where Django defines it
-from django.db.models.fields.related_descriptors import (
-    _filter_prefetch_queryset,  # pyright: ignore[reportAttributeAccessIssue]
-)
-
 from django_strawberry_framework.optimizer.nested_fetch import (
     NestedConnectionRequest,
     WindowedPrefetchStrategy,
@@ -47,6 +41,7 @@ from django_strawberry_framework.optimizer.single_parent_fetch import (
 from django_strawberry_framework.utils._queryset_private import (
     chain_queryset,
 )
+from tests.optimizer._builders import filter_prefetch_queryset
 from tests.optimizer._builders import nested_connection_request as _request
 
 
@@ -85,7 +80,7 @@ def _planned_single_parent_queryset(request: NestedConnectionRequest):
 def _prefetch_filtered(request: NestedConnectionRequest, field_name: str, parents: list[Model]):
     """The planned queryset exactly as Django's prefetch hands it to ``_fetch_all``."""
     queryset = _planned_single_parent_queryset(request)
-    filtered = _filter_prefetch_queryset(queryset, field_name, parents)
+    filtered = filter_prefetch_queryset(queryset, field_name, parents)
     assert isinstance(filtered, SingleParentWindowQuerySet)
     return filtered
 
@@ -302,7 +297,7 @@ def test_fast_path_populates_a_nested_prefetch():
     assert isinstance(rows[0], Book)
     # basedpyright: django-stubs omits Model._prefetched_objects_cache, reported as an unknown
     # attribute
-    assert "genres" in rows[0]._prefetched_objects_cache  # pyright: ignore[reportAttributeAccessIssue]
+    assert "genres" in rows[0]._prefetched_objects_cache  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     assert list(rows[0].genres.all()) == [genre]
 
 

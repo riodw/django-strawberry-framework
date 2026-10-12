@@ -89,8 +89,8 @@ if TYPE_CHECKING:
     from strawberry.types import Info
     from strawberry.types.base import WithStrawberryObjectDefinition
 
-    from ..mutations.inputs import FieldError, ModelFieldIndex
-    from ..mutations.resolvers import _GeneratedPayload, _M2MAssignments
+    from ..mutations.inputs import ModelFieldIndex
+    from ..mutations.resolvers import StepFailure, _GeneratedPayload, _M2MAssignments
     from ..mutations.sets import DeclarationRegistry, _ValidatedMutationMeta
     from ..types.base import DjangoType
     from ..utils.permissions import ChannelsRequestAdapter
@@ -1229,7 +1229,7 @@ def _register_decode_step(
     data: object,
     info: Info[object, object],
     instance: models.Model | None,
-) -> _RegisterDecoded | list[FieldError]:
+) -> _RegisterDecoded | StepFailure:
     """The register ``decode_step``: the shared model decode + the password capture.
 
     Rides ``_model_decode_step``; bind stashes ``password`` as kind ``EXCLUDED``
@@ -1242,12 +1242,12 @@ def _register_decode_step(
     required input field (``AbstractBaseUser.password`` has no default / blank),
     so a reached decode always captured it.
     """
-    from ..mutations.resolvers import _model_decode_step
+    from ..mutations import resolvers
 
     # The rider is a model-backed create: its snapshot carries the user model and the
     # bind stashed the decode's reverse maps.
     model = backing_model_of(mutation_cls._mutation_meta)
-    decoded = _model_decode_step(
+    decoded = resolvers._model_decode_step(
         model,
         data,
         info,
@@ -1255,7 +1255,7 @@ def _register_decode_step(
         specs=mutation_cls._input_field_specs,
         model_fields=cast("ModelFieldIndex", mutation_cls._model_fields_by_attr),
     )
-    if isinstance(decoded, list):
+    if isinstance(decoded, resolvers.StepFailure):
         return decoded
     # The rider's model is ``get_user_model()`` and its bind stashed the ``EXCLUDED``
     # password spec, so the decode answers the user plus the captured values.
@@ -1270,7 +1270,7 @@ def _register_write_step(
     mutation_cls: type[DjangoMutation],
     instance: models.Model | None,
     decoded: _RegisterDecoded,
-) -> models.Model | list[FieldError]:
+) -> models.Model | StepFailure:
     """The register ``write_step``: validate + hash the password, then the shared tail.
 
     ``validate_password(raw_password, user)`` runs with the constructed (unsaved)
@@ -1295,9 +1295,11 @@ def _register_write_step(
 
     user, m2m_assignments, exclude, raw_password = decoded
     if raw_password is None:
-        return [null_field_error("password")]
+        return resolvers.StepFailure([null_field_error("password")])
     if not isinstance(raw_password, str):
-        return [field_error("password", "Invalid password.", codes=FIELD_ERROR_CODE_INVALID)]
+        return resolvers.StepFailure(
+            [field_error("password", "Invalid password.", codes=FIELD_ERROR_CODE_INVALID)],
+        )
     # ``password`` rides the D6 exclusion seam, so it bypasses the shared decode's
     # scalar storability preflight (``decode_scalar_leaf``) that every other input
     # scalar - including this register's own ``username`` - runs through. A
@@ -1309,12 +1311,12 @@ def _register_write_step(
     # ``username``), never a top-level GraphQL error.
     text_error = unencodable_text_error("password", raw_password)
     if text_error is not None:
-        return [text_error]
+        return resolvers.StepFailure([text_error])
     try:
         validate_password(raw_password, user)
     except ValidationError as exc:
         codes = [leaf.code for leaf in exc.error_list if leaf.code]
-        return [field_error("password", exc.messages, codes=codes)]
+        return resolvers.StepFailure([field_error("password", exc.messages, codes=codes)])
     user.set_password(raw_password)
     return resolvers._model_write_step(mutation_cls, instance, (user, m2m_assignments, exclude))
 

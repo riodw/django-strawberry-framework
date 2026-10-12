@@ -63,6 +63,7 @@ import re
 import threading
 from collections.abc import Awaitable, Callable, Mapping
 from functools import cache
+from typing import TYPE_CHECKING
 
 import pytest
 import strawberry
@@ -91,6 +92,9 @@ from django_strawberry_framework import (
 from django_strawberry_framework.error_policy import DEFAULT_ERROR_POLICY
 from django_strawberry_framework.testing import AsyncTestClient, Response
 from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
+
+if TYPE_CHECKING:
+    from typing_extensions import TypeIs
 
 pytestmark = pytest.mark.urls(__name__)
 
@@ -1096,7 +1100,17 @@ def test_a_custom_message_and_extension_key_both_reach_the_wire():
     assert _SENSITIVE not in json.dumps(payload)
 
 
-def _entry_request(entry: tuple[str, str], query: str):
+def _is_dict(value: object) -> TypeIs[dict[object, object]]:
+    """Whether a parsed body is a ``dict``, its keys and values still unchecked."""
+    return isinstance(value, dict)
+
+
+def _is_json_object(value: object) -> TypeIs[JSONObject]:
+    """Whether a parsed body is a JSON object (a ``dict`` whose keys are all strings)."""
+    return _is_dict(value) and all(isinstance(key, str) for key in value)
+
+
+def _entry_request(entry: tuple[str, str], query: str) -> JSONObject:
     """POST one document to a shared-entry mount through that entry's own view color.
 
     ``entry`` is the ``(spelling, color)`` key rather than the mount, because the
@@ -1110,7 +1124,9 @@ def _entry_request(entry: tuple[str, str], query: str):
         response = _await_response(
             AsyncTestClient().query(query, assert_no_errors=False, url=mount),
         )
-        return json.loads(response.response.content)
+        parsed: object = json.loads(response.response.content)
+        assert _is_json_object(parsed), parsed
+        return parsed
     _, payload = _post(mount, query)
     return payload
 
@@ -1167,7 +1183,7 @@ def test_an_overlapping_request_does_not_unmask_a_failing_one(spelling: str, col
     _SharedEntryCoordinator.parked.clear()
     _SharedEntryCoordinator.released.clear()
     _SharedEntryCoordinator.armed = True
-    overlapped = {}
+    overlapped: dict[str, JSONObject] = {}
 
     def _run_failing():
         overlapped["payload"] = _entry_request(entry, "{ boom }")

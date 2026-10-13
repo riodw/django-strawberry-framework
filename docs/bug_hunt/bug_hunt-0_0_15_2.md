@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 49 done, 63 to do.
+Progress: 50 done, 63 to do.
 
 ## Done
 
@@ -94,6 +94,9 @@ Progress: 49 done, 63 to do.
 - [x] 80. Four connection catches turned a consumer source or `Meta.ordering` fault into a deliberate `GraphQLError` naming the
   exception class (no `correlationId`, no log line); they are deleted, so the fault reaches the error policy as itself and is
   masked with a `correlationId`, as on the list field and the optimized nested path (`29c1f670`)
+- [x] 81. A `DjangoConnection` subclass whose edge class declares its own `CURSOR_PREFIX` (mounted with `relay.connection`)
+  refused its own offset cursors past page 1 and served or masked a foreign `arrayconnection:` cursor; every offset decode
+  now reads the connection's own edge-class prefix, so it pages and a foreign cursor gets the cursor error (`23a9229c`)
 - [x] 103. A writable relation field bound to its `attname` (`cat = PrimaryKeyRelatedField(source="category_id")`, or a
   `category_id` field with the source defaulted) published a create input every request failed with a masked TypeError; it
   is refused at schema build with the remedy `source="category"`, root, nested and injected (`f8ff159c`)
@@ -122,8 +125,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## To do: found along the way
 
-- [ ] 81. `decode_offset_cursor` checks `relay.Edge.CURSOR_PREFIX`, not the connection's `edge_class.CURSOR_PREFIX`: a custom Edge
-  prefix turns a foreign `arrayconnection:` cursor into a masked error instead of the cursor message (robustness, fails closed)
 - [ ] 87. ModelForm: a declared `forms.ChoiceField` narrower than its column's choices still publishes the column enum, so a
   published member is refused by the form (accurate `invalid_choice`); the form analogue of item 35 (robustness)
 - [ ] 88. `ListField(child=CharField())` elements skip the lone-surrogate text preflight (top-level `str` only) and reach `save()` raw
@@ -222,6 +223,9 @@ not real bugs and just get deleted from t3. One checkbox per area:
   ids decode by the schema-published type name; `decode_global_id` and `testing.global_id_for` take an optional `schema=`
   (`global_id_for(..., schema=)` emits the published name and raises `ConfigurationError` for a type the schema does not
   publish), and the inherited-closure `type` child emits the published name
+- [ ] 118. CHANGELOG entry for item 81: a `DjangoConnection` subclass whose edge class declares its own `CURSOR_PREFIX` pages
+  with its own offset cursors and answers a foreign `arrayconnection:` cursor with the cursor error; stock connections are
+  unchanged
 
 ## Hunt not finished in t3
 

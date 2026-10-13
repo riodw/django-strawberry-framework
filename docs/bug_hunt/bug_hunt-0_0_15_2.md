@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 50 done, 63 to do.
+Progress: 51 done, 67 to do.
 
 ## Done
 
@@ -104,6 +104,10 @@ Progress: 50 done, 63 to do.
   carried the converted name while `node`, `nodes`, mutations and GlobalID filters decoded by the plain name (refused, or
   another type's rows read and written on a collision); they now decode by the executing schema's published name
   (`e05b2436`)
+- [x] 119. Two `prove_failability.py` runs on one tree could both own it: `RUN.lock` was created empty and its pid
+  written after, so a second run read no pid, unlinked the lock as stale and claimed it (a silent 0-row proof, or a
+  mutation left in the tree with a passing restore proof), and a run without `--scratch-root` took no lock at all; a
+  kernel `flock` on the repository root is now held for the whole run (`ce338eec`)
 
 ## To do: t3 robustness rows
 
@@ -149,6 +153,15 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 110. The item-56 alias message labels an owner `'category_id' (source 'category_id')` when the name and the source match
 - [ ] 111. A GenericForeignKey own-name `PrimaryKeyRelatedField(source="content_object")` raises `AttributeError` in
   `_require_relation_primary` (`related_model` is None) instead of `ConfigurationError`
+- [ ] 120. `prove_failability.py` has no SIGTERM / SIGHUP handler: a terminated run leaves its mutation in the tree and
+  its `ACTIVE-MUTATION.json` marker; recovery is by hand from `restore_with`
+- [ ] 121. A crashed `prove_failability.py` run without `--scratch-root` leaves its marker in its own `failability-*`
+  directory, so the next default-mode run is not refused and reads the mutated tree; a `pre_image` or `reverse_patch`
+  entry would copy the mutated bytes as pristine
+- [ ] 122. `prove_failability.py` names pristine copies `pristine/<label-digest>__<path>`, the same path for every run of
+  one tree under one `--scratch-root` (harmless while the tree lock excludes concurrent runs)
+- [ ] 123. BUILD.md "Mechanized: `scripts/prove_failability.py`" says the tool's default scratch is "a bare `/tmp` path";
+  it is a fresh `failability-*` directory under `TMPDIR`
 
 ## To do: holes found re-checking the fixes
 

@@ -188,9 +188,9 @@ def build_lazy_field_signature(
     injected ``inspect.Signature`` + ``__annotations__`` with a ``strawberry.lazy``
     return forward-ref. ``DjangoMutationField`` (via
     ``_synthesized_mutation_signature``) AND the auth fixed-field factories both use
-    this ONE builder so the ``root`` (Strawberry-bound) + ``info`` (reserved) + the
-    keyword-only GraphQL argument shape cannot drift between the write factory and the
-    auth factories.
+    this ONE builder so the reserved ``info`` + the keyword-only GraphQL argument shape
+    cannot drift between the write factory and the auth factories. The dispatcher reads
+    nothing off its parent, so it declares no ``root`` and Strawberry binds none.
 
     ``arguments`` is the ordered ``(name, annotation)`` list of GraphQL args (a
     mutation's ``id`` / ``data`` lazy refs; auth's ``username`` / ``password``; an
@@ -200,7 +200,6 @@ def build_lazy_field_signature(
     (``_resolve.__signature__`` / ``_resolve.__annotations__``).
     """
     params: list[inspect.Parameter] = [
-        inspect.Parameter("root", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None),
         inspect.Parameter("info", inspect.Parameter.KEYWORD_ONLY, annotation=Info),
     ]
     annotations: dict[str, object] = {"info": Info}
@@ -218,8 +217,8 @@ def _synthesized_mutation_signature(
 ) -> tuple[inspect.Signature, dict[str, object]]:
     """Build the per-operation resolver ``__signature__`` + ``__annotations__`` (spec-036 Decision 14 / 7).
 
-    ``root`` / ``info`` are Strawberry-reserved (bound without becoming GraphQL
-    args); the operation's GraphQL args follow:
+    ``info`` is Strawberry-reserved (bound without becoming a GraphQL arg); the
+    operation's GraphQL args follow:
 
     - ``create``: ``data: <Model>Input!`` (non-null, no default).
     - ``update``: ``id: ID!`` + ``data: <Model>PartialInput!``.
@@ -289,7 +288,7 @@ def DjangoMutationField(  # noqa: N802  # PascalCase for the field-factory famil
     # ``_resolve`` id-kwarg gating).
     takes_id = mutation_cls._mutation_meta.operation != "form"
 
-    def _resolve(root: object, info: Info[object, object], **kwargs: object) -> object:  # noqa: ARG001
+    def _resolve(info: Info[object, object], **kwargs: object) -> object:
         data = kwargs.get("data", strawberry.UNSET)
         call_kwargs: dict[str, object] = {"data": data}
         if takes_id:

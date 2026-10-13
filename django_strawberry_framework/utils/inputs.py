@@ -1577,11 +1577,12 @@ class GeneratedInputArgumentsFactory(Generic[_FactorySetT]):
 
     def _build_input_triples(
         self,
-        set_cls: type[_FactorySetT],
-        type_name: str,
-        owner_definition: DjangoTypeDefinition | None,
+        _set_cls: type[_FactorySetT],
+        _type_name: str,
+        _owner_definition: DjangoTypeDefinition | None,
+        /,
     ) -> list[tuple[str, object, dict[str, object]]]:
-        """Return the input-field triples for ``set_cls`` (family hook).
+        """Return the input-field triples for the set class (family hook).
 
         The filter family appends ``_build_logic_fields`` (the ``and_`` /
         ``or_`` / ``not_`` operator bag); the order family returns the field

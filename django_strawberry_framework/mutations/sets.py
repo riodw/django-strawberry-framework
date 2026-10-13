@@ -501,6 +501,31 @@ def resolver_seams(
     return _id_less_resolver_seams(module_path, sync_name, async_name)
 
 
+#: The model flavor's resolver module and its two entries, shared by ``DjangoMutation``'s
+#: runtime seams and the checker's reading of them (``_ModelResolverSeams``).
+_MUTATION_RESOLVERS_MODULE = "django_strawberry_framework.mutations.resolvers"
+_MUTATION_SYNC_ENTRY = "resolve_mutation_sync"
+_MUTATION_ASYNC_ENTRY = "resolve_mutation_async"
+
+
+def dispatch_resolver_entry(
+    module_path: str,
+    entry_name: str,
+    cls: type[object],
+    info: Info[object, object],
+    /,
+    **kwargs: object,
+) -> object:
+    """Call the flavor's resolver entry ``module_path.entry_name`` with the seam's arguments.
+
+    The entry is imported by name at resolve time to break the import cycle between a
+    flavor's ``sets`` and ``resolvers`` modules; its signature is the seam's
+    (``(cls, info, *, data[, id])``).
+    """
+    entry = cast("Callable[..., object]", import_attr(module_path, entry_name))
+    return entry(cls, info, **kwargs)
+
+
 def _id_resolver_seams(
     module_path: str,
     sync_name: str,
@@ -516,10 +541,7 @@ def _id_resolver_seams(
         id: object,  # noqa: A002
     ) -> object:
         """Delegate to the flavor's sync resolver entry (function-local import cycle guard)."""
-        # The attribute is the flavor's own resolver entry, imported by name at
-        # resolve time to break the import cycle; its signature is the seam's.
-        entry = cast("Callable[..., object]", import_attr(module_path, sync_name))
-        return entry(cls, info, data=data, id=id)
+        return dispatch_resolver_entry(module_path, sync_name, cls, info, data=data, id=id)
 
     def resolve_async(
         cls: type[object],
@@ -529,10 +551,7 @@ def _id_resolver_seams(
         id: object,  # noqa: A002
     ) -> object:
         """Delegate to the flavor's async resolver entry (function-local import cycle guard)."""
-        # The attribute is the flavor's own resolver entry, imported by name at
-        # resolve time to break the import cycle; its signature is the seam's.
-        entry = cast("Callable[..., object]", import_attr(module_path, async_name))
-        return entry(cls, info, data=data, id=id)
+        return dispatch_resolver_entry(module_path, async_name, cls, info, data=data, id=id)
 
     return classmethod(resolve_sync), classmethod(resolve_async)
 
@@ -546,17 +565,11 @@ def _id_less_resolver_seams(
 
     def resolve_sync(cls: type[object], info: Info[object, object], *, data: object) -> object:
         """Delegate to the flavor's sync resolver entry (no ``id`` - model-less flavor)."""
-        # The attribute is the flavor's own resolver entry, imported by name at
-        # resolve time to break the import cycle; its signature is the seam's.
-        entry = cast("Callable[..., object]", import_attr(module_path, sync_name))
-        return entry(cls, info, data=data)
+        return dispatch_resolver_entry(module_path, sync_name, cls, info, data=data)
 
     def resolve_async(cls: type[object], info: Info[object, object], *, data: object) -> object:
         """Delegate to the flavor's async resolver entry (no ``id`` - model-less flavor)."""
-        # The attribute is the flavor's own resolver entry, imported by name at
-        # resolve time to break the import cycle; its signature is the seam's.
-        entry = cast("Callable[..., object]", import_attr(module_path, async_name))
-        return entry(cls, info, data=data)
+        return dispatch_resolver_entry(module_path, async_name, cls, info, data=data)
 
     return classmethod(resolve_sync), classmethod(resolve_async)
 
@@ -717,7 +730,7 @@ def make_meta_validating_metaclass(
             # the ``_mutation_meta`` slot ``__new__`` fills from it.
             _mutation_meta: object
 
-            def _validate_meta(cls, meta: object, /) -> object: ...
+            def _validate_meta(cls, _meta: object, /) -> object: ...
 
         def __new__(
             cls: type[MetaValidatingMetaclass],
@@ -1136,7 +1149,62 @@ else:
     )
 
 
-class DjangoMutation(metaclass=DjangoMutationMetaclass):
+# The model-backed ``resolve_sync`` / ``resolve_async`` seams as a type checker reads them.
+# The class installs the ``resolver_seams`` pair at run time, which a checker cannot type as
+# overridable methods, so it reads them from this typing-only base instead: a consumer's
+# override is checked against these signatures, and each body states what the default does.
+# At run time the base is ``object``, so ``DjangoMutation``'s bases and MRO are unchanged.
+if TYPE_CHECKING:
+
+    class _ModelResolverSeams(Protocol):
+        """The overridable model-flavor resolver-dispatch seams (``mutations/fields.py::_resolve``).
+
+        Bare ``Info`` takes Strawberry's ``Any`` TypeVar defaults, so an override may type
+        ``info`` with its own context and root.
+        """
+
+        @classmethod
+        def resolve_sync(
+            cls,
+            info: Info,
+            *,
+            data: object,
+            id: object,  # noqa: A002
+        ) -> object:
+            """Dispatch the mutation synchronously."""
+            return dispatch_resolver_entry(
+                _MUTATION_RESOLVERS_MODULE,
+                _MUTATION_SYNC_ENTRY,
+                cls,
+                info,
+                data=data,
+                id=id,
+            )
+
+        @classmethod
+        def resolve_async(
+            cls,
+            info: Info,
+            *,
+            data: object,
+            id: object,  # noqa: A002
+        ) -> object:
+            """Dispatch the mutation asynchronously."""
+            return dispatch_resolver_entry(
+                _MUTATION_RESOLVERS_MODULE,
+                _MUTATION_ASYNC_ENTRY,
+                cls,
+                info,
+                data=data,
+                id=id,
+            )
+
+    _ModelResolverSeamsBase = _ModelResolverSeams
+else:
+    _ModelResolverSeamsBase = object
+
+
+class DjangoMutation(_ModelResolverSeamsBase, metaclass=DjangoMutationMetaclass):
     """Consumer-facing write-side base class (spec-036 Decision 3 / Decision 5).
 
     A concrete mutation declares a nested ``class Meta`` with ``model`` +
@@ -1447,35 +1515,12 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
     # pair with their own ``resolver_seams(...)`` call (the eight
     # near-identical seam bodies single-sited as one factory). A type checker sees
     # the pair as the classmethods the factory builds, so a subclass may override
-    # either with a method. Bare ``Info`` takes Strawberry's ``Any`` TypeVar
-    # defaults, so an override may type ``info`` with its own context and root.
-    if TYPE_CHECKING:
-
-        @classmethod
-        def resolve_sync(
-            cls,
-            info: Info,
-            *,
-            data: object,
-            id: object,  # noqa: A002
-        ) -> object:
-            """Dispatch the mutation synchronously."""
-
-        @classmethod
-        def resolve_async(
-            cls,
-            info: Info,
-            *,
-            data: object,
-            id: object,  # noqa: A002
-        ) -> object:
-            """Dispatch the mutation asynchronously."""
-
-    else:
+    # either with a method (``_ModelResolverSeams`` carries the checker's reading).
+    if not TYPE_CHECKING:
         resolve_sync, resolve_async = resolver_seams(
-            "django_strawberry_framework.mutations.resolvers",
-            "resolve_mutation_sync",
-            "resolve_mutation_async",
+            _MUTATION_RESOLVERS_MODULE,
+            _MUTATION_SYNC_ENTRY,
+            _MUTATION_ASYNC_ENTRY,
         )
 
     def check_permission(

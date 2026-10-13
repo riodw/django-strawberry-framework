@@ -74,16 +74,16 @@ if TYPE_CHECKING:
     from ..utils.typing import ModelField
     from .base import DjangoType
 
-# Every generated relation / file resolver: Strawberry binds ``(root, info)``.
+# Every generated relation resolver: Strawberry binds ``(root, info)``.
 _FieldResolver = Callable[[object, Info[object, object]], object]
+# The generated file resolver reads only its parent, so Strawberry binds just ``root``.
+_FileResolver = Callable[[object], object]
 
 
 class _NamedFieldResolver(Protocol):
     """A generated resolver as ``_name_resolver`` renames it: a ``def`` with a writable name."""
 
     __name__: str
-
-    def __call__(self, root: object, info: Info[object, object], /) -> object: ...
 
 
 _NamedFieldResolverT = TypeVar("_NamedFieldResolverT", bound=_NamedFieldResolver)
@@ -949,7 +949,7 @@ def _attach_relation_resolvers(
         setattr(cls, field.name, strawberry.field(resolver=resolver))
 
 
-def _make_file_resolver(field: "ModelField") -> _FieldResolver:
+def _make_file_resolver(field: "ModelField") -> _FileResolver:
     """Generate the parent resolver for a ``FileField`` / ``ImageField`` column.
 
     Object nullability ONLY (spec-037 Decision 4): a Django file column's
@@ -963,13 +963,12 @@ def _make_file_resolver(field: "ModelField") -> _FieldResolver:
     the storage-property accesses that raise happen later, in Strawberry's
     per-subfield resolution, outside this resolver's reach.
 
-    Stamped via ``_name_resolver`` for trace stability, and takes ``(root,
-    info)`` to match the relation-resolver signature even though ``info`` is
-    unused (Strawberry injects it).
+    Stamped via ``_name_resolver`` for trace stability. It takes only ``root``:
+    it reads nothing off ``info``, so it declares none and Strawberry binds none.
     """
     field_name = field.name
 
-    def file_resolver(root: object, info: Info[object, object]) -> object:  # noqa: ARG001 - info injected by Strawberry, unused here.
+    def file_resolver(root: object) -> object:
         value: object = getattr(root, field_name)
         return value if value else None
 

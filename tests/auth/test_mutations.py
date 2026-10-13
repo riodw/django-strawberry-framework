@@ -915,7 +915,7 @@ def test_auth_field_dispatch_splits_sync_and_async_resolver_bodies():
     resolver = resolver_function(field)
 
     # Sync execution stays synchronous: the plain sync body runs and returns a value.
-    assert resolver(None, info=None) == "sync"
+    assert resolver(info=None) == "sync"
     assert len(sync_calls) == 1
     assert async_calls == []
 

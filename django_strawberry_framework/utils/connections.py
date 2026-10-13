@@ -955,7 +955,8 @@ def derive_keyset_window_bounds(
     info: EitherInfo | None,
     *,
     before: object,
-    after: object,  # noqa: ARG001 - signature parity with the offset twin; the seek, not the bounds, consumes it.
+    # basedpyright: keyword parity with the offset twin; the seek, not the bounds, consumes it
+    after: object,  # pyright: ignore[reportUnusedParameter]  # noqa: ARG001
     first: int | None,
     last: object,
     max_results: int | None,

@@ -553,7 +553,6 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
     _node_fields_declared.append("DjangoNodeField")
 
     def _resolve(
-        root: object,  # noqa: ARG001
         info: Info[object, object],
         # ``id`` is the Relay-spec signature (``node(id: ID!)``) - the builtin
         # shadow is deliberate. ``strawberry.ID`` (the raw string), never
@@ -665,7 +664,6 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
     _node_fields_declared.append("DjangoNodesField")
 
     def _resolve(
-        root: object,  # noqa: ARG001
         info: Info[object, object],
         # Raw strings for the same reason as ``DjangoNodeField``'s ``id``
         # argument.

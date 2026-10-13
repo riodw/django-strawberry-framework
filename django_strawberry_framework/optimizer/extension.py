@@ -648,7 +648,7 @@ SelectionExtractor = Callable[
 
 def _root_child_selections(
     selections: "list[Selection]",
-    info: "GraphQLResolveInfo",  # noqa: ARG001
+    _info: "GraphQLResolveInfo",
 ) -> "list[Selection]":
     """Flatten children from every converted root field node.
 

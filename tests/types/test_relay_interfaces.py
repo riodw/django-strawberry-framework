@@ -336,9 +336,9 @@ def test_is_type_of_injected_for_all_djangotypes():
     ):
         assert "is_type_of" in type_cls.__dict__
         is_type_of = type_cls.__dict__["is_type_of"]
-        assert is_type_of(model_cls(), info=None) is True
-        assert is_type_of(other_model_cls(), info=None) is False
-        assert is_type_of(object(), info=None) is False
+        assert is_type_of(model_cls(), None) is True
+        assert is_type_of(other_model_cls(), None) is False
+        assert is_type_of(object(), None) is False
 
 
 def test_consumer_declared_is_type_of_is_preserved():
@@ -385,8 +385,8 @@ def test_is_type_of_hostile_hint_descriptor_falls_back_to_instance_check():
             fields = ("id", "name")
 
     is_type_of = CategoryNode.__dict__["is_type_of"]
-    assert is_type_of(Category(), info=None) is True
-    assert is_type_of(HostileObject(), info=None) is False
+    assert is_type_of(Category(), None) is True
+    assert is_type_of(HostileObject(), None) is False
 
 
 # ---------------------------------------------------------------------------

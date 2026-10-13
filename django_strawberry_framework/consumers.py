@@ -423,6 +423,12 @@ if TYPE_CHECKING:
         async def close(self, *, code: int, reason: str) -> None:
             """Close the socket with the WebSocket close ``code`` and ``reason``."""
 
+    class _SocketClose(Protocol):
+        """An adapter's bound ``close``: the WebSocket close ``code`` and ``reason``, by keyword."""
+
+        async def __call__(self, *, code: int, reason: str) -> None:
+            """Close the socket with the WebSocket close ``code`` and ``reason``."""
+
     class _GatedSocket(_ClosableSocket, Protocol):
         """The WebSocket adapter as the checkpoints read it: its close and its consumer."""
 
@@ -484,7 +490,7 @@ if TYPE_CHECKING:
 
         # basedpyright: the slot is read as upstream's schema and overwritten with the wrapper
         @schema.setter
-        def schema(self, value: _StopAwareSchema, /) -> None: ...  # pyright: ignore[reportPropertyTypeMismatch]
+        def schema(self, _value: _StopAwareSchema, /) -> None: ...  # pyright: ignore[reportPropertyTypeMismatch]
 
         async def handle(self) -> None:
             """Upstream's message loop."""
@@ -492,19 +498,19 @@ if TYPE_CHECKING:
     class _TransportWSHandlerShape(_HandlerShape):
         """The ``graphql-transport-ws`` handler's admission hook."""
 
-        async def handle_subscribe(self, message: Mapping[str, object]) -> None:
-            """Upstream's ``subscribe`` frame handler."""
+        async def handle_subscribe(self, _message: Mapping[str, object], /) -> None:
+            """Upstream's ``subscribe`` frame handler (upstream passes the frame positionally)."""
 
     class _GraphQLWSHandlerShape(_HandlerShape):
         """The legacy ``graphql-ws`` handler's admission hooks and its task registry."""
 
         tasks: Mapping[object, object]
 
-        async def handle_start(self, message: Mapping[str, object]) -> None:
-            """Upstream's ``start`` frame handler."""
+        async def handle_start(self, _message: Mapping[str, object], /) -> None:
+            """Upstream's ``start`` frame handler (upstream passes the frame positionally)."""
 
-        async def handle_stop(self, message: Mapping[str, object]) -> None:
-            """Upstream's ``stop`` frame handler."""
+        async def handle_stop(self, _message: Mapping[str, object], /) -> None:
+            """Upstream's ``stop`` frame handler (upstream passes the frame positionally)."""
 
     class WebSocketAdapterShape:
         """The WebSocket adapter a package consumer installs: its consumer, its sends, its close."""
@@ -514,11 +520,10 @@ if TYPE_CHECKING:
         def __init__(self, *args: object, **kwargs: object) -> None:
             """Upstream's adapter initializer, forwarded verbatim."""
 
-        async def send_json(self, message: Mapping[str, object]) -> None:
-            """Write one protocol frame."""
+        async def send_json(self, _message: Mapping[str, object], /) -> None:
+            """Write one protocol frame (upstream passes the frame positionally)."""
 
-        async def close(self, *, code: int, reason: str) -> None:
-            """Close the socket with the WebSocket close ``code`` and ``reason``."""
+        close: _SocketClose
 
 
 #: The outgoing frame a revalidated send hands to the transport unchanged.

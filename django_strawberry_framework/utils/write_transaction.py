@@ -872,8 +872,8 @@ class _ValueSnapshot:
 
     __slots__: tuple[str, ...] = ()
 
-    def matches(self, current: object) -> bool:
-        """Return whether ``current`` still holds the value this snapshot captured."""
+    def matches(self, _current: object, /) -> bool:
+        """Return whether the current value still holds the value this snapshot captured."""
         raise NotImplementedError
 
 

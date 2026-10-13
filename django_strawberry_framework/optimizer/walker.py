@@ -213,7 +213,8 @@ def plan_optimizations(
 def plan_relation(
     field: FieldMeta,
     target_type: type[DjangoType] | None,
-    info: object,  # noqa: ARG001
+    # basedpyright: mirrors the ``DjangoOptimizerExtension.plan_relation`` seam, whose overrides plan on it
+    info: object,  # pyright: ignore[reportUnusedParameter]  # noqa: ARG001
     *,
     target_definition: DjangoTypeDefinition | None = None,
 ) -> tuple[str, str]:
@@ -221,7 +222,7 @@ def plan_relation(
 
     ``info`` is unused by this default planner but kept to mirror the
     ``DjangoOptimizerExtension.plan_relation`` override seam, whose subclasses
-    may plan on ``info`` - hence the ARG001 noqa rather than dropping the param.
+    may plan on ``info`` - hence the suppressions rather than dropping the param.
 
     ``target_definition`` is the walker's captured child definition
     (``_resolve_relation_target``'s second answer). The walk always supplies

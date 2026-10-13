@@ -1155,10 +1155,10 @@ def _is_plain_container_value(value: object) -> TypeGuard[_PlainContainer]:
     return _is_plain_container(type(value))
 
 
-def _expr_mapping_key_detail(label: str, key: object) -> str:  # noqa: ARG001 - shared detail signature
+def _expr_mapping_key_detail(label: str, _key: object) -> str:
     """Non-string mapping-key detail for the expression-graph walk.
 
-    This walker names the slot, not the offending key type; ``key`` is accepted so both
+    This walker names the slot, not the offending key type; the key is accepted so both
     detail formatters share one signature.
     """
     return f"{label} has a non-string mapping key"

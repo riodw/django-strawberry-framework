@@ -237,7 +237,7 @@ class RelatedSetTargetMixin(LazyRelatedClassMixin):
             self._validate_target(resolved)
         return resolved
 
-    def _validate_target(self, resolved: object) -> None:
+    def _validate_target(self, _resolved: object, /) -> None:
         """Family hook: reject a resolved target outside the family.
 
         Called with every non-``None`` RESOLVED target -- strings / callables

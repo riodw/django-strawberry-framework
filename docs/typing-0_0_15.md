@@ -5,7 +5,7 @@ rules still switched off and the `# pyright: ignore[...]` comments still in the 
 Each item is fixed at the root, gated (both passes 0 errors, full suite in one pass at 100% coverage), then committed.
 A split suite run on a tree other sessions are editing can drop modules from every part, so it is not a coverage gate.
 
-Progress: 21 done, 8 to do. Ignore comments: 1038 lines (1897 at the start of 0.0.15's ignore sweep).
+Progress: 21 done, 8 to do. Ignore comments: 1044 lines (1897 at the start of 0.0.15's ignore sweep).
 
 ## Pre-commit (`uvx pre-commit run --all-files`, 7d8d1d72, clean clone)
 
@@ -77,7 +77,8 @@ of them.
   scripts/ and the package (their execution environments in `pyproject.toml`)
 - [ ] 9. `reportUnusedCallResult`: 4702 (package 0, tests 2897, examples 1527, scripts 245, root 33); on for the
   package
-- [ ] 10. `reportUnusedParameter`: 1777 (package 77, tests 1124, examples 571, scripts 0, root 5); on for scripts/
+- [ ] 10. `reportUnusedParameter`: 1700 (package 0, tests 1124, examples 571, scripts 0, root 5); on for scripts/ and
+  the package
 
 Off by design (not planned): `reportImplicitStringConcatenation`, `reportPrivateUsage`, `reportUnusedFunction`,
 `reportImportCycles`, `reportUninitializedInstanceVariable`. The reasons are in `pyproject.toml`.

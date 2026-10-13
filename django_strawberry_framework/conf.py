@@ -601,14 +601,14 @@ def error_policy_setting() -> object:
     return getattr(settings, ERROR_POLICY_KEY, None)
 
 
-def reload_settings(setting: str, value: object, **kwargs: object) -> None:
+def reload_settings(setting: str, value: object, **_kwargs: object) -> None:
     """Refresh the singleton ``settings`` instance when our key changes.
 
     Mutates the existing ``Settings`` object instead of rebinding the module
     global so callers that did ``from .conf import settings`` keep seeing
     fresh values.  ``value`` is whatever Django's ``setting_changed`` signal
     sends; ``None`` (e.g. when an ``override_settings`` block exits) restores
-    lazy reload on next attribute access.  ``**kwargs`` absorbs the remaining
+    lazy reload on next attribute access.  ``**_kwargs`` absorbs the remaining
     ``setting_changed`` payload (``enter``, ``sender``, ``signal``) so the
     receiver matches the signal signature; it is required, not optional.
     """

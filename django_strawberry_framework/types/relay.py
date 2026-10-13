@@ -132,7 +132,7 @@ def install_is_type_of(type_cls: type[DjangoType]) -> None:
         return
     model = model_for(type_cls)
 
-    def is_type_of(obj: object, info: object) -> bool:  # noqa: ARG001
+    def is_type_of(obj: object, _info: object) -> bool:
         try:
             hinted = getattr(obj, _NODE_TYPE_HINT_ATTR, None)
         except BaseException:
@@ -305,7 +305,8 @@ def _resolve_id_default(
     cls: type[relay.Node],
     root: models.Model,
     *,
-    info: Info[object, object],  # noqa: ARG001
+    # basedpyright: Strawberry's Relay machinery calls ``resolve_id(root, info=info)`` by keyword
+    info: Info[object, object],  # pyright: ignore[reportUnusedParameter]  # noqa: ARG001
 ) -> str:
     """Default ``Node.resolve_id`` with a ``__dict__`` cache check.
 
@@ -892,11 +893,12 @@ def _install_typename_closure(
         def resolve_typename(
             cls: type[_RelayDjangoType],
             root: object,
-            info: Info[object, object],  # noqa: ARG001
+            info: Info[object, object],
         ) -> str:
             # Strawberry's resolve_typename seam passes ``(cls, root, info)``; the
             # encoder contract dropped ``info`` (pre-1.0), so only ``root`` is
             # forwarded to ``encode_typename``.
+            del info
             return encode_typename(definition, strategy, cls, root)
 
     setattr(resolve_typename, _FRAMEWORK_CLOSURE_MARKER, True)

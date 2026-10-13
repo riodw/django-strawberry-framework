@@ -509,7 +509,7 @@ def _make_auth_field(
     # the factory fails loud as ConfigurationError.
     directives = validated_field_directives("auth field", directives)
 
-    def _resolve(root: object, info: Info[object, object], **kwargs: object) -> object:  # noqa: ARG001
+    def _resolve(info: Info[object, object], **kwargs: object) -> object:
         check_deadline(info)
         if async_execution():
             return async_body(info, **kwargs)

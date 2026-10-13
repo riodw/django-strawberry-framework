@@ -39,67 +39,67 @@ if TYPE_CHECKING:
     _KeyT = TypeVar("_KeyT")
     _ValueT = TypeVar("_ValueT")
 
-    def is_dict(value: object, /) -> TypeIs[dict[object, object]]:
-        """Return whether ``value`` is a ``dict`` (subclasses included)."""
+    def is_dict(_value: object, /) -> TypeIs[dict[object, object]]:
+        """Return whether the value is a ``dict`` (subclasses included)."""
         ...
 
-    def is_list(value: object, /) -> TypeIs[list[object]]:
-        """Return whether ``value`` is a ``list`` (subclasses included)."""
+    def is_list(_value: object, /) -> TypeIs[list[object]]:
+        """Return whether the value is a ``list`` (subclasses included)."""
         ...
 
-    def is_tuple(value: object, /) -> TypeIs[tuple[object, ...]]:
-        """Return whether ``value`` is a ``tuple`` (subclasses included)."""
+    def is_tuple(_value: object, /) -> TypeIs[tuple[object, ...]]:
+        """Return whether the value is a ``tuple`` (subclasses included)."""
         ...
 
-    def is_set(value: object, /) -> TypeIs[set[object]]:
-        """Return whether ``value`` is a ``set`` (subclasses included)."""
+    def is_set(_value: object, /) -> TypeIs[set[object]]:
+        """Return whether the value is a ``set`` (subclasses included)."""
         ...
 
-    def is_frozenset(value: object, /) -> TypeIs[frozenset[object]]:
-        """Return whether ``value`` is a ``frozenset`` (subclasses included)."""
+    def is_frozenset(_value: object, /) -> TypeIs[frozenset[object]]:
+        """Return whether the value is a ``frozenset`` (subclasses included)."""
         ...
 
-    def is_abstract_set(value: object, /) -> TypeIs[AbstractSet[object]]:
-        """Return whether ``value`` is a ``collections.abc.Set`` (registered virtual subclasses included)."""
+    def is_abstract_set(_value: object, /) -> TypeIs[AbstractSet[object]]:
+        """Return whether the value is a ``collections.abc.Set`` (registered virtual subclasses included)."""
         ...
 
-    def is_memoryview(value: object, /) -> TypeIs[memoryview]:
-        """Return whether ``value`` is a ``memoryview`` (subclasses included)."""
+    def is_memoryview(_value: object, /) -> TypeIs[memoryview]:
+        """Return whether the value is a ``memoryview`` (subclasses included)."""
         ...
 
-    def is_iterable(value: object, /) -> TypeIs[Iterable[object]]:
-        """Return whether ``value`` is a ``collections.abc.Iterable`` (declares ``__iter__``)."""
+    def is_iterable(_value: object, /) -> TypeIs[Iterable[object]]:
+        """Return whether the value is a ``collections.abc.Iterable`` (declares ``__iter__``)."""
         ...
 
-    def is_mapping(value: object, /) -> TypeIs[Mapping[object, object]]:
-        """Return whether ``value`` is a ``Mapping`` (registered virtual subclasses included)."""
+    def is_mapping(_value: object, /) -> TypeIs[Mapping[object, object]]:
+        """Return whether the value is a ``Mapping`` (registered virtual subclasses included)."""
         ...
 
-    def dict_items(value: dict[_KeyT, _ValueT], /) -> ItemsView[_KeyT, _ValueT]:
+    def dict_items(_value: dict[_KeyT, _ValueT], /) -> ItemsView[_KeyT, _ValueT]:
         """``dict.items`` read through the base slot."""
         ...
 
-    def dict_get(value: dict[_KeyT, _ValueT], key: _KeyT, /) -> _ValueT | None:
+    def dict_get(_value: dict[_KeyT, _ValueT], _key: _KeyT, /) -> _ValueT | None:
         """``dict.get`` read through the base slot."""
         ...
 
-    def list_iter(value: list[_ValueT], /) -> Iterator[_ValueT]:
+    def list_iter(_value: list[_ValueT], /) -> Iterator[_ValueT]:
         """``list.__iter__`` read through the base slot."""
         ...
 
-    def tuple_iter(value: tuple[_ValueT, ...], /) -> Iterator[_ValueT]:
+    def tuple_iter(_value: tuple[_ValueT, ...], /) -> Iterator[_ValueT]:
         """``tuple.__iter__`` read through the base slot."""
         ...
 
-    def set_iter(value: set[_ValueT], /) -> Iterator[_ValueT]:
+    def set_iter(_value: set[_ValueT], /) -> Iterator[_ValueT]:
         """``set.__iter__`` read through the base slot."""
         ...
 
-    def frozenset_iter(value: frozenset[_ValueT], /) -> Iterator[_ValueT]:
+    def frozenset_iter(_value: frozenset[_ValueT], /) -> Iterator[_ValueT]:
         """``frozenset.__iter__`` read through the base slot."""
         ...
 
-    def mapping_get(value: Mapping[_KeyT, _ValueT], key: _KeyT, /) -> _ValueT | None:
+    def mapping_get(_value: Mapping[_KeyT, _ValueT], _key: _KeyT, /) -> _ValueT | None:
         """``Mapping.get`` read through the ABC's own method."""
         ...
 

@@ -907,8 +907,9 @@ class DjangoType:
         # which a parameter typed narrower than Any rejects (reportIncompatibleMethodOverride)
         queryset: models.QuerySet[Any, Any],  # pyright: ignore[reportExplicitAny]
         # basedpyright: an override annotates ``info: strawberry.Info``, which object rejects; the
-        # shared visibility runners also serve public helpers taking any info, which Info rejects
-        info: Any,  # pyright: ignore[reportExplicitAny]  # noqa: ARG003
+        # shared visibility runners also serve public helpers taking any info, which Info rejects;
+        # the identity default reads no ``info``, but the readers pass it to every override
+        info: Any,  # pyright: ignore[reportExplicitAny, reportUnusedParameter]  # noqa: ARG003
         # basedpyright: an override returns ``super().get_queryset(...)`` as its own model's
         # queryset, which a concrete return rejects and a TypeVar return forbids non-generically
     ) -> models.QuerySet[Any, Any]:  # pyright: ignore[reportExplicitAny]

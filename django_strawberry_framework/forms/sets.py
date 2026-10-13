@@ -62,6 +62,7 @@ from ..mutations.sets import (
     build_and_stash_input,
     cached_build_input,
     construction_kwargs,
+    dispatch_resolver_entry,
     make_declaration_registry,
     make_meta_validating_metaclass,
     model_backed_permission_and_lock,
@@ -97,6 +98,7 @@ from .inputs import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
+    from typing import Protocol
 
     from django.db import models
     from strawberry.types import Info
@@ -431,7 +433,7 @@ def _form_kwargs_overridden(
 
 
 def _default_get_form_kwargs(
-    self: DjangoModelFormMutation | DjangoFormMutation,  # noqa: ARG001  # the default ignores it
+    _self: object,
     info: Info[object, object],
     *,
     data: dict[str, object],
@@ -455,7 +457,7 @@ def _default_get_form_kwargs(
 
 
 def _default_get_form(
-    self: DjangoModelFormMutation | DjangoFormMutation,
+    self: _FormConstructionHooks,
     info: Info[object, object],
     *,
     data: dict[str, object],
@@ -546,7 +548,111 @@ def _form_input_type_name_for(
     return form_input_type_name(form_class, operation_kind, effective, full_field_names=full)
 
 
-class DjangoModelFormMutation(DjangoMutation):
+# The form construction hooks (and the plain flavor's resolver seams) as a type checker
+# reads them. Each class installs the shared defaults at run time - ``get_form_kwargs`` /
+# ``get_form`` are ``_default_get_form_kwargs`` / ``_default_get_form``, which
+# ``_form_kwargs_overridden`` compares by identity - and a checker would read those
+# assignments as plain attributes, so it reads these typing-only bases instead: a consumer's
+# override is checked against a method signature, and each body states what the default
+# does. At run time the bases are ``object`` / ``DjangoMutation``, so neither form base's
+# bases or MRO change.
+if TYPE_CHECKING:
+
+    class _FormConstructionHooks(Protocol):
+        """The construction hooks both form bases expose (spec-038 Decision 8 step 4)."""
+
+        _mutation_meta: ClassVar[_ValidatedMutationMeta]
+
+        def get_form_kwargs(
+            self,
+            info: Info[object, object],
+            *,
+            data: dict[str, object],
+            files: dict[str, object],
+            instance: models.Model | None = None,
+            # basedpyright: splatted into the consumer form's constructor, whose stub types each kwarg
+        ) -> dict[str, Any]:  # pyright: ignore[reportExplicitAny]
+            """Return the form constructor kwargs (``data`` / ``files``, plus ``instance``)."""
+            return _default_get_form_kwargs(self, info, data=data, files=files, instance=instance)
+
+        def get_form(
+            self,
+            info: Info[object, object],
+            *,
+            data: dict[str, object],
+            files: dict[str, object],
+            instance: models.Model | None = None,
+        ) -> forms.BaseForm:
+            """Construct the bound form (``form_class(**get_form_kwargs(...))``)."""
+            return _default_get_form(self, info, data=data, files=files, instance=instance)
+
+    class _ModelFormConstructionHooks(_FormConstructionHooks, Protocol):
+        """The ``ModelForm`` flavor's hooks: its ``get_form`` builds a ``ModelForm``.
+
+        The resolver saves the form and reads its ``instance``. ``ModelForm``'s model
+        parameter is invariant, so ``Any`` there lets an override return its own
+        ``ModelForm[<Model>]``.
+        """
+
+        @override
+        def get_form(
+            self,
+            info: Info[object, object],
+            *,
+            data: dict[str, object],
+            files: dict[str, object],
+            instance: models.Model | None = None,
+            # basedpyright: invariant model parameter: ModelForm[Model] rejects ModelForm[Item]
+        ) -> forms.ModelForm[Any]:  # pyright: ignore[reportExplicitAny]
+            """Construct the bound ``ModelForm`` (``form_class(**get_form_kwargs(...))``)."""
+            # The flavor's ``_validate_meta`` stores a ``ModelForm`` subclass as its form class.
+            return cast(
+                # basedpyright: invariant model parameter, as on the return annotation above
+                "forms.ModelForm[Any]",  # pyright: ignore[reportExplicitAny]
+                _default_get_form(self, info, data=data, files=files, instance=instance),
+            )
+
+    class _ModelFormMutationBase(DjangoMutation, _ModelFormConstructionHooks):
+        """``DjangoMutation`` with the ``ModelForm`` construction hooks."""
+
+    class _FormMutationHooks(_FormConstructionHooks, Protocol):
+        """The plain flavor's hooks plus its model-less ``(info, *, data)`` resolver seams."""
+
+        @classmethod
+        def resolve_sync(cls, info: Info, *, data: object) -> object:
+            """Dispatch the mutation synchronously."""
+            return dispatch_resolver_entry(
+                _FORM_RESOLVERS_MODULE,
+                _FORM_SYNC_ENTRY,
+                cls,
+                info,
+                data=data,
+            )
+
+        @classmethod
+        def resolve_async(cls, info: Info, *, data: object) -> object:
+            """Dispatch the mutation asynchronously."""
+            return dispatch_resolver_entry(
+                _FORM_RESOLVERS_MODULE,
+                _FORM_ASYNC_ENTRY,
+                cls,
+                info,
+                data=data,
+            )
+
+    _FormMutationBase = _FormMutationHooks
+else:
+    _ModelFormMutationBase = DjangoMutation
+    _FormMutationBase = object
+
+#: The form flavors' resolver module and its two entries, shared by both bases' runtime
+#: seams and the checker's reading of the plain flavor's pair (``_FormMutationHooks``).
+_FORM_RESOLVERS_MODULE = "django_strawberry_framework.forms.resolvers"
+_FORM_SYNC_ENTRY = "resolve_form_sync"
+_FORM_ASYNC_ENTRY = "resolve_form_async"
+
+
+class DjangoModelFormMutation(_ModelFormMutationBase):
     """A ``ModelForm``-backed write mutation (spec-038 Decision 6).
 
     Rides the ``DjangoMutation`` base: the SAME metaclass validates its ``Meta``
@@ -728,39 +834,9 @@ class DjangoModelFormMutation(DjangoMutation):
             base=DjangoModelFormMutation,
         )
 
-    # A type checker reads both construction hooks as methods, so a consumer override is
-    # checked against a method signature; the runtime attributes are the shared defaults
-    # ``_form_kwargs_overridden`` compares by identity. It reads the ``ModelForm`` flavor's
-    # ``get_form`` as returning a ``ModelForm`` (the resolver saves it and reads its
-    # ``instance``); ``ModelForm``'s model parameter is invariant, so ``Any`` there lets an
-    # override return its own ``ModelForm[<Model>]``.
-    if TYPE_CHECKING:
-
-        def get_form_kwargs(
-            self,
-            info: Info[object, object],
-            *,
-            data: dict[str, object],
-            files: dict[str, object],
-            instance: models.Model | None = None,
-            # basedpyright: splatted into the consumer form's constructor, whose stub types each kwarg
-        ) -> dict[str, Any]:  # pyright: ignore[reportExplicitAny]
-            """Return the form constructor kwargs (``data`` / ``files``, plus ``instance``)."""
-            ...
-
-        def get_form(
-            self,
-            info: Info[object, object],
-            *,
-            data: dict[str, object],
-            files: dict[str, object],
-            instance: models.Model | None = None,
-            # basedpyright: invariant model parameter: ModelForm[Model] rejects ModelForm[Item]
-        ) -> forms.ModelForm[Any]:  # pyright: ignore[reportExplicitAny]
-            """Construct the bound ``ModelForm`` (``form_class(**get_form_kwargs(...))``)."""
-            ...
-
-    else:
+    # The shared construction defaults ``_form_kwargs_overridden`` compares by identity; a
+    # type checker reads the hooks from ``_ModelFormConstructionHooks``.
+    if not TYPE_CHECKING:
         get_form_kwargs = _default_get_form_kwargs
         get_form = _default_get_form
 
@@ -788,9 +864,9 @@ class DjangoModelFormMutation(DjangoMutation):
     # the signature the ``with_id`` seams carry.
     if not TYPE_CHECKING:
         resolve_sync, resolve_async = resolver_seams(
-            "django_strawberry_framework.forms.resolvers",
-            "resolve_form_sync",
-            "resolve_form_async",
+            _FORM_RESOLVERS_MODULE,
+            _FORM_SYNC_ENTRY,
+            _FORM_ASYNC_ENTRY,
         )
 
 
@@ -815,7 +891,7 @@ else:
     )
 
 
-class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
+class DjangoFormMutation(_FormMutationBase, metaclass=DjangoFormMutationMetaclass):
     """A model-LESS plain-``forms.Form`` write mutation (spec-038 Decision 6).
 
     The lighter sibling: no model, no ``DjangoType`` object slot. It shares the
@@ -1050,35 +1126,9 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
             base=DjangoFormMutation,
         )
 
-    # A type checker reads both construction hooks as methods, so a consumer override is
-    # checked against a method signature; the runtime attributes are the shared defaults
-    # ``_form_kwargs_overridden`` compares by identity.
-    if TYPE_CHECKING:
-
-        def get_form_kwargs(
-            self,
-            info: Info[object, object],
-            *,
-            data: dict[str, object],
-            files: dict[str, object],
-            instance: models.Model | None = None,
-            # basedpyright: splatted into the consumer form's constructor, whose stub types each kwarg
-        ) -> dict[str, Any]:  # pyright: ignore[reportExplicitAny]
-            """Return the form constructor kwargs (``data`` / ``files``, plus ``instance``)."""
-            ...
-
-        def get_form(
-            self,
-            info: Info[object, object],
-            *,
-            data: dict[str, object],
-            files: dict[str, object],
-            instance: models.Model | None = None,
-        ) -> forms.BaseForm:
-            """Construct the bound form (``form_class(**get_form_kwargs(...))``)."""
-            ...
-
-    else:
+    # The shared construction defaults ``_form_kwargs_overridden`` compares by identity; a
+    # type checker reads the hooks from ``_FormConstructionHooks``.
+    if not TYPE_CHECKING:
         get_form_kwargs = _default_get_form_kwargs
         get_form = _default_get_form
 
@@ -1134,23 +1184,12 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     # a model-less form has no row to locate, so the seam signature is
     # ``(info, *, data)``. The generated seams' function-local import
     # keeps ``forms/sets.py`` free of a load-time edge to the resolver module. A
-    # type checker sees the pair as the classmethods the factory builds, declared
-    # the way ``mutations/sets.py::DjangoMutation`` declares its ``with_id`` pair.
-    if TYPE_CHECKING:
-
-        @classmethod
-        def resolve_sync(cls, info: Info, *, data: object) -> object:
-            """Dispatch the mutation synchronously."""
-
-        @classmethod
-        def resolve_async(cls, info: Info, *, data: object) -> object:
-            """Dispatch the mutation asynchronously."""
-
-    else:
+    # type checker reads the pair from ``_FormMutationHooks``.
+    if not TYPE_CHECKING:
         resolve_sync, resolve_async = resolver_seams(
-            "django_strawberry_framework.forms.resolvers",
-            "resolve_form_sync",
-            "resolve_form_async",
+            _FORM_RESOLVERS_MODULE,
+            _FORM_SYNC_ENTRY,
+            _FORM_ASYNC_ENTRY,
             with_id=False,
         )
 

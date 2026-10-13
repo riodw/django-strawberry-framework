@@ -170,7 +170,8 @@ def _panel_title(panel: Panel) -> object:
 
 
 def _get_payload(
-    request: HttpRequest,  # noqa: ARG001 - upstream-verbatim signature (spec-042 Decision 6)
+    # basedpyright: upstream-verbatim signature (spec-042 Decision 6)
+    request: HttpRequest,  # pyright: ignore[reportUnusedParameter]  # noqa: ARG001
     response: HttpResponse,
     toolbar: DebugToolbar,
 ) -> dict[object, object] | None:
@@ -241,8 +242,11 @@ class DebugToolbarMiddleware(_DebugToolbarMiddleware):
         self,
         request: HttpRequest,
         view_func: object,
-        *args: object,
-        **kwargs: object,
+        # basedpyright: upstream-verbatim signature (spec-042 Decision 6); Django passes the view's
+        # args and kwargs positionally, so both land in ``*args``
+        *args: object,  # pyright: ignore[reportUnusedParameter]
+        # basedpyright: upstream-verbatim signature (spec-042 Decision 6)
+        **kwargs: object,  # pyright: ignore[reportUnusedParameter]
     ) -> None:
         """Tag the request when its resolved view is a Strawberry Django view.
 

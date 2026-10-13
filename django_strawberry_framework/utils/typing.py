@@ -301,12 +301,12 @@ def unwrap_graphql_type(gql_type: object) -> object:
 
 if TYPE_CHECKING:
 
-    def is_graphql_list(value: object, /) -> TypeIs[GraphQLList[GraphQLType]]:
-        """Return whether ``value`` is a graphql-core ``GraphQLList`` (its item read as ``GraphQLType``)."""
+    def is_graphql_list(_value: object, /) -> TypeIs[GraphQLList[GraphQLType]]:
+        """Return whether the value is a graphql-core ``GraphQLList`` (its item read as ``GraphQLType``)."""
         ...
 
-    def _is_graphql_non_null(value: object, /) -> TypeIs[GraphQLNonNull[_GraphQLNullableType]]:
-        """Return whether ``value`` is a graphql-core ``GraphQLNonNull``."""
+    def _is_graphql_non_null(_value: object, /) -> TypeIs[GraphQLNonNull[_GraphQLNullableType]]:
+        """Return whether the value is a graphql-core ``GraphQLNonNull``."""
         ...
 
 else:

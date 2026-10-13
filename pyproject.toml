@@ -1,25 +1,44 @@
-# https://packaging.python.org/en/latest/guides/writing-pyproject-toml/
+[build-system]
+# PEP 639 ``license`` expression + ``license-files`` need hatchling 1.27.
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+# The one version source: hatchling reads ``__version__`` from the package
+# init (default regex source) for sdist/wheel metadata and any direct build.
+[tool.hatch.version]
+path = "django_strawberry_framework/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["django_strawberry_framework"]
+
+[tool.hatch.build.targets.sdist]
+# Ship the package, tests, and key metadata only. Without this, hatchling's default
+# sdist tars the whole tree — internal docs/SPECS, examples/ (with sqlite DBs), and
+# any local .claude/ state — into a ~7 MB archive.
+include = [
+    "/django_strawberry_framework",
+    "/tests",
+    "/README.md",
+    "/LICENSE",
+    "/CHANGELOG.md",
+    "/pyproject.toml",
+]
+
 [project]
 name = "django-strawberry-framework"
-# The release is single-sourced in ``django_strawberry_framework/__init__.py``
-# (``__version__``); hatchling derives the packaging metadata from it via the
-# ``[tool.hatch.version]`` table below, so there is no second version literal
-# to keep in lockstep.
+# Read from ``django_strawberry_framework/__init__.py`` by ``[tool.hatch.version]``.
 dynamic = ["version"]
 description = "A DRF-inspired Django integration framework for Strawberry GraphQL — filtering, ordering, aggregation, and permissions"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.10,<4.0"
+requires-python = ">=3.10"
 authors = [
-    { name = "Unaxy" },
-]
-maintainers = [
     { name = "Unaxy" },
 ]
 keywords = ["django", "strawberry", "graphql", "filters", "framework", "drf"]
 classifiers = [
-    "Development Status :: 1 - Planning",
+    "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -61,58 +80,45 @@ Issues = "https://github.com/unaxy/django-strawberry-framework/issues"
 
 [dependency-groups]
 dev = [
-    # cryptography is a SOFT dependency of the package: only Meta.cursor_field
-    # needs AES-SIV. The dev group installs it so keyset tests exercise the
-    # present path while ordinary consumers avoid a compiled dependency.
+    # Soft dependencies of the package: never in [project].dependencies; installed
+    # here so the present-path tests run.
+    # The [daphne] extra is needed only to import channels.testing (spec-041 Decision 5).
+    "channels[daphne]>=4.3.2",
+    # Only Meta.cursor_field needs AES-SIV.
     "cryptography>=44.0.0",
+    # 7.0.0 is the first release carrying the Framework :: Django :: 6.0 classifier
+    # the package advertises (spec-042 Decision 5).
+    "django-debug-toolbar>=7.0.0",
     "djangorestframework>=3.17.0",
+    # Fakeshop: faker seeds the example data, pillow backs its ImageFields.
     "faker>=33.0.0",
     "pillow>=10.0.0",
+    # Test runner.
     "pytest>=9.0.2",
     "pytest-asyncio>=1.0.0",
-    # channels is a SOFT dependency of the package ([project].dependencies is
-    # untouched); the dev group installs it (with Channels' own [daphne] extra,
-    # required only to IMPORT channels.testing) so tests/test_routers.py can
-    # exercise the channels-present path (spec-041 Decision 5).
-    "channels[daphne]>=4.3.2",
-    # django-debug-toolbar is a SOFT dependency of the package ([project].dependencies
-    # is untouched); the dev group installs it so tests/middleware/test_debug_toolbar.py
-    # can exercise the toolbar-present path (spec-042 Decision 5). The >=7.0.0 floor is
-    # deliberately above upstream's >=6.0.0: 7.0.0 is the first release carrying the
-    # Framework :: Django :: 6.0 classifier the package itself advertises.
-    "django-debug-toolbar>=7.0.0",
     "pytest-cov>=7.0.0",
     # 4.13.0 first exports ``pytest_django.Settings``, the settings fixture's type.
     "pytest-django>=4.13.0",
     "pytest-xdist>=3.8.0",
-    # PyYAML is a test-only dependency, and NOT a dependency of the package
-    # ([project].dependencies is untouched): tests/test_ci_governance.py parses
-    # .github/workflows/*.yml structurally so the least-privilege permission
-    # scopes, immutable action/image pins, and per-job timeouts are asserted
-    # rather than reviewed by eye (spec-049 Decision 6).
+    # tests/test_ci_governance.py parses .github/workflows/*.yml (spec-049 Decision 6).
     "pyyaml>=6.0.2",
-    "ruff>=0.15.0",
-    # ``scripts/`` read pyproject.toml with it: the scripts run on the 3.10 floor cell,
-    # where the stdlib ``tomllib`` does not exist yet.
-    "tomli>=2.4.1",
-    # The package ships ``py.typed``, so its annotations are a public contract
-    # that downstream type checkers consume. basedpyright (config in
-    # ``[tool.basedpyright]``) checks them, with the Django and DRF stubs so
-    # framework types are real rather than ``Any``.
+    # Lint and types.
+    "basedpyright>=1.40.1",
+    # ``py.typed`` makes the package's annotations public; the stubs make Django
+    # and DRF types real rather than ``Any``.
     "django-stubs>=6.0.9",
-    # Runtime half of the stubs: the fakeshop settings call its ``monkeypatch()``
-    # so example classes can subscript bases Django keeps non-generic at runtime
-    # (``admin.ModelAdmin[Card]``, ``forms.ModelForm[Item]``).
+    # The fakeshop settings call its ``monkeypatch()`` so example classes can
+    # subscript ``admin.ModelAdmin[Card]`` / ``forms.ModelForm[Item]``.
     "django-stubs-ext>=6.0.9",
     "djangorestframework-stubs>=3.18.0",
-    "basedpyright>=1.40.1",
-    # typeshed stubs for two libraries the package subclasses: django-filter (a hard
-    # dependency; the filters family) and channels (a soft one; the WebSocket consumer
-    # and router). Each
-    # stub release names the upstream line it covers (``26.1.*`` / ``4.3.*``), so
-    # bump it with the library. django-debug-toolbar ships its own ``py.typed``.
-    "types-django-filter>=26.1.0.20260906",
+    "ruff>=0.15.0",
+    # typeshed stubs: each release names the upstream line it covers (``4.3.*`` /
+    # ``26.1.*``), so bump it with the library.
     "types-channels>=4.3.0.20260518",
+    "types-django-filter>=26.1.0.20260906",
+    # Scripts.
+    # The scripts run on the 3.10 floor cell, where the stdlib ``tomllib`` does not exist.
+    "tomli>=2.4.1",
 ]
 # Postgres test tier (opt-in): ``uv sync --group pg`` adds the driver the
 # ``FAKESHOP_PG_DSN`` settings branch needs. Kept out of ``dev`` so the
@@ -121,54 +127,12 @@ pg = [
     "psycopg[binary]>=3.3.4",
 ]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-# The one version source: hatchling reads ``__version__`` from the package
-# init (default regex source) for sdist/wheel metadata and any direct build.
-[tool.hatch.version]
-path = "django_strawberry_framework/__init__.py"
-
-[tool.hatch.build.targets.wheel]
-packages = ["django_strawberry_framework"]
-
-[tool.hatch.build.targets.sdist]
-# Ship the package, tests, and key metadata only. Without this, hatchling's default
-# sdist tars the whole tree — internal docs/SPECS, examples/ (with sqlite DBs), and
-# any local .claude/ state — into a ~7 MB archive.
-include = [
-    "/django_strawberry_framework",
-    "/tests",
-    "/README.md",
-    "/LICENSE",
-    "/CHANGELOG.md",
-    "/pyproject.toml",
-]
-
 [tool.ruff]
 line-length = 99
 target-version = "py310"
-exclude = [
-    ".git",
-    "__pycache__",
-    "docs/source/conf.py",
-    "old",
-    "build",
-    "dist",
-    "venv",
-    ".venv",
-    "env",
-    ".pytest_cache",
-    ".coverage",
-    "htmlcov",
-]
 
 [tool.ruff.format]
-# ruff 0.16 formats Python blocks inside Markdown. Fenced blocks in this repo are
-# verbatim example content (see START.md "Markdown link convention"), and the
-# archived specs under docs/SPECS/ are a historical record, so the formatter owns
-# .py only.
+# Fenced blocks in .md are verbatim example content, so the formatter owns .py only.
 exclude = ["*.md"]
 
 [tool.ruff.lint]
@@ -209,26 +173,9 @@ ignore = [
     "RUF003", # ambiguous-unicode in comments — ditto
 ]
 
-[tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401"]
-# B018 (useless-expression): bare ``factory.arguments`` triggers the lazy
-# build/raise under test. RUF012 (mutable-class-default): test/example fixture
-# classes use mutable attrs idiomatically. PERF: perf of test/example code is
-# irrelevant. ARG: in test code an "unused argument" is almost always an
-# injected pytest fixture (used for its side effect) or a framework-fixed
-# resolver/hook signature — both are required to be present, so ARG is noise
-# here; it stays enforced on the PACKAGE, where an unused named arg is a real
-# signal. RUF043 (pytest match= metacharacters): plain `match="...with a
-# period..."` is the dominant convention (147 vs 20 raw) and matches error
-# substrings fine; forcing raw strings would tax every test.
-"tests/**/*.py" = ["D", "ANN", "ERA001", "F841", "SIM117", "SIM118", "E501", "N802", "N806", "B018", "RUF012", "PERF", "RUF043", "ARG"]
-"examples/**/*.py" = ["D", "ANN", "ERA001", "F841", "SIM117", "SIM118", "E501", "UP031", "N806", "B018", "RUF012", "PERF", "RUF043", "ARG"]
-# PERF: one-shot build/maintenance scripts are not a performance surface.
-"scripts/**/*.py" = ["PERF"]
-"**/migrations/*.py" = ["D100", "D101", "D104"]
-"**/views.py" = ["D101"]
-"**/urls.py" = ["D100"]
-"**/admin.py" = ["D101"]
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "double"
+multiline-quotes = "double"
 
 [tool.ruff.lint.flake8-unused-arguments]
 # Unused ``*args`` / ``**kwargs`` are signature padding for protocol/forward
@@ -240,45 +187,61 @@ ignore-variadic-names = true
 [tool.ruff.lint.isort]
 known-first-party = ["django_strawberry_framework"]
 
-[tool.ruff.lint.pydocstyle]
-convention = "google"
-
-[tool.ruff.lint.flake8-quotes]
-inline-quotes = "double"
-multiline-quotes = "double"
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**/*.py" = [
+    "D",      # docstrings not required in test code
+    "ANN",    # annotations not required in test code
+    "ERA001", # commented-out code
+    "F841",   # unused local variable
+    "SIM117", # nested with statements
+    "SIM118", # `key in dict.keys()`
+    "E501",   # line too long
+    "N802",   # function name not lowercase
+    "N806",   # variable in function not lowercase
+    "B018",   # bare `factory.arguments` triggers the lazy build under test
+    "RUF012", # fixture classes use mutable attrs idiomatically
+    "PERF",   # not a performance surface
+    "RUF043", # plain `match="..."` substrings are the convention
+    "ARG",    # an unused arg is an injected fixture or a framework-fixed signature; enforced on the package
+]
+"examples/**/*.py" = [
+    "D",      # docstrings not required in example code
+    "ANN",    # annotations not required in example code
+    "ERA001", # commented-out code
+    "F841",   # unused local variable
+    "SIM117", # nested with statements
+    "SIM118", # `key in dict.keys()`
+    "E501",   # line too long
+    "UP031",  # printf-style string formatting
+    "N806",   # variable in function not lowercase
+    "B018",   # bare `factory.arguments` triggers the lazy build under test
+    "RUF012", # fixture classes use mutable attrs idiomatically
+    "PERF",   # not a performance surface
+    "RUF043", # plain `match="..."` substrings are the convention
+    "ARG",    # an unused arg is an injected fixture or a framework-fixed signature; enforced on the package
+]
+# PERF: one-shot build/maintenance scripts are not a performance surface.
+"scripts/**/*.py" = ["PERF"]
+"**/migrations/*.py" = ["D100", "D101", "D104"]
+"**/views.py" = ["D101"]
+"**/urls.py" = ["D100"]
+"**/admin.py" = ["D101"]
 
 [tool.ruff.lint.pycodestyle]
 # The formatter wraps code at line-length (99); E501 only flags lines past 110
 # -- the grace covers long strings/comments the formatter cannot break.
 max-line-length = 110
 
-# basedpyright checks the shipped package (``py.typed`` makes its annotations public)
-# and the ``scripts/`` tooling that gates it, and a warning fails the run. A script runs
-# as ``python scripts/<name>.py``, so its execution environment is rooted at
-# ``scripts/`` (sibling imports such as ``_kanban_lib``) with the repo root (``scripts.*``
-# and package imports as first-party source, not through the editable install) and the
-# fakeshop project on the path (``apps.*`` / ``config.*`` imports, resolved statically,
-# never executed). No
-# plugin exists or is wanted: the check reads only the stubs' and packages' own
-# annotations, so it sees the package exactly as a downstream checker does and never
-# imports the example project's settings. Every dependency is typed (its own
-# ``py.typed``, django-stubs, or the typeshed stubs in the ``dev`` group).
-# ``pythonVersion`` is the lowest Python the installed stubs support (they import
-# ``typing.Self``); a lower one would read every ``Self`` return as ``Any``. The
-# package's own 3.10 floor is proven by the floor CI cell running the suite on 3.10, and
-# ``pyrightconfig.floor.json`` (which extends this table) re-checks its scope at 3.10
-# so a 3.11+ stdlib or ``typing`` name fails when it is written. The one suppression is
-# ``# pyright: ignore[<rule>]``, always rule-scoped: ``# type: ignore`` is not read at
-# all, and a suppression the run does not need is itself an error.
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
 [tool.basedpyright]
-# Every Python file in the repository. The excludes are git-ignored scratch trees:
-# generated source copies (docs/shadow/) and the throwaway files a review, build, DRY or
-# bug-hunt cycle creates and deletes at closeout. tests/ imports the fakeshop apps the way
-# pytest's `pythonpath` does, through the extra path; it stays in the root environment
-# because an environment rooted at tests/ lets tests/rest_framework and tests/types shadow
-# DRF and the stdlib. An environment's root resolves imports before anything else, so the
-# package's rest_framework/ subpackage takes its own environment, listed first: rooted at
-# the package it would shadow DRF for its own modules.
+# Every .py in the repo (the package's annotations are public via ``py.typed``); the
+# excludes are git-ignored scratch trees (docs/shadow/ copies, cycle temp files). tests/
+# stays in the root environment, importing fakeshop through the extra path as pytest's
+# `pythonpath` does: an environment rooted at tests/ lets tests/rest_framework and
+# tests/types shadow DRF and the stdlib.
 include = ["."]
 extraPaths = ["examples/fakeshop"]
 exclude = [
@@ -289,59 +252,89 @@ exclude = [
     "docs/*/temp-tests",
     "docs/*/worker-memory",
 ]
-executionEnvironments = [
-    { root = "scripts", extraPaths = [
-        "examples/fakeshop",
-        ".",
-    ], reportUnannotatedClassAttribute = "error", reportUnusedCallResult = "error", reportUnusedParameter = "error" },
-    { root = "django_strawberry_framework/rest_framework", extraPaths = [
-        ".",
-    ], reportUnannotatedClassAttribute = "error", reportUnusedCallResult = "error", reportUnusedParameter = "error" },
-    { root = "django_strawberry_framework", extraPaths = [
-        ".",
-    ], reportUnannotatedClassAttribute = "error", reportUnusedCallResult = "error", reportUnusedParameter = "error" },
-    # Python files outside the package, scripts/, tests/ and examples/: a file root adds no
-    # import root, so with these extra paths each resolves as the root environment does (a
-    # docs/dry root would search docs/dry first and name the module export_dry_review).
-    { root = "conftest.py", extraPaths = [
-        ".",
-        "examples/fakeshop",
-    ], reportUnannotatedClassAttribute = "error", reportUnusedCallResult = "error", reportUnusedParameter = "error" },
-    { root = "line_count.py", extraPaths = [
-        ".",
-        "examples/fakeshop",
-    ], reportUnannotatedClassAttribute = "error", reportUnusedCallResult = "error", reportUnusedParameter = "error" },
-    { root = "docs/dry/export_dry_review.py", extraPaths = [
-        ".",
-        "examples/fakeshop",
-    ], reportUnannotatedClassAttribute = "error", reportUnusedCallResult = "error", reportUnusedParameter = "error" },
-    { root = "examples/fakeshop" },
-]
+# Lowest Python the stubs support (they import `typing.Self`; lower reads every `Self`
+# as `Any`). The 3.10 floor is proven by the floor CI cell and pyrightconfig.floor.json,
+# which re-checks this scope at 3.10 so a 3.11+ stdlib or `typing` name fails.
 pythonVersion = "3.11"
-# Every rule on (`all`), minus the rules and flags below; a warning fails the run.
+# No plugin: only the stubs' and packages' own annotations (every dependency is typed),
+# so the package reads as a downstream checker sees it and fakeshop settings are never
+# imported. Every rule on (`all`) minus those below; a warning fails the run.
 typeCheckingMode = "all"
 failOnWarnings = true
+# The one suppression is a rule-scoped `# pyright: ignore[<rule>]`; `# type: ignore`
+# is not read, and a suppression the run does not need is an error.
 enableTypeIgnoreComments = false
 reportUnnecessaryTypeIgnoreComment = "error"
-# Off by design. The formatter's multi-line string layout is implicit concatenation
-# (ruff bans only the explicit `+` form, ISC003); the package shares underscore names
-# across its own modules, so a private helper another module imports reads as unused
-# in its own; import cycles are broken at runtime by local imports; and attributes a
-# metaclass, descriptor or Django's model machinery sets are declared annotation-only
-# (reverse accessors, key columns, `__slots__` entries), which reads as uninitialized.
+# Off by design: the formatter's multi-line strings are implicit concatenation (ruff bans
+# only `+`, ISC003); a private helper another package module imports reads as unused in
+# its own; import cycles are broken by local imports; metaclass, descriptor and Django
+# model attributes are declared annotation-only (reverse accessors, key columns,
+# `__slots__`), which reads as uninitialized.
 reportImplicitStringConcatenation = "none"
 reportPrivateUsage = "none"
 reportUnusedFunction = "none"
 reportImportCycles = "none"
 reportUninitializedInstanceVariable = "none"
-# Off until their remaining sites are fixed (the ratchet): turn one on to list them.
-# reportUnannotatedClassAttribute, reportUnusedCallResult and reportUnusedParameter are on
-# for scripts/, django_strawberry_framework/ and the root files (their execution
-# environments above).
+# The ratchet, off until their sites are fixed (turn one on to list them); the last three
+# are on in the scripts/, package and root-file environments below.
 reportAny = "none"
 reportUnannotatedClassAttribute = "none"
 reportUnusedCallResult = "none"
 reportUnusedParameter = "none"
+
+# An environment's root resolves imports first. Scripts run as `python
+# scripts/<name>.py`: sibling imports from the root, plus the repo root (first-party, not
+# the editable install) and fakeshop (resolved statically, never executed).
+[[tool.basedpyright.executionEnvironments]]
+root = "scripts"
+extraPaths = ["examples/fakeshop", "."]
+reportUnannotatedClassAttribute = "error"
+reportUnusedCallResult = "error"
+reportUnusedParameter = "error"
+
+# Listed before the package root: rooted at the package, rest_framework/ would shadow
+# DRF for its own modules.
+[[tool.basedpyright.executionEnvironments]]
+root = "django_strawberry_framework/rest_framework"
+extraPaths = ["."]
+reportUnannotatedClassAttribute = "error"
+reportUnusedCallResult = "error"
+reportUnusedParameter = "error"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "django_strawberry_framework"
+extraPaths = ["."]
+reportUnannotatedClassAttribute = "error"
+reportUnusedCallResult = "error"
+reportUnusedParameter = "error"
+
+# Python files outside the package, scripts/, tests/ and examples/ each take an
+# environment rooted at the file: a file root adds no import root, so with these extra
+# paths they resolve as the root environment does (a docs/dry root would search docs/dry
+# first and name the module export_dry_review).
+[[tool.basedpyright.executionEnvironments]]
+root = "conftest.py"
+extraPaths = [".", "examples/fakeshop"]
+reportUnannotatedClassAttribute = "error"
+reportUnusedCallResult = "error"
+reportUnusedParameter = "error"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "line_count.py"
+extraPaths = [".", "examples/fakeshop"]
+reportUnannotatedClassAttribute = "error"
+reportUnusedCallResult = "error"
+reportUnusedParameter = "error"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "docs/dry/export_dry_review.py"
+extraPaths = [".", "examples/fakeshop"]
+reportUnannotatedClassAttribute = "error"
+reportUnusedCallResult = "error"
+reportUnusedParameter = "error"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "examples/fakeshop"
 
 [tool.coverage.run]
 source = ["django_strawberry_framework"]
@@ -349,7 +342,6 @@ source = ["django_strawberry_framework"]
 [tool.coverage.report]
 fail_under = 100
 show_missing = true
-skip_covered = false
 exclude_lines = [
     "pragma: no cover",
     "^\\s*if (typing\\.)?TYPE_CHECKING:",

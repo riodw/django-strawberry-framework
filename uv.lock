@@ -1,11 +1,9 @@
 version = 1
 revision = 3
-requires-python = ">=3.10, <4.0"
+requires-python = ">=3.10"
 resolution-markers = [
-    "python_full_version >= '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
-    "(python_full_version >= '3.15' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.15' and sys_platform != 'win32')",
-    "(python_full_version >= '3.12' and python_full_version < '3.15' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.12' and python_full_version < '3.15' and sys_platform != 'win32')",
+    "python_full_version >= '3.12' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
+    "(python_full_version >= '3.12' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.12' and sys_platform != 'win32')",
     "python_full_version == '3.11.*' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
     "(python_full_version == '3.11.*' and platform_python_implementation != 'PyPy') or (python_full_version == '3.11.*' and sys_platform != 'win32')",
     "python_full_version < '3.11'",
@@ -55,10 +53,8 @@ name = "autobahn"
 version = "26.7.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
-    "(python_full_version >= '3.15' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.15' and sys_platform != 'win32')",
-    "(python_full_version >= '3.12' and python_full_version < '3.15' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.12' and python_full_version < '3.15' and sys_platform != 'win32')",
+    "python_full_version >= '3.12' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
+    "(python_full_version >= '3.12' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.12' and sys_platform != 'win32')",
     "python_full_version == '3.11.*' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
     "(python_full_version == '3.11.*' and platform_python_implementation != 'PyPy') or (python_full_version == '3.11.*' and sys_platform != 'win32')",
 ]
@@ -523,10 +519,8 @@ name = "django"
 version = "6.1.2"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
-    "(python_full_version >= '3.15' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.15' and sys_platform != 'win32')",
-    "(python_full_version >= '3.12' and python_full_version < '3.15' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.12' and python_full_version < '3.15' and sys_platform != 'win32')",
+    "python_full_version >= '3.12' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
+    "(python_full_version >= '3.12' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.12' and sys_platform != 'win32')",
 ]
 dependencies = [
     { name = "asgiref", marker = "python_full_version >= '3.12'" },
@@ -665,10 +659,8 @@ name = "django-stubs"
 version = "6.1.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
-    "(python_full_version >= '3.15' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.15' and sys_platform != 'win32')",
-    "(python_full_version >= '3.12' and python_full_version < '3.15' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.12' and python_full_version < '3.15' and sys_platform != 'win32')",
+    "python_full_version >= '3.12' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
+    "(python_full_version >= '3.12' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.12' and sys_platform != 'win32')",
     "python_full_version == '3.11.*' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
     "(python_full_version == '3.11.*' and platform_python_implementation != 'PyPy') or (python_full_version == '3.11.*' and sys_platform != 'win32')",
 ]
@@ -705,10 +697,8 @@ name = "django-stubs-ext"
 version = "6.1.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
-    "(python_full_version >= '3.15' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.15' and sys_platform != 'win32')",
-    "(python_full_version >= '3.12' and python_full_version < '3.15' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.12' and python_full_version < '3.15' and sys_platform != 'win32')",
+    "python_full_version >= '3.12' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
+    "(python_full_version >= '3.12' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.12' and sys_platform != 'win32')",
     "python_full_version == '3.11.*' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
     "(python_full_version == '3.11.*' and platform_python_implementation != 'PyPy') or (python_full_version == '3.11.*' and sys_platform != 'win32')",
 ]
@@ -757,10 +747,8 @@ name = "djangorestframework-stubs"
 version = "3.18.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
-    "(python_full_version >= '3.15' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.15' and sys_platform != 'win32')",
-    "(python_full_version >= '3.12' and python_full_version < '3.15' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.12' and python_full_version < '3.15' and sys_platform != 'win32')",
+    "python_full_version >= '3.12' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
+    "(python_full_version >= '3.12' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.12' and sys_platform != 'win32')",
     "python_full_version == '3.11.*' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
     "(python_full_version == '3.11.*' and platform_python_implementation != 'PyPy') or (python_full_version == '3.11.*' and sys_platform != 'win32')",
 ]
@@ -1495,10 +1483,8 @@ name = "txaio"
 version = "26.6.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.15' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
-    "(python_full_version >= '3.15' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.15' and sys_platform != 'win32')",
-    "(python_full_version >= '3.12' and python_full_version < '3.15' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.12' and python_full_version < '3.15' and sys_platform != 'win32')",
+    "python_full_version >= '3.12' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
+    "(python_full_version >= '3.12' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.12' and sys_platform != 'win32')",
     "python_full_version == '3.11.*' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
     "(python_full_version == '3.11.*' and platform_python_implementation != 'PyPy') or (python_full_version == '3.11.*' and sys_platform != 'win32')",
 ]

@@ -41,7 +41,7 @@ sequence:
    lifted or re-worded, the board's `## Progress to 1.0.0` section advances,
    the alpha-status prose in `README.md` and `docs/GLOSSARY.md` flips to
    beta, the PyPI Development-Status trove
-   classifier moves off `1 - Planning`, and a fresh `## [0.1.0]` entry is
+   classifier moves from `3 - Alpha` to `4 - Beta`, and a fresh `## [0.1.0]` entry is
    written atop `CHANGELOG.md`'s patch entries with the cumulative alpha history
    ([Decision 7](#decision-7--the-changelog-010-entry-covers-the-whole-shipped-alpha-line)).
 5. **Cut, tag, publish.** The version triplet moves to `0.1.0`, the
@@ -192,8 +192,8 @@ is a distinct gate.
   - [ ] Advance the board's `## Progress to 1.0.0` section — via the kanban
         DB + `scripts/build_kanban_md.py` / `build_kanban_html.py` regen,
         never a hand edit of the generated exports.
-  - [ ] Move the PyPI trove classifier off
-        `Development Status :: 1 - Planning`
+  - [ ] Move the PyPI trove classifier from
+        `Development Status :: 3 - Alpha` to `Development Status :: 4 - Beta`
         ([Decision 4](#decision-4--a-milestone-0-cut-carries-more-than-the-version-triplet)).
   - [ ] Write a fresh `CHANGELOG.md` `## [0.1.0] - YYYY-MM-DD` entry atop the
         existing `## [0.0.x]` patch entries, with a one-paragraph release
@@ -252,7 +252,7 @@ to happen once, in order, with evidence.
   `DONE-045-0.0.14`", plus `056` by name) omits `DONE-046` … `DONE-049` and
   cards 050–055 — a card-text gap this spec resolves by Decision 2 and
   records in [Risks](#risks-and-open-questions).
-- The supported matrix per `pyproject.toml`: Python `>=3.10,<4.0`
+- The supported matrix per `pyproject.toml`: Python `>=3.10`
   (classifiers 3.10–3.14), `Django>=5.2.16` (classifiers 5.2 / 6.0 / 6.1),
   `strawberry-graphql>=0.322.2`, `django-filter>=25.2`. CI
   (`.github/workflows/django.yml`) carries the pinned floor row
@@ -264,8 +264,8 @@ to happen once, in order, with evidence.
   match, README matches exports, docs agree on shipped/planned state, no
   stale skips, mirrored tests, ruff clean, pytest at 100%) — this card is
   where that checklist is actually executed.
-- The PyPI trove classifier says `Development Status :: 1 - Planning`,
-  which is stale even for alpha and flatly wrong for a beta.
+- The PyPI trove classifier says `Development Status :: 3 - Alpha`, which
+  is wrong for a beta.
 - `CHANGELOG.md` has no minor-version entry; every release entry is a
   `0.0.x` patch entry gated behind the maintainer-permission rule, and the
   open line carries a `## [0.0.15] - Unreleased` heading. The
@@ -350,8 +350,8 @@ None. The consumer-visible changes are exactly:
 
 - `django_strawberry_framework.__version__` == `"0.1.0"` (the single
   version literal — `pyproject.toml` derives from it via hatch).
-- The PyPI Development-Status trove classifier moves off `1 - Planning`
-  ([Decision 4](#decision-4--a-milestone-0-cut-carries-more-than-the-version-triplet)).
+- The PyPI Development-Status trove classifier moves from `3 - Alpha` to
+  `4 - Beta` ([Decision 4](#decision-4--a-milestone-0-cut-carries-more-than-the-version-triplet)).
 - The published release notes (`CHANGELOG.md` `[0.1.0]`) and the beta-status
   documentation set.
 
@@ -446,10 +446,10 @@ deliverables**, not afterthoughts:
   the `CHANGELOG.md` Versioning block's `0.1.0` row read as reached;
   the GLOSSARY's "Current package version / Alpha-quality" line becomes the
   beta line.
-- **The trove classifier**: `Development Status :: 1 - Planning` →
+- **The trove classifier**: `Development Status :: 3 - Alpha` →
   `Development Status :: 4 - Beta` in `pyproject.toml` `classifiers` — the
   one place the published index itself encodes the milestone. (`4 - Beta` is
-  the exact trove term for this phase; `3 - Alpha` is not retro-set.)
+  the exact trove term for this phase.)
 
 **Alternative rejected**: treating the milestone chores as ordinary Slice 5
 doc fold-in — these items are invisible to the routine patch-cut checklist
@@ -683,11 +683,10 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
   full inventory (`rg -n "alpha constraint" docs/GLOSSARY.md`) is taken at
   execution time, not trusted from this spec's snapshot.
 - **`Development Status` classifier step**: `4 - Beta` is proposed
-  (Decision 4); the maintainer may prefer to hold `3 - Alpha` semantics one
-  more cycle. Preferred answer: `4 - Beta` — the version number and the
+  (Decision 4); the maintainer may prefer to hold the current `3 - Alpha`
+  one more cycle. Preferred answer: `4 - Beta` — the version number and the
   README will both say beta, and the classifier should not contradict them.
-  Fallback: any value except the current `1 - Planning`, which is wrong
-  under every reading.
+  Fallback: keep `3 - Alpha` until the next cut.
 - **Upstream drift during alpha**: features either upstream shipped after
   the pinned audit revisions are not alpha debt (Decision 6) — but Slice 1 should note any
   obvious new upstream surface it trips over as candidate `BACKLOG.md`
@@ -740,8 +739,8 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
       glossary DB + re-rendered; `## Progress to 1.0.0` advanced via the
       kanban DB + regen; alpha-status prose flipped to beta in `README.md`
       and the GLOSSARY, with the `GOAL.md` / `TODAY.md` / `CHANGELOG.md`
-      Versioning milestone references swept; trove classifier moved off
-      `1 - Planning` (Decision 4).
+      Versioning milestone references swept; trove classifier moved from
+      `3 - Alpha` to `4 - Beta` (Decision 4).
 - [ ] `CHANGELOG.md` gains a fresh `## [0.1.0] - YYYY-MM-DD` entry
       with the release summary and cumulative Added / Changed / Fixed /
       Removed sections covering the shipped alpha line, wire breaks called

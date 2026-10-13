@@ -130,7 +130,7 @@ dev = [
     # subscript ``admin.ModelAdmin[Card]`` / ``forms.ModelForm[Item]``.
     "django-stubs-ext>=6.0.9",
     "djangorestframework-stubs>=3.18.0",
-    "ruff>=0.15.0",
+    "ruff>=0.17.0",
     # typeshed stubs: each release names the upstream line it covers (``4.3.*`` /
     # ``26.1.*``), so bump it with the library.
     "types-channels>=4.3.0.20260518",

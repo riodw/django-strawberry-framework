@@ -1,6 +1,6 @@
 [build-system]
 # PEP 639 ``license`` expression + ``license-files`` need hatchling 1.27.
-requires = ["hatchling>=1.27"]
+requires = ["hatchling>=1.27", "hatch-fancy-pypi-readme>=25.1"]
 build-backend = "hatchling.build"
 
 # The one version source: hatchling reads ``__version__`` from the package
@@ -10,6 +10,25 @@ path = "django_strawberry_framework/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["django_strawberry_framework"]
+
+# The PyPI long description is README.md with its repo-relative links pointed at
+# GitHub, so they resolve on the PyPI page while the file in the repo keeps
+# relative links. Anchors and absolute URLs pass through unchanged.
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+# Reference-style definitions: ``[label]: docs/README.md``.
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(?m)^(\[[^\]]+\]):[ \t]+(?!https?://|mailto:|#)(\S+)'
+replacement = '\1: https://github.com/unaxy/django-strawberry-framework/blob/main/\2'
+
+# Inline links: ``[text](docs/README.md)``.
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\]\((?!https?://|mailto:|#)([^)\s]+)\)'
+replacement = '](https://github.com/unaxy/django-strawberry-framework/blob/main/\1)'
 
 [tool.hatch.build.targets.sdist]
 # Ship the package, tests, and key metadata only. Without this, hatchling's default
@@ -27,9 +46,9 @@ include = [
 [project]
 name = "django-strawberry-framework"
 # Read from ``django_strawberry_framework/__init__.py`` by ``[tool.hatch.version]``.
-dynamic = ["version"]
+# ``readme`` is built by the fancy-pypi-readme hook above.
+dynamic = ["version", "readme"]
 description = "A DRF-inspired Django integration framework for Strawberry GraphQL — filtering, ordering, aggregation, and permissions"
-readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
@@ -74,7 +93,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://pypi.org/project/django-strawberry-framework"
+Homepage = "https://github.com/unaxy/django-strawberry-framework"
 Repository = "https://github.com/unaxy/django-strawberry-framework"
 Issues = "https://github.com/unaxy/django-strawberry-framework/issues"
 

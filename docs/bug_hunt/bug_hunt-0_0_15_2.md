@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 51 done, 67 to do.
+Progress: 52 done, 75 to do.
 
 ## Done
 
@@ -97,6 +97,10 @@ Progress: 51 done, 67 to do.
 - [x] 81. A `DjangoConnection` subclass whose edge class declares its own `CURSOR_PREFIX` (mounted with `relay.connection`)
   refused its own offset cursors past page 1 and served or masked a foreign `arrayconnection:` cursor; every offset decode
   now reads the connection's own edge-class prefix, so it pages and a foreign cursor gets the cursor error (`23a9229c`)
+- [x] 87. A ModelForm field over a choice column published the column's read enum whatever the form admitted, so a declared
+  narrower `ChoiceField` advertised members the form refused; it now publishes exactly the column values the form's own
+  `valid_value` admits (a generated `<InputTypeName><FieldName>Enum` when fewer), and a field admitting no non-empty column
+  value, or a `MultipleChoiceField` over a single-value choice column, is refused at schema build (`889e7c7a`)
 - [x] 103. A writable relation field bound to its `attname` (`cat = PrimaryKeyRelatedField(source="category_id")`, or a
   `category_id` field with the source defaulted) published a create input every request failed with a masked TypeError; it
   is refused at schema build with the remedy `source="category"`, root, nested and injected (`f8ff159c`)
@@ -129,8 +133,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## To do: found along the way
 
-- [ ] 87. ModelForm: a declared `forms.ChoiceField` narrower than its column's choices still publishes the column enum, so a
-  published member is refused by the form (accurate `invalid_choice`); the form analogue of item 35 (robustness)
 - [ ] 88. `ListField(child=CharField())` elements skip the lone-surrogate text preflight (top-level `str` only) and reach `save()` raw
 - [ ] 89. The grouped-choices `ArrayField` refusal tells a list column to "declare a flat ChoiceField", which cannot write a list
 - [ ] 90. Nested list-of-choice serializer shapes (`ListField(child=MultipleChoiceField)`, `ListField(child=ListField(child=ChoiceField))`)
@@ -153,6 +155,33 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 110. The item-56 alias message labels an owner `'category_id' (source 'category_id')` when the name and the source match
 - [ ] 111. A GenericForeignKey own-name `PrimaryKeyRelatedField(source="content_object")` raises `AttributeError` in
   `_require_relation_primary` (`related_model` is None) instead of `ConfigurationError`
+- [ ] 113. On a connection the consumer pipeline (visibility, `FilterSet`, `OrderSet`) runs before the deadline check: past the
+  deadline, `allLibraryGenresConnection(filter: {books: {shelf: {homeBranch: {exact: $pk}}}})` runs the `ModelChoiceFilter`
+  branch lookup, and an invalid pk answers `FILTER_INVALID` instead of the deadline rejection; item 114 closes it
+- [ ] 114. Request-rejection precedence (design approved 2026-10-08, all 7 decisions;
+  `~/dst-handoff/2026-10-08/admission-design.md`, which also holds the wire-change table and the CHANGELOG text):
+  - One order: P0 document admission, P1 field-argument errors, P2 the deadline, P3 the consumer pipeline, P4 slice and database.
+    One seam: a new `admission.py` (`admit_connection_page`, `admit_list_page`, `admit_node_refetch`); connections enter it
+    through a package `DjangoConnectionExtension(ConnectionExtension)` built with `strawberry.field(extensions=...)`, replacing
+    both `relay.connection(` calls (`connection.py`, `types/finalizer.py`). Node fields decode the id before the deadline;
+    `first` + `last` keeps `PaginationArgumentError` and its message. Doc home: spec-047 Decision 14, a glossary entry
+    "Request rejection precedence", one AGENTS.md line.
+  - Draft: `refs/scratch/admission-wip` (`970d054a`), unfinished and never run, cut before many landings; its glossary,
+    KANBAN and constants may be half-regenerated. Still to write: `examples/fakeshop/test_query/test_admission_api.py`,
+    `tests/test_admission.py`, failability (swap P1 and P2; move admission after `next_`).
+  - Watch: reproduce everything `relay.connection()` sets up beyond the extension; never leak the admitted page across parents
+    or concurrent async fields; `bounded_rows` / `bounded_rows_async` are public and keep their deadline check; the keyset
+    cursor's shape and signature are P1 while the column-fingerprint match stays at the seek; the walker's plan-time catch in
+    `optimizer/nested_planner.py`.
+  - Text this changes: `8d4f66bd` documents `get_queryset`, `check_*_permission` and consumer `FilterSet` / `OrderSet`
+    running before the deadline (connections, `DjangoListField`, the many-side re-check) as trusted application code. Under
+    strictness `"raise"` past the deadline a forward FK / OneToOne hop reports the deadline while a many-side hop reports the
+    N+1 error (`_check_n1` runs before `bounded_rows`). A generated mutation's transaction opens before the write pipeline's
+    check (an audited exclusion in `8d4f66bd`).
+- [ ] 115. Item 12's hot-path AFTER number was never taken (BEFORE: `check_deadline` about 300 ns per call, +24% to +46% per
+  resolver call, about +1% end to end at 100 rows): `<tree>/.venv/bin/python ~/dst-handoff/2026-10-08/hotpath12_bench.py
+  --tree <tree> --json after_run1.json`. Unmeasured: return early when neither the budget nor the context mirror holds a
+  deadline (skips 4 of the 8 calls)
 - [ ] 120. `prove_failability.py` has no SIGTERM / SIGHUP handler: a terminated run leaves its mutation in the tree and
   its `ACTIVE-MUTATION.json` marker; recovery is by hand from `restore_with`
 - [ ] 121. A crashed `prove_failability.py` run without `--scratch-root` leaves its marker in its own `failability-*`
@@ -162,6 +191,18 @@ not real bugs and just get deleted from t3. One checkbox per area:
   one tree under one `--scratch-root` (harmless while the tree lock excludes concurrent runs)
 - [ ] 123. BUILD.md "Mechanized: `scripts/prove_failability.py`" says the tool's default scratch is "a bare `/tmp` path";
   it is a fresh `failability-*` directory under `TMPDIR`
+- [ ] 124. ModelForm: an explicit `null` on a declared non-required choice field (or `CharField`) over a non-blank text
+  choice column stores `""` (Django skips model validation for an empty value on a non-required form field), and the read
+  enum then cannot serialize the row ("cannot represent value: ''"); the serializer flavor refuses the analogue at build
+- [ ] 125. ModelForm: no check that a declared field's kind agrees with its column beyond choice columns
+  (`MultipleChoiceField` over a non-choice text column, a single `ChoiceField` over an `ArrayField` of choices,
+  `IntegerField` over a text column); the serializer flavor checks agreement in `_model_backed_scalar_annotation`
+- [ ] 126. A plain `Form` `ChoiceField` publishes `String`, while a serializer-only `ChoiceField` publishes a generated enum
+- [ ] 127. Lead: a serializer single `ChoiceField` over an `ArrayField` may skip
+  `_reject_choice_values_the_column_does_not_list` (`column.choices` is `None`) and publish a scalar enum
+- [ ] 128. `django_strawberry_framework/testing/relay.py::global_id_for` annotates `schema: Schema | None` with `Schema`
+  imported only under `TYPE_CHECKING` and no `from __future__ import annotations`: importing the public module raises
+  `NameError` on Python 3.10-3.13 (the floor run of `test_library_api.py` fails at collection; 3.14's lazy annotations hide it)
 
 ## To do: holes found re-checking the fixes
 
@@ -239,131 +280,14 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 118. CHANGELOG entry for item 81: a `DjangoConnection` subclass whose edge class declares its own `CURSOR_PREFIX` pages
   with its own offset cursors and answers a foreign `arrayconnection:` cursor with the cursor error; stock connections are
   unchanged
+- [ ] 129. CHANGELOG entry for item 87: a ModelForm mutation whose form declares a choice field narrower than its column
+  publishes a generated enum of only the column values the form admits (static choices; callable and `__init__`-assigned
+  choices keep the column enum), and a field admitting none of the column's non-empty values, or a `MultipleChoiceField`
+  over a single-value choice column, raises `ConfigurationError` at schema build
 
 ## Hunt not finished in t3
 
 - [ ] 29. The hunt's final test gate was never run
-
-## Addendum: handoff 2026-10-08 (item 12 and the request-rejection precedence)
-
-Written at the close of one chat for whoever picks this up next. Item 12 has since landed as `8d4f66bd`; the precedence work
-is not landed.
-
-### Where the work is
-
-Scratch under `/private/tmp` is wiped by a reboot, so everything is copied to `~/dst-handoff/2026-10-08/`:
-
-- `0001-fix-resolvers-nested-forward-FK-OneToOne-and-reverse.patch`: commit `7595d578`, the item 12 fix (also kept in the main repo as
-  `refs/scratch/fix12`). Based on `85ba203e`; main has moved since (at least `cdc760b5`), so rebase and re-carve
-  `examples/fakeshop/db.sqlite3` (its only DB change is glossary rows: the "Execution resource policy" body plus new terms 587
-  `check_deadline` and 588 `bounded_rows`; `glossary_item12.py` replays them).
-- `admission-wip.patch` and `admission-wip-status.txt`: the UNCOMMITTED, UNFINISHED precedence implementation, `git diff HEAD` on top of
-  `7595d578` (new files included). It was snapshotted while an Opus Medium implementer was still mid-task: code, both new test files
-  and spec-030/032/047 edits existed; glossary, KANBAN, AGENTS, START, README and CHANGELOG had not been started, and no test had
-  run. Treat it as a draft to review, not a finished change.
-- `admission-design.md`: the approved design (read this first).
-- `item12-gather-report.md`: item 12 facts and probes.
-- `hotpath12_bench.py`, `before_run1.json`/`.log`: hot-path harness and the BEFORE numbers.
-- `probe12.py`, `probeMCF_*.py`: the probes behind the findings below.
-
-The live clone was
-`/private/tmp/claude-501/-Users-riordenweber-projects-django-strawberry-framework/df9d661e-0eaa-4a60-9fbe-5e28dd0c0d33/scratchpad/fix12`.
-The implementer was stopped and its last state committed as `970d054a` (`refs/scratch/admission-wip` in the main repo; also `0001-wip-admission-*.patch` in the handoff dir). It stopped while running the generators, so the glossary, KANBAN and constants may be half-updated. Start from that commit, not `admission-wip.patch`.
-
-### Item 12: landed as `8d4f66bd`
-
-- Verdict: a defect under AGENTS rule 37. The contract row is the `ResourcePolicy` `execution_deadline_seconds` docstring plus
-  spec-047 Decision 9, which says every seam about to reach the database checks the deadline first. The shape is `DjangoSchema` with
-  a deadline and no optimizer (or an unplanned relation). The wire input is `{ allLibraryBooks { title shelf { code } } }` on the
-  `/rp-deadline/` test mount: 5 queries after the deadline, no error.
-- Fix (`7595d578`): `check_deadline(info)` is the first statement of `forward_resolver` and `reverse_one_to_one_resolver` in
-  `types/resolvers.py::_make_relation_resolver`, checked on every call. There are no checks inside the async closures. The wire
-  message now reads "before this field reached the database".
-- Docs: the "collection resolvers" wording in the glossary and the `check_deadline` docstring is retired. Two audited exclusions
-  are added: the file resolver, and hand-written resolvers, which are trusted code (GOAL.md "Trust boundary") and opt in via
-  `check_deadline` / `bounded_rows`.
-- Tests are written but NOT run, in `test_resource_policy_api.py`:
-  - forward FK, forward O2O, reverse O2O and many-side rows;
-  - an unarmed control;
-  - an optimizer-mounted pin, which distinguishes a check at the resolver head from one on the lazy path only;
-  - async O2O rows.
-- Hot path: `check_deadline` costs about 300 ns per call, +24% to +46% per resolver call and about +1% end to end at 100 rows.
-  The AFTER number has not been taken:
-  `<tree>/.venv/bin/python ~/dst-handoff/2026-10-08/hotpath12_bench.py --tree <tree> --json after_run1.json`.
-- Unmeasured idea: an early return when neither the budget nor the context mirror holds a deadline. It would skip 4 of the 8 calls.
-- After landing: tick 12, purge D-3A-1 from t3 (outside auto mode, backup first), and tick 28 if 13 and 12 were its only findings.
-
-### The request-rejection precedence
-
-**Why the question kept coming back.** "Which error wins: `first`/`last` or the deadline?" came up 14 times since 2026-08. The
-order of per-field checks was never chosen. It falls out of Strawberry's `ConnectionExtension.resolve` running the package resolver
-(visibility, FilterSet, OrderSet) before `resolve_connection` (guard, deadline, bounds). Every seam is hand-ordered differently, and
-no test pairs two rejections.
-
-**Approved by Rio (all 7 decisions):**
-
-- **One order.** P0 is document admission, P1 field-argument errors, P2 the deadline, P3 the consumer pipeline, P4 slice and
-  database.
-- **One seam.** A new `admission.py` (`admit_connection_page`, `admit_list_page`, `admit_node_refetch`). Connections enter it through
-  a package `DjangoConnectionExtension(ConnectionExtension)` built with `strawberry.field(extensions=...)`, which replaces both
-  `relay.connection(` calls (`connection.py`, `types/finalizer.py`).
-- **Node fields** decode the id before the deadline.
-- **`first` + `last`** raises `PaginationArgumentError`, with the same message as today.
-- **Doc home** is spec-047 Decision 14 plus a glossary entry "Request rejection precedence", plus one AGENTS.md line.
-- **Landing order:** item 12 lands first.
-- **CHANGELOG:** entries for both changes. The text is in `admission-design.md` decision 7.
-
-**A defect this closes.** On a connection, a consumer `ModelChoiceFilter` validates (and queries) before the deadline check. The
-shipped `allLibraryGenresConnection(filter: {books: {shelf: {homeBranch: {exact: $pk}}}})` ran its branch lookup after an expired
-deadline. With an invalid pk it answers `FILTER_INVALID` instead of the deadline rejection. Give it its own item number when this
-lands.
-
-**Wire changes.** Only requests that are invalid in two ways change; the table is in `admission-design.md`.
-
-**What the next agent does:**
-1. Finish the implementation from the clone or `admission-wip.patch` against the design.
-2. Write the live matrix test `examples/fakeshop/test_query/test_admission_api.py`.
-3. Write `tests/test_admission.py`.
-4. Prove failability with two mutations: swapping P1 and P2, and moving admission after `next_`.
-
-**Watch when finishing:**
-- Reproduce everything `relay.connection()` sets up beyond the extension.
-- Do not leak the admitted page across parents or concurrent async fields.
-- `bounded_rows` / `bounded_rows_async` are public API and keep their deadline check.
-- Keyset: the cursor's shape and signature belong to P1; the column-fingerprint match stays at the seek.
-- The walker's plan-time catch in `optimizer/nested_planner.py`.
-
-### Rules that bit this chat
-
-- AGENTS rules 15/16: no pytest unless Rio asks, and when asked, targeted files only.
-  - Before every run, `pgrep -fl '[p]ytest|[b]asedpyright'` must print nothing (any project; a medtrics pytest was running) and at
-    least 35% memory must be free.
-  - Three subagents ran a light probe without gating on that check. Briefs must tell them to gate on it, not just print it.
-- Work in a private `git clone --no-local` with its own `uv sync`. Never write the main checkout's tracked
-  `examples/fakeshop/db.sqlite3`.
-- Landing through a concurrently dirty main:
-  1. Rebase in scratch and re-carve the DB rows by UPDATE/INSERT.
-  2. `merge --ff-only` only when no dirty file overlaps; otherwise commit through a private index.
-  3. Never `git commit --only`.
-- No `Co-Authored-By` footer (AGENTS rule 33). No branches. CHANGELOG only when Rio says so (this time Rio did).
-- Always run a verifier agent over an implementer's commit before landing.
-
-### Other open threads
-
-- Items 78 and 79 (CHANGELOG for 65 and 52) still need Rio. Focused pytest runs for items 65 and 52 were never run since landing.
-- t3 worktree `~/.t3/worktrees/django-strawberry-framework/t3code-1cc21548` was rebased onto main (`8a322bbf`) on 2026-10-08,
-  its uncommitted hunt work merged file by file; item 12's D-3A-1 copy is stripped from it.
-- Main-repo refs `refs/scratch/fix65`, `fix52`, `land` and `fix12` are superseded and can be deleted.
-- For the precedence work, from item 12's verification:
-  - The `get_queryset` hooks, `check_*_permission` hooks and consumer `FilterSet` / `OrderSet` classes (a `ModelChoiceFilter`
-    validating) run before the deadline check on connections, `DjangoListField` and the many-side relation re-check;
-    `8d4f66bd` documents them as trusted application code, and the approved order (P2 deadline before P3 consumer pipeline)
-    will change that text.
-  - Under strictness `"raise"` with a passed deadline, a forward FK / OneToOne hop reports the deadline (checked before
-    `_check_n1`) while a many-side hop reports the N+1 error (`_check_n1` runs before `bounded_rows`).
-  - A generated mutation field's completion-spanning transaction opens (BEGIN / SAVEPOINT, no row) before the write pipeline's
-    check; documented as an audited exclusion in `8d4f66bd`.
-
 
 <!-- LINK DEFINITIONS -->
 

@@ -300,6 +300,21 @@ executionEnvironments = [
     { root = "django_strawberry_framework", extraPaths = [
         ".",
     ], reportUnannotatedClassAttribute = "error", reportUnusedCallResult = "error", reportUnusedParameter = "error" },
+    # Python files outside the package, scripts/, tests/ and examples/: a file root adds no
+    # import root, so with these extra paths each resolves as the root environment does (a
+    # docs/dry root would search docs/dry first and name the module export_dry_review).
+    { root = "conftest.py", extraPaths = [
+        ".",
+        "examples/fakeshop",
+    ], reportUnannotatedClassAttribute = "error", reportUnusedCallResult = "error", reportUnusedParameter = "error" },
+    { root = "line_count.py", extraPaths = [
+        ".",
+        "examples/fakeshop",
+    ], reportUnannotatedClassAttribute = "error", reportUnusedCallResult = "error", reportUnusedParameter = "error" },
+    { root = "docs/dry/export_dry_review.py", extraPaths = [
+        ".",
+        "examples/fakeshop",
+    ], reportUnannotatedClassAttribute = "error", reportUnusedCallResult = "error", reportUnusedParameter = "error" },
     { root = "examples/fakeshop" },
 ]
 pythonVersion = "3.11"
@@ -321,7 +336,8 @@ reportImportCycles = "none"
 reportUninitializedInstanceVariable = "none"
 # Off until their remaining sites are fixed (the ratchet): turn one on to list them.
 # reportUnannotatedClassAttribute, reportUnusedCallResult and reportUnusedParameter are on
-# for scripts/ and django_strawberry_framework/ (their execution environments above).
+# for scripts/, django_strawberry_framework/ and the root files (their execution
+# environments above).
 reportAny = "none"
 reportUnannotatedClassAttribute = "none"
 reportUnusedCallResult = "none"

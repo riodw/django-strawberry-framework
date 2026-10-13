@@ -474,7 +474,7 @@ def _module_name(path: Path, root: Path) -> str:
     display = _display_path(path, root)
     parts = list(display.with_suffix("").parts)
     if parts and parts[-1] == "__init__":
-        parts.pop()
+        _ = parts.pop()
     return ".".join(parts)
 
 
@@ -533,7 +533,7 @@ def _function_fingerprint(
     """Return an exact body fingerprint and nontrivial AST-node count."""
     body = list(node.body)
     if body and _is_docstring_statement(body[0]):
-        body.pop(0)
+        _ = body.pop(0)
     wrapper = ast.Module(body=body, type_ignores=[])
     payload = f"{type(node).__name__}:{ast.dump(wrapper, include_attributes=False)}"
     node_count = sum(1 for _item in ast.walk(wrapper))
@@ -662,7 +662,7 @@ def _resolved_from_module(path: Path, root: Path, node: ast.ImportFrom) -> str:
         return node.module or ""
     current = _module_name(path, root).split(".")
     if path.name != "__init__.py" and current:
-        current.pop()
+        _ = current.pop()
     remove = node.level - 1
     if remove:
         current = current[:-remove] if remove <= len(current) else []
@@ -700,8 +700,8 @@ class _LiteralVisitor(ast.NodeVisitor):
     """Collect non-docstring string literals."""
 
     def __init__(self, path: Path, minimum_length: int) -> None:
-        self.path = path
-        self.minimum_length = minimum_length
+        self.path: Path = path
+        self.minimum_length: int = minimum_length
         self.records: list[LiteralRecord] = []
 
     def _visit_definition(self, node: ast.AST) -> None:
@@ -962,7 +962,7 @@ def _collect_references(
             )
 
     for locator in by_locator:
-        references.setdefault(locator, [])
+        _ = references.setdefault(locator, [])
     return (
         {
             locator: sorted(items, key=lambda item: (item.path.as_posix(), item.lineno, item.kind))
@@ -1389,36 +1389,36 @@ def check_review(
 
 def _add_target_arguments(parser: argparse.ArgumentParser) -> None:
     """Add arguments shared by audit/check target discovery."""
-    parser.add_argument(
+    _ = parser.add_argument(
         "--root",
         type=Path,
         default=Path.cwd(),
         help="Repository/root directory used to resolve paths (default: current directory).",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--target",
         type=Path,
         action="append",
         required=True,
         help="Python file or directory to inventory; repeatable.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--exclude",
         action="append",
         default=[],
         help="Repo-relative glob that must not be read; repeatable.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--no-default-excludes",
         action="store_true",
         help="Disable built-in VCS, environment, cache, build, and docs/shadow exclusions.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--include-nested",
         action="store_true",
         help="Inventory nested local functions in addition to module/class definitions.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--include-constants",
         action="store_true",
         help="Also inventory module-level UPPER_CASE constants.",
@@ -1436,28 +1436,28 @@ def _build_parser() -> argparse.ArgumentParser:
         "plan",
         help="Generate a fresh cycle plan from the current package source.",
     )
-    plan.add_argument("--root", type=Path, default=Path.cwd())
-    plan.add_argument(
+    _ = plan.add_argument("--root", type=Path, default=Path.cwd())
+    _ = plan.add_argument(
         "--package-root",
         type=Path,
         default=Path("django_strawberry_framework"),
     )
-    plan.add_argument("--target-release")
-    plan.add_argument(
+    _ = plan.add_argument("--target-release")
+    _ = plan.add_argument(
         "--mode",
         choices=("autonomous", "pause-after-each-item"),
         default="autonomous",
     )
-    plan.add_argument("--output", type=Path)
-    plan.add_argument("--force", action="store_true")
-    plan.add_argument("--generated-date")
+    _ = plan.add_argument("--output", type=Path)
+    _ = plan.add_argument("--force", action="store_true")
+    _ = plan.add_argument("--generated-date")
 
     audit = subparsers.add_parser(
         "audit",
         help="Generate a static cross-file DRY evidence dossier.",
     )
     _add_target_arguments(audit)
-    audit.add_argument(
+    _ = audit.add_argument(
         "--scan-root",
         type=Path,
         action="append",
@@ -1467,36 +1467,36 @@ def _build_parser() -> argparse.ArgumentParser:
             "Defaults to package/tests/examples/scripts roots that exist."
         ),
     )
-    audit.add_argument(
+    _ = audit.add_argument(
         "--context",
         type=Path,
         action="append",
         default=[],
         help="Non-Python context file included only in concept searches; repeatable.",
     )
-    audit.add_argument(
+    _ = audit.add_argument(
         "--search-term",
         action="append",
         default=[],
         help="Literal concept to search across parsed Python/context files; repeatable.",
     )
-    audit.add_argument("--case-sensitive", action="store_true")
-    audit.add_argument("--duplicate-min-nodes", type=int, default=8)
-    audit.add_argument("--literal-min-length", type=int, default=20)
-    audit.add_argument("--max-evidence", type=int, default=25)
-    audit.add_argument("--output", type=Path)
-    audit.add_argument("--stdout", action="store_true")
-    audit.add_argument("--force", action="store_true")
-    audit.add_argument("--generated-date")
+    _ = audit.add_argument("--case-sensitive", action="store_true")
+    _ = audit.add_argument("--duplicate-min-nodes", type=int, default=8)
+    _ = audit.add_argument("--literal-min-length", type=int, default=20)
+    _ = audit.add_argument("--max-evidence", type=int, default=25)
+    _ = audit.add_argument("--output", type=Path)
+    _ = audit.add_argument("--stdout", action="store_true")
+    _ = audit.add_argument("--force", action="store_true")
+    _ = audit.add_argument("--generated-date")
 
     check = subparsers.add_parser(
         "check",
         help="Verify a completed review covers every definition and required topic.",
     )
     _add_target_arguments(check)
-    check.add_argument("--review", type=Path, required=True)
-    check.add_argument("--require-topic", action="append", default=[])
-    check.add_argument("--case-sensitive-topics", action="store_true")
+    _ = check.add_argument("--review", type=Path, required=True)
+    _ = check.add_argument("--require-topic", action="append", default=[])
+    _ = check.add_argument("--case-sensitive-topics", action="store_true")
     return parser
 
 

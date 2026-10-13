@@ -70,7 +70,7 @@ def _opened_outside_main_thread_sync_context() -> bool:
     if threading.current_thread() is not threading.main_thread():
         return True
     try:
-        asyncio.get_running_loop()
+        _ = asyncio.get_running_loop()
     except RuntimeError:
         return False
     return True
@@ -112,7 +112,10 @@ _install_postgres_connection_tracking()
 
 
 @pytest.fixture(autouse=True, scope="session")
-def _close_stray_postgres_connections(django_db_setup: None) -> Iterator[None]:  # noqa: ARG001 - ordering dependency
+def _close_stray_postgres_connections(
+    # basedpyright: requested for its teardown order; pytest rejects usefixtures on a fixture
+    django_db_setup: None,  # pyright: ignore[reportUnusedParameter]  # noqa: ARG001
+) -> Iterator[None]:
     """Close tracked stray Postgres connections before the test DBs drop.
 
     Depending on ``django_db_setup`` orders this fixture's teardown BEFORE
@@ -132,17 +135,18 @@ def _close_stray_postgres_connections(django_db_setup: None) -> Iterator[None]: 
 def _django_db_signature(
     transaction: object = False,
     reset_sequences: object = False,
-    databases: object = None,  # noqa: ARG001 - pytest-django's parameter list, bound not read
-    serialized_rollback: object = False,  # noqa: ARG001 - as above
-    available_apps: object = None,  # noqa: ARG001 - as above
-) -> tuple[object, object]:
+    databases: object = None,
+    serialized_rollback: object = False,
+    available_apps: object = None,
+) -> tuple[object, object, object, object, object]:
     """Bind a ``django_db`` marker's arguments exactly as pytest-django's signature does.
 
     ``transaction`` and ``reset_sequences`` are the first two positional parameters, so
     ``django_db(True)`` and ``django_db(transaction=True)`` mean the same thing; an argument
-    pytest-django would reject raises the same ``TypeError`` here.
+    pytest-django would reject raises the same ``TypeError`` here. Returns the five bound
+    values in signature order, as pytest-django's own binding does.
     """
-    return transaction, reset_sequences
+    return transaction, reset_sequences, databases, serialized_rollback, available_apps
 
 
 def _uses_db_and_is_transactional(item: pytest.Item) -> tuple[bool, bool]:
@@ -159,7 +163,7 @@ def _uses_db_and_is_transactional(item: pytest.Item) -> tuple[bool, bool]:
     if marker is None:
         uses_db = transactional = False
     else:
-        transaction, reset_sequences = _django_db_signature(*marker.args, **marker.kwargs)
+        transaction, reset_sequences, *_ = _django_db_signature(*marker.args, **marker.kwargs)
         uses_db = True
         transactional = bool(transaction or reset_sequences)
     fixtures = getattr(item, "fixturenames", ())
@@ -229,7 +233,7 @@ def _skip_pg_tests_off_postgres(items: list[pytest.Item]) -> None:
             item.add_marker(skip_pg)
 
 
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:  # noqa: ARG001 - pytest hookspec
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Apply the collection rules to every collected item, whichever tree it came from."""
     _refuse_nontransactional_async_db_tests(items)
     _skip_pg_tests_off_postgres(items)
@@ -294,7 +298,7 @@ def _deepcopy_overflow_depth() -> int:
         for _ in range(depth):
             nested = [nested]
         try:
-            copy.deepcopy(nested)
+            _ = copy.deepcopy(nested)
         except RecursionError:
             return depth
         depth *= 2

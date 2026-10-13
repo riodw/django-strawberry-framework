@@ -8,7 +8,7 @@ The upstream trees are captured for reference while shaping `django-strawberry-f
 
 ## graphene_django
 
-Source: `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django` (graphene-django 3.2.3, from the installed `dist-info`)
+Source: `~/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django` (graphene-django 3.2.3, from the installed `dist-info`)
 
 ```bash
 graphene_django/
@@ -77,7 +77,7 @@ graphene_django/
 
 ## strawberry_django
 
-Source: `/Users/riordenweber/projects/strawberry-django-main/strawberry_django` (strawberry-django 0.82.1 per its `pyproject.toml`; a source download, not a git checkout)
+Source: `~/projects/strawberry-django-main/strawberry_django` (strawberry-django 0.82.1 per its `pyproject.toml`; a source download, not a git checkout)
 
 ```bash
 strawberry_django/
@@ -159,7 +159,7 @@ strawberry_django/
 
 ## django_graphene_filters
 
-Source: `/Users/riordenweber/projects/django-graphene-filters/django_graphene_filters` (django-graphene-filters 1.0.0, git `9ab2662`)
+Source: `~/projects/django-graphene-filters/django_graphene_filters` (django-graphene-filters 1.0.0, git `9ab2662`)
 
 ```bash
 django_graphene_filters/

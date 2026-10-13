@@ -199,7 +199,7 @@ example and `django-graphene-filters`'
   `queryset.only(*names)`; `Meta.optimizer_hints` is the shipped
   consumer-side projection-widening surface.
 - Upstream, the full surface exists and is verified readable at
-  `/Users/riordenweber/projects/django-graphene-filters`:
+  `~/projects/django-graphene-filters`:
   `django_graphene_filters/fieldset.py::AdvancedFieldSet` +
   `FieldSetMetaclass`, the wiring in
   `django_graphene_filters/object_type.py::_wrap_field_resolvers` (plus its

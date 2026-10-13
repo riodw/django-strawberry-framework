@@ -664,4 +664,4 @@ The completion contract, grouped by slice.
 <!-- External -->
 [graphene-django]: https://github.com/graphql-python/graphene-django
 [strawberry-django]: https://github.com/strawberry-graphql/strawberry-django
-[upstream-cookbook]: https://github.com/riodw/django-graphene-filters
+[upstream-cookbook]: https://pypi.org/project/django-graphene-filters/

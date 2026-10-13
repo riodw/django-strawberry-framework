@@ -130,7 +130,7 @@ inside `(P1.6, M4)`. Publish no figure from one glob.
 Three sub-populations behave differently and must not be swept as one:
 
 1. **Body labels** - `(**P1.4**)`, `(M3)`, `(**F10**)` inline in prose. Delete the token;
-   **keep the clause it justified**. `START.md` "Style Rio cares about": removed
+   **keep the clause it justified**. `START.md` "Style the maintainer cares about": removed
    attribution carried the WHY, so restate it as one plain clause from the code.
 2. **Heading labels** - `### Promotions to single-site now (P1 - third-copy forks)`,
    `### Single-siting that prevents drift (P2)`, `### Small reuses to pin; deliberately

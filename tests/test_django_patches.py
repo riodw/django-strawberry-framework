@@ -35,8 +35,7 @@ patched method directly against synthetic ``SimpleTestCase`` /
 ``TransactionTestCase`` subclasses with hand-built ``databases``
 allow-lists. The test ``default`` alias is always present, so a
 one-alias multi-DB scenario is enough to exercise both branches of
-the patched loop. The demo shape at
-<https://github.com/riodw/django-remove_databases_failures-demo> runs
+the patched loop. A standalone demo project of this shape runs
 under vanilla ``manage.py test`` rather than pytest-django and cannot
 be reproduced 1:1 here: pytest-django's per-test flush calls
 ``connection.cursor()`` mid-lifecycle and crashes on the swapped

@@ -2593,7 +2593,7 @@ def test_will_lazy_load_false_for_real_reverse_one_to_one_in_fields_cache():
 
     from django_strawberry_framework.types.resolvers import _will_lazy_load_single
 
-    patron = Patron.objects.create(name="Rio")
+    patron = Patron.objects.create(name="Ada")
     MembershipCard.objects.create(patron=patron, barcode="1234")
     cached_patron = Patron.objects.select_related("card").get(pk=patron.pk)
 
@@ -2665,7 +2665,7 @@ def test_strictness_raise_accepts_unplanned_cached_reverse_one_to_one():
     """B3: strictness='raise' accepts an unplanned reverse OneToOne already loaded."""
     from apps.library.models import MembershipCard, Patron
 
-    patron = Patron.objects.create(name="Rio")
+    patron = Patron.objects.create(name="Ada")
     MembershipCard.objects.create(patron=patron, barcode="1234")
 
     class CardType(DjangoType):
@@ -2700,7 +2700,7 @@ def test_strictness_raise_accepts_unplanned_cached_reverse_one_to_one():
     assert result.errors is None
     assert result.data == {
         "allPatrons": [
-            {"name": "Rio", "card": {"barcode": "1234"}},
+            {"name": "Ada", "card": {"barcode": "1234"}},
         ],
     }
 

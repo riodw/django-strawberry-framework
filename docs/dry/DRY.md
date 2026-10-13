@@ -192,7 +192,7 @@ carry no round-trip pair or async twin).
    investigation, never the verdict; a contract source (spec, glossary anchor, owner prose, oracle)
    must establish the rule applies to the missing member. Established → behavior defect under
    `## Defects`, separate from any consolidation of the existing guards; ambiguous or newly
-   proposed → route to Rio. Adding a guard changes what is accepted: never "behavior-preserving".
+   proposed → route to the maintainer. Adding a guard changes what is accepted: never "behavior-preserving".
 
 ### The change challenge
 
@@ -272,7 +272,7 @@ trigger to check, never a substitute for a fresh trace; "reviewed once" ≠ perm
 Remove tests of deleted internals only when each distinct behavior demonstrably survives as a case
 on the owner. Boundary tests stay at the [AGENTS.md][agents] tier; when the live tier needs a
 fakeshop fixture that doesn't exist (model, relation shape), the test lands at the strongest
-existing tier and the missing fixture becomes a `## Defects` entry for Rio: never a new example
+existing tier and the missing fixture becomes a `## Defects` entry for the maintainer: never a new example
 model inside an item. Oracles never rewritten to read from the owner they check. Owner coverage ≠
 every former behavior still runs. Intentional test repetition stays when it keeps behaviors
 independently legible. Every gate a finding relies on must be shown able to fail for the
@@ -301,7 +301,7 @@ database resolves outside the copy; a record cites the run id. Never branch. The
 authorizes any `workspace.py run` or `prove`, a focused permanent test w/ `--no-cov` in the
 shared tree, and the final gate `workspace.py gate dry`; nothing else converts into a test run,
 and a proof needing one it can't get = `execution-deferred`. `--cell sharded` and `--cell pg`
-need Rio's separate word; without it they stay `unverified` and the gate lists them, unless
+need the maintainer's separate word; without it they stay `unverified` and the gate lists them, unless
 `inapplicable by construction`: the target's code path reaches no database, alias or dialect
 decision, Worker-1 states the reason, Worker-2 judges it.
 
@@ -312,10 +312,10 @@ lacks (axis 6, contract source found), layering claim the imports contradict. �
 artifact w/ owner; never fixed inside the item; never dropped. Worker-2 appends its own entries
 there, marked `(Worker-2)`; Worker-0 homes them the same way. Before closeout Worker-0 homes each
 on a NAMED owning card (unowned deferral dies). Defect a consolidation can't land without → the
-finding's Coupling names it and the family stays open: Rio authorizes a combined fix, or the
+finding's Coupling names it and the family stays open: the maintainer authorizes a combined fix, or the
 consolidation is redesigned to stand alone. Carding the repair while accepting the dependent
 consolidation is not a resolution. A defect w/ security impact (authorization, database routing,
-data exposure) goes to Rio by the [SECURITY.md][security] path as `blocked`, its reproduction kept
+data exposure) goes to the maintainer by the [SECURITY.md][security] path as `blocked`, its reproduction kept
 out of the artifact.
 
 ### Zero-edit result
@@ -345,7 +345,7 @@ folder integration item per package folder, project integration, final test gate
 (`/`→`__`, `.py` dropped), `dry-folder-<path>.md`, `dry-rule-<family>.md`, `dry-project.md`.
 `--mode pause-after-each-item` when the entry command names it; `--target-release` only when the
 version literal is mid-change. Worker-0 alone edits the plan; nobody erases prior lines. A run
-Rio scopes below the whole plan sets `Status: partial (<scope>)` and closes w/ an `## Outcomes`
+the maintainer scopes below the whole plan sets `Status: partial (<scope>)` and closes w/ an `## Outcomes`
 "Scope of this run" section naming what ran and what did not; an unticked box never reads as
 examined.
 
@@ -380,13 +380,13 @@ Dirty ≠ untouchable. Each item landing tracked edits or new files appends to t
 `## Owned changes`: path, item, symbols changed. A later item may build on a path listed there.
 Attribute by content, never by dirty status: before editing a dirty path, diff vs
 `git show HEAD:<path>` and match every hunk to the ledger or the cycle baseline; a hunk in neither
-= external edit → stop, report to Worker-0, who reconciles w/ Rio. Scope = the paths the item
+= external edit → stop, report to Worker-0, who reconciles w/ the maintainer. Scope = the paths the item
 touches; dirt elsewhere is concurrent work to leave alone, not a stop. Same stop when the
 item-scoped diff shows hunks the worker didn't make. A file clean at cycle entry, dirty w/o a
 ledger row = external.
 
 A test failing before the item's first edit is pre-existing: reproduce it in the item's `before`
-copy, record it under `## Defects` w/ owner + the failing command, route to Rio through Worker-0.
+copy, record it under `## Defects` w/ owner + the failing command, route to the maintainer through Worker-0.
 It blocks the gate row, never the item.
 
 ### Workers
@@ -408,13 +408,13 @@ scoped: the owner, its tests, the ledger rows the item lands.
    `workspace.py baseline dry/<item>`, spawn a fresh Worker-1 w/ the item, artifact path, run id,
    baseline, ledger, its address `dry/<item>/consolidate`, required reading. Artifact `Status:`
    drives the next step: `ready-for-verification/<n>` → Worker-2 (fresh on pass 1); `designed` →
-   Worker-1 w/ edit rights, or Rio; `revision-needed` → Worker-1 again, and its resubmission
+   Worker-1 w/ edit rights, or the maintainer; `revision-needed` → Worker-1 again, and its resubmission
    returns to the SAME Worker-2 whose trace is already on disk (fresh only when that context is
-   gone; two failed re-passes → `blocked`, Rio decides; a standing Worker-1 / Worker-2 disagreement
+   gone; two failed re-passes → `blocked`, the maintainer decides; a standing Worker-1 / Worker-2 disagreement
    → `blocked` at once w/ both positions recorded, never a third pass to break it); `verified` →
-   ledger rows, tick, advance (`autonomous`) or report + wait for Rio's go
+   ledger rows, tick, advance (`autonomous`) or report + wait for the maintainer's go
    (`pause-after-each-item`). Adds `## Families` items, index rows, ledger rows; reconciles
-   unattributed hunks w/ Rio before further dispatch; removes item scratch by explicit path and
+   unattributed hunks w/ the maintainer before further dispatch; removes item scratch by explicit path and
    runs `workspace.py release dry/<item>` after `verified` only, and `release dry/<item> --role
    verify-<n>` when a pass returns `revision-needed`. Never reviews, implements, approves,
    overrides Worker-2.
@@ -444,7 +444,7 @@ scope. After an edit: `uv run ruff check --fix .`, then `uv run ruff format .` l
 `uv run ruff format --check <paths touched>` and `uv run ruff check <paths touched>` both pass.
 Test runs only as
 "Tests" authorizes; worker prose never converts dispatch into more. Changelog edits need explicit
-authorization. Only Rio commits.
+authorization. Only the maintainer commits.
 
 ### Artifact
 
@@ -502,7 +502,7 @@ the suite and CI's floor cell in a gate copy carrying its own git index). Gate =
 package coverage 100% + floor suite + every `## Pending execution` command from
 every artifact, run as listed (a green unmutated suite discharges no failability proof). Record
 failures, coverage, skips, xfails, collected/selected counts, `FAKESHOP_SHARDED` mode: sharded-only
-tests skip by default, so their behaviors stay unverified unless Rio also authorizes a
+tests skip by default, so their behaviors stay unverified unless the maintainer also authorizes a
 `FAKESHOP_SHARDED=1` run (`--suites lint,default,floor,sharded`, `pg` likewise). The gate's result
 file binds it: `git stash create` at gate time + blob ids of `pyproject.toml` and `uv.lock` + each
 suite's cell + the floor pins. Change to package source, tests, fixtures, pytest/coverage config, dependencies or mode
@@ -510,7 +510,7 @@ invalidates it; prose doesn't. Worker-2 completes the gate row by confirming the
 match the tree and each pending command ran. Failure in a path an item touched, or of a `proof:`
 command → that item back to Worker-1; a failing `gate:` command reopens no item; failure reproduced
 against `git show HEAD:` of its test + target → pre-existing, `## Defects`, gate row `blocked` on
-it for Rio; environment failure → recorded precisely, `blocked`.
+it for the maintainer; environment failure → recorded precisely, `blocked`.
 
 Worker-0 fills `## Outcomes` BEFORE deleting anything. Artifacts are untracked; Outcomes is the
 only record a later run can invalidate a verdict from. Per finding: rule, owner before/after, each
@@ -518,7 +518,7 @@ challenge w/ count, freshness fingerprints, proof commands + status, negative co
 judgment. Per run: machinery deleted; rejections w/ triggers; families left open; defects homed
 (each on a NAMED owning card); coupling introduced; net source change vs cycle baseline; gate
 record; cells unverified; blocked items w/ the decision owed; concurrent work untouched. Then
-`Status: complete` (`partial (<scope>)` for a scoped run; `blocked` w/ the decision Rio owes);
+`Status: complete` (`partial (<scope>)` for a scoped run; `blocked` w/ the decision the maintainer owes);
 remove only this run's `docs/dry/temp-tests/<scope>/` dirs + `docs/dry/worker-memory/` contents, by
 explicit path, then `uv run python scripts/workspace.py gc dry` (copies, evidence, databases).
 Never recursively clear `docs/dry/`; never delete another run's scratch. Never remove `DRY.md`, the

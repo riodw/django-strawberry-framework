@@ -3,7 +3,7 @@ Target release: `0.0.5`.
 Status: shipped. Primary spec for the `0.0.5` Relay foundation and the single source of truth for card `DONE-015-0.0.5`.
 Owner: package maintainer.
 Predecessors: `docs/GLOSSARY.md`, `GOAL.md`, `KANBAN.md` card `DONE-015-0.0.5`.
-Influences: the local checkouts referenced from `docs/TREE.md` — `/Users/riordenweber/projects/strawberry-django-main/strawberry_django` and `/Users/riordenweber/projects/django-graphene-filters/django_graphene_filters`.
+Influences: the local checkouts referenced from `docs/TREE.md` — `~/projects/strawberry-django-main/strawberry_django` and `~/projects/django-graphene-filters/django_graphene_filters`.
 Rationale companion: [`docs/SPECS/appx/spec-015-relay_interfaces-0_0_5-rationale.md`][spec-015-rationale] carries the borrowing posture and its per-borrow justifications, the evidence for mutating `__bases__`, and every rejected alternative.
 ## Slice checklist
 Each top-level item maps to one of the five steps in the "Implementation plan" section. Indented items are the discrete sub-parts to complete inside that slice.

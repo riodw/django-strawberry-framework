@@ -16,11 +16,11 @@ The narrow definition-order problem is documented in `docs/SPECS/spec-008-defini
 ## Target outcome
 The target user-facing schema should feel like the cookbook schema from the Graphene package:
 
-- `file:///Users/riordenweber/projects/django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py#L17`
-- `file:///Users/riordenweber/projects/django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py#L42`
-- `file:///Users/riordenweber/projects/django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py#L69`
-- `file:///Users/riordenweber/projects/django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py#L96`
-- `file:///Users/riordenweber/projects/django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py#L131`
+- `~/projects/django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py#L17`
+- `~/projects/django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py#L42`
+- `~/projects/django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py#L69`
+- `~/projects/django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py#L96`
+- `~/projects/django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py#L131`
 
 The Graphene reference exposes four model nodes, each with:
 
@@ -116,28 +116,28 @@ Type conversion and Strawberry finalization therefore happen at different moment
 
 Important source references:
 
-- `AdvancedDjangoObjectType`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/object_type.py#L119`
-- `AdvancedDjangoObjectType.__init_subclass_with_meta__`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/object_type.py#L156`
-- `AdvancedDjangoObjectType.get_node`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/object_type.py#L251`
-- `_wrap_field_resolvers`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/object_type.py#L363`
-- `_convert_field_to_list_or_connection`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/object_type.py#L459`
-- `AdvancedDjangoFilterConnectionField`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/connection_field.py#L67`
-- `AdvancedDjangoFilterConnectionField.args`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/connection_field.py#L156`
-- `AdvancedDjangoFilterConnectionField.filterset_class`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/connection_field.py#L169`
-- `AdvancedDjangoFilterConnectionField.filtering_args`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/connection_field.py#L188`
-- `AdvancedDjangoFilterConnectionField.resolve_queryset`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/connection_field.py#L257`
-- `AdvancedDjangoFilterConnectionField._extract_aggregate_selection`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/connection_field.py#L362`
-- `ClassBasedTypeNameMixin`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/mixins.py#L27`
-- `LazyRelatedClassMixin`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/mixins.py#L55`
-- `LazyRelatedClassMixin.resolve_lazy_class`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/mixins.py#L61`
-- `FilterArgumentsFactory`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/filter_arguments_factory.py#L36`
-- `FilterArgumentsFactory._ensure_built`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/filter_arguments_factory.py#L98`
-- `OrderArgumentsFactory._ensure_built`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/order_arguments_factory.py#L78`
-- `AggregateArgumentsFactory._ensure_built`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/aggregate_arguments_factory.py#L89`
-- `AdvancedAggregateSet.compute`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/aggregateset.py#L440`
-- `AdvancedAggregateSet.acompute`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/aggregateset.py#L474`
-- `AdvancedFieldSet`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/fieldset.py#L80`
-- `apply_cascade_permissions`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/permissions.py#L19`
+- `AdvancedDjangoObjectType`: `~/projects/django-graphene-filters/django_graphene_filters/object_type.py#L119`
+- `AdvancedDjangoObjectType.__init_subclass_with_meta__`: `~/projects/django-graphene-filters/django_graphene_filters/object_type.py#L156`
+- `AdvancedDjangoObjectType.get_node`: `~/projects/django-graphene-filters/django_graphene_filters/object_type.py#L251`
+- `_wrap_field_resolvers`: `~/projects/django-graphene-filters/django_graphene_filters/object_type.py#L363`
+- `_convert_field_to_list_or_connection`: `~/projects/django-graphene-filters/django_graphene_filters/object_type.py#L459`
+- `AdvancedDjangoFilterConnectionField`: `~/projects/django-graphene-filters/django_graphene_filters/connection_field.py#L67`
+- `AdvancedDjangoFilterConnectionField.args`: `~/projects/django-graphene-filters/django_graphene_filters/connection_field.py#L156`
+- `AdvancedDjangoFilterConnectionField.filterset_class`: `~/projects/django-graphene-filters/django_graphene_filters/connection_field.py#L169`
+- `AdvancedDjangoFilterConnectionField.filtering_args`: `~/projects/django-graphene-filters/django_graphene_filters/connection_field.py#L188`
+- `AdvancedDjangoFilterConnectionField.resolve_queryset`: `~/projects/django-graphene-filters/django_graphene_filters/connection_field.py#L257`
+- `AdvancedDjangoFilterConnectionField._extract_aggregate_selection`: `~/projects/django-graphene-filters/django_graphene_filters/connection_field.py#L362`
+- `ClassBasedTypeNameMixin`: `~/projects/django-graphene-filters/django_graphene_filters/mixins.py#L27`
+- `LazyRelatedClassMixin`: `~/projects/django-graphene-filters/django_graphene_filters/mixins.py#L55`
+- `LazyRelatedClassMixin.resolve_lazy_class`: `~/projects/django-graphene-filters/django_graphene_filters/mixins.py#L61`
+- `FilterArgumentsFactory`: `~/projects/django-graphene-filters/django_graphene_filters/filter_arguments_factory.py#L36`
+- `FilterArgumentsFactory._ensure_built`: `~/projects/django-graphene-filters/django_graphene_filters/filter_arguments_factory.py#L98`
+- `OrderArgumentsFactory._ensure_built`: `~/projects/django-graphene-filters/django_graphene_filters/order_arguments_factory.py#L78`
+- `AggregateArgumentsFactory._ensure_built`: `~/projects/django-graphene-filters/django_graphene_filters/aggregate_arguments_factory.py#L89`
+- `AdvancedAggregateSet.compute`: `~/projects/django-graphene-filters/django_graphene_filters/aggregateset.py#L440`
+- `AdvancedAggregateSet.acompute`: `~/projects/django-graphene-filters/django_graphene_filters/aggregateset.py#L474`
+- `AdvancedFieldSet`: `~/projects/django-graphene-filters/django_graphene_filters/fieldset.py#L80`
+- `apply_cascade_permissions`: `~/projects/django-graphene-filters/django_graphene_filters/permissions.py#L19`
 
 ### What to take from django-graphene-filters
 Take the product semantics almost wholesale.
@@ -295,46 +295,46 @@ For this package, the equivalent is not `Dynamic`. The equivalent is a package-o
 
 Important source references:
 
-- `_process_type`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py#L73`
-- `StrawberryDjangoDefinition`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py#L425`
-- `type`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py#L448`
-- `interface`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py#L520`
-- `input`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py#L565`
-- `partial`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py#L616`
-- `StrawberryDjangoFieldBase`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/base.py#L50`
-- `StrawberryDjangoFieldBase.resolve_type`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/base.py#L185`
-- `StrawberryDjangoFieldBase.get_result`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/base.py#L260`
-- `StrawberryDjangoFieldBase.get_queryset`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/base.py#L263`
-- `DjangoModelType`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/types.py#L73`
-- `field_type_map`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/types.py#L229`
-- `resolve_model_field_type`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/types.py#L439`
-- `resolve_model_field_name`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/types.py#L569`
-- `get_model_field`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/types.py#L584`
-- `is_optional`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/types.py#L607`
-- `StrawberryDjangoField`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/field.py#L97`
-- `StrawberryDjangoField.get_result`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/field.py#L201`
-- `StrawberryDjangoField.get_queryset`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/field.py#L358`
-- `StrawberryDjangoConnectionExtension`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/field.py#L424`
-- `field`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/field.py#L689`
-- `connection`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/field.py#L895`
-- `unwrap_type`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/utils/typing.py#L137`
-- `get_type_from_lazy_annotation`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/utils/typing.py#L149`
-- `_get_prefetch_queryset`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py#L528`
-- `_optimize_prefetch_queryset`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py#L571`
-- `_must_use_prefetch_related`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py#L833`
-- `optimize`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py#L1580`
-- `DjangoOptimizerExtension`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py#L1694`
-- `DjangoOptimizerExtension.optimize`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py#L1805`
-- `process_filters`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/filters.py#L164`
-- `filters.apply`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/filters.py#L287`
-- `process_order`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/ordering.py#L107`
-- `ordering.apply`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/ordering.py#L169`
-- `order_type`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/ordering.py#L388`
-- `run_type_get_queryset`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/queryset.py#L34`
-- `django_resolver`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/resolvers.py#L65`
-- `django_getattr`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/resolvers.py#L158`
-- `DjangoListConnection`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/relay/list_connection.py#L59`
-- `DjangoListConnection.resolve_connection`: `file:///Users/riordenweber/projects/strawberry-django-main/strawberry_django/relay/list_connection.py#L78`
+- `_process_type`: `~/projects/strawberry-django-main/strawberry_django/type.py#L73`
+- `StrawberryDjangoDefinition`: `~/projects/strawberry-django-main/strawberry_django/type.py#L425`
+- `type`: `~/projects/strawberry-django-main/strawberry_django/type.py#L448`
+- `interface`: `~/projects/strawberry-django-main/strawberry_django/type.py#L520`
+- `input`: `~/projects/strawberry-django-main/strawberry_django/type.py#L565`
+- `partial`: `~/projects/strawberry-django-main/strawberry_django/type.py#L616`
+- `StrawberryDjangoFieldBase`: `~/projects/strawberry-django-main/strawberry_django/fields/base.py#L50`
+- `StrawberryDjangoFieldBase.resolve_type`: `~/projects/strawberry-django-main/strawberry_django/fields/base.py#L185`
+- `StrawberryDjangoFieldBase.get_result`: `~/projects/strawberry-django-main/strawberry_django/fields/base.py#L260`
+- `StrawberryDjangoFieldBase.get_queryset`: `~/projects/strawberry-django-main/strawberry_django/fields/base.py#L263`
+- `DjangoModelType`: `~/projects/strawberry-django-main/strawberry_django/fields/types.py#L73`
+- `field_type_map`: `~/projects/strawberry-django-main/strawberry_django/fields/types.py#L229`
+- `resolve_model_field_type`: `~/projects/strawberry-django-main/strawberry_django/fields/types.py#L439`
+- `resolve_model_field_name`: `~/projects/strawberry-django-main/strawberry_django/fields/types.py#L569`
+- `get_model_field`: `~/projects/strawberry-django-main/strawberry_django/fields/types.py#L584`
+- `is_optional`: `~/projects/strawberry-django-main/strawberry_django/fields/types.py#L607`
+- `StrawberryDjangoField`: `~/projects/strawberry-django-main/strawberry_django/fields/field.py#L97`
+- `StrawberryDjangoField.get_result`: `~/projects/strawberry-django-main/strawberry_django/fields/field.py#L201`
+- `StrawberryDjangoField.get_queryset`: `~/projects/strawberry-django-main/strawberry_django/fields/field.py#L358`
+- `StrawberryDjangoConnectionExtension`: `~/projects/strawberry-django-main/strawberry_django/fields/field.py#L424`
+- `field`: `~/projects/strawberry-django-main/strawberry_django/fields/field.py#L689`
+- `connection`: `~/projects/strawberry-django-main/strawberry_django/fields/field.py#L895`
+- `unwrap_type`: `~/projects/strawberry-django-main/strawberry_django/utils/typing.py#L137`
+- `get_type_from_lazy_annotation`: `~/projects/strawberry-django-main/strawberry_django/utils/typing.py#L149`
+- `_get_prefetch_queryset`: `~/projects/strawberry-django-main/strawberry_django/optimizer.py#L528`
+- `_optimize_prefetch_queryset`: `~/projects/strawberry-django-main/strawberry_django/optimizer.py#L571`
+- `_must_use_prefetch_related`: `~/projects/strawberry-django-main/strawberry_django/optimizer.py#L833`
+- `optimize`: `~/projects/strawberry-django-main/strawberry_django/optimizer.py#L1580`
+- `DjangoOptimizerExtension`: `~/projects/strawberry-django-main/strawberry_django/optimizer.py#L1694`
+- `DjangoOptimizerExtension.optimize`: `~/projects/strawberry-django-main/strawberry_django/optimizer.py#L1805`
+- `process_filters`: `~/projects/strawberry-django-main/strawberry_django/filters.py#L164`
+- `filters.apply`: `~/projects/strawberry-django-main/strawberry_django/filters.py#L287`
+- `process_order`: `~/projects/strawberry-django-main/strawberry_django/ordering.py#L107`
+- `ordering.apply`: `~/projects/strawberry-django-main/strawberry_django/ordering.py#L169`
+- `order_type`: `~/projects/strawberry-django-main/strawberry_django/ordering.py#L388`
+- `run_type_get_queryset`: `~/projects/strawberry-django-main/strawberry_django/queryset.py#L34`
+- `django_resolver`: `~/projects/strawberry-django-main/strawberry_django/resolvers.py#L65`
+- `django_getattr`: `~/projects/strawberry-django-main/strawberry_django/resolvers.py#L158`
+- `DjangoListConnection`: `~/projects/strawberry-django-main/strawberry_django/relay/list_connection.py#L59`
+- `DjangoListConnection.resolve_connection`: `~/projects/strawberry-django-main/strawberry_django/relay/list_connection.py#L78`
 
 ### Borrow `_process_type`, but adapt the lifecycle
 `_process_type` has the right shape for a Strawberry-native type finalization function:

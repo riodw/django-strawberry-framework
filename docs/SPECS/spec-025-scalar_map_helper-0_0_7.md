@@ -74,11 +74,11 @@ No upstream precedent exists at the helper-API level. The `StrawberryConfig.scal
 
 ### From `strawberry-django` — no precedent to borrow
 
-`/Users/riordenweber/projects/strawberry-django-main/strawberry_django/` references neither `StrawberryConfig` nor `scalar_map`. It defines no package-custom scalar — it maps `BigIntegerField` / `PositiveBigIntegerField` to `int` and reuses Strawberry's own `Upload` — so it has no registration helper to model on.
+`~/projects/strawberry-django-main/strawberry_django/` references neither `StrawberryConfig` nor `scalar_map`. It defines no package-custom scalar — it maps `BigIntegerField` / `PositiveBigIntegerField` to `int` and reuses Strawberry's own `Upload` — so it has no registration helper to model on.
 
 ### From `graphene-django` — no precedent to borrow
 
-`graphene-django` (`/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/`) uses Graphene's `Scalar` subclass mechanism; there is no `StrawberryConfig` analogue.
+`graphene-django` (`~/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/`) uses Graphene's `Scalar` subclass mechanism; there is no `StrawberryConfig` analogue.
 
 ### Explicitly do not borrow
 

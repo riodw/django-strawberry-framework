@@ -146,7 +146,7 @@ None.
   build adds and discards the same records (178 today, 0 remaining).
 - **Proof** - `rg -c "_hash_component|def __hash__" django_strawberry_framework/types/relations.py`
   prints nothing (exit 1); `rg -c "@dataclass\(frozen=True, eq=False\)" django_strawberry_framework/types/relations.py`
-  prints `1`; `uv run python scripts/workspace.py run review/types/relations.py/verify-mechanics-<n> -- python /Users/riordenweber/projects/django-strawberry-framework/docs/review/temp-tests/types__relations/mechanics/probe_proof.py`
+  prints `1`; `uv run python scripts/workspace.py run review/types/relations.py/verify-mechanics-<n> -- python ~/projects/django-strawberry-framework/docs/review/temp-tests/types__relations/mechanics/probe_proof.py`
   prints `identity hash: True identity eq: True`, `module has _hash_component: False`,
   `pending remaining after finalize: 0` (before: `False False`, `True`, 0; run
   `review-20260925T170933-512969`); `uv run python scripts/workspace.py run review/types/relations.py/verify-mechanics-<n> -- pytest tests/types/test_relations.py tests/test_registry.py tests/types/test_finalizer.py tests/types/test_base.py tests/types/test_definition_order.py tests/types/test_definition_relations.py --no-cov -q`
@@ -364,7 +364,7 @@ deleted, cited in the review pass before the edit.
 Gap for `## Decisions` (not this axis, not `revision-needed`): KANBAN.md card item (c) naming the
 stale `_record_pending_relation` comment in
 `tests/test_registry.py::test_finalize_discards_consumer_authored_pending_relation_without_rewriting_annotation`
-is discharged by M2's deletion of that comment; the board row is Worker-0 / Rio's (DB edit).
+is discharged by M2's deletion of that comment; the board row is Worker-0 / the maintainer's (DB edit).
 
 Verdict: M1 verified, M2 verified, the `field_map` extension verified, the extra test deletion
 verified.

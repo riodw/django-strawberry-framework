@@ -21,7 +21,7 @@ DRF-shaped Django integration for Strawberry GraphQL. Pre-`1.0`, one maintainer,
 
 Upstream checkouts for cribbing (paths pinned in [AGENTS.md][agents]): `~/projects/strawberry-django-main/strawberry_django`; `graphene_django` inside `~/projects/django-graphene-filters/.venv`. Behavior ← strawberry-graphql-django. Surface ← django-graphene-filters + DRF.
 
-## How Rio communicates
+## How the maintainer communicates
 
 Direct, decisive, reverses fast, expects same.
 
@@ -34,23 +34,23 @@ Direct, decisive, reverses fast, expects same.
 
 ## Session rules you will forget
 
-- **No `pytest` after edits.** Format only. Rio says "run tests" / "run the full pipeline" when wanted. Binds agent briefs and scratch copies too: a brief allows ruff, `check_trailing_commas.py` and basedpyright only; agents list the tests and mutation probes they would run and wait for Rio's go.
+- **No `pytest` after edits.** Format only. The maintainer says "run tests" / "run the full pipeline" when wanted. Binds agent briefs and scratch copies too: a brief allows ruff, `check_trailing_commas.py` and basedpyright only; agents list the tests and mutation probes they would run and wait for the maintainer's go.
 - After edits: `uv run ruff check --fix .`, `uv run ruff format .`, stop. No `pytest`, `manage.py check`, `uv build`.
-- Rio commits. Never auto-commit unless explicitly asked. **NEVER `Co-Authored-By` or any attribution footer.** Message = change description only.
-- **Commit auth covers ONE batch.** Doesn't carry to next batch/task, nor via a compaction summary. Rule is *no auto-commit*, not *never commit*; re-read AGENTS.md when a rule seems to forbid what Rio explicitly asks.
-- **NEVER create/switch branches without explicit auth.** Commit request ≠ branch auth. Commit on current branch; flag oddities after. (Once branched "helpfully" → misrouted Rio's concurrent commit.)
+- The maintainer commits. Never auto-commit unless explicitly asked. **NEVER `Co-Authored-By` or any attribution footer.** Message = change description only.
+- **Commit auth covers ONE batch.** Doesn't carry to next batch/task, nor via a compaction summary. Rule is *no auto-commit*, not *never commit*; re-read AGENTS.md when a rule seems to forbid what the maintainer explicitly asks.
+- **NEVER create/switch branches without explicit auth.** Commit request ≠ branch auth. Commit on current branch; flag oddities after. (Once branched "helpfully" → misrouted the maintainer's concurrent commit.)
 - Before committing: `uvx pre-commit run --files <paths>`. Hooks check things ruff doesn't. See "Pre-commit and CI gates".
 - Temp files → session scratchpad dir. Never repo, never bare `/tmp`. Delete scratch clones, worktrees and temp files the moment their work lands (a uv-synced clone runs to hundreds of MB; `.venv` alone is most of it). Delete only what you created: a brief saying "delete your scratch files" once emptied a whole shared scratchpad (gate kit + venv), so briefs say "delete only files you created". Never touch another session's scratch.
 
 ## Concurrent sessions
 
-Rio runs several sessions on this checkout, same branch, same time. Normal.
+The maintainer runs several sessions on this checkout, same branch, same time. Normal.
 
 - Unexpected dirty/untracked files, commits you didn't make = other session. Never revert/"tidy". Never reset `examples/fakeshop/db.sqlite3` while another session may write it.
 - `git add <path>` only; `-A` sweeps their WIP into your commit. Reverse too: your edits may land in THEIR commit; check `git log --stat` before assuming your work is unstaged. Swallowed file can be MIXED (their hunks + yours); back out hunk-wise, not file-wise. Your file missing from the dirty list is the signal: `git show HEAD:<path> | grep -c <your marker>` before concluding the work was lost; if it landed, commit nothing for it and re-add nothing.
 - No `git stash` / `checkout --` / `restore` on shared tree; the one sanctioned exception is `git checkout HEAD -- docs/review/` to restore that protected directory. Diff your change vs `git show HEAD:<path>` written to scratchpad.
 - Never apply an existing stash: the local ones are dead WIP older than shipped work, and applying one reverts it. A partial `stash apply` lands the untracked half (`stash@{N}^3`) w/ no conflict marker and no `git status` signal (dead DRAFT specs once sat at `docs/` top level that way, breaking the one-WIP-spec invariant). An untracked file older than the work in flight is a stash leak until `git log --all --follow -- <path>` says otherwise.
-- Before landing a fix, check for a parallel one: `git log main` (`-S<symbol>`), `git worktree list`, open sessions. A spun-off follow-up task Rio starts becomes a second implementation of the same defect; two sessions have fixed one defect from the same base and found out only at landing.
+- Before landing a fix, check for a parallel one: `git log main` (`-S<symbol>`), `git worktree list`, open sessions. A spun-off follow-up task the maintainer starts becomes a second implementation of the same defect; two sessions have fixed one defect from the same base and found out only at landing.
 - Landing from a worktree or scratch clone: commit there, merge main into it, re-carve any DB conflict (re-render + generator `--check`), run hooks + gate on the merged tree, then fast-forward the main checkout (`git -C <main> merge --ff-only <branch>`, or `git fetch <clone> main` + `git merge --ff-only FETCH_HEAD`). ff-only writes only the changed paths, so other sessions' dirty files survive. Work lands ON main, never left on a side branch or pushed as a new one; ask before `git push`, then `git merge-base --is-ancestor <sha> origin/main`. Main moved under the clone → rebase it, re-point recorded shas, re-gate. A concurrently dirty file the fix also touches blocks `--ff-only`: `git update-ref refs/heads/main <sha> <old sha>`, `update-index --cacheinfo` the new blob, then rewrite the working file as the new blob + their hunk after a `cmp` check that their diff is unchanged.
 - `git mv` stages instantly; concurrent commit can adopt your rename while its content edits stay dirty. Rewrite content first vs plain `mv`, `git add` both together, verify `git log --stat` (swept rename vanishes from `git status`).
 - Other session may rewrite main history (amend/rebase). Prove your commit landed: `git merge-base --is-ancestor <sha> HEAD`. Not memory.
@@ -60,7 +60,7 @@ Rio runs several sessions on this checkout, same branch, same time. Normal.
 - `git diff --cached --name-status` before any `git add`: index may hold their staged work; one commit ships it under your message. If they staged whole tree, `git diff -- <path>` shows your file clean; use `git diff HEAD -- <path>`.
 - Carve-out commit: first grep your new files' imports for symbols ABSENT at HEAD. Rewired onto their refactor → no standalone commit exists; leave dirty, say so.
 - Before recommending push: `git rev-list --left-right --count origin/main...main`. "Tests failing" but local green → `gh run list` first; red job may not be a test job.
-- Final-gate failure in committed code may be Rio's own rewrite of your fix. Diff your verified version vs HEAD before editing; broken test inside their in-flight refactor ≠ your regression. One collection ERROR in one test module drops coverage across every file its tests build schemas through → scattered misses usually = one broken module.
+- Final-gate failure in committed code may be the maintainer's own rewrite of your fix. Diff your verified version vs HEAD before editing; broken test inside their in-flight refactor ≠ your regression. One collection ERROR in one test module drops coverage across every file its tests build schemas through → scattered misses usually = one broken module.
 - Don't regenerate rendered docs while their feature work is mid-flight (publishes half-landed surface).
 - Attribute dirty files by DIFF CONTENT, not "files my task touched". Regenerated doc/DB = CONSEQUENCE of a code change; belongs to whoever caused it.
 
@@ -129,7 +129,7 @@ Four trees, one `pytest.ini`, one command: `uv run pytest`.
 - **Live-first, both verdicts.** Reachable from a real query → MUST be in `test_query/`. Promoting to live DELETES the package-only stand-in, same change, after proving redundancy empirically. A plan can pin a predicate's rejection live and leave acceptance package-only: check which VERDICT each live row proves. "Fixture can't reach it" = fixture gap, not unreachability. The live-tier README suite map indexes every `test_query/test_*.py`; the module docstring is the authoritative description, the map is the index.
 - **First line of every catalog/auth test:** `seed_data(N)` / `create_users(N)` from `apps.products.services`. Library acceptance tests: inline `Model.objects.create(...)`.
 - **Parallel default.** `addopts = -v -n auto --dist loadscope --cov --cov-report=term-missing`. `loadscope` keeps a module on one worker (registry-isolation fixtures; expensive live schema rebuild). Worker = process w/ own registry + in-memory SQLite. Single test: `uv run pytest -n0 tests/test_x.py::test_name`.
-- **Machine budget.** Rio's Mac: 16 GB, 8 cores, no swap. A full `uv run pytest` is 8 coverage workers; two at once plus basedpyright main + floor exhausted memory on 2026-10-08 (forced reboot; /private/tmp scratch clones lost). Before any full suite or basedpyright pass: `pgrep -fl '[p]ytest|[b]asedpyright'` must be empty and `memory_pressure` must report 50%+ free; otherwise wait, or cap with `-n 4` / a focused `-n0` selection. Coordinators serialize gates across their agents; never brief two agents to gate at the same time. Fetch a finished scratch commit into the main repo (`git fetch <clone> main`) before verification, since a reboot wipes /private/tmp. The `workspace.py` pool lives under `$TMPDIR`, which macOS purges of files idle ~3 days while keeping directories: slot copies and proof evidence vanish while `state.json` still lists slots `ready`. Copy evidence worth keeping out at cycle close; after an idle stretch `gc` the flow before reuse (`gc` cleans only the checkout it runs from).
+- **Machine budget.** The maintainer's Mac: 16 GB, 8 cores, no swap. A full `uv run pytest` is 8 coverage workers; two at once plus basedpyright main + floor exhausted memory on 2026-10-08 (forced reboot; /private/tmp scratch clones lost). Before any full suite or basedpyright pass: `pgrep -fl '[p]ytest|[b]asedpyright'` must be empty and `memory_pressure` must report 50%+ free; otherwise wait, or cap with `-n 4` / a focused `-n0` selection. Coordinators serialize gates across their agents; never brief two agents to gate at the same time. Fetch a finished scratch commit into the main repo (`git fetch <clone> main`) before verification, since a reboot wipes /private/tmp. The `workspace.py` pool lives under `$TMPDIR`, which macOS purges of files idle ~3 days while keeping directories: slot copies and proof evidence vanish while `state.json` still lists slots `ready`. Copy evidence worth keeping out at cycle close; after an idle stretch `gc` the flow before reuse (`gc` cleans only the checkout it runs from).
 - **A split suite is not a coverage gate on a live tree.** Parts that combine below 100% while one full run is 100% = split artifact first: a split recomputed per part on a tree another session edits reshuffles bins, so some modules run in no part. A module at 0% cannot come from a killed tracer (xdist collection imports every module on every worker). Freeze the module lists once, assert their union equals the full collected list, gate a `git archive` snapshot; a statement count that changes between parts = source moved under the run.
 - **Warnings are errors** (`filterwarnings = error`). Never weaken. `tests/conftest.py` closes async SQLite connections that would leak `ResourceWarning`; root `conftest.py` same for Postgres. Test extension hooks are generators: a plain-method hook goes through Strawberry's `from_callable`, whose `asyncio.iscoroutinefunction` call is deprecated on the venv's Python and fails the test that reaches it.
 - **Coverage:** `fail_under = 100`, `django_strawberry_framework` only. Example apps/tests run, never count. `pragma: no cover` only for runner-unreachable branches. Statement coverage can't see fail-open EXPRESSIONS (`max(x, 0)`, `getattr(..., default)`, `x or fallback`, broad `except`); find by reading, BUILD.md "Fail-open shapes".
@@ -223,7 +223,7 @@ uv run python scripts/build_glossary_md.py && uv run python scripts/build_tree_m
 
 ## Agentflows
 
-Five standing process docs. Rio invokes by name ("run the builder on the active spec", "start a DRY cycle"); none self-starts. All re-read AGENTS.md + this file first, none commit, each closes own scratch.
+Five standing process docs. The maintainer invokes by name ("run the builder on the active spec", "start a DRY cycle"); none self-starts. All re-read AGENTS.md + this file first, none commit, each closes own scratch.
 
 | Flow | Doc | Does | Per-cycle artifacts |
 |---|---|---|---|
@@ -240,7 +240,7 @@ Shared mechanics:
 - **Builder corpus grows by mechanism, never restatement** (BUILD.md "corpus ratchet"): any edit to `BUILD.md`/`ARTIFACT.md`/`worker-*.md` reports `wc -c` before/after + names what it subsumes. Never edit a process doc while a worker is mid-pass. Role files = pointer + role delta, never restated procedure.
 - **Failability aggregates OUTSIDE the guard under test.** Inside, guard absorbs the failures being measured; plausible-wrong count graded by nobody.
 - **Harvesting items from a doc about to be deleted** = enumerate-and-tick over source's own numbering, then grep each item at destination w/ a NAMED owning card. Section sweep looks complete, leaves items unhomed.
-- **Ad hoc agent sweeps (outside the five flows).** Digging report first, Rio decides; implementers get DISJOINT file ownership and one shared brief file in the scratchpad. Before an implementer's context dies, SendMessage it for helpful / misleading / missing; fold the answers into the standing doc; have one fresh agent use the doc cold; vet that agent's findings against the code and act only on what is true.
+- **Ad hoc agent sweeps (outside the five flows).** Digging report first, the maintainer decides; implementers get DISJOINT file ownership and one shared brief file in the scratchpad. Before an implementer's context dies, SendMessage it for helpful / misleading / missing; fold the answers into the standing doc; have one fresh agent use the doc cold; vet that agent's findings against the code and act only on what is true.
 - **Per-cycle scratch closes w/ cycle.** `review-*.md`, `rev-*.md`, `dry-*.md`, `bld-*.md`, `bug_hunt-*.md`: exempt from `path::Symbol` rule (raw `path:NN` OK), no style cleanup. Include in repo-wide greps for drift; edit only if cycle in flight. `clean_up.py` removes generated ones only.
 - **Closeout consistency.** Shipped card: realign opener + `Status:` (boxes stay unticked; Status = truth); correct wrong Decision/Test-plan/DoD prose. Clean `git status` ≠ finished cycle; read artifact `Status:` chain.
 
@@ -296,7 +296,7 @@ Each produced a clean-looking pass while measuring nothing. Check instrument bef
 - **Retiring a per-cycle artifact strands inbound refs.** Same pass: de-link to code span keeping prose, or retarget standing pointer at `git show <commit>:<path>`. Re-audit orphaned defs / undefined refs.
 - **Two death commits ⇒ two pointers.** Earlier commit holds a stale copy of whatever outlived it. Archived path may also name an earlier cycle's deleted file — say which.
 
-## Style Rio cares about
+## Style the maintainer cares about
 
 - **Meta classes on every consumer surface.** Stacked Strawberry decorators on a consumer-facing class = strawberry-graphql-django API = the reason this package exists. Strawberry = engine; DRF = shape.
 - Model text fields = `TextField`, never `CharField`, even short. Codified in example models.
@@ -363,11 +363,11 @@ Editing it: dense. No blank lines, no periods, no code blocks.
 
 ## Past mistakes
 
-- **Don't pre-populate `conf.py` w/ future settings.** Rio trimmed it hard. Key lands with its feature.
-- **Don't restore deleted files on assumption.** Ask. (Restored `schema.py` + `test_schema_smoke.py` Rio had removed on purpose.)
+- **Don't pre-populate `conf.py` w/ future settings.** The maintainer trimmed it hard. Key lands with its feature.
+- **Don't restore deleted files on assumption.** Ask. (Restored `schema.py` + `test_schema_smoke.py` the maintainer had removed on purpose.)
 - **Don't add example-app coverage to the gate.** Rolled back once. Package = 100%; example exercises via real flows, doesn't gate.
 - **Don't second-guess `field_name` patterns** in files translated from `django-graphene-filters`. Mirror old shape.
-- **Don't over-harden a rule after context loss.** *No auto-commit* ≠ *never commit*. Re-read AGENTS.md when a rule seems to forbid what Rio asks.
+- **Don't over-harden a rule after context loss.** *No auto-commit* ≠ *never commit*. Re-read AGENTS.md when a rule seems to forbid what the maintainer asks.
 - **Don't auto-revert a live-tree regression.** No-revert rule covers DIRTY files you didn't author; regression in COMMITTED code → root-cause fix, not checkout.
 - **No defer-the-real-fix sequencing.** No test-only fix when prod code is the wrong abstraction, no `pragma: no cover` workaround, no follow-up card as substitute.
 - **Rule w/o gate rots.** Repairing a forbidden form → root-cause fix = the missing gate, not the sites. Gate fails open one level up at every level: corpus silently empty (`git ls-files` in ignored dir exits 0, empty stdout), required-file list shrinks, region bounds unpinned. Ask for the next level up before the reviewer does.

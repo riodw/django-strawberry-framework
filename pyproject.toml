@@ -12,10 +12,10 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10,<4.0"
 authors = [
-    { name = "Rio Weber", email = "riodweber@gmail.com" },
+    { name = "Unaxy" },
 ]
 maintainers = [
-    { name = "Rio Weber", email = "riodweber@gmail.com" },
+    { name = "Unaxy" },
 ]
 keywords = ["django", "strawberry", "graphql", "filters", "framework", "drf"]
 classifiers = [

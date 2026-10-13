@@ -85,7 +85,7 @@ Every line is `{"stream":{"kind":"session","id":<session uuid>}, "sequence":N, "
 
 ### 1.5 Plan, pricing and budget (why we do not send prompts casually)
 
-**Plan on this account** (`riodweber@gmail.com`, Meta OAuth via device code, provider `meta`,
+**Plan on this account** (Meta OAuth via device code, provider `meta`,
 `api.meta.ai/v1`): **Muse Code "High Usage"**, upgraded 2026-09-22 ~13:40Z from "Everyday Usage".
 Maintainer's words: "3x the price but 5x the usage". Model bound: `muse-spark-1.3-contributor`
 (the catalog default; its description: "Your content, including inter-session messages, may be
@@ -150,7 +150,7 @@ Preconditions: the maintainer said "restart"/"launch" AND named the flow(s), the
 target is always the existing worktree.
 
 ```bash
-WT=/Users/riordenweber/.t3/worktrees/django-strawberry-framework/t3code-1cc21548
+WT=$HOME/.t3/worktrees/django-strawberry-framework/t3code-1cc21548
 S=$SCRATCHPAD/muse            # session scratchpad, never the repo
 mkdir -p "$S"
 # one line per flow; rotate old logs first (mv hunt.jsonl hunt-runN.jsonl)
@@ -270,12 +270,12 @@ What DOES work: typing into the TUI. `screen -S <name> -p 0 -X stuff "<text>"`, 
 Worker-0 is the TUI under `screen`, not `exec`:
 
 ```bash
-WT=/Users/riordenweber/.t3/worktrees/django-strawberry-framework/t3code-1cc21548
+WT=$HOME/.t3/worktrees/django-strawberry-framework/t3code-1cc21548
 cd "$WT" && MUSE_EXPERIMENTAL_EXTERNAL_AGENT_INGRESS=on MUSE_EXPERIMENTAL_LOCAL_SESSION_MESSAGING=1 \
 screen -dmS muse-dry ~/.local/bin/muse --yolo --workspace "$WT" \
   --model muse-spark-1.3-contributor --reasoning-effort max "$(cat "$S/dry-prompt-N.md")"
 # steer (each submit is a metered prompt, §1.5):
-screen -S muse-dry -p 0 -X stuff "MAINTAINER (Rio): PAUSE HERE ..."; screen -S muse-dry -p 0 -X stuff $'\015'
+screen -S muse-dry -p 0 -X stuff "MAINTAINER: PAUSE HERE ..."; screen -S muse-dry -p 0 -X stuff $'\015'
 ```
 
 Trade-offs, all untested on a real Worker-0: no `--json` stdout, so monitoring reads the durable log
@@ -401,7 +401,7 @@ must add its ownership (production files it may edit) to the hunt and DRY prompt
 ## 6. Concurrency contract between the flows
 
 - All Muse agents run in the t3 worktree; the main checkout
-  `/Users/riordenweber/projects/django-strawberry-framework` is theirs to never touch. Claude's own
+  `~/projects/django-strawberry-framework` is theirs to never touch. Claude's own
   edits for the maintainer happen in whichever tree the maintainer names (guard deletions on
   2026-09-22 were in the worktree, uncommitted).
 - Nobody reverts. Dirty files at task start are concurrent work (AGENTS.md rule 34). A finding

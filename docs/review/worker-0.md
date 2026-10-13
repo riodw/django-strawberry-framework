@@ -14,7 +14,7 @@ command at each; a quoted section name is REVIEW.md's and owns the command's for
    release from `__version__`.
 2. No plan → `review_plan.py plan <scope flags> --mode <mode>`. Plan exists →
    `review_plan.py resume --plan <plan> <scope flags>`, then set the header `Mode:` by hand when it
-   differs. Output ends `nothing in scope` → report that to Rio and stop.
+   differs. Output ends `nothing in scope` → report that to the maintainer and stop.
 3. `review_plan.py reconcile --plan <plan>`; act on every line; re-hash every recorded fingerprint
    ("Plan"). Reopen = plan item `Status: pending`, box unticked, a `Reopened: <date> - <moved
    paths>` field; the item keeps its artifact and records, and pass numbers never restart.
@@ -108,7 +108,7 @@ blocked ones ("Integration passes").
 - A step 4 or 6 row fails → back to that role with the row named, and
   `Returned: <axis | Worker-2> - <row>; handoffs <count in the file it writes>` on the item. The
   same row failing twice, or a second failed re-pass → `blocked`.
-- An unattributed hunk stops the item until Rio reconciles it; `autonomous` records it `blocked`
+- An unattributed hunk stops the item until the maintainer reconciles it; `autonomous` records it `blocked`
   and advances. A pre-existing failure goes into `## Decisions` (Worker-2 also records one it
   reports under the artifact's `## Defects`); it blocks the gate row, never the item.
 - A reviewer's `Routed:` lead for another item → a `Routed:` line in that item's dispatch, or
@@ -116,7 +116,7 @@ blocked ones ("Integration passes").
 - A verifier's named gap on another axis → that axis owes a verify pass, dispatched w/ a
   `Routed gap:` line; a gap the receiving verifier puts outside the item's reach →
   `## Decisions` w/ its named owner.
-- A sensitive finding ("Ground rules") is `blocked` at once and its scratch root stays until Rio
+- A sensitive finding ("Ground rules") is `blocked` at once and its scratch root stays until the maintainer
   clears it. `blocked` → `Blocked:` on the item, the decision into `## Decisions`,
   `workspace.py release review/<item>`, advance.
 
@@ -150,10 +150,10 @@ your own copy after reverse-applying <latest item diff>`.
    `## Bench baseline` rows at `<phase>` = `gate` ("Final gate and closeout"). A failure routed to
    an item makes it `revision-needed`; the gate reruns after it closes.
 2. `## Outcomes` before deleting anything; tick the gate. Plan `Status: blocked` with the decisions
-   Rio owes when any item or the gate row is blocked, else `complete` or `partial (<scope>)`.
+   the maintainer owes when any item or the gate row is blocked, else `complete` or `partial (<scope>)`.
 3. Remove this run's `docs/review/temp-tests/<stem>/` dirs bar a sensitive blocked item's, and the
    `docs/review/worker-memory/` contents, each by explicit path; `workspace.py gc review`.
-4. Report to Rio in five lines or fewer: result, blocked items with the decision owed, what is
+4. Report to the maintainer in five lines or fewer: result, blocked items with the decision owed, what is
    uncommitted. Never commit.
 
 Beside a HUNT or DRY Worker-0 under [MUSE.md][muse]: REVIEW.md's last paragraph.

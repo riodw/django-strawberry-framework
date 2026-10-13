@@ -617,7 +617,7 @@ Filled by Worker-0 at closeout before any scratch is removed; a scoped run adds 
 ### Run
 
 - Bench baseline vs gate: every row within spread, instrument ids identical, query counts identical (table above).
-- Decisions owed to Rio: four, under `## Decisions` (mixed-case fakeshop fixture; pre-existing `docs/TREE.md` drift for `tests/test_workspace.py` at HEAD, CI `build_tree_md.py --check` red independent of this run; `prove_failability.py` captured-log miscount; generated inputs vs `auto_camel_case=False`), plus the walker slow-path lead.
+- Decisions owed to the maintainer: four, under `## Decisions` (mixed-case fakeshop fixture; pre-existing `docs/TREE.md` drift for `tests/test_workspace.py` at HEAD, CI `build_tree_md.py --check` red independent of this run; `prove_failability.py` captured-log miscount; generated inputs vs `auto_camel_case=False`), plus the walker slow-path lead.
 - Cells unverified: none. sharded and pg `inapplicable by construction` for every finding (verifiers concurred); both suites ran green in the gate.
 - Blocked items: none.
 - Net source change vs cycle baseline 6ac69870: package 8 files +105/-92; tests 5 files +162/-14; uncommitted.

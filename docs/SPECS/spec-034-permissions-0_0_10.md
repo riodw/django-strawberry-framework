@@ -650,4 +650,4 @@ The completion contract the card is built against. Items are grouped by slice; t
 <!-- .venv/ -->
 
 <!-- External -->
-[upstream-permissions]: https://github.com/riodw/django-graphene-filters/blob/master/django_graphene_filters/permissions.py
+[upstream-permissions]: https://pypi.org/project/django-graphene-filters/

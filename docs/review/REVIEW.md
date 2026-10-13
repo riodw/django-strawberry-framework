@@ -90,7 +90,7 @@ this item like the target's), their tests, the ledger rows the item lands.
   row first, a feasible project shape under the supported public API, the wire or configuration
   input that reaches it ([AGENTS.md][agents] rule 35), evidence a stranger can replay, root-cause
   fix at the owner, permanent test at the strongest reachable tier in the same change. A contract
-  nobody can cite → `blocked`, Rio decides; never a fix.
+  nobody can cite → `blocked`, the maintainer decides; never a fix.
 - **Duplication needs one rule.** Consolidate only when sites implement one rule w/ one contract
   and the same reasons to change; count authoritative definitions the way DRY's change challenge
   does, and choose the owner by responsibility (DRY principle 7). Similar-looking code w/ separate
@@ -124,7 +124,7 @@ this item like the target's), their tests, the ledger rows the item lands.
       pytest <node> --no-cov
   uv run python scripts/workspace.py run review/<item>/<role> --cell pg -- pytest <node> --no-cov
   ```
-- Only Rio commits, branches, pushes, edits the changelog. Concurrent work is preserved
+- Only the maintainer commits, branches, pushes, edits the changelog. Concurrent work is preserved
   ("Baseline and ownership").
 
 ## Scripts
@@ -150,7 +150,7 @@ docstring is the manual. "Shared" = the shared tree; "copy" = through
 | [check_trailing_commas.py][check-trailing-commas] | Worker-2, Mechanics verifier | shared; `--check <paths>` | layout gate ("Worker-2 implements") |
 | [review_changed_python_diffs_against_head.py][review-diffs] | Comments verifier | shared; `--output-dir <scratch>` | the item's prose diff ("Comments") |
 | [_bench_common.py][bench-common], [_plan_common.py][plan-common] | nobody | n/a | plumbing the scripts above import |
-| [clean_up.py][clean-up] | never | n/a | Rio runs it by hand; its globs match tracked records |
+| [clean_up.py][clean-up] | never | n/a | The maintainer runs it by hand; its globs match tracked records |
 
 Two defaults write where the flow must not: `review_inspect.py` and
 `review_changed_python_diffs_against_head.py` write into `docs/shadow/`, whose folders have one
@@ -438,12 +438,12 @@ symbols changed. A later item may build on a ledgered path. Attribute by content
 status: before editing a dirty path, Worker-2 diffs vs `git show HEAD:<path>` and matches every
 hunk to the ledger, the cycle baseline, or an earlier pass of this item (the item-scoped diff
 Worker-0 wrote to scratch); a hunk in none = external edit → stop, report to Worker-0, who
-reconciles w/ Rio. Same stop when the item-scoped diff shows hunks the worker didn't make.
+reconciles w/ the maintainer. Same stop when the item-scoped diff shows hunks the worker didn't make.
 
 A test failing before the item's first edit is pre-existing: Worker-2 reproduces it in the item's
 `before` copy and records it under the artifact's `## Defects` w/ the failing command; one Worker-0
 meets outside a pass (at the gate, or in a check) goes to the plan's `## Decisions` instead, since
-Worker-0 writes no artifact section. Either way Worker-0 routes it to Rio. It blocks the gate row,
+Worker-0 writes no artifact section. Either way Worker-0 routes it to the maintainer. It blocks the gate row,
 never the item.
 
 ### Bench baseline
@@ -617,7 +617,7 @@ Mechanically, before Worker-2 reads anything:
 | a Recommendation or text after that would land a line-number citation in code, tests or a standing doc, or a symbol `check_citations.py --paths <record>` cannot resolve (checked on the review pass; a symbol the item later deletes stays in that text as written) | back to that Worker-1 |
 | a list entry neither discharged nor rejected | back to that Worker-1 |
 
-Twice back on the same row → `blocked` for Rio. All three records pass → Worker-0 copies
+Twice back on the same row → `blocked` for the maintainer. All three records pass → Worker-0 copies
 `Path class` into the plan item and the artifact header, sets the artifact
 `Status: ready-for-implementation`, runs `workspace.py release review/<item> --keep before`, sets
 `Status: implementing` and spawns a fresh Worker-2 w/ the target, the main artifact, all three
@@ -720,7 +720,7 @@ Any axis `revision-needed` → the artifact `Status: revision-needed`, a fresh W
 artifact and its handoffs, then fresh verifiers on the axes that failed and on any axis a verifier
 named a gap on (Comments too whenever the re-pass touches prose; a prose-only re-pass owes
 Comments alone, its `--code-digest` identity the evidence the other axes stand); two failed
-re-passes → `blocked` for Rio. All three `verified` → ledger rows (Worker-2's proposal, checked against the item-scoped
+re-passes → `blocked` for the maintainer. All three `verified` → ledger rows (Worker-2's proposal, checked against the item-scoped
 diff), `Result:` and `Verification:` lines on the plan item, tick, remove item scratch by explicit
 path, `workspace.py release review/<item>`, advance (`autonomous`) or report and wait
 (`pause-after-each-item`). Worker-0 never regrades a verifier.
@@ -731,12 +731,12 @@ Plan item result lines:
 Result: <n> findings implemented (<H>/<M>/<L>), <n> rejected, <n> deferred. Files: <paths>.
 Verification: Passed. Performance <numbers or none>; Mechanics; Comments.
 Cleanup: Removed <item scratch paths>; copies released; unrelated work preserved.
-Blocked: <condition and the decision Rio must make>.
+Blocked: <condition and the decision the maintainer must make>.
 ```
 
 ## Artifacts
 
-Four per file item, all under `docs/review/`, untracked until Rio commits them, protected by
+Four per file item, all under `docs/review/`, untracked until the maintainer commits them, protected by
 [AGENTS.md][agents] rule 22 from bulk deletion. Names take the source path relative to the
 package, `/` → `__`, `.py` dropped: `optimizer/walker.py` → `rev-optimizer__walker.md` +
 `rev-optimizer__walker.performance.md`, `.mechanics.md`, `.comments.md`. Folder
@@ -759,7 +759,7 @@ fingerprints. `Handoff:` last.
 
 ## Defects
 
-Correctness defects fixed in this item (HUNT fields) or blocked for Rio; pre-existing failures.
+Correctness defects fixed in this item (HUNT fields) or blocked for the maintainer; pre-existing failures.
 
 ## Pending execution
 
@@ -848,16 +848,16 @@ change to package source, tests, fixtures, pytest or coverage config, dependenci
 invalidates it; prose does not. Failure in a path an item touched, or of a `proof:` command → that
 item back to Worker-2 and its verifiers; a failing `gate:` command reopens no item; a failure
 reproduced against `git show HEAD:` of its test and target → pre-existing, `## Decisions`, gate
-row `blocked` for Rio; environment failure → recorded precisely, `blocked`.
+row `blocked` for the maintainer; environment failure → recorded precisely, `blocked`.
 
 Worker-0 fills `## Outcomes` BEFORE `gc`: an item's scratch is gone once it closes, but its
 plan fields and the evidence folder (run logs, proofs, gate results) stand until `gc`. Per item: findings per axis w/ severity and
 disposition; every number before / after w/ its command; owner moves; consolidations w/ their
 challenge counts; comments regraded; defects fixed w/ their permanent tests; rejections w/
-triggers; deferred Lows. Per run: bench baseline vs gate figures; decisions owed to Rio
+triggers; deferred Lows. Per run: bench baseline vs gate figures; decisions owed to the maintainer
 (`## Decisions`); cells unverified; blocked items; net source change vs cycle baseline; gate
 record; concurrent work untouched; "Scope of this run" for a scoped run. Then `Status: complete`
-(`partial (<scope>)`; `blocked` w/ the decision Rio owes). Remove only this run's
+(`partial (<scope>)`; `blocked` w/ the decision the maintainer owes). Remove only this run's
 `docs/review/temp-tests/<stem>/` dirs, bar a sensitive `blocked` item's evidence, and
 `docs/review/worker-memory/` contents, by explicit path, then
 `uv run python scripts/workspace.py gc review`: copies, gate copy, evidence, databases, and the

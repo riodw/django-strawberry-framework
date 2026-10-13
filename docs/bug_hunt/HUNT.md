@@ -3,7 +3,7 @@
 Entry: `Execute docs/bug_hunt/HUNT.md (You are Worker-0)`. Worker-0 reads [AGENTS.md][agents] +
 [START.md][start], generates or resumes the progress file, then runs the hunt autonomously through
 every item, revision, and the final gate until `Status: complete` or a genuine maintainer decision
-blocks it. Nothing here self-starts; Rio starts a hunt by that command.
+blocks it. Nothing here self-starts; the maintainer starts a hunt by that command.
 
 Hunt the current working tree for confirmed defects in `django_strawberry_framework/`. Contracts
 are the unit, files are the inventory: every `.py` is an entry point into the live system,
@@ -32,7 +32,7 @@ only; this doc is canonical.
 - Invoking this flow authorizes the runs it names: a focused permanent test w/ `--no-cov` in the
   shared tree, any `workspace.py run` or `prove` ("Workspace"), and the final gate `workspace.py
   gate hunt`. Nothing else converts into a test run. `FAKESHOP_SHARDED=1` and Postgres cells need
-  Rio's separate word; without it a cell is `unverified`, or `inapplicable by construction` when
+  the maintainer's separate word; without it a cell is `unverified`, or `inapplicable by construction` when
   the target's code path reaches no database, alias or dialect decision (Worker-1 states the
   reason, Worker-2 judges it).
 - **The item fences edits, never inspection.** A defect lives where several layers meet, so
@@ -52,7 +52,7 @@ only; this doc is canonical.
   under `error_policy.py::ErrorPolicy`, transport rejections each have an owner + wire shape. An
   unexpected internal exception is a lead; its Python class alone never justifies a `FieldError`
   conversion, and masking never proves the behavior beneath it correct. A contract nobody can cite
-  → `blocked`, Rio decides; never a fix.
+  → `blocked`, the maintainer decides; never a fix.
 - **Property premise before property run.** Every property records the authoritative contract
   citation, valid input domain, transformation, observable, an INDEPENDENT oracle (querying the
   same implementation isn't one), known exceptions. `utils/strings.py::pascal_case` is the
@@ -66,7 +66,7 @@ only; this doc is canonical.
   is tested against overlapping shapes (a longer declaration whose prefix equals a shorter one),
   not only equal ones; a refusal message that names a remedy gets that remedy tested. Live tier
   needing a fakeshop fixture that doesn't exist (model, relation shape) → test at the strongest
-  existing tier + the missing fixture reported as its own `blocked` line for Rio; never a new
+  existing tier + the missing fixture reported as its own `blocked` line for the maintainer; never a new
   example model inside an item.
 - **Severity = impact.** Reachability, actor prerequisites, likelihood, C/I/A impact, blast radius,
   confidence, each stated. No origin floors or caps: a developer-robustness defect and a security
@@ -75,9 +75,9 @@ only; this doc is canonical.
   / Low as in the finding record; style preferences and speculative risks are not bugs.
 - **Sensitive findings.** A client-reachable isolation/authorization defect gets the
   [SECURITY.md][security] maintainer path before its reproducer lands in any tracked file: record
-  the item `blocked` w/ the defect named abstractly, evidence held in scratch, Rio decides
+  the item `blocked` w/ the defect named abstractly, evidence held in scratch, the maintainer decides
   disclosure. A card plus a failing test is not a parked vulnerability.
-- Only Rio commits, branches, pushes, edits the changelog.
+- Only the maintainer commits, branches, pushes, edits the changelog.
 
 ## Progress file
 
@@ -126,7 +126,7 @@ Result: Fixed <severity>. Files changed: <paths>; validation: <commands/results>
 Result: Inconclusive. Missing: <what never ran, and why>.
 Verification: Passed. Expected-before-diagnosis: <recorded expectation>. Evidence: <checks>.
 Cleanup: Removed <item-owned scratch paths>; copies released; unrelated work preserved.
-Blocked: <condition and the decision Rio must make>.
+Blocked: <condition and the decision the maintainer must make>.
 ```
 
 ## Baseline and ownership
@@ -148,7 +148,7 @@ Fixes accumulate uncommitted. Each verified item's tracked edits + new files go 
 changes` ledger (path, item, symbols). A later item may build on a ledgered path. Attribute by
 content: before editing a dirty path, diff vs `git show HEAD:<path>` and match every hunk to the
 ledger or the cycle baseline; a hunk in neither = external edit → stop, report to Worker-0, who
-reconciles w/ Rio. Same stop when the item-scoped diff carries hunks the worker didn't make.
+reconciles w/ the maintainer. Same stop when the item-scoped diff carries hunks the worker didn't make.
 
 ## Workspace
 
@@ -170,7 +170,7 @@ id, copy, imported package `__file__` and digest, cell and database `NAME`s, cop
 modified, shared tree moved since the sync) and refuses to run (exit 125) when the package, the
 interpreter or a database resolves outside the copy. The copy holds its own sqlite files,
 virtualenv, caches, subprocesses; no network, no credentials. `--cell pg` gives the copy a
-database of its own on the compose container; it still needs Rio's word ("Ground rules").
+database of its own on the compose container; it still needs the maintainer's word ("Ground rules").
 `scripts/prove_failability.py` runs only through `prove`; never the live script on a live target.
 Promotion = Worker-1 applying the confirmed fix to the shared tree by hand, then the focused
 permanent test there. No branches, no shared-tree restores.
@@ -301,7 +301,7 @@ receives Worker-1's diagnosis and report AFTER recording its own expectation.
 5. Confirm permanent tests exercise real usage at the AGENTS.md tier and fail w/o the correction.
 6. For `No bugs`: rerun the strongest probes, judge each claimed inapplicable axis on its reason
    against the target's real surface, search independently where the trace is shallow.
-7. Confirm severity factors; dispute product semantics → `blocked` for Rio, never a regrade by
+7. Confirm severity factors; dispute product semantics → `blocked` for the maintainer, never a regrade by
    fiat.
 8. Check the item-scoped diff against [AGENTS.md][agents] prose rules: no process provenance,
    `path::Symbol` citations, tests at the mandated tier; run `uv run ruff format --check` and
@@ -324,9 +324,9 @@ challenges. Worker-2 never edits the production fix or its tests.
   (twice → `inconclusive` recorded, next item). Passing checks → fresh Worker-2 w/
   expectation-first sequencing. `verified` → ledger rows, `Result:`/`Verification:`/`Cleanup:`
   lines, tick, advance. `revision-needed` → `release hunt/<item> --role verify-<n>`, same item back
-  to Worker-1 w/ its copy intact; after two failed re-passes → `blocked` for Rio.
+  to Worker-1 w/ its copy intact; after two failed re-passes → `blocked` for the maintainer.
 - Append a `## Scenarios` item whenever a report names a cross-file contract w/o one; new
-  `## Package questions` leads come only from Rio.
+  `## Package questions` leads come only from the maintainer.
 - Mark `stale` any verified item whose recorded digests no longer match; re-dispatch Worker-2 on it
   before the gate.
 - Cleanup after `verified`/`no-bugs` only: item scratch by explicit path, then
@@ -365,12 +365,12 @@ closing note; verified items whose digests moved go `stale`.
 
 Final gate (Worker-0): `uv run python scripts/workspace.py gate hunt --suites lint,default,floor`:
 CI's lint job, the full suite, then CI's floor cell (`workspace.py` docstring), in a gate copy
-carrying its own git index (`--suites lint,default,floor,sharded,pg` once Rio authorized those
+carrying its own git index (`--suites lint,default,floor,sharded,pg` once the maintainer authorized those
 cells). Passes when lint, the suite and the floor suite pass + package coverage stays 100%. Record
 failures, coverage, skips, xfails, collected/selected counts, cell. The gate's result file binds it
 to `git stash create` at gate time + blob ids of `pyproject.toml`, `uv.lock` + the floor pins.
 Product failure → the owning item back to Worker-1; environment/concurrent failure → recorded
-precisely, `blocked`. Sharded and Postgres cells are `unverified` unless Rio authorized them; the
+precisely, `blocked`. Sharded and Postgres cells are `unverified` unless the maintainer authorized them; the
 report lists them.
 
 ## Closeout
@@ -417,7 +417,7 @@ two-role method is at `git show 58114254:docs/bug_hunt/HUNT.md`.
 
 Installed today: pytest + coverage, `scripts/prove_failability.py` (`workspace.py prove` only).
 Nothing else is in `pyproject.toml`; adding Hypothesis, hypothesis-graphql, mutmut, semgrep, a type
-checker, `pytest-randomly`, `pytest-timeout`, `freezegun` is Rio's decision, recorded as `blocked`
+checker, `pytest-randomly`, `pytest-timeout`, `freezegun` is the maintainer's decision, recorded as `blocked`
 when a scenario needs one. If added: a dependency a permanent test imports lives in `dev` and runs
 in CI, or the generator stays optional and only minimized deterministic regressions are promoted;
 Hypothesis gets a per-example state reset proved before any write-path property, and a profile

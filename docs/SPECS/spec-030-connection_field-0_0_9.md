@@ -704,4 +704,4 @@ The completion contract, grouped by slice.
 
 <!-- External -->
 [strawberry-relay]: https://strawberry.rocks/docs/guides/relay
-[upstream-cookbook]: https://github.com/riodw/django-graphene-filters
+[upstream-cookbook]: https://pypi.org/project/django-graphene-filters/

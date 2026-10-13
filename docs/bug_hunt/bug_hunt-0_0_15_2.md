@@ -67,7 +67,7 @@ Progress: 55 done, 81 to do.
   since 0.0.7 (`548059b3`)
 - [x] 42. `auto_camel_case=False` keeps every generated input camelCase (82 mutation, 3,487 filter, 124 order fields) while
   Strawberry-owned names follow it; FieldError keys still match the published names. Not a defect under rule 37 (no shipped doc
-  says inputs follow the converter): Rio's 2026-09-25 decision already homes it on `TODO-BETA-077-0.1.7`, no code
+  says inputs follow the converter): the maintainer's 2026-09-25 decision already homes it on `TODO-BETA-077-0.1.7`, no code
 - [x] 43. A serializer `ListField(child=ChoiceField(...))` published `[String!]`; it now publishes the field's generated enum like a
   `MultipleChoiceField`. Fixed with it: `MultipleChoiceField(allow_blank=True)` refused its own `BLANK` (list members reached DRF
   unwrapped); `raw_choice_value` now unwraps a list element-wise (`a9dec21d`)

@@ -290,7 +290,7 @@ viewer cannot see.
   `name` path must honor that gate, or an anonymous caller could probe
   category names through `search:` that `filter: {name: ...}` denies
   ([Decision 13](#decision-13--search-honors-filterset-permission-gates)).
-- Upstream (`/Users/riordenweber/projects/django-graphene-filters`):
+- Upstream (`~/projects/django-graphene-filters`):
   `object_type.py` accepts `search_fields` in Meta;
   `django_graphene_filters/connection_field.py::search_args` adds the `search` argument when the
   node type declares the tuple and threads it to the filterset;

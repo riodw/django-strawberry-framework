@@ -144,7 +144,7 @@ member, so this is **D1**, a behavior defect, not a consolidation.
 override's return; `connection.py:1828/1865` invokes the same public `OrderSet.apply_sync` /
 `apply_async` with neither. The contract sources found (spec-050's Edge cases, the
 `_SealPolicy.require_unevaluated` prose) both scope the rule to the list field, so the axis says
-*ambiguous* — routed to Rio through Worker 0 (**D3**), not decided here.
+*ambiguous* — routed to the maintainer through Worker 0 (**D3**), not decided here.
 (c) *Awaitable disposal*: enumerated every site that refuses an awaitable. The shared
 `_dispose_sync_awaitable` covers this module, `list_field.py` and the two exported refusers;
 `auth/mutations.py:505-511` (twice) and `routers.py:279-285` each spell detect-then-dispose
@@ -624,7 +624,7 @@ queryset") is a list-field spec, and `_SealPolicy.require_unevaluated`'s prose r
 list field invoked that ordering method one step earlier and takes its window on what comes back".
 The connection field also windows what comes back (Relay cursor slicing via
 `ListConnection`), which is why this is not simply out of scope. **Ambiguous or newly proposed →
-routed to Rio** through Worker 0. No fix, and no consolidation depends on it.
+routed to the maintainer** through Worker 0. No fix, and no consolidation depends on it.
 
 ### D4 — `base_queryset`'s docstring states a distinction its body's reason does not support
 
@@ -688,7 +688,7 @@ gate carries them.
 1. `proof:` `FAKESHOP_SHARDED=1 uv run pytest examples/fakeshop/test_query -k prefetch --no-cov`
    — discharges D1's observable half: that a nested-connection prefetch child whose target
    `get_queryset` returns `.using("shard_b")` actually reads the other shard at fetch time.
-   Needs Rio's separate authorization for the sharded mode; until then D1's cross-connection
+   Needs the maintainer's separate authorization for the sharded mode; until then D1's cross-connection
    *consequence* stays `unverified` (the policy asymmetry itself is already
    `execution-verified` by the read-only probe).
 
@@ -1498,7 +1498,7 @@ still empty; `django_strawberry_framework/utils/querysets.py` still blob
 because no tracked file was edited. No workspace was built this pass (nothing mutates source), so
 the `--project`/`--directory` hazard the dispatch flagged did not arise; the one command I ran
 against the shared tree is read-only and its package root is printed in its own output
-(`/Users/riordenweber/projects/django-strawberry-framework/django_strawberry_framework`).
+(`~/projects/django-strawberry-framework/django_strawberry_framework`).
 
 Concurrent dirt has grown again and is entirely another session's: `AGENTS.md`, `GOAL.md`,
 `docs/TREE.md`, `docs/feedback.md`, `docs/spec-050-list_field_arguments-0_0_15.md` and its
@@ -1681,7 +1681,7 @@ artifact.
 ### Verdict
 
 `Status: verified`. `## Pending execution` is non-empty (three entries, one of them a genuine
-`execution-deferred` proof gated on Rio's `FAKESHOP_SHARDED=1` authorization), so the plan item is
+`execution-deferred` proof gated on the maintainer's `FAKESHOP_SHARDED=1` authorization), so the plan item is
 ticked as **`verified, pending execution`**.
 
 R1, R2 and R3 are all discharged, each in a stronger form than I asked for: R1 as a rejection with

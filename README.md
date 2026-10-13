@@ -127,7 +127,7 @@ Install, quick start, reading and writing data, transport, and deployment all li
 
 ## Inspired by
 
-- <https://github.com/riodw/django-graphene-filters>
+- <https://pypi.org/project/django-graphene-filters/>
 - <https://github.com/encode/django-rest-framework>
 - <https://github.com/strawberry-graphql/strawberry-graphql-django>
 

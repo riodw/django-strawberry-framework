@@ -58,7 +58,7 @@ output; `rg -c "@dataclass\(frozen=True, eq=False\)" ...` `1`;
 `rg -c "relation_kind|nullable|RelationKind" ...` exit 1; `uv run ruff check tests/test_registry.py`
 passes.
 
-Before / after, `python /Users/riordenweber/projects/django-strawberry-framework/docs/review/temp-tests/types__relations/mechanics/probe_proof.py`:
+Before / after, `python ~/projects/django-strawberry-framework/docs/review/temp-tests/types__relations/mechanics/probe_proof.py`:
 
 - before `review-20260925T171456-5f8867` (`workspace.py run review/types/relations.py/before -- python <probe>`):
   `fields: source_type,source_model,field_name,django_field,related_model,relation_kind,nullable`,
@@ -85,7 +85,7 @@ request observes; the record identity is internal to declaration / finalize):
 - shared tree, focused: `uv run pytest tests/types/test_relations.py tests/test_registry.py tests/types/test_finalizer.py tests/types/test_base.py tests/types/test_definition_order.py tests/types/test_definition_relations.py tests/types/test_relay_interfaces.py tests/utils/test_relations.py --no-cov -q`
   617 passed (619 before: -3 deleted, +1 new).
 
-Failability, `workspace.py prove review/types/relations.py/implement /Users/riordenweber/projects/django-strawberry-framework/docs/review/temp-tests/types__relations/implement/prove_m1.json`,
+Failability, `workspace.py prove review/types/relations.py/implement ~/projects/django-strawberry-framework/docs/review/temp-tests/types__relations/implement/prove_m1.json`,
 run `review-20260925T172025-057e3c`, exit 0, scope the six modules + `--no-cov --show-capture=no`,
 restore byte-proved both entries:
 
@@ -205,7 +205,7 @@ lines above an edited hunk and was left: it is routed to the `types/base.py` ite
 `## Decisions` and this change does not make it false. KANBAN.md card TODO-ALPHA-053 item (c)
 names the stale `_record_pending_relation` comment in
 `tests/test_registry.py::test_finalize_discards_consumer_authored_pending_relation_without_rewriting_annotation`;
-that comment is gone with M2, so the card item is discharged (board DB, Worker-0 / Rio). The
+that comment is gone with M2, so the card item is discharged (board DB, Worker-0 / the maintainer). The
 fixture count 176 vs 178 is the concurrent library model, not this change.
 
 ## Iterations

@@ -286,5 +286,5 @@ Spec: [Decision 13 — Live HTTP coverage strategy][spec-028-d13].
 <!-- .venv/ -->
 
 <!-- External -->
-[upstream-cookbook-filterset-factories]: https://github.com/riodw/django-graphene-filters
-[upstream-cookbook-orderset]: https://github.com/riodw/django-graphene-filters
+[upstream-cookbook-filterset-factories]: https://pypi.org/project/django-graphene-filters/
+[upstream-cookbook-orderset]: https://pypi.org/project/django-graphene-filters/

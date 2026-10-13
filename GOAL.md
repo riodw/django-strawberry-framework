@@ -594,4 +594,4 @@ Two example projects prove the goal:
 <!-- .venv/ -->
 
 <!-- External -->
-[cookbook-schema]: https://github.com/riodw/django-graphene-filters/blob/master/examples/cookbook/cookbook/recipes/schema.py
+[cookbook-schema]: https://pypi.org/project/django-graphene-filters/

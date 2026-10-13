@@ -77,7 +77,7 @@ as `uv run python scripts/<name>.py` from the repo root; `workspace.py` is that 
    (`patch -R -p1 -d <copy> < <diff>`) and `run`; the next run takes `--fresh`.
 4. Judge every `disputed: <reason>` in `## Implementation (Worker-2)`: Worker-2 right → the
    finding closes w/ the reason and its reopen trigger; wrong → both positions and a `Blocked:`
-   line for Rio (a standing disagreement; no third pass).
+   line for the maintainer (a standing disagreement; no third pass).
 5. Per axis:
    - **Performance, Mechanics:** each test the change relies on fails without it:
      `workspace.py prove <address> <root>/verify-<axis>-<n>/<name>.json` (format:

@@ -140,7 +140,7 @@ Local source path: [`~/projects/strawberry-django-main/strawberry_django/orderin
 - [`strawberry_django/ordering.py::process_order`][upstream-strawberry-ordering] / [`apply_ordering`][upstream-strawberry-ordering] — the runtime side; `OrderSet.apply_sync(input_value, queryset, info)` / `apply_async(...)` is the equivalent consumer-facing entry point.
 - [`strawberry_django/ordering.py::ORDER_ARG`][upstream-strawberry-ordering] (`= "order"`) and [`strawberry_django/ordering.py::ORDERING_ARG`][upstream-strawberry-ordering] (`= "ordering"`) — **NOT borrowed as a pair**; the package ships a single list-shaped `orderBy: [<T>OrderInput!]` argument per [Decision 5](#decision-5--ordering-enum-and-argument-shape), and **no argument-name constant at all** — Strawberry derives the GraphQL `orderBy:` argument from the resolver's Python `order_by` parameter by auto-camel-case, so a constant would have no reader.
 - [`strawberry_django/ordering.py::StrawberryDjangoFieldOrdering`][upstream-strawberry-ordering] — **NOT borrowed**; the package's `Meta`-driven shape forbids subclassing Strawberry field classes for consumer-facing declarations; the equivalent is the [Decision 11](#decision-11--order_input_typeorderset-consumer-helper) helper on a plain `@strawberry.field` resolver.
-- [`strawberry_django/ordering.py::order_type`][upstream-strawberry-ordering] (`@strawberry_django.order_type(Model)`) — **NOT borrowed** (the `Meta`-driven shape per [`START.md`][start] "Style Rio cares about" forbids decorator-on-order-type for consumer-facing classes).
+- [`strawberry_django/ordering.py::order_type`][upstream-strawberry-ordering] (`@strawberry_django.order_type(Model)`) — **NOT borrowed** (the `Meta`-driven shape per [`START.md`][start] "Style the maintainer cares about" forbids decorator-on-order-type for consumer-facing classes).
 - [`strawberry_django/ordering.py::order`][upstream-strawberry-ordering] — the legacy decorator alias marked deprecated in favor of `order_type`; **NOT borrowed**.
 
 ### From `graphene-django` — no separate ordering primitive to borrow
@@ -1035,10 +1035,10 @@ Every live suite in `test_query/` picks up the module-scoped autouse fixture `_r
 
 <!-- External -->
 [strawberry-lazy]: https://strawberry.rocks
-[upstream-cookbook]: https://github.com/riodw/django-graphene-filters
-[upstream-cookbook-mixins]: https://github.com/riodw/django-graphene-filters
-[upstream-cookbook-order-arguments-factory]: https://github.com/riodw/django-graphene-filters
-[upstream-cookbook-orders]: https://github.com/riodw/django-graphene-filters
-[upstream-cookbook-orderset]: https://github.com/riodw/django-graphene-filters
+[upstream-cookbook]: https://pypi.org/project/django-graphene-filters/
+[upstream-cookbook-mixins]: https://pypi.org/project/django-graphene-filters/
+[upstream-cookbook-order-arguments-factory]: https://pypi.org/project/django-graphene-filters/
+[upstream-cookbook-orders]: https://pypi.org/project/django-graphene-filters/
+[upstream-cookbook-orderset]: https://pypi.org/project/django-graphene-filters/
 [upstream-graphene-filter-fields]: https://github.com/graphql-python/graphene-django
 [upstream-strawberry-ordering]: https://github.com/strawberry-graphql/strawberry-django

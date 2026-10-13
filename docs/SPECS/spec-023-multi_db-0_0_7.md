@@ -64,7 +64,7 @@ Without a pinned contract that behavior is implicit. A migrant from `graphene-dj
 
 Both reference packages take different stances:
 
-- `strawberry-django` does not document multi-db behavior. Its `optimizer.py` (verified at `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py`) does not call `router.db_for_*` anywhere; cooperation rides entirely on the queryset's `_db` attribute.
+- `strawberry-django` does not document multi-db behavior. Its `optimizer.py` (verified at `~/projects/strawberry-django-main/strawberry_django/optimizer.py`) does not call `router.db_for_*` anywhere; cooperation rides entirely on the queryset's `_db` attribute.
 - `graphene-django` does not document multi-db either; its filter / connection layer is database-agnostic by accident, not by design.
 
 This is a tests + docs contract with **zero production code change**. Its discipline is **what the contract covers and what it does NOT**: routing through Django's `router.db_for_*` API and queryset `_db` propagation are in scope; first-class sharding-aware planning (cross-shard joins, automatic shard selection based on FK, multi-shard aggregates, `Meta.preferred_database`) is deferred to the [`BACKLOG.md`][backlog] `sharding_aware_optimizer` entry.
@@ -107,13 +107,13 @@ Multi-database cooperation is a Django capability neither reference package docu
 
 ### From `strawberry-django` — no precedent to borrow
 
-Local source path: `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py`. Verified by inspection: the file does not call `router.db_for_*` anywhere; multi-db cooperation rides entirely on the queryset's `_db` attribute (the same shape this package ships). There is no `docs/multi-db.md` in the upstream's repo; no `tests/test_multi_db.py`; no documented stance on what consumers can rely on under `.using()`.
+Local source path: `~/projects/strawberry-django-main/strawberry_django/optimizer.py`. Verified by inspection: the file does not call `router.db_for_*` anywhere; multi-db cooperation rides entirely on the queryset's `_db` attribute (the same shape this package ships). There is no `docs/multi-db.md` in the upstream's repo; no `tests/test_multi_db.py`; no documented stance on what consumers can rely on under `.using()`.
 
 The shape we ship is functionally equivalent to the upstream's — a queryset's `_db` survives `select_related` / `prefetch_related` / `Prefetch` chains because Django's queryset API preserves it — but we additionally call `router.db_for_read(...)` on FK-id elision stubs (the [`types/resolvers.py::_build_fk_id_stub`][resolvers] path), which the upstream does not. The call is necessary because an FK-id elision stub is a freshly-constructed model instance with no `_db` from a queryset to inherit; without the router lookup the stub's `_state.db` stays `None`. The upstream's optimizer does not implement FK-id elision, so the cooperation gap doesn't arise there.
 
 ### From `graphene-django` — no precedent to borrow
 
-Local source path: `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/`. Verified: no `router.db_for_*` calls anywhere in the package source. The package is database-agnostic by accident — `RelayConnectionField` and `DjangoListField` resolvers return whatever queryset the consumer hands them, and queryset `.using()` propagates through Django's machinery without the package noticing.
+Local source path: `~/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/`. Verified: no `router.db_for_*` calls anywhere in the package source. The package is database-agnostic by accident — `RelayConnectionField` and `DjangoListField` resolvers return whatever queryset the consumer hands them, and queryset `.using()` propagates through Django's machinery without the package noticing.
 
 ### Explicitly do not borrow
 

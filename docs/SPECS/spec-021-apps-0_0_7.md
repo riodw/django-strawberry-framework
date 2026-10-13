@@ -92,7 +92,7 @@ The two reference packages at the paths given in [`docs/TREE.md`][tree] take opp
 
 ### From `strawberry_django` — borrow the AppConfig shape
 
-Local source path: `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/apps.py` (referenced from [`docs/TREE.md #"## strawberry_django"`][tree]).
+Local source path: `~/projects/strawberry-django-main/strawberry_django/apps.py` (referenced from [`docs/TREE.md #"## strawberry_django"`][tree]).
 
 Contents:
 
@@ -111,7 +111,7 @@ class StrawberryDjangoConfig(AppConfig):
 
 ### From `graphene_django` — explicitly do not borrow the absence
 
-Local source path: `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/` (referenced from [`docs/TREE.md #"## graphene_django"`][tree]).
+Local source path: `~/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/` (referenced from [`docs/TREE.md #"## graphene_django"`][tree]).
 
 - **graphene-django ships NO `apps.py`.** Consumers add `"graphene_django"` to `INSTALLED_APPS` and rely on Django's implicit AppConfig fallback.
 - **Not borrowed.** Modern Django convention is an explicit `AppConfig`; the parity consumers expect from `strawberry-django` is on the explicit side; and the app-load hook the upstream patches need exists only with an explicit class.
@@ -387,4 +387,4 @@ The card is complete when all of the following are true:
 <!-- .venv/ -->
 
 <!-- External -->
-[apps]: /Users/riordenweber/projects/strawberry-django-main/strawberry_django/apps.py
+[apps]: ~/projects/strawberry-django-main/strawberry_django/apps.py

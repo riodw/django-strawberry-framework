@@ -449,7 +449,7 @@ only completed spec carrying them.
 
 **Rejected alternative:** restore the P-labels in the spec, a one-file edit against ~20 source
 comments. Rejected because it reverses the precedent three prior cycles set and re-introduces
-into a standing document the review-residue vocabulary `START.md` "Style Rio cares about" bars,
+into a standing document the review-residue vocabulary `START.md` "Style the maintainer cares about" bars,
 to preserve citations that `AGENTS.md` rule 27 says should never have been ordinals.
 
 **Known and deliberately out of scope:** `orders/sets.py` cites `spec-030 … P1-B` twice against

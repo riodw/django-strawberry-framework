@@ -12,7 +12,7 @@ from django.db import migrations, models
 from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 from django.db.migrations.state import StateApps
 
-SPEC_URL_PREFIX = "https://github.com/riodw/django-strawberry-framework/blob/main"
+SPEC_URL_PREFIX = "https://github.com/unaxy/django-strawberry-framework/blob/main"
 
 
 def _backfill_path_from_url(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:

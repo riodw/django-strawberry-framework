@@ -378,7 +378,7 @@ scope above (already declared). The cycle runs the builder worker cycle per coho
 on one identified tree, then one review of that tree under Decision 20, then the record.
 
 - Session scratchpad `<scratch>`:
-  `/private/tmp/claude-501/-Users-riordenweber-projects-django-strawberry-framework/87545721-0f0a-4259-b47e-4e5f7c9a1695/scratchpad`
+  `<session scratchpad>`
 - Pre-flight: index empty; no `docs/builder/bld-050-*` artifact exists; worker memory seeded at
   `docs/builder/worker-memory/050-worker-{0,1,2,3}.md`; temp tests under
   `docs/builder/temp-tests/050/`.

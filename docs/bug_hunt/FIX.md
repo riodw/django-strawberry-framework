@@ -35,7 +35,7 @@ Each phase finishes completely (every agent it dispatched has reported) before t
    doc homes, test placement, exported surface).
    - Not a defect under rule 37: tick it in the tracker with the verdict and the evidence, no code. If it hides a
      real contract question, file that under "Waiting on you". Next item.
-   - A decision only Rio can make (the rules do not settle it and the choice changes a public contract): move the
+   - A decision only the maintainer can make (the rules do not settle it and the choice changes a public contract): move the
      item under "Waiting on you" with the question and the evidence. Next item.
 5. **Plan.** Write the plan to the scratchpad (`<id>-plan.md`) and print it in chat: the defect, the decisions with
    their final answers and the rule behind each, what is out of scope (filed as new tracker items), the docs that

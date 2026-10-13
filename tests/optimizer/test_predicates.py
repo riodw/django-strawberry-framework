@@ -129,7 +129,7 @@ def test_alias_mismatch_message_reports_the_compared_values(monkeypatch: pytest.
     """
     reads = {"n": 0}
 
-    def flip(model_instance: object = None, **hints: object):
+    def flip(_model_instance: object = None, **_hints: object):
         reads["n"] += 1
         return "default" if reads["n"] % 2 else "nonexistent"
 

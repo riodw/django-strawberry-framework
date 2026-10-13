@@ -928,7 +928,7 @@ def test_phase_3_failure_leaves_registry_unfinalized_and_requires_fresh_classes(
     original_type = strawberry.type
     reached_by_strawberry: list[type] = []
 
-    def failing_type(type_cls: type, **kwargs: object):
+    def failing_type(type_cls: type, **_kwargs: object):
         reached_by_strawberry.append(type_cls)
         raise TypeError("simulated Strawberry failure")
 

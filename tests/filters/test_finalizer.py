@@ -1605,7 +1605,7 @@ def test_phase_2_5_rejects_globalid_filter_on_callable_strategy_target():
     naming the filterset and field.
     """
 
-    def encode(type_cls: type[DjangoType], model: type[Model], root: object):
+    def encode(_type_cls: type[DjangoType], _model: type[Model], _root: object):
         return "GenreType"
 
     class GenreFilter(FilterSet):
@@ -1653,7 +1653,7 @@ def test_phase_2_5_rejects_globalid_filter_on_custom_strategy_target():
             filterset_class = GenreFilter
 
         @classmethod
-        def resolve_typename(cls, root: object, info: object):
+        def resolve_typename(cls, _root: object, _info: object):
             return "GenreType"
 
     assert registry.get(Genre) is GenreType

@@ -85,7 +85,7 @@ def middleware(toolbar_leaf: ModuleType) -> DebugToolbarMiddleware:
     ``get_response`` the stock ``__init__`` inspects (sync -> not async mode).
     """
 
-    def get_response(request: HttpRequest) -> None:
+    def get_response(_request: HttpRequest) -> None:
         return None
 
     return toolbar_leaf.DebugToolbarMiddleware(get_response)
@@ -405,7 +405,7 @@ def test_process_view_tolerates_non_class_view_class(middleware: DebugToolbarMid
     """
     request = RequestFactory().get("/")
 
-    def view_func(request: HttpRequest):
+    def view_func(_request: HttpRequest):
         return None
 
     # Django's ``as_view()`` callback contract puts ``view_class`` in the callback function's

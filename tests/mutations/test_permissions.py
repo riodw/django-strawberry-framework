@@ -270,11 +270,11 @@ def test_permission_classes_override_deny_blocks_permitted_caller():
     class DenyAll:
         def has_permission(
             self,
-            info: object,
-            mutation: type[object],
-            operation: str,
-            data: object,
-            instance: object = None,
+            _info: object,
+            _mutation: type[object],
+            _operation: str,
+            _data: object,
+            _instance: object = None,
         ):
             return False
 
@@ -305,11 +305,11 @@ def test_async_has_permission_is_rejected_not_bypassed():
     class AsyncDeny:
         async def has_permission(
             self,
-            info: object,
-            mutation: type[object],
-            operation: str,
-            data: object,
-            instance: object = None,
+            _info: object,
+            _mutation: type[object],
+            _operation: str,
+            _data: object,
+            _instance: object = None,
         ):
             return False
 
@@ -338,11 +338,11 @@ def test_awaitable_has_permission_is_rejected_not_bypassed():
     class AwaitableDeny:
         def has_permission(
             self,
-            info: object,
-            mutation: type[object],
-            operation: str,
-            data: object,
-            instance: object = None,
+            _info: object,
+            _mutation: type[object],
+            _operation: str,
+            _data: object,
+            _instance: object = None,
         ):
             return DeferredDeny()
 
@@ -472,7 +472,7 @@ def test_awaitable_has_perm_is_rejected_not_bypassed():
     class _AwaitablePermUser:
         is_authenticated = True
 
-        def has_perm(self, codename: str):
+        def has_perm(self, _codename: str):
             async def _deny():
                 return False
 
@@ -519,11 +519,11 @@ def test_run_permission_classes_short_circuits_on_first_denial():
     class AllowingPerm:
         def has_permission(
             self,
-            info: object,
-            mutation: type[object],
-            operation: str,
-            data: object,
-            instance: object = None,
+            _info: object,
+            _mutation: type[object],
+            _operation: str,
+            _data: object,
+            _instance: object = None,
         ):
             eval_order.append("AllowingPerm")
             return True
@@ -531,11 +531,11 @@ def test_run_permission_classes_short_circuits_on_first_denial():
     class DenyingPerm:
         def has_permission(
             self,
-            info: object,
-            mutation: type[object],
-            operation: str,
-            data: object,
-            instance: object = None,
+            _info: object,
+            _mutation: type[object],
+            _operation: str,
+            _data: object,
+            _instance: object = None,
         ):
             eval_order.append("DenyingPerm")
             return False
@@ -543,11 +543,11 @@ def test_run_permission_classes_short_circuits_on_first_denial():
     class NeverReachedPerm:
         def has_permission(
             self,
-            info: object,
-            mutation: type[object],
-            operation: str,
-            data: object,
-            instance: object = None,
+            _info: object,
+            _mutation: type[object],
+            _operation: str,
+            _data: object,
+            _instance: object = None,
         ):
             eval_order.append("NeverReachedPerm")
             return True
@@ -611,11 +611,11 @@ def test_walk_ignores_mid_request_pollution_of_the_class_permission_list():
     class AllowAndPollute:
         def has_permission(
             self,
-            info: object,
+            _info: object,
             mutation: type[object],
-            operation: str,
-            data: object,
-            instance: object = None,
+            _operation: str,
+            _data: object,
+            _instance: object = None,
         ):
             # ``mutation`` IS the mutation class the walk passes; the pollution
             # reach is the exact object the walk would iterate live.
@@ -632,11 +632,11 @@ def test_walk_ignores_mid_request_pollution_of_the_class_permission_list():
     class Denier:
         def has_permission(
             self,
-            info: object,
-            mutation: type[object],
-            operation: str,
-            data: object,
-            instance: object = None,
+            _info: object,
+            _mutation: type[object],
+            _operation: str,
+            _data: object,
+            _instance: object = None,
         ):
             events.append("Denier")
             return False
@@ -709,11 +709,11 @@ def test_hook_rebinding_the_validated_permission_slot_fails_closed():
     class AllowAndRebind:
         def has_permission(
             self,
-            info: object,
+            _info: object,
             mutation: type[DjangoMutation],
-            operation: str,
-            data: object,
-            instance: object = None,
+            _operation: str,
+            _data: object,
+            _instance: object = None,
         ):
             # The hook's ``mutation`` IS the mutation class; the plain attribute
             # statement is the pre-fix persistent-bypass shape.
@@ -723,11 +723,11 @@ def test_hook_rebinding_the_validated_permission_slot_fails_closed():
     class Denier:
         def has_permission(
             self,
-            info: object,
-            mutation: type[object],
-            operation: str,
-            data: object,
-            instance: object = None,
+            _info: object,
+            _mutation: type[object],
+            _operation: str,
+            _data: object,
+            _instance: object = None,
         ):
             denier_runs.append("Denier")
             return False

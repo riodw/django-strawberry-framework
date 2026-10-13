@@ -325,7 +325,7 @@ def test_assigned_relation_field_resolver_kwarg_override_keeps_consumer_resolver
             model = Item
             fields = ("id", "name")
 
-    def category_items(root: Category) -> list[ItemType]:
+    def category_items() -> list[ItemType]:
         return []
 
     class CategoryType(DjangoType):
@@ -938,7 +938,7 @@ def test_auto_annotation_on_unselected_field_raises():
 def test_auto_annotation_combined_with_assigned_field_raises():
     """``auto`` (infer type) cannot coexist with an assigned resolver/type."""
 
-    def _zero(root: object) -> int:
+    def _zero() -> int:
         return 0
 
     with pytest.raises(ConfigurationError, match="cannot combine with an assigned resolver"):
@@ -1118,7 +1118,7 @@ def test_consumer_id_annotation_on_direct_relay_node_subclass_raises():
 def test_consumer_id_assigned_strawberry_field_on_relay_node_type_raises():
     """Assigned ``id = strawberry.field(resolver=...)`` raises; message names the workarounds."""
 
-    def _constant_id(root: object) -> str:
+    def _constant_id() -> str:
         return "x"
 
     with pytest.raises(ConfigurationError) as exc_info:

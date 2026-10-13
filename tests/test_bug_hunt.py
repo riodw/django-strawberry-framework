@@ -24,15 +24,15 @@ def _write(path: Path, content: str) -> Path:
     return path
 
 
-def _one_module_listing(args: Sequence[str]) -> str:
+def _one_module_listing(_args: Sequence[str]) -> str:
     return f"{bug_hunt.DEFAULT_PACKAGE_DIR}/module.py\0"
 
 
-def _skip_refresh(*args: object) -> None:
+def _skip_refresh(*_args: object) -> None:
     return None
 
 
-def _accept_commit(commit: str) -> None:
+def _accept_commit(_commit: str) -> None:
     return None
 
 
@@ -86,7 +86,7 @@ def test_generator_writes_autonomous_progress_and_preserves_existing_run(
 
     monkeypatch.setattr(bug_hunt, "_run_git", fake_run_git)
 
-    def fake_snapshot_git(args: Sequence[str]) -> str:
+    def fake_snapshot_git(_args: Sequence[str]) -> str:
         return baseline_listing
 
     monkeypatch.setattr(snapshot, "_run_git", fake_snapshot_git)
@@ -359,7 +359,7 @@ def test_snapshot_failure_never_publishes_partial_staging(
             return f"{tmp_path}\n"
         return "\0".join([*paths, ""])
 
-    def fake_materialize(commit: str, path: str, target: Path) -> None:
+    def fake_materialize(_commit: str, path: str, target: Path) -> None:
         stem = snapshot._stem_for(path)
         _write(target / f"{stem}.stripped.py", path)
         if path == paths[1]:

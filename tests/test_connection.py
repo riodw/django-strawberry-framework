@@ -523,7 +523,7 @@ def _capture_info(node_type: type[DjangoType]):
     conn_type = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
     captured: dict[str, strawberry.Info[object, object]] = {}
 
-    def capture(root: object, info: strawberry.Info[object, object]) -> Iterable[Category]:
+    def capture(info: strawberry.Info[object, object]) -> Iterable[Category]:
         captured["info"] = info
         return Category.objects.all()
 
@@ -699,7 +699,7 @@ def test_consumer_resolver_manager_coerced():
     """A ``Manager`` return is coerced to a ``QuerySet`` and runs the full pipeline."""
     services.seed_data(2)
 
-    def resolver(root: object, info: object) -> models.Manager[Category]:
+    def resolver(_root: object, _info: object) -> models.Manager[Category]:
         return Category.objects  # a Manager, not a QuerySet
 
     schema = _field_schema(_make_sidecar_node_type("ManagerNode"), resolver=resolver)
@@ -720,7 +720,7 @@ def test_consumer_resolver_queryset_full_pipeline():
     """
     services.seed_data(2)
 
-    def resolver(root: object, info: object) -> Iterable[object]:
+    def resolver(_root: object, _info: object) -> Iterable[object]:
         return Category.objects.all()
 
     schema = _field_schema(_make_sidecar_node_type("QuerySetNode"), resolver=resolver)
@@ -741,7 +741,7 @@ def test_consumer_resolver_iterable_without_sidecar_input_paginates():
     services.seed_data(1)
     rows = list(Category.objects.all())
 
-    def resolver(root: object, info: object) -> Iterable[object]:
+    def resolver(_root: object, _info: object) -> Iterable[object]:
         return list(rows)  # a plain list
 
     schema = _field_schema(_make_sidecar_node_type("IterableOkNode"), resolver=resolver)
@@ -757,7 +757,7 @@ def test_consumer_resolver_iterable_with_sidecar_input_raises():
     services.seed_data(1)
     rows = list(Category.objects.all())
 
-    def resolver(root: object, info: object) -> Iterable[object]:
+    def resolver(_root: object, _info: object) -> Iterable[object]:
         return list(rows)
 
     schema = _field_schema(_make_sidecar_node_type("IterableBadNode"), resolver=resolver)
@@ -779,7 +779,7 @@ def test_consumer_resolver_iterable_with_total_count_selected_raises():
     services.seed_data(1)
     rows = list(Category.objects.all())
 
-    def resolver(root: object, info: object) -> Iterable[object]:
+    def resolver(_root: object, _info: object) -> Iterable[object]:
         return list(rows)
 
     schema = _field_schema(
@@ -811,7 +811,7 @@ def test_consumer_resolver_countless_iterable_paginates_without_total_count(
     services.seed_data(3)
     rows = list(Category.objects.all())
 
-    def resolver(root: object, info: object) -> Iterable[object]:
+    def resolver(_root: object, _info: object) -> Iterable[object]:
         return make_source(rows)
 
     schema = _field_schema(
@@ -839,7 +839,7 @@ def test_consumer_resolver_generator_paginates_without_total_count():
     services.seed_data(2)
     rows = list(Category.objects.all())
 
-    def resolver(root: object, info: object) -> Iterable[object]:
+    def resolver(_root: object, _info: object) -> Iterable[object]:
         yield from rows
 
     schema = _field_schema(
@@ -868,7 +868,7 @@ def test_consumer_resolver_non_iterable_source_raises_graphql_error(bad_source: 
     """
     services.seed_data(1)
 
-    def resolver(root: object, info: object) -> object:
+    def resolver(_root: object, _info: object) -> object:
         return bad_source
 
     schema = _field_schema(_make_sidecar_node_type("ScalarSourceNode"), resolver=resolver)
@@ -913,7 +913,7 @@ async def test_async_consumer_resolver_set_source_paginates_without_total_count(
     await sync_to_async(services.seed_data)(2)
     rows = await sync_to_async(lambda: list(Category.objects.all()))()
 
-    async def resolver(root: object, info: object) -> Iterable[object]:
+    async def resolver(_root: object, _info: object) -> Iterable[object]:
         return set(rows)
 
     schema = await sync_to_async(_field_schema)(
@@ -985,7 +985,7 @@ async def test_async_consumer_resolver_iterable_with_total_count_selected_raises
     await sync_to_async(services.seed_data)(1)
     rows = await sync_to_async(lambda: list(Category.objects.all()))()
 
-    async def resolver(root: object, info: object) -> Iterable[object]:
+    async def resolver(_root: object, _info: object) -> Iterable[object]:
         return list(rows)
 
     schema = await sync_to_async(_field_schema)(
@@ -1097,7 +1097,7 @@ def test_connection_resolver_composition_order():
     services.seed_data(3)
     calls: list[str] = []
 
-    def get_queryset(cls: type[DjangoType], qs: models.QuerySet[Category], info: object):
+    def get_queryset(_cls: type[DjangoType], qs: models.QuerySet[Category], _info: object):
         calls.append("visibility")
         return qs
 
@@ -1222,7 +1222,7 @@ def test_connection_sync_async_generator_resolver_raises_sync_misuse():
     services.seed_data(1)
     rows = list(Category.objects.all())
 
-    async def resolver(root: object, info: object):
+    async def resolver(_root: object, _info: object):
         for row in rows:
             yield row
 
@@ -1248,7 +1248,7 @@ async def test_connection_async_generator_resolver_executes_on_async_path():
     await sync_to_async(services.seed_data)(2)
     rows = await sync_to_async(list)(Category.objects.order_by("pk"))
 
-    async def resolver(root: object, info: object):
+    async def resolver(_root: object, _info: object):
         for row in rows:
             yield row
 
@@ -1311,7 +1311,7 @@ def test_connection_sync_resolver_returning_async_iterable_raises_sync_misuse():
     services.seed_data(1)
     rows = list(Category.objects.order_by("pk"))
 
-    def resolver(root: object, info: object):
+    def resolver(_root: object, _info: object):
         async def stream():
             for row in rows:
                 yield row
@@ -1335,7 +1335,7 @@ def test_sync_context_async_get_queryset_raises_sync_misuse():
     """An async ``get_queryset`` invoked from the sync resolver path raises ``SyncMisuseError``."""
     services.seed_data(1)
 
-    async def get_queryset(cls: type[DjangoType], qs: models.QuerySet[Category], info: object):
+    async def get_queryset(_cls: type[DjangoType], qs: models.QuerySet[Category], _info: object):
         return qs
 
     node_type = _make_sidecar_node_type(
@@ -1364,7 +1364,7 @@ async def test_async_execution_default_connection_async_get_queryset_raises_sync
 
     await sync_to_async(services.seed_data)(1)
 
-    async def get_queryset(cls: type[DjangoType], qs: models.QuerySet[Category], info: object):
+    async def get_queryset(_cls: type[DjangoType], qs: models.QuerySet[Category], _info: object):
         return qs
 
     node_type = _make_sidecar_node_type(
@@ -1386,7 +1386,10 @@ async def test_connection_sync_resolver_returning_coroutine_raises_sync_misuse()
     async def _inner() -> list[object]:
         return []
 
-    def _sync_resolver_returning_coroutine(root: object, info: object) -> Awaitable[list[object]]:
+    def _sync_resolver_returning_coroutine(
+        _root: object,
+        _info: object,
+    ) -> Awaitable[list[object]]:
         return _inner()
 
     schema = _field_schema(
@@ -1420,8 +1423,8 @@ async def test_connection_async_resolver_resolving_to_residual_awaitable_fails_c
         return []
 
     async def _async_resolver_returning_awaitable(
-        root: object,
-        info: object,
+        _root: object,
+        _info: object,
     ) -> Awaitable[Iterable[object]]:
         return _inner()  # resolves (after one await) to ANOTHER coroutine
 
@@ -1792,7 +1795,7 @@ async def test_connection_async_pipeline_applies_filter_and_order():
     """
     from asgiref.sync import sync_to_async
 
-    async def resolver(root: object, info: object):
+    async def resolver(_root: object, _info: object):
         # An async resolver forces the connection through the ASYNC pipeline; the
         # sidecar filter:/orderBy: args are then applied to its result via *_async.
         return Category.objects.all()
@@ -1835,20 +1838,20 @@ async def _awaitable_queryset(queryset: object):
 
 
 def _order_override_evaluated(
-    cls: type[_CategoryOrder],
-    order_input: object,
+    _cls: type[_CategoryOrder],
+    _order_input: object,
     queryset: models.QuerySet[Category],
-    info: object,
+    _info: object,
 ):
     list(queryset)
     return queryset
 
 
 def _order_override_untrusted(
-    cls: type[_CategoryOrder],
-    order_input: object,
-    queryset: models.QuerySet[Category],
-    info: object,
+    _cls: type[_CategoryOrder],
+    _order_input: object,
+    _queryset: models.QuerySet[Category],
+    _info: object,
 ):
     candidate = _DeferredFilterQuerySet(model=Category)
     # ``negate`` decides whether the predicate is inverted and is truth-tested to
@@ -1859,10 +1862,10 @@ def _order_override_untrusted(
 
 
 def _order_override_in_place_routing(
-    cls: type[_CategoryOrder],
-    order_input: object,
+    _cls: type[_CategoryOrder],
+    _order_input: object,
     queryset: models.QuerySet[Category],
-    info: object,
+    _info: object,
 ):
     set_queryset_hints(queryset, {"tenant": 2})
     return queryset
@@ -2024,16 +2027,16 @@ def test_connection_async_seal_rejects_a_non_awaitable_apply_async(
     """``apply_async`` returning a plain value is rejected on the connection's async path."""
 
     def _plain_apply_async(
-        cls: type[_CategoryOrder],
-        order_input: object,
+        _cls: type[_CategoryOrder],
+        _order_input: object,
         queryset: models.QuerySet[Category],
-        info: object,
+        _info: object,
     ) -> models.QuerySet[Category]:
         return queryset
 
     monkeypatch.setattr(_CategoryOrder, "apply_async", classmethod(_plain_apply_async))
 
-    async def resolver(root: object, info: object):
+    async def resolver(_root: object, _info: object):
         return Category.objects.all()
 
     schema = _field_schema(_make_sidecar_node_type("AsyncSealNonAwaitableNode"), resolver=resolver)
@@ -2059,16 +2062,16 @@ def test_connection_async_seal_rejects_a_sliced_apply_async_result(
     """A sliced ``apply_async`` result is rejected with the shared shape wording."""
 
     async def _sliced(
-        cls: type[_CategoryOrder],
-        order_input: object,
+        _cls: type[_CategoryOrder],
+        _order_input: object,
         queryset: models.QuerySet[Category],
-        info: object,
+        _info: object,
     ):
         return queryset.order_by("name")[:1]
 
     monkeypatch.setattr(_CategoryOrder, "apply_async", classmethod(_sliced))
 
-    async def resolver(root: object, info: object):
+    async def resolver(_root: object, _info: object):
         return Category.objects.all()
 
     schema = _field_schema(_make_sidecar_node_type("AsyncSealSlicedNode"), resolver=resolver)
@@ -2434,7 +2437,7 @@ def test_consumer_resolver_pre_sliced_queryset_raises_clear_error():
     """
     services.seed_data(2)
 
-    def resolver(root: object, info: object) -> Iterable[object]:
+    def resolver(_root: object, _info: object) -> Iterable[object]:
         return Category.objects.all()[:5]  # already sliced before the pipeline reorders
 
     schema = _field_schema(_make_sidecar_node_type("PreSlicedNode"), resolver=resolver)
@@ -2492,9 +2495,9 @@ class _HostileConnQuerySet(models.QuerySet[Category]):
 
 
 def _hostile_visibility_hook(
-    cls: type[DjangoType],
-    qs: models.QuerySet[Category],
-    info: object,
+    _cls: type[DjangoType],
+    _qs: models.QuerySet[Category],
+    _info: object,
 ) -> models.QuerySet[Category]:
     """Return the hostile subclass carrying a genuine ``is_private=False`` predicate."""
     return models.QuerySet[Category].filter(_HostileConnQuerySet(model=Category), is_private=False)
@@ -2564,7 +2567,7 @@ def test_connection_instance_shadowed_all_hook_is_sealed():
     """
     public_names = _seed_public_private_categories()
 
-    def _shadowed_all_hook(cls: type[DjangoType], qs: models.QuerySet[Category], info: object):
+    def _shadowed_all_hook(_cls: type[DjangoType], _qs: models.QuerySet[Category], _info: object):
         source = Category.objects.filter(is_private=False)
         source.all = lambda: Category.objects.all()  # instance shadow (predicate-dropping)
         return source
@@ -2597,11 +2600,15 @@ def test_connection_query_chain_shadow_hook_is_sealed():
     """
     _seed_public_private_categories()
 
-    def _shadowed_chain_hook(cls: type[DjangoType], qs: models.QuerySet[Category], info: object):
+    def _shadowed_chain_hook(
+        _cls: type[DjangoType],
+        _qs: models.QuerySet[Category],
+        _info: object,
+    ):
         source = Category.objects.filter(is_private=False)
         unfiltered = Category.objects.all().query
 
-        def _unfiltered_chain(*args: object, **kwargs: object) -> Query:
+        def _unfiltered_chain(*_args: object, **_kwargs: object) -> Query:
             return unfiltered
 
         source.query.chain = _unfiltered_chain  # instance shadow
@@ -2662,7 +2669,7 @@ def _alias_drift_manager() -> models.Manager[Category]:
 def test_connection_resolver_manager_degrading_to_list_fails_closed():
     """A consumer resolver returning a Manager that degrades to a list fails closed (sync)."""
 
-    def resolver(root: object, info: object) -> models.Manager[Category]:
+    def resolver(_root: object, _info: object) -> models.Manager[Category]:
         return _degrading_manager()
 
     schema = _field_schema(
@@ -2678,7 +2685,7 @@ def test_connection_resolver_manager_degrading_to_list_fails_closed():
 def test_connection_resolver_manager_alias_drift_fails_closed():
     """A consumer resolver returning a Manager whose ``.all()`` drifts alias fails closed (sync)."""
 
-    def resolver(root: object, info: object) -> models.Manager[Category]:
+    def resolver(_root: object, _info: object) -> models.Manager[Category]:
         return _alias_drift_manager()
 
     schema = _field_schema(
@@ -2697,7 +2704,7 @@ async def test_connection_resolver_manager_degrading_to_list_fails_closed_async(
     """Sync/async parity: the Manager-degrade failure propagates on the async path too."""
     from asgiref.sync import sync_to_async
 
-    async def resolver(root: object, info: object) -> models.Manager[Category]:
+    async def resolver(_root: object, _info: object) -> models.Manager[Category]:
         return _degrading_manager()
 
     schema = await sync_to_async(_field_schema)(
@@ -3114,7 +3121,7 @@ def _planned_relation_schema(
             relation_shapes = {"items": "both"}
             primary = True
 
-    def _hook(cls: type[DjangoType], queryset: models.QuerySet[Item], info: object):
+    def _hook(_cls: type[DjangoType], queryset: models.QuerySet[Item], _info: object):
         assert hook_calls is not None  # installed only when the caller collects hook calls
         hook_calls.append(queryset.model)
         return queryset
@@ -3329,10 +3336,10 @@ _FILTERED_CONNECTION_QUERY = (
 
 
 def _filter_override_in_place_routing(
-    cls: type[_CategoryFilter],
-    input_value: object,
+    _cls: type[_CategoryFilter],
+    _input_value: object,
     queryset: models.QuerySet[Category],
-    info: object,
+    _info: object,
 ):
     set_queryset_hints(queryset, {"tenant": 2})
     return queryset
@@ -3474,16 +3481,16 @@ def test_connection_async_seal_rejects_a_non_awaitable_filter_apply_async(
     """``FilterSet.apply_async`` returning a plain value is rejected on the async path."""
 
     def _plain_apply_async(
-        cls: type[_CategoryFilter],
-        input_value: object,
+        _cls: type[_CategoryFilter],
+        _input_value: object,
         queryset: models.QuerySet[Category],
-        info: object,
+        _info: object,
     ) -> models.QuerySet[Category]:
         return queryset
 
     monkeypatch.setattr(_CategoryFilter, "apply_async", classmethod(_plain_apply_async))
 
-    async def resolver(root: object, info: object):
+    async def resolver(_root: object, _info: object):
         return Category.objects.all()
 
     schema = _field_schema(
@@ -3509,16 +3516,16 @@ def test_connection_async_seal_rejects_a_sliced_filter_apply_async_result(
     """A sliced ``FilterSet.apply_async`` result is rejected with the shared shape wording."""
 
     async def _sliced(
-        cls: type[_CategoryFilter],
-        input_value: object,
+        _cls: type[_CategoryFilter],
+        _input_value: object,
         queryset: models.QuerySet[Category],
-        info: object,
+        _info: object,
     ):
         return queryset.order_by("name")[:1]
 
     monkeypatch.setattr(_CategoryFilter, "apply_async", classmethod(_sliced))
 
-    async def resolver(root: object, info: object):
+    async def resolver(_root: object, _info: object):
         return Category.objects.all()
 
     schema = _field_schema(_make_sidecar_node_type("AsyncFilterSealSlicedNode"), resolver=resolver)
@@ -3535,7 +3542,7 @@ def test_connection_async_seal_rejects_a_sliced_filter_apply_async_result(
     )
 
 
-def _combined_get_queryset(cls: type[DjangoType], qs: models.QuerySet[Category], info: object):
+def _combined_get_queryset(_cls: type[DjangoType], qs: models.QuerySet[Category], _info: object):
     return qs.filter(name__startswith="a").union(qs.filter(name__startswith="b"))
 
 
@@ -3597,10 +3604,10 @@ def test_connection_serves_a_combined_sidecar_result_as_its_primary_key_set(
     services.seed_data(2)
 
     def _a_or_b_union(
-        cls: type[object],
-        value: object,
+        _cls: type[object],
+        _value: object,
         queryset: models.QuerySet[Category],
-        info: object,
+        _info: object,
     ) -> models.QuerySet[Category]:
         return (
             queryset.filter(name__startswith="a")

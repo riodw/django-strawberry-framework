@@ -271,7 +271,7 @@ def test_flat_composite_milestone_filter_fires_target_permission_gate(
     from apps.kanban.filters import MilestoneFilter
     from graphql import GraphQLError
 
-    def deny_key(self: MilestoneFilter, request: object) -> NoReturn:
+    def deny_key(_self: MilestoneFilter, _request: object) -> NoReturn:
         raise GraphQLError("milestone key denied")
 
     # ``raising=False``: the gate is an opt-in hook the fixture filter does not

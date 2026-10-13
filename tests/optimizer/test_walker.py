@@ -5812,7 +5812,7 @@ def test_refusing_nested_fetch_strategy_leaves_selection_unplanned():
         end_execution_frame,
     )
 
-    def decline_after_mutation(request: NestedConnectionRequest, plan: OptimizationPlan):
+    def decline_after_mutation(_request: NestedConnectionRequest, plan: OptimizationPlan):
         _mutate_every_plan_field(plan, "leaked")
         return False
 
@@ -5853,7 +5853,7 @@ def test_accepting_nested_fetch_strategy_merges_candidate_exactly_once():
         end_execution_frame,
     )
 
-    def accept_after_mutation(request: NestedConnectionRequest, plan: OptimizationPlan):
+    def accept_after_mutation(_request: NestedConnectionRequest, plan: OptimizationPlan):
         _mutate_every_plan_field(plan, "accepted")
         return True
 
@@ -5899,7 +5899,7 @@ def test_raising_nested_fetch_strategy_leaves_parent_byte_identical():
     )
     from django_strawberry_framework.optimizer.walker import _plan_connection_relation
 
-    def raise_after_mutation(request: NestedConnectionRequest, plan: OptimizationPlan):
+    def raise_after_mutation(_request: NestedConnectionRequest, plan: OptimizationPlan):
         _mutate_every_plan_field(plan, "leaked")
         raise RuntimeError("strategy exploded")
 

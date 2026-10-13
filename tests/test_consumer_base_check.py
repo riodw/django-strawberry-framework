@@ -19,7 +19,7 @@ class _TransportHandler:
     async def handle(self) -> None:
         return None
 
-    async def handle_subscribe(self, message: object) -> None:
+    async def handle_subscribe(self, _message: object) -> None:
         return None
 
 
@@ -27,23 +27,23 @@ class _LegacyHandler:
     async def handle(self) -> None:
         return None
 
-    async def handle_start(self, message: object) -> None:
+    async def handle_start(self, _message: object) -> None:
         return None
 
-    async def handle_stop(self, message: object) -> None:
+    async def handle_stop(self, _message: object) -> None:
         return None
 
 
 class _Adapter:
-    async def send_json(self, message: object) -> None:
+    async def send_json(self, _message: object) -> None:
         return None
 
-    async def close(self, code: int, reason: str) -> None:
+    async def close(self, _code: int, _reason: str) -> None:
         return None
 
 
 class _AdapterWithoutClose:
-    async def send_json(self, message: object) -> None:
+    async def send_json(self, _message: object) -> None:
         return None
 
 
@@ -53,10 +53,10 @@ class _BaseConsumer:
     websocket_adapter_class: type[object] = _Adapter
 
     @classmethod
-    def as_asgi(cls, **initkwargs: object) -> object:
+    def as_asgi(cls, **_initkwargs: object) -> object:
         return cls
 
-    async def disconnect(self, code: int) -> None:
+    async def disconnect(self, _code: int) -> None:
         return None
 
 

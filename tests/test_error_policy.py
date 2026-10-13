@@ -1190,7 +1190,7 @@ def test_error_policy_extension_on_operation_exploding_execution_context():
             return None
 
         @result.setter
-        def result(self, val: StrawberryExecutionResult | None):
+        def result(self, _val: StrawberryExecutionResult | None):
             raise RuntimeError("cannot set result")
 
     # basedpyright: a context whose ``result`` assignment raises is the hostile input under test;
@@ -1242,7 +1242,7 @@ def test_the_return_seam_degrades_when_masking_itself_raises(
     caplog.set_level(logging.ERROR, logger="django_strawberry_framework")
     schema = DjangoSchema(query=_Query)
 
-    def _unanswerable(policy: ErrorPolicy):
+    def _unanswerable(_policy: ErrorPolicy):
         raise RuntimeError("the masking gate cannot answer")
 
     monkeypatch.setattr(schema_module, "masking_is_active", _unanswerable)

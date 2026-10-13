@@ -1052,7 +1052,7 @@ def test_raising_get_form_fields_body_is_configuration_error(
         else {"form_class": form_cls, "operation": "create"}
     )
 
-    def get_exploding_form_fields(cls: type):
+    def get_exploding_form_fields(_cls: type):
         raise RuntimeError("hook exploded")
 
     with pytest.raises(
@@ -1079,7 +1079,7 @@ def test_get_form_fields_hook_raising_configuration_error_reraises_unchanged():
     """
     form_cls = _contact_form()
 
-    def get_config_error_form_fields(cls: type):
+    def get_config_error_form_fields(_cls: type):
         raise ConfigurationError("the hook's own typed reject")
 
     with pytest.raises(ConfigurationError, match="hook's own typed reject") as excinfo:
@@ -1106,7 +1106,7 @@ def test_get_form_fields_hook_raising_empty_exception_reports_no_detail():
     exception body must not defeat the typed message assembly).
     """
 
-    def get_empty_error_form_fields(cls: type):
+    def get_empty_error_form_fields(_cls: type):
         raise ValueError
 
     with pytest.raises(ConfigurationError, match="calling it raised ValueError: no detail"):

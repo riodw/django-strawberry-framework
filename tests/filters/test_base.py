@@ -162,7 +162,7 @@ def test_array_filter_passes_through_none():
 def test_array_filter_method_setter_swaps_in_array_filter_method():
     """A consumer-supplied `method=` callable plugs in `ArrayFilterMethod`."""
 
-    def custom(qs: object, name: str, value: object):
+    def custom(_qs: object, name: str, value: object):
         return ("custom", name, value)
 
     f = ArrayFilter(field_name="tags", method=custom)
@@ -334,7 +334,7 @@ def test_global_id_multiple_choice_filter_decodes_every_element(monkeypatch: pyt
     """Decoded `node_id`s reach the underlying `MultipleChoiceFilter.filter`."""
     captured: list[list[str]] = []
 
-    def spy(self: object, qs: object, value: Iterable[str]):
+    def spy(_self: object, qs: object, value: Iterable[str]):
         captured.append(list(value))
         return qs
 
@@ -854,7 +854,7 @@ def test_related_filter_filterset_setter_substitutes_target():
 def test_array_filter_method_call_passes_through_none():
     """`ArrayFilterMethod.__call__` returns the queryset untouched for `None`."""
 
-    def custom(qs: object, name: str, value: object):
+    def custom(_qs: object, name: str, value: object):
         return ("custom", name, value)
 
     sentinel = _RecordingQs()
@@ -866,7 +866,7 @@ def test_array_filter_method_call_passes_through_none():
 def test_array_filter_method_call_dispatches_to_custom_method():
     """A non-`None` value reaches the consumer callable with `(qs, field_name, value)`."""
 
-    def custom(qs: object, name: str, value: object):
+    def custom(_qs: object, name: str, value: object):
         return ("custom", name, value)
 
     f = ArrayFilter(field_name="tags", method=custom)
@@ -876,7 +876,7 @@ def test_array_filter_method_call_dispatches_to_custom_method():
 def test_list_filter_method_setter_swaps_in_list_filter_method():
     """A consumer-supplied `method=` callable plugs in `ListFilterMethod`."""
 
-    def custom(qs: object, name: str, value: object):
+    def custom(qs: object, _name: str, _value: object):
         return qs
 
     f = ListFilter(field_name="ids", method=custom)
@@ -886,7 +886,7 @@ def test_list_filter_method_setter_swaps_in_list_filter_method():
 def test_list_filter_method_call_passes_through_none():
     """`ListFilterMethod.__call__` returns the queryset untouched for `None`."""
 
-    def custom(qs: object, name: str, value: object):
+    def custom(_qs: object, name: str, value: object):
         return ("custom", name, value)
 
     sentinel = _RecordingQs()
@@ -897,7 +897,7 @@ def test_list_filter_method_call_passes_through_none():
 def test_list_filter_method_call_dispatches_to_custom_method():
     """A non-`None` value reaches the consumer callable with `(qs, field_name, value)`."""
 
-    def custom(qs: object, name: str, value: object):
+    def custom(_qs: object, name: str, value: object):
         return ("custom", name, value)
 
     f = ListFilter(field_name="ids", method=custom)
@@ -1183,7 +1183,7 @@ def test_multi_value_filter_strategy_aware_indexes_rejection(monkeypatch: pytest
     owner = _owner("model")
     captured: list[list[object]] = []
 
-    def spy(self: object, qs: object, value: Iterable[object]):
+    def spy(_self: object, qs: object, value: Iterable[object]):
         captured.append(list(value))
         return qs
 

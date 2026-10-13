@@ -133,9 +133,8 @@ def _assert_refused(payload: JSONObject, message: str, hidden_name: str) -> None
     assert hidden_name not in str(payload)
 
 
-def test_anonymous_depth_one_join_does_not_serve_the_planned_targets_hidden_row(
-    db: None,
-) -> None:
+@pytest.mark.django_db
+def test_anonymous_depth_one_join_does_not_serve_the_planned_targets_hidden_row() -> None:
     """``select_related("category")`` beside the planned prefetch serves no hidden row."""
     services.seed_data(1)
     item, entry = _hide_one_items_category()
@@ -149,7 +148,8 @@ def test_anonymous_depth_one_join_does_not_serve_the_planned_targets_hidden_row(
     )
 
 
-def test_staff_depth_one_join_is_served_the_category(db: None) -> None:
+@pytest.mark.django_db
+def test_staff_depth_one_join_is_served_the_category() -> None:
     """The control: the hook admits staff, so the same row is served."""
     services.seed_data(1)
     item, entry = _hide_one_items_category()
@@ -162,9 +162,8 @@ def test_staff_depth_one_join_is_served_the_category(db: None) -> None:
     }
 
 
-def test_anonymous_wildcard_join_does_not_serve_the_planned_targets_hidden_row(
-    db: None,
-) -> None:
+@pytest.mark.django_db
+def test_anonymous_wildcard_join_does_not_serve_the_planned_targets_hidden_row() -> None:
     """The wildcard ``select_related()`` follows the non-null key the plan prefetches."""
     services.seed_data(1)
     item, entry = _hide_one_items_category()
@@ -181,9 +180,8 @@ def test_anonymous_wildcard_join_does_not_serve_the_planned_targets_hidden_row(
     )
 
 
-def test_anonymous_depth_two_join_does_not_serve_the_planned_targets_hidden_row(
-    db: None,
-) -> None:
+@pytest.mark.django_db
+def test_anonymous_depth_two_join_does_not_serve_the_planned_targets_hidden_row() -> None:
     """``select_related("item__category")`` through a planned ``item`` prefetch serves no hidden row.
 
     ``ItemType.get_queryset`` cascades onto its category, so the planned ``item``
@@ -202,7 +200,8 @@ def test_anonymous_depth_two_join_does_not_serve_the_planned_targets_hidden_row(
     )
 
 
-def test_staff_depth_two_join_is_served_the_category(db: None) -> None:
+@pytest.mark.django_db
+def test_staff_depth_two_join_is_served_the_category() -> None:
     """The control: the hook admits staff, so the nested category is served."""
     services.seed_data(1)
     item, entry = _hide_one_items_category()
@@ -242,16 +241,16 @@ def _holder_schema(
     """
 
     def join_category(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[Item],
-        info: strawberry.Info[object, object],
+        _info: strawberry.Info[object, object],
     ) -> QuerySet[Item]:
         return queryset.select_related("category")
 
     def hide_private(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[Category],
-        info: strawberry.Info[object, object],
+        _info: strawberry.Info[object, object],
     ) -> QuerySet[Category]:
         return queryset.filter(is_private=False)
 
@@ -305,7 +304,8 @@ _HOLDER_REFUSAL = "Cannot return null for non-nullable field HolderItemType.cate
 
 
 @pytest.mark.parametrize("query", [_DEPTH_ONE_QUERY, _DEPTH_TWO_QUERY])
-def test_hook_join_does_not_serve_the_planned_targets_hidden_row(db: None, query: str) -> None:
+@pytest.mark.django_db
+def test_hook_join_does_not_serve_the_planned_targets_hidden_row(query: str) -> None:
     """A JOIN the hook itself adds, at the root and inside a planned child, serves no hidden row."""
     services.seed_data(1)
     item, entry = _hide_one_items_category()
@@ -315,9 +315,8 @@ def test_hook_join_does_not_serve_the_planned_targets_hidden_row(db: None, query
     _assert_refused(payload, _HOLDER_REFUSAL, item.category.name)
 
 
-def test_hookless_intermediate_join_does_not_serve_the_planned_targets_hidden_row(
-    db: None,
-) -> None:
+@pytest.mark.django_db
+def test_hookless_intermediate_join_does_not_serve_the_planned_targets_hidden_row() -> None:
     """A JOINed ``item`` hop survives while the prefetched ``category`` hop under it is released."""
     services.seed_data(1)
     item, entry = _hide_one_items_category()
@@ -327,7 +326,8 @@ def test_hookless_intermediate_join_does_not_serve_the_planned_targets_hidden_ro
     _assert_refused(payload, _HOLDER_REFUSAL, item.category.name)
 
 
-def test_join_off_the_planned_prefetch_path_is_kept(db: None) -> None:
+@pytest.mark.django_db
+def test_join_off_the_planned_prefetch_path_is_kept() -> None:
     """A JOIN no planned prefetch covers survives: ``item`` comes in with the entry row.
 
     Only ``item__category`` is planned as a prefetch here, so the resolver's ``item``
@@ -375,7 +375,7 @@ async def test_async_hook_join_does_not_serve_the_planned_targets_hidden_row(que
     _assert_refused(response.json(), _HOLDER_REFUSAL, hidden_name)
 
 
-def _root_rows(item: Item, entry: Entry) -> JSONObject:
+def _root_rows(item: Item, _entry: Entry) -> JSONObject:
     return {"items": [{"name": item.name}]}
 
 
@@ -398,8 +398,8 @@ _UNREAD_HOOK_JOINS = [
 
 
 @pytest.mark.parametrize(("query", "expected", "statement"), _UNREAD_HOOK_JOINS)
+@pytest.mark.django_db
 def test_hook_join_the_selection_never_reads_survives_the_projection(
-    db: None,
     query: str,
     expected: Callable[[Item, Entry], JSONObject],
     statement: int,
@@ -420,9 +420,9 @@ def _hooked_entries_schema(item_pk: int) -> strawberry.Schema:
     """Holder whose ``entries`` connection child type's hook JOINs ``property``."""
 
     def join_property(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[Entry],
-        info: strawberry.Info[object, object],
+        _info: strawberry.Info[object, object],
     ) -> QuerySet[Entry]:
         return queryset.select_related("property")
 
@@ -462,7 +462,8 @@ def _hooked_entries_schema(item_pk: int) -> strawberry.Schema:
     )
 
 
-def test_hook_join_survives_a_scalar_only_connection_window(db: None) -> None:
+@pytest.mark.django_db
+def test_hook_join_survives_a_scalar_only_connection_window() -> None:
     """A ``pageInfo``-only window projects pk and connector columns and keeps the hook's JOIN."""
     services.seed_data(1)
     item = Item.objects.order_by("pk").first()
@@ -496,7 +497,8 @@ def _unread_hook_join_rows() -> tuple[strawberry.Schema, Item, Entry]:
 async def test_async_hook_join_the_selection_never_reads_survives_the_projection(
     query: str,
     expected: Callable[[Item, Entry], JSONObject],
-    statement: int,
+    # basedpyright: pytest binds the shared parametrize row's argnames by name
+    statement: int,  # pyright: ignore[reportUnusedParameter]
 ) -> None:
     """The same unread hook JOIN, at the root and in the planned child, on an async request."""
     schema, item, entry = await sync_to_async(_unread_hook_join_rows)()

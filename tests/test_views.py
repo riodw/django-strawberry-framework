@@ -2206,7 +2206,7 @@ def test_the_package_view_hands_upstream_a_str_for_a_bytes_body(view_class: _Vie
     view = view_class(schema=SCHEMA)
     seen: list[str | bytes] = []
 
-    def _recorder(self: object, data: str | bytes):
+    def _recorder(_self: object, data: str | bytes):
         seen.append(data)
         return {"recorded": True}
 
@@ -2231,7 +2231,7 @@ def test_the_package_view_passes_a_str_body_through_by_identity(view_class: _Vie
     body = '{"a": 1}'
     seen: list[str | bytes] = []
 
-    def _recorder(self: object, data: str | bytes):
+    def _recorder(_self: object, data: str | bytes):
         seen.append(data)
         return {"recorded": True}
 
@@ -2831,7 +2831,7 @@ def _passthrough_middleware(get_response: Callable[[HttpRequest], HttpResponseBa
     return get_response
 
 
-def _plain_view(request: HttpRequest):
+def _plain_view(_request: HttpRequest):
     """A non-package view, mounted so the middleware's pass-through is exercised."""
     return HttpResponse("plain")
 
@@ -2920,7 +2920,7 @@ def _wrapper_copying_only_csrf_exempt(
     return wrapped
 
 
-def _marked_callback_without_a_view_class(request: HttpRequest):
+def _marked_callback_without_a_view_class(_request: HttpRequest):
     """A callback carrying the marker and none of the bookkeeping behind it.
 
     The marker name is package-specific, so nothing supported produces this - but
@@ -2931,7 +2931,7 @@ def _marked_callback_without_a_view_class(request: HttpRequest):
     return HttpResponse("marked, no view_class")
 
 
-def _marked_callback_with_unusable_initkwargs(request: HttpRequest):
+def _marked_callback_with_unusable_initkwargs(_request: HttpRequest):
     """A callback whose ``view_initkwargs`` is not a mapping to splat.
 
     The other half of the same recognition: ``view_class`` is real here, so only
@@ -2940,7 +2940,7 @@ def _marked_callback_with_unusable_initkwargs(request: HttpRequest):
     return HttpResponse("marked, unusable initkwargs")
 
 
-def _marked_callback_with_initkwargs_the_class_rejects(request: HttpRequest):
+def _marked_callback_with_initkwargs_the_class_rejects(_request: HttpRequest):
     """A callback whose bookkeeping has ``as_view``'s exact shape and no instance behind it.
 
     The third shape, and the only one no test of the bookkeeping's *shape* can
@@ -2959,7 +2959,7 @@ class _NotAPackageView:
 _VIEW_CLASS_FACTORY_CALLS: list[dict[str, object]] = []
 
 
-def _boundary_the_factory_carries(request: HttpRequest):
+def _boundary_the_factory_carries(_request: HttpRequest):
     """The callable the factory below carries under the boundary method's name.
 
     Never invoked by anything: the object a called factory returns is what
@@ -2988,7 +2988,7 @@ def _view_class_factory(**initkwargs: object):
 setattr(_view_class_factory, _BOUNDARY_METHOD, _boundary_the_factory_carries)
 
 
-def _marked_callback_with_a_callable_view_class(request: HttpRequest):
+def _marked_callback_with_a_callable_view_class(_request: HttpRequest):
     """A callback whose ``view_class`` is callable and is not a class.
 
     The shape that separates the class test from the construction attempt: a
@@ -3017,7 +3017,7 @@ class _ForeignButBuildableView:
         _FOREIGN_VIEW_CONSTRUCTIONS.append(initkwargs)
 
 
-def _marked_callback_with_a_foreign_view_class(request: HttpRequest):
+def _marked_callback_with_a_foreign_view_class(_request: HttpRequest):
     """A callback whose bookkeeping is impeccable and whose class is not ours.
 
     The shape no test of the bookkeeping and no construction attempt can tell from
@@ -3091,7 +3091,7 @@ class _CallbackWhoseBookkeepingReadRaises:
         raise RuntimeError("this callback answers a bookkeeping read with a raise")
 
 
-def _marked_callback_with_a_raising_metaclass(request: HttpRequest):
+def _marked_callback_with_a_raising_metaclass(_request: HttpRequest):
     """A callback whose class turns the boundary probe's read into an exception.
 
     Every clause before the probe says yes: the marker is there, ``view_class`` is
@@ -3103,7 +3103,7 @@ def _marked_callback_with_a_raising_metaclass(request: HttpRequest):
     return HttpResponse("marked, metaclass read raises")
 
 
-def _marked_callback_with_a_raising_boundary_descriptor(request: HttpRequest):
+def _marked_callback_with_a_raising_boundary_descriptor(_request: HttpRequest):
     """The same failure through the other shape of attribute machinery.
 
     Refused by the same guard as the metaclass route rather than by a clause of
@@ -3132,7 +3132,7 @@ class _MinimalBoundaryViewClass:
         self.initkwargs = initkwargs
 
 
-def _record_the_boundary_run(self: object, request: HttpRequest):
+def _record_the_boundary_run(_self: object, request: HttpRequest):
     """The boundary the class above carries: it records the request and refuses nothing."""
     _MINIMAL_BOUNDARY_RUNS.append(request)
 
@@ -3140,7 +3140,7 @@ def _record_the_boundary_run(self: object, request: HttpRequest):
 setattr(_MinimalBoundaryViewClass, _BOUNDARY_METHOD, _record_the_boundary_run)
 
 
-def _marked_callback_with_a_minimal_boundary_view_class(request: HttpRequest):
+def _marked_callback_with_a_minimal_boundary_view_class(_request: HttpRequest):
     """A callback whose ``view_class`` carries the probed boundary and nothing else.
 
     Unmounted on purpose: its subject is which name ``process_view`` invokes, which is
@@ -3329,7 +3329,8 @@ def _counting_multipart_parses() -> Generator[list[bool], None, None]:
 @pytest.mark.parametrize(("under", "over", "is_async"), _MOUNTED_PATHS)
 async def test_the_projects_own_csrf_middleware_runs_when_the_chain_supplies_the_ordering(
     under: str,
-    over: str,
+    # basedpyright: pytest binds every parametrize column by name, read or not
+    over: str,  # pyright: ignore[reportUnusedParameter]
     is_async: bool,
 ):
     """The defect this closes: a project's CSRF class must not be replaced here.
@@ -3406,12 +3407,7 @@ async def test_the_middleware_passes_a_non_package_view_through_untouched():
     assert response.content == b"plain"
 
 
-@pytest.mark.parametrize(("under", "over", "is_async"), _MOUNTED_PATHS)
-async def test_the_view_does_not_measure_a_body_the_chain_already_measured(
-    under: str,
-    over: str,
-    is_async: bool,
-):
+async def test_the_view_does_not_measure_a_body_the_chain_already_measured():
     """One request, one measurement: the middleware stamps and the view believes it.
 
     The stamp is not an optimization detail - re-running the boundary would cost a
@@ -3460,7 +3456,7 @@ def test_middleware_ignores_an_unreadable_optional_mount_handoff():
     """
 
     class BoundaryView:
-        def _enforce_request_boundary(self, request: HttpRequest):
+        def _enforce_request_boundary(self, _request: HttpRequest):
             return None
 
     class Callback:
@@ -3699,7 +3695,8 @@ async def test_the_same_two_mounts_parse_nothing_without_the_middleware_either(
 
 @pytest.mark.parametrize(("marked", "wrapped", "is_async"), _WRAPPED_PATHS)
 async def test_a_declined_callbacks_over_limit_body_never_reaches_the_csrf_class(
-    marked: str,
+    # basedpyright: pytest binds every parametrize column by name, read or not
+    marked: str,  # pyright: ignore[reportUnusedParameter]
     wrapped: str,
     is_async: bool,
 ):
@@ -3728,7 +3725,8 @@ async def test_a_declined_callbacks_over_limit_body_never_reaches_the_csrf_class
 
 @pytest.mark.parametrize(("marked", "wrapped", "is_async"), _WRAPPED_PATHS)
 async def test_a_declined_callback_still_gets_a_complete_csrf_check(
-    marked: str,
+    # basedpyright: pytest binds every parametrize column by name, read or not
+    marked: str,  # pyright: ignore[reportUnusedParameter]
     wrapped: str,
     is_async: bool,
 ):
@@ -3769,7 +3767,8 @@ async def test_a_declined_callback_still_gets_a_complete_csrf_check(
 @pytest.mark.parametrize(("under", "over", "is_async"), _MOUNTED_PATHS)
 async def test_a_chain_with_the_boundary_and_no_csrf_middleware_still_checks_csrf(
     under: str,
-    over: str,
+    # basedpyright: pytest binds every parametrize column by name, read or not
+    over: str,  # pyright: ignore[reportUnusedParameter]
     is_async: bool,
 ):
     """The disjunct the ordering audit deliberately admits, driven by a request.

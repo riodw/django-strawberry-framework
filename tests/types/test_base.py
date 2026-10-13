@@ -83,7 +83,8 @@ CATEGORY_SCALAR_FIELDS = (
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry(isolate_global_registry: None) -> None:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def _isolate_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
     """Every test here declares fresh ``DjangoType`` classes - opt the module
     into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
 
@@ -777,7 +778,7 @@ def test_relation_shapes_on_consumer_assigned_relation_raises():
     contract; same overrides-own-the-shape message as the annotation corner.
     """
 
-    def _items_resolver(root: Category) -> list[str]:
+    def _items_resolver() -> list[str]:
         return []  # Never resolved - the class raises at creation.
 
     with pytest.raises(ConfigurationError) as excinfo:
@@ -1092,7 +1093,7 @@ def test_meta_globalid_strategy_callable_accepted_and_stored():
     """A well-formed sync three-arg encoder validates and is stored on the definition."""
     from strawberry import relay
 
-    def encode(type_cls: type[DjangoType], model: type[models.Model], root: object):
+    def encode(_type_cls: type[DjangoType], _model: type[models.Model], _root: object):
         return "custom"
 
     class CategoryType(DjangoType):
@@ -1110,7 +1111,7 @@ def test_meta_globalid_strategy_callable_wrong_arity_raises():
     """A wrong-arity encoder is rejected at type creation (the ``inspect.signature`` check)."""
     from strawberry import relay
 
-    def encode(type_cls: type[DjangoType], model: type[models.Model]):
+    def encode(_type_cls: type[DjangoType], _model: type[models.Model]):
         return "custom"
 
     with pytest.raises(ConfigurationError, match=r"\(type_cls, model, root\)"):
@@ -1135,10 +1136,10 @@ def test_meta_globalid_strategy_callable_old_four_arg_signature_rejected():
     from strawberry import relay
 
     def encode(
-        type_cls: type[DjangoType],
-        model: type[models.Model],
-        root: object,
-        info: object,
+        _type_cls: type[DjangoType],
+        _model: type[models.Model],
+        _root: object,
+        _info: object,
     ):
         return "custom"
 
@@ -1157,7 +1158,7 @@ def test_meta_globalid_strategy_async_callable_raises():
     """An ``async def`` encoder is rejected at type creation (the sync-ness check)."""
     from strawberry import relay
 
-    async def encode(type_cls: type[DjangoType], model: type[models.Model], root: object):
+    async def encode(_type_cls: type[DjangoType], _model: type[models.Model], _root: object):
         return "custom"
 
     with pytest.raises(ConfigurationError, match="must be sync"):
@@ -2304,7 +2305,7 @@ def test_consumer_assigned_field_resolver_on_file_column_is_not_clobbered():
     (spec-037 Decision 3).
     """
 
-    def attachment_resolver(self: object) -> str:
+    def attachment_resolver() -> str:
         return "consumer-owned"
 
     model = _make_file_override_model()

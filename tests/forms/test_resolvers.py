@@ -100,11 +100,11 @@ class _AllowAll:
 
     def has_permission(
         self,
-        info: object,
-        mutation: type[object],
-        operation: str,
-        data: object,
-        instance: object = None,
+        _info: object,
+        _mutation: type[object],
+        _operation: str,
+        _data: object,
+        _instance: object = None,
     ):
         return True
 
@@ -439,7 +439,7 @@ def test_relation_visibility_relay_multi_hidden_rejected():
     """
 
     @classmethod
-    def hide_all(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+    def hide_all(_cls: type[DjangoType], qs: models.QuerySet[models.Model], _info: object):
         return qs.none()
 
     schema, (GenreT, ShelfT, _BookT) = _build_book_m2m_schema(
@@ -1011,9 +1011,9 @@ def test_plain_form_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.Mon
     seen: dict[str, object] = {}
 
     def fake_pipeline(
-        mutation_cls: object,
-        info: object,
-        data: object,
+        _mutation_cls: object,
+        _info: object,
+        _data: object,
         id: object,  # noqa: A002
         *,
         decode_step: object,
@@ -1198,9 +1198,9 @@ def test_sync_create_meeting_async_get_queryset_raises_sync_misuse():
     """A sync form create meeting an ``async def get_queryset`` on a relation raises ``SyncMisuseError``."""
 
     async def _async_get_queryset(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         qs: models.QuerySet[models.Model],
-        info: object,
+        _info: object,
     ):
         return qs
 
@@ -1646,7 +1646,7 @@ def test_to_form_key_value_handles_serializable_value_exceptions(
     # An attribute the row lacks: serializable_value raises AttributeError.
     assert _to_form_key_value(row, field) == 42
 
-    def _missing(self: library_models.Genre, name: str) -> object:
+    def _missing(_self: library_models.Genre, _name: str) -> object:
         raise FieldDoesNotExist("missing")
 
     monkeypatch.setattr(library_models.Genre, "serializable_value", _missing)
@@ -1789,7 +1789,7 @@ def test_reconstruct_partial_data_m2m_does_not_exist(monkeypatch: pytest.MonkeyP
 
     from django_strawberry_framework.forms.resolvers import _reconstruct_partial_data
 
-    def _dangling(self: library_models.Book) -> object:
+    def _dangling(_self: library_models.Book) -> object:
         raise ObjectDoesNotExist("dangling")
 
     monkeypatch.setattr(library_models.Book, "genres", property(_dangling))

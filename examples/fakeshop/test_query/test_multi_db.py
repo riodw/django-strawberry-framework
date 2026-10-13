@@ -155,17 +155,17 @@ def _build_list_field_routing_mismatch_schema(
     from apps.library.schema import BranchType
 
     def _malicious_apply_sync(
-        cls: type[BranchOrder],
-        order_input: object,
-        queryset: QuerySet[models.Branch],
-        info: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
+        _queryset: QuerySet[models.Branch],
+        _info: object,
     ) -> QuerySet[models.Branch]:
         # Receives shard_b queryset, maliciously returns default queryset
         return models.Branch.objects.using("default").order_by("name")
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_malicious_apply_sync))
 
-    def _shard_b_branches(root: object, info: Info[object, object]) -> QuerySet[models.Branch]:
+    def _shard_b_branches(_root: object, _info: Info[object, object]) -> QuerySet[models.Branch]:
         return models.Branch.objects.using("shard_b")
 
     @strawberry.type
@@ -228,17 +228,17 @@ def _build_connection_routing_mismatch_schema(
     from apps.library.schema import GenreType
 
     def _malicious_apply_sync(
-        cls: type[GenreOrder],
-        order_input: object,
-        queryset: QuerySet[models.Genre],
-        info: object,
+        _cls: type[GenreOrder],
+        _order_input: object,
+        _queryset: QuerySet[models.Genre],
+        _info: object,
     ) -> QuerySet[models.Genre]:
         # Receives the shard_b queryset, maliciously returns a default one.
         return models.Genre.objects.using("default").order_by("name")
 
     monkeypatch.setattr(GenreOrder, "apply_sync", classmethod(_malicious_apply_sync))
 
-    def _shard_b_genres(root: object, info: Info[object, object]) -> QuerySet[models.Genre]:
+    def _shard_b_genres(_root: object, _info: Info[object, object]) -> QuerySet[models.Genre]:
         return models.Genre.objects.using("shard_b")
 
     @strawberry.type
@@ -306,10 +306,10 @@ def _build_list_field_hints_mismatch_schema(
     from apps.library.schema import BranchType
 
     def _malicious_hints_apply_sync(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: QuerySet[models.Branch],
-        info: object,
+        _info: object,
     ) -> QuerySet[models.Branch]:
         # Receives an unrouted queryset with hints={'tenant': 1}; returns a candidate
         # carrying hints={'tenant': 2}. Both sides have ``_db is None``, so the hints
@@ -320,7 +320,7 @@ def _build_list_field_hints_mismatch_schema(
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_malicious_hints_apply_sync))
 
-    def _hints_resolver(root: object, info: Info[object, object]):
+    def _hints_resolver(_root: object, _info: Info[object, object]):
         qs = models.Branch.objects.all()
         monkeypatch.setattr(qs, "_hints", {"tenant": 1})
         return qs
@@ -384,10 +384,10 @@ def _build_list_field_in_place_routing_mutation_schema(
     from apps.library.schema import BranchType
 
     def _in_place_apply_sync(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: QuerySet[models.Branch],
-        info: object,
+        _info: object,
     ) -> QuerySet[models.Branch]:
         # Mutates the very object it was handed and returns it unchanged otherwise:
         # a post-call read of that object would see the rewritten routing as the baseline.
@@ -397,7 +397,7 @@ def _build_list_field_in_place_routing_mutation_schema(
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_in_place_apply_sync))
 
-    def _shard_b_tenant_resolver(root: object, info: Info[object, object]):
+    def _shard_b_tenant_resolver(_root: object, _info: Info[object, object]):
         qs = models.Branch.objects.using("shard_b")
         monkeypatch.setattr(qs, "_hints", {"tenant": 1})
         return qs
@@ -475,21 +475,20 @@ assert _TENANT_TOKEN is not _EQUAL_DISTINCT_TOKEN
 class _IdentitySensitiveRouter:
     """Routes reads carrying THE tenant token object to ``shard_b``; equal copies stay on default."""
 
-    def db_for_read(self, model: type[Model], **hints: object) -> str | None:
+    def db_for_read(self, _model: type[Model], **hints: object) -> str | None:
         return "shard_b" if hints.get("tenant") is _TENANT_TOKEN else None
 
-    def db_for_write(self, model: type[Model], **hints: object) -> str | None:
+    def db_for_write(self, _model: type[Model], **_hints: object) -> str | None:
         return None
 
-    def allow_relation(self, obj1: Model, obj2: Model, **hints: object) -> bool | None:
+    def allow_relation(self, _obj1: Model, _obj2: Model, **_hints: object) -> bool | None:
         return None
 
     def allow_migrate(
         self,
-        db: str,
-        app_label: str,
-        model_name: str | None = None,
-        **hints: object,
+        _db: str,
+        _app_label: str,
+        **_hints: object,
     ) -> bool | None:
         return None
 
@@ -506,10 +505,10 @@ def _build_list_field_identity_token_schema(
     swap = {"active": False}
 
     def _token_swapping_apply_sync(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: QuerySet[models.Branch],
-        info: object,
+        _info: object,
     ) -> QuerySet[models.Branch]:
         ordered = queryset.order_by("name")
         if swap["active"]:
@@ -518,7 +517,7 @@ def _build_list_field_identity_token_schema(
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_token_swapping_apply_sync))
 
-    def _tenant_resolver(root: object, info: Info[object, object]):
+    def _tenant_resolver(_root: object, _info: Info[object, object]):
         qs = models.Branch.objects.all()
         monkeypatch.setattr(qs, "_hints", {"tenant": _TENANT_TOKEN})
         return qs
@@ -602,7 +601,7 @@ class _NestedTenantRouter:
     why preserving a hint's identity cannot prove the route is unchanged.
     """
 
-    def db_for_read(self, model: type[Model], **hints: object) -> str | None:
+    def db_for_read(self, _model: type[Model], **hints: object) -> str | None:
         token = hints.get("tenant")
         if not _is_exact_dict(token):
             return None
@@ -610,18 +609,17 @@ class _NestedTenantRouter:
         assert type(alias) is str, token
         return alias
 
-    def db_for_write(self, model: type[Model], **hints: object) -> str | None:
+    def db_for_write(self, _model: type[Model], **_hints: object) -> str | None:
         return None
 
-    def allow_relation(self, obj1: Model, obj2: Model, **hints: object) -> bool | None:
+    def allow_relation(self, _obj1: Model, _obj2: Model, **_hints: object) -> bool | None:
         return None
 
     def allow_migrate(
         self,
-        db: str,
-        app_label: str,
-        model_name: str | None = None,
-        **hints: object,
+        _db: str,
+        _app_label: str,
+        **_hints: object,
     ) -> bool | None:
         return None
 
@@ -638,10 +636,10 @@ def _build_list_field_mutable_hint_schema(
     token = {"alias": "shard_b"}
 
     def _hint_mutating_apply_sync(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: QuerySet[models.Branch],
-        info: object,
+        _info: object,
     ) -> QuerySet[models.Branch]:
         # Mutate INSIDE the hint value the source carried, then return an ordinary
         # ordered clone. ``QuerySet._clone`` carries the same ``_hints`` object
@@ -651,7 +649,7 @@ def _build_list_field_mutable_hint_schema(
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_hint_mutating_apply_sync))
 
-    def _tenant_resolver(root: object, info: Info[object, object]):
+    def _tenant_resolver(_root: object, _info: Info[object, object]):
         qs = models.Branch.objects.all()
         monkeypatch.setattr(qs, "_hints", {"tenant": token})
         return qs
@@ -735,7 +733,7 @@ def _build_test_schema(_reload_project_schema_for_acceptance_tests: None) -> Ite
     @strawberry.type
     class _MultiDbTestQuery:
         @strawberry.field(graphql_type=list[BookType])
-        def books_on_shard_b(self, info: Info[object, object]) -> QuerySet[models.Book]:
+        def books_on_shard_b(self) -> QuerySet[models.Book]:
             return models.Book.objects.using("shard_b").select_related(
                 "shelf__branch",
             )
@@ -772,7 +770,7 @@ def _build_debug_test_schema(_reload_project_schema_for_acceptance_tests: None) 
     @strawberry.type
     class _MultiDbDebugTestQuery:
         @strawberry.field(graphql_type=list[BookType])
-        def books_on_shard_b(self, info: Info[object, object]) -> QuerySet[models.Book]:
+        def books_on_shard_b(self) -> QuerySet[models.Book]:
             return models.Book.objects.using("shard_b").select_related(
                 "shelf__branch",
             )
@@ -1094,12 +1092,12 @@ class _ProductsWriteToShardBRouter:
             return instance_db
         return "default"
 
-    def db_for_write(self, model: type[Model], **hints: object) -> str | None:
+    def db_for_write(self, model: type[Model], **_hints: object) -> str | None:
         if model._meta.app_label == "products":
             return "shard_b"
         return None
 
-    def allow_relation(self, obj1: Model, obj2: Model, **hints: object) -> bool | None:
+    def allow_relation(self, _obj1: Model, _obj2: Model, **_hints: object) -> bool | None:
         return True
 
 
@@ -1367,12 +1365,12 @@ class _LibraryWriteToShardBRouter:
             return instance_db
         return "default"
 
-    def db_for_write(self, model: type[Model], **hints: object) -> str | None:
+    def db_for_write(self, model: type[Model], **_hints: object) -> str | None:
         if model._meta.app_label == "library":
             return "shard_b"
         return None
 
-    def allow_relation(self, obj1: Model, obj2: Model, **hints: object) -> bool | None:
+    def allow_relation(self, _obj1: Model, _obj2: Model, **_hints: object) -> bool | None:
         return True
 
 
@@ -1589,7 +1587,7 @@ def _prefetch_alias_schema(
     @strawberry.type
     class _PrefetchAliasQuery:
         @strawberry.field(graphql_type=list[shelf_type])
-        def shelves(self, info: Info[object, object]) -> QuerySet[models.Shelf]:
+        def shelves(self) -> QuerySet[models.Shelf]:
             queryset = models.Shelf.objects.all()
             if root_alias is not None:
                 queryset = queryset.using(root_alias)

@@ -195,13 +195,15 @@ def test_query_sends_a_non_dict_variables_mapping(
 
 
 @pytest.fixture
-def seeded_catalog(transactional_db: None) -> None:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def seeded_catalog(transactional_db: None) -> None:  # pyright: ignore[reportUnusedParameter]
     """``seed_data(1)`` in a sync fixture; transactional so the async view's thread sees the rows."""
     seed_data(1)
 
 
 @pytest.fixture
-def permitted_writer(transactional_db: None) -> tuple[User, str]:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def permitted_writer(transactional_db: None) -> tuple[User, str]:  # pyright: ignore[reportUnusedParameter]
     """A ``create_users`` user granted ``add_item`` + a category GlobalID, for the async bracket.
 
     Seeds first (AGENTS.md seed-helper rule), then grants the explicit
@@ -225,7 +227,8 @@ def permitted_writer(transactional_db: None) -> tuple[User, str]:
     return user, category_gid
 
 
-async def test_async_query_happy_path_and_raise_direction(seeded_catalog: None) -> None:
+@pytest.mark.usefixtures("seeded_catalog")
+async def test_async_query_happy_path_and_raise_direction() -> None:
     """The awaited transport, the async decode, and the package ``Response``.
 
     The same typed-shape assertions as the live sync happy path - ``errors`` /
@@ -356,7 +359,8 @@ async def test_async_login_bracket_logs_out_when_the_block_raises(
 
 
 @pytest.fixture
-def upload_superuser(transactional_db: None) -> User:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def upload_superuser(transactional_db: None) -> User:  # pyright: ignore[reportUnusedParameter]
     """A superuser for the async multipart upload, created in a sync fixture.
 
     ``createMediaSpecimen`` is gated by the default ``add_mediaspecimen``

@@ -1020,7 +1020,7 @@ query ($first: Int, $after: String) {
 def test_keyset_list_source_is_rejected_over_http():
     """A keyset connection resolver that returns a list is refused on the wire."""
 
-    def _list_resolver(root: object, info: strawberry.Info[object, object]):
+    def _list_resolver(_root: object, _info: strawberry.Info[object, object]):
         return list(models.Issue.objects.all())
 
     _seed_three_issues()
@@ -1037,7 +1037,7 @@ def test_keyset_list_source_is_rejected_over_http():
 def test_keyset_pre_sliced_source_is_rejected_over_http():
     """A keyset connection resolver that returns an already-sliced QuerySet is refused."""
 
-    def _sliced_resolver(root: object, info: strawberry.Info[object, object]):
+    def _sliced_resolver(_root: object, _info: strawberry.Info[object, object]):
         return models.Issue.objects.all()[:5]
 
     payload = _post_holder(
@@ -1053,7 +1053,7 @@ def test_keyset_pre_sliced_source_is_rejected_over_http():
 async def test_async_keyset_first_page_slices_and_counts():
     """An async keyset field slices the first page through the async engine and ``acount``."""
 
-    async def _async_resolver(root: object, info: strawberry.Info[object, object]):
+    async def _async_resolver(_root: object, _info: strawberry.Info[object, object]):
         return models.Issue.objects.all()
 
     await sync_to_async(_seed_three_issues)()
@@ -1073,7 +1073,7 @@ async def test_async_keyset_first_page_slices_and_counts():
 async def test_async_keyset_after_cursor_continues_the_page():
     """A minted async keyset cursor round-trips on the same async field."""
 
-    async def _async_resolver(root: object, info: strawberry.Info[object, object]):
+    async def _async_resolver(_root: object, _info: strawberry.Info[object, object]):
         return models.Issue.objects.all()
 
     await sync_to_async(_seed_three_issues)()
@@ -1094,7 +1094,7 @@ async def test_async_keyset_after_cursor_continues_the_page():
 async def test_async_keyset_total_count_only():
     """A totalCount-only async keyset query counts via ``acount`` and fetches no edges."""
 
-    async def _async_resolver(root: object, info: strawberry.Info[object, object]):
+    async def _async_resolver(_root: object, _info: strawberry.Info[object, object]):
         return models.Issue.objects.all()
 
     await sync_to_async(_seed_three_issues)()
@@ -1110,7 +1110,7 @@ async def test_async_keyset_total_count_only():
 async def test_async_keyset_deferred_cursor_column_is_loaded():
     """Cursor minting on an async keyset field must not lazy-load a deferred order column."""
 
-    async def _async_resolver(root: object, info: strawberry.Info[object, object]):
+    async def _async_resolver(_root: object, _info: strawberry.Info[object, object]):
         return models.Issue.objects.defer("number", "title")
 
     await sync_to_async(_seed_three_issues)()
@@ -1192,9 +1192,9 @@ def _hook_order_schema(
     child_model, parent_model, relation, label = _HOOK_SHAPES[shape]
 
     def hook(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[models.Issue | models.Book],
-        info: strawberry.Info[object, object],
+        _info: strawberry.Info[object, object],
     ) -> QuerySet[models.Issue | models.Book]:
         ordered = queryset if hook_order is None else queryset.order_by(*hook_order)
         if reverse:
@@ -1227,8 +1227,8 @@ def _hook_order_schema(
     finalize_django_types()
 
     async def async_parents(
-        root: object,
-        info: strawberry.Info[object, object],
+        _root: object,
+        _info: strawberry.Info[object, object],
     ) -> QuerySet[models.Periodical | models.Genre]:
         return parent_model.objects.order_by("name")
 
@@ -1866,9 +1866,9 @@ def _reversed_reading_list_schema(
     """
 
     def hook(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[models.ReadingList],
-        info: strawberry.Info[object, object],
+        _info: strawberry.Info[object, object],
     ) -> QuerySet[models.ReadingList]:
         return (queryset.order_by(*hook_order) if hook_order else queryset).reverse()
 
@@ -1988,16 +1988,16 @@ def _twin_children_schema(*, optimizer: bool = True) -> strawberry.Schema:
     from apps.scalars.models import ScalarSpecimen
 
     def shifts_newest_first(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[models.DeskShift],
-        info: strawberry.Info[object, object],
+        _info: strawberry.Info[object, object],
     ) -> QuerySet[models.DeskShift]:
         return queryset.order_by("-id")
 
     def specimens_by_label(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[ScalarSpecimen],
-        info: strawberry.Info[object, object],
+        _info: strawberry.Info[object, object],
     ) -> QuerySet[ScalarSpecimen]:
         return queryset.order_by("label")
 
@@ -2025,14 +2025,14 @@ def _twin_children_schema(*, optimizer: bool = True) -> strawberry.Schema:
     finalize_django_types()
 
     async def async_desks(
-        root: object,
-        info: strawberry.Info[object, object],
+        _root: object,
+        _info: strawberry.Info[object, object],
     ) -> QuerySet[models.CirculationDesk]:
         return models.CirculationDesk.objects.all()
 
     async def async_specimens(
-        root: object,
-        info: strawberry.Info[object, object],
+        _root: object,
+        _info: strawberry.Info[object, object],
     ) -> QuerySet[ScalarSpecimen]:
         return ScalarSpecimen.objects.filter(parent__isnull=True)
 

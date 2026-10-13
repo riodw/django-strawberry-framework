@@ -235,7 +235,7 @@ def test_patched_parse_json_passes_a_str_body_through_without_reencoding():
     body = '{"a": 1}'
     seen: list[str | bytes] = []
 
-    def _recorder(view: object, data: str | bytes):
+    def _recorder(_view: object, data: str | bytes):
         seen.append(data)
         return {"recorded": True}
 
@@ -522,7 +522,7 @@ def test_apply_fails_loudly_when_the_upload_utility_is_not_a_plain_function():
             patches.apply()
 
 
-def _self_only_method(self: object) -> None:
+def _self_only_method(_self: object) -> None:
     """A delegate whose signature lost every parameter but ``self``."""
     return None
 

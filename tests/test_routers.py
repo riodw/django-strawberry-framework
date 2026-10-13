@@ -623,9 +623,9 @@ class _RecordingDjangoApplication:
 
 
 async def _unreachable_application(
-    scope: WebSocketScope,
-    receive: ASGIReceiveCallable,
-    send: ASGISendCallable,
+    _scope: WebSocketScope,
+    _receive: ASGIReceiveCallable,
+    _send: ASGISendCallable,
 ) -> None:
     """An ASGI application a row wraps but never reaches: a call fails the test."""
     raise AssertionError("the wrapped application must not run")
@@ -953,7 +953,7 @@ def _make_user_and_session(
 
 
 @database_sync_to_async
-def _flush_the_session(user: AbstractBaseUser, session_key: str):
+def _flush_the_session(_user: AbstractBaseUser, session_key: str):
     """Revoke the session out of band: clear it and DELETE its row.
 
     What ``logout`` does on any server-side engine, so this single mutator covers
@@ -980,7 +980,7 @@ def _session_row_still_exists(session_key: str):
 
 
 @database_sync_to_async
-def _disable_the_user(user: AbstractBaseUser, session_key: str):
+def _disable_the_user(user: AbstractBaseUser, _session_key: str):
     """Disable the actor out of band; the session row itself stays valid.
 
     ``ModelBackend.user_can_authenticate`` then rejects the load, so
@@ -991,7 +991,7 @@ def _disable_the_user(user: AbstractBaseUser, session_key: str):
 
 
 @database_sync_to_async
-def _rotate_the_password(user: AbstractBaseUser, session_key: str):
+def _rotate_the_password(user: AbstractBaseUser, _session_key: str):
     """Rotate the actor's password out of band, invalidating the session auth hash.
 
     The shape a password change (or a ``logout`` elsewhere) produces:
@@ -2022,7 +2022,7 @@ def test_an_injected_consumer_class_still_sits_inside_all_three_wrappers():
     assert router.application_mapping["http"] is django_application
 
 
-async def _valid_asgi_application(scope: object, receive: object, send: object):
+async def _valid_asgi_application(_scope: object, _receive: object, _send: object):
     """The ASGI application a CORRECT factory returns: an async callable.
 
     Module-level so the four factory rows below mount the same object and assert
@@ -2093,7 +2093,8 @@ def test_a_factory_returning_a_non_application_fails_at_construction(
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
 
-    def factory(*, schema: object):
+    # basedpyright: the router invokes a WebSocket consumer factory as factory(schema=schema)
+    def factory(*, schema: object):  # pyright: ignore[reportUnusedParameter]
         return returned
 
     with pytest.raises(ConfigurationError) as exc_info:
@@ -2124,7 +2125,8 @@ def test_an_async_factory_is_rejected_and_the_refused_coroutine_is_closed():
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
 
-    async def async_factory(*, schema: object):
+    # basedpyright: the router invokes a WebSocket consumer factory as factory(schema=schema)
+    async def async_factory(*, schema: object):  # pyright: ignore[reportUnusedParameter]
         return _valid_asgi_application
 
     with pytest.raises(ConfigurationError) as exc_info:
@@ -2183,7 +2185,8 @@ def test_a_factory_that_raises_from_its_body_is_not_normalized():
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
 
-    def factory(*, schema: object):
+    # basedpyright: the router invokes a WebSocket consumer factory as factory(schema=schema)
+    def factory(*, schema: object):  # pyright: ignore[reportUnusedParameter]
         raise TypeError("the factory's own bug")
 
     with pytest.raises(TypeError, match="the factory's own bug"):
@@ -3257,7 +3260,7 @@ async def test_only_disallowed_host_becomes_a_websocket_denial(monkeypatch: pyte
     """
     router = _router()
 
-    def exploding_projection(scope: object):
+    def exploding_projection(_scope: object):
         raise RuntimeError("projection bug")
 
     monkeypatch.setattr(consumers_module, "_host_validation_request", exploding_projection)
@@ -3422,7 +3425,8 @@ async def test_a_hostile_host_is_denied_before_the_auth_stack_and_the_consumer(
 
     monkeypatch.setattr(CookieMiddleware, "__call__", recording_call)
 
-    def _recording_consumer(schema: object):
+    # basedpyright: the router invokes a WebSocket consumer factory as factory(schema=schema)
+    def _recording_consumer(schema: object):  # pyright: ignore[reportUnusedParameter]
         return _recording_websocket_application(reached)
 
     router = _router(websocket_consumer_class=_recording_consumer)
@@ -3454,7 +3458,8 @@ async def test_an_injected_consumer_is_denied_by_both_handshake_boundaries():
     """
     reached: list[str] = []
 
-    def _recording_consumer(schema: object):
+    # basedpyright: the router invokes a WebSocket consumer factory as factory(schema=schema)
+    def _recording_consumer(schema: object):  # pyright: ignore[reportUnusedParameter]
         return _recording_websocket_application(reached)
 
     router = _router(websocket_consumer_class=_recording_consumer)
@@ -4001,7 +4006,7 @@ async def test_a_failing_auth_backend_load_also_fails_closed(
     _user, cookie, _session_key = await _make_user_and_session("backend_failure_probe")
     router = _router()
 
-    async def exploding_get_user(scope: object):
+    async def exploding_get_user(_scope: object):
         raise RuntimeError("auth backend unavailable")
 
     async with _open_ws(router, cookie=cookie) as communicator:
@@ -4818,17 +4823,17 @@ async def test_control_frame_send_serializes_with_a_concurrent_revocation():
         async def handle(self):
             return None
 
-        async def handle_subscribe(self, message: object):
+        async def handle_subscribe(self, _message: object):
             return None
 
     class LegacyHandler:
         async def handle(self):
             return None
 
-        async def handle_start(self, message: object):
+        async def handle_start(self, _message: object):
             return None
 
-        async def handle_stop(self, message: object):
+        async def handle_stop(self, _message: object):
             return None
 
     class Adapter:
@@ -4840,7 +4845,7 @@ async def test_control_frame_send_serializes_with_a_concurrent_revocation():
             await release.wait()
             sent.append(message)
 
-        async def close(self, code: int, reason: str):
+        async def close(self, _code: int, _reason: str):
             return None
 
     class BaseConsumer:
@@ -4849,10 +4854,10 @@ async def test_control_frame_send_serializes_with_a_concurrent_revocation():
         websocket_adapter_class = Adapter
 
         @classmethod
-        def as_asgi(cls, **initkwargs: object) -> object:
+        def as_asgi(cls, **_initkwargs: object) -> object:
             return cls
 
-        async def disconnect(self, code: int):
+        async def disconnect(self, _code: int):
             return None
 
     # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
@@ -6766,7 +6771,8 @@ class _ScriptedTransport:
         self._close_exception = close_exception
         self.closes: list[tuple[int, str]] = []
 
-    def iter_json(self, *, ignore_parsing_errors: bool = False):
+    # basedpyright: Strawberry's protocol handler passes ignore_parsing_errors= by keyword
+    def iter_json(self, *, ignore_parsing_errors: bool = False):  # pyright: ignore[reportUnusedParameter]
         exception = self._iter_exception
 
         async def generator():

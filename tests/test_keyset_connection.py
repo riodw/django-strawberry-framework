@@ -402,10 +402,10 @@ def test_keyset_order_state_rejects_a_related_value_read_through_a_hiding_type(
     if hides:
 
         def _hide_secret(
-            cls: type[DjangoType],
+            _cls: type[DjangoType],
             queryset: QuerySet[Periodical],
-            info: object,
-            **kwargs: object,
+            _info: object,
+            **_kwargs: object,
         ) -> QuerySet[Periodical]:
             return queryset.exclude(name="secret")
 

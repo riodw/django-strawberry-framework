@@ -25,7 +25,8 @@ from django_strawberry_framework.types.relations import PendingRelation
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry(isolate_global_registry: None) -> None:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def _isolate_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
     """Every test here declares fresh ``DjangoType`` classes - opt the module
     into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
 
@@ -323,13 +324,13 @@ def test_model_label_routing_audit_rejects_a_missing_primary_definition(
     primary = type("Primary", (), {})
     emitter = type("Emitter", (), {})
 
-    def _emitter_for(model: object) -> type:
+    def _emitter_for(_model: object) -> type:
         return emitter
 
-    def _primary_for(model: object) -> type:
+    def _primary_for(_model: object) -> type:
         return primary
 
-    def _no_definition(type_cls: object) -> None:
+    def _no_definition(_type_cls: object) -> None:
         return None
 
     monkeypatch.setattr(finalizer_module, "_first_model_label_emitter", _emitter_for)
@@ -358,13 +359,13 @@ def test_secondary_collapse_warning_survives_unreadable_model_metadata(
     secondary = type("Secondary", (), {})
     definition = type("Definition", (), {"effective_globalid_strategy": "model"})()
 
-    def _primary_for(model: object) -> type:
+    def _primary_for(_model: object) -> type:
         return primary
 
-    def _types_for(model: object) -> tuple[type, type]:
+    def _types_for(_model: object) -> tuple[type, type]:
         return (primary, secondary)
 
-    def _definition_for(type_cls: object) -> object:
+    def _definition_for(_type_cls: object) -> object:
         return definition
 
     monkeypatch.setattr(registry, "primary_for", _primary_for)

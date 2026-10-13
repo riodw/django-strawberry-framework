@@ -847,16 +847,10 @@ def set_card_status(
 # ---------------------------------------------------------------------------
 
 
-def set_item_complete(
-    item: models.CardItem,
-    complete: bool = True,
-    *,
-    actor: object = None,
-) -> models.CardItem:
+def set_item_complete(item: models.CardItem, complete: bool = True) -> models.CardItem:
     """Set a card item's ``is_complete`` checkbox (the general per-bullet flag).
 
-    ``actor`` is accepted for call-site symmetry with :func:`verify_item`; a bare
-    completion carries no verification provenance, so it is not persisted here --
+    A bare completion carries no verification provenance, so it takes no actor --
     record who verified a bullet (and how) with :func:`verify_item`.
     """
     item.is_complete = complete

@@ -168,11 +168,11 @@ class _AllowAll:
 
     def has_permission(
         self,
-        info: object,
-        mutation: type[object],
-        operation: str,
-        data: object,
-        instance: object = None,
+        _info: object,
+        _mutation: type[object],
+        _operation: str,
+        _data: object,
+        _instance: object = None,
     ):
         return True
 
@@ -182,11 +182,11 @@ class _DenyAll:
 
     def has_permission(
         self,
-        info: object,
-        mutation: type[object],
-        operation: str,
-        data: object,
-        instance: object = None,
+        _info: object,
+        _mutation: type[object],
+        _operation: str,
+        _data: object,
+        _instance: object = None,
     ):
         return False
 
@@ -882,7 +882,7 @@ def test_register_arm_error_survives_a_reload_cycle():
 def test_bridged_async_body_is_a_real_coroutine_function():
     """The async resolver body is a genuine ``async def`` (not a sync body in disguise)."""
 
-    def _sync_body(info: object, **kwargs: object) -> None:
+    def _sync_body(_info: object, **_kwargs: object) -> None:
         return None
 
     body = _sync_bridged_async_body(_sync_body)
@@ -894,11 +894,11 @@ def test_auth_field_dispatch_splits_sync_and_async_resolver_bodies():
     sync_calls: list[dict[str, object]] = []
     async_calls: list[dict[str, object]] = []
 
-    def _sync_body(info: object, **kwargs: object) -> str:
+    def _sync_body(_info: object, **kwargs: object) -> str:
         sync_calls.append(kwargs)
         return "sync"
 
-    async def _async_body(info: object, **kwargs: object) -> str:
+    async def _async_body(_info: object, **kwargs: object) -> str:
         async_calls.append(kwargs)
         return "async"
 
@@ -999,11 +999,11 @@ def test_async_has_permission_raises_sync_misuse_never_a_silent_allow():
     class AsyncGate:
         async def has_permission(
             self,
-            info: object,
-            mutation: type[object],
-            operation: str,
-            data: object,
-            instance: object = None,
+            _info: object,
+            _mutation: type[object],
+            _operation: str,
+            _data: object,
+            _instance: object = None,
         ):
             return False
 
@@ -1024,11 +1024,11 @@ async def test_async_permission_hook_rejected_inside_the_sync_worker_too():
     class AsyncGate:
         async def has_permission(
             self,
-            info: object,
-            mutation: type[object],
-            operation: str,
-            data: object,
-            instance: object = None,
+            _info: object,
+            _mutation: type[object],
+            _operation: str,
+            _data: object,
+            _instance: object = None,
         ):
             return False
 
@@ -1132,8 +1132,8 @@ def test_login_gate_sees_the_attempted_username_and_never_the_password():
     class RecordingGate:
         def has_permission(
             self,
-            info: object,
-            mutation: type[object],
+            _info: object,
+            _mutation: type[object],
             operation: str,
             data: object,
             instance: object = None,
@@ -1168,11 +1168,11 @@ def test_gate_introspecting_the_mutation_object_raises_on_the_model_less_fields(
     class InfoKeyedGate:
         def has_permission(
             self,
-            info: object,
+            _info: object,
             mutation: type[object],
             operation: str,
-            data: object,
-            instance: object = None,
+            _data: object,
+            _instance: object = None,
         ) -> bool:
             seen_holders.append(mutation)
             return operation == "logout"
@@ -1180,11 +1180,11 @@ def test_gate_introspecting_the_mutation_object_raises_on_the_model_less_fields(
     class ModelIntrospectingGate:
         def has_permission(
             self,
-            info: object,
+            _info: object,
             mutation: type[object],
-            operation: str,
-            data: object,
-            instance: object = None,
+            _operation: str,
+            _data: object,
+            _instance: object = None,
         ) -> bool:
             # basedpyright: the Meta read on a holder that declares none is the request-time raise
             # under test
@@ -1644,10 +1644,10 @@ class _AllowInactiveBackend:
 
     def authenticate(
         self,
-        request: HttpRequest | None,
+        _request: HttpRequest | None,
         username: str | None = None,
         password: str | None = None,
-        **kwargs: object,
+        **_kwargs: object,
     ):
         user = get_user_model().objects.filter(username=username).first()
         if user is not None and user.check_password(password):
@@ -1727,7 +1727,8 @@ def _login_exec(
 def _raising_receiver(signal: Signal, message: str):
     """Connect a real ``signal`` receiver that raises ``RuntimeError(message)`` in the block."""
 
-    def _boom(sender: object, **kwargs: object):
+    # basedpyright: Django's Signal.send passes sender= by keyword
+    def _boom(sender: object, **_kwargs: object):  # pyright: ignore[reportUnusedParameter]
         raise RuntimeError(message)
 
     signal.connect(_boom)
@@ -1767,7 +1768,7 @@ def test_login_payload_construction_failure_is_execution_error_session_untouched
 
     schema = _login_logout_schema()
 
-    def _boom(*args: object, **kwargs: object):
+    def _boom(*_args: object, **_kwargs: object):
         raise RuntimeError("payload construction boom")
 
     monkeypatch.setattr(mutation_resolvers, "build_payload", _boom)

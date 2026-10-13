@@ -16,7 +16,8 @@ from apps.kanban.constants import TRACKED_FILE_PATHS
 
 
 @pytest.fixture(autouse=True)
-def _service_lookups(db: None) -> None:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def _service_lookups(db: None) -> None:  # pyright: ignore[reportUnusedParameter]
     kf.make_status("todo")
     kf.make_status("done")
     kf.make_priority("medium")

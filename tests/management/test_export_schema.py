@@ -72,7 +72,7 @@ def test_export_schema_file_write_disables_newline_translation(monkeypatch: pyte
     captured: dict[str, object] = {}
 
     def write_text(
-        self: Path,
+        _self: Path,
         data: str,
         *,
         encoding: str | None = None,

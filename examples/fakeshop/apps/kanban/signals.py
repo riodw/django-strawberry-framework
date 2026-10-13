@@ -367,11 +367,10 @@ def _sync_card_order_after_insert(card: models.Card, using: str | None) -> None:
 
 @receiver(pre_save, sender=models.Card, dispatch_uid="kanban_prepare_card_save")
 def prepare_card_save(
-    sender: type[models.Card],
     instance: models.Card,
     update_fields: frozenset[str] | None,
     using: str | None,
-    **kwargs: object,
+    **_kwargs: object,
 ) -> None:
     _validate_card_status_transition(instance, update_fields, using)
     _validate_done_card_has_spec(instance, using)
@@ -380,12 +379,7 @@ def prepare_card_save(
 
 
 @receiver(pre_save, sender=models.SpecDoc, dispatch_uid="kanban_validate_spec_doc_card")
-def validate_spec_doc_card(
-    sender: type[models.SpecDoc],
-    instance: models.SpecDoc,
-    using: str | None,
-    **kwargs: object,
-) -> None:
+def validate_spec_doc_card(instance: models.SpecDoc, using: str | None, **_kwargs: object) -> None:
     if instance.card_id is None:
         raise ValidationError(SPEC_CARD_REQUIRED_ERROR)
     if instance.pk is None:
@@ -401,12 +395,7 @@ def validate_spec_doc_card(
 
 
 @receiver(pre_delete, sender=models.SpecDoc, dispatch_uid="kanban_protect_done_card_spec")
-def protect_done_card_spec(
-    sender: type[models.SpecDoc],
-    instance: models.SpecDoc,
-    using: str | None,
-    **kwargs: object,
-) -> None:
+def protect_done_card_spec(instance: models.SpecDoc, using: str | None, **kwargs: object) -> None:
     if _delete_origin_is_card(kwargs.get("origin")):
         return
     if _card_is_done(instance.card_id, using):
@@ -419,10 +408,9 @@ def protect_done_card_spec(
     dispatch_uid="kanban_validate_card_glossary_term_card",
 )
 def validate_card_glossary_term_card(
-    sender: type[models.CardGlossaryTerm],
     instance: models.CardGlossaryTerm,
     using: str | None,
-    **kwargs: object,
+    **_kwargs: object,
 ) -> None:
     if instance.pk is None:
         return
@@ -448,7 +436,6 @@ def validate_card_glossary_term_card(
     dispatch_uid="kanban_protect_done_card_glossary_link",
 )
 def protect_done_card_glossary_link(
-    sender: type[models.CardGlossaryTerm],
     instance: models.CardGlossaryTerm,
     using: str | None,
     **kwargs: object,
@@ -464,23 +451,15 @@ def protect_done_card_glossary_link(
 
 
 @receiver(post_save, sender=models.Card, dispatch_uid="kanban_sync_card_after_save")
-def sync_card_after_save(
-    sender: type[models.Card],
-    instance: models.Card,
-    created: bool,
-    update_fields: frozenset[str] | None,
-    using: str | None,
-    **kwargs: object,
-) -> None:
+def sync_card_after_save(instance: models.Card, using: str | None, **_kwargs: object) -> None:
     _sync_card_order_after_insert(instance, using)
 
 
 @receiver(post_delete, sender=models.Card, dispatch_uid="kanban_compact_card_order_after_delete")
 def compact_card_order_after_delete(
-    sender: type[models.Card],
     instance: models.Card,
     using: str | None,
-    **kwargs: object,
+    **_kwargs: object,
 ) -> None:
     """Delegate delete-compaction to the service layer (the receiver only wires it)."""
     from apps.kanban import services
@@ -490,10 +469,9 @@ def compact_card_order_after_delete(
 
 @receiver(pre_save, sender=models.CardReference, dispatch_uid="kanban_prepare_card_reference")
 def prepare_card_reference(
-    sender: type[models.CardReference],
     instance: models.CardReference,
     using: str | None,
-    **kwargs: object,
+    **_kwargs: object,
 ) -> None:
     """Raise-only guard: reject self-references, cycles, and dependency mis-ordering.
 
@@ -516,14 +494,12 @@ def prepare_card_reference(
     dispatch_uid="kanban_uuid_cardpathlink_m2m",
 )
 def create_card_path_link_uuid_rows(
-    sender: type[models.CardPathLink],
     instance: models.Card | models.TrackedPath,
     action: str,
     reverse: bool,
-    model: type[models.Card] | type[models.TrackedPath],
     pk_set: set[int] | None,
     using: str | None = None,
-    **kwargs: object,
+    **_kwargs: object,
 ) -> None:
     """Create ``UUIDModel`` side-rows for ``CardPathLink`` rows added via M2M writes.
 
@@ -554,7 +530,7 @@ def create_uuid_row(
     instance: Model,
     created: bool,
     using: str | None = None,
-    **kwargs: object,
+    **_kwargs: object,
 ) -> None:
     """On first save of a linked model, create its ``UUIDModel`` side-row.
 

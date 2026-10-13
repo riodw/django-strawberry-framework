@@ -167,7 +167,8 @@ def test_path_contributing_nothing_fails(
     assert _summary(captured.out).endswith("errors 1")
 
 
-def test_unsupported_suffix_is_ignored_not_failed(repo: Path, capsys: pytest.CaptureFixture[str]):
+@pytest.mark.usefixtures("repo")
+def test_unsupported_suffix_is_ignored_not_failed(capsys: pytest.CaptureFixture[str]):
     """An existing file no rule covers is reported as ignored and does not fail the run."""
     assert ctc.main(["--check", "pyproject.toml"]) == 0
     captured = capsys.readouterr()
@@ -242,7 +243,8 @@ def test_diff_prints_fix_without_writing(repo: Path, capsys: pytest.CaptureFixtu
     assert f"+{ctc.LINK_DEF_CATEGORIES[-1]}" in out
 
 
-def test_diff_rejects_fix(repo: Path):
+@pytest.mark.usefixtures("repo")
+def test_diff_rejects_fix():
     """--diff writes nothing, so pairing it with --fix is a usage error."""
     with pytest.raises(SystemExit):
         ctc.main(["--fix", "--diff", "."])
@@ -265,7 +267,8 @@ def test_fix_writes_what_diff_showed(repo: Path, capsys: pytest.CaptureFixture[s
         ("def f(a, b, c):\n    return a\n", []),
     ],
 )
-def test_comma_layout_threshold(repo: Path, source: str, expected: list[tuple[int, str]]):
+@pytest.mark.usefixtures("repo")
+def test_comma_layout_threshold(source: str, expected: list[tuple[int, str]]):
     """A single-line four-parameter def must explode; three parameters stay inline."""
     assert ctc._analyze(source, ctc.threshold_for(Path("pkg/mod.py")))[2] == expected
 
@@ -278,6 +281,7 @@ def test_comma_layout_threshold(repo: Path, source: str, expected: list[tuple[in
         (CLEAN_MD, None),
     ],
 )
-def test_markdown_scaffold(repo: Path, text: str, missing: str | None):
+@pytest.mark.usefixtures("repo")
+def test_markdown_scaffold(text: str, missing: str | None):
     """The first missing scaffold marker is reported; the canonical footer passes."""
     assert ctc._scaffold_in_canonical_order(text) == missing

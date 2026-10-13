@@ -39,7 +39,8 @@ from django_strawberry_framework.schema import DjangoSchema
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry(isolate_global_registry: None) -> Iterator[None]:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def _isolate_registry(isolate_global_registry: None) -> Iterator[None]:  # pyright: ignore[reportUnusedParameter]
     """Every test here declares fresh ``DjangoType`` classes over the library models."""
     yield
 
@@ -48,10 +49,10 @@ def _hiding(field: str, value: str) -> classmethod[DjangoType, ..., QuerySet[Mod
     """Return a ``get_queryset`` hook hiding the rows whose ``field`` equals ``value``."""
 
     def get_queryset(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[Model],
-        info: object,
-        **kwargs: object,
+        _info: object,
+        **_kwargs: object,
     ) -> QuerySet[Model]:
         return queryset.exclude(**{field: value})
 

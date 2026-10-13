@@ -53,7 +53,8 @@ from ._link_models import (
 
 
 @pytest.fixture(autouse=True)
-def _isolate_global_registry(isolate_global_registry: None) -> None:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def _isolate_global_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
     """Every row declares fresh ``DjangoType`` classes."""
 
 
@@ -65,10 +66,10 @@ def link_tables() -> Iterator[None]:
 
 
 def _parent_visibility(
-    cls: type[DjangoType],
+    _cls: type[DjangoType],
     queryset: QuerySet[LnkParent],
-    info: object,
-    **kwargs: object,
+    _info: object,
+    **_kwargs: object,
 ):
     """An identity ``get_queryset`` hook: forces every hop onto the parent into a ``Prefetch``."""
     return queryset
@@ -158,7 +159,8 @@ _EXPECTED_PAGE = [["a1", "a2"], ["b1"], []]
 
 
 @pytest.mark.django_db(transaction=True)
-def test_two_column_link_list_prefetch_loads_every_carrier(link_tables: None):
+@pytest.mark.usefixtures("link_tables")
+def test_two_column_link_list_prefetch_loads_every_carrier():
     """A plain list over the two-column link is one parent query plus one prefetch.
 
     The prefetch ``.only()`` carries both ``p_tenant`` and ``p_code`` (the
@@ -189,8 +191,8 @@ _LINK_CONNECTION_ROOT_ROWS: list[tuple[str, Callable[[_WireData], list[_WireData
     _LINK_CONNECTION_ROOT_ROWS,
     ids=["list_root", "connection_root"],
 )
+@pytest.mark.usefixtures("link_tables")
 def test_two_column_link_connection_resolves_per_parent(
-    link_tables: None,
     query: str,
     rows_of: Callable[[_WireData], list[_WireData]],
 ):
@@ -214,7 +216,8 @@ def test_two_column_link_connection_resolves_per_parent(
     ],
     ids=["one_column_foreign_object", "to_field_foreign_key"],
 )
-def test_one_column_link_list_prefetch_is_batched(link_tables: None, relation: str, query: str):
+@pytest.mark.usefixtures("link_tables")
+def test_one_column_link_list_prefetch_is_batched(relation: str, query: str):
     """A plain list over a one-column link is one parent query plus one prefetch.
 
     The child carrier (``p_id`` / the ``slug`` FK column) and, for the
@@ -241,7 +244,8 @@ def test_one_column_link_list_prefetch_is_batched(link_tables: None, relation: s
     ],
     ids=["one_column_foreign_object", "to_field_foreign_key"],
 )
-def test_one_column_link_connection_is_one_window(link_tables: None, relation: str, query: str):
+@pytest.mark.usefixtures("link_tables")
+def test_one_column_link_connection_is_one_window(relation: str, query: str):
     """A nested connection over a one-column link is one root query plus one window.
 
     The window partitions by the lone carrier column, and both projections load
@@ -258,7 +262,8 @@ def test_one_column_link_connection_is_one_window(link_tables: None, relation: s
     ["columnChildren", "slugChildren"],
     ids=["one_column_foreign_object", "to_field_foreign_key"],
 )
-def test_forward_link_prefetch_loads_the_child_carrier(link_tables: None, root: str):
+@pytest.mark.usefixtures("link_tables")
+def test_forward_link_prefetch_loads_the_child_carrier(root: str):
     """A forward hop downgraded to a ``Prefetch`` is one child query plus one parent query.
 
     The parent type's ``get_queryset`` forces the ``Prefetch``, whose attach reads
@@ -276,7 +281,8 @@ def test_forward_link_prefetch_loads_the_child_carrier(link_tables: None, root: 
 
 
 @pytest.mark.django_db(transaction=True)
-def test_conflicting_alias_connection_loads_the_parent_link_columns(link_tables: None):
+@pytest.mark.usefixtures("link_tables")
+def test_conflicting_alias_connection_loads_the_parent_link_columns():
     """A connection refused for conflicting alias arguments still loads the parent ``slug``.
 
     Two aliases of one parent hop select the nested connection with different
@@ -352,7 +358,8 @@ _M2M_ROWS = {
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("row", list(_M2M_ROWS), ids=list(_M2M_ROWS))
-def test_m2m_through_to_field_link_loads_the_source_key(link_tables: None, row: str):
+@pytest.mark.usefixtures("link_tables")
+def test_m2m_through_to_field_link_loads_the_source_key(row: str):
     """An M2M hop whose through FK targets a non-pk column loads that column on the source.
 
     Django matches through rows to source rows by the through FK's target
@@ -414,8 +421,8 @@ def _pair_parent_schema(*, optimizer: bool, route: str) -> strawberry.Schema:
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("route", ["annotation", "hint"], ids=["visibility_hook", "prefetch_hint"])
+@pytest.mark.usefixtures("link_tables")
 def test_consumer_authored_two_column_forward_link_prefetch_loads_every_target(
-    link_tables: None,
     route: str,
 ):
     """A prefetched two-column forward link is one child query plus one parent query.
@@ -548,8 +555,8 @@ _PAIR_PARENTS = [
     [(False, 1), (True, 2)],
     ids=["select_related", "prefetch"],
 )
+@pytest.mark.usefixtures("link_tables")
 def test_generated_two_column_forward_link_resolves_every_parent(
-    link_tables: None,
     query: str,
     parent_hook: bool,
     queries: int,
@@ -567,7 +574,8 @@ def test_generated_two_column_forward_link_resolves_every_parent(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_generated_two_column_forward_link_id_selection_joins_the_parent(link_tables: None):
+@pytest.mark.usefixtures("link_tables")
+def test_generated_two_column_forward_link_id_selection_joins_the_parent():
     """An id-only selection over the link reads the parent row, never one carrier column.
 
     FK-id elision answers an id-only hop from the source row's one link column;
@@ -592,8 +600,8 @@ def test_generated_two_column_forward_link_id_selection_joins_the_parent(link_ta
     ],
     ids=["reverse_list", "reverse_connection"],
 )
+@pytest.mark.usefixtures("link_tables")
 def test_generated_two_column_forward_link_round_trips_through_the_reverse_side(
-    link_tables: None,
     relation: str,
     queries: int,
 ):
@@ -620,8 +628,8 @@ def test_generated_two_column_forward_link_round_trips_through_the_reverse_side(
     [(False, 1), (True, 2)],
     ids=["select_related", "prefetch"],
 )
+@pytest.mark.usefixtures("link_tables")
 def test_generated_nullable_two_column_forward_link_resolves_absent_parents_to_null(
-    link_tables: None,
     parent_hook: bool,
     queries: int,
 ):

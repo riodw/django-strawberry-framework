@@ -13,7 +13,8 @@ from apps.products.services import create_users, seed_data
 
 
 @pytest.fixture
-def admin_client(db: None) -> Client:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def admin_client(db: None) -> Client:  # pyright: ignore[reportUnusedParameter]
     """Logged-in superuser client for hitting admin URLs."""
     User.objects.create_superuser(username="admin", password="admin", email="admin@example.com")
     client = Client()

@@ -1543,7 +1543,8 @@ def test_digit_boundary_form_fields_survive_distinct_in_sdl():
         ("field2", "field2"),
     }
 
-    def _probe(inp: object) -> int:
+    # basedpyright: Strawberry derives the GraphQL argument whose SDL name the test reads
+    def _probe(inp: object) -> int:  # pyright: ignore[reportUnusedParameter]
         return 1
 
     _probe.__annotations__ = {"inp": cre, "return": int}
@@ -1692,7 +1693,7 @@ def test_model_column_for_typed_on_non_field_does_not_exist_get_field():
     form and the field.
     """
 
-    def _boom(name: str):
+    def _boom(_name: str):
         raise RuntimeError("hostile get_field")
 
     def _missing(name: str):

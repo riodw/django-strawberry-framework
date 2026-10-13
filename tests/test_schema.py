@@ -521,7 +521,7 @@ async def test_execute_mutation_field_async_exception_rolls_back():
 
     ctx.is_awaitable = _is_awaitable
 
-    async def async_failing_resolve(*args: object, **kwargs: object):
+    async def async_failing_resolve(*_args: object, **_kwargs: object):
         raise RuntimeError("async field crash")
 
     with (
@@ -1828,7 +1828,7 @@ def test_a_refused_request_runs_no_parser_at_all(document: str, code: str):
     )
     parsed: list[str] = []
 
-    def _record(source: object, **kwargs: object):
+    def _record(source: object, **_kwargs: object):
         parsed.append(str(source))
         raise AssertionError("a refused configuration must not reach a parser")
 

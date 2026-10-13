@@ -32,7 +32,8 @@ class _NonHashableField:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry(isolate_global_registry: None) -> None:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def _isolate_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
     """Each record's source type registers; the shared fixture clears it after the test."""
 
 

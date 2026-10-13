@@ -90,9 +90,8 @@ def install_auto_strategy_schema(
 
 
 @pytest.mark.django_db
-def test_auto_strategy_picks_the_vendor_body_and_pages_truthfully_over_http(
-    install_auto_strategy_schema: None,
-) -> None:
+@pytest.mark.usefixtures("install_auto_strategy_schema")
+def test_auto_strategy_picks_the_vendor_body_and_pages_truthfully_over_http() -> None:
     """Auto runs LATERAL on Postgres, the windowed body elsewhere, with truthful page metadata."""
     branch = Branch.objects.create(name="Auto strategy", city="Boston")
     shelf = Shelf.objects.create(code="AUTO", topic="Routing", branch=branch)
@@ -172,7 +171,8 @@ def install_hashable_scalar_cache_schema(
     @strawberry.type
     class Misc:
         @strawberry.field
-        def logs(self, after: BombValue) -> list[str]:
+        # basedpyright: Strawberry derives the probe's GraphQL argument from this parameter
+        def logs(self, after: BombValue) -> list[str]:  # pyright: ignore[reportUnusedParameter]
             return ["ok"]
 
     @strawberry.type
@@ -401,7 +401,7 @@ class _RefusingNestedStrategy:
 
     name = "refusing"
 
-    def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan) -> bool:
+    def plan(self, _request: NestedConnectionRequest, _plan: OptimizationPlan) -> bool:
         return False
 
 
@@ -473,10 +473,10 @@ def install_distinct_child_schema(
     """Install a library graph whose nested book queryset is ``.distinct()``."""
 
     def _distinct(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[Book],
-        info: strawberry.Info[object, object],
-        **kwargs: object,
+        _info: strawberry.Info[object, object],
+        **_kwargs: object,
     ) -> QuerySet[Book]:
         return queryset.distinct()
 
@@ -506,9 +506,8 @@ def install_distinct_child_schema(
 
 
 @pytest.mark.django_db
-def test_distinct_child_queryset_never_windows_over_http(
-    install_distinct_child_schema: None,
-) -> None:
+@pytest.mark.usefixtures("install_distinct_child_schema")
+def test_distinct_child_queryset_never_windows_over_http() -> None:
     """A target ``get_queryset`` returning ``.distinct()`` leaves the nested page unplanned.
 
     The nested planner refuses the whole relation (Decision 6), so each parent

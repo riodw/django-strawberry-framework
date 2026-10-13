@@ -299,12 +299,11 @@ reportPrivateUsage = "none"
 reportUnusedFunction = "none"
 reportImportCycles = "none"
 reportUninitializedInstanceVariable = "none"
-# The ratchet, off until their sites are fixed (turn one on to list them); the last three
+# The ratchet, off until their sites are fixed (turn one on to list them); the last two
 # are on in the scripts/, package and root-file environments below.
 reportAny = "none"
 reportUnannotatedClassAttribute = "none"
 reportUnusedCallResult = "none"
-reportUnusedParameter = "none"
 
 # An environment's root resolves imports first. Scripts run as `python
 # scripts/<name>.py`: sibling imports from the root, plus the repo root (first-party, not
@@ -314,7 +313,6 @@ root = "scripts"
 extraPaths = ["examples/fakeshop", "."]
 reportUnannotatedClassAttribute = "error"
 reportUnusedCallResult = "error"
-reportUnusedParameter = "error"
 
 # Listed before the package root: rooted at the package, rest_framework/ would shadow
 # DRF for its own modules.
@@ -323,14 +321,12 @@ root = "django_strawberry_framework/rest_framework"
 extraPaths = ["."]
 reportUnannotatedClassAttribute = "error"
 reportUnusedCallResult = "error"
-reportUnusedParameter = "error"
 
 [[tool.basedpyright.executionEnvironments]]
 root = "django_strawberry_framework"
 extraPaths = ["."]
 reportUnannotatedClassAttribute = "error"
 reportUnusedCallResult = "error"
-reportUnusedParameter = "error"
 
 # Python files outside the package, scripts/, tests/ and examples/ each take an
 # environment rooted at the file: a file root adds no import root, so with these extra
@@ -341,21 +337,18 @@ root = "conftest.py"
 extraPaths = [".", "examples/fakeshop"]
 reportUnannotatedClassAttribute = "error"
 reportUnusedCallResult = "error"
-reportUnusedParameter = "error"
 
 [[tool.basedpyright.executionEnvironments]]
 root = "line_count.py"
 extraPaths = [".", "examples/fakeshop"]
 reportUnannotatedClassAttribute = "error"
 reportUnusedCallResult = "error"
-reportUnusedParameter = "error"
 
 [[tool.basedpyright.executionEnvironments]]
 root = "docs/dry/export_dry_review.py"
 extraPaths = [".", "examples/fakeshop"]
 reportUnannotatedClassAttribute = "error"
 reportUnusedCallResult = "error"
-reportUnusedParameter = "error"
 
 [[tool.basedpyright.executionEnvironments]]
 root = "examples/fakeshop"

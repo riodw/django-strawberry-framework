@@ -1600,7 +1600,7 @@ def test_consumer_override_relation_nonstandard_lookup_not_rejected():
     class CustomM2M(ModelMultipleChoiceFilter):
         """Consumer filter class governing the M2M relation selection."""
 
-    def _override_extra(f: object) -> dict[str, object]:
+    def _override_extra(_f: object) -> dict[str, object]:
         return {"queryset": library_models.Genre.objects.all()}
 
     class OverrideFilter(FilterSet):
@@ -1930,7 +1930,7 @@ def test_filter_defaults_shadow_relation_override_on_relay_target_is_honored():
     class CustomRelationFilter(django_filters.ModelMultipleChoiceFilter):
         pass
 
-    def _override_extra(f: object) -> dict[str, object]:
+    def _override_extra(_f: object) -> dict[str, object]:
         return {
             "queryset": library_models.Genre._default_manager.all(),
         }
@@ -2035,7 +2035,7 @@ def test_honored_override_runs_outer_with_no_reserved_alias():
     class CustomRelationFilter(django_filters.ModelMultipleChoiceFilter):
         pass
 
-    def _override_extra(f: object) -> dict[str, object]:
+    def _override_extra(_f: object) -> dict[str, object]:
         return {
             "queryset": library_models.Genre._default_manager.all(),
         }
@@ -2407,7 +2407,8 @@ def test_invoke_suppressing_helper_restores_distinct_after_exception():
 
     boom = RuntimeError("decode failure mid-invocation")
 
-    def _raising_filter(qs: QuerySet[django_models.Model], value: object):
+    # basedpyright: assigned over Filter.filter, whose typed signature fixes the parameter names
+    def _raising_filter(qs: QuerySet[django_models.Model], value: object):  # pyright: ignore[reportUnusedParameter]
         # The flag is suppressed at this point; prove it, then blow up.
         assert filter_instance.distinct is False
         raise boom
@@ -2574,7 +2575,7 @@ def test_pre_snapshot_filterset_degrades_to_old_behavior(monkeypatch: pytest.Mon
     # the pre-snapshot state.
     BookGenreFilter.get_filters()
 
-    def _no_snapshot(cls: type[FilterSet]) -> None:
+    def _no_snapshot(_cls: type[FilterSet]) -> None:
         return None
 
     monkeypatch.setattr(BookGenreFilter, "_expansion_snapshot", classmethod(_no_snapshot))
@@ -3501,7 +3502,7 @@ def test_c4_untouched_surfaces_attach_no_reserved_alias():
         def filter_note(
             self,
             queryset: QuerySet[library_models.Book],
-            name: str,
+            _name: str,
             value: object,
         ):
             return queryset.filter(loans__note__icontains=value).distinct()
@@ -3538,7 +3539,7 @@ def test_c4_untouched_surfaces_attach_no_reserved_alias():
     assert [n for n in custom.query.annotations if n.startswith("_dst_predicate_")] == []
     assert list(custom.order_by("id").values_list("pk", flat=True)) == [book.pk]
 
-    def _override_extra(f: object) -> dict[str, object]:
+    def _override_extra(_f: object) -> dict[str, object]:
         return {"lookup_expr": "icontains"}
 
     class OverridesFilter(FilterSet):
@@ -4055,7 +4056,7 @@ def test_run_permission_checks_fires_only_for_active_input_fields():
             model = Category
             fields = {"name": ["exact"]}
 
-        def check_name_permission(self, request: object):
+        def check_name_permission(self, _request: object):
             fired.append("name")
 
     CategoryFilter._run_permission_checks({}, request=HttpRequest())
@@ -4093,7 +4094,7 @@ def test_run_permission_checks_skips_unset_related_branch():
             model = library_models.Branch
             fields = {"name": ["exact"]}
 
-        def check_shelves_permission(self, request: object):
+        def check_shelves_permission(self, _request: object):
             fired.append("shelves")
 
     BranchFilter._run_permission_checks(BranchInput(), request=HttpRequest())
@@ -4108,7 +4109,7 @@ def test_run_permission_checks_recurses_into_active_related_branch():
             model = library_models.Shelf
             fields = {"code": ["exact"]}
 
-        def check_code_permission(self, request: object):
+        def check_code_permission(self, _request: object):
             fired.append("shelf.code")
 
     class BranchFilter(FilterSet):
@@ -4146,7 +4147,7 @@ def test_run_permission_checks_recurses_into_logical_branches():
             model = Category
             fields = {"name": ["exact"]}
 
-        def check_name_permission(self, request: object):
+        def check_name_permission(self, _request: object):
             fired.append("name")
 
     # ``and`` with the same field in two arms fires the gate ONCE.
@@ -4188,7 +4189,7 @@ def test_run_permission_checks_rejects_malformed_logical_branch_before_hooks():
             model = Category
             fields = {"name": ["exact"]}
 
-        def check_name_permission(self, request: object):
+        def check_name_permission(self, _request: object):
             fired.append("name")
 
     # Sequence operator given a dict container
@@ -4234,7 +4235,7 @@ def test_run_permission_checks_dedups_child_gate_across_sibling_branches():
             model = library_models.Shelf
             fields = {"code": ["exact"]}
 
-        def check_code_permission(self, request: object):
+        def check_code_permission(self, _request: object):
             fired.append("shelf.code")
 
     class BranchFilter(FilterSet):
@@ -4244,7 +4245,7 @@ def test_run_permission_checks_dedups_child_gate_across_sibling_branches():
             model = library_models.Branch
             fields = {"name": ["exact"]}
 
-        def check_shelves_permission(self, request: object):
+        def check_shelves_permission(self, _request: object):
             fired.append("branch.shelves")
 
     BranchFilter._run_permission_checks(
@@ -4371,7 +4372,7 @@ def test_permission_checks_run_only_through_apply_entrypoint():
             model = Category
             fields = {"name": ["exact"]}
 
-        def check_name_permission(self, request: object):
+        def check_name_permission(self, _request: object):
             fired.append("name")
 
     Category.objects.create(name="alpha")
@@ -4437,7 +4438,7 @@ def test_apply_sync_nested_related_gate_fires_once_not_per_level():
             model = library_models.Book
             fields = {"title": ["exact", "icontains"]}
 
-        def check_title_permission(self, request: object):
+        def check_title_permission(self, _request: object):
             fired.append("title")
 
     class ShelfFilter(FilterSet):
@@ -4447,7 +4448,7 @@ def test_apply_sync_nested_related_gate_fires_once_not_per_level():
             model = library_models.Shelf
             fields = {"code": ["exact"]}
 
-        def check_books_permission(self, request: object):
+        def check_books_permission(self, _request: object):
             fired.append("shelf.books")
 
     class BranchFilter(FilterSet):
@@ -4457,7 +4458,7 @@ def test_apply_sync_nested_related_gate_fires_once_not_per_level():
             model = library_models.Branch
             fields = {"name": ["exact"]}
 
-        def check_shelves_permission(self, request: object):
+        def check_shelves_permission(self, _request: object):
             fired.append("branch.shelves")
 
     # One level of relation nesting: the child ``code`` gate is absent, but
@@ -4509,7 +4510,7 @@ def test_apply_async_nested_related_gate_fires_once_and_still_denies():
             model = library_models.Shelf
             fields = {"code": ["exact", "icontains"]}
 
-        def check_code_permission(self, request: object):
+        def check_code_permission(self, _request: object):
             fired.append("code")
 
     class BranchFilter(FilterSet):
@@ -4534,7 +4535,7 @@ def test_apply_async_nested_related_gate_fires_once_and_still_denies():
             model = library_models.Shelf
             fields = {"code": ["exact"]}
 
-        def check_code_permission(self, request: object):
+        def check_code_permission(self, _request: object):
             raise GraphQLError("denied async shelf code")
 
     class DenyingBranchFilter(FilterSet):
@@ -5008,7 +5009,7 @@ def test_apply_sync_scalar_top_level_input_fails_loud():
             model = Category
             fields = {"name": ["exact"]}
 
-        def check_name_permission(self, request: object):
+        def check_name_permission(self, _request: object):
             fired.append("name")
 
     Category.objects.create(name="alpha")
@@ -5202,7 +5203,7 @@ def test_run_permission_checks_short_circuits_on_none_and_unset():
             model = Category
             fields = {"name": ["exact"]}
 
-        def check_name_permission(self, request: object):
+        def check_name_permission(self, _request: object):
             fired.append("name")
 
     CategoryFilter._run_permission_checks(None, request=HttpRequest())
@@ -5220,7 +5221,7 @@ def test_check_permissions_walks_explicit_requested_fields():
             model = Category
             fields = {"name": ["exact"]}
 
-        def check_name_permission(self, request: object):
+        def check_name_permission(self, _request: object):
             fired.append("name")
 
     instance = CategoryFilter(data={}, queryset=Category.objects.all())
@@ -6241,7 +6242,7 @@ def test_apply_async_runs_permission_checks_off_event_loop_thread():
             model = Category
             fields = {"name": ["exact"]}
 
-        def check_name_permission(self, request: object):
+        def check_name_permission(self, _request: object):
             captured["permission_thread"] = threading.get_ident()
 
     async def _run() -> int:
@@ -7049,7 +7050,7 @@ def test_generation_provenance_override_generated_for_meta_filter_overrides():
     import django_filters
     from django.db import models
 
-    def _override_extra(f: object) -> dict[str, object]:
+    def _override_extra(_f: object) -> dict[str, object]:
         return {"required": True}
 
     class BookFilter(FilterSet):
@@ -7469,8 +7470,8 @@ def test_candidate_snapshot_omits_declared_and_method_filters():
         def filter_note(
             self,
             queryset: QuerySet[library_models.Book],
-            name: str,
-            value: object,
+            _name: str,
+            _value: object,
         ):
             return queryset
 
@@ -7494,7 +7495,7 @@ def test_candidate_snapshot_omits_override_generated_leaf():
     import django_filters
     from django.db import models as django_models
 
-    def _override_extra(f: object) -> dict[str, object]:
+    def _override_extra(_f: object) -> dict[str, object]:
         return {"required": True}
 
     class BookFilter(FilterSet):
@@ -8181,7 +8182,7 @@ def test_is_generation_capable_false_for_plain_function_seam_override():
     keeps class creation from invoking the shadowed seam during ``get_filters``.
     """
 
-    def _plain_seam(field: ModelField, field_name: str, lookup_expr: str | None = None):
+    def _plain_seam(_field: ModelField, _field_name: str, _lookup_expr: str | None = None):
         raise AssertionError("never invoked")
 
     class PlainSeamFilter(FilterSet):
@@ -8562,7 +8563,7 @@ def test_method_owned_leaf_is_ineligible_on_framework_many_side_path():
     unknown-family eligibility probe).
     """
 
-    def _passthrough_method(qs: object, name: str, value: object) -> object:
+    def _passthrough_method(qs: object, _name: str, _value: object) -> object:
         return qs
 
     leaf = CharFilter(field_name="genres", method=_passthrough_method)
@@ -9129,7 +9130,7 @@ def test_exclude_extra_override_refused_and_pristine_never_excludes():
     """
     from django.db import models as dj_models
 
-    def _override_extra(f: object) -> dict[str, object]:
+    def _override_extra(_f: object) -> dict[str, object]:
         return {"exclude": True}
 
     class BookFilter(FilterSet):
@@ -9224,7 +9225,7 @@ def test_replacement_shadow_does_not_contaminate_other_filtersets():
 
     _register_relay(library_models.Genre)
 
-    def _override_extra(f: object) -> dict[str, object]:
+    def _override_extra(_f: object) -> dict[str, object]:
         return {"queryset": library_models.Genre.objects.none()}
 
     class FiltersetA(FilterSet):
@@ -9283,7 +9284,7 @@ def test_replacement_preserves_restricted_queryset_and_wire_shape():
 
     _register_relay(library_models.Genre)
 
-    def _override_extra(f: object) -> dict[str, object]:
+    def _override_extra(_f: object) -> dict[str, object]:
         return {"queryset": library_models.Genre.objects.none(), "required": True}
 
     class BookFilter(FilterSet):
@@ -9335,7 +9336,7 @@ def test_positive_controls_unchanged_converts_replacement_preserved():
     assert origin == "framework_default"
     assert isinstance(UnchangedFilter.get_filters()["genres"], GlobalIDMultipleChoiceFilter)
 
-    def _override_extra(f: object) -> dict[str, object]:
+    def _override_extra(_f: object) -> dict[str, object]:
         return {"queryset": library_models.Genre.objects.all()}
 
     class ReplacedFilter(FilterSet):
@@ -9466,7 +9467,7 @@ def test_r6_override_shadowed_by_more_derived_default_stays_framework():
 
     _register_relay(library_models.Patron)
 
-    def _override_extra(f: object) -> dict[str, object]:
+    def _override_extra(_f: object) -> dict[str, object]:
         return {}
 
     class MembershipCardFilter(FilterSet):
@@ -9494,7 +9495,7 @@ def test_r6_override_that_actually_governs_is_consumer_owned():
 
     _register_relay(library_models.Patron)
 
-    def _override_extra(f: object) -> dict[str, object]:
+    def _override_extra(_f: object) -> dict[str, object]:
         return {}
 
     class MembershipCardFilter(FilterSet):
@@ -9527,7 +9528,7 @@ def test_r6_benign_base_override_does_not_block_to_many_routing():
     """
     from django.db import models as dj_models
 
-    def _override_extra(f: object) -> dict[str, object]:
+    def _override_extra(_f: object) -> dict[str, object]:
         return {}
 
     class BookFilter(FilterSet):
@@ -10036,7 +10037,7 @@ def _patron_child_with_method_string() -> type[FilterSet]:
         def filter_email(
             self,
             queryset: QuerySet[library_models.Patron],
-            name: str,
+            _name: str,
             value: object,
         ):
             return queryset.filter(email=value)
@@ -10260,8 +10261,8 @@ def test_projected_leaf_matches_nothing_when_the_child_filter_matches_nothing():
         def filter_nobody(
             self,
             queryset: QuerySet[library_models.Patron],
-            name: str,
-            value: object,
+            _name: str,
+            _value: object,
         ):
             return queryset.none()
 
@@ -10438,10 +10439,10 @@ def test_flat_expanded_declared_child_fires_the_gates_its_nested_twin_fires():
             model = library_models.Shelf
             fields = {"code": ["exact"]}
 
-        def check_home_branch_permission(self, request: object):
+        def check_home_branch_permission(self, _request: object):
             fired.append("child.home_branch")
 
-        def check_branch_permission(self, request: object):
+        def check_branch_permission(self, _request: object):
             fired.append("child.branch")
 
     class ParentBookFilter(FilterSet):
@@ -10451,13 +10452,13 @@ def test_flat_expanded_declared_child_fires_the_gates_its_nested_twin_fires():
             model = library_models.Book
             fields = []
 
-        def check_shelf_permission(self, request: object):
+        def check_shelf_permission(self, _request: object):
             fired.append("parent.shelf")
 
-        def check_shelf_home_branch_permission(self, request: object):
+        def check_shelf_home_branch_permission(self, _request: object):
             fired.append("parent.shelf_home_branch")
 
-        def check_shelf_branch_permission(self, request: object):
+        def check_shelf_branch_permission(self, _request: object):
             fired.append("parent.shelf_branch")
 
     ParentBookFilter.get_filters()
@@ -10505,7 +10506,7 @@ def _shelf_and_branch_filters(shelf_type_get_queryset: Callable[..., object] | N
         def filter_code_is(
             self,
             queryset: QuerySet[library_models.Shelf],
-            name: str,
+            _name: str,
             value: object,
         ):
             return queryset.filter(code=value)
@@ -10609,10 +10610,10 @@ def test_apply_async_awaits_async_get_queryset_of_every_flat_hop(filter_input: d
     from asgiref.sync import sync_to_async
 
     async def _visible_shelves(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[library_models.Shelf],
-        info: object,
-        **kwargs: object,
+        _info: object,
+        **_kwargs: object,
     ):
         return await sync_to_async(lambda: queryset.exclude(topic="secret"))()
 
@@ -10675,10 +10676,10 @@ def test_flat_hop_visibility_runs_once_per_request_and_never_for_an_inactive_lea
     calls: list[object] = []
 
     def _visible_shelves(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[library_models.Shelf],
         info: object,
-        **kwargs: object,
+        **_kwargs: object,
     ):
         calls.append(info)
         return queryset.exclude(topic="secret")
@@ -10709,18 +10710,18 @@ def test_projected_leaf_walking_a_hop_of_its_child_set_scopes_both_hops(spelling
     """
 
     def _visible_patrons(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[library_models.Patron],
-        info: object,
-        **kwargs: object,
+        _info: object,
+        **_kwargs: object,
     ):
         return queryset.exclude(name="hidden")
 
     def _visible_loans(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[library_models.Loan],
-        info: object,
-        **kwargs: object,
+        _info: object,
+        **_kwargs: object,
     ):
         return queryset.exclude(note__startswith="secret")
 
@@ -10815,10 +10816,10 @@ def _hide(model: type[django_models.Model], fields: object = "__all__", **lookup
     """Register a type for ``model`` whose ``get_queryset`` hides the rows matching ``lookups``."""
 
     def get_queryset(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[django_models.Model],
-        info: object,
-        **kwargs: object,
+        _info: object,
+        **_kwargs: object,
     ):
         return queryset.exclude(**lookups)
 
@@ -11136,10 +11137,10 @@ def test_apply_async_awaits_the_hop_of_relation_key_and_exclude_leaves(
     calls: list[object] = []
 
     async def _visible_books(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[library_models.Book],
         info: object,
-        **kwargs: object,
+        **_kwargs: object,
     ):
         calls.append(info)
         return await sync_to_async(lambda: queryset.exclude(circulation_status="repair"))()
@@ -11168,10 +11169,10 @@ def test_inactive_relation_key_leaf_runs_no_get_queryset():
     calls: list[object] = []
 
     def _visible_books(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[library_models.Book],
         info: object,
-        **kwargs: object,
+        **_kwargs: object,
     ):
         calls.append(info)
         return queryset
@@ -11231,10 +11232,10 @@ def test_to_many_relation_key_filters_compare_the_visible_target_key(
     genres, books = _genre_world(register_type=False)
 
     def _hide_repair(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[library_models.Book],
-        info: object,
-        **kwargs: object,
+        _info: object,
+        **_kwargs: object,
     ) -> QuerySet[library_models.Book]:
         return queryset.exclude(circulation_status="repair")
 
@@ -11614,10 +11615,10 @@ def test_undeclared_globalid_relation_key_still_validates_against_the_target_typ
     _genres, books = _genre_world(register_type=False)
 
     def _hide_repair(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[library_models.Book],
-        info: object,
-        **kwargs: object,
+        _info: object,
+        **_kwargs: object,
     ) -> QuerySet[library_models.Book]:
         return queryset.exclude(circulation_status="repair")
 
@@ -11650,11 +11651,11 @@ def test_undeclared_globalid_relation_key_still_validates_against_the_target_typ
 
 
 @pytest.mark.parametrize(
-    ("register", "custom_hook"),
-    [(False, False), (True, False)],
+    "register",
+    [False, True],
     ids=["unregistered-target", "identity-hook-target"],
 )
-def test_undeclared_relation_no_type_scopes_is_not_walked(register: bool, custom_hook: bool):
+def test_undeclared_relation_no_type_scopes_is_not_walked(register: bool):
     """A relation whose target no type scopes keeps Django's own join: the leaf walks no hop.
 
     Neither an unregistered target model nor a type keeping the identity
@@ -12079,10 +12080,10 @@ def _books_through_shelf_branches(shelf_hook: Callable[..., object] | None = Non
     """
 
     def hide_secret(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[library_models.Shelf],
-        info: object,
-        **kwargs: object,
+        _info: object,
+        **_kwargs: object,
     ):
         return queryset.exclude(topic="secret")
 
@@ -12162,10 +12163,10 @@ def test_apply_async_awaits_the_intermediate_model_get_queryset(filter_input: di
     from asgiref.sync import sync_to_async
 
     async def hide_secret_async(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[library_models.Shelf],
-        info: object,
-        **kwargs: object,
+        _info: object,
+        **_kwargs: object,
     ):
         return await sync_to_async(lambda: queryset.exclude(topic="secret"))()
 
@@ -12201,10 +12202,10 @@ def test_apply_async_awaits_the_undeclared_hop_get_queryset(filter_input: dict[s
     from asgiref.sync import sync_to_async
 
     async def hide_secret_async(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[library_models.Shelf],
-        info: object,
-        **kwargs: object,
+        _info: object,
+        **_kwargs: object,
     ):
         return await sync_to_async(lambda: queryset.exclude(topic="secret"))()
 
@@ -12263,10 +12264,10 @@ def test_undeclared_path_reentering_the_root_model_reads_the_bound_types_hook(sp
         topic: str,
     ) -> Callable[..., QuerySet[library_models.Shelf]]:
         def _hide_topic(
-            cls: type[DjangoType],
+            _cls: type[DjangoType],
             queryset: QuerySet[library_models.Shelf],
-            info: object,
-            **kwargs: object,
+            _info: object,
+            **_kwargs: object,
         ) -> QuerySet[library_models.Shelf]:
             return queryset.exclude(topic=topic)
 
@@ -12464,8 +12465,8 @@ def test_consumer_qs_override_runs_inside_a_logical_arm():
         def keep_all(
             self,
             queryset: QuerySet[library_models.Shelf],
-            name: str,
-            value: object,
+            _name: str,
+            _value: object,
         ) -> QuerySet[library_models.Shelf]:
             return queryset
 
@@ -12685,10 +12686,10 @@ def test_walked_leaf_restriction_compiles_on_the_parent_database_alias(declared:
     seen: list[str] = []
 
     def get_queryset(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[library_models.Shelf],
-        info: object,
-        **kwargs: object,
+        _info: object,
+        **_kwargs: object,
     ):
         seen.append(queryset.db)
         return queryset
@@ -12731,9 +12732,9 @@ def _book_genre_book_parent(*, customize_child: bool):
             fields = {"title": ["exact"]}
 
     def filter_named(
-        self: FilterSet,
+        _self: FilterSet,
         queryset: QuerySet[library_models.Genre],
-        name: str,
+        _name: str,
         value: object,
     ):
         return queryset.filter(name=value)
@@ -12915,10 +12916,10 @@ def test_expanded_leaf_under_an_mti_subclass_child_set_runs_where_its_path_resol
     calls: list[object] = []
 
     def get_queryset(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[library_models.Genre],
         info: object,
-        **kwargs: object,
+        **_kwargs: object,
     ):
         calls.append(info)
         return queryset.exclude(name__startswith="secret")
@@ -12965,14 +12966,14 @@ def _gated_branch_parent(branch_attr: str):
             model = library_models.Shelf
             fields = {"code": ["exact"]}
 
-    def branch_gate(self: FilterSet, request: object):
+    def branch_gate(_self: FilterSet, request: object):
         if getattr(request, "denied", False):
             raise GraphQLError(f"{branch_attr} denied")
 
     def code_by_method(
-        self: FilterSet,
+        _self: FilterSet,
         queryset: QuerySet[library_models.Branch],
-        name: str,
+        _name: str,
         value: object,
     ):
         return queryset.filter(shelves__code=value)
@@ -13123,7 +13124,7 @@ def test_projected_leaf_fires_the_child_set_branch_gate_its_chain_walks(spelling
 def _gate(label: str):
     """A ``check_*_permission`` that records ``label`` on the request it is handed."""
 
-    def check(self: FilterSet, request: _GateProbeRequest):
+    def check(_self: FilterSet, request: _GateProbeRequest):
         request.fired.add(label)
 
     return check
@@ -13154,9 +13155,9 @@ def _gate_recording_branch_parent(branch_attr: str):
         check_code_permission = _gate("Shelf.code")
 
     def code_by_method(
-        self: FilterSet,
+        _self: FilterSet,
         queryset: QuerySet[library_models.Branch],
-        name: str,
+        _name: str,
         value: object,
     ):
         return queryset.filter(shelves__code=value)
@@ -13482,7 +13483,8 @@ class _ConditionMember(enum.Enum):
 
 
 @pytest.fixture
-def nullable_condition_rows(transactional_db: None) -> Iterator[None]:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def nullable_condition_rows(transactional_db: None) -> Iterator[None]:  # pyright: ignore[reportUnusedParameter]
     """Create the specimen table with rows ``blank``, ``good``, ``worn`` and ``null``; drop it after.
 
     The table is unmanaged, so it exists only for the requesting test; SQLite's schema editor

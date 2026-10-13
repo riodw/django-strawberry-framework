@@ -188,7 +188,7 @@ def test_settings_uninitialized_user_settings_does_not_recurse():
 def test_settings_normalization_attribute_error_does_not_recurse(monkeypatch: pytest.MonkeyPatch):
     """An AttributeError in _normalize_user_settings must not trigger infinite recursion in __getattr__."""
 
-    def racy_normalize(value: object):
+    def racy_normalize(_value: object):
         raise AttributeError("Simulated normalization AttributeError")
 
     monkeypatch.setattr(conf, "_normalize_user_settings", racy_normalize)

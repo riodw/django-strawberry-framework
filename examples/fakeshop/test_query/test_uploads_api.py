@@ -342,7 +342,7 @@ def test_storage_without_absolute_paths_nulls_only_the_path_subfield_over_http(
         specimen.attachment.save("doc.txt", ContentFile(b"hello bytes"), save=False)
         specimen.save()
 
-        def _no_absolute_path(self: FileSystemStorage, name: str) -> NoReturn:
+        def _no_absolute_path(_self: FileSystemStorage, _name: str) -> NoReturn:
             raise NotImplementedError("This backend doesn't support absolute paths.")
 
         monkeypatch.setattr(FileSystemStorage, "path", _no_absolute_path)
@@ -432,7 +432,7 @@ def test_suspicious_file_operation_is_reported_not_nulled_over_http(
         specimen.attachment.save("doc.txt", ContentFile(b"hello bytes"), save=False)
         specimen.save()
 
-        def _suspicious_path(self: FileSystemStorage, name: str) -> NoReturn:
+        def _suspicious_path(_self: FileSystemStorage, _name: str) -> NoReturn:
             raise SuspiciousFileOperation("escaped media root")
 
         monkeypatch.setattr(FileSystemStorage, "path", _suspicious_path)

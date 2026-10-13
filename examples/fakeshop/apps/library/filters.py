@@ -68,7 +68,7 @@ class ModelChoiceInFilter(BaseInFilter, ModelChoiceFilter):  # pyright: ignore[r
     """The django-filter ``in`` idiom over a model-choice filter: a list of branch keys."""
 
 
-def _unrestricted_branches(request: HttpRequest | None = None) -> QuerySet[models.Branch]:
+def _unrestricted_branches(_request: HttpRequest | None = None) -> QuerySet[models.Branch]:
     """Every branch but the ``city="restricted"`` ones: the declared model-choice queryset.
 
     ``ShelfFilter``'s model-choice filters validate against it. ``home_branch_for_request``
@@ -226,7 +226,7 @@ class PatronFilter(FilterSet):
     def filter_email_must_have_at_sign(
         self,
         queryset: QuerySet[models.Patron],
-        name: str,
+        _name: str,
         value: str,
     ) -> QuerySet[models.Patron]:
         """Apply the declared filter once the validator has accepted the value."""

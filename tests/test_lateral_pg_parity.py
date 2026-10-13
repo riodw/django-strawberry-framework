@@ -70,7 +70,8 @@ class _Closeable(Protocol):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_global_registry(isolate_global_registry: None) -> None:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def _isolate_global_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
     """Every test here declares fresh ``DjangoType`` classes - opt the module
     into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
 
@@ -520,7 +521,7 @@ def _visibility_schemas():
     """
 
     @classmethod
-    def _hide_repair(cls: type[DjangoType], queryset: QuerySet[Book], info: object):
+    def _hide_repair(_cls: type[DjangoType], queryset: QuerySet[Book], _info: object):
         return queryset.exclude(circulation_status="repair")
 
     make_django_type(
@@ -635,7 +636,7 @@ def test_multi_table_visibility_scope_downgrades_off_the_lateral_path():
     _seed_visibility()
 
     @classmethod
-    def _hide_by_branch(cls: type[DjangoType], queryset: QuerySet[Book], info: object):
+    def _hide_by_branch(_cls: type[DjangoType], queryset: QuerySet[Book], _info: object):
         return queryset.exclude(shelf__branch__city="restricted")
 
     make_django_type(
@@ -686,7 +687,7 @@ def _request_varying_visibility_schema():
     from django_strawberry_framework import DjangoOptimizerExtension, strawberry_config
 
     @classmethod
-    def _scope_by_staff(cls: type[DjangoType], queryset: QuerySet[Book], info: object):
+    def _scope_by_staff(_cls: type[DjangoType], queryset: QuerySet[Book], info: object):
         # The real idiom: unwrap info.context -> request -> user -> is_staff.
         context = getattr(info, "context", None)
         request = getattr(context, "request", None) or context

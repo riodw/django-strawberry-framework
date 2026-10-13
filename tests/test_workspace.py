@@ -1220,8 +1220,8 @@ def test_release_keeps_the_copy_until_its_binding_is_gone(
     assert _bound_to(layout) == {"slot-1": None}
 
 
+@pytest.mark.usefixtures("layout")
 def test_gc_refuses_while_a_run_waits_for_its_copy(
-    layout: workspace.Layout,
     actors: _Actors,
 ) -> None:
     actors.run("run", pauses=("bound",))
@@ -1563,7 +1563,7 @@ def test_postgres_exact_match_never_takes_slot10_for_slot1(
     statements: list[str] = []
     postgres = workspace.Postgres(tmp_path)
 
-    def _record_statement(statement: str, database: str = "postgres") -> str:
+    def _record_statement(statement: str, _database: str = "postgres") -> str:
         statements.append(statement)
         return ""
 

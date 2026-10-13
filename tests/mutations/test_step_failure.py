@@ -31,7 +31,8 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry(isolate_global_registry: None) -> Iterator[None]:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def _isolate_registry(isolate_global_registry: None) -> Iterator[None]:  # pyright: ignore[reportUnusedParameter]
     """Declare this module's types and mutation over a cleared registry."""
     yield
 

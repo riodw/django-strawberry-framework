@@ -779,7 +779,8 @@ def _recording_upload_handlers():
     )
 
 
-def _csrf_failure_probe(request: HttpRequest, reason: str = ""):
+# basedpyright: Django calls CSRF_FAILURE_VIEW with reason= by keyword
+def _csrf_failure_probe(_request: HttpRequest, reason: str = ""):  # pyright: ignore[reportUnusedParameter]
     """A custom ``CSRF_FAILURE_VIEW``, so one row can prove the setting still fires."""
     return HttpResponseForbidden(b"probe-csrf-failure")
 

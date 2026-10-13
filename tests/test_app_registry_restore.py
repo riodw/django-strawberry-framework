@@ -58,7 +58,8 @@ def probe_cleanup() -> Iterator[None]:
     apps.clear_cache()
 
 
-def test_restore_keeps_a_model_bound_at_module_scope(probe_cleanup: None) -> None:
+@pytest.mark.usefixtures("probe_cleanup")
+def test_restore_keeps_a_model_bound_at_module_scope() -> None:
     """A model its still-imported module binds stays registered with its reverse relation."""
     snapshot = {label: dict(registered) for label, registered in apps.all_models.items()}
     module = types.ModuleType(_PROBE_MODULE)
@@ -74,7 +75,8 @@ def test_restore_keeps_a_model_bound_at_module_scope(probe_cleanup: None) -> Non
     assert reverse.related_model is probe
 
 
-def test_restore_unregisters_a_model_no_module_binds(probe_cleanup: None) -> None:
+@pytest.mark.usefixtures("probe_cleanup")
+def test_restore_unregisters_a_model_no_module_binds() -> None:
     """A model only the test holds is unregistered and its reverse relation expires."""
     snapshot = {label: dict(registered) for label, registered in apps.all_models.items()}
     sys.modules[_PROBE_MODULE] = types.ModuleType(_PROBE_MODULE)

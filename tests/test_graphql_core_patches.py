@@ -104,7 +104,7 @@ def test_captured_upstream_still_returns_a_residual_awaitable():
 
 
 def test_apply_fails_loudly_when_upstream_shape_changes():
-    def _one_argument_completer(self: object) -> None:
+    def _one_argument_completer(_self: object) -> None:
         return None
 
     with mock.patch.object(patches, "_original_complete_list_value", _one_argument_completer):

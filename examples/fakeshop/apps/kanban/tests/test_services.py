@@ -19,7 +19,8 @@ PLANNED_TEST_FILE = "tests/planned_only/test_planned_only.py"
 
 
 @pytest.fixture(autouse=True)
-def _service_lookups(db: None) -> None:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def _service_lookups(db: None) -> None:  # pyright: ignore[reportUnusedParameter]
     kf.make_status("todo")
     kf.make_priority("medium")
     kf.make_section("scope")
@@ -628,7 +629,7 @@ def test_resolve_card_ambiguous_title_raises(
     """
     card = kf.make_card(title="Ambiguous card", target_version=beta_version)
 
-    def _raise_multiple(**kwargs: object):
+    def _raise_multiple(**_kwargs: object):
         raise models.Card.MultipleObjectsReturned
 
     monkeypatch.setattr(models.Card.objects, "get", _raise_multiple)

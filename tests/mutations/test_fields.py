@@ -43,11 +43,11 @@ def _isolate_registry() -> Iterator[None]:
 class _AllowAll:
     def has_permission(
         self,
-        info: object,
-        mutation: type[object],
-        operation: str,
-        data: object,
-        instance: object = None,
+        _info: object,
+        _mutation: type[object],
+        _operation: str,
+        _data: object,
+        _instance: object = None,
     ):
         return True
 

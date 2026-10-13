@@ -52,7 +52,8 @@ from tests._info import make_info, unread_info
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry(isolate_global_registry: None) -> None:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def _isolate_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
     """Every test here declares fresh ``DjangoType`` classes - opt the module
     into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
 
@@ -353,7 +354,7 @@ def test_consumer_declared_is_type_of_is_preserved():
     """
     sentinel = object()
 
-    def consumer_is_type_of(obj: object, info: object):
+    def consumer_is_type_of(_obj: object, _info: object):
         return sentinel
 
     class CustomNode(DjangoType):
@@ -366,7 +367,7 @@ def test_consumer_declared_is_type_of_is_preserved():
             fields = ("id", "name")
 
     assert CustomNode.__dict__["is_type_of"] is consumer_is_type_of
-    assert CustomNode.__dict__["is_type_of"](Category(), info=None) is sentinel
+    assert CustomNode.__dict__["is_type_of"](Category(), None) is sentinel
 
 
 def test_is_type_of_hostile_hint_descriptor_falls_back_to_instance_check():
@@ -1027,9 +1028,10 @@ async def test_consumer_async_resolve_node_wins():
         @classmethod
         async def resolve_node(
             cls,
-            info: object,
-            node_id: object,
-            required: bool = False,
+            # basedpyright: the test calls this override by keyword, as Strawberry's Relay seam does
+            info: object,  # pyright: ignore[reportUnusedParameter]
+            # basedpyright: the test calls this override by keyword, as Strawberry's Relay seam does
+            node_id: object,  # pyright: ignore[reportUnusedParameter]
         ):
             return sentinel
 
@@ -1066,7 +1068,8 @@ def test_consumer_resolve_id_wins():
             interfaces = (relay.Node,)
 
         @classmethod
-        def resolve_id(cls, root: object, info: object) -> str:
+        # basedpyright: Strawberry's Relay seam and this test pass ``info`` by keyword
+        def resolve_id(cls, _root: object, info: object) -> str:  # pyright: ignore[reportUnusedParameter]
             return sentinel_id
 
     finalize_django_types()
@@ -1086,9 +1089,10 @@ def test_consumer_resolve_node_wins():
         @classmethod
         def resolve_node(
             cls,
-            info: object,
-            node_id: object,
-            required: bool = False,
+            # basedpyright: the test calls this override by keyword, as Strawberry's Relay seam does
+            info: object,  # pyright: ignore[reportUnusedParameter]
+            # basedpyright: the test calls this override by keyword, as Strawberry's Relay seam does
+            node_id: object,  # pyright: ignore[reportUnusedParameter]
         ):
             return sentinel
 
@@ -1109,9 +1113,8 @@ def test_consumer_resolve_nodes_wins():
         @classmethod
         def resolve_nodes(
             cls,
-            info: object,
-            node_ids: object = None,
-            required: bool = False,
+            # basedpyright: the test calls this override by keyword, as Strawberry's Relay seam does
+            info: object,  # pyright: ignore[reportUnusedParameter]
         ):
             return sentinel
 
@@ -1283,7 +1286,7 @@ def test_resolve_id_attr_reads_stamp_without_rescanning(monkeypatch: pytest.Monk
     finalize_django_types()
     assert CategoryNode.__dict__["_dsf_relay_id_attr"] == "pk"
 
-    def _boom(cls: type[relay.Node]):
+    def _boom(_cls: type[relay.Node]):
         raise AssertionError("upstream scan must not run for a stamped type")
 
     monkeypatch.setattr(relay.Node, "resolve_id_attr", classmethod(_boom))
@@ -1832,7 +1835,7 @@ def test_globalid_type_plus_model_emits_model_label():
 def test_globalid_callable_strategy_emits_custom():
     """A callable returns the type-name slot and it appears in the emitted GlobalID."""
 
-    def encoder(type_cls: type[DjangoType], model: type[Model], root: object):
+    def encoder(_type_cls: type[DjangoType], model: type[Model], _root: object):
         return f"custom:{model._meta.label_lower}"
 
     class CategoryNode(DjangoType):
@@ -1862,7 +1865,7 @@ def test_globalid_callable_non_string_return_raises(bad_return: object):
     The installed closure raises (not Strawberry's ``Node._id`` ``AssertionError``).
     """
 
-    def encoder(type_cls: type[DjangoType], model: type[Model], root: object):
+    def encoder(_type_cls: type[DjangoType], _model: type[Model], _root: object):
         return bad_return
 
     class CategoryNode(DjangoType):
@@ -1889,7 +1892,7 @@ def test_globalid_callable_string_subclass_is_normalized():
         def __format__(self, spec: str):
             raise RuntimeError("hostile format")
 
-    def encoder(type_cls: type[DjangoType], model: type[Model], root: object):
+    def encoder(_type_cls: type[DjangoType], _model: type[Model], _root: object):
         return HostileString("custom-payload")
 
     class CategoryNode(DjangoType):
@@ -1920,7 +1923,7 @@ def test_encode_typename_helper_dispatch():
     assert encode_typename(definition, "type+model", CategoryNode, object()) == "products.category"
     assert encode_typename(definition, "type", CategoryNode, object()) == "CategoryNode"
 
-    def encoder(type_cls: type[DjangoType], model: type[Model], root: object):
+    def encoder(_type_cls: type[DjangoType], _model: type[Model], _root: object):
         return "from-callable"
 
     assert encode_typename(definition, encoder, CategoryNode, object()) == "from-callable"
@@ -1936,7 +1939,7 @@ def test_consumer_resolve_typename_override_preserved_and_recorded_custom():
             interfaces = (relay.Node,)
 
         @classmethod
-        def resolve_typename(cls, root: object, info: object):
+        def resolve_typename(cls, _root: object, _info: object):
             return "ConsumerOwned"
 
     consumer_func = CategoryNode.__dict__["resolve_typename"].__func__
@@ -1957,7 +1960,7 @@ def test_resolve_typename_override_plus_meta_strategy_raises():
             globalid_strategy = "model"
 
         @classmethod
-        def resolve_typename(cls, root: object, info: object):
+        def resolve_typename(cls, _root: object, _info: object):
             return "ConsumerOwned"
 
     assert registry.get(Category) is CategoryNode
@@ -1977,7 +1980,7 @@ def test_resolve_typename_override_plus_setting_does_not_raise(settings: pytest_
             interfaces = (relay.Node,)
 
         @classmethod
-        def resolve_typename(cls, root: object, info: object):
+        def resolve_typename(cls, _root: object, _info: object):
             return "ConsumerOwned"
 
     finalize_django_types()
@@ -2304,7 +2307,7 @@ def test_routing_audit_sees_child_true_recorded_strategy():
     The child's true ``model`` recording must trip the routing audit.
     """
 
-    def encoder(type_cls: type[DjangoType], model: type[Model], root: object):
+    def encoder(_type_cls: type[DjangoType], _model: type[Model], _root: object):
         return "custom-payload"
 
     class PrimaryNode(DjangoType):
@@ -2351,7 +2354,7 @@ def test_plain_function_resolve_typename_is_not_classified_override():
     over it - pinned here so the marker-based discrimination stays explicit.
     """
 
-    def resolve_typename(root: object, info: object):
+    def resolve_typename(_root: object, _info: object):
         return "PlainFunction"
 
     class CategoryNode(DjangoType):
@@ -2376,7 +2379,7 @@ def test_plain_function_resolve_typename_is_not_classified_override():
 def test_callable_setting_well_formed_accepted(settings: pytest_django.Settings):
     """A well-formed callable ``RELAY_GLOBALID_STRATEGY`` setting is accepted (-> ``callable``)."""
 
-    def encoder(type_cls: type[DjangoType], model: type[Model], root: object):
+    def encoder(_type_cls: type[DjangoType], _model: type[Model], _root: object):
         return "from-setting"
 
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": encoder}
@@ -2395,7 +2398,7 @@ def test_callable_setting_well_formed_accepted(settings: pytest_django.Settings)
 def test_callable_setting_wrong_arity_raises(settings: pytest_django.Settings):
     """A wrong-arity callable setting raises at finalization, naming the setting."""
 
-    def encoder(type_cls: type[DjangoType], model: type[Model]):
+    def encoder(_type_cls: type[DjangoType], _model: type[Model]):
         return "x"
 
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": encoder}
@@ -2415,7 +2418,7 @@ def test_callable_setting_wrong_arity_raises(settings: pytest_django.Settings):
 def test_callable_setting_async_raises(settings: pytest_django.Settings):
     """An ``async def`` callable setting raises at finalization, naming the setting."""
 
-    async def encoder(type_cls: type[DjangoType], model: type[Model], root: object):
+    async def encoder(_type_cls: type[DjangoType], _model: type[Model], _root: object):
         return "x"
 
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": encoder}
@@ -2561,7 +2564,7 @@ def test_invalid_setting_raises_when_only_type_has_resolve_typename_override(
             interfaces = (relay.Node,)
 
         @classmethod
-        def resolve_typename(cls, root: object, info: object):
+        def resolve_typename(cls, _root: object, _info: object):
             return "ConsumerOwned"
 
     assert registry.get(Category) is CategoryNode
@@ -2570,7 +2573,7 @@ def test_invalid_setting_raises_when_only_type_has_resolve_typename_override(
         finalize_django_types()
 
 
-def _two_arg_strategy(type_cls: object, model: object) -> str:
+def _two_arg_strategy(_type_cls: object, _model: object) -> str:
     return "x"
 
 
@@ -2602,7 +2605,7 @@ def test_invalid_async_callable_setting_raises_with_zero_relay_types(
 ):
     """An ``async def`` callable setting raises with zero Relay types (sync-ness check)."""
 
-    async def encoder(type_cls: type[DjangoType], model: type[Model], root: object):
+    async def encoder(_type_cls: type[DjangoType], _model: type[Model], _root: object):
         return "x"
 
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": encoder}
@@ -2709,7 +2712,7 @@ def test_retry_lifecycle_rejects_setting_change_no_mixed_strategy(
             fields = ("id", "name")
             interfaces = (relay.Node,)
 
-    def _boom(*args: object, **kwargs: object):
+    def _boom(*_args: object, **_kwargs: object):
         raise RuntimeError("phase-3 boom")
 
     monkeypatch.setattr(strawberry, "type", _boom)
@@ -2904,7 +2907,7 @@ def test_decode_type_strategy_rejects_model_label_id():
 def test_decode_callable_strategy_has_no_decode_path():
     """A payload resolving to a ``callable``-strategy type raises (encode-only)."""
 
-    def encoder(type_cls: type[DjangoType], model: type[Model], root: object):
+    def encoder(_type_cls: type[DjangoType], model: type[Model], _root: object):
         return model._meta.label_lower
 
     class CategoryNode(DjangoType):
@@ -2931,7 +2934,7 @@ def test_decode_custom_override_type_has_no_decode_path():
             interfaces = (relay.Node,)
 
         @classmethod
-        def resolve_typename(cls, root: object, info: object):
+        def resolve_typename(cls, _root: object, _info: object):
             return "products.category"
 
     finalize_django_types()

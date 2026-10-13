@@ -498,27 +498,27 @@ def _build_consumer_and_adapter() -> tuple[
     WebSocketAdapterShape,
 ]:
     class FakeAdapter:
-        async def send_json(self, message: object):
+        async def send_json(self, _message: object):
             pass
 
-        async def close(self, code: int | None = None, reason: str | None = None):
+        async def close(self, _code: int | None = None, _reason: str | None = None):
             pass
 
     class FakeTransport:
         async def handle(self) -> None:
             pass
 
-        async def handle_subscribe(self, message: object) -> None:
+        async def handle_subscribe(self, _message: object) -> None:
             pass
 
     class FakeLegacy:
         async def handle(self) -> None:
             pass
 
-        async def handle_start(self, message: object) -> None:
+        async def handle_start(self, _message: object) -> None:
             pass
 
-        async def handle_stop(self, message: object) -> None:
+        async def handle_stop(self, _message: object) -> None:
             pass
 
     class FakeBase:
@@ -530,10 +530,10 @@ def _build_consumer_and_adapter() -> tuple[
             pass
 
         @classmethod
-        def as_asgi(cls, **initkwargs: object) -> object:
+        def as_asgi(cls, **_initkwargs: object) -> object:
             return cls
 
-        async def disconnect(self, code: int):
+        async def disconnect(self, _code: int):
             pass
 
     # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
@@ -1655,7 +1655,7 @@ async def test_send_revalidated_send_hostile():
     ws = Mock()
     ws.ws_consumer = consumer
 
-    async def hostile_send(msg: object):
+    async def hostile_send(_msg: object):
         raise ValueError("hostile send")
 
     with patch.object(cmod, "_refreshed_actor", return_value=Mock(is_authenticated=True)):
@@ -1749,7 +1749,7 @@ async def test_send_revalidated_send_cancelled():
     ws = Mock()
     ws.ws_consumer = consumer
 
-    async def hostile_send(msg: object):
+    async def hostile_send(_msg: object):
         raise asyncio.CancelledError("cancelled send")
 
     with patch.object(cmod, "_refreshed_actor", return_value=Mock(is_authenticated=True)):

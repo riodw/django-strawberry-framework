@@ -173,9 +173,8 @@ def _first_item() -> models.Item:
 
 
 @pytest.mark.django_db
-def test_connection_edge_and_nested_relation_ids_carry_the_published_name(
-    renaming_schema: DjangoSchema,
-) -> None:
+@pytest.mark.usefixtures("renaming_schema")
+def test_connection_edge_and_nested_relation_ids_carry_the_published_name() -> None:
     """A root connection edge and its nested forward relation both emit ``Api<Type>:<pk>``."""
     seed_data(1)
     create_users(1)
@@ -212,9 +211,8 @@ def test_connection_edge_and_nested_relation_ids_carry_the_published_name(
 
 
 @pytest.mark.django_db
-def test_bare_node_refetches_an_emitted_item_id_in_one_item_query(
-    renaming_schema: DjangoSchema,
-) -> None:
+@pytest.mark.usefixtures("renaming_schema")
+def test_bare_node_refetches_an_emitted_item_id_in_one_item_query() -> None:
     """``node(id:)`` resolves ``ApiItemType:<pk>`` to the item through one ``products_item`` read."""
     seed_data(1)
     create_users(1)
@@ -239,9 +237,8 @@ def test_bare_node_refetches_an_emitted_item_id_in_one_item_query(
 
 
 @pytest.mark.django_db
-def test_nodes_refetches_emitted_ids_of_two_types_in_input_order(
-    renaming_schema: DjangoSchema,
-) -> None:
+@pytest.mark.usefixtures("renaming_schema")
+def test_nodes_refetches_emitted_ids_of_two_types_in_input_order() -> None:
     """``nodes(ids:)`` decodes each published name, one read per decoded type, input order kept."""
     seed_data(1)
     create_users(1)
@@ -267,7 +264,8 @@ def test_nodes_refetches_emitted_ids_of_two_types_in_input_order(
 
 
 @pytest.mark.django_db
-def test_typed_node_field_refetches_an_emitted_genre_id(renaming_schema: DjangoSchema) -> None:
+@pytest.mark.usefixtures("renaming_schema")
+def test_typed_node_field_refetches_an_emitted_genre_id() -> None:
     """The typed ``genre(id:)`` field accepts the ``ApiGenreType`` id its own type emits."""
     seed_data(1)
     genre = library_models.Genre.objects.create(name="Renamed")
@@ -289,9 +287,8 @@ def test_typed_node_field_refetches_an_emitted_genre_id(renaming_schema: DjangoS
 
 
 @pytest.mark.django_db
-def test_typed_node_field_names_published_types_in_the_mismatch_error(
-    renaming_schema: DjangoSchema,
-) -> None:
+@pytest.mark.usefixtures("renaming_schema")
+def test_typed_node_field_names_published_types_in_the_mismatch_error() -> None:
     """A typed field fed another type's emitted id names both types as the client sees them."""
     seed_data(1)
     create_users(1)
@@ -319,8 +316,8 @@ def test_typed_node_field_names_published_types_in_the_mismatch_error(
     ],
     ids=["node", "nodes"],
 )
+@pytest.mark.usefixtures("renaming_schema")
 def test_default_spelling_of_a_renamed_type_is_rejected(
-    renaming_schema: DjangoSchema,
     query: str,
     expected_data: JSONObject | None,
 ) -> None:
@@ -407,8 +404,8 @@ _ITEM_WRITES: dict[
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("flavor", list(_ITEM_WRITES), ids=list(_ITEM_WRITES))
+@pytest.mark.usefixtures("renaming_schema")
 def test_item_write_by_emitted_ids_targets_the_named_rows(
-    renaming_schema: DjangoSchema,
     flavor: str,
 ) -> None:
     """Each flavor writes ``RenamedWidget`` under the category its ``ApiCategoryType`` id names."""
@@ -428,7 +425,8 @@ def test_item_write_by_emitted_ids_targets_the_named_rows(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_delete_by_emitted_id_removes_the_named_item(renaming_schema: DjangoSchema) -> None:
+@pytest.mark.usefixtures("renaming_schema")
+def test_delete_by_emitted_id_removes_the_named_item() -> None:
     """``deleteItem(id: "ApiItemType:<pk>")`` deletes exactly that row."""
     seed_data(1)
     create_users(1)
@@ -446,9 +444,8 @@ def test_delete_by_emitted_id_removes_the_named_item(renaming_schema: DjangoSche
 
 
 @pytest.mark.django_db(transaction=True)
-def test_many_to_many_ids_by_emitted_genre_ids_attach_the_named_genres(
-    renaming_schema: DjangoSchema,
-) -> None:
+@pytest.mark.usefixtures("renaming_schema")
+def test_many_to_many_ids_by_emitted_genre_ids_attach_the_named_genres() -> None:
     """``createBookViaCustomInput(genres:)`` attaches the genres its ``ApiGenreType`` ids name."""
     seed_data(1)
     branch = library_models.Branch.objects.create(name="Central", city="Boston")
@@ -476,7 +473,8 @@ def test_many_to_many_ids_by_emitted_genre_ids_attach_the_named_genres(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_serializer_many_to_many_update_by_emitted_ids(renaming_schema: DjangoSchema) -> None:
+@pytest.mark.usefixtures("renaming_schema")
+def test_serializer_many_to_many_update_by_emitted_ids() -> None:
     """``updateBookGenresViaSerializer`` locates the ``ApiBookType`` id and sets the named genres."""
     seed_data(1)
     branch = library_models.Branch.objects.create(name="Central", city="Boston")
@@ -496,9 +494,8 @@ def test_serializer_many_to_many_update_by_emitted_ids(renaming_schema: DjangoSc
 
 
 @pytest.mark.django_db(transaction=True)
-def test_default_spelling_relation_id_is_an_invalid_relation_error(
-    renaming_schema: DjangoSchema,
-) -> None:
+@pytest.mark.usefixtures("renaming_schema")
+def test_default_spelling_relation_id_is_an_invalid_relation_error() -> None:
     """``categoryId: "CategoryType:<pk>"`` names nothing this schema publishes: no row written."""
     seed_data(1)
     create_users(1)
@@ -541,11 +538,8 @@ def test_default_spelling_relation_id_is_an_invalid_relation_error(
         "relation-key-in",
     ],
 )
-def test_globalid_filters_accept_emitted_ids(
-    renaming_schema: DjangoSchema,
-    variable: str,
-    filter_input: str,
-) -> None:
+@pytest.mark.usefixtures("renaming_schema")
+def test_globalid_filters_accept_emitted_ids(variable: str, filter_input: str) -> None:
     """Own-id, ``RelatedFilter``-hop and relation-key GlobalID filters select the rows named."""
     seed_data(1)
     create_users(1)
@@ -581,9 +575,8 @@ def test_globalid_filters_accept_emitted_ids(
 
 
 @pytest.mark.django_db
-def test_relation_key_exact_filter_accepts_an_emitted_property_id(
-    renaming_schema: DjangoSchema,
-) -> None:
+@pytest.mark.usefixtures("renaming_schema")
+def test_relation_key_exact_filter_accepts_an_emitted_property_id() -> None:
     """``allEntries(filter: { propertyId: { exact } })`` selects the entries of that property."""
     seed_data(1)
     create_users(1)
@@ -603,9 +596,8 @@ def test_relation_key_exact_filter_accepts_an_emitted_property_id(
 
 
 @pytest.mark.django_db
-def test_globalid_filter_rejects_the_default_spelling_of_a_renamed_type(
-    renaming_schema: DjangoSchema,
-) -> None:
+@pytest.mark.usefixtures("renaming_schema")
+def test_globalid_filter_rejects_the_default_spelling_of_a_renamed_type() -> None:
     """The filter expects the published name and says so; the default spelling selects nothing."""
     seed_data(1)
     create_users(1)
@@ -630,7 +622,8 @@ def test_globalid_filter_rejects_the_default_spelling_of_a_renamed_type(
 
 
 @pytest.fixture
-def collision_schema(db: None) -> Iterator[DjangoSchema]:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def collision_schema(db: None) -> Iterator[DjangoSchema]:  # pyright: ignore[reportUnusedParameter]
     """``CategoryNode`` publishes as ``ApiCategoryNode``, the very name another real type declares.
 
     Every type uses ``Meta.globalid_strategy = "type"`` under the default setting. The
@@ -677,9 +670,8 @@ def collision_schema(db: None) -> Iterator[DjangoSchema]:
 
 
 @pytest.mark.django_db
-def test_converted_name_equal_to_another_types_name_resolves_the_published_type(
-    collision_schema: DjangoSchema,
-) -> None:
+@pytest.mark.usefixtures("collision_schema")
+def test_converted_name_equal_to_another_types_name_resolves_the_published_type() -> None:
     """``node(id: "ApiCategoryNode:<pk>")`` returns the category, never the item of that pk."""
     seed_data(1)
     category = models.Category.objects.earliest("pk")
@@ -693,9 +685,8 @@ def test_converted_name_equal_to_another_types_name_resolves_the_published_type(
 
 
 @pytest.mark.django_db
-def test_converted_name_collision_is_a_typed_mismatch_not_a_wrong_row(
-    collision_schema: DjangoSchema,
-) -> None:
+@pytest.mark.usefixtures("collision_schema")
+def test_converted_name_collision_is_a_typed_mismatch_not_a_wrong_row() -> None:
     """The typed ``item(id:)`` field refuses the category's id by both published names."""
     seed_data(1)
     category = models.Category.objects.earliest("pk")
@@ -712,9 +703,8 @@ def test_converted_name_collision_is_a_typed_mismatch_not_a_wrong_row(
 
 
 @pytest.mark.django_db
-def test_typed_nodes_field_names_published_types_in_the_mismatch_error(
-    collision_schema: DjangoSchema,
-) -> None:
+@pytest.mark.usefixtures("collision_schema")
+def test_typed_nodes_field_names_published_types_in_the_mismatch_error() -> None:
     """The typed ``items(ids:)`` batch refuses the category's id by both published names."""
     seed_data(1)
     category = models.Category.objects.earliest("pk")
@@ -732,9 +722,8 @@ def test_typed_nodes_field_names_published_types_in_the_mismatch_error(
 
 
 @pytest.mark.django_db
-def test_typed_mismatch_names_an_unpublished_type_by_its_own_spelling(
-    collision_schema: DjangoSchema,
-) -> None:
+@pytest.mark.usefixtures("collision_schema")
+def test_typed_mismatch_names_an_unpublished_type_by_its_own_spelling() -> None:
     """A Relay type this schema does not publish keeps its own spelling, and its own name.
 
     ``PropertyNode:<pk>`` names no type the schema publishes, and the registered
@@ -765,7 +754,8 @@ class _PropertyAsCategory(NameConverter):
 
 
 @pytest.fixture
-def filter_authority_schema(db: None) -> Iterator[DjangoSchema]:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def filter_authority_schema(db: None) -> Iterator[DjangoSchema]:  # pyright: ignore[reportUnusedParameter]
     """An item filter on ``category`` in a schema that publishes ``PropertyNode`` as ``CategoryNode``.
 
     ``CategoryNode`` is registered (the filter's target) but reachable from no root,
@@ -815,9 +805,8 @@ def filter_authority_schema(db: None) -> Iterator[DjangoSchema]:
 
 
 @pytest.mark.django_db
-def test_relation_filter_refuses_a_slot_this_schema_publishes_for_another_type(
-    filter_authority_schema: DjangoSchema,
-) -> None:
+@pytest.mark.usefixtures("filter_authority_schema")
+def test_relation_filter_refuses_a_slot_this_schema_publishes_for_another_type() -> None:
     """``CategoryNode:<pk>`` is this schema's property id, so the category filter refuses it.
 
     The slot equals the target type's own default spelling, but ``node(id:)`` in
@@ -852,7 +841,8 @@ def test_relation_filter_refuses_a_slot_this_schema_publishes_for_another_type(
 
 
 @pytest.fixture
-def shadowing_child_schema(db: None) -> Iterator[DjangoSchema]:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def shadowing_child_schema(db: None) -> Iterator[DjangoSchema]:  # pyright: ignore[reportUnusedParameter]
     """A ``type`` child of a concrete ``model``-strategy Relay parent, under the prefix converter."""
     registry.clear()
 
@@ -886,9 +876,8 @@ def shadowing_child_schema(db: None) -> Iterator[DjangoSchema]:
 
 
 @pytest.mark.django_db
-def test_shadowing_type_child_emits_its_published_name(
-    shadowing_child_schema: DjangoSchema,
-) -> None:
+@pytest.mark.usefixtures("shadowing_child_schema")
+def test_shadowing_type_child_emits_its_published_name() -> None:
     """The child's slot is ``ApiChildCategoryNode`` (its ``__typename``); the parent keeps its label."""
     seed_data(1)
     category = models.Category.objects.earliest("pk")
@@ -923,9 +912,8 @@ def test_shadowing_type_child_emits_its_published_name(
 
 
 @pytest.mark.django_db
-def test_shadowing_type_child_refetches_the_id_it_emitted(
-    shadowing_child_schema: DjangoSchema,
-) -> None:
+@pytest.mark.usefixtures("shadowing_child_schema")
+def test_shadowing_type_child_refetches_the_id_it_emitted() -> None:
     """The id the child's connection put on the wire refetches through ``node`` as the child."""
     seed_data(1)
     category = models.Category.objects.earliest("pk")

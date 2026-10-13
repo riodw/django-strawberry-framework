@@ -188,7 +188,7 @@ def test_global_id_for_type_strategy_refuses_a_schema_not_publishing_the_type():
 def _callable_strategy_type() -> type[DjangoType]:
     """A Relay type whose ``Meta.globalid_strategy`` is a consumer callable."""
 
-    def _encoder(type_cls: type[DjangoType], model: type[models.Model], root: object):
+    def _encoder(_type_cls: type[DjangoType], _model: type[models.Model], _root: object):
         return "products.category"
 
     return _make_node_type("CategoryNode", strategy=_encoder)
@@ -204,7 +204,7 @@ def _custom_override_type() -> type[DjangoType]:
             interfaces = (relay.Node,)
 
         @classmethod
-        def resolve_typename(cls, root: object, info: strawberry.Info[object, object]):
+        def resolve_typename(cls, _root: object, _info: strawberry.Info[object, object]):
             return "ConsumerOwned"
 
     return CategoryNode
@@ -300,7 +300,7 @@ def test_global_id_for_strategy_stamped_but_unfinalized_raises(monkeypatch: pyte
     """
     category_node = _make_node_type("CategoryNode")
 
-    def _boom(*args: object, **kwargs: object):
+    def _boom(*_args: object, **_kwargs: object):
         raise RuntimeError("phase-3 boom")
 
     monkeypatch.setattr(strawberry, "type", _boom)

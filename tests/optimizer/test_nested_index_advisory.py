@@ -1470,7 +1470,7 @@ class TestAdvisoryDeferredUntilWindowAccepted:
     class _RefuseEveryWindow:
         name = "refuse-all"
 
-        def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan):
+        def plan(self, _request: NestedConnectionRequest, _plan: OptimizationPlan):
             return False
 
     @staticmethod

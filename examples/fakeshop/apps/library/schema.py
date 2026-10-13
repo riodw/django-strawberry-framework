@@ -52,14 +52,17 @@ from django_strawberry_framework.orders import OrderInput
 # drives an ``async def`` resolver's ``Manager`` through it.
 
 
-def _branches_manager_resolver(root: object, info: Info) -> Manager[models.Branch]:
+def _branches_manager_resolver(_root: object, _info: Info) -> Manager[models.Branch]:
     return models.Branch.objects
 
 
 # Consumer ``resolver=`` whose bare ``.order_by()`` clears ``ReadingList``'s
 # inherited title ordering. Django then compiles no ``Meta.ordering`` for the
 # source, so the connection over it pages under the pk tiebreaker alone.
-def _reading_lists_without_default_order(root: object, info: Info) -> QuerySet[models.ReadingList]:
+def _reading_lists_without_default_order(
+    _root: object,
+    _info: Info,
+) -> QuerySet[models.ReadingList]:
     return models.ReadingList.objects.order_by()
 
 
@@ -74,8 +77,8 @@ def _reading_lists_without_default_order(root: object, info: Info) -> QuerySet[m
 
 
 def _branch_notes_over_proxy_child_resolver(
-    root: object,
-    info: Info,
+    _root: object,
+    _info: Info,
 ) -> QuerySet[models.BranchNote]:
     """Prefetch the proxy-targeted relation with a child over the PROXY itself."""
     return models.BranchNote.objects.prefetch_related(
@@ -84,8 +87,8 @@ def _branch_notes_over_proxy_child_resolver(
 
 
 def _branch_notes_over_concrete_child_resolver(
-    root: object,
-    info: Info,
+    _root: object,
+    _info: Info,
 ) -> QuerySet[models.BranchNote]:
     """Prefetch the proxy-targeted relation with a child over the CONCRETE model."""
     return models.BranchNote.objects.prefetch_related(
@@ -94,8 +97,8 @@ def _branch_notes_over_concrete_child_resolver(
 
 
 def _branch_notes_over_unrelated_child_resolver(
-    root: object,
-    info: Info,
+    _root: object,
+    _info: Info,
 ) -> QuerySet[models.BranchNote]:
     """Prefetch the proxy-targeted relation with a child over an UNRELATED table.
 

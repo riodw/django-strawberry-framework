@@ -545,7 +545,7 @@ def test_a_resolver_cannot_reach_the_binding_carrier(
     @strawberry.type
     class TamperQuery:
         @strawberry.field
-        def tamper(self, info: strawberry.Info) -> str:
+        def tamper(self) -> str:
             during = shared.execution_context
             try:
                 attack(shared)
@@ -801,7 +801,7 @@ def _spawning_schema(shared: _SilentProbe, seen: dict[str, object], release: asy
     @strawberry.type
     class SpawningQuery:
         @strawberry.field
-        async def spawn(self, info: strawberry.Info) -> str:
+        async def spawn(self) -> str:
             async def child():
                 seen["bound_during"] = shared._operation_state() is not None
                 await release.wait()
@@ -879,7 +879,7 @@ async def test_a_surviving_task_that_starts_its_own_operation_ends_with_nothing_
             return "spawned"
 
         @strawberry.field
-        def spawn_hello(self, info: strawberry.Info) -> str:
+        def spawn_hello(self) -> str:
             rows = seen.get("nested_rows", [])
             assert _is_list(rows)
             seen["nested_rows"] = [*rows, operation_is_nested()]
@@ -932,7 +932,7 @@ async def test_a_child_released_during_result_collection_reads_a_closed_binding(
     @strawberry.type
     class SpawningQuery:
         @strawberry.field
-        async def spawn(self, info: strawberry.Info) -> str:
+        async def spawn(self) -> str:
             async def child():
                 await release.wait()
                 seen["child_state"] = shared._operation_state()

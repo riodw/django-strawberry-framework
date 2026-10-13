@@ -2783,11 +2783,13 @@ class _Probe:
     scalar_edges: _ScalarEdges
 
     @strawberry.field
-    def page(self, first: int | None = None) -> _ProbeConnection:
+    # basedpyright: Strawberry derives the probe's GraphQL argument from this parameter
+    def page(self, first: int | None = None) -> _ProbeConnection:  # pyright: ignore[reportUnusedParameter]
         return _ProbeConnection(edges=[])
 
     @strawberry.field
-    def echo(self, text: str = "x", tags: list[str] | None = None) -> str:
+    # basedpyright: Strawberry derives the probe's GraphQL argument from this parameter
+    def echo(self, text: str = "x", tags: list[str] | None = None) -> str:  # pyright: ignore[reportUnusedParameter]
         return text
 
     @strawberry.field
@@ -2796,12 +2798,14 @@ class _Probe:
 
     @strawberry.field
     # basedpyright: Strawberry reads this annotation as the argument's GraphQL type; JSON | None
-    # would make the probe's argument nullable and change its schema
-    def blob(self, payload: strawberry.scalars.JSON = None) -> str:  # pyright: ignore[reportArgumentType]
+    # would make the probe's argument nullable and change its schema; Strawberry derives the
+    # probe's GraphQL argument from this parameter
+    def blob(self, payload: strawberry.scalars.JSON = None) -> str:  # pyright: ignore[reportArgumentType, reportUnusedParameter]
         return "ok"
 
     @strawberry.field
-    def stash(self, document: Upload) -> str:
+    # basedpyright: Strawberry derives the probe's GraphQL argument from this parameter
+    def stash(self, document: Upload) -> str:  # pyright: ignore[reportUnusedParameter]
         return "ok"
 
 
@@ -2819,7 +2823,8 @@ class _WriteProbe:
     """
 
     @strawberry.mutation
-    def tag(self, tags: list[strawberry.ID] | None = None) -> str:
+    # basedpyright: Strawberry derives the probe's GraphQL argument from this parameter
+    def tag(self, tags: list[strawberry.ID] | None = None) -> str:  # pyright: ignore[reportUnusedParameter]
         return "ok"
 
 
@@ -2944,7 +2949,8 @@ class _SpyQuery:
         return "hi"
 
     @strawberry.field
-    def echo(self, text: SpyText) -> str:
+    # basedpyright: Strawberry derives the probe's GraphQL argument from this parameter
+    def echo(self, text: SpyText) -> str:  # pyright: ignore[reportUnusedParameter]
         return "ok"
 
 

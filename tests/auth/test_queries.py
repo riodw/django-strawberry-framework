@@ -55,10 +55,10 @@ class _IsAuthenticated:
 
     def has_permission(
         self,
-        info: object,
-        mutation: type[object],
-        operation: str,
-        data: object,
+        _info: object,
+        _mutation: type[object],
+        _operation: str,
+        _data: object,
         instance: object = None,
     ):
         return instance is not None
@@ -402,7 +402,7 @@ def _legacy_callable_user(outcome: Callable[[], object]):
     return type is the concrete ``UserT``, and GraphQL rejects anything else.
     """
 
-    def _is_authenticated(self: object):
+    def _is_authenticated(_self: object):
         return outcome()
 
     return mock.patch.object(User, "is_authenticated", _is_authenticated)
@@ -572,8 +572,8 @@ async def test_async_gated_me_forces_the_lazy_user_inside_the_one_sync_boundary(
     class RecordingGate:
         def has_permission(
             self,
-            info: object,
-            mutation: type[object],
+            _info: object,
+            _mutation: type[object],
             operation: str,
             data: object,
             instance: object = None,

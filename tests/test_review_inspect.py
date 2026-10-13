@@ -264,7 +264,7 @@ def test_json_blob_id_falls_back_to_the_same_sha1_without_git(
     target = _write(tmp_path / REL_PATH, SAMPLE)
     expected = review_inspect._blob_id(target)
 
-    def _no_git(*args: object, **kwargs: object):
+    def _no_git(*_args: object, **_kwargs: object):
         raise OSError("git unavailable")
 
     monkeypatch.setattr(subprocess, "run", _no_git)

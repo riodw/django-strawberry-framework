@@ -179,7 +179,7 @@ def test_apply_fails_loudly_when_symbol_missing():
 def test_apply_fails_loudly_when_body_getter_signature_changes():
     """The patch pins the getter arity it replaces."""
 
-    def _two_argument_getter(self: object, extra: object) -> None:
+    def _two_argument_getter(_self: object, _extra: object) -> None:
         return None
 
     with mock.patch.object(patches, "_original_body_fget", _two_argument_getter):

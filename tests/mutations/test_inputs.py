@@ -822,7 +822,8 @@ def test_digit_boundary_columns_do_not_silently_collide_in_generated_input():
     # so set the resolver's ``__annotations__`` to real objects to reference the
     # generated input class as a schema-field argument type.
     # The ``object`` annotation is replaced below; Strawberry reads the argument type from there.
-    def _probe(inp: object) -> int:
+    # basedpyright: Strawberry reads the argument to put the input class in the SDL under test
+    def _probe(inp: object) -> int:  # pyright: ignore[reportUnusedParameter]
         return 1
 
     _probe.__annotations__ = {"inp": input_cls, "return": int}
@@ -965,7 +966,8 @@ def test_type_name_digit_boundary_narrowings_stay_distinct():
     materialize_mutation_input_class(right.__name__, right)  # must not collide
 
     # The ``object`` annotations are replaced below; Strawberry reads the argument types from there.
-    def _probe(left_inp: object, right_inp: object) -> int:
+    # basedpyright: Strawberry reads the arguments to put both input classes in the SDL under test
+    def _probe(left_inp: object, right_inp: object) -> int:  # pyright: ignore[reportUnusedParameter]
         return 1
 
     _probe.__annotations__ = {"left_inp": left, "right_inp": right, "return": int}

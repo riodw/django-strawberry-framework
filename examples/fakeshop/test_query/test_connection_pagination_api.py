@@ -518,10 +518,10 @@ async def _aseed_genres(*names: str) -> None:
 
 
 def _override_evaluated(
-    cls: type[GenreOrder],
-    order_input: object,
+    _cls: type[GenreOrder],
+    _order_input: object,
     queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _info: object,
 ):
     list(queryset)
     return queryset
@@ -541,19 +541,19 @@ def _untrusted_genre_queryset():
 
 
 def _override_untrusted(
-    cls: type[GenreOrder],
-    order_input: object,
-    queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _cls: type[GenreOrder],
+    _order_input: object,
+    _queryset: models.QuerySet[library_models.Genre],
+    _info: object,
 ):
     return _untrusted_genre_queryset()
 
 
 def _override_in_place_routing(
-    cls: type[GenreOrder],
-    order_input: object,
+    _cls: type[GenreOrder],
+    _order_input: object,
     queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _info: object,
 ):
     set_queryset_hints(queryset, {"tenant": 2})
     return queryset
@@ -763,7 +763,7 @@ def test_connection_healthy_apply_sync_override_still_returns_ordered_edges(
 _ASYNC_CURRENT: dict[str, DjangoSchema | None] = {"schema": None}
 
 
-async def _async_genres_resolver(root: object, info: strawberry.Info[object, object]):
+async def _async_genres_resolver(_root: object, _info: strawberry.Info[object, object]):
     """An ``async def`` consumer resolver - the shape that selects ``_pipeline_async``."""
     return library_models.Genre.objects.all()
 
@@ -863,10 +863,10 @@ _GENRE_ORDER_ASYNC_SHAPE_PREFIX = (
 
 
 async def _override_async_evaluated(
-    cls: type[GenreOrder],
-    order_input: object,
+    _cls: type[GenreOrder],
+    _order_input: object,
     queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _info: object,
 ):
     [genre async for genre in queryset]
     _ASYNC_APPLY_CALLS.append("evaluated")
@@ -874,40 +874,40 @@ async def _override_async_evaluated(
 
 
 async def _override_async_sliced(
-    cls: type[GenreOrder],
-    order_input: object,
+    _cls: type[GenreOrder],
+    _order_input: object,
     queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _info: object,
 ):
     _ASYNC_APPLY_CALLS.append("sliced")
     return queryset.order_by("name")[:1]
 
 
 async def _override_async_combined_duplicates(
-    cls: type[GenreOrder],
-    order_input: object,
+    _cls: type[GenreOrder],
+    _order_input: object,
     queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _info: object,
 ):
     _ASYNC_APPLY_CALLS.append("combined-duplicates")
     return queryset.union(queryset, all=True)
 
 
 async def _override_async_wrong_model(
-    cls: type[GenreOrder],
-    order_input: object,
-    queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _cls: type[GenreOrder],
+    _order_input: object,
+    _queryset: models.QuerySet[library_models.Genre],
+    _info: object,
 ):
     _ASYNC_APPLY_CALLS.append("wrong-model")
     return library_models.Book.objects.all()
 
 
 async def _override_async_in_place_routing(
-    cls: type[GenreOrder],
-    order_input: object,
+    _cls: type[GenreOrder],
+    _order_input: object,
     queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _info: object,
 ):
     set_queryset_hints(queryset, {"tenant": 2})
     _ASYNC_APPLY_CALLS.append("routing-rewritten-in-place")
@@ -915,10 +915,10 @@ async def _override_async_in_place_routing(
 
 
 async def _override_async_materialized_list(
-    cls: type[GenreOrder],
-    order_input: object,
+    _cls: type[GenreOrder],
+    _order_input: object,
     queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _info: object,
 ):
     rows = [genre async for genre in queryset]
     _ASYNC_APPLY_CALLS.append("materialized-list")
@@ -926,40 +926,40 @@ async def _override_async_materialized_list(
 
 
 async def _override_async_none(
-    cls: type[GenreOrder],
-    order_input: object,
-    queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _cls: type[GenreOrder],
+    _order_input: object,
+    _queryset: models.QuerySet[library_models.Genre],
+    _info: object,
 ):
     _ASYNC_APPLY_CALLS.append("none")
     return None
 
 
 async def _override_async_projection(
-    cls: type[GenreOrder],
-    order_input: object,
+    _cls: type[GenreOrder],
+    _order_input: object,
     queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _info: object,
 ):
     _ASYNC_APPLY_CALLS.append("projection")
     return queryset.values("name")
 
 
 async def _override_async_untrusted(
-    cls: type[GenreOrder],
-    order_input: object,
-    queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _cls: type[GenreOrder],
+    _order_input: object,
+    _queryset: models.QuerySet[library_models.Genre],
+    _info: object,
 ):
     _ASYNC_APPLY_CALLS.append("malformed-deferred-filter")
     return _untrusted_genre_queryset()
 
 
 def _override_async_non_awaitable(
-    cls: type[GenreOrder],
-    order_input: object,
+    _cls: type[GenreOrder],
+    _order_input: object,
     queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _info: object,
 ):
     _ASYNC_APPLY_CALLS.append("non-awaitable")
     return queryset
@@ -979,10 +979,10 @@ async def _order_residual_inner():
 
 
 async def _override_async_residual_awaitable(
-    cls: type[GenreOrder],
-    order_input: object,
-    queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _cls: type[GenreOrder],
+    _order_input: object,
+    _queryset: models.QuerySet[library_models.Genre],
+    _info: object,
 ):
     _ORDER_RESIDUAL_BODY_RAN.clear()
     coro = _order_residual_inner()
@@ -1173,10 +1173,10 @@ async def test_connection_async_serves_a_combined_apply_async_result_as_its_prim
     """An ``apply_async`` returning an ordered union is served as the rows it selects, in order."""
 
     async def _combined(
-        cls: type[GenreOrder],
-        order_input: object,
+        _cls: type[GenreOrder],
+        _order_input: object,
         queryset: models.QuerySet[library_models.Genre],
-        info: object,
+        _info: object,
     ):
         _ASYNC_APPLY_CALLS.append("combined")
         return queryset.filter(name="C").union(queryset.filter(name="A")).order_by("-name")
@@ -1204,10 +1204,10 @@ _GENRE_FILTER_ASYNC_SHAPE_PREFIX = (
 
 
 async def _filter_override_async_evaluated(
-    cls: type[GenreFilter],
-    filter_input: object,
+    _cls: type[GenreFilter],
+    _filter_input: object,
     queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _info: object,
 ):
     [genre async for genre in queryset]
     _ASYNC_APPLY_CALLS.append("filter-evaluated")
@@ -1215,40 +1215,40 @@ async def _filter_override_async_evaluated(
 
 
 async def _filter_override_async_sliced(
-    cls: type[GenreFilter],
-    filter_input: object,
+    _cls: type[GenreFilter],
+    _filter_input: object,
     queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _info: object,
 ):
     _ASYNC_APPLY_CALLS.append("filter-sliced")
     return queryset.order_by("name")[:1]
 
 
 async def _filter_override_async_combined_duplicates(
-    cls: type[GenreFilter],
-    filter_input: object,
+    _cls: type[GenreFilter],
+    _filter_input: object,
     queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _info: object,
 ):
     _ASYNC_APPLY_CALLS.append("filter-combined-duplicates")
     return queryset.union(queryset, all=True)
 
 
 async def _filter_override_async_wrong_model(
-    cls: type[GenreFilter],
-    filter_input: object,
-    queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _cls: type[GenreFilter],
+    _filter_input: object,
+    _queryset: models.QuerySet[library_models.Genre],
+    _info: object,
 ):
     _ASYNC_APPLY_CALLS.append("filter-wrong-model")
     return library_models.Book.objects.all()
 
 
 async def _filter_override_async_in_place_routing(
-    cls: type[GenreFilter],
-    filter_input: object,
+    _cls: type[GenreFilter],
+    _filter_input: object,
     queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _info: object,
 ):
     set_queryset_hints(queryset, {"tenant": 2})
     _ASYNC_APPLY_CALLS.append("filter-routing-rewritten-in-place")
@@ -1256,10 +1256,10 @@ async def _filter_override_async_in_place_routing(
 
 
 async def _filter_override_async_materialized_list(
-    cls: type[GenreFilter],
-    filter_input: object,
+    _cls: type[GenreFilter],
+    _filter_input: object,
     queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _info: object,
 ):
     rows = [genre async for genre in queryset]
     _ASYNC_APPLY_CALLS.append("filter-materialized-list")
@@ -1267,40 +1267,40 @@ async def _filter_override_async_materialized_list(
 
 
 async def _filter_override_async_none(
-    cls: type[GenreFilter],
-    filter_input: object,
-    queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _cls: type[GenreFilter],
+    _filter_input: object,
+    _queryset: models.QuerySet[library_models.Genre],
+    _info: object,
 ):
     _ASYNC_APPLY_CALLS.append("filter-none")
     return None
 
 
 async def _filter_override_async_projection(
-    cls: type[GenreFilter],
-    filter_input: object,
+    _cls: type[GenreFilter],
+    _filter_input: object,
     queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _info: object,
 ):
     _ASYNC_APPLY_CALLS.append("filter-projection")
     return queryset.values("name")
 
 
 async def _filter_override_async_untrusted(
-    cls: type[GenreFilter],
-    filter_input: object,
-    queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _cls: type[GenreFilter],
+    _filter_input: object,
+    _queryset: models.QuerySet[library_models.Genre],
+    _info: object,
 ):
     _ASYNC_APPLY_CALLS.append("filter-malformed-deferred-filter")
     return _untrusted_genre_queryset()
 
 
 def _filter_override_async_non_awaitable(
-    cls: type[GenreFilter],
-    filter_input: object,
+    _cls: type[GenreFilter],
+    _filter_input: object,
     queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _info: object,
 ):
     _ASYNC_APPLY_CALLS.append("filter-non-awaitable")
     return queryset
@@ -1317,10 +1317,10 @@ async def _filter_residual_inner():
 
 
 async def _filter_override_async_residual_awaitable(
-    cls: type[GenreFilter],
-    filter_input: object,
-    queryset: models.QuerySet[library_models.Genre],
-    info: object,
+    _cls: type[GenreFilter],
+    _filter_input: object,
+    _queryset: models.QuerySet[library_models.Genre],
+    _info: object,
 ):
     _FILTER_RESIDUAL_BODY_RAN.clear()
     coro = _filter_residual_inner()
@@ -1530,15 +1530,15 @@ def _cursor_rows() -> list[library_models.Genre]:
     return list(library_models.Genre.objects.order_by("pk"))
 
 
-def _list_genres(root: object, info: strawberry.Info[object, object]):
+def _list_genres(_root: object, _info: strawberry.Info[object, object]):
     return _cursor_rows()
 
 
-def _tuple_genres(root: object, info: strawberry.Info[object, object]):
+def _tuple_genres(_root: object, _info: strawberry.Info[object, object]):
     return tuple(_cursor_rows())
 
 
-def _generator_genres(root: object, info: strawberry.Info[object, object]):
+def _generator_genres(_root: object, _info: strawberry.Info[object, object]):
     return (genre for genre in _cursor_rows())
 
 
@@ -1554,11 +1554,11 @@ def _failing_genres(error: Exception) -> Iterator[library_models.Genre]:
     raise error
 
 
-def _key_error_genres(root: object, info: strawberry.Info[object, object]):
+def _key_error_genres(_root: object, _info: strawberry.Info[object, object]):
     return _failing_genres(KeyError(_SOURCE_SECRET))
 
 
-def _value_error_genres(root: object, info: strawberry.Info[object, object]):
+def _value_error_genres(_root: object, _info: strawberry.Info[object, object]):
     return _failing_genres(ValueError(_SOURCE_SECRET))
 
 
@@ -1577,26 +1577,26 @@ class _TenantScopedGenreQuerySet(models.QuerySet[library_models.Genre]):
         raise _TenantScopeMissingError(_SOURCE_SECRET)
 
 
-def _tenant_scoped_genres(root: object, info: strawberry.Info[object, object]):
+def _tenant_scoped_genres(_root: object, _info: strawberry.Info[object, object]):
     return _TenantScopedGenreQuerySet(model=library_models.Genre)
 
 
-def _unusable_id_book_genres(root: object, info: strawberry.Info[object, object]):
+def _unusable_id_book_genres(_root: object, _info: strawberry.Info[object, object]):
     # The idiom that skips reading the parent row: an unsaved instance carrying an id.
     # This one is not an integer, so the relation filter Django defers to the queryset's
     # first ``query`` read cannot be built.
     return library_models.Book(pk=_SOURCE_SECRET).genres
 
 
-async def _async_list_genres(root: object, info: strawberry.Info[object, object]):
+async def _async_list_genres(_root: object, _info: strawberry.Info[object, object]):
     return await sync_to_async(_cursor_rows)()
 
 
-async def _async_tuple_genres(root: object, info: strawberry.Info[object, object]):
+async def _async_tuple_genres(_root: object, _info: strawberry.Info[object, object]):
     return tuple(await sync_to_async(_cursor_rows)())
 
 
-async def _async_queryset_genres(root: object, info: strawberry.Info[object, object]):
+async def _async_queryset_genres(_root: object, _info: strawberry.Info[object, object]):
     return library_models.Genre.objects.all()
 
 
@@ -2023,7 +2023,7 @@ def _fail_hydrating(
     without writing anything un-hydratable to the database.
     """
 
-    def from_db_value(value: object, expression: object, connection: object) -> object:
+    def from_db_value(_value: object, _expression: object, _connection: object) -> object:
         raise ValueError(_SOURCE_SECRET)
 
     monkeypatch.setattr(

@@ -93,11 +93,11 @@ class _AllowAll:
 
     def has_permission(
         self,
-        info: object,
-        mutation: type[object],
-        operation: str,
-        data: object,
-        instance: object = None,
+        _info: object,
+        _mutation: type[object],
+        _operation: str,
+        _data: object,
+        _instance: object = None,
     ):
         return True
 
@@ -460,9 +460,9 @@ def test_globalid_relation_override_flows_through_visibility_contract():
 
     @classmethod
     def _hide_private(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[product_models.Category],
-        info: strawberry.Info,
+        _info: strawberry.Info,
     ):
         return queryset.filter(is_private=False)
 
@@ -490,10 +490,10 @@ def test_sync_misuse_async_get_queryset_from_sync_path():
     """A sync update over a type with an ``async def get_queryset`` raises ``SyncMisuseError``."""
 
     async def _async_get_queryset(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[product_models.Item],
-        info: strawberry.Info,
-        **kwargs: object,
+        _info: strawberry.Info,
+        **_kwargs: object,
     ):
         return queryset
 
@@ -632,7 +632,7 @@ async def test_async_mutation_does_not_leak_into_later_read_optimizer_execution(
             operation = "create"
             permission_classes = [_AllowAll]
 
-    def _all_items(self: object):
+    def _all_items():
         return product_models.Item.objects.all()
 
     # ``from __future__ import annotations`` makes a ``-> list[ItemT]`` string
@@ -769,9 +769,9 @@ def test_m2m_hidden_related_id_is_field_error():
 
     @classmethod
     def _hide_secret(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[library_models.Genre],
-        info: strawberry.Info,
+        _info: strawberry.Info,
     ):
         return queryset.exclude(name="Secret")
 
@@ -1378,20 +1378,20 @@ def test_locate_instance_locks_through_base_manager_subquery_by_default():
 _T = TypeVar("_T")
 
 
-def _noop(*args: object, **kwargs: object) -> None:
+def _noop(*_args: object, **_kwargs: object) -> None:
     """A patched seam that accepts any call and does nothing."""
 
 
 def _returning(value: _T) -> Callable[..., _T]:
     """A patched seam that accepts any call and answers ``value`` (the same object each call)."""
 
-    def stub(*args: object, **kwargs: object) -> _T:
+    def stub(*_args: object, **_kwargs: object) -> _T:
         return value
 
     return stub
 
 
-def _fresh_mock(*args: object, **kwargs: object) -> mock.MagicMock:
+def _fresh_mock(*_args: object, **_kwargs: object) -> mock.MagicMock:
     """A patched seam that accepts any call and answers a NEW ``MagicMock`` each call."""
     return mock.MagicMock()
 
@@ -1487,7 +1487,7 @@ def test_write_pipeline_opens_atomic_on_managed_write_alias(monkeypatch: pytest.
         def __exit__(self, *args: object):
             return False
 
-    def _refetched(*args: object, **kwargs: object) -> MagicMock:
+    def _refetched(*_args: object, **_kwargs: object) -> MagicMock:
         return MagicMock(pk=1)
 
     monkeypatch.setattr(mutation_resolvers, "model_for", _fresh_mock)
@@ -1752,13 +1752,15 @@ def test_delete_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.MonkeyP
     seen: dict[str, object] = {}
 
     def fake_pipeline(
-        mutation_cls: object,
-        info: object,
+        _mutation_cls: object,
+        _info: object,
         data: object,
         id: object,  # noqa: A002
         *,
-        decode_step: object,
-        write_step: object,
+        # basedpyright: the delete resolver passes the pipeline steps by keyword
+        decode_step: object,  # pyright: ignore[reportUnusedParameter]
+        # basedpyright: the delete resolver passes the pipeline steps by keyword
+        write_step: object,  # pyright: ignore[reportUnusedParameter]
         tail_step: object = None,
     ):
         seen["data"] = data

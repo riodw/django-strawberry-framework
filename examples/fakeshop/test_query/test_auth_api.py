@@ -242,16 +242,10 @@ class PermissionDeniedBackend:
     import path (the ``DictFormPasswordValidator`` precedent above).
     """
 
-    def authenticate(
-        self,
-        request: HttpRequest | None,
-        username: str | None = None,
-        password: str | None = None,
-        **kwargs: object,
-    ) -> User | None:
+    def authenticate(self, _request: HttpRequest | None, **_kwargs: object) -> User | None:
         raise PermissionDenied
 
-    def get_user(self, user_id: int) -> User | None:
+    def get_user(self, _user_id: int) -> User | None:
         return None
 
 
@@ -265,10 +259,10 @@ class AllowInactiveBackend:
 
     def authenticate(
         self,
-        request: HttpRequest | None,
+        _request: HttpRequest | None,
         username: str | None = None,
         password: str | None = None,
-        **kwargs: object,
+        **_kwargs: object,
     ) -> User | None:
         user = User.objects.filter(username=username).first()
         if user is not None and user.check_password(password):
@@ -282,16 +276,10 @@ class AllowInactiveBackend:
 class CrashingBackend:
     """A backend whose ``authenticate`` raises a non-``PermissionDenied`` error."""
 
-    def authenticate(
-        self,
-        request: HttpRequest | None,
-        username: str | None = None,
-        password: str | None = None,
-        **kwargs: object,
-    ) -> User | None:
+    def authenticate(self, _request: HttpRequest | None, **_kwargs: object) -> User | None:
         raise RuntimeError("backend boom")
 
-    def get_user(self, user_id: int) -> User | None:
+    def get_user(self, _user_id: int) -> User | None:
         return None
 
 
@@ -302,15 +290,15 @@ class RecordingBackend:
 
     def authenticate(
         self,
-        request: HttpRequest | None,
+        _request: HttpRequest | None,
         username: str | None = None,
         password: str | None = None,
-        **kwargs: object,
+        **_kwargs: object,
     ) -> User | None:
         type(self).seen.append((username, password))
         return None
 
-    def get_user(self, user_id: int) -> User | None:
+    def get_user(self, _user_id: int) -> User | None:
         return None
 
 
@@ -580,7 +568,7 @@ def test_weak_password_register_envelope_keys_to_password_not_all():
 # ``leaf.code`` walk still sees only scalar leaves - pinned here so the manual
 # walk's reliance on that upstream normalization is explicit (hunt 0.0.15).
 class DictFormPasswordValidator:
-    def validate(self, password: str, user: User | None = None) -> None:
+    def validate(self, _password: str, _user: User | None = None) -> None:
         from django.core.exceptions import ValidationError
 
         raise ValidationError({"password": ["Password policy violated."]})
@@ -1057,10 +1045,10 @@ def test_login_and_me_skip_user_type_visibility(monkeypatch: pytest.MonkeyPatch)
     from apps.accounts.schema import UserType
 
     def _hide_everyone(
-        cls: type[UserType],
+        _cls: type[UserType],
         queryset: QuerySet[User],
-        info: strawberry.Info[object, object],
-        **kwargs: object,
+        _info: strawberry.Info[object, object],
+        **_kwargs: object,
     ) -> QuerySet[User]:
         return queryset.none()
 
@@ -1079,7 +1067,7 @@ def test_login_signal_failure_compensates_and_leaves_the_caller_anonymous():
     create_users(1)
     client = Client()
 
-    def _boom(sender: type[User], **kwargs: object) -> None:
+    def _boom(**_kwargs: object) -> None:
         raise RuntimeError("login-signal boom")
 
     auth_signals.user_logged_in.connect(_boom)
@@ -1114,7 +1102,7 @@ def test_logout_signal_failure_is_an_error_and_keeps_the_durable_session():
     key = client.session.session_key
     assert Session.objects.filter(session_key=key).exists()
 
-    def _boom(sender: type[User], **kwargs: object) -> None:
+    def _boom(**_kwargs: object) -> None:
         raise RuntimeError("logout-signal boom")
 
     auth_signals.user_logged_out.connect(_boom)

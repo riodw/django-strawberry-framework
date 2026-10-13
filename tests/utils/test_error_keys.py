@@ -81,11 +81,11 @@ class _AllowAll:
 
     def has_permission(
         self,
-        info: object,
-        mutation: type[object],
-        operation: str,
-        data: object,
-        instance: object = None,
+        _info: object,
+        _mutation: type[object],
+        _operation: str,
+        _data: object,
+        _instance: object = None,
     ):
         return True
 
@@ -184,7 +184,7 @@ def _run_model(shape: str, raised: _Raised, monkeypatch: pytest.MonkeyPatch):
         meta["fields"] = ("name", "category")
     create_item = type("CreateItem", (DjangoMutation,), {"Meta": type("Meta", (), meta)})
 
-    def clean(self: product_models.Item) -> None:
+    def clean(_self: product_models.Item) -> None:
         raise _django_error(raised)
 
     monkeypatch.setattr(product_models.Item, "clean", clean)
@@ -327,7 +327,7 @@ def _run_register(shape: str, raised: _Raised, monkeypatch: pytest.MonkeyPatch):
     assert registry.get(User) is UserT
     monkeypatch.setattr(User, "REQUIRED_FIELDS", ["email", "first_name"])
 
-    def clean(self: User) -> None:
+    def clean(_self: User) -> None:
         raise _django_error(raised)
 
     monkeypatch.setattr(User, "clean", clean)
@@ -570,7 +570,7 @@ def test_rename_onto_an_unexposed_model_name_shares_one_key(monkeypatch: pytest.
             fields = ("name", "description")
             permission_classes = [_AllowAll]
 
-    def clean(self: product_models.Item) -> None:
+    def clean(_self: product_models.Item) -> None:
         raise DjangoValidationError({"name": "on name"})
 
     monkeypatch.setattr(product_models.Item, "clean", clean)
@@ -631,7 +631,7 @@ def test_decode_error_keeps_its_input_name_under_a_swapped_rename(
             input_class = ItemSwapAgain
             permission_classes = [_AllowAll]
 
-    def clean(self: product_models.Item) -> None:
+    def clean(_self: product_models.Item) -> None:
         raise DjangoValidationError({"name": "on name"})
 
     monkeypatch.setattr(product_models.Item, "clean", clean)
@@ -662,7 +662,7 @@ def test_constraint_listing_a_forward_key_column_keys_to_its_input(
 
     # ``get_constraints`` is the seam ``validate_constraints`` reads; patching it leaves
     # ``Options``' cached constraint views (``total_unique_constraints``) untouched.
-    def get_constraints(self: product_models.Item) -> list[tuple[type[Model], list[object]]]:
+    def get_constraints(_self: product_models.Item) -> list[tuple[type[Model], list[object]]]:
         return [(product_models.Item, [constraint])]
 
     monkeypatch.setattr(product_models.Item, "get_constraints", get_constraints)

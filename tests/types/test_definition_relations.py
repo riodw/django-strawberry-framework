@@ -42,7 +42,8 @@ from django_strawberry_framework.types.definition import (
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry(isolate_global_registry: None) -> None:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def _isolate_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
     """Every test here declares fresh ``DjangoType`` classes - opt the module
     into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
 
@@ -226,13 +227,13 @@ def test_related_target_lookup_degrades_malformed_model_and_relation_metadata(
         def related_model(self):
             raise RuntimeError("target exploded")
 
-    def _exploding_field(name: str) -> object:
+    def _exploding_field(_name: str) -> object:
         raise RuntimeError("field")
 
-    def _unreadable_relation_flag(name: str) -> object:
+    def _unreadable_relation_flag(_name: str) -> object:
         return _UnreadableRelationFlag()
 
-    def _unreadable_target(name: str) -> object:
+    def _unreadable_target(_name: str) -> object:
         return _UnreadableTarget()
 
     cases = [
@@ -247,13 +248,13 @@ def test_related_target_lookup_degrades_malformed_model_and_relation_metadata(
     target = object()
     field = SimpleNamespace(is_relation=True, related_model=target)
 
-    def _relation_field(name: str) -> object:
+    def _relation_field(_name: str) -> object:
         return field
 
-    def _exploding_get(model: object) -> object:
+    def _exploding_get(_model: object) -> object:
         raise RuntimeError
 
-    def _exploding_get_definition(type_cls: object) -> object:
+    def _exploding_get_definition(_type_cls: object) -> object:
         raise RuntimeError
 
     definition = _malformed_definition(
@@ -264,7 +265,7 @@ def test_related_target_lookup_degrades_malformed_model_and_relation_metadata(
 
     target_type = object()
 
-    def _target_type_get(model: object) -> object:
+    def _target_type_get(_model: object) -> object:
         return target_type
 
     monkeypatch.setattr(registry, "get", _target_type_get)

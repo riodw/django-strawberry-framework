@@ -15,7 +15,8 @@ from apps.kanban import models, services
 
 
 @pytest.fixture(autouse=True)
-def _worklog_lookups(db: None) -> None:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def _worklog_lookups(db: None) -> None:  # pyright: ignore[reportUnusedParameter]
     kf.make_status("backlog")
     kf.make_status("todo")
     kf.make_status("wip")

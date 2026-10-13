@@ -24,7 +24,8 @@ from django_strawberry_framework.testing import AsyncTestClient
 
 
 @pytest.fixture(autouse=True)
-def _lookups(db: None) -> None:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def _lookups(db: None) -> None:  # pyright: ignore[reportUnusedParameter]
     for key in (
         "backlog",
         "todo",
@@ -618,7 +619,8 @@ def test_create_card_from_spec_number_branch_places_and_shifts():
 
 
 @pytest.fixture
-def _async_kanban_card(transactional_db: None) -> tuple[models.Card, User]:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def _async_kanban_card(transactional_db: None) -> tuple[models.Card, User]:  # pyright: ignore[reportUnusedParameter]
     """Seed lookups, a TODO card, and a staff user, committed so the async view thread sees them.
 
     ``AsyncTestClient`` posts through Django's in-process async handler, running

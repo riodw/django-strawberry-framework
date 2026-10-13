@@ -5,7 +5,7 @@ rules still switched off and the `# pyright: ignore[...]` comments still in the 
 Each item is fixed at the root, gated (both passes 0 errors, full suite in one pass at 100% coverage), then committed.
 A split suite run on a tree other sessions are editing can drop modules from every part, so it is not a coverage gate.
 
-Progress: 21 done, 8 to do. Ignore comments: 1049 lines (1897 at the start of 0.0.15's ignore sweep).
+Progress: 22 done, 7 to do. Ignore comments: 1137 lines (1897 at the start of 0.0.15's ignore sweep).
 
 ## Pre-commit (`uvx pre-commit run --all-files`, 4ce779e1, clean clone)
 
@@ -62,6 +62,10 @@ Progress: 21 done, 8 to do. Ignore comments: 1049 lines (1897 at the start of 0.
 - [x] 13. `reportUnknownArgumentType` on everywhere: typed unbound slots (`dict_items`, `mapping_get`), per-view
   `as_view` returns, and checker-only shape classes for the bases the consumer factory reads at run time; 76
   suppression lines carry one of the three rules, each naming the third-party defect
+- [x] 10. `reportUnusedParameter` on everywhere: a parameter the caller passes by position is renamed `_name`, a
+  fixture requested for its side effect moves to `@pytest.mark.usefixtures`, an optional Strawberry `root` / `info`
+  or unread private parameter is removed, and `NestedConnectionStrategy.plan` takes its arguments positional-only;
+  98 suppression lines keep a parameter a caller binds by name
 
 ## To do: rules still off
 
@@ -76,8 +80,6 @@ of them.
 - [ ] 8. `reportUnannotatedClassAttribute`: 8365 (package 0, tests 6684, examples 1681, scripts 0, root 0); on for
   scripts/, the package and the root files (their execution environments in `pyproject.toml`)
 - [ ] 9. `reportUnusedCallResult`: 4425 (package 0, tests 2897, examples 1527, scripts 0, root 0); on for scripts/, the
-  package and the root files
-- [ ] 10. `reportUnusedParameter`: 1695 (package 0, tests 1124, examples 571, scripts 0, root 0); on for scripts/, the
   package and the root files
 
 Off by design (not planned): `reportImplicitStringConcatenation`, `reportPrivateUsage`, `reportUnusedFunction`,
@@ -132,7 +134,7 @@ strawberry_django does?
 
 ## Ignore breakdown
 
-Lines carrying `# pyright: ignore[...]`: 1049 (1143 rule hits) in 181 files: tests 776, package 203, examples 67,
+Lines carrying `# pyright: ignore[...]`: 1137 (1233 rule hits) in 193 files: tests 846, package 203, examples 85,
 scripts 2, root 1.
 
 ### By cause
@@ -148,7 +150,7 @@ Unknown rules because the expression already suppressed for another rule evaluat
 | Verbatim forwards (schema, consumers, ModelForm, ModelSerializer, field and `strawberry.type` forwards) | 42 | 0 | keep |
 | Django model `Meta` on proxy / MTI children | 10 | 0 | keep |
 | Third-party annotations only the Unknown rules report: Strawberry 16 (11 the `_graphql_core.py` alias rebinding, 5 bare generics), django-stubs 9 (7 migration M2M `_To`, `Prefetch`, a `re_path` route list), drf-stubs 8, graphql-core 3.2 bare generics 3, django-debug-toolbar 3, pytest 3, asgiref 1 | 43 | 43 | item 30 |
-| Framework-fixed parameters a default never reads (keyword-called hooks, upstream-verbatim signatures, a fixture requested for teardown order); one more shares a line counted below | 7 | 0 | keep |
+| Parameters a caller binds by name that the body never reads (keyword-called hooks and callbacks, Strawberry argument probes, upstream-verbatim signatures, fixtures a fixture requests for setup or teardown order, parametrize columns); three more share lines counted elsewhere | 95 | 0 | keep |
 | The rest, reviewed in item 21 or added since, each reason line stating its cause (framework `Meta` reads, mixin `__init__` chains, filter overrides, `Any` forwards, django-stubs / typeshed omissions) | 356 | 21 | keep |
 
 ### By rule
@@ -159,6 +161,7 @@ Unknown rules because the expression already suppressed for another rule evaluat
 | `reportIncompatibleVariableOverride` | 210 | 5 | 178 | 27 | 0 | 0 |
 | `reportAttributeAccessIssue` | 153 | 26 | 126 | 1 | 0 | 0 |
 | `reportExplicitAny` | 100 | 62 | 22 | 14 | 2 | 0 |
+| `reportUnusedParameter` | 98 | 7 | 72 | 18 | 0 | 1 |
 | `reportIncompatibleMethodOverride` | 74 | 7 | 62 | 5 | 0 | 0 |
 | `reportUnknownMemberType` | 60 | 29 | 29 | 2 | 0 | 0 |
 | `reportUnknownVariableType` | 38 | 23 | 15 | 0 | 0 | 0 |
@@ -169,7 +172,6 @@ Unknown rules because the expression already suppressed for another rule evaluat
 | `reportUnknownArgumentType` | 14 | 4 | 3 | 7 | 0 | 0 |
 | `reportUnsafeMultipleInheritance` | 13 | 8 | 3 | 2 | 0 | 0 |
 | `reportIndexIssue` | 10 | 0 | 10 | 0 | 0 | 0 |
-| `reportUnusedParameter` | 8 | 7 | 0 | 0 | 0 | 1 |
 | `reportMissingSuperCall` | 7 | 2 | 5 | 0 | 0 | 0 |
 | `reportUndefinedVariable` | 7 | 0 | 7 | 0 | 0 | 0 |
 | `reportUnreachable` | 7 | 5 | 2 | 0 | 0 | 0 |
@@ -194,16 +196,16 @@ Unknown rules because the expression already suppressed for another rule evaluat
 
 | File | Lines |
 | --- | --- |
-| `tests/rest_framework/test_resolvers.py` | 65 |
-| `tests/utils/test_querysets.py` | 65 |
+| `tests/rest_framework/test_resolvers.py` | 72 |
+| `tests/utils/test_querysets.py` | 66 |
 | `tests/rest_framework/test_sets.py` | 50 |
 | `tests/rest_framework/test_converter.py` | 45 |
+| `tests/test_resource_policy.py` | 32 |
 | `examples/fakeshop/apps/library/serializers.py` | 30 |
-| `tests/test_resource_policy.py` | 27 |
+| `tests/types/test_relay_interfaces.py` | 24 |
 | `tests/test_list_field.py` | 22 |
 | `tests/rest_framework/test_inputs.py` | 20 |
 | `tests/test_error_policy.py` | 18 |
-| `tests/utils/test_relations.py` | 18 |
 
 
 <!-- LINK DEFINITIONS -->

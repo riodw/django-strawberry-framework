@@ -640,7 +640,7 @@ def test_convert_filter_to_input_annotation_rejects_unknown_method_filter():
     # `method` is set but whose `field` is `None` (the unknown-form-shape
     # case). Mutating `Filter.field` globally would leak the override
     # across tests, so we build a per-test subclass instead.
-    def _passthrough_method(qs: object, name: str, value: object) -> object:
+    def _passthrough_method(qs: object, _name: str, _value: object) -> object:
         return qs
 
     class _NoFieldFilter:

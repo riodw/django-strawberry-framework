@@ -23,7 +23,8 @@ PLANNED_TEST_FILE = "tests/planned_only/test_planned_only.py"
 
 
 @pytest.fixture(autouse=True)
-def _command_lookups(db: None) -> None:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def _command_lookups(db: None) -> None:  # pyright: ignore[reportUnusedParameter]
     kf.make_status("todo")
     kf.make_section("dependencies_note")
     kf.make_card_reference_kind("dependency")
@@ -255,7 +256,7 @@ def test_import_card_files_wraps_validation_error_as_command_error(
 
     card = kf.make_card(title="Guarded card", target_version=beta_version)
 
-    def _raise(*args: object, **kwargs: object):
+    def _raise(*_args: object, **_kwargs: object):
         raise ValidationError("guard says no")
 
     monkeypatch.setattr(services, "set_card_changed_files", _raise)

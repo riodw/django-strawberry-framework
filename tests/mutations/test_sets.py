@@ -452,11 +452,11 @@ def test_permission_classes_explicit_override_honored():
     class AllowAll:
         def has_permission(
             self,
-            info: object,
-            mutation: type[object],
-            operation: str,
-            data: object,
-            instance: object = None,
+            _info: object,
+            _mutation: type[object],
+            _operation: str,
+            _data: object,
+            _instance: object = None,
         ):
             return True
 
@@ -475,11 +475,11 @@ def test_permission_classes_sequence_is_normalized_to_an_immutable_tuple():
     class AllowAll:
         def has_permission(
             self,
-            info: object,
-            mutation: type[object],
-            operation: str,
-            data: object,
-            instance: object = None,
+            _info: object,
+            _mutation: type[object],
+            _operation: str,
+            _data: object,
+            _instance: object = None,
         ):
             return True
 
@@ -503,11 +503,11 @@ def test_permission_classes_bare_class_raises():
     class AllowAll:
         def has_permission(
             self,
-            info: object,
-            mutation: type[object],
-            operation: str,
-            data: object,
-            instance: object = None,
+            _info: object,
+            _mutation: type[object],
+            _operation: str,
+            _data: object,
+            _instance: object = None,
         ):
             return True
 
@@ -544,11 +544,11 @@ def test_permission_classes_instance_entry_raises():
     class AllowAll:
         def has_permission(
             self,
-            info: object,
-            mutation: type[object],
-            operation: str,
-            data: object,
-            instance: object = None,
+            _info: object,
+            _mutation: type[object],
+            _operation: str,
+            _data: object,
+            _instance: object = None,
         ):
             return True
 
@@ -1691,14 +1691,14 @@ def test_make_meta_validating_metaclass_validates_registers_and_skips_abstract()
         _mutation_meta = None
 
         @classmethod
-        def _validate_meta(cls, meta: type) -> str:
+        def _validate_meta(cls, _meta: type) -> str:
             return f"a:{cls.__name__}"
 
     class BaseB(metaclass=MetaB):
         _mutation_meta = None
 
         @classmethod
-        def _validate_meta(cls, meta: type) -> str:
+        def _validate_meta(cls, _meta: type) -> str:
             return f"b:{cls.__name__}"
 
     class AbstractA(BaseA):

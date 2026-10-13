@@ -442,10 +442,10 @@ def test_shipped_branches_nonzero_offset_without_order_rejected():
 
 
 def _apply_order_unchanged(
-    cls: type[BranchOrder],
-    order_input: object,
+    _cls: type[BranchOrder],
+    _order_input: object,
     queryset: models.QuerySet[library_models.Branch],
-    info: object,
+    _info: object,
 ):
     """A mistaken public override: it honours the supplied order by returning nothing new."""
     return queryset
@@ -918,7 +918,7 @@ class _ProjectQ(models.Q):
 class _ProjectName(str):
     """A string subclass Django reads as an expression because it carries the method."""
 
-    def resolve_expression(self, *args: object, **kwargs: object):
+    def resolve_expression(self, *_args: object, **_kwargs: object):
         return Random()
 
     def asc(self):
@@ -1202,10 +1202,10 @@ def test_shipped_branches_offset_accepts_extra_ordering_over_a_dormant_random_or
     _seed_three_branches()
 
     def _extra_supersedes_random(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
-        info: object,
+        _info: object,
     ):
         return queryset.order_by("?").extra(order_by=["id"])
 
@@ -1234,10 +1234,10 @@ def test_shipped_branches_offset_rejects_extra_random_ordering_over_a_stable_ord
     _seed_three_branches()
 
     def _extra_random_supersedes_stable(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
-        info: object,
+        _info: object,
     ):
         return queryset.order_by("name").extra(order_by=["?"])
 
@@ -1266,10 +1266,10 @@ def test_shipped_branches_offset_rejects_an_annotated_random_order(
     _seed_three_branches()
 
     def _random_annotation(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
-        info: object,
+        _info: object,
     ):
         return queryset.annotate(rnd=Random()).order_by("rnd")
 
@@ -1296,10 +1296,10 @@ def test_shipped_branches_offset_rejects_an_f_reference_to_a_random_annotation(
     _seed_three_branches()
 
     def _random_annotation_via_f(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
-        info: object,
+        _info: object,
     ):
         return queryset.annotate(rnd=Random()).order_by(models.F("rnd").desc())
 
@@ -1327,10 +1327,10 @@ def test_shipped_branches_offset_rejects_a_desc_or_lookup_random_alias(
     _seed_three_branches()
 
     def _aliased(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
-        info: object,
+        _info: object,
     ):
         return queryset.annotate(rnd=Random()).order_by(term)
 
@@ -1357,10 +1357,10 @@ def test_shipped_branches_offset_rejects_an_extra_select_ordering(monkeypatch: p
     _seed_three_branches()
 
     def _extra_select_ordering(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
-        info: object,
+        _info: object,
     ):
         return queryset.extra(select={"rnd": "RANDOM()"}, order_by=["rnd"])
 
@@ -1388,10 +1388,10 @@ def test_shipped_branches_offset_rejects_a_dotted_extra_order(
     _seed_three_branches()
 
     def _dotted_extra(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
-        info: object,
+        _info: object,
     ):
         return queryset.extra(order_by=[term])
 
@@ -1416,10 +1416,10 @@ def test_shipped_branches_offset_rejects_a_composed_random_order(monkeypatch: py
     _seed_three_branches()
 
     def _composed_random(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
-        info: object,
+        _info: object,
     ):
         return queryset.order_by(Coalesce(Random(), Random()))
 
@@ -1446,10 +1446,10 @@ def test_shipped_branches_offset_rejects_a_raw_sql_order(monkeypatch: pytest.Mon
     _seed_three_branches()
 
     def _raw_sql_ordering(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
-        info: object,
+        _info: object,
     ):
         return queryset.order_by(RawSQL("RANDOM()", []))
 
@@ -1476,10 +1476,10 @@ def test_shipped_branches_offset_rejects_a_bare_database_function_order(
     _seed_three_branches()
 
     def _bare_function_ordering(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
-        info: object,
+        _info: object,
     ):
         output_field: models.FloatField[float | int | str | Combinable, float] = (
             models.FloatField()
@@ -1508,10 +1508,10 @@ def test_shipped_branches_offset_rejects_a_subquery_order(monkeypatch: pytest.Mo
     _seed_three_branches()
 
     def _subquery_ordering(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
-        info: object,
+        _info: object,
     ):
         inner = (
             library_models.Branch.objects.filter(pk=models.OuterRef("pk"))
@@ -1544,10 +1544,10 @@ def test_shipped_branches_offset_rejects_raw_sql_inside_a_predicate_container(
     _seed_three_branches()
 
     def _container_ordering(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
-        info: object,
+        _info: object,
     ):
         return queryset.order_by(
             models.Case(
@@ -1581,10 +1581,10 @@ def test_shipped_branches_offset_accepts_a_conditional_order(monkeypatch: pytest
     _seed_three_branches()
 
     def _conditional_ordering(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
-        info: object,
+        _info: object,
     ):
         return queryset.order_by(
             models.Case(
@@ -1618,10 +1618,10 @@ def test_shipped_branches_offset_accepts_a_stable_annotated_order(monkeypatch: p
     _seed_three_branches()
 
     def _stable_annotation(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
-        info: object,
+        _info: object,
     ):
         return queryset.annotate(sort_key=Lower("name")).order_by("sort_key")
 
@@ -1654,10 +1654,10 @@ def test_shipped_branches_offset_accepts_a_container_predicate_of_readable_leave
     _seed_three_branches()
 
     def _container_of_literals(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
-        info: object,
+        _info: object,
     ):
         return queryset.order_by(
             models.Case(
@@ -1704,10 +1704,10 @@ def test_shipped_branches_offset_accepts_a_row_count_order(monkeypatch: pytest.M
     _seed_three_branches()
 
     def _row_count_ordering(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
-        info: object,
+        _info: object,
     ):
         return queryset.annotate(row_count=models.Count("*")).order_by("row_count", "name")
 
@@ -2369,7 +2369,7 @@ def test_holder_branches_serve_a_combined_source_and_result_as_their_primary_key
     original_get_queryset = library_schema.BranchType.get_queryset
 
     def _tracking_get_queryset(
-        cls: type[library_schema.BranchType],
+        _cls: type[library_schema.BranchType],
         queryset: models.QuerySet[library_models.Branch],
         info: strawberry.Info[object, object],
         **kwargs: object,
@@ -2408,10 +2408,10 @@ def test_holder_branches_serve_a_combined_source_and_result_as_their_primary_key
     assert visibility_calls == 1
 
     def _combined_apply_sync(
-        cls: type[BranchOrder],
-        order_input: object,
+        _cls: type[BranchOrder],
+        _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
-        info: object,
+        _info: object,
     ):
         return queryset.filter(name="A").union(queryset.filter(name="B")).order_by("name")
 
@@ -2434,7 +2434,7 @@ def test_holder_branches_serve_a_combined_source_and_result_as_their_primary_key
     assert p_hook["data"]["allLibraryBranchesViaListField"] == [{"name": "B"}]
 
 
-def _combined_genre_source(root: object, info: strawberry.Info[object, object]):
+def _combined_genre_source(_root: object, _info: strawberry.Info[object, object]):
     return library_models.Genre.objects.filter(name="A").union(
         library_models.Genre.objects.exclude(name="A"),
     )
@@ -2527,10 +2527,10 @@ def test_holder_genres_a_hook_carrying_a_consumer_expression_names_the_state_on_
     library_models.Genre.objects.create(name="A")
 
     def _annotating_get_queryset(
-        cls: type[library_schema.GenreType],
+        _cls: type[library_schema.GenreType],
         queryset: models.QuerySet[library_models.Genre],
-        info: strawberry.Info[object, object],
-        **kwargs: object,
+        _info: strawberry.Info[object, object],
+        **_kwargs: object,
     ):
         return queryset.annotate(u=_ConsumerUpper(models.F("name")))
 
@@ -2578,30 +2578,30 @@ async def _awaitable_queryset(
 
 
 def _override_in_place_routing(
-    cls: type[BranchOrder],
-    order_input: object,
+    _cls: type[BranchOrder],
+    _order_input: object,
     queryset: models.QuerySet[library_models.Branch],
-    info: object,
+    _info: object,
 ):
     set_queryset_hints(queryset, {"tenant": 2})
     return queryset
 
 
 def _override_evaluated(
-    cls: type[BranchOrder],
-    order_input: object,
+    _cls: type[BranchOrder],
+    _order_input: object,
     queryset: models.QuerySet[library_models.Branch],
-    info: object,
+    _info: object,
 ):
     list(queryset)
     return queryset
 
 
 def _override_untrusted(
-    cls: type[BranchOrder],
-    order_input: object,
-    queryset: models.QuerySet[library_models.Branch],
-    info: object,
+    _cls: type[BranchOrder],
+    _order_input: object,
+    _queryset: models.QuerySet[library_models.Branch],
+    _info: object,
 ):
     candidate = _DeferredFilterQuerySet(model=library_models.Branch)
     # ``negate`` decides whether the predicate is inverted and is truth-tested to
@@ -2765,8 +2765,8 @@ def test_holder_branches_hostile_normalized_term_is_rejected_before_it_can_run(
             raise RuntimeError("hostile format ran")
 
     def _hostile_terms(
-        cls: type[BranchOrder],
-        input_value: object,
+        _cls: type[BranchOrder],
+        _input_value: object,
     ) -> list[tuple[str, Ordering | None]]:
         return [(_HostileStr("city"), Ordering.ASC)]
 
@@ -3085,10 +3085,7 @@ def _legacy_reference_resolver(
     implementation: it records the final queryset's SQL and marks before returning.
     """
 
-    def resolver(
-        root: object,
-        info: strawberry.Info[object, object],
-    ) -> models.QuerySet[models.Model]:
+    def resolver(info: strawberry.Info[object, object]) -> models.QuerySet[models.Model]:
         queryset = apply_type_visibility_sync(library_schema.BranchType, source_factory(), info)
         bounded = bounded_rows(queryset, info, None)
         assert isinstance(bounded, models.QuerySet)
@@ -3160,7 +3157,7 @@ def _install_parity_probes(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
     original_get_queryset = library_schema.BranchType.get_queryset
 
     def _tracking_get_queryset(
-        cls: type[library_schema.BranchType],
+        _cls: type[library_schema.BranchType],
         queryset: models.QuerySet[library_models.Branch],
         info: strawberry.Info[object, object],
         **kwargs: object,
@@ -3603,7 +3600,7 @@ def test_holder_orderset_override_returning_queryset_subclass(monkeypatch: pytes
     orig_apply_sync = BranchOrder.apply_sync
 
     def _subclass_apply_sync(
-        cls: type[BranchOrder],
+        _cls: type[BranchOrder],
         order_input: object,
         queryset: models.QuerySet[library_models.Branch],
         info: object,
@@ -3964,18 +3961,18 @@ def test_holder_list_field_uses_the_named_targets_queryset(
     library_models.Patron.objects.create(name="kept", email="c@example.com")
 
     def _hide_primary(
-        cls: type[library_schema.PatronType],
+        _cls: type[library_schema.PatronType],
         queryset: models.QuerySet[library_models.Patron],
-        info: strawberry.Info[object, object],
-        **kwargs: object,
+        _info: strawberry.Info[object, object],
+        **_kwargs: object,
     ) -> models.QuerySet[library_models.Patron]:
         return queryset.exclude(name="from-primary")
 
     def _hide_secondary(
-        cls: type[library_schema.PublicPatronType],
+        _cls: type[library_schema.PublicPatronType],
         queryset: models.QuerySet[library_models.Patron],
-        info: strawberry.Info[object, object],
-        **kwargs: object,
+        _info: strawberry.Info[object, object],
+        **_kwargs: object,
     ) -> models.QuerySet[library_models.Patron]:
         return queryset.exclude(name="from-secondary")
 
@@ -4017,10 +4014,10 @@ def test_shipped_branches_sync_http_rejects_an_async_get_queryset(monkeypatch: p
     library_models.Branch.objects.create(name="Alpha", city="Boston")
 
     async def _async_get_queryset(
-        cls: type[library_schema.BranchType],
+        _cls: type[library_schema.BranchType],
         queryset: models.QuerySet[library_models.Branch],
-        info: strawberry.Info[object, object],
-        **kwargs: object,
+        _info: strawberry.Info[object, object],
+        **_kwargs: object,
     ):
         return queryset
 
@@ -4049,10 +4046,10 @@ def test_shipped_branches_sync_http_rejects_an_awaitable_get_queryset(
             return library_models.Branch.objects.all()
 
     def _deferred_hook(
-        cls: type[library_schema.BranchType],
-        queryset: models.QuerySet[library_models.Branch],
-        info: strawberry.Info[object, object],
-        **kwargs: object,
+        _cls: type[library_schema.BranchType],
+        _queryset: models.QuerySet[library_models.Branch],
+        _info: strawberry.Info[object, object],
+        **_kwargs: object,
     ) -> _DeferredQueryset:
         return _DeferredQueryset()
 
@@ -4072,7 +4069,7 @@ def test_shipped_branches_sync_http_rejects_an_awaitable_get_queryset(
 def test_holder_sync_http_rejects_an_async_generator_resolver():
     """Sync HTTP refuses an async-generator resolver before GraphQL slices it."""
 
-    async def _resolve(root: object, info: strawberry.Info[object, object]):
+    async def _resolve(_root: object, _info: strawberry.Info[object, object]):
         # The yield over an empty iterable makes this resolver an async generator that yields nothing.
         for _ in ():
             yield None
@@ -4123,10 +4120,10 @@ class _HostileBranchQuerySet(models.QuerySet[library_models.Branch]):
 
 
 def _hostile_branch_hook(
-    cls: type[library_schema.BranchType],
-    queryset: models.QuerySet[library_models.Branch],
-    info: strawberry.Info[object, object],
-    **kwargs: object,
+    _cls: type[library_schema.BranchType],
+    _queryset: models.QuerySet[library_models.Branch],
+    _info: strawberry.Info[object, object],
+    **_kwargs: object,
 ) -> models.QuerySet[library_models.Branch]:
     """Apply the visibility predicate through unbound ``QuerySet.filter``."""
     return models.QuerySet[library_models.Branch].filter(
@@ -4136,7 +4133,7 @@ def _hostile_branch_hook(
 
 
 def _degrading_branch_manager():
-    def _all(self: models.Manager[library_models.Branch]) -> list[str]:
+    def _all(_self: models.Manager[library_models.Branch]) -> list[str]:
         return ["secret"]
 
     manager = type("ListManager", (models.Manager,), {"all": _all})()

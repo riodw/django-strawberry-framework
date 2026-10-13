@@ -263,7 +263,7 @@ def test_hook_exception_propagates_and_resets_state():
     """
     raiser_venue = _make_type("RaiserAType", Venue)
 
-    def _boom(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+    def _boom(_cls: type[DjangoType], _qs: models.QuerySet[models.Model], _info: object):
         raise RuntimeError("boom")
 
     _make_type("RaiserBType", RepairTicket, get_queryset=_boom)
@@ -589,7 +589,7 @@ def test_gfk_default_walk_preflights_closed():
     """
     hook_calls: list[type[DjangoType]] = []
 
-    def _counting_hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+    def _counting_hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], _info: object):
         hook_calls.append(cls)
         return qs
 
@@ -749,7 +749,11 @@ def test_multi_db_subquery_pinned_to_caller_alias():
     # what actually pins spec-034 Decision 8.
     received_dbs: list[str] = []
 
-    def _record_alias_hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+    def _record_alias_hook(
+        _cls: type[DjangoType],
+        qs: models.QuerySet[models.Model],
+        _info: object,
+    ):
         received_dbs.append(qs.db)
         return qs.exclude(name="hidden")
 
@@ -999,14 +1003,14 @@ def _register_ct_pair(hook: _Hook | None):
     return parent_type
 
 
-def _values_projection(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+def _values_projection(_cls: type[DjangoType], qs: models.QuerySet[models.Model], _info: object):
     return qs.exclude(name="hidden").values("id", "name")
 
 
 def _values_list_projection(
-    cls: type[DjangoType],
+    _cls: type[DjangoType],
     qs: models.QuerySet[models.Model],
-    info: object,
+    _info: object,
 ):
     return qs.exclude(name="hidden").values_list("name")
 
@@ -1137,58 +1141,66 @@ def test_to_field_edge_compares_target_column():
 
 
 def _hook_returns_list(
-    cls: type[DjangoType],
-    qs: models.QuerySet[models.Model],
-    info: object,
+    _cls: type[DjangoType],
+    _qs: models.QuerySet[models.Model],
+    _info: object,
 ) -> list[object]:
     return []
 
 
-def _hook_unrelated_model(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+def _hook_unrelated_model(
+    _cls: type[DjangoType],
+    qs: models.QuerySet[models.Model],
+    _info: object,
+):
     return _CtOther.objects.using(qs.db).all()
 
 
-def _hook_mti_child(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+def _hook_mti_child(_cls: type[DjangoType], qs: models.QuerySet[models.Model], _info: object):
     return _CtTargetChild.objects.using(qs.db).all()
 
 
-def _hook_sliced(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+def _hook_sliced(_cls: type[DjangoType], qs: models.QuerySet[models.Model], _info: object):
     return qs[:5]
 
 
-def _hook_distinct(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+def _hook_distinct(_cls: type[DjangoType], qs: models.QuerySet[models.Model], _info: object):
     return qs.distinct("name")
 
 
-def _hook_union_all(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+def _hook_union_all(_cls: type[DjangoType], qs: models.QuerySet[models.Model], _info: object):
     return qs.union(qs, all=True)
 
 
 def _hook_intersection_values(
-    cls: type[DjangoType],
+    _cls: type[DjangoType],
     qs: models.QuerySet[models.Model],
-    info: object,
+    _info: object,
 ):
     return qs.intersection(qs).values("id")
 
 
-def _hook_grouped_count(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+def _hook_grouped_count(_cls: type[DjangoType], qs: models.QuerySet[models.Model], _info: object):
     return qs.annotate(n=models.Count("id"))
 
 
-def _hook_grouped_values(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+def _hook_grouped_values(_cls: type[DjangoType], qs: models.QuerySet[models.Model], _info: object):
     return qs.values("name").annotate(n=models.Count("id"))
 
 
-def _hook_extra_shadow(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+def _hook_extra_shadow(_cls: type[DjangoType], qs: models.QuerySet[models.Model], _info: object):
     return qs.extra(select={"id": "name"})
 
 
-def _hook_annotate_shadow(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+def _hook_annotate_shadow(
+    _cls: type[DjangoType],
+    qs: models.QuerySet[models.Model],
+    _info: object,
+):
     return qs.values("name").annotate(id=models.Value(1))
 
 
-def _hook_off_alias(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+def _hook_off_alias(_cls: type[DjangoType], qs: models.QuerySet[models.Model], _info: object):
     return qs.using("bogus_alias")
 
 
@@ -1299,9 +1311,9 @@ def test_hostile_hook_clone_override_is_neutralized_by_sealing_in_cascade():
             return _CtTarget.objects.all()
 
     def _hostile_hook(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         qs: models.QuerySet[models.Model],
-        info: object,
+        _info: object,
     ) -> models.QuerySet[_CtTarget]:
         return models.QuerySet[_CtTarget].filter(
             _StickyQuerySet(model=_CtTarget, using=qs.db),
@@ -1339,9 +1351,9 @@ def test_hostile_values_override_end_to_end_is_neutralized_by_sealing():
             return models.QuerySet._values(_CtTarget.objects.all(), *fields, **expressions)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
 
     def _hostile_hook(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         qs: models.QuerySet[models.Model],
-        info: object,
+        _info: object,
     ) -> models.QuerySet[_CtTarget]:
         return models.QuerySet[_CtTarget].filter(
             _ValuesEraser(model=_CtTarget, using=qs.db),
@@ -1377,7 +1389,7 @@ def test_unsealable_hook_query_class_fails_closed_with_cascade_prose():
     class _ForeignQuery(sql.Query):
         pass
 
-    def _hostile_hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+    def _hostile_hook(_cls: type[DjangoType], qs: models.QuerySet[models.Model], _info: object):
         target = _CtTarget.objects.filter(name="visible").using(qs.db)
         set_queryset_query(target, _ForeignQuery(_CtTarget))
         return target
@@ -1401,7 +1413,7 @@ class _ConsumerUpper(models.Func):
 def test_a_hook_carrying_a_consumer_expression_names_what_the_cascade_can_rebuild():
     """An edge hook refused as ``untrusted`` names the full cause list and the advice."""
 
-    def _hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+    def _hook(_cls: type[DjangoType], qs: models.QuerySet[models.Model], _info: object):
         return _CtTarget.objects.using(qs.db).annotate(u=_ConsumerUpper(models.F("name")))
 
     registry.clear()
@@ -1437,7 +1449,7 @@ def test_annotation_alias_shadow_cannot_bypass_visibility():
 
         # The malicious hook: narrow to the nominally visible target, but alias
         # the pk to the hidden row's id so a naive re-projection would select it.
-        def _shadow_hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+        def _shadow_hook(_cls: type[DjangoType], qs: models.QuerySet[models.Model], _info: object):
             return qs.filter(name="visible").values("name").annotate(id=models.Value(hidden.pk))
 
         parent_type = _register_ct_pair(_shadow_hook)
@@ -1671,7 +1683,7 @@ def test_fields_scopes_walk():
     subset of cascade edges.
     """
 
-    def _exclude_private(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+    def _exclude_private(_cls: type[DjangoType], qs: models.QuerySet[models.Model], _info: object):
         return qs.filter(is_private=False)
 
     _make_type("FsItemType", Item, get_queryset=_exclude_private)
@@ -1865,7 +1877,11 @@ def test_sync_helper_raises_syncmisuseerror_on_async_target_hook():
     cascade consumer at an "async resolver" would be a dead end.
     """
 
-    async def _async_hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+    async def _async_hook(
+        _cls: type[DjangoType],
+        qs: models.QuerySet[models.Model],
+        _info: object,
+    ):
         return qs
 
     _make_type("AsyncTargetItemType", Item, get_queryset=_async_hook)
@@ -1918,7 +1934,11 @@ async def test_aapply_async_target_hook_still_raises():
     """An ``async def`` target hook raises SyncMisuseError from the async variant too (Decision 10)."""
     from asgiref.sync import sync_to_async
 
-    async def _async_hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+    async def _async_hook(
+        _cls: type[DjangoType],
+        qs: models.QuerySet[models.Model],
+        _info: object,
+    ):
         return qs
 
     @sync_to_async
@@ -2047,7 +2067,7 @@ def test_two_overlapping_threads_isolate_traversal_state():
 
     barrier = threading.Barrier(2, timeout=10)
 
-    def _parking_hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
+    def _parking_hook(_cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
         barrier.wait()  # both walks are provably in-flight together
         assert isinstance(info, SimpleNamespace)
         if getattr(info.context, "fail", False):

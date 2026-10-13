@@ -296,7 +296,7 @@ class NestedConnectionStrategy(Protocol):
 
     name: str
 
-    def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan) -> bool:
+    def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan, /) -> bool:
         """Attach fetch directives for one nested connection; ``True`` = planned."""
         raise NotImplementedError
 

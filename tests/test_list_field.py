@@ -442,7 +442,7 @@ async def test_djangolistfield_sync_resolver_returning_future_cancels_it() -> No
             model = Category
             fields = ("id", "name")
 
-    def _sync_resolver_returning_future(root: object, info: Info) -> asyncio.Future[object]:
+    def _sync_resolver_returning_future(_root: object, _info: Info) -> asyncio.Future[object]:
         future = asyncio.get_running_loop().create_future()
         captured["future"] = future
         return future
@@ -521,7 +521,7 @@ def _python_named_argument(name: str) -> SimpleNamespace:
     return SimpleNamespace(python_name=name)
 
 
-def _no_argument_definition(name: str) -> None:
+def _no_argument_definition(_name: str) -> None:
     """A resolver with no definition for any parameter."""
     return None
 
@@ -751,7 +751,7 @@ async def test_async_iterable_early_cleanup_hostile_aclose_lookup_notes():
 
     tracker = HostileTracker()
 
-    async def resolver_async_iter(root: object, info: object, **kwargs: object):
+    async def resolver_async_iter(_root: object, _info: object, **_kwargs: object):
         return tracker
 
     @strawberry.type
@@ -1122,7 +1122,7 @@ def test_a_consumer_resolver_list_field_also_reads_the_definition_only_at_constr
     target_item = services.seed_decoy_and_target_rows()["item"]
     decoy_names = set(Category.objects.values_list("name", flat=True))
 
-    def _all_items(root: object, info: object) -> QuerySet[Item]:
+    def _all_items(_root: object, _info: object) -> QuerySet[Item]:
         return Item.objects.all()
 
     state["armed"] = True
@@ -1384,7 +1384,7 @@ def test_list_field_direct_call_schema_name_fallback_and_definition_lookup(
     # A definition but no ``_raw_info``: no executable schema published a name, so
     # the default spelling is the only truthful answer.
 
-    def _order_by_definition(name: str) -> ArgDef:
+    def _order_by_definition(_name: str) -> ArgDef:
         return ArgDef()
 
     info_stub = SimpleNamespace(
@@ -2013,7 +2013,7 @@ class _SubclassedQ(models.Q):
 class _ResolvingName(str):
     """A field path that is an expression, because it carries ``resolve_expression``."""
 
-    def resolve_expression(self, *args: object, **kwargs: object):
+    def resolve_expression(self, *_args: object, **_kwargs: object):
         return Random()
 
 
@@ -2410,7 +2410,7 @@ async def test_list_field_rejected_async_iterator_is_closed_when_building_the_re
             if self.fail_close:
                 raise RuntimeError("aclose error")
 
-    def _broken_definition_lookup(name: str):
+    def _broken_definition_lookup(_name: str):
         raise RuntimeError("simulated definition lookup failure")
 
     info = SimpleNamespace(
@@ -2600,7 +2600,7 @@ def _execution_mode_schema() -> DjangoSchema:
             model = Category
             fields = ("id", "name")
 
-    def _sync_consumer(root: object, info: Info) -> QuerySet[Category]:
+    def _sync_consumer(_root: object, _info: Info) -> QuerySet[Category]:
         """A plain ``def`` returning a queryset, which is the committed sync wrapper."""
         return Category.objects.all()
 

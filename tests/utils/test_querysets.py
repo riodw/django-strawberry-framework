@@ -181,7 +181,7 @@ def _extra_where_lists(query: SqlQuery) -> tuple[list[str], list[object]]:
     return node.sqls, node.params  # pyright: ignore[reportReturnType]
 
 
-def _noop(*args: object, **kwargs: object) -> None:
+def _noop(*_args: object, **_kwargs: object) -> None:
     """A shadow that accepts any call and does nothing (it must never run)."""
 
 
@@ -194,7 +194,8 @@ def _as_async_hook_type(cls: type[object]) -> type[DjangoType]:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry(isolate_global_registry: None) -> None:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def _isolate_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
     """Every type declared here registers; the shared fixture clears it after each test."""
 
 
@@ -236,7 +237,7 @@ class _AsyncType:
     __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
     @classmethod
-    async def get_queryset(cls, queryset: models.QuerySet[Category], info: object):
+    async def get_queryset(cls, queryset: models.QuerySet[Category], _info: object):
         return queryset
 
 
@@ -444,7 +445,7 @@ async def test_run_in_one_sync_boundary_runs_callable_off_event_loop():
 def test_visibility_source_must_be_a_queryset():
     """A non-queryset source fails closed BEFORE the hook runs (fires no consumer code)."""
 
-    def _boom(cls: type, queryset: models.QuerySet[Category], info: object):  # must never run
+    def _boom(_cls: type, _queryset: models.QuerySet[Category], _info: object):  # must never run
         raise AssertionError("hook ran on an invalid source")
 
     with pytest.raises(ConfigurationError, match="requires a QuerySet of Category rows"):
@@ -471,7 +472,7 @@ def test_evaluated_source_is_refreshed_before_hook(
     """
     seen: dict[str, object] = {}
 
-    def _capture(cls: type, queryset: models.QuerySet[Category], info: object):
+    def _capture(_cls: type, queryset: models.QuerySet[Category], _info: object):
         seen["qs"] = queryset
         return queryset
 
@@ -533,7 +534,7 @@ def test_unsealable_source_fails_closed():
     runs on an unsealable source.
     """
 
-    def _boom(cls: type, queryset: models.QuerySet[Category], info: object):  # must never run
+    def _boom(_cls: type, _queryset: models.QuerySet[Category], _info: object):  # must never run
         raise AssertionError("hook ran on an unsealable source")
 
     source = Category.objects.filter(name="visible")
@@ -558,7 +559,7 @@ def test_a_source_carrying_a_consumer_expression_names_the_state_the_seal_rebuil
     the queryset from instead.
     """
 
-    def _boom(cls: type, queryset: models.QuerySet[Category], info: object):  # must never run
+    def _boom(_cls: type, _queryset: models.QuerySet[Category], _info: object):  # must never run
         raise AssertionError("hook ran on an unsealable source")
 
     source = Category.objects.annotate(u=_ConsumerUpper(F("name")))
@@ -599,7 +600,7 @@ async def test_hook_manager_result_is_coerced_async():
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
         @classmethod
-        async def get_queryset(cls, queryset: models.QuerySet[Category], info: object):
+        async def get_queryset(cls, _queryset: models.QuerySet[Category], _info: object):
             return Category.objects
 
     result = await apply_type_visibility_async(
@@ -1264,7 +1265,7 @@ def test_spoofed_base_table_over_frozen_alias_map_fails_closed():
     Baking the alias map composes lazy query state only; no SQL runs.
     """
 
-    def _spoof(cls: type, queryset: models.QuerySet[Category], info: object):
+    def _spoof(_cls: type, _queryset: models.QuerySet[Category], _info: object):
         hostile = Item.objects.all()
         hostile.query.get_initial_alias()  # freeze the alias map against Item's table
         # basedpyright: the planted spoofed model is the hostile input under test; django-stubs
@@ -1298,7 +1299,7 @@ def test_malformed_non_model_query_model_fails_closed_typed():
     ``_concrete_or_none`` folds it into the fail-closed table defect instead.
     """
 
-    def _malformed(cls: type, queryset: models.QuerySet[Category], info: object):
+    def _malformed(_cls: type, _queryset: models.QuerySet[Category], _info: object):
         hostile = Category.objects.all()
         # basedpyright: the planted spoofed model is the hostile input under test; django-stubs
         # types the slot as the queryset's own model class
@@ -1446,19 +1447,19 @@ async def test_predicate_dropping_override_result_is_neutralized_async():
 # ---------------------------------------------------------------------------
 
 
-def _shadowed_all_hook(cls: type, qs: models.QuerySet[Category], info: object):
+def _shadowed_all_hook(_cls: type, _qs: models.QuerySet[Category], _info: object):
     """Return a plain visible-only queryset whose instance ``all`` is predicate-dropping."""
     source = Category.objects.filter(is_private=False)
     source.all = lambda: Category.objects.all()  # instance shadow (would drop the predicate)
     return source
 
 
-def _shadowed_chain_hook(cls: type, qs: models.QuerySet[Category], info: object):
+def _shadowed_chain_hook(_cls: type, _qs: models.QuerySet[Category], _info: object):
     """Return a plain visible-only queryset whose ``query.chain`` is instance-replaced."""
     source = Category.objects.filter(is_private=False)
     unfiltered = Category.objects.all().query
 
-    def _unfiltered_chain(*args: object, **kwargs: object) -> SqlQuery:
+    def _unfiltered_chain(*_args: object, **_kwargs: object) -> SqlQuery:
         return unfiltered
 
     source.query.chain = _unfiltered_chain  # instance shadow
@@ -1574,7 +1575,7 @@ def test_hook_exception_propagates_unchanged():
     class _BoomError(RuntimeError):
         pass
 
-    def _raise(cls: type, queryset: models.QuerySet[Category], info: object):
+    def _raise(_cls: type, _queryset: models.QuerySet[Category], _info: object):
         raise _BoomError("consumer bug")
 
     with pytest.raises(_BoomError, match="consumer bug"):
@@ -1769,7 +1770,7 @@ def test_identity_hook_result_is_resealed_dropping_injected_cache_sync():
     """
     Category.objects.create(name="visible_row", is_private=False)
 
-    def _hook(cls: type, queryset: models.QuerySet[Category], info: object):
+    def _hook(_cls: type, queryset: models.QuerySet[Category], _info: object):
         queryset._result_cache = [Category(name="synthetic-hidden", is_private=True)]
         return queryset
 
@@ -2069,7 +2070,7 @@ async def test_async_nested_awaitable_fails_closed():
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
         @classmethod
-        async def get_queryset(cls, queryset: models.QuerySet[Category], info: object):
+        async def get_queryset(cls, queryset: models.QuerySet[Category], _info: object):
             async def _inner():
                 return queryset  # disposed, never awaited
 
@@ -2087,7 +2088,7 @@ async def test_async_generator_hook_result_fails_closed():
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
         @classmethod
-        async def get_queryset(cls, queryset: models.QuerySet[Category], info: object):
+        async def get_queryset(cls, _queryset: models.QuerySet[Category], _info: object):
             return _async_generator_result()
 
     with pytest.raises(ConfigurationError, match="got async_generator"):
@@ -2109,7 +2110,7 @@ async def test_identity_hook_result_is_resealed_dropping_injected_cache_async():
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
         @classmethod
-        async def get_queryset(cls, queryset: models.QuerySet[Category], info: object):
+        async def get_queryset(cls, queryset: models.QuerySet[Category], _info: object):
             queryset._result_cache = [Category(name="synthetic-hidden", is_private=True)]
             return queryset
 
@@ -2171,8 +2172,8 @@ def test_shadowed_leaf_as_sql_never_dispatches():
     fired: list[str] = []
 
     def _spy_as_sql(
-        compiler: SQLCompiler,
-        connection: BaseDatabaseWrapper,
+        _compiler: SQLCompiler,
+        _connection: BaseDatabaseWrapper,
     ) -> tuple[str, list[object]]:  # must never run
         fired.append("as_sql")
         return "1", []
@@ -2703,7 +2704,7 @@ def test_deferred_filter_hostile_resolve_expression_never_dispatches():
     class _HostileValue:
         conditional = True
 
-        def resolve_expression(self, query: SqlQuery, *args: object, **kwargs: object):
+        def resolve_expression(self, query: SqlQuery, *_args: object, **_kwargs: object):
             fired.append("resolve_expression")
             from django.db.models.sql.where import WhereNode
 
@@ -2880,7 +2881,7 @@ def test_is_inert_value_uses_exact_types_not_isinstance():
     from decimal import Decimal
 
     class _EvilStr(str):
-        def resolve_expression(self, query: object, *args: object, **kwargs: object):
+        def resolve_expression(self, _query: object, *_args: object, **_kwargs: object):
             from django.db.models import Value
 
             return Value(1)
@@ -2904,7 +2905,7 @@ def test_deferred_str_subclass_expression_never_dispatches():
     fired: list[str] = []
 
     class _EvilStr(str):
-        def resolve_expression(self, query: object, *args: object, **kwargs: object):
+        def resolve_expression(self, _query: object, *_args: object, **_kwargs: object):
             fired.append("resolve_expression")
             from django.db.models import Value
 
@@ -2929,7 +2930,7 @@ def test_deferred_model_instance_with_instance_resolve_expression_fails_closed()
     """
     from django.db.models import Value
 
-    def _value_one(query: object, *args: object, **kwargs: object) -> Value:
+    def _value_one(_query: object, *_args: object, **_kwargs: object) -> Value:
         return Value(1)
 
     inst = Category(name="p")
@@ -2974,8 +2975,8 @@ def test_dynamic_as_vendor_shadow_never_dispatches():
     fired: list[str] = []
 
     def _spy_as_sqlite(
-        compiler: SQLCompiler,
-        connection: BaseDatabaseWrapper,
+        _compiler: SQLCompiler,
+        _connection: BaseDatabaseWrapper,
     ) -> tuple[str, list[object]]:  # must never run
         fired.append("as_sqlite")
         return "1", []
@@ -3002,7 +3003,7 @@ def test_func_arg_joiner_metadata_non_string_fails_closed():
     from django.db.models.functions import Concat
 
     class _EvilJoiner:
-        def join(self, parts: object):  # must never run
+        def join(self, _parts: object):  # must never run
             return "x"
 
     source = Category.objects.all()
@@ -5978,7 +5979,7 @@ def test_apply_type_visibility_sync_serves_a_combined_result_as_its_pk_set():
     names = sorted(Category.objects.values_list("name", flat=True))
     first, second = names[0], names[1]
 
-    def _union_hook(cls: type, queryset: models.QuerySet[Category], info: object):
+    def _union_hook(_cls: type, queryset: models.QuerySet[Category], _info: object):
         return queryset.filter(name=first).union(queryset.filter(name=second))
 
     CombinedType = _declared_type(Category, "CombinedType", _union_hook)
@@ -6164,10 +6165,10 @@ def test_validate_post_orderset_result_refuses_a_combined_result_ordered_through
     from django_strawberry_framework.orders import Ordering, OrderSet
 
     def _hide_secret(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: models.QuerySet[Shelf],
-        info: object,
-        **kwargs: object,
+        _info: object,
+        **_kwargs: object,
     ) -> models.QuerySet[Shelf]:
         return queryset.exclude(topic="secret")
 
@@ -6530,7 +6531,7 @@ class _NestedAliasRouter:
 
     calls: list[str] = []
 
-    def db_for_read(self, model: type[models.Model], **hints: object) -> str | None:
+    def db_for_read(self, _model: type[models.Model], **hints: object) -> str | None:
         _NestedAliasRouter.calls.append("read")
         token = hints.get("tenant")
         if not is_exact_dict(token):
@@ -6612,7 +6613,7 @@ def test_routing_intent_on_an_explicitly_routed_source_needs_no_router():
 
 
 class _RaisingRouter:
-    def db_for_read(self, model: type[models.Model], **hints: object):
+    def db_for_read(self, _model: type[models.Model], **_hints: object):
         raise RuntimeError("router exploded")
 
 
@@ -6628,7 +6629,7 @@ def test_routing_intent_fails_closed_when_the_router_raises():
 
 
 class _NonStringAliasRouter:
-    def db_for_read(self, model: type[models.Model], **hints: object):
+    def db_for_read(self, _model: type[models.Model], **_hints: object):
         return 17
 
 

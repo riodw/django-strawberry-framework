@@ -11,7 +11,7 @@ from config.schema import schema
 from django_strawberry_framework.views import DjangoGraphQLView
 
 
-def index(request: HttpRequest) -> HttpResponse:
+def index(_request: HttpRequest) -> HttpResponse:
     """Landing page with quick links to all dev actions."""
     return HttpResponse("""
         <h2>Fakeshop Dev Links</h2>

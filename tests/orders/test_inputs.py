@@ -37,7 +37,8 @@ from tests._soft_dependency import blocked_modules
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry(isolate_global_registry: None) -> None:
+# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
+def _isolate_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
     """Clear the global registry and input ledgers around every test here.
 
     The module declares function-scope ``OrderSet`` subclasses whose

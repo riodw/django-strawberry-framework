@@ -97,7 +97,7 @@ def _content_type(response: HttpResponseBase) -> str:
     return response["Content-Type"].split(";")[0]
 
 
-def _show_toolbar_always(request: HttpRequest) -> bool:
+def _show_toolbar_always(_request: HttpRequest) -> bool:
     """The always-true show-toolbar callback: independent of REMOTE_ADDR / INTERNAL_IPS."""
     return True
 
@@ -148,7 +148,7 @@ class _StampBrotliContentEncodingMiddleware(_StampGzipContentEncodingMiddleware)
     encoding = "br"
 
 
-def _unrelated_json_view(request: HttpRequest) -> HttpResponse:
+def _unrelated_json_view(_request: HttpRequest) -> HttpResponse:
     """A non-Strawberry JSON view: the leak guard must leave the body untouched."""
     return HttpResponse(b'{"probe": "ok"}', content_type="application/json")
 

@@ -605,12 +605,12 @@ def test_resolve_async_passes_through_evaluated_queryset(monkeypatch: pytest.Mon
     qs = Category.objects.all()
     len(qs)  # evaluate synchronously, before the await -> no DB access in the coroutine
 
-    def _tripwire(info: object):
+    def _tripwire(_info: object):
         raise AssertionError("guard must short-circuit before return-type resolution")
 
     monkeypatch.setattr(extension_module, "_resolve_model_from_return_type", _tripwire)
 
-    async def fake_next(root: object, info: object, *args: object, **kwargs: object):
+    async def fake_next(_root: object, _info: object, *_args: object, **_kwargs: object):
         return qs
 
     info = make_info(field_name="allCategories")._raw_info
@@ -750,7 +750,7 @@ def test_resolve_passes_through_non_root_resolvers():
     qs = Category.objects.all()
     called_with = {}
 
-    def fake_next(root: object, info: object, *args: object, **kwargs: object):
+    def fake_next(_root: object, _info: object, *_args: object, **_kwargs: object):
         called_with["fired"] = True
         return qs
 
@@ -781,7 +781,7 @@ def test_resolve_handles_async_root_resolver():
 
     qs = Category.objects.all()
 
-    async def fake_next(root: object, info: object, *args: object, **kwargs: object):
+    async def fake_next(_root: object, _info: object, *_args: object, **_kwargs: object):
         return qs
 
     # Root resolver: path.prev is None. Its String return type maps to no registered model.
@@ -800,9 +800,8 @@ def test_resolve_handles_async_root_resolver():
 
 
 @pytest.mark.django_db
-def test_optimize_handles_empty_field_nodes(
-    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+@pytest.mark.usefixtures("django_assert_num_queries")
+def test_optimize_handles_empty_field_nodes():
     """If field_nodes is empty, _optimize returns the queryset unchanged."""
     services.seed_data(1)
 
@@ -859,13 +858,7 @@ def test_optimize_returns_original_queryset_for_empty_plan(monkeypatch: pytest.M
     ext = DjangoOptimizerExtension()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
 
-    def _empty_plan(
-        selected_fields: object,
-        model: object,
-        info: object = None,
-        *,
-        source_type: object = None,
-    ) -> OptimizationPlan:
+    def _empty_plan(*_args: object, **_kwargs: object) -> OptimizationPlan:
         return OptimizationPlan()
 
     monkeypatch.setattr(extension_module, "plan_optimizations", _empty_plan)
@@ -898,9 +891,8 @@ def test_on_execute_sets_and_resets_context_var():
 
 
 @pytest.mark.django_db
-def test_cache_differentiates_queries(
-    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+@pytest.mark.usefixtures("django_assert_num_queries")
+def test_cache_differentiates_queries():
     """B1: different queries produce different cache entries."""
     services.seed_data(1)
 
@@ -1309,13 +1301,7 @@ def test_get_or_build_plan_reuses_uncacheable_plan_within_execution(
 
     builds = {"count": 0}
 
-    def _fake_plan_optimizations(
-        selections: object,
-        model: type[Model],
-        *,
-        info: object,
-        source_type: object,
-    ):
+    def _fake_plan_optimizations(*_args: object, **_kwargs: object):
         builds["count"] += 1
         return OptimizationPlan(prefetch_related=["items"], cacheable=False).finalize()
 
@@ -2349,13 +2335,7 @@ def test_plan_cache_eviction_survives_concurrent_drain(
 
     new_plan = SimpleNamespace(cacheable=True)
 
-    def _new_plan(
-        selected_fields: object,
-        model: object,
-        info: object = None,
-        *,
-        source_type: object = None,
-    ) -> SimpleNamespace:
+    def _new_plan(*_args: object, **_kwargs: object) -> SimpleNamespace:
         return new_plan
 
     monkeypatch.setattr(extension_module, "plan_optimizations", _new_plan)
@@ -2912,7 +2892,7 @@ def test_check_schema_skips_unreachable_and_missing_field_map(monkeypatch: pytes
     registry.register(Category, ReachableWithoutFieldMap)  # pyright: ignore[reportArgumentType]
     del UnreachableType
 
-    def _reachable_types(schema: object) -> set[type]:
+    def _reachable_types(_schema: object) -> set[type]:
         return {ReachableWithoutFieldMap}
 
     monkeypatch.setattr(extension_module, "_collect_schema_reachable_types", _reachable_types)
@@ -3178,9 +3158,8 @@ def test_optimizer_hint_importable_from_top_level():
 
 
 @pytest.mark.django_db
-def test_plan_stashed_with_select_related(
-    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+@pytest.mark.usefixtures("django_assert_num_queries")
+def test_plan_stashed_with_select_related():
     """B5: the stashed plan contains the expected select_related entries."""
     services.seed_data(1)
 
@@ -3219,9 +3198,8 @@ def test_plan_stashed_with_select_related(
 
 
 @pytest.mark.django_db
-def test_plan_stashed_with_prefetch_related(
-    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+@pytest.mark.usefixtures("django_assert_num_queries")
+def test_plan_stashed_with_prefetch_related():
     """B5: the stashed plan contains the expected prefetch_related entries."""
     services.seed_data(1)
 
@@ -6022,7 +6000,7 @@ def test_an_operation_in_a_context_that_outlived_a_request_publishes_as_its_own(
     @strawberry.type
     class Query:
         @strawberry.field(graphql_type=list[ItemType])
-        def all_items(self, info: strawberry.Info) -> QuerySet[Item]:
+        def all_items(self) -> QuerySet[Item]:
             """Copy this operation's context, as a resolver starting a task does."""
             seen.setdefault("copied", contextvars.copy_context())
             return Item.objects.all()

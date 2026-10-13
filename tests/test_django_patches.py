@@ -101,7 +101,7 @@ def test_apply_reinstalls_when_class_attribute_reverted(monkeypatch: pytest.Monk
     # classmethod descriptor itself back (assigning a bound method back via the
     # attribute would replace the descriptor with a regular function and break
     # later tests).
-    def _foreign(cls: type[SimpleTestCase]):
+    def _foreign(_cls: type[SimpleTestCase]):
         pass
 
     monkeypatch.setattr(SimpleTestCase, "_remove_databases_failures", classmethod(_foreign))
@@ -216,7 +216,7 @@ def test_patched_remove_databases_failures_skips_non_wrapper_methods():
     connection = connections["default"]
     original_cursor = connection.cursor
 
-    def _plain_cursor(*args: object, **kwargs: object) -> NoReturn:
+    def _plain_cursor(*_args: object, **_kwargs: object) -> NoReturn:
         raise AssertionError("not a ``_DatabaseFailure`` wrapper; only its identity is read")
 
     connection.cursor = _plain_cursor
@@ -249,7 +249,7 @@ def test_patched_remove_databases_failures_covers_direct_simple_test_case_subcla
     connection = connections["default"]
     original_cursor = connection.cursor
 
-    def _plain_cursor(*args: object, **kwargs: object) -> NoReturn:
+    def _plain_cursor(*_args: object, **_kwargs: object) -> NoReturn:
         raise AssertionError("not a ``_DatabaseFailure`` wrapper; only its identity is read")
 
     connection.cursor = _plain_cursor
@@ -296,7 +296,7 @@ def test_unpatched_remove_databases_failures_crashes_on_non_wrapper(
     connection = connections["default"]
     original_cursor = connection.cursor
 
-    def _plain_cursor(*args: object, **kwargs: object) -> NoReturn:
+    def _plain_cursor(*_args: object, **_kwargs: object) -> NoReturn:
         raise AssertionError("not a ``_DatabaseFailure`` wrapper; only its identity is read")
 
     connection.cursor = _plain_cursor
@@ -317,7 +317,7 @@ def test_apply_fails_loudly_when_database_failure_symbol_missing():
 def test_apply_fails_loudly_when_upstream_method_signature_changes():
     """The patch pins the classmethod arity its replacement assumes."""
 
-    def changed(cls: type[SimpleTestCase], extra: object):
+    def changed(_cls: type[SimpleTestCase], _extra: object):
         pass
 
     with mock.patch.object(
@@ -344,7 +344,7 @@ def test_apply_fails_loudly_when_upstream_body_drifts(monkeypatch: pytest.Monkey
     ``RuntimeError`` before installing anything.
     """
 
-    def _foreign(cls: type[SimpleTestCase]):
+    def _foreign(_cls: type[SimpleTestCase]):
         pass
 
     monkeypatch.setattr(SimpleTestCase, "_remove_databases_failures", classmethod(_foreign))
@@ -632,7 +632,7 @@ def test_apply_no_ops_when_toggle_disabled(
     is back on.
     """
 
-    def _foreign(cls: type[SimpleTestCase]):
+    def _foreign(_cls: type[SimpleTestCase]):
         pass
 
     monkeypatch.setattr(SimpleTestCase, "_remove_databases_failures", classmethod(_foreign))
@@ -659,7 +659,7 @@ def test_apply_no_ops_when_django_dependency_opted_out(
     name).
     """
 
-    def _foreign(cls: type[SimpleTestCase]):
+    def _foreign(_cls: type[SimpleTestCase]):
         pass
 
     monkeypatch.setattr(SimpleTestCase, "_remove_databases_failures", classmethod(_foreign))

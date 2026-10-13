@@ -26,7 +26,7 @@ def test_plan_cli_inventories_current_source_and_refuses_accidental_overwrite(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
 
-    def _dirty_status(root: Path) -> str:
+    def _dirty_status(_root: Path) -> str:
         return " M package/root.py\n?? notes.md\n"
 
     monkeypatch.setattr(dry, "_git_status_short", _dirty_status)
@@ -92,10 +92,10 @@ def test_plan_reads_the_release_from_the_package_and_states_a_missing_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
 
-    def _unavailable_status(root: Path) -> None:
+    def _unavailable_status(_root: Path) -> None:
         return None
 
-    def _clean_status(root: Path) -> str:
+    def _clean_status(_root: Path) -> str:
         return ""
 
     monkeypatch.setattr(dry, "_git_status_short", _unavailable_status)

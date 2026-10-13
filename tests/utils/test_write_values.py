@@ -470,7 +470,8 @@ def test_relation_into_dispatches_single_and_multi_then_stores():
         value: object,
         *,
         graphql_name: str,
-        related_model: type[Model],
+        # basedpyright: relation_into passes the decoder kwargs by keyword
+        related_model: type[Model],  # pyright: ignore[reportUnusedParameter]
         info: object,
         **extra: object,
     ):
@@ -489,7 +490,8 @@ def test_relation_into_dispatches_single_and_multi_then_stores():
         value: object,
         *,
         graphql_name: str,
-        related_model: type[Model],
+        # basedpyright: relation_into passes the decoder kwargs by keyword
+        related_model: type[Model],  # pyright: ignore[reportUnusedParameter]
         info: object,
         **extra: object,
     ):
@@ -541,12 +543,13 @@ def test_relation_into_dispatches_single_and_multi_then_stores():
     dest.clear()
 
     def failing(
-        value: object,
+        _value: object,
         *,
         graphql_name: str,
-        related_model: type[Model],
-        info: object,
-        **extra: object,
+        # basedpyright: relation_into passes the decoder kwargs by keyword
+        related_model: type[Model],  # pyright: ignore[reportUnusedParameter]
+        # basedpyright: relation_into passes the decoder kwargs by keyword
+        info: object,  # pyright: ignore[reportUnusedParameter]
     ):
         return None, field_error(graphql_name, "hidden", codes="invalid")
 
@@ -580,20 +583,24 @@ def test_decode_field_handlers_split_files_from_data():
     def single(
         value: object,
         *,
-        graphql_name: str,
-        related_model: type[Model],
-        info: object,
-        **extra: object,
+        # basedpyright: relation_into passes the decoder kwargs by keyword
+        graphql_name: str,  # pyright: ignore[reportUnusedParameter]
+        # basedpyright: relation_into passes the decoder kwargs by keyword
+        related_model: type[Model],  # pyright: ignore[reportUnusedParameter]
+        # basedpyright: relation_into passes the decoder kwargs by keyword
+        info: object,  # pyright: ignore[reportUnusedParameter]
     ):
         return f"pk-{value}", None
 
     def multi(
-        value: object,
+        _value: object,
         *,
-        graphql_name: str,
-        related_model: type[Model],
-        info: object,
-        **extra: object,
+        # basedpyright: relation_into passes the decoder kwargs by keyword
+        graphql_name: str,  # pyright: ignore[reportUnusedParameter]
+        # basedpyright: relation_into passes the decoder kwargs by keyword
+        related_model: type[Model],  # pyright: ignore[reportUnusedParameter]
+        # basedpyright: relation_into passes the decoder kwargs by keyword
+        info: object,  # pyright: ignore[reportUnusedParameter]
     ):
         raise AssertionError("multi should not run")
 
@@ -1033,7 +1040,7 @@ def test_decode_visible_relation_ids_coercion_and_null_boundaries_stay_contained
     assert pks == [category.pk]
 
 
-def _relation_decoder_never_called(*args: object, **kwargs: object) -> NoReturn:
+def _relation_decoder_never_called(*_args: object, **_kwargs: object) -> NoReturn:
     """A relation decoder the path under test never reaches: any call fails the test."""
     raise AssertionError("the relation decoders must not run")
 

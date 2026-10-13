@@ -12,7 +12,6 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
-import pytest_django
 import strawberry
 from apps.library.models import (
     Book,
@@ -705,9 +704,8 @@ def test_walker_plan_never_projects_non_column_relation_names():
 
 
 @pytest.mark.django_db
-def test_walker_produces_same_plan_with_cached_map(
-    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+@pytest.mark.usefixtures("django_assert_num_queries")
+def test_walker_produces_same_plan_with_cached_map():
     """B7: the walker's plan is identical whether it uses the cached map or _meta."""
     import strawberry
 

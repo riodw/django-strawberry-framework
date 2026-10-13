@@ -515,11 +515,11 @@ def _bind_item_serializer_mutation(
     class _AllowAll:
         def has_permission(
             self,
-            info: object,
-            mutation: type[object],
-            op: str,
-            data: object,
-            instance: object = None,
+            _info: object,
+            _mutation: type[object],
+            _op: str,
+            _data: object,
+            _instance: object = None,
         ):
             return True
 
@@ -1240,7 +1240,7 @@ def test_relation_decode_consumes_recorded_strategy_after_strategy_resolver_fail
 
     from django_strawberry_framework.types import relay as relay_module
 
-    def _boom(*args: object, **kwargs: object):
+    def _boom(*_args: object, **_kwargs: object):
         raise AssertionError("_resolve_globalid_strategy must not run on the query path")
 
     monkeypatch.setattr(relay_module, "_resolve_globalid_strategy", _boom)
@@ -1316,11 +1316,11 @@ async def test_async_entry_rejects_data_rewriting_hook_too():
     class _AllowAll:
         def has_permission(
             self,
-            info: object,
-            mutation: type[object],
-            op: str,
-            data: object,
-            instance: object = None,
+            _info: object,
+            _mutation: type[object],
+            _op: str,
+            _data: object,
+            _instance: object = None,
         ):
             return True
 
@@ -1864,11 +1864,11 @@ def _build_serializer_g2_schema():
     class _AllowAll:
         def has_permission(
             self,
-            info: object,
-            mutation: type[object],
-            op: str,
-            data: object,
-            instance: object = None,
+            _info: object,
+            _mutation: type[object],
+            _op: str,
+            _data: object,
+            _instance: object = None,
         ):
             return True
 
@@ -2134,10 +2134,10 @@ def _hookable_injected_mut(injected_fields: tuple[str, ...] | None, hook_return:
 
         def get_serializer_injected_data(
             self,
-            info: object,
+            _info: object,
             *,
             data: Mapping[str, object],
-            hook_context: SerializerHookContext,
+            **_kwargs: object,
         ):
             # The received view is FROZEN: mutation is structurally impossible.
             with pytest.raises(TypeError):
@@ -2208,10 +2208,10 @@ def test_injected_data_hook_cannot_mutate_nested_client_containers():
 
         def get_serializer_injected_data(
             self,
-            info: object,
+            _info: object,
             *,
             data: Mapping[str, object],
-            hook_context: SerializerHookContext,
+            **_kwargs: object,
         ):
             # A nested list is a tuple and a nested dict a MappingProxyType: the
             # in-place mutations a mutable clone merely ISOLATED are now
@@ -2701,11 +2701,13 @@ def test_save_kwargs_hook_cannot_mutate_validated_data_by_identity():
             return super().create(validated_data)
 
     def mutating_save_kwargs(
-        self: SerializerMutation,
-        info: object,
+        # basedpyright: assigned over the typed hook, whose signature fixes these names
+        self: SerializerMutation,  # pyright: ignore[reportUnusedParameter]
+        # basedpyright: assigned over the typed hook, whose signature fixes these names
+        info: object,  # pyright: ignore[reportUnusedParameter]
         *,
         data: Mapping[str, object],
-        hook_context: SerializerHookContext,
+        **_kwargs: object,
     ) -> dict[str, object]:
         # Before the freeze, these in-place mutations rewrote validated_data by identity;
         # the frozen view makes them raise instead of silently succeeding.
@@ -2753,13 +2755,8 @@ def test_save_kwargs_hook_validation_error_maps_to_field_error_envelope():
             model = product_models.Item
             fields = ("name", "category")
 
-    def raising_save_kwargs(
-        self: SerializerMutation,
-        info: object,
-        *,
-        data: Mapping[str, object],
-        hook_context: SerializerHookContext,
-    ):
+    # basedpyright: assigned over the typed hook, whose signature fixes these names
+    def raising_save_kwargs(self: SerializerMutation, info: object, **_kwargs: object):  # pyright: ignore[reportUnusedParameter]
         raise serializers.ValidationError({"name": ["from the save-kwargs hook"]})
 
     mutation_cls = _bind_item_serializer_mutation(PlainItemSerializer)
@@ -2792,13 +2789,7 @@ def test_save_kwargs_hook_non_mapping_return_is_configuration_error():
             model = product_models.Item
             fields = ("name", "category")
 
-    def malformed_save_kwargs(
-        self: SerializerMutation,
-        info: object,
-        *,
-        data: Mapping[str, object],
-        hook_context: SerializerHookContext,
-    ):
+    def malformed_save_kwargs(_self: SerializerMutation, _info: object, **_kwargs: object):
         return None
 
     mutation_cls = _bind_item_serializer_mutation(PlainItemSerializer)
@@ -2877,11 +2868,11 @@ def test_merged_kwargs_hook_rewriting_data_is_configuration_error():
     """A ``get_serializer_kwargs`` returning a DIFFERENT ``data`` fails loud (data is framework-owned)."""
 
     def hook(
-        self: SerializerMutation,
-        info: object,
+        _self: SerializerMutation,
+        _info: object,
         *,
         data: Mapping[str, object],
-        hook_context: SerializerHookContext,
+        **_kwargs: object,
     ):
         return {"data": {**data, "smuggled": "value"}}
 
@@ -2902,11 +2893,11 @@ def test_merged_kwargs_hook_equal_data_is_tolerated():
     """A hook returning the (unmodified) data copy is tolerated (the default's pass-through)."""
 
     def hook(
-        self: SerializerMutation,
-        info: object,
+        _self: SerializerMutation,
+        _info: object,
         *,
         data: Mapping[str, object],
-        hook_context: SerializerHookContext,
+        **_kwargs: object,
     ):
         return {"data": data}
 
@@ -2928,11 +2919,11 @@ def test_merged_kwargs_hook_substituting_instance_is_configuration_error():
     substituted = SimpleNamespace(pk=999)
 
     def hook(
-        self: SerializerMutation,
-        info: object,
+        _self: SerializerMutation,
+        _info: object,
         *,
         data: Mapping[str, object],
-        hook_context: SerializerHookContext,
+        **_kwargs: object,
     ):
         return {"data": data, "instance": substituted}
 
@@ -2953,11 +2944,11 @@ def test_merged_kwargs_hook_conflicting_write_alias_is_configuration_error():
     """A hook setting a conflicting ``context['write_alias']`` fails loud (alias is framework-owned)."""
 
     def hook(
-        self: SerializerMutation,
-        info: object,
+        _self: SerializerMutation,
+        _info: object,
         *,
         data: Mapping[str, object],
-        hook_context: SerializerHookContext,
+        **_kwargs: object,
     ):
         return {"data": data, "context": {"write_alias": "other"}}
 
@@ -2993,11 +2984,11 @@ def test_merged_kwargs_hook_cannot_mutate_nested_client_containers():
     """The constructor hook's data view is RECURSIVELY frozen: nested mutations raise."""
 
     def hook(
-        self: SerializerMutation,
-        info: object,
+        _self: SerializerMutation,
+        _info: object,
         *,
         data: Mapping[str, object],
-        hook_context: SerializerHookContext,
+        **_kwargs: object,
     ) -> dict[str, object]:
         # A mutable copy merely ISOLATED these; the frozen view makes them impossible.
         # A frozen nested list is a tuple: no in-place ``append`` exists to call.
@@ -3031,11 +3022,11 @@ def test_merged_kwargs_hook_equal_but_not_identical_data_is_configuration_error(
     """
 
     def hook(
-        self: SerializerMutation,
-        info: object,
+        _self: SerializerMutation,
+        _info: object,
         *,
         data: Mapping[str, object],
-        hook_context: SerializerHookContext,
+        **_kwargs: object,
     ):
         return {"data": dict(data)}
 
@@ -3054,13 +3045,7 @@ def test_merged_kwargs_hook_equal_but_not_identical_data_is_configuration_error(
 def test_merged_kwargs_hook_non_mapping_return_is_configuration_error():
     """A malformed constructor hook return fails before reserved-key handling."""
 
-    def hook(
-        self: SerializerMutation,
-        info: object,
-        *,
-        data: Mapping[str, object],
-        hook_context: SerializerHookContext,
-    ):
+    def hook(_self: SerializerMutation, _info: object, **_kwargs: object):
         return None
 
     mutation_cls = _reserved_kwarg_mutation(hook)
@@ -3117,11 +3102,11 @@ def test_merged_kwargs_hook_non_string_keys_are_configuration_error():
     """A ``get_serializer_kwargs`` returning a non-str-keyed mapping fails loud, typed."""
 
     def hook(
-        self: SerializerMutation,
-        info: object,
+        _self: SerializerMutation,
+        _info: object,
         *,
         data: Mapping[str, object],
-        hook_context: SerializerHookContext,
+        **_kwargs: object,
     ):
         return {1: "x", "data": data}
 
@@ -3154,11 +3139,11 @@ def test_serializer_kwargs_hook_non_string_keys_fail_before_serializer_construct
             fields = ("name", "category")
 
     def hostile_kwargs(
-        self: SerializerMutation,
-        info: object,
+        _self: SerializerMutation,
+        _info: object,
         *,
         data: Mapping[str, object],
-        hook_context: SerializerHookContext,
+        **_kwargs: object,
     ):
         return {1: "x", "data": data}
 
@@ -3192,13 +3177,7 @@ def test_save_kwargs_hook_non_string_keys_fail_before_save():
             model = product_models.Item
             fields = ("name", "category")
 
-    def hostile_save_kwargs(
-        self: SerializerMutation,
-        info: object,
-        *,
-        data: Mapping[str, object],
-        hook_context: SerializerHookContext,
-    ):
+    def hostile_save_kwargs(_self: SerializerMutation, _info: object, **_kwargs: object):
         return {1: "x"}
 
     mutation_cls = _bind_item_serializer_mutation(KeyGateSaveSerializer)
@@ -3219,13 +3198,7 @@ def test_save_kwargs_hook_non_string_keys_fail_before_save():
 def test_merged_kwargs_hook_explicit_none_data_is_configuration_error():
     """An explicit ``data=None`` return is NOT omission: the sentinel keeps it rejected."""
 
-    def hook(
-        self: SerializerMutation,
-        info: object,
-        *,
-        data: Mapping[str, object],
-        hook_context: SerializerHookContext,
-    ):
+    def hook(_self: SerializerMutation, _info: object, **_kwargs: object):
         return {"data": None}
 
     mutation_cls = _reserved_kwarg_mutation(hook)
@@ -3244,13 +3217,7 @@ def test_merged_kwargs_hook_explicit_none_data_is_configuration_error():
 def test_merged_kwargs_hook_explicit_none_instance_on_update_is_configuration_error():
     """On update, an explicit ``instance=None`` return is rejected (sentinel, not ``pop`` default)."""
 
-    def hook(
-        self: SerializerMutation,
-        info: object,
-        *,
-        data: Mapping[str, object],
-        hook_context: SerializerHookContext,
-    ):
+    def hook(_self: SerializerMutation, _info: object, **_kwargs: object):
         return {"instance": None}
 
     mutation_cls = _reserved_kwarg_mutation(hook)
@@ -3276,11 +3243,11 @@ def test_merged_kwargs_deep_data_passthrough_never_recurses():
     import sys
 
     def hook(
-        self: SerializerMutation,
-        info: object,
+        _self: SerializerMutation,
+        _info: object,
         *,
         data: Mapping[str, object],
-        hook_context: SerializerHookContext,
+        **_kwargs: object,
     ):
         return {"data": data}
 
@@ -3792,7 +3759,7 @@ def test_write_witness_blocks_cross_alias_pre_save():
         assert written == []  # the other thread's write never lands on this witness
 
 
-def _execute_nothing(*args: object) -> None:
+def _execute_nothing(*_args: object) -> None:
     return None
 
 
@@ -4798,11 +4765,11 @@ def _bind_book_genres_mutation(serializer_cls: type[DRFSerializer], *, operation
     class _AllowAll:
         def has_permission(
             self,
-            info: object,
-            mutation: type[object],
-            op: str,
-            data: object,
-            instance: object = None,
+            _info: object,
+            _mutation: type[object],
+            _op: str,
+            _data: object,
+            _instance: object = None,
         ):
             return True
 
@@ -4873,7 +4840,7 @@ def test_field_validator_substituting_a_relation_object_is_rejected():
             model = product_models.Item
             fields = ("name", "category")
 
-        def validate_category(self, value: product_models.Category):
+        def validate_category(self, _value: product_models.Category):
             return product_models.Category.objects.get(pk=hidden.pk)  # the swap
 
     visible = product_models.Category.objects.create(name="LedgerVisible")
@@ -4976,7 +4943,7 @@ def test_field_validator_substituting_a_renamed_source_relation_is_rejected():
             model = product_models.Item
             fields = ("name", "group")
 
-        def validate_group(self, value: product_models.Category):
+        def validate_group(self, _value: product_models.Category):
             return product_models.Category.objects.get(pk=hidden.pk)
 
     visible = product_models.Category.objects.create(name="RenamedVisible")
@@ -5301,11 +5268,13 @@ def test_hook_mutating_the_located_target_is_rejected_before_save():
     item = product_models.Item.objects.create(name="DriftItem", category=category)
 
     def drifting_kwargs(
-        self: SerializerMutation,
-        info: object,
+        # basedpyright: assigned over the typed hook, whose signature fixes these names
+        self: SerializerMutation,  # pyright: ignore[reportUnusedParameter]
+        # basedpyright: assigned over the typed hook, whose signature fixes these names
+        info: object,  # pyright: ignore[reportUnusedParameter]
         *,
         data: Mapping[str, object],
-        hook_context: SerializerHookContext,
+        **_kwargs: object,
     ) -> dict[str, object]:
         item.name = "smuggled-by-hook"  # setattr the located row before the save
         return {"data": data}
@@ -5335,11 +5304,11 @@ def test_save_kwargs_naming_a_model_field_is_rejected():
     mutation_cls = _bind_item_serializer_mutation(PlainSerializer)
 
     def model_field_save_kwargs(
-        self: SerializerMutation,
-        info: object,
-        *,
-        data: Mapping[str, object],
-        hook_context: SerializerHookContext,
+        # basedpyright: assigned over the typed hook, whose signature fixes these names
+        self: SerializerMutation,  # pyright: ignore[reportUnusedParameter]
+        # basedpyright: assigned over the typed hook, whose signature fixes these names
+        info: object,  # pyright: ignore[reportUnusedParameter]
+        **_kwargs: object,
     ) -> dict[str, object]:
         return {"is_private": True}  # an Item column never validated or visibility-checked
 

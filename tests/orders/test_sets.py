@@ -473,7 +473,7 @@ def test_orderset_check_permission_dedups_repeated_list_entries():
             model = Shelf
             fields = ["code"]
 
-        def check_code_permission(self, request: object):
+        def check_code_permission(self, _request: object):
             counts["code"] += 1
 
     class BookOrderDedup(OrderSet):
@@ -483,7 +483,7 @@ def test_orderset_check_permission_dedups_repeated_list_entries():
             model = Book
             fields = ["title"]
 
-        def check_shelf_permission(self, request: object):
+        def check_shelf_permission(self, _request: object):
             counts["shelf"] += 1
 
     factory = OrderArgumentsFactory(BookOrderDedup)
@@ -590,7 +590,7 @@ def test_orderset_direct_mapping_initializes_specs_before_permissions():
             model = Shelf
             fields = ["code"]
 
-        def check_code_permission(self, request: object):
+        def check_code_permission(self, _request: object):
             raise GraphQLError("code gate fired")
 
     class BookOrderDirectMapping(OrderSet):
@@ -2844,10 +2844,10 @@ def _hiding_type(model: type[Model], type_name: str, *, primary: bool = True, **
     """Register a type for ``model`` whose ``get_queryset`` hides the rows matching ``hidden``."""
 
     def get_queryset(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[Model],
-        info: object,
-        **kwargs: object,
+        _info: object,
+        **_kwargs: object,
     ):
         return queryset.exclude(**hidden)
 
@@ -3038,10 +3038,10 @@ def test_apply_async_awaits_an_async_only_hook_behind_a_related_term(
     from django_strawberry_framework.utils.querysets import SyncMisuseError
 
     async def hide_secret_async(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[Model],
-        info: object,
-        **kwargs: object,
+        _info: object,
+        **_kwargs: object,
     ):
         return await sync_to_async(lambda: queryset.exclude(topic="secret"))()
 

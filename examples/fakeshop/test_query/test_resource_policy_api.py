@@ -660,7 +660,8 @@ class _AuthorityQuery:
         return list(bounded_rows(_UNCONFIGURED_SOURCE_ROWS, info, None))
 
     @strawberry.field
-    def take(self, payload: OpaqueValue = _NO_OPAQUE_VALUE) -> str:
+    # basedpyright: Strawberry derives the probe's GraphQL argument from this parameter
+    def take(self, payload: OpaqueValue = _NO_OPAQUE_VALUE) -> str:  # pyright: ignore[reportUnusedParameter]
         return "ok"
 
 
@@ -1293,7 +1294,8 @@ class _SharedEntryExtension(SchemaExtension):
 
 
 @cache
-def _entry_extension(spelling: str) -> _SharedEntryExtension:
+# basedpyright: the functools.cache key: one shared extension object per spelling
+def _entry_extension(spelling: str) -> _SharedEntryExtension:  # pyright: ignore[reportUnusedParameter]
     """The ONE extension object a shared-entry mount hands every operation."""
     return _SharedEntryExtension()
 

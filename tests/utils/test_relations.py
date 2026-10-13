@@ -1160,10 +1160,10 @@ def test_lookup_validation_wraps_every_transform_failure_stage():
     """Lookup resolution, transform construction, and the exact-probe all fail as typed errors."""
 
     class _RaisingTransformLookup:
-        def get_lookup(self, part: str):
+        def get_lookup(self, _part: str):
             return None
 
-        def get_transform(self, part: str):
+        def get_transform(self, _part: str):
             raise RuntimeError("transform lookup exploded")
 
     class _RaisingTransform:
@@ -1171,14 +1171,14 @@ def test_lookup_validation_wraps_every_transform_failure_stage():
             raise RuntimeError("transform construction exploded")
 
     class _ConstructingTerminal:
-        def get_lookup(self, part: str):
+        def get_lookup(self, _part: str):
             return None
 
-        def get_transform(self, part: str):
+        def get_transform(self, _part: str):
             return _RaisingTransform
 
     class _BrokenExact:
-        def get_lookup(self, part: str):
+        def get_lookup(self, _part: str):
             raise RuntimeError("exact lookup exploded")
 
     class _BrokenExactTransform:
@@ -1186,10 +1186,10 @@ def test_lookup_validation_wraps_every_transform_failure_stage():
             return _BrokenExact()
 
     class _BrokenExactTerminal:
-        def get_lookup(self, part: str):
+        def get_lookup(self, _part: str):
             return None
 
-        def get_transform(self, part: str):
+        def get_transform(self, _part: str):
             return _BrokenExactTransform
 
     with pytest.raises(LookupValidationError):
@@ -1220,7 +1220,7 @@ def test_many_path_probes_fail_closed_for_unexpected_classifier_errors(
     """Both the cached and the uncached probe answer ``False`` when the classifier explodes."""
     _path_traverses_to_many_cached.cache_clear()
 
-    def _exploding_classifier(model: object, path: str) -> object:
+    def _exploding_classifier(_model: object, _path: str) -> object:
         raise RuntimeError("classifier exploded")
 
     monkeypatch.setattr(relations_module, "_classify_path_cached", _exploding_classifier)

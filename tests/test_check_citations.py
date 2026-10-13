@@ -207,7 +207,8 @@ def test_a_citation_wrapped_inside_its_path_is_joined_once(tree: Path):
     assert outcomes[0].resolved
 
 
-def test_iter_citations_keeps_its_tuple_shape(tree: Path):
+@pytest.mark.usefixtures("tree")
+def test_iter_citations_keeps_its_tuple_shape():
     text = "# widgets.py::build and widgets.py::\n#   LIMIT\n"
     assert list(check_citations.iter_citations(text)) == [
         (1, "widgets.py", "build"),
@@ -243,7 +244,8 @@ def test_paths_checks_only_the_named_files(tree: Path, capsys: pytest.CaptureFix
     assert "nowhere.py::X` -- no such file" in out
 
 
-def test_paths_refuses_a_missing_file(tree: Path):
+@pytest.mark.usefixtures("tree")
+def test_paths_refuses_a_missing_file():
     with pytest.raises(check_citations.CitationCheckError, match="no such file"):
         check_citations.main(["--paths", "tests/absent.py"])
 
@@ -380,7 +382,8 @@ def test_cited_by_matches_a_deleted_target_by_its_spelled_path(
     assert "(1 gated, 0 ungated, 1 unresolved)" in out
 
 
-def test_cited_by_refuses_a_malformed_symbol(tree: Path):
+@pytest.mark.usefixtures("tree")
+def test_cited_by_refuses_a_malformed_symbol():
     with pytest.raises(check_citations.CitationCheckError, match="dotted symbol"):
         check_citations.main(["--cited-by", "widgets.py::1bad"])
 

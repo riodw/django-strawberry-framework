@@ -359,7 +359,7 @@ def test_invoke_permission_method_fires_once_and_dedupes():
     calls: list[str] = []
 
     class _Bare:
-        def check_name_permission(self, request: object):
+        def check_name_permission(self, _request: object):
             calls.append("name")
 
     fired: set[str] = set()
@@ -386,7 +386,7 @@ def test_invoke_permission_method_rejects_an_async_gate_instead_of_silently_allo
     denied: list[str] = []
 
     class _Bare:
-        async def check_name_permission(self, request: object):
+        async def check_name_permission(self, _request: object):
             # Would DENY, but as an ``async def`` it can never run under the sync
             # permission pass; the guard must reject the coroutine, not treat it as
             # a truthy success.
@@ -405,7 +405,7 @@ def test_invoke_permission_method_passes_a_normal_sync_return_through():
     fired: set[str] = set()
 
     class _Bare:
-        def check_name_permission(self, request: object):
+        def check_name_permission(self, _request: object):
             return None
 
     # No raise, and the fire is recorded for the dedup set.
@@ -534,7 +534,7 @@ class _Rel:
 
 
 def _record_gate(store: list[str], label: str):
-    def _check(self: object, request: object):
+    def _check(_self: object, _request: object):
         store.append(label)
 
     return _check
@@ -997,8 +997,8 @@ def test_run_active_input_permission_checks_double_dispatch_and_dedup():
         @classmethod
         def _run_permission_checks(
             cls,
-            input_value: object,
-            request: object,
+            _input_value: object,
+            _request: object,
             *,
             _fired: dict[type[object], set[str]] | None = None,
             _depth: int = 0,
@@ -1036,10 +1036,10 @@ def test_run_active_input_permission_checks_double_dispatch_and_dedup():
         ):
             invoke_permission_method(bare_instance, field_path, request, fired=fired)
 
-        def check_name_permission(self, request: object):
+        def check_name_permission(self, _request: object):
             calls.append("parent.name")
 
-        def check_child_permission(self, request: object):
+        def check_child_permission(self, _request: object):
             calls.append("parent.child")
 
     fired: dict[type, set[str]] = {}
@@ -1222,8 +1222,8 @@ def test_related_depth_error_survives_hostile_child_qualname():
         @classmethod
         def _run_permission_checks(
             cls,
-            input_value: object,
-            request: object,
+            _input_value: object,
+            _request: object,
             *,
             _fired: dict[type[object], set[str]] | None,
             _depth: int,
@@ -1265,8 +1265,8 @@ def test_run_active_input_permission_checks_falls_back_to_default_traversal_dept
         @classmethod
         def _run_permission_checks(
             cls,
-            input_value: object,
-            request: object,
+            _input_value: object,
+            _request: object,
             *,
             _fired: dict[type[object], set[str]] | None,
             _depth: int,
@@ -1326,14 +1326,14 @@ def test_resolve_auth_aliases_tracks_a_divergent_router_read_answer(
     auth_app_label = get_user_model()._meta.app_label
 
     class _AuthToShardRouter:
-        def db_for_read(self, model: type[Model], **hints: object):
+        def db_for_read(self, model: type[Model], **_hints: object):
             # Route the auth app (and its perm/contenttype companions) to a
             # non-default alias; everything else keeps the default.
             if model._meta.app_label in {auth_app_label, "auth", "contenttypes"}:
                 return "shard_b"
             return None
 
-        def db_for_write(self, model: type[Model], **hints: object):
+        def db_for_write(self, _model: type[Model], **_hints: object):
             return None
 
     settings.DATABASE_ROUTERS = [_AuthToShardRouter()]

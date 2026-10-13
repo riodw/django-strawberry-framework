@@ -958,9 +958,9 @@ query {
 
 
 def _sliced_book_hook(
-    cls: type[DjangoType],
+    _cls: type[DjangoType],
     queryset: QuerySet[models.Book],
-    info: strawberry.Info[object, object],
+    _info: strawberry.Info[object, object],
 ) -> QuerySet[models.Book]:
     """A ``BookType.get_queryset`` that returns a sliced top-N queryset."""
     return queryset.order_by("pk")[:1]
@@ -5640,10 +5640,10 @@ _GenreFilterOverride: TypeAlias = Callable[
 
 
 def _genre_filter_in_place_routing(
-    cls: type[GenreFilter],
-    input_value: object,
+    _cls: type[GenreFilter],
+    _input_value: object,
     queryset: QuerySet[models.Genre],
-    info: object,
+    _info: object,
 ) -> QuerySet[models.Genre]:
     set_queryset_hints(queryset, {"tenant": 2})
     return queryset
@@ -5787,10 +5787,10 @@ def test_genre_connection_serves_a_combined_filter_result_as_its_primary_key_set
     """A ``GenreFilter.apply_sync`` returning a union is windowed as the rows it selects."""
 
     def _combined(
-        cls: type[GenreFilter],
-        input_value: object,
+        _cls: type[GenreFilter],
+        _input_value: object,
         queryset: QuerySet[models.Genre],
-        info: object,
+        _info: object,
     ) -> QuerySet[models.Genre]:
         return queryset.filter(name="Alpha").union(queryset.filter(name="Echo"))
 
@@ -7083,7 +7083,7 @@ urlpatterns = [
 ]
 
 
-async def _async_genres_resolver(root: object, info: strawberry.Info[object, object]):
+async def _async_genres_resolver(_root: object, _info: strawberry.Info[object, object]):
     """An ``async def`` consumer resolver: the connection shape that applies ``filter:`` asynchronously."""
     return models.Genre.objects.all()
 
@@ -7380,10 +7380,10 @@ class _HostileBookQuerySet(QuerySet[models.Book]):
 
 
 def _hostile_book_hook(
-    cls: type[DjangoType],
-    queryset: QuerySet[models.Book],
-    info: strawberry.Info[object, object],
-    **kwargs: object,
+    _cls: type[DjangoType],
+    _queryset: QuerySet[models.Book],
+    _info: strawberry.Info[object, object],
+    **_kwargs: object,
 ) -> QuerySet[models.Book]:
     """Seed the real repair-exclusion through unbound ``QuerySet.filter``."""
     return (

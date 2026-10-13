@@ -97,11 +97,11 @@ class _ConsumerStrategy:
         self.name = name
         self._verdict = verdict
 
-    def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan) -> bool:
+    def plan(self, _request: NestedConnectionRequest, _plan: OptimizationPlan) -> bool:
         return self._verdict
 
 
-def _never_plans(request: object, plan: object) -> bool:
+def _never_plans(_request: object, _plan: object) -> bool:
     return False
 
 
@@ -267,7 +267,7 @@ def test_optimizer_hint_strategy_accepts_and_drives_a_consumer_instance():
     class RecordingStrategy:
         name = "recording"
 
-        def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan):
+        def plan(self, request: NestedConnectionRequest, _plan: OptimizationPlan):
             planned.append(request)
             return True
 
@@ -305,7 +305,7 @@ def test_active_strategy_preserves_falsey_consumer_strategy():
         def __bool__(self):
             return False
 
-        def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan):
+        def plan(self, _request: NestedConnectionRequest, _plan: OptimizationPlan):
             return True
 
     custom = FalseyStrategy()

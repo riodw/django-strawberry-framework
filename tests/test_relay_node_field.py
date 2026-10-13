@@ -548,8 +548,10 @@ def test_consumer_overrides_receive_the_decoded_node_id_string():
             cls,
             node_id: str,
             *,
-            info: strawberry.Info,
-            required: bool = False,
+            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
+            info: strawberry.Info,  # pyright: ignore[reportUnusedParameter]
+            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
+            required: bool = False,  # pyright: ignore[reportUnusedParameter]
         ):
             received.append(node_id)
             return None if node_id.startswith("legacy-") else row
@@ -558,9 +560,11 @@ def test_consumer_overrides_receive_the_decoded_node_id_string():
         def resolve_nodes(
             cls,
             *,
-            info: strawberry.Info,
+            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
+            info: strawberry.Info,  # pyright: ignore[reportUnusedParameter]
             node_ids: Iterable[str],
-            required: bool = False,
+            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
+            required: bool = False,  # pyright: ignore[reportUnusedParameter]
         ):
             node_ids = list(node_ids)
             received.append(node_ids)
@@ -855,9 +859,11 @@ async def test_nodes_async_with_sync_consumer_resolve_nodes_override():
         def resolve_nodes(
             cls,
             *,
-            info: strawberry.Info,
+            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
+            info: strawberry.Info,  # pyright: ignore[reportUnusedParameter]
             node_ids: Iterable[str],
-            required: bool = False,
+            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
+            required: bool = False,  # pyright: ignore[reportUnusedParameter]
         ):
             # Synchronous list return (no coroutine); closes over pre-fetched
             # rows so it issues no ORM query inside the event loop.
@@ -1034,9 +1040,12 @@ def test_nodes_consumer_resolve_nodes_wrong_length_raises():
         def resolve_nodes(
             cls,
             *,
-            info: strawberry.Info,
-            node_ids: Iterable[str],
-            required: bool = False,
+            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
+            info: strawberry.Info,  # pyright: ignore[reportUnusedParameter]
+            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
+            node_ids: Iterable[str],  # pyright: ignore[reportUnusedParameter]
+            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
+            required: bool = False,  # pyright: ignore[reportUnusedParameter]
         ) -> list[Self]:
             return []  # wrong length: 0 rows for the requested ids.
 
@@ -1080,9 +1089,11 @@ def test_nodes_consumer_resolve_nodes_generator_return_accepted():
         def resolve_nodes(
             cls,
             *,
-            info: strawberry.Info,
+            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
+            info: strawberry.Info,  # pyright: ignore[reportUnusedParameter]
             node_ids: Iterable[str],
-            required: bool = False,
+            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
+            required: bool = False,  # pyright: ignore[reportUnusedParameter]
         ):
             rows = {str(obj.pk): obj for obj in Category.objects.filter(pk__in=node_ids)}
             return (rows.get(str(node_id)) for node_id in node_ids)

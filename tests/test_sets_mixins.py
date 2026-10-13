@@ -793,7 +793,7 @@ def test_order_normalizer_consumes_the_family_permission_traversal(
     sentinel = object()
     captured: dict[str, SetInputTraversal] = {}
 
-    def _spy(set_cls: type[object], input_value: object, config: SetInputTraversal):
+    def _spy(_set_cls: type[object], _input_value: object, config: SetInputTraversal):
         captured["config"] = config
         return iter(())
 
@@ -839,7 +839,7 @@ def test_filter_normalizer_consumes_the_family_permission_traversal(
 
     captured = {}
 
-    def _spy(set_cls: type[object], input_value: object, config: SetInputTraversal):
+    def _spy(_set_cls: type[object], _input_value: object, config: SetInputTraversal):
         captured["config"] = config
         return iter(())
 

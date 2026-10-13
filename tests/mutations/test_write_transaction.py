@@ -104,11 +104,11 @@ class _AllowAll:
 
     def has_permission(
         self,
-        info: object,
-        mutation: type[object],
-        operation: str,
-        data: object,
-        instance: object = None,
+        _info: object,
+        _mutation: type[object],
+        _operation: str,
+        _data: object,
+        _instance: object = None,
     ):
         return True
 
@@ -287,11 +287,11 @@ async def test_concurrent_async_windows_each_hold_an_outermost_transaction_of_th
     observations: list[tuple[int, bool, int]] = []
 
     async def fake_execute_field(
-        self: object,
-        parent_type: object,
-        source: object,
-        field_nodes: object,
-        path: object,
+        _self: object,
+        _parent_type: object,
+        _source: object,
+        _field_nodes: object,
+        _path: object,
     ):
         observations.append(await sync_to_async(_window_observation, thread_sensitive=True)())
         if len(observations) == 2:
@@ -328,11 +328,11 @@ def test_concurrent_async_windows_on_two_event_loops_each_hold_their_own_transac
     observation_lock = threading.Lock()
 
     async def fake_execute_field(
-        self: object,
-        parent_type: object,
-        source: object,
-        field_nodes: object,
-        path: object,
+        _self: object,
+        _parent_type: object,
+        _source: object,
+        _field_nodes: object,
+        _path: object,
     ):
         observation = await sync_to_async(_window_observation, thread_sensitive=True)()
         with observation_lock:
@@ -371,11 +371,11 @@ async def test_async_execution_context_exits_transaction_on_raised_base_exceptio
     item = await sync_to_async(_seed_item)("AsyncRaise")
 
     def _boom(
-        self: object,
-        parent_type: object,
-        source: object,
-        field_nodes: object,
-        path: object,
+        _self: object,
+        _parent_type: object,
+        _source: object,
+        _field_nodes: object,
+        _path: object,
     ):
         raise RuntimeError("execution exploded outside GraphQL error handling")
 
@@ -406,11 +406,11 @@ def test_sync_execution_context_exits_transaction_on_raised_base_exception(
     item = _seed_item("SyncRaise")
 
     def _boom(
-        self: object,
-        parent_type: object,
-        source: object,
-        field_nodes: object,
-        path: object,
+        _self: object,
+        _parent_type: object,
+        _source: object,
+        _field_nodes: object,
+        _path: object,
     ):
         raise RuntimeError("execution exploded outside GraphQL error handling")
 
@@ -1113,10 +1113,10 @@ class _DeleteTargetOutFromUnder:
 
     def has_permission(
         self,
-        info: object,
-        mutation: type[object],
-        operation: str,
-        data: object,
+        _info: object,
+        _mutation: type[object],
+        _operation: str,
+        _data: object,
         instance: product_models.Item | None = None,
     ):
         if instance is not None:
@@ -1184,7 +1184,7 @@ def test_missing_post_write_refetch_returns_conflict_envelope(monkeypatch: pytes
     schema = _mutation_schema(UpdateItem)
     item = _seed_item("RefetchGone")
 
-    def _refetch_nothing(*args: object, **kwargs: object) -> None:
+    def _refetch_nothing(*_args: object, **_kwargs: object) -> None:
         return None
 
     monkeypatch.setattr(mutation_resolvers, "refetch_optimized", _refetch_nothing)
@@ -1263,7 +1263,7 @@ def test_forced_update_conflict_probe_failure_reraises_the_original(
     """The absence probe itself failing re-raises the ORIGINAL error, not the probe's."""
     signal = DatabaseError("the original failure")
 
-    def _probe_fails(self: QuerySet[Model]) -> bool:
+    def _probe_fails(_self: QuerySet[Model]) -> bool:
         raise DatabaseError("probe failure")
 
     monkeypatch.setattr(QuerySet, "exists", _probe_fails)
@@ -1288,10 +1288,10 @@ def test_visibility_hook_switching_aliases_fails_closed():
     """A ``get_queryset`` hook re-routing to another alias is a loud refusal, not a write."""
 
     def _reroute(
-        cls: type[DjangoType],
+        _cls: type[DjangoType],
         queryset: QuerySet[product_models.Item],
-        info: strawberry.Info,
-        **kwargs: object,
+        _info: strawberry.Info,
+        **_kwargs: object,
     ):
         return queryset.using("some_other_alias")
 
@@ -1325,10 +1325,10 @@ def test_pin_write_queryset_derives_the_owner_from_the_model():
 
 
 def test_check_instance_write_alias_fails_closed_on_divergence(monkeypatch: pytest.MonkeyPatch):
-    def _instance_sensitive(model: object, **hints: object) -> str:
+    def _instance_sensitive(_model: object, **hints: object) -> str:
         return "shard_x" if hints.get("instance") is not None else "default"
 
-    def _always_default(model: object, **hints: object) -> str:
+    def _always_default(_model: object, **_hints: object) -> str:
         return "default"
 
     monkeypatch.setattr(
@@ -1620,11 +1620,11 @@ class _TruthyNonBool:
 
     def has_permission(
         self,
-        info: object,
-        mutation: type[object],
-        operation: str,
-        data: object,
-        instance: object = None,
+        _info: object,
+        _mutation: type[object],
+        _operation: str,
+        _data: object,
+        _instance: object = None,
     ):
         return "yes"
 
@@ -1690,7 +1690,7 @@ def test_has_perm_returning_non_bool_is_a_configuration_error():
     class _WeirdUser:
         is_authenticated = True
 
-        def has_perm(self, codename: str):
+        def has_perm(self, _codename: str):
             return "granted"  # truthy, not a bool
 
     class UpdateItem(DjangoMutation):
@@ -2234,10 +2234,10 @@ def test_field_fingerprint_reads_atom_leaves_through_base_slots():
     """
     from django_strawberry_framework.utils.write_transaction import _field_fingerprint
 
-    def _gold_repr(self: object) -> str:
+    def _gold_repr(_self: object) -> str:
         return repr("gold")
 
-    def _ten_repr(self: object) -> str:
+    def _ten_repr(_self: object) -> str:
         return "10"
 
     shadow_str = type("str", (str,), {"__repr__": _gold_repr})

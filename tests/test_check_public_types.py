@@ -359,7 +359,7 @@ def test_a_child_that_cannot_start_or_decode_is_a_measurement_error(
 ):
     """``subprocess.run``'s start and decode failures surface as a measurement error."""
 
-    def refuse(*args: object, **kwargs: object):
+    def refuse(*_args: object, **_kwargs: object):
         raise error
 
     monkeypatch.setattr(subprocess, "run", refuse)

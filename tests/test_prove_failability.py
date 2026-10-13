@@ -36,8 +36,11 @@ package ``__file__`` and database ``NAME`` from inside pytest, ``--workspace``
 refuses a root outside the copy, ``--json`` carries the whole record, and
 two runs never share scratch state: without ``--scratch-root`` each run makes a
 fresh directory, and under one explicit root each repository root gets its own
-namespace whose live marker or run lock refuses a second run against that tree. The
-original single-anchor shape reads and grades exactly as it did.
+namespace whose live marker refuses a run against that tree. Every run, with or
+without a scratch root and anchors-only included, holds an exclusive kernel lock on
+the tree itself for its whole duration, which refuses a second concurrent run before
+it writes anything, involves no file, and leaves nothing behind when its holder dies.
+The original single-anchor shape reads and grades exactly as it did.
 
 ``REPO_ROOT`` is monkeypatched to a ``tmp_path`` fake repo (as
 ``tests/test_clean_up.py`` does) and ``_run_scope`` is stubbed, so no test here
@@ -46,11 +49,14 @@ mutates a real file or spawns a real pytest.
 
 import dataclasses
 import difflib
+import errno
+import fcntl
 import filecmp
 import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import types
 from collections.abc import Iterable
@@ -548,23 +554,42 @@ def test_two_workspace_roots_under_one_scratch_root_never_share_pristine_marker_
         assert not (directory / prove_failability.ACTIVE_MARKER_NAME).exists()
 
 
-@pytest.mark.parametrize(
-    ("writer", "reading"),
-    [("running", "still running"), ("gone", "no longer running")],
-)
+def _hold_tree_lock(repo: Path) -> int:
+    """Take the lock a run takes on ``repo`` through a descriptor of this test's own.
+
+    ``flock`` belongs to the open file description, so a second ``os.open`` in
+    this process contends exactly as another process would.
+    """
+    descriptor = os.open(repo, os.O_RDONLY | os.O_DIRECTORY)
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return descriptor
+
+
+def _tree_lock_is_free(repo: Path) -> bool:
+    """Return whether a run could take ``repo``'s lock now, releasing it at once."""
+    try:
+        os.close(_hold_tree_lock(repo))
+    except BlockingIOError:
+        return False
+    return True
+
+
+@pytest.mark.parametrize("writer_pid", ["running", "gone"])
 def test_a_live_marker_for_the_same_repository_root_refuses_the_run_and_is_kept(
     fake_repo: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    writer: str,
-    reading: str,
+    writer_pid: str,
 ):
+    # A run that holds the tree's lock reads a marker only a crashed run can have left:
+    # the writer held the same lock while its mutation was live. So the pid the marker
+    # names is no evidence either way - a live one is a reused pid - and both read alike.
     seen = _stub_run(monkeypatch)
     given = tmp_path / "outside-scratch"
     directory = prove_failability._resolve_scratch_root(str(given))
     marker = directory / prove_failability.ACTIVE_MARKER_NAME
-    pid = os.getppid() if writer == "running" else None
+    pid = os.getppid() if writer_pid == "running" else None
     restore = f"cp {directory}/pristine/x {fake_repo}/package/views.py"
     marker.write_text(
         json.dumps({"pid": pid, "files": [{"restore_with": restore}]}),
@@ -580,38 +605,161 @@ def test_a_live_marker_for_the_same_repository_root_refuses_the_run_and_is_kept(
     assert "scratch root refused" in error
     assert str(marker) in error
     assert restore in error
-    assert reading in error
+    assert "no longer running" in error
     assert marker.read_bytes() == before
-    assert not (directory / prove_failability.RUN_LOCK_NAME).exists()
+    assert _tree_lock_is_free(fake_repo)
     assert (fake_repo / "package" / "views.py").read_text(encoding="utf-8") == SOURCE
 
 
-@pytest.mark.parametrize(("holder", "expected_code"), [("running", 1), ("gone", 0)])
-def test_a_run_lock_held_by_a_running_process_refuses_and_a_stale_one_is_replaced(
+@pytest.mark.parametrize("mode", ["run", "check-anchors-only"])
+@pytest.mark.parametrize("scratch", ["given", "default"])
+def test_a_run_against_a_tree_another_run_holds_is_refused_before_anything_is_written(
     fake_repo: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    holder: str,
-    expected_code: int,
+    scratch: str,
+    mode: str,
+):
+    # The lock names the tree, not the scratch directory: a run without --scratch-root
+    # gets a fresh directory and so shares nothing with the holder but the tree, which
+    # is exactly what two runs must not share. An anchors-only run reads the tree the
+    # holder may be mutating, so it is refused the same way.
+    seen = _stub_run(monkeypatch)
+    system_tmp = tmp_path / "system-tmp"
+    system_tmp.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(system_tmp))
+    given = tmp_path / "outside-scratch"
+    arguments = [str(_manifest(tmp_path))]
+    if scratch == "given":
+        arguments += ["--scratch-root", str(given)]
+    if mode == "check-anchors-only":
+        arguments.append("--check-anchors-only")
+    holder = _hold_tree_lock(fake_repo)
+    try:
+        code = prove_failability.main(arguments)
+    finally:
+        os.close(holder)
+
+    assert code == 1
+    assert seen == []
+    error = capsys.readouterr().err
+    assert "another run holds the lock on the repository root" in error
+    assert str(fake_repo) in error
+    assert not given.exists()
+    assert list(system_tmp.iterdir()) == []
+    assert (fake_repo / "package" / "views.py").read_text(encoding="utf-8") == SOURCE
+
+
+@pytest.mark.parametrize("scratch", ["given", "default"])
+def test_the_tree_lock_is_held_for_the_whole_run_and_released_when_it_ends(
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scratch: str,
 ):
     _four_failing_rows(monkeypatch)
+    stubbed = prove_failability._run_scope
+    held_during: list[bool] = []
+    nested: list[int] = []
+
+    def observing_run_scope(
+        entry: prove_failability.ProofEntry,
+        capture: prove_failability.RunCapture | None = None,
+    ):
+        held_during.append(not _tree_lock_is_free(fake_repo))
+        nested.append(prove_failability.main([str(_manifest(tmp_path)), "--check-anchors-only"]))
+        return stubbed(entry, capture)
+
+    monkeypatch.setattr(prove_failability, "_run_scope", observing_run_scope)
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    arguments = [str(_manifest(tmp_path))]
+    if scratch == "given":
+        arguments += ["--scratch-root", str(tmp_path / "outside-scratch")]
+
+    code = prove_failability.main(arguments)
+
+    assert code == 0
+    assert held_during == [True, True]
+    assert nested == [1, 1]
+    assert _tree_lock_is_free(fake_repo)
+
+
+def test_a_holder_killed_mid_run_leaves_no_lock_to_clear(
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # A crashed holder's lock is never stale and never taken over: the kernel drops it
+    # with the process, so there is no file whose contents a contender must judge.
+    _four_failing_rows(monkeypatch)
     given = tmp_path / "outside-scratch"
-    directory = prove_failability._resolve_scratch_root(str(given))
-    lock = directory / prove_failability.RUN_LOCK_NAME
-    lock.write_text(
-        json.dumps({"pid": os.getppid() if holder == "running" else None}),
-        encoding="utf-8",
-    )
+    # Leaving the block closes the holder's stdin, so a failed assertion inside it still
+    # ends the holder instead of leaking it into later rows.
+    with subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import fcntl, os, sys\n"
+            "descriptor = os.open(sys.argv[1], os.O_RDONLY | os.O_DIRECTORY)\n"
+            "fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+            "print('held', flush=True)\n"
+            "sys.stdin.read()\n",
+            str(fake_repo),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    ) as holder:
+        assert holder.stdout is not None
+        assert holder.stdout.readline() == "held\n"
+        refused = prove_failability.main(
+            [str(_manifest(tmp_path)), "--scratch-root", str(given)],
+        )
+        holder.kill()
 
     code = prove_failability.main([str(_manifest(tmp_path)), "--scratch-root", str(given)])
 
-    assert code == expected_code
-    if holder == "running":
-        assert "locked by running process" in capsys.readouterr().err
-        assert lock.exists()
-    else:
-        assert not lock.exists()
+    assert refused == 1
+    assert code == 0
+    assert _tree_lock_is_free(fake_repo)
+
+
+@pytest.mark.parametrize("code", [errno.ENOLCK, errno.EINVAL], ids=["ENOLCK", "EINVAL"])
+def test_a_lock_failure_other_than_contention_propagates_and_closes_the_descriptor(
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    code: int,
+):
+    # Only a held lock is a refusal; any other flock error is not evidence that another
+    # run holds the tree, so it surfaces as itself and the descriptor does not leak.
+    seen = _stub_run(monkeypatch)
+    locked: list[int] = []
+    closed: list[int] = []
+    real_close = os.close
+
+    def failing_flock(descriptor: int, operation: int) -> None:
+        locked.append(descriptor)
+        raise OSError(code, os.strerror(code))
+
+    def recording_close(descriptor: int) -> None:
+        closed.append(descriptor)
+        real_close(descriptor)
+
+    monkeypatch.setattr(fcntl, "flock", failing_flock)
+    monkeypatch.setattr(os, "close", recording_close)
+    given = tmp_path / "outside-scratch"
+
+    with pytest.raises(OSError, match=os.strerror(code)) as raised:
+        _ = prove_failability.main([str(_manifest(tmp_path)), "--scratch-root", str(given)])
+
+    assert not isinstance(raised.value, BlockingIOError)
+    assert raised.value.errno == code
+    assert len(locked) == 1
+    assert closed == locked
+    assert seen == []
+    assert not given.exists()
 
 
 def test_without_a_scratch_root_every_run_gets_a_fresh_directory_named_in_header_and_json(
@@ -648,7 +796,6 @@ def test_without_a_scratch_root_every_run_gets_a_fresh_directory_named_in_header
             directory / prove_failability.ACTIVE_MARKER_NAME,
         )
         assert (directory / prove_failability.PRISTINE_DIRECTORY_NAME).is_dir()
-        assert not (directory / prove_failability.RUN_LOCK_NAME).exists()
 
 
 @pytest.mark.parametrize(

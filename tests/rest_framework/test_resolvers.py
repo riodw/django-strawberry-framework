@@ -5055,13 +5055,25 @@ def test_object_validator_mutating_a_resolved_relation_pk_in_place_is_rejected()
 
 
 def test_relation_intent_snapshot_handles_a_null_relation():
-    """A null relation snapshots ``(None, None, None)`` and matches an unchanged ``None``."""
+    """A null relation snapshots ``(None, None, None, None)`` and matches an unchanged ``None``."""
     snap = serializer_resolvers._relation_intent_snapshot(None)
-    assert snap == (None, None, None)
+    assert snap == (
+        None,
+        None,
+        None,
+        None,
+    )
     assert isinstance(snap, tuple)
     assert serializer_resolvers._relation_identity_intact(None, snap)
     # A list relation snapshots one tuple per row (a null member is captured too).
-    assert serializer_resolvers._relation_intent_snapshot([None]) == [(None, None, None)]
+    assert serializer_resolvers._relation_intent_snapshot([None]) == [
+        (
+            None,
+            None,
+            None,
+            None,
+        ),
+    ]
 
 
 @pytest.mark.django_db
@@ -5470,6 +5482,73 @@ def test_nested_relation_substitution_is_rejected_per_item():
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("many", [False, True], ids=["nested_single", "nested_multi"])
+@pytest.mark.parametrize("rename", [True, False], ids=["renamed", "intact"])
+def test_nested_to_field_relation_key_changed_in_place_is_rejected(rename: bool, many: bool):
+    """A validator re-pointing a nested ``to_field`` relation's key IN PLACE fails closed.
+
+    ``PatronProfile.favorite_genre`` stores the genre NAME. Renaming the resolved genre in
+    memory leaves its identity and pk intact but re-points the stored column at another
+    genre; nested relations get no post-save attestation, so the intent walk compares the
+    key captured at ``run_validation`` time, under a single nested child and under each item
+    of a ``many=True`` child alike. The intact twin (no rename) passes.
+    """
+    chosen = library_models.Genre.objects.create(name="NestedKeyChosen")
+    library_models.Genre.objects.create(name="NestedKeyOther")
+
+    class ProfileSerializer(serializers.ModelSerializer[library_models.PatronProfile]):
+        favorite_genre: _PkRelation[library_models.Genre] = serializers.PrimaryKeyRelatedField(
+            queryset=library_models.Genre.objects.all(),
+        )
+
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+            model = library_models.PatronProfile
+            fields = ("favorite_genre",)
+
+        def validate_favorite_genre(self, value: library_models.Genre):
+            if rename:
+                value.name = "NestedKeyOther"
+            return value
+
+    class ParentSerializer(serializers.Serializer[object]):
+        profile = ProfileSerializer(many=many)
+
+    child_spec = SimpleNamespace(
+        kind=RELATION_SINGLE,
+        target_name="favorite_genre",
+        source=None,
+        nested_specs=None,
+    )
+    parent_spec = SimpleNamespace(
+        kind=NESTED_MULTI if many else NESTED_SINGLE,
+        target_name="profile",
+        source=None,
+        nested_specs=[child_spec],
+    )
+    fake_mut = _as_serializer_mutation(
+        SimpleNamespace(
+            __name__="NestedKeyMut",
+            _input_field_specs=[parent_spec],
+            _injected_field_specs=None,
+        ),
+    )
+
+    item = {"favorite_genre": chosen.pk}
+    serializer = ParentSerializer(data={"profile": [item] if many else item})
+    ledger = serializer_resolvers._instrument_relation_intent(fake_mut, serializer)
+    assert serializer.is_valid(), serializer_errors(serializer)
+    if rename:
+        with pytest.raises(
+            ConfigurationError,
+            match="'profile.favorite_genre' is not the exact object",
+        ):
+            serializer_resolvers._assert_relation_intent(fake_mut, serializer, ledger)
+    else:
+        assert serializer_resolvers._assert_relation_intent(fake_mut, serializer, ledger) == {}
+
+
+@pytest.mark.django_db
 def test_nested_relation_nulled_after_validation_is_rejected():
     """A parent validator that NULLS a nested value after its children resolved fails closed.
 
@@ -5610,7 +5689,7 @@ def test_attestation_skips_serializer_only_and_non_matching_sources():
         item,
         alias="default",
         m2m_before={},
-        relation_pks={
+        relation_keys={
             "ghost": 1,
             "ghosts": frozenset({1}),
             "cat_as_multi": frozenset({1}),
@@ -5651,7 +5730,7 @@ def test_attestation_rejects_a_cleared_fk_that_was_not_cleared():
             item,
             alias="default",
             m2m_before={},
-            relation_pks={"category": None},  # captured null intent
+            relation_keys={"category": None},  # captured null intent
         )
 
 

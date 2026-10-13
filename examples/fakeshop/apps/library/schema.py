@@ -2186,6 +2186,76 @@ class CreateShelfViaMetadataSerializer(SerializerMutation):
         permission_classes = []
 
 
+class CreatePatronProfileViaSerializer(SerializerMutation):
+    """Create a ``PatronProfile`` whose ``favorite_genre`` is a ``to_field`` key (stored by name).
+
+    ``favoriteGenreId`` takes a ``GenreType`` ``GlobalID`` (the genre's id); the saved
+    ``favorite_genre_id`` column holds the genre's ``name``.
+    """
+
+    class Meta:
+        serializer_class = serializers.PatronProfileSerializer
+        operation = "create"
+        permission_classes = []
+
+
+class UpdatePatronProfileViaSerializer(SerializerMutation):
+    """Update a ``PatronProfile``'s mailing details and ``to_field`` ``favorite_genre`` key."""
+
+    class Meta:
+        serializer_class = serializers.PatronProfileDetailsSerializer
+        operation = "update"
+        permission_classes = []
+
+
+class CreatePatronProfileReplacingGenre(SerializerMutation):
+    """A DELIBERATELY-misbehaving create whose ``create()`` links a genre the client never chose.
+
+    The live test proves the post-save relation attestation refuses the replaced ``to_field``
+    key over ``/graphql/`` and no profile is written.
+    """
+
+    class Meta:
+        serializer_class = serializers.GenreReplacingPatronProfileSerializer
+        operation = "create"
+        permission_classes = []
+
+
+class CreatePatronProfileViaRenamedSerializer(SerializerMutation):
+    """``CreatePatronProfileViaSerializer`` over the renamed spelling ``fav`` (``favId``)."""
+
+    class Meta:
+        serializer_class = serializers.RenamedPatronProfileSerializer
+        operation = "create"
+        permission_classes = []
+
+
+class CreatePatronProfileReplacingGenreRenamed(SerializerMutation):
+    """``CreatePatronProfileReplacingGenre`` over the renamed spelling ``fav`` (``favId``).
+
+    The live test proves the post-save relation attestation reads the column through the
+    renamed field's source and refuses the replaced ``to_field`` key; no profile is written.
+    """
+
+    class Meta:
+        serializer_class = serializers.GenreReplacingRenamedPatronProfileSerializer
+        operation = "create"
+        permission_classes = []
+
+
+class CreatePatronProfileRepointingGenre(SerializerMutation):
+    """A DELIBERATELY-misbehaving create whose field validator re-points the chosen genre's key.
+
+    The live test proves the relation-intent walk refuses the in-place ``to_field`` key change
+    over ``/graphql/`` before the save, so no profile is written.
+    """
+
+    class Meta:
+        serializer_class = serializers.GenreRepointingPatronProfileSerializer
+        operation = "create"
+        permission_classes = []
+
+
 @strawberry.type
 class Mutation:
     """Library write surface (live raw-pk relation visibility + ``to_field_name``).
@@ -2209,6 +2279,13 @@ class Mutation:
     and ``createShelfViaOptionalCodeSerializer`` share one serializer and prove mutation-level
     ``Meta.optional_fields`` produces a distinct input with weaker GraphQL requiredness while
     leaving DRF to enforce the omitted required field in-band.
+    ``createPatronProfileViaSerializer`` / ``updatePatronProfileViaSerializer`` write the
+    ``to_field`` key ``PatronProfile.favorite_genre`` (the column stores the genre name) and
+    are attested against that name, as is ``createPatronProfileViaRenamedSerializer`` (the
+    same key bound under the renamed field ``fav``); ``createPatronProfileReplacingGenre`` and
+    ``createPatronProfileReplacingGenreRenamed`` (a custom ``create()`` re-pointing the
+    validated genre, own-name and renamed) and ``createPatronProfileRepointingGenre``
+    (a field validator renaming the validated genre in place) are refused.
     """
 
     create_shelf_via_form = DjangoMutationField(CreateShelfViaForm)
@@ -2282,6 +2359,20 @@ class Mutation:
     update_book_with_injected_status = DjangoMutationField(UpdateBookWithInjectedStatus)
     create_branch_with_nested_shelves = DjangoMutationField(
         CreateBranchWithNestedShelves,
+    )
+    create_patron_profile_via_serializer = DjangoMutationField(CreatePatronProfileViaSerializer)
+    update_patron_profile_via_serializer = DjangoMutationField(UpdatePatronProfileViaSerializer)
+    create_patron_profile_replacing_genre = DjangoMutationField(
+        CreatePatronProfileReplacingGenre,
+    )
+    create_patron_profile_repointing_genre = DjangoMutationField(
+        CreatePatronProfileRepointingGenre,
+    )
+    create_patron_profile_via_renamed_serializer = DjangoMutationField(
+        CreatePatronProfileViaRenamedSerializer,
+    )
+    create_patron_profile_replacing_genre_renamed = DjangoMutationField(
+        CreatePatronProfileReplacingGenreRenamed,
     )
 
 

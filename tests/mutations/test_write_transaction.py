@@ -1843,7 +1843,7 @@ def test_pks_match_canonicalizes_through_the_pk_field():
 
     from apps.kanban.models import UUIDModel
 
-    from django_strawberry_framework.utils.write_transaction import canonical_pk, pks_match
+    from django_strawberry_framework.utils.write_transaction import pks_match
 
     uuid_model = UUIDModel
     value = uuid.uuid4()
@@ -1856,7 +1856,7 @@ def test_pks_match_canonicalizes_through_the_pk_field():
 
     int_model = product_models.Category
     assert pks_match(int_model, 5, "5")
-    assert canonical_pk(int_model, "7") == 7
+    assert not pks_match(int_model, 5, 7)
 
 
 def test_reject_substituted_row_is_silent_when_pks_match():

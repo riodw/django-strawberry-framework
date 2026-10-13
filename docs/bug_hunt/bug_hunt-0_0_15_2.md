@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 52 done, 75 to do.
+Progress: 53 done, 79 to do.
 
 ## Done
 
@@ -112,6 +112,10 @@ Progress: 52 done, 75 to do.
   written after, so a second run read no pid, unlinked the lock as stale and claimed it (a silent 0-row proof, or a
   mutation left in the tree with a passing restore proof), and a run without `--scratch-root` took no lock at all; a
   kernel `flock` on the repository root is now held for the whole run (`ce338eec`)
+- [x] 106. A `to_field` ForeignKey written through a declared `PrimaryKeyRelatedField` failed every non-null create and
+  update (the attestation compared the stored `to_field` value with the pk) and, with an integer `to_field`, passed a
+  wrong-row write; the snapshot captures the key the relation stores, the walk refuses it re-pointed in place and the
+  attestation compares the column with it (this commit)
 
 ## To do: t3 robustness rows
 
@@ -144,8 +148,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 100. A random `"?"` order (hook `order_by("?")` or `Meta.ordering = ["?"]`) on an optimized nested offset connection
   raises "Cannot resolve keyword '?' into field" (masked), reversed or not, `first:` or `last:`; the root path serves it
 - [ ] 101. `manage.py import_spec_terms --check` fails on spec-020's terms CSV on main (seen at `eb30dd7e`)
-- [ ] 106. A `to_field` ForeignKey written through a declared `PrimaryKeyRelatedField` (either spelling) fails every create
-  and update with a masked `ConfigurationError`: `_attest_saved_relations` compares the column's `to_field` value to the pk
 - [ ] 107. A writable primary-key relation (MTI parent link, OneToOne `primary_key=True`) in an update input fails at request
   time instead of at class creation
 - [ ] 108. A serializer-only source over the default `create()` / `update()` (`gs = PrimaryKeyRelatedField(many=True,
@@ -203,6 +205,19 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 128. `django_strawberry_framework/testing/relay.py::global_id_for` annotates `schema: Schema | None` with `Schema`
   imported only under `TYPE_CHECKING` and no `from __future__ import annotations`: importing the public module raises
   `NameError` on Python 3.10-3.13 (the floor run of `test_library_api.py` fails at collection; 3.14's lazy annotations hide it)
+- [ ] 130. Model `DjangoMutation` writes the related pk into a `to_field` ForeignKey column (`mutations/inputs.py` publishes
+  `<name>_id`; `mutations/resolvers.py::_decode_single_relation_id` returns the pk assigned to the attname): on
+  `PatronProfile.favorite_genre` a genre named like the chosen genre's pk is linked silently, otherwise a payload FieldError;
+  an integer `to_field` links whichever row's key equals the pk
+- [ ] 131. ModelForm: a declared `ModelChoiceField` without `to_field_name` over a `to_field` ForeignKey fails every partial
+  update that omits it ("Select a valid choice"): `forms/resolvers.py::_reconstruct_partial_data` refills it with the stored
+  `to_field` value while the bound field resolves by pk (its docstring claims the attname is the key the field resolves)
+- [ ] 132. A `SerializerMutation` whose `Meta.fields` narrowing keeps a relation to a Relay-Node type fails schema build
+  (`TypeError: Mutation fields cannot be resolved. '<...>PartialInput'`), create and update, e.g. `Shelf.branch`; a non-Relay
+  target builds
+- [ ] 133. A `PrimaryKeyRelatedField` to a model whose pk is a `OneToOneField` (`PatronProfile`) is refused at schema build
+  ("Unsupported Django field type 'OneToOneField' on PatronProfile.patron"); a FK to such a model cannot be written by a
+  serializer mutation (fails loud)
 
 ## To do: holes found re-checking the fixes
 
@@ -284,6 +299,9 @@ not real bugs and just get deleted from t3. One checkbox per area:
   publishes a generated enum of only the column values the form admits (static choices; callable and `__init__`-assigned
   choices keep the column enum), and a field admitting none of the column's non-empty values, or a `MultipleChoiceField`
   over a single-value choice column, raises `ConfigurationError` at schema build
+- [ ] 134. CHANGELOG entry for item 106: a `SerializerMutation` writing a `ForeignKey(to_field=...)` through a declared
+  `PrimaryKeyRelatedField` now saves (every non-null create and update was a masked error); a validator, nested write or
+  custom `create()` / `update()` that re-points a validated relation's stored key is refused with `ConfigurationError`
 
 ## Hunt not finished in t3
 

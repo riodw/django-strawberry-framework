@@ -94,6 +94,7 @@ if TYPE_CHECKING:
 
     from ..mutations.inputs import FieldError
     from ..mutations.sets import WriteMutationClass
+    from .typing import ConcreteField
 
     #: The ``execute`` callable a connection hands an ``execute_wrapper``: the
     #: statement parameters, the context and the result are passed through untouched.
@@ -772,31 +773,33 @@ def check_instance_write_alias(
         )
 
 
-def canonical_pk(model: type[models.Model], value: object) -> object:
-    """Coerce ``value`` through ``model``'s pk field to its canonical Python form.
+def column_values_match(field: ConcreteField, first: object, second: object) -> bool:
+    """Compare two values of ONE column canonically through ``field.to_python`` (fail closed).
 
-    The pk-equality primitive the pipeline compares authorization snapshots with:
-    ``str()`` comparison is NOT canonical for every pk type (a ``UUIDField`` pk
-    may surface as a dashed, un-dashed, or ``UUID``-typed value that stringifies
-    differently while addressing the SAME row), so equality goes through the
-    model pk field's OWN ``to_python`` conversion. An uncoercible value (a forged
-    pk of the wrong shape) raises the field's ``ValidationError`` - callers use
-    ``pks_match``, which maps that to "not equal" (fail closed).
+    The column-equality primitive the pipeline compares captured snapshots
+    with: ``str()`` comparison is NOT canonical for every column type (a
+    ``UUIDField`` value may surface as a dashed, un-dashed, or ``UUID``-typed
+    value that stringifies differently while naming the SAME row), so equality
+    goes through the column field's OWN ``to_python`` conversion. A
+    ``ForeignKey`` converts through its ``target_field`` (the related pk, or
+    the ``to_field`` column), so a relation column compares in the domain it
+    stores. ``True`` only when BOTH values coerce and the canonical forms are
+    equal; an uncoercible side (a forged value of the wrong shape) is a
+    mismatch, never an exception the caller must handle.
     """
-    return model._meta.pk.to_python(value)
+    try:
+        return field.to_python(first) == field.to_python(second)
+    except Exception:
+        return False
 
 
 def pks_match(model: type[models.Model], first: object, second: object) -> bool:
     """Compare two pk values canonically through ``model``'s pk field (fail closed).
 
-    ``True`` only when BOTH values coerce through the pk field's ``to_python``
-    and the canonical forms are equal; an uncoercible side (a spoofed pk of the
-    wrong shape) is a mismatch, never an exception the caller must handle.
+    ``column_values_match`` over ``model._meta.pk``: ``True`` only when both values
+    coerce through the pk field's ``to_python`` and the canonical forms are equal.
     """
-    try:
-        return canonical_pk(model, first) == canonical_pk(model, second)
-    except Exception:
-        return False
+    return column_values_match(model._meta.pk, first, second)
 
 
 def reject_substituted_row(

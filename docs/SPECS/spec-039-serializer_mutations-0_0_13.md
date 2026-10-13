@@ -1905,11 +1905,12 @@ The pipeline steps:
      before `is_valid()`, recording the exact resolved objects — one entry per `many=True`
      list item, with custom `pk_field` implementations still supported, since the ledger
      records the relation object DRF finally resolves. `_assert_relation_intent` then
-     requires the final `validated_data` to carry them **by identity**: renamed sources,
-     injected fields, single relations, lists (length plus pairwise identity, so duplicate
-     and explicit-empty-list set semantics pass through), and nested paths alike. A
-     validator may reject or pop a relation (popping reverts to omitted semantics); it may
-     never substitute or inject one.
+     requires the final `validated_data` to carry them **by identity**, still carrying the
+     pk, alias and stored key captured at run_validation (a key re-pointed in place is a
+     substitution): renamed sources, injected fields, single relations, lists (length plus
+     pairwise identity, so duplicate and explicit-empty-list set semantics pass through),
+     and nested paths alike. A validator may reject or pop a relation (popping reverts to
+     omitted semantics); it may never substitute or inject one.
    - **Validator queryset pinning.** `_pin_validator_querysets` walks the serializer's
      validators recursively — per instance, on a copy — and pins each one's queryset to
      the operation's write alias, so a `UniqueTogetherValidator` (or any author validator)
@@ -1943,8 +1944,9 @@ The pipeline steps:
      closure as `save()` itself**.
    - **After the save the returned top-level row is attested against the database**
      (`_attest_saved_relations`): every supplied FK / OneToOne column is read back in one
-     `values()` query and must hold the validated target's pk (canonical comparison
-     through the related pk field), every supplied M2M must equal the validated pk
+     `values()` query and must hold the validated target's key captured at run_validation
+     (`ForeignKey.target_field`: the related pk, or the `to_field` column), compared through
+     the key's own `to_python`, every supplied M2M must equal the validated pk
      **set** (an explicit `[]` clears; duplicates collapse per DRF `.set()` semantics),
      and every omitted partial-update M2M on the write surface must equal its pre-save
      membership snapshot. A custom `create()` / `update()` that ignored or replaced
@@ -2496,7 +2498,8 @@ Pin as named import obligations (Slice DoD lines): `utils/strings.py::graphql_ca
 `mutations/inputs.py::{annotate_queryset_relation, model_column_write_annotation,
 model_column_write_kind}` (the **backing** model-relation read the converter does via
 `source`, not re-derived from DRF's `many` / `source` flags) plus
-`utils/relations.py::is_forward_many_to_many` on the resolver's attestation path; the
+`utils/relations.py::{is_forward_many_to_many, is_single_column_foreign_key}` on the
+resolver's attestation path; the
 `utils/querysets.py::{model_for, initial_queryset, apply_type_visibility_sync,
 apply_type_visibility_async, visibility_scoped_related_queryset, reject_async_in_sync_context}`
 locate + relation-visibility + async-guard substrate (a re-spell here is a data-leak risk,
@@ -2545,7 +2548,7 @@ the Slice-1 DRY bullet enumerates, and that one is executable
 | [`serializer_converter.py`][rf-converter] | `exceptions`, `registry`, `scalars`, `mutations/inputs.py`, `types/converters.py`, `utils/converters.py`, `utils/inputs.py`, `utils/strings.py` | the shared fail-loud dispatch skeleton, the shared conversion base + field spec, the four input-kind constants, the read-side scalar / enum core (`convert_scalar`, `scalar_for_field`, `build_enum_from_choices`), the model-column relation classifiers (`model_column_write_kind`, `model_column_write_annotation`, `annotate_queryset_relation`), the [`Upload`][glossary-upload-scalar] scalar, `graphql_camel_name` / `pascal_case`, the `register_subsystem_clear` seam |
 | [`inputs.py`][rf-inputs] | `exceptions`, `registry`, `mutations/inputs.py`, `utils/inputs.py`, `utils/strings.py`, `.serializer_converter` | the input-namespace one-ledger trio, the shape-build cache pair, `build_strawberry_input_class`, `generated_input_type_name`, `guard_dropped_required`, `iter_input_field_collisions`, `optional_input_field`, `resolve_effective_fields`, `normalize_field_name_sequence`, `pascalize_token`, `InputFieldSpec`, `graphql_camel_name`, the `CREATE` / `PARTIAL` kinds, the `register_subsystem_clear` seam |
 | [`sets.py`][rf-sets] | `exceptions`, `mutations/inputs.py`, `mutations/sets.py`, `utils/inputs.py`, `.inputs`, `.serializer_converter` | `DjangoMutation`, `_ValidatedMutationMeta`, `_validate_permission_classes`, `reject_unknown_meta_keys`, `MODEL_BACKED_WRITE_META_KEYS`, `NON_DELETE_OPERATION_INPUT_KIND` + `require_non_delete_operation`, `build_and_stash_input`, `construction_kwargs`, `normalize_meta_field_selection`, `require_backing_class` / `require_model_class` / `require_subclass`, `resolve_backed_model_or_raise` / `resolve_meta_model`, `resolver_seams`, `validate_select_for_update`, `normalize_field_name_sequence` |
-| [`resolvers.py`][rf-resolvers] | `exceptions`, `mutations/inputs.py`, `mutations/resolvers.py`, `utils/errors.py`, `utils/inputs.py`, `utils/permissions.py`, `utils/querysets.py`, `utils/relations.py`, `utils/write_transaction.py`, `utils/write_values.py`, `.hook_context`, `.inputs`, `.serializer_converter` | the shared sync-pipeline skeleton `run_write_pipeline_sync` + `make_resolver_entries`, the shared decode primitives in `utils/write_values.py` — `decode_visible_relation`, `decode_visible_relation_ids`, `decode_provided_fields`, `decode_field_handlers`, `decoded_into` — the shared leaf-error constructors in `utils/errors.py`, the `NON_FIELD_ERROR_KEY` sentinel and `FieldError`, the write-transaction substrate (`require_write_pipeline`, `pipeline_write_phase`, `pin_write_queryset`, `base_locked_queryset`, `assert_no_target_drift`, `pks_match`, `make_cross_alias_save_guard`), `related_visibility_queryset`, `request_from_info` |
+| [`resolvers.py`][rf-resolvers] | `exceptions`, `mutations/inputs.py`, `mutations/resolvers.py`, `utils/errors.py`, `utils/inputs.py`, `utils/permissions.py`, `utils/querysets.py`, `utils/relations.py`, `utils/write_transaction.py`, `utils/write_values.py`, `.hook_context`, `.inputs`, `.serializer_converter` | the shared sync-pipeline skeleton `run_write_pipeline_sync` + `make_resolver_entries`, the shared decode primitives in `utils/write_values.py` — `decode_visible_relation`, `decode_visible_relation_ids`, `decode_provided_fields`, `decode_field_handlers`, `decoded_into` — the shared leaf-error constructors in `utils/errors.py`, the `NON_FIELD_ERROR_KEY` sentinel and `FieldError`, the write-transaction substrate (`require_write_pipeline`, `pipeline_write_phase`, `pin_write_queryset`, `base_locked_queryset`, `assert_no_target_drift`, `pks_match`, `column_values_match`, `make_cross_alias_save_guard`), `related_visibility_queryset`, `request_from_info` |
 | [`__init__.py`][rf-init] | `utils/imports.py` | the shared `require_optional_module` core behind `require_drf()` (Decision 12) |
 | [`hook_context.py`][rf-hook-context] | nothing | — (two frozen dataclasses, no framework dependency) |
 

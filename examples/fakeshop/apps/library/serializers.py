@@ -11,7 +11,14 @@ consumer-visible behaviors end to end:
   to inject the runtime tenant (the ``get_serializer_for_schema`` hook live matrix);
 * ``ShelfSerializer`` / ``RenamedShelfSerializer`` back a parent serializer mutation and a
   SUBCLASS that redefines ``Meta.serializer_class`` (the subclass-validation live matrix - a
-  subclass must validate against its OWN serializer, not an inherited parent snapshot).
+  subclass must validate against its OWN serializer, not an inherited parent snapshot);
+* ``PatronProfileSerializer`` / ``PatronProfileDetailsSerializer`` /
+  ``RenamedPatronProfileSerializer`` write the ``to_field`` key
+  ``PatronProfile.favorite_genre`` through a declared ``PrimaryKeyRelatedField`` under its
+  own name or renamed (the column stores the genre name), while
+  ``GenreReplacingPatronProfileSerializer`` / ``GenreReplacingRenamedPatronProfileSerializer``
+  and ``GenreRepointingPatronProfileSerializer`` re-point the validated genre in a custom
+  ``create()`` and in a field validator (the relation-attestation live rows).
 
 ``Shelf`` is non-Relay (``ShelfType`` lists no ``relay.Node`` interface), so the ``branch``
 FK relation input is a raw pk and the payload object slot is ``result`` (not ``node``); the
@@ -36,7 +43,7 @@ from django_strawberry_framework import (
 )
 from django_strawberry_framework.rest_framework.accessors import base_fields
 
-from .models import Book, Branch, Genre, Shelf
+from .models import Book, Branch, Genre, PatronProfile, Shelf
 
 #: A serializer's name-to-field map. The four ``Any``s are DRF ``Field``'s generics, which
 #: no single binding fits across a heterogeneous map.
@@ -715,3 +722,117 @@ class BranchWithShelvesSerializer(serializers.ModelSerializer[Branch]):
             if alt_branches:
                 shelf.alt_branches.set(alt_branches)
         return branch
+
+
+class PatronProfileSerializer(serializers.ModelSerializer[PatronProfile]):
+    """A ``PatronProfile`` serializer writing the ``to_field`` key ``favorite_genre``.
+
+    ``PatronProfile.favorite_genre`` is ``ForeignKey(Genre, to_field="name")``: its column
+    stores the genre NAME, not the genre id. DRF's ``ModelSerializer`` maps such a key to
+    ``SlugRelatedField(slug_field="name")``, which ``SerializerMutation`` refuses (a relation
+    input decodes to a primary key), so the field is declared under the relation's own name
+    as a ``PrimaryKeyRelatedField``: the input names the genre by id, and the saved column
+    holds that genre's name.
+    """
+
+    # DRF's stubs type the constructor as returning either a single or a many relation.
+    favorite_genre: (
+        serializers.RelatedField[Genre, Genre, object] | serializers.ManyRelatedField
+    ) = serializers.PrimaryKeyRelatedField(
+        queryset=Genre.objects.all(),
+        allow_null=True,
+        required=False,
+    )
+
+    # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+    class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        model = PatronProfile
+        fields: tuple[str, ...] = ("patron", "address_2", "favorite_genre")
+
+
+class PatronProfileDetailsSerializer(PatronProfileSerializer):
+    """``PatronProfileSerializer`` without the primary-key relation ``patron`` (the update surface)."""
+
+    class Meta(PatronProfileSerializer.Meta):
+        fields: tuple[str, ...] = ("address_2", "favorite_genre")
+
+
+class RenamedPatronProfileSerializer(serializers.ModelSerializer[PatronProfile]):
+    """``PatronProfileSerializer`` with the ``to_field`` key bound under a RENAMED field.
+
+    ``fav = PrimaryKeyRelatedField(source="favorite_genre")`` writes the same relation as
+    the own-name spelling: the input names the genre by id under ``favId``, and the saved
+    ``favorite_genre_id`` column holds that genre's name.
+    """
+
+    # DRF's stubs type the constructor as returning either a single or a many relation.
+    fav: serializers.RelatedField[Genre, Genre, object] | serializers.ManyRelatedField = (
+        serializers.PrimaryKeyRelatedField(
+            source="favorite_genre",
+            queryset=Genre.objects.all(),
+            allow_null=True,
+            required=False,
+        )
+    )
+
+    # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+    class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        model = PatronProfile
+        fields: tuple[str, ...] = ("patron", "address_2", "fav")
+
+
+def _repoint_to_another_genre(genre: Genre) -> None:
+    """Rename ``genre`` IN MEMORY to the first other genre's name (the object stays the same)."""
+    other = Genre.objects.exclude(pk=genre.pk).order_by("pk").first()
+    if other is not None:
+        genre.name = other.name
+
+
+class GenreReplacingPatronProfileSerializer(PatronProfileSerializer):
+    """A DELIBERATELY-wrong ``create()`` that re-points the validated genre at another genre.
+
+    The custom ``create()`` renames the validated ``favorite_genre`` object IN MEMORY to the
+    first other genre's name before saving, so the stored ``to_field`` column names a genre
+    the client never chose while the live object still claims to be the validated one. The
+    post-save relation attestation must refuse it: it compares the column with the genre
+    name CAPTURED when the field validated, not with the live object.
+    """
+
+    @override
+    # basedpyright: DRF hands create() an untyped validated_data dict; Any matches its stub
+    def create(self, validated_data: dict[str, Any]) -> PatronProfile:  # pyright: ignore[reportExplicitAny]
+        _repoint_to_another_genre(validated_data["favorite_genre"])
+        return super().create(validated_data)
+
+
+class GenreReplacingRenamedPatronProfileSerializer(RenamedPatronProfileSerializer):
+    """``GenreReplacingPatronProfileSerializer`` over the renamed spelling ``fav``.
+
+    ``validated_data`` carries the relation under its source ``favorite_genre``; the custom
+    ``create()`` re-points that validated genre in memory, and the post-save attestation
+    must refuse the saved column through the renamed field's source.
+    """
+
+    @override
+    # basedpyright: DRF hands create() an untyped validated_data dict; Any matches its stub
+    def create(self, validated_data: dict[str, Any]) -> PatronProfile:  # pyright: ignore[reportExplicitAny]
+        _repoint_to_another_genre(validated_data["favorite_genre"])
+        return super().create(validated_data)
+
+
+class GenreRepointingPatronProfileSerializer(PatronProfileSerializer):
+    """A DELIBERATELY-wrong field validator that re-points the validated genre's key IN PLACE.
+
+    ``validate_favorite_genre`` renames the resolved genre object in memory to the first
+    other genre's name and returns the SAME object, so its identity and pk are intact while
+    the ``to_field`` column it would write names a genre the client never chose. The
+    relation-intent walk must refuse it before the save: the genre's name is the key the
+    relation stores, and the walk compares it with the name captured when the field
+    validated.
+    """
+
+    def validate_favorite_genre(self, value: Genre | None) -> Genre | None:
+        """Rename the validated genre to another genre's name, keeping the object."""
+        if value is not None:
+            _repoint_to_another_genre(value)
+        return value

@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 48 done, 62 to do.
+Progress: 49 done, 63 to do.
 
 ## Done
 
@@ -97,6 +97,10 @@ Progress: 48 done, 62 to do.
 - [x] 103. A writable relation field bound to its `attname` (`cat = PrimaryKeyRelatedField(source="category_id")`, or a
   `category_id` field with the source defaulted) published a create input every request failed with a masked TypeError; it
   is refused at schema build with the remedy `source="category"`, root, nested and injected (`f8ff159c`)
+- [x] 116. Under `globalid_strategy="type"` a `NameConverter` that renames object types broke GlobalID round trips: ids
+  carried the converted name while `node`, `nodes`, mutations and GlobalID filters decoded by the plain name (refused, or
+  another type's rows read and written on a collision); they now decode by the executing schema's published name
+  (`e05b2436`)
 
 ## To do: t3 robustness rows
 
@@ -214,6 +218,10 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 112. CHANGELOG entry for item 103: a `SerializerMutation` whose serializer binds a writable relation field to its
   `attname` (`source="category_id"`, or a `category_id` `PrimaryKeyRelatedField` with no `source`) now raises
   `ConfigurationError` at schema build; bind the relation instead (`source="category"`)
+- [ ] 117. CHANGELOG entry for item 116: under `globalid_strategy="type"` with a `NameConverter` that renames object types,
+  ids decode by the schema-published type name; `decode_global_id` and `testing.global_id_for` take an optional `schema=`
+  (`global_id_for(..., schema=)` emits the published name and raises `ConfigurationError` for a type the schema does not
+  publish), and the inherited-closure `type` child emits the published name
 
 ## Hunt not finished in t3
 

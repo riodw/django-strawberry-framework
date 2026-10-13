@@ -1,0 +1,87 @@
+name: Publish
+
+# Release publishing through PyPI Trusted Publishing (spec-057 Decision 8). A
+# version tag pushed by the maintainer builds the sdist and wheel; the upload job
+# then waits on the `pypi` environment's required reviewer and exchanges a
+# short-lived GitHub OIDC token for a PyPI upload credential. No PyPI API token
+# exists anywhere, and the published files carry PEP 740 attestations naming
+# this repository and this workflow.
+#
+# The PyPI trusted publisher is bound to: owner `unaxy`, repository
+# `django-strawberry-framework`, workflow `publish.yml`, environment `pypi`.
+# Renaming this file or the environment breaks that binding.
+on:
+  push:
+    tags:
+      - "v*"
+
+# Least privilege by default. Only the upload job widens its scope, and only by
+# `id-token: write`, which mints the OIDC token and grants no repository access.
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build sdist and wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # This job never pushes, so the checkout credential has no consumer.
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          # A release build never restores a cache another workflow could have
+          # written: what ships is built from the tagged tree alone.
+          enable-cache: false
+      - name: Build
+        run: uv build
+      - name: Refuse a tag that does not name the built version
+        # The release is single-sourced in `__version__`; the tag must agree with
+        # it, so a mistyped tag stops here instead of publishing the wrong name.
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          for artifact in \
+            "dist/django_strawberry_framework-${version}-py3-none-any.whl" \
+            "dist/django_strawberry_framework-${version}.tar.gz"; do
+            if [ ! -f "$artifact" ]; then
+              echo "tag ${TAG} does not match the built version; dist/ holds:"
+              ls dist/
+              exit 1
+            fi
+          done
+      - name: Upload the distributions
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      # The required reviewer on this environment is the maintainer's approval
+      # of every upload; the trusted publisher accepts tokens from it alone.
+      name: pypi
+      url: https://pypi.org/project/django-strawberry-framework/
+    permissions:
+      id-token: write
+    steps:
+      - name: Download the distributions
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2

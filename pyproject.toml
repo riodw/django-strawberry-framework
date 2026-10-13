@@ -56,8 +56,8 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://pypi.org/project/django-strawberry-framework"
-Repository = "https://github.com/riodw/django-strawberry-framework"
-Issues = "https://github.com/riodw/django-strawberry-framework/issues"
+Repository = "https://github.com/unaxy/django-strawberry-framework"
+Issues = "https://github.com/unaxy/django-strawberry-framework/issues"
 
 [dependency-groups]
 dev = [

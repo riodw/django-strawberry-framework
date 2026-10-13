@@ -44,10 +44,10 @@ sequence:
    classifier moves off `1 - Planning`, and a fresh `## [0.1.0]` entry is
    written atop `CHANGELOG.md`'s patch entries with the cumulative alpha history
    ([Decision 7](#decision-7--the-changelog-010-entry-covers-the-whole-shipped-alpha-line)).
-5. **Cut, tag, publish.** The version triplet moves to `0.1.0`, the release
-   is tagged in git, and the build is published to PyPI — with the
-   tag-and-publish actions maintainer-executed
-   ([Decision 8](#decision-8--tag-and-publish-are-maintainer-executed-actions)).
+5. **Cut, tag, publish.** The version triplet moves to `0.1.0`, the
+   maintainer tags the release in git, and the tag's CI run publishes the
+   build to PyPI through Trusted Publishing once the maintainer approves it
+   ([Decision 8](#decision-8--the-maintainer-tags-ci-publishes-through-trusted-publishing)).
 
 Status: **PLANNED — no slice built yet.**
 Five slices: Slice 1 (**queue gate + parity audit**), Slice 2 (**matrix
@@ -207,8 +207,9 @@ is a distinct gate.
         version literal — `pyproject.toml` is `dynamic = ["version"]` and
         `uv.lock` records no version for the editable root package),
         `tests/base/test_init.py`, and the GLOSSARY package-version row.
-  - [ ] `uv build`; maintainer tags the release and runs `uv publish`
-        ([Decision 8](#decision-8--tag-and-publish-are-maintainer-executed-actions));
+  - [ ] `uv build` artifact smoke; the maintainer pushes the `v0.1.0` tag
+        and approves the `pypi` environment run of `publish.yml`
+        ([Decision 8](#decision-8--the-maintainer-tags-ci-publishes-through-trusted-publishing));
         post-publish, a `pip install django-strawberry-framework==0.1.0`
         smoke check in an isolated venv imports cleanly with no extras.
   - [ ] Card flip to Done + `KANBAN.md` / `KANBAN.html` regeneration from
@@ -530,24 +531,31 @@ every wire break in one entry.
 entries — this entry is the one place the alpha line gets a coherent
 narrative; a link farm defers the reading cost to every future consumer.
 
-### Decision 8 — Tag and publish are maintainer-executed actions
+### Decision 8 — The maintainer tags; CI publishes through Trusted Publishing
 
-**Decision**: Slice 5's terminal actions — the release commit, the git tag,
-and `uv publish` — are executed by the maintainer. The executing agent
-prepares everything up to that boundary (the triplet edits, `uv build`, the
-built-artifact smoke check, the exact commands per [`CONTRIBUTING.md`][contributing]'s
-publish flow) and stops. This follows the repo's standing authorization
-rules ([`AGENTS.md`][agents]: no commits without an explicit ask, never
-branch/tag without authorization) and the practical one: `uv publish`
-requires the maintainer's PyPI token, which the agent must never handle.
-Post-publish, the agent-side verification resumes: an isolated-venv
-`pip install django-strawberry-framework==0.1.0` must import cleanly with
-no extras installed and report `__version__ == "0.1.0"`.
+**Decision**: Slice 5's terminal actions — the release commit and the
+`v0.1.0` tag push — are executed by the maintainer, and the tag push starts
+the repository's standing release workflow, `.github/workflows/publish.yml`
+(this card uses it; it does not build it). That workflow builds the sdist and
+wheel from the tagged tree, refuses a tag that does not match `__version__`,
+and holds the upload on the `pypi` environment until the maintainer approves
+it; the upload then exchanges a GitHub OIDC token for a PyPI credential
+through Trusted Publishing, so no PyPI API token exists for anyone to handle,
+and the published files carry PEP 740 attestations naming
+`unaxy/django-strawberry-framework`. The executing agent prepares everything
+up to that boundary (the triplet edits, `uv build`, the built-artifact smoke
+check, the commands per [`CONTRIBUTING.md`][contributing]'s publish flow) and
+stops. This follows the repo's standing authorization rules
+([`AGENTS.md`][agents]: no commits without an explicit ask, never
+branch/tag without authorization). Post-publish, the agent-side verification
+resumes: an isolated-venv `pip install django-strawberry-framework==0.1.0`
+must import cleanly with no extras installed and report
+`__version__ == "0.1.0"`.
 
-**Alternative rejected**: automating tag + publish behind a CI release
-workflow — worth considering for the beta line, but building release
-automation is new scope (Decision 1) and this card's job is to cut one
-release, not to ship a release pipeline.
+**Alternative rejected**: `uv publish --token` from the maintainer's machine
+— it needs a long-lived PyPI API token on disk, uploads whatever local tree
+built the files rather than the tagged one, and publishes no provenance
+attestation tying the release to this repository.
 
 ## Implementation plan
 
@@ -560,7 +568,7 @@ delta is the triplet):
 | 2 | Full-matrix CI dispatch + isolated floor/ceiling venv runs + release-readiness checklist | none (verification only) | MEDIUM — a red row blocks the cut |
 | 3 | Doc status cross-check | `README.md`, `docs/README.md`, `docs/GLOSSARY.md` (DB+regen), `docs/TREE.md` (regen) | LOW — doc-only |
 | 4 | Milestone chores + the CHANGELOG `0.1.0` entry | GLOSSARY DB+regen, kanban DB+regen, `README.md`, `GOAL.md`, `TODAY.md`, `pyproject.toml` (classifier), `CHANGELOG.md` | MEDIUM — permission-gated file; generated-file discipline |
-| 5 | Version triplet + build + tag + publish + card wrap | `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, GLOSSARY version row, kanban regen | MEDIUM — the irreversible step is maintainer-executed |
+| 5 | Version triplet + build + tag + publish + card wrap | `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, GLOSSARY version row, kanban regen | MEDIUM — the irreversible step is the maintainer's tag push and publish approval |
 
 Sequencing constraints: Slice 1 gates everything (Decision 2). Slice 2 runs
 against the tree after the last alpha patch lands (the 056 cut, planned
@@ -578,8 +586,8 @@ existing release machinery rather than re-spelling it: the glossary DB +
 `scripts/build_kanban_md.py` / `scripts/build_kanban_html.py` for the board
 (both are generated exports; hand edits decay), `scripts/build_tree_md.py`
 for `docs/TREE.md`, the [`CONTRIBUTING.md`][contributing] Building /
-Publishing commands
-(`uv build` / `uv publish`) and its single-sourced "Updating the package
+Publishing sections
+(`uv build`, then the tag-triggered `publish.yml`) and its single-sourced "Updating the package
 version" section verbatim, and
 `scripts/check_spec_glossary.py`
 plus `import_spec_terms` for this spec's own term hygiene at card wrap.
@@ -603,7 +611,7 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
 - **Trove classifier wording**: the classifier list is validated by PyPI at
   upload — `Development Status :: 4 - Beta` is the exact registered string;
   a typo fails at publish time, so the built wheel's metadata is checked
-  before the maintainer publishes.
+  before the maintainer pushes the tag.
 - **Isolated-venv discipline**: matrix and smoke installs never touch the
   shared `.venv` (`uv pip install --python /tmp/<venv>/bin/python`); the
   Django 6.x rows require Python ≥ 3.12.
@@ -680,13 +688,6 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
   README will both say beta, and the classifier should not contradict them.
   Fallback: any value except the current `1 - Planning`, which is wrong
   under every reading.
-- **Publish mechanics**: [`CONTRIBUTING.md`][contributing] documents
-  `uv build` + `uv publish --token`; whether the tag or the publish comes
-  first, and the tag name format (`v0.1.0` vs `0.1.0`), are unpinned
-  repo-wide. Preferred answer: tag `v0.1.0` on the release commit, publish
-  from that tag's tree; recorded here so the beta line inherits a
-  convention. Fallback: the maintainer's existing habit wins — the git tag
-  history at execution time is the tiebreaker.
 - **Upstream drift during alpha**: features either upstream shipped after
   the pinned audit revisions are not alpha debt (Decision 6) — but Slice 1 should note any
   obvious new upstream surface it trips over as candidate `BACKLOG.md`
@@ -711,8 +712,6 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
   filter-key namespace + schema-named generated input fields (`0.1.7`),
   and migration guides + the adversarial suite (`0.1.8`).
 - The API freeze and stable cut-over — `TODO-STABLE-073-1.0.0`.
-- Release-pipeline automation (CI-driven tag/publish) — raised and rejected
-  in Decision 8; a future card if the beta cadence warrants it.
 - The [Cross-subsystem invariants][glossary-cross-subsystem-invariants]
   (`1.0.0`-scoped) — the beta docs keep pointing at them; this card does not
   claim them.
@@ -750,9 +749,10 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
 - [ ] Version triplet at `0.1.0`:
       `django_strawberry_framework/__init__.py::__version__`,
       `tests/base/test_init.py`, and the GLOSSARY package-version row.
-- [ ] Release tagged in git and published to PyPI by the maintainer
-      (Decision 8); post-publish isolated-venv smoke green (clean import
-      with no extras, `__version__ == "0.1.0"`).
+- [ ] Release tag `v0.1.0` pushed by the maintainer and the `publish.yml`
+      upload approved on the `pypi` environment (Decision 8); post-publish
+      isolated-venv smoke green (clean import with no extras,
+      `__version__ == "0.1.0"`).
 - [ ] Card flipped Done, `KANBAN.md` / `KANBAN.html` regenerated from the
       DB, `import_spec_terms` green against this spec.
 

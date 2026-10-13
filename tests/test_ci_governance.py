@@ -329,6 +329,37 @@ def test_dependency_audit_workflow_runs_on_pull_request_and_a_schedule():
     assert triggers.get("schedule"), "dependency audit must run on a schedule"
 
 
+def _environment_name(job: _YAMLMapping) -> object:
+    """Return a job's environment name, from the bare or the mapping spelling."""
+    environment = job.get("environment")
+    return _mapping(environment).get("name") if _is_mapping(environment) else environment
+
+
+def test_publish_workflow_keeps_the_trusted_publisher_binding():
+    """``publish.yml`` publishes on a version tag from the ``pypi`` environment.
+
+    PyPI's trusted publisher names this file and this environment, so either
+    rename silently breaks the next release. The upload stays the one job here
+    holding ``id-token: write`` (the token PyPI exchanges for an upload
+    credential), behind the build that checked the tag against ``__version__``.
+    """
+    workflow = _workflow(WORKFLOW_DIR / "publish.yml")
+    triggers = _mapping(workflow[True] if True in workflow else workflow["on"])
+    assert set(triggers) == {"push"}, f"publish.yml must run on tag pushes only, got {triggers}"
+    assert _mapping(triggers["push"]).get("tags") == ["v*"], "publish.yml must run on v* tags"
+    minting = {
+        name: _mapping(job)
+        for name, job in _jobs(workflow).items()
+        if _mapping(_mapping(job).get("permissions")).get("id-token") == "write"
+    }
+    assert list(minting) == ["publish"], f"exactly one job mints the token, got {list(minting)}"
+    publish = minting["publish"]
+    assert _environment_name(publish) == "pypi"
+    assert publish.get("needs") == "build"
+    actions = [_mapping(step).get("uses") or "" for step in _steps(publish)]
+    assert any(str(uses).startswith("pypa/gh-action-pypi-publish@") for uses in actions)
+
+
 # ---------------------------------------------------------------------------
 # Standing pin: no active .py may construct a schema with a forbidden
 # DjangoOptimizerExtension ``extensions=`` form (spec-029 Decision 3).

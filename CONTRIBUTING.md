@@ -19,7 +19,7 @@ Thanks for your interest in contributing to `django-strawberry-framework`. The p
 This project uses [`uv`](https://docs.astral.sh/uv/) for dependency and environment management.
 
 ```bash
-git clone https://github.com/riodw/django-strawberry-framework.git
+git clone https://github.com/unaxy/django-strawberry-framework.git
 cd django-strawberry-framework
 uv sync
 uvx pre-commit install
@@ -115,9 +115,14 @@ uv build
 
 ## Publishing
 
+Releases publish from CI through PyPI Trusted Publishing; no PyPI API token exists. Land the version bump on `main`, then tag that commit and push the tag:
+
 ```bash
-uv publish --token PASSWORD
+git tag v0.1.0
+git push origin v0.1.0
 ```
+
+The tag starts `.github/workflows/publish.yml`. Its build job runs `uv build` on the tagged tree and refuses a tag that does not match `__version__`; its publish job waits for the maintainer's approval on the `pypi` environment, then uploads the sdist and wheel with attestations. The PyPI trusted publisher is bound to owner `unaxy`, repository `django-strawberry-framework`, workflow `publish.yml`, environment `pypi`, so renaming the workflow file or the environment breaks publishing.
 
 ## Updating dependencies
 
@@ -154,7 +159,7 @@ docs: clarify filter Meta options
 
 ## Reporting issues
 
-Please open issues at <https://github.com/riodw/django-strawberry-framework/issues> with as much context as possible — Python version, Django version, a minimal reproducer if available. Security reports follow [`SECURITY.md`][security].
+Please open issues at <https://github.com/unaxy/django-strawberry-framework/issues> with as much context as possible — Python version, Django version, a minimal reproducer if available. Security reports follow [`SECURITY.md`][security].
 
 ## Code of conduct
 

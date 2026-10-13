@@ -16,8 +16,8 @@ If you discover a security vulnerability, **please do not open a public issue**.
 
 Instead, report it privately by either:
 
-- Using GitHub's [private vulnerability reporting](https://github.com/riodw/django-strawberry-framework/security/advisories/new) on this repository, or
-- Emailing the maintainer at `riodweber@gmail.com` with the subject line `SECURITY: django-strawberry-framework`.
+- Using GitHub's [private vulnerability reporting](https://github.com/unaxy/django-strawberry-framework/security/advisories/new) on this repository, or
+- Emailing `hello@unaxy.com` with the subject line `SECURITY: django-strawberry-framework`.
 
 Please include:
 

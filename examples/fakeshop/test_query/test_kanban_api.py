@@ -645,7 +645,7 @@ def test_select_o2o_spec_uuid_side_table_and_timestamps():
     assert card["spec"] == {
         "name": "spec-027-filters-0_0_8",
         "url": (
-            "https://github.com/riodw/django-strawberry-framework/blob/main/"
+            "https://github.com/unaxy/django-strawberry-framework/blob/main/"
             "docs/SPECS/spec-027-filters-0_0_8.md"
         ),
     }

@@ -87,7 +87,7 @@ TODO_STATUS_KEY = "todo"
 # The GitHub blob prefix a SpecDoc URL is derived from. The DB stores the
 # repo-relative ``path``; ``SpecDoc.url`` composes the full URL at read time so
 # a repo rename or branch move is a one-line change here, not a data migration.
-SPEC_URL_PREFIX = "https://github.com/riodw/django-strawberry-framework/blob/main"
+SPEC_URL_PREFIX = "https://github.com/unaxy/django-strawberry-framework/blob/main"
 
 # TrackedPath lifecycle states (replaces the earlier ``is_current`` boolean).
 TRACKED_PATH_CURRENT = "current"

@@ -204,7 +204,7 @@ The six code gaps left by the `0.1.0` parity audit after everything homeable was
 
 #### Scope
 
-- Slice 1 - the new package: brand-new standalone repo riodw/django-strawberry-debug; pyproject (deps Django>=5.2 + strawberry-graphql>=0.316.0, NO dependency on django-strawberry-framework), src layout, MIT, README ported from spec-044's user-facing API (posture, wire contract, graphene narrowing table, async boundary); debug.py moved VERBATIM except the single logger swap (logging.getLogger("django_strawberry_debug")); the 1,019-line suite moved onto a self-contained harness; CI matrix green; 0.1.0 published to PyPI.
+- Slice 1 - the new package: brand-new standalone repo unaxy/django-strawberry-debug; pyproject (deps Django>=5.2 + strawberry-graphql>=0.316.0, NO dependency on django-strawberry-framework), src layout, MIT, README ported from spec-044's user-facing API (posture, wire contract, graphene narrowing table, async boundary); debug.py moved VERBATIM except the single logger swap (logging.getLogger("django_strawberry_debug")); the 1,019-line suite moved onto a self-contained harness; CI matrix green; 0.1.0 published to PyPI.
 - Slice 2 - the framework seam: delete extensions/debug.py + tests/extensions/test_debug.py; rewrite extensions/__init__.py as the require_optional_module-guarded PEP 562 lazy re-export; add [project.optional-dependencies] debug = ["django-strawberry-debug>=0.1.0"] (+ dev-group pin); absence test on the None-sentinel shape; ONE live-tier re-export + optimizer-composability proof; the probe scaffold slims to that seam test; fail_under = 100 re-verified.
 - Slice 3 - docs fold-in (GLOSSARY via DB, README, TREE regen, dry-file doc retired) and card wrap; the 0.0.15 version-triplet cut and CHANGELOG entry belong to the boundary-hardening/DRY-squeeze card, which shares this patch line and lands last.
 
@@ -218,7 +218,7 @@ The six code gaps left by the `0.1.0` parity audit after everything homeable was
 
 #### Files likely touched
 
-- New repo (riodw/django-strawberry-debug): pyproject.toml, src/django_strawberry_debug/{__init__,debug}.py, tests/, CI workflows, README, CHANGELOG
+- New repo (unaxy/django-strawberry-debug): pyproject.toml, src/django_strawberry_debug/{__init__,debug}.py, tests/, CI workflows, README, CHANGELOG
 - This repo: `django_strawberry_framework/extensions/{__init__,debug}.py`, `tests/extensions/test_debug.py`, `tests/_soft_dependency.py`, `examples/fakeshop/test_query/test_debug_extension_api.py`, `pyproject.toml` (extras + dev group), `uv.lock`
 - Slice 3 docs: `docs/GLOSSARY.md` (DB + re-render), `README.md`, `docs/README.md`, `docs/TREE.md`, `TODAY.md`, `CHANGELOG.md`, KANBAN regen
 
@@ -462,7 +462,7 @@ Maintainer decision 2026-08-29 on the parity register's federation cut blocker: 
 
 - Slice 1 - in-repo seams, the only slice that touches this repo's package source: pin `DjangoSchema` as deliberately subclass-friendly (a stated contract with a test, not an accident), because a federated consumer needs `strawberry.federation.Schema`'s directive/entity machinery AND `DjangoSchema`'s transaction-spanning mutation context in one class, so the satellite must be able to build a `DjangoFederationSchema` on both; audit that everything entity resolution needs - registry lookup, finalizer participation, GlobalID/node identity - is reachable through public API under the import-linter boundary contracts the DRY-squeeze card lands, and add any missing public seam here rather than letting the satellite import `_private` internals.
 - The pinned `DjangoSchema` subclass contract also states that every keyword argument `DjangoSchema.__init__` owns (today `resource_policy` and `error_policy`, and any later one) is consumed before delegation to the Strawberry base, and that a subclass forwards `**kwargs` unchanged, so a keyword added to `DjangoSchema` later reaches a `DjangoFederationSchema` without a satellite release.
-- Slice 2 - the satellite: new repo riodw/django-strawberry-federation depending on django-strawberry-framework and strawberry-graphql's federation support; `DjangoFederationSchema`; the DRF-idiom Meta surface (`Meta.federation = {"keys": [...], "shareable": [...], "tag": ...}`) emitting Federation 2 directives - Meta declarations, never decorators; `_entities` resolution routed through the target type's `get_queryset` so row visibility holds for gateway entity fetches exactly as it does for root fields; own suite, CI matrix, README; 0.1.0 published to PyPI.
+- Slice 2 - the satellite: new repo unaxy/django-strawberry-federation depending on django-strawberry-framework and strawberry-graphql's federation support; `DjangoFederationSchema`; the DRF-idiom Meta surface (`Meta.federation = {"keys": [...], "shareable": [...], "tag": ...}`) emitting Federation 2 directives - Meta declarations, never decorators; `_entities` resolution routed through the target type's `get_queryset` so row visibility holds for gateway entity fetches exactly as it does for root fields; own suite, CI matrix, README; 0.1.0 published to PyPI.
 - Slice 3 - framework docs fold-in: `[federation]` optional-dependencies extra pointing at the satellite; GLOSSARY entry via the DB; the migration-guides card's 🍓 guide maps `strawberry_django`'s federation subpackage to the satellite; the beta release card's parity carve-out cites the package; the BACKLOG `apollo_federation_meta_surface` row is retired (done at carding, recorded here).
 
 #### Definition of done
@@ -479,7 +479,7 @@ Maintainer decision 2026-08-29 on the parity register's federation cut blocker: 
 - `django_strawberry_framework/schema.py` (subclass-friendliness contract + docstring)
 - Public seam additions only if the Slice 1 audit finds a gap (registry / finalizer / node identity access)
 - `pyproject.toml` (`[federation]` extra), GLOSSARY via DB, guides fold-in
-- Everything else lives in the new riodw/django-strawberry-federation repo
+- Everything else lives in the new unaxy/django-strawberry-federation repo
 
 #### Verified in upstream
 

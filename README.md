@@ -167,11 +167,11 @@ Install, quick start, reading and writing data, transport, and deployment all li
 <!-- .venv/ -->
 
 <!-- External -->
-[build-image]: https://github.com/riodw/django-strawberry-framework/actions/workflows/django.yml/badge.svg
-[build-url]: https://github.com/riodw/django-strawberry-framework/actions
-[coveralls-image]: https://coveralls.io/repos/github/riodw/django-strawberry-framework/badge.svg?branch=main
-[coveralls-url]: https://coveralls.io/github/riodw/django-strawberry-framework?branch=main
-[license-image]: https://img.shields.io/github/license/riodw/django-strawberry-framework
-[license-url]: https://github.com/riodw/django-strawberry-framework/blob/main/LICENSE
+[build-image]: https://github.com/unaxy/django-strawberry-framework/actions/workflows/django.yml/badge.svg
+[build-url]: https://github.com/unaxy/django-strawberry-framework/actions
+[coveralls-image]: https://coveralls.io/repos/github/unaxy/django-strawberry-framework/badge.svg?branch=main
+[coveralls-url]: https://coveralls.io/github/unaxy/django-strawberry-framework?branch=main
+[license-image]: https://img.shields.io/github/license/unaxy/django-strawberry-framework
+[license-url]: https://github.com/unaxy/django-strawberry-framework/blob/main/LICENSE
 [changelog-image]: https://img.shields.io/badge/changelog-CHANGELOG.md-blue
-[changelog-url]: https://github.com/riodw/django-strawberry-framework/blob/main/CHANGELOG.md
+[changelog-url]: https://github.com/unaxy/django-strawberry-framework/blob/main/CHANGELOG.md

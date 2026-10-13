@@ -94,7 +94,7 @@ Each top-level item maps to one commit / PR (Slice 1's commits land in the
 new repository; Slices 2–3 land here).
 
 - [ ] **Slice 1 — `django-strawberry-debug` exists and is published**
-  - [ ] New repository (`riodw/django-strawberry-debug`): `pyproject.toml`
+  - [ ] New repository (`unaxy/django-strawberry-debug`): `pyproject.toml`
         (name `django-strawberry-debug`, version `0.1.0`, deps
         `Django>=5.2.16` + `strawberry-graphql>=0.316.0` with the
         per-operation-isolation half of the framework's floor comment; **no

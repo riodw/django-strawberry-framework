@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 55 done, 81 to do.
+Progress: 57 done, 86 to do.
 
 ## Done
 
@@ -143,6 +143,16 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 24. Trailing-comma lint in two test files (2 rows)
 - [ ] 25. Stale test-fixture row in `tests/utils/test_querysets.py`: likely already covered by item 41
 - [ ] 27. Unfiled leads from the same family (triage with the rows above)
+- [x] 139. Two `workspace.py` runs of one address started during the copy's first sync both synced it: the second decided
+  its sync before waiting for the copy's lock and resynced over the first run's edits (silently, its header said "copy is
+  fresh"); a killed `--fresh` sync left the copy marked ready and half-mirrored, and a run whose copy was released while it
+  waited ran in another address's copy; the sync is now decided under the copy's lock, every sync marks the copy syncing
+  first, and a run whose copy no longer holds its address refuses with exit 125 (`4ed767bb`)
+- [x] 140. `workspace.py release` and `gc` probed a copy's lock, dropped it and then unbound or deleted: `gc` without
+  `--force` deleted active work (about 98% of runs started with it), deleted the lock files a waiter held so two runs owned
+  one copy, and a probe or a racing run recreated an unmarked flow folder; every command now holds a shared lock on the
+  flow folder, `gc` holds it exclusive through the removal (marker last), `release` keeps each copy's lock through its
+  state write, `lock_is_busy` and `gc --force` are gone (`4ed767bb`)
 
 ## To do: found along the way
 
@@ -229,6 +239,15 @@ not real bugs and just get deleted from t3. One checkbox per area:
   optional relation silently (the form binds `None`; the serializer's descriptor assignment stores `NULL`), where the model
   flavor refuses it as the relation error since item 130; `forms/resolvers.py::_to_form_key_value` also falls back to
   `obj.pk` when `to_field_name` does not resolve on the row
+- [ ] 141. `workspace.py baseline` records the ITEM_BASELINE sha before it waits for the copy's lock and syncs, so the
+  `before` copy can come from a later tree than the recorded sha
+- [ ] 142. A SIGKILLed `workspace.py` leaves its command running without any lease (its fds are not inherited), so `gc`
+  or `release` can remove or unbind the copy under a still-running pytest
+- [ ] 143. The macOS `$TMPDIR` purge deletes a flow's `.dsf-ws` marker after about 3 idle days, so START.md's "gc the flow
+  before reuse" refuses ("carries no marker") until a run writes it again
+- [ ] 144. `workspace.py gc`'s Postgres `stop_if_idle` runs after the flow lease is released and can race another flow
+  creating a database
+- [ ] 145. `workspace.py status` can raise `FileNotFoundError` reading `state.json` while a `gc` removes the flow
 
 ## To do: holes found re-checking the fixes
 

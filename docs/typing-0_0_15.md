@@ -73,9 +73,10 @@ of them.
   boundary stays here: `scripts/_kanban_lib.py::fetch_graphql_data` returns `dict[str, Any]`, and the `TypedDict`
   payloads it feeds (`IdRow`, `LabelRef`, ...) are only as true as that `Any`; retyping it to `object` needs a runtime
   validator that narrows the payload into those `TypedDict`s, keeping today's behavior on a malformed response
-- [ ] 8. `reportUnannotatedClassAttribute`: 8545 (package 164, tests 6684, examples 1681, scripts 14, root 2)
+- [ ] 8. `reportUnannotatedClassAttribute`: 8531 (package 164, tests 6684, examples 1681, scripts 0, root 2); on for
+  scripts/ (its execution environment in `pyproject.toml`)
 - [ ] 9. `reportUnusedCallResult`: 4782 (package 80, tests 2897, examples 1527, scripts 245, root 33)
-- [ ] 10. `reportUnusedParameter`: 1777 (package 77, tests 1124, examples 571, scripts 0, root 5)
+- [ ] 10. `reportUnusedParameter`: 1777 (package 77, tests 1124, examples 571, scripts 0, root 5); on for scripts/
 
 Off by design (not planned): `reportImplicitStringConcatenation`, `reportPrivateUsage`, `reportUnusedFunction`,
 `reportImportCycles`, `reportUninitializedInstanceVariable`. The reasons are in `pyproject.toml`.

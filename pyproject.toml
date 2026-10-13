@@ -288,7 +288,10 @@ exclude = [
     "docs/*/worker-memory",
 ]
 executionEnvironments = [
-    { root = "scripts", extraPaths = ["examples/fakeshop", "."] },
+    { root = "scripts", extraPaths = [
+        "examples/fakeshop",
+        ".",
+    ], reportUnannotatedClassAttribute = "error", reportUnusedParameter = "error" },
     { root = "examples/fakeshop" },
 ]
 pythonVersion = "3.11"
@@ -309,6 +312,8 @@ reportUnusedFunction = "none"
 reportImportCycles = "none"
 reportUninitializedInstanceVariable = "none"
 # Off until their remaining sites are fixed (the ratchet): turn one on to list them.
+# reportUnannotatedClassAttribute and reportUnusedParameter are on for scripts/ (its
+# execution environment above).
 reportAny = "none"
 reportUnannotatedClassAttribute = "none"
 reportUnusedCallResult = "none"

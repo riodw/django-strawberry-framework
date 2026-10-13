@@ -292,9 +292,9 @@ class ModuleDescriptionError(TreeRenderError):
         detail: str,
     ) -> None:
         """Record the offending ``path``, the broken ``rule`` and a readable ``detail``."""
-        self.path = path
-        self.rule = rule
-        self.detail = detail
+        self.path: Path = path
+        self.rule: str = rule
+        self.detail: str = detail
         super().__init__(f"{display_path(path)}: [{rule}] {detail}")
 
 

@@ -439,7 +439,7 @@ class GlossaryInliner:
     """
 
     def __init__(self, glossary_terms: list[GlossaryTermRef]) -> None:
-        self._pending = {
+        self._pending: dict[str, tuple[GlossaryTermRef, re.Pattern[str]]] = {
             term["anchor"]: (term, term_pattern(term["title"]))
             for term in sorted(glossary_terms, key=lambda term: -len(term["title"]))
         }

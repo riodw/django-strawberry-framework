@@ -441,8 +441,8 @@ class _Locator:
         scopes: Sequence[_Scope],
         source_lines: Sequence[str],
     ) -> None:
-        self.rel_path = rel_path
-        self.source_lines = source_lines
+        self.rel_path: str = rel_path
+        self.source_lines: Sequence[str] = source_lines
         self._innermost: list[_Scope | None] = [None] * (len(source_lines) + 2)
         # Fill widest spans first so each line ends on its innermost scope.
         for scope in sorted(scopes, key=lambda item: item.end - item.start, reverse=True):
@@ -488,12 +488,12 @@ class _StaticVisitor(ast.NodeVisitor):
         first_party_prefixes: Sequence[str],
         literal_min_length: int,
     ) -> None:
-        self.source_lines = source_lines
-        self.long_function_lines = long_function_lines
-        self.long_function_branches = long_function_branches
-        self.markers = tuple(markers)
-        self.first_party_prefixes = tuple(first_party_prefixes)
-        self.literal_min_length = literal_min_length
+        self.source_lines: Sequence[str] = source_lines
+        self.long_function_lines: int = long_function_lines
+        self.long_function_branches: int = long_function_branches
+        self.markers: tuple[str, ...] = tuple(markers)
+        self.first_party_prefixes: tuple[str, ...] = tuple(first_party_prefixes)
+        self.literal_min_length: int = literal_min_length
         self.imports: list[_ImportRecord] = []
         self.symbols: list[_SymbolRecord] = []
         self.calls: list[_CallRecord] = []
@@ -1349,7 +1349,7 @@ class _ReferenceIndex:
     """
 
     def __init__(self, package_root: Path, root: Path) -> None:
-        self.package_root = package_root
+        self.package_root: Path = package_root
         self.sites: dict[str, list[tuple[str, int, str]]] = {}
         if not package_root.is_dir():
             return

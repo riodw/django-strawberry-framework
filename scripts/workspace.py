@@ -1158,7 +1158,7 @@ class Postgres:
 
     def __init__(self, repo_root: Path) -> None:
         """Bind to the checkout whose compose file starts the container."""
-        self.repo_root = repo_root
+        self.repo_root: Path = repo_root
         self._container: tuple[str, str, str] | None = None
 
     def _docker(self, *args: str, check: bool = True) -> str:

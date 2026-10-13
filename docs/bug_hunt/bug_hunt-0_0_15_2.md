@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 57 done, 86 to do.
+Progress: 58 done, 85 to do.
 
 ## Done
 
@@ -125,6 +125,10 @@ Progress: 57 done, 86 to do.
   linked silently (including one the visibility scope hides) or a payload FieldError, for a FK, a OneToOne and an M2M whose
   through model's target-side foreign key has a `to_field`; the one visibility query now also reads the key the relation
   stores and that key is written (this commit)
+- [x] 89. The serializer refusal of a field taking a grouped-choices column's read enum offered "declare a flat
+  ChoiceField" over an `ArrayField` whose `base_field` is grouped too, where a `ChoiceField` writes one value into the list
+  column; over such an array it now names a declared `MultipleChoiceField` or `ListField(child=ChoiceField)`, each element
+  checked against the `base_field`'s flattened values (`6f1a6cd4`)
 
 ## To do: t3 robustness rows
 
@@ -156,7 +160,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## To do: found along the way
 
-- [ ] 89. The grouped-choices `ArrayField` refusal tells a list column to "declare a flat ChoiceField", which cannot write a list
 - [ ] 90. Nested list-of-choice serializer shapes (`ListField(child=MultipleChoiceField)`, `ListField(child=ListField(child=ChoiceField))`)
   still publish `[[String!]!]`; an enum there needs a deeper element unwrap than item 43's one level
 - [ ] 92. A consumer `save()` raising Django's `ValidationError` escapes the ModelForm flavor as a masked top-level error, while the
@@ -273,7 +276,8 @@ not real bugs and just get deleted from t3. One checkbox per area:
   a concrete type's path through an FK declared to a proxy (`BranchNote.branch`) reads the bound type, not the proxy's type
 - [ ] 76. CHANGELOG entry for item 62: a `SerializerMutation` whose serializer declares a flat `ChoiceField` over a grouped-choices
   column binds again (checked against the column's flattened values); a refused value now reads "which does not list it", and a
-  serializer field taking a grouped column's read enum is refused with a remedy to declare a flat `ChoiceField`
+  serializer field taking a grouped column's read enum is refused with a remedy to declare a flat `ChoiceField` (over an
+  `ArrayField` whose `base_field` is grouped, a `MultipleChoiceField` or `ListField(child=ChoiceField)`)
 - [ ] 77. The read enum refuses a grouped-choices column, though group labels are presentation like choice labels. Flatten it on
   the read side too (retires the `str`-override carve-out and the write-side grouped refusal), or keep?
 - [ ] 78. CHANGELOG entry for item 65: every lookup on a choice column treats each enum member as a value (`iExact: BLANK`

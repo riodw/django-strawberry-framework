@@ -1542,7 +1542,9 @@ them separately:
   values, a grouped column's groups flattened in order (Django's `flatchoices`), while grouped
   choices remain rejected for the read enum: a declared flat choice field over a grouped
   column is checked against those values, and a field that would take the column's read enum
-  over it is refused, the message offering a declared flat `ChoiceField`. Any other value is a
+  over it is refused, the message offering a declared flat `ChoiceField` (over an `ArrayField`
+  whose `base_field` is grouped, a `MultipleChoiceField` or `ListField(child=ChoiceField)`,
+  which write the list the array stores). Any other value is a
   [`ConfigurationError`][glossary-configurationerror] at input build: the field would write a
   value the column does not list (over a flat column, one its read enum cannot serialize).
   This holds for a declared field, an auto-generated one given `allow_blank` by

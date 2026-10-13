@@ -1077,20 +1077,26 @@ def _reject_read_enum_over_grouped_column(field: DRFField, column: ConcreteField
     auto-generated ``ChoiceField``, or any other declared field) takes the column's read type,
     for a choice column its read enum (for an ``ArrayField``, the enum of the ``base_field`` each
     element is stored through). The read enum supports only the flat ``(value, label)`` form, so
-    over Django's grouped-choices form there is no enum to take. A consumer-declared flat
-    ``ChoiceField`` brings its own generated enum, checked against the values the column lists,
-    so it is the serializer-side remedy.
+    over Django's grouped-choices form there is no enum to take. A consumer-declared flat choice
+    field brings its own generated enum, checked against the values the column lists, so it is
+    the serializer-side remedy: a ``ChoiceField`` over a single-value column, and over an
+    ``ArrayField`` a ``MultipleChoiceField`` or ``ListField(child=ChoiceField)``, each element
+    checked against the ``base_field`` (``_multiple_choice_element_column``), since a
+    ``ChoiceField`` writes one value, never the list the array stores.
     """
-    element = array_element_field(column) or column
-    if not choice_column_is_grouped(element):
+    element = array_element_field(column)
+    if not choice_column_is_grouped(element or column):
         return
+    declared = (
+        "ChoiceField" if element is None else "MultipleChoiceField or ListField(child=ChoiceField)"
+    )
     serializer_name = _safe_type_name(getattr(field, "parent", None))
     raise ConfigurationError(
         f"Serializer {serializer_name} field {field.field_name!r} takes the read enum of the "
         f"choice column {column.model.__name__}.{column.name}, which uses Django's grouped-choices "
         "form (nested tuples for option groups). Only the flat (value, label) form has a read "
         "enum; flatten the choices source, split into separate fields, or declare a flat "
-        "ChoiceField on the serializer.",
+        f"{declared} on the serializer.",
     )
 
 

@@ -20,8 +20,10 @@ Covers ``django_strawberry_framework/rest_framework/serializer_converter.py``:
   serializer-only field;
 - a grouped choice column: a declared flat ``ChoiceField`` checked against the column's
   flattened values (accepted, or refused for a value the column does not list), an
-  ``ArrayField`` whose ``base_field`` is grouped, and the refusal of every field that would
-  take the column's read enum;
+  ``ArrayField`` whose ``base_field`` is grouped (a declared ``MultipleChoiceField`` or
+  ``ListField(child=ChoiceField)`` checked the same way per element), and the refusal of every
+  field that would take the column's read enum, naming the declared field that writes the
+  column's value;
 - a ``Choices.__empty__`` ``(None, label)`` pair left to ``allow_null``: the auto
   ``ModelSerializer`` field, a serializer-only ``ChoiceField`` / ``MultipleChoiceField`` and an
   ``ArrayField`` element build with no ``_None`` member;
@@ -2132,13 +2134,19 @@ def test_declared_choice_over_grouped_column_value_the_column_does_not_list_refu
     )
 
 
-def _grouped_read_enum_refusal(serializer_name: str, field_name: str, column: str) -> str:
+def _grouped_read_enum_refusal(
+    serializer_name: str,
+    field_name: str,
+    column: str,
+    *,
+    declared: str = "ChoiceField",
+) -> str:
     return (
         f"Serializer {serializer_name} field {field_name!r} takes the read enum of the choice "
         "column "
         f"{column}, which uses Django's grouped-choices form (nested tuples for option groups). "
         "Only the flat (value, label) form has a read enum; flatten the choices source, split "
-        "into separate fields, or declare a flat ChoiceField on the serializer."
+        f"into separate fields, or declare a flat {declared} on the serializer."
     )
 
 
@@ -2196,22 +2204,36 @@ def _grouped_array_choice_column(monkeypatch: pytest.MonkeyPatch):
     return column
 
 
-def test_multiple_choice_over_grouped_array_base_accepted(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize(
+    "make_field",
+    [_multi_tags_field, _list_choice_tags_field],
+    ids=["multiple-choice", "listfield-choice-child"],
+)
+def test_multiple_choice_over_grouped_array_base_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+    make_field: Callable[..., DRFField],
+):
     """Each element is checked against the grouped ``base_field``'s flattened values."""
     column = _grouped_array_choice_column(monkeypatch)
-    field = _multi_tags_field(choices=[("a", "A")])
+    field = make_field(choices=[("a", "A")])
     annotation = serializer_converter._model_backed_scalar_annotation(field, column, "X")
     assert get_origin(annotation) is list
     (inner,) = get_args(annotation)
     assert [member.value for member in inner] == ["a"]
 
 
+@pytest.mark.parametrize(
+    "make_field",
+    [_multi_tags_field, _list_choice_tags_field],
+    ids=["multiple-choice", "listfield-choice-child"],
+)
 def test_multiple_choice_element_the_grouped_array_base_does_not_list_refused(
     monkeypatch: pytest.MonkeyPatch,
+    make_field: Callable[..., DRFField],
 ):
     """An element value outside the grouped ``base_field``'s flattened values is refused."""
     column = _grouped_array_choice_column(monkeypatch)
-    field = _multi_tags_field(choices=[("zzz", "Z")])
+    field = make_field(choices=[("zzz", "Z")])
     with pytest.raises(ConfigurationError) as exc_info:
         serializer_converter._model_backed_scalar_annotation(field, column, "X")
     assert str(exc_info.value) == _value_refusal(
@@ -2223,14 +2245,22 @@ def test_multiple_choice_element_the_grouped_array_base_does_not_list_refused(
     )
 
 
-def test_list_field_over_grouped_array_base_refused(monkeypatch: pytest.MonkeyPatch):
-    """A list field over the array would take the grouped ``base_field``'s read enum: refused."""
+@pytest.mark.parametrize(
+    "declared_field",
+    [serializers.ListField(child=serializers.CharField()), serializers.CharField()],
+    ids=["listfield-char-child", "char"],
+)
+def test_field_over_grouped_array_base_refused(
+    monkeypatch: pytest.MonkeyPatch,
+    declared_field: DRFField,
+):
+    """A field over the array that is no list of choices would take the grouped read enum.
+
+    The remedy names the list-of-choices fields, which write the list the array stores: a
+    ``ChoiceField`` writes one value.
+    """
     column = _grouped_array_choice_column(monkeypatch)
-    serializer_cls = type(
-        "ListTagsSer",
-        (serializers.Serializer,),
-        {"tags": serializers.ListField(child=serializers.CharField())},
-    )
+    serializer_cls = type("ListTagsSer", (serializers.Serializer,), {"tags": declared_field})
     field = bound_fields(serializer_cls())["tags"]
     with pytest.raises(ConfigurationError) as exc_info:
         serializer_converter._model_backed_scalar_annotation(field, column, "X")
@@ -2238,6 +2268,35 @@ def test_list_field_over_grouped_array_base_refused(monkeypatch: pytest.MonkeyPa
         "ListTagsSer",
         "tags",
         "Category.tags",
+        declared="MultipleChoiceField or ListField(child=ChoiceField)",
+    )
+
+
+def test_generated_list_of_choices_over_grouped_array_base_refused(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The ``ListField(child=ChoiceField)`` DRF generates over the array is refused.
+
+    Its child carries the ``base_field``'s flattened choices, so the per-element value check
+    passes; as a generated field it takes the grouped read enum, and the remedy names the
+    declared list-of-choices fields.
+    """
+    column = _grouped_array_choice_column(monkeypatch)
+
+    class GeneratedTagsSer(serializers.Serializer[object]):
+        @override
+        def get_fields(self) -> dict[str, DRFField]:
+            child = serializers.ChoiceField(choices=_GROUPED_CHOICES)
+            return {"tags": serializers.ListField(child=child)}
+
+    field = bound_fields(GeneratedTagsSer())["tags"]
+    with pytest.raises(ConfigurationError) as exc_info:
+        serializer_converter._model_backed_scalar_annotation(field, column, "X")
+    assert str(exc_info.value) == _grouped_read_enum_refusal(
+        "GeneratedTagsSer",
+        "tags",
+        "Category.tags",
+        declared="MultipleChoiceField or ListField(child=ChoiceField)",
     )
 
 

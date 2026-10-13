@@ -62,4 +62,5 @@ def require_drf() -> ModuleType:
 # guarded ``ImportError`` when DRF is absent (the root ``__getattr__`` reaches
 # ``rest_framework.sets`` through this package, so the guard fires before the
 # DRF-importing submodule loads).
-require_drf()
+_drf = require_drf()
+del _drf  # only the raise is wanted; the module stays out of this namespace

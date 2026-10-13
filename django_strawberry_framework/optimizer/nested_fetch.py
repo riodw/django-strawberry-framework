@@ -218,7 +218,7 @@ class RecognizedFetchQuerySet(QuerySet[models.Model, models.Model]):
         if self._result_cache is None:
             rows = self._fetch_recognized_rows()
             if rows is not None:
-                self._result_cache = rows
+                self._result_cache: list[models.Model] | None = rows
         # The superclass call is a no-op on a populated cache except for the
         # nested ``prefetch_related`` pass - which recognized rows need too
         # (single-parent rows are usually already populated because the
@@ -380,7 +380,7 @@ class WindowedPrefetchStrategy:
     a lateral single-parent variant is out of v1 scope.
     """
 
-    name = "windowed"
+    name: str = "windowed"
 
     def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan) -> bool:
         """Window the child queryset and carry it as a ``to_attr`` Prefetch."""
@@ -414,7 +414,7 @@ class AutoNestedConnectionStrategy:
     cannot mix backend-specific planning modes.
     """
 
-    name = "auto"
+    name: str = "auto"
 
     def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan) -> bool:
         """Attach a fetch-time vendor-aware, lateral-capable windowed prefetch."""

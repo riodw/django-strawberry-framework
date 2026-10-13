@@ -77,7 +77,7 @@ CSRF check refused it.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from asgiref.sync import markcoroutinefunction
 from cross_web import HTTPException
@@ -134,18 +134,21 @@ class GraphQLRequestBodyBoundaryMiddleware:
     #: Declared for both chains so Django adapts nothing: an async deployment
     #: keeps its coroutine view dispatch, and ``__acall__`` awaits downstream
     #: rather than handing a coroutine to a synchronous caller.
-    sync_capable = True
-    async_capable = True
+    sync_capable: ClassVar[bool] = True
+    async_capable: ClassVar[bool] = True
 
     def __init__(
         self,
         get_response: Callable[[HttpRequest], HttpResponseBase | Awaitable[HttpResponseBase]],
     ) -> None:
         """Bind the downstream chain and refuse a chain that cannot deliver the ordering."""
-        self.get_response = get_response
+        self.get_response: Callable[
+            [HttpRequest],
+            HttpResponseBase | Awaitable[HttpResponseBase],
+        ] = get_response
         _require_boundary_before_csrf()
         if is_marked_coroutine_function(self.get_response):
-            markcoroutinefunction(self)
+            _ = markcoroutinefunction(self)
 
     def __call__(self, request: HttpRequest) -> HttpResponseBase | Awaitable[HttpResponseBase]:
         """Publish the request this middleware is handling, then call downstream.

@@ -5,7 +5,7 @@ rules still switched off and the `# pyright: ignore[...]` comments still in the 
 Each item is fixed at the root, gated (both passes 0 errors, full suite in one pass at 100% coverage), then committed.
 A split suite run on a tree other sessions are editing can drop modules from every part, so it is not a coverage gate.
 
-Progress: 21 done, 8 to do. Ignore comments: 1037 lines (1897 at the start of 0.0.15's ignore sweep).
+Progress: 21 done, 8 to do. Ignore comments: 1038 lines (1897 at the start of 0.0.15's ignore sweep).
 
 ## Pre-commit (`uvx pre-commit run --all-files`, 7d8d1d72, clean clone)
 
@@ -73,9 +73,10 @@ of them.
   boundary stays here: `scripts/_kanban_lib.py::fetch_graphql_data` returns `dict[str, Any]`, and the `TypedDict`
   payloads it feeds (`IdRow`, `LabelRef`, ...) are only as true as that `Any`; retyping it to `object` needs a runtime
   validator that narrows the payload into those `TypedDict`s, keeping today's behavior on a malformed response
-- [ ] 8. `reportUnannotatedClassAttribute`: 8531 (package 164, tests 6684, examples 1681, scripts 0, root 2); on for
-  scripts/ (its execution environment in `pyproject.toml`)
-- [ ] 9. `reportUnusedCallResult`: 4782 (package 80, tests 2897, examples 1527, scripts 245, root 33)
+- [ ] 8. `reportUnannotatedClassAttribute`: 8367 (package 0, tests 6684, examples 1681, scripts 0, root 2); on for
+  scripts/ and the package (their execution environments in `pyproject.toml`)
+- [ ] 9. `reportUnusedCallResult`: 4702 (package 0, tests 2897, examples 1527, scripts 245, root 33); on for the
+  package
 - [ ] 10. `reportUnusedParameter`: 1777 (package 77, tests 1124, examples 571, scripts 0, root 5); on for scripts/
 
 Off by design (not planned): `reportImplicitStringConcatenation`, `reportPrivateUsage`, `reportUnusedFunction`,

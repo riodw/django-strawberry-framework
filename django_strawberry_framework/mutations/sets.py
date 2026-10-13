@@ -887,7 +887,7 @@ class _ValidatedMutationMeta:
     a new mutation class).
     """
 
-    __slots__ = (
+    __slots__: tuple[str, ...] = (
         "_sealed",
         "exclude",
         "fields",
@@ -923,7 +923,7 @@ class _ValidatedMutationMeta:
         select_for_update: bool = False,
         nested_fields: Mapping[str, NestedSerializerConfig] | None = None,
     ) -> None:
-        self._sealed = False
+        self._sealed: bool = False
         self.model: type[models.Model] | None = model
         self.operation: str = operation
         self.input_class: type[WithStrawberryObjectDefinition] | None = input_class

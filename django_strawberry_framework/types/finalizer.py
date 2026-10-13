@@ -541,7 +541,7 @@ def _suppress_relation_list_form(type_cls: type[DjangoType], name: str) -> None:
     contract) may re-enter synthesis with the field already suppressed, and
     must not ``KeyError`` / ``AttributeError`` on the second pass.
     """
-    type_cls.__annotations__.pop(name, None)
+    _ = type_cls.__annotations__.pop(name, None)
     if name in type_cls.__dict__:
         delattr(type_cls, name)
 
@@ -600,7 +600,7 @@ def _register_relation_connection_teardown(
             delattr(type_cls, generated)
 
         if definition.relation_connections is not None:
-            definition.relation_connections.pop(generated, None)
+            _ = definition.relation_connections.pop(generated, None)
             if not definition.relation_connections:
                 definition.relation_connections = None
         # Raw ``__dict__`` on purpose: the three branches below key off the entry
@@ -626,7 +626,7 @@ def _register_relation_connection_teardown(
             # current: drop the synthesized sibling's annotation and, for a
             # ``"connection"`` shape, restore the suppressed relation
             # annotation when its slot is still absent.
-            current_annotations.pop(generated, None)
+            _ = current_annotations.pop(generated, None)
             if (
                 shape == "connection"
                 and relation_name not in current_annotations
@@ -1150,7 +1150,7 @@ def finalize_django_types() -> None:
         loaded_attr("django_strawberry_framework.auth.mutations", "bind_auth_mutations"),
     )
     if bind_auth is not None:
-        bind_auth()
+        _ = bind_auth()
     bind_mutations()
     # Bind plain ``DjangoFormMutation`` declarations (spec-038 Decision
     # 6 / Decision 13) in the SAME phase-2.5 window. The model-less plain-form
@@ -1184,7 +1184,7 @@ def finalize_django_types() -> None:
         # A lazy ``Meta.description`` renders here, once, in the active language;
         # GraphQL schema descriptions are plain strings.
         description = None if definition.description is None else str(definition.description)
-        strawberry.type(type_cls, name=definition.name, description=description)
+        _ = strawberry.type(type_cls, name=definition.name, description=description)
         definition.finalized = True
 
     registry.mark_finalized()
@@ -1888,7 +1888,7 @@ class _SidecarBindingSpec(Generic[_SetT]):
 
 def _expand_filterset(filterset_cls: type[FilterSet]) -> None:
     """Layer-4 filterset expansion (resolves lazy ``RelatedFilter`` refs)."""
-    filterset_cls.get_filters()
+    _ = filterset_cls.get_filters()
 
 
 def _expand_orderset(orderset_cls: type[OrderSet]) -> None:
@@ -1903,7 +1903,7 @@ def _expand_orderset(orderset_cls: type[OrderSet]) -> None:
     subpass-2 boundary -- so an unresolved ``RelatedOrder('...')`` rewraps as
     ``ConfigurationError`` with ``__cause__`` preserved here.
     """
-    orderset_cls.get_fields()
+    _ = orderset_cls.get_fields()
     for related in orderset_cls.related_orders.values():
         _ = related.orderset
 

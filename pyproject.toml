@@ -276,7 +276,9 @@ max-line-length = 110
 # bug-hunt cycle creates and deletes at closeout. tests/ imports the fakeshop apps the way
 # pytest's `pythonpath` does, through the extra path; it stays in the root environment
 # because an environment rooted at tests/ lets tests/rest_framework and tests/types shadow
-# DRF and the stdlib.
+# DRF and the stdlib. An environment's root resolves imports before anything else, so the
+# package's rest_framework/ subpackage takes its own environment, listed first: rooted at
+# the package it would shadow DRF for its own modules.
 include = ["."]
 extraPaths = ["examples/fakeshop"]
 exclude = [
@@ -292,6 +294,12 @@ executionEnvironments = [
         "examples/fakeshop",
         ".",
     ], reportUnannotatedClassAttribute = "error", reportUnusedParameter = "error" },
+    { root = "django_strawberry_framework/rest_framework", extraPaths = [
+        ".",
+    ], reportUnannotatedClassAttribute = "error", reportUnusedCallResult = "error" },
+    { root = "django_strawberry_framework", extraPaths = [
+        ".",
+    ], reportUnannotatedClassAttribute = "error", reportUnusedCallResult = "error" },
     { root = "examples/fakeshop" },
 ]
 pythonVersion = "3.11"
@@ -312,8 +320,9 @@ reportUnusedFunction = "none"
 reportImportCycles = "none"
 reportUninitializedInstanceVariable = "none"
 # Off until their remaining sites are fixed (the ratchet): turn one on to list them.
-# reportUnannotatedClassAttribute and reportUnusedParameter are on for scripts/ (its
-# execution environment above).
+# reportUnannotatedClassAttribute is on for scripts/ and django_strawberry_framework/,
+# reportUnusedParameter for scripts/, and reportUnusedCallResult for the package (their
+# execution environments above).
 reportAny = "none"
 reportUnannotatedClassAttribute = "none"
 reportUnusedCallResult = "none"

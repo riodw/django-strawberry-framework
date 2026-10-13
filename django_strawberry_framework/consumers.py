@@ -801,12 +801,12 @@ class _ConnectionRevocation:
     attempt.
     """
 
-    __slots__ = ("attempt", "attempts", "state")
+    __slots__: tuple[str, ...] = ("attempt", "attempts", "state")
 
     def __init__(self) -> None:
-        self.state = _REVOCATION_PERMITTED
+        self.state: str = _REVOCATION_PERMITTED
         self.attempt: asyncio.Task[None] | None = None
-        self.attempts = 0
+        self.attempts: int = 0
 
     @property
     def revoked(self) -> bool:
@@ -880,7 +880,7 @@ class _ConnectionRevocation:
         try:
             await asyncio.shield(self.attempt)
         except asyncio.CancelledError:
-            self.attempt.cancel()
+            _ = self.attempt.cancel()
             # Suppressed, not swallowed: the attempt answers a cancellation it was
             # handed with ``CancelledError`` of its own, and re-raising the caller's
             # below is what propagates the one that matters.
@@ -1572,11 +1572,11 @@ class _StopAwareSchema:
     rather than a delegation to the real schema.
     """
 
-    __slots__ = ("_consumer", "_schema")
+    __slots__: tuple[str, ...] = ("_consumer", "_schema")
 
     def __init__(self, schema: BaseSchema, consumer: _RevocationOwner) -> None:
-        self._schema = schema
-        self._consumer = consumer
+        self._schema: BaseSchema = schema
+        self._consumer: _RevocationOwner = consumer
 
     # basedpyright: verbatim forward to BaseSchema.subscribe; uncapped strawberry may add params
     async def subscribe(self, *args: Any, **kwargs: Any) -> AsyncGenerator[object, None]:  # pyright: ignore[reportExplicitAny]
@@ -2134,9 +2134,11 @@ def build_revalidating_consumer_class(
         above own.
         """
 
-        graphql_transport_ws_handler_class = _RevalidatingTransportWSHandler
-        graphql_ws_handler_class = _RevalidatingGraphQLWSHandler
-        websocket_adapter_class = _RevocationGatedWebSocketAdapter
+        graphql_transport_ws_handler_class: type[_TransportWSHandlerShape] = (
+            _RevalidatingTransportWSHandler
+        )
+        graphql_ws_handler_class: type[_GraphQLWSHandlerShape] = _RevalidatingGraphQLWSHandler
+        websocket_adapter_class: type[WebSocketAdapterShape] = _RevocationGatedWebSocketAdapter
 
         def __init__(
             self,
@@ -2147,8 +2149,8 @@ def build_revalidating_consumer_class(
             # Stored BEFORE ``super().__init__``: upstream's initializer starts
             # the consumer's own machinery, and the checkpoints read both of these
             # off the view / adapter's consumer.
-            self.revalidation_window = revalidation_window
-            self._revocation = _ConnectionRevocation()
+            self.revalidation_window: float = revalidation_window
+            self._revocation: _ConnectionRevocation = _ConnectionRevocation()
             super().__init__(*args, **kwargs)
 
         @override
@@ -2291,7 +2293,7 @@ class DjangoWebSocketHostValidator:
     """
 
     def __init__(self, application: ASGI3Application) -> None:
-        self.application = application
+        self.application: ASGI3Application = application
 
     async def __call__(
         self,
@@ -2301,7 +2303,7 @@ class DjangoWebSocketHostValidator:
     ) -> None:
         """Validate the handshake's ``Host`` through Django, then delegate or deny."""
         try:
-            _host_validation_request(scope).get_host()
+            _ = _host_validation_request(scope).get_host()
         except DisallowedHost:
             # The ONLY exception normalized into a denial, and the denial is
             # Channels' own consumer rather than a package-authored close, so a

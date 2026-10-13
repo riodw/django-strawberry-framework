@@ -241,7 +241,7 @@ class Settings:
         if user_settings is None:
             self._user_settings: dict[object, object] | None = None
             self._live_source: object = _LIVE_UNSET
-            self._django_backed = True
+            self._django_backed: bool = True
         else:
             self._user_settings = _normalize_user_settings(user_settings)
             self._live_source = _LIVE_UNSET

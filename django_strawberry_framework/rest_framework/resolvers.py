@@ -563,7 +563,7 @@ def serializer_errors_to_field_errors(
             break
         if not descended:
             active.discard(id(node))
-            frames.pop()
+            _ = frames.pop()
     if not flattened and not prefix:
         return [empty_validation_error(prefix)]
     return flattened
@@ -899,7 +899,7 @@ def _frozen_hook_view(value: object) -> object:
             break
         if descended:
             continue
-        frames.pop()
+        _ = frames.pop()
         active.discard(id(source))
         frozen = _finalize(source, acc)
         memo[id(source)] = frozen
@@ -1670,7 +1670,7 @@ class _RelationIntentLedger:
     during the post-``is_valid()`` identity walk; ``counters`` keeps nested items aligned.
     """
 
-    __slots__ = ("counters", "records")
+    __slots__: tuple[str, ...] = ("counters", "records")
 
     def __init__(self) -> None:
         self.records: dict[str, list[_RelationSnapshot]] = {}
@@ -2199,8 +2199,8 @@ def _write_witness(
     try:
         yield written
     finally:
-        post_save.disconnect(_record, sender=model)
-        pre_save.disconnect(_block_cross_alias)
+        _ = post_save.disconnect(_record, sender=model)
+        _ = pre_save.disconnect(_block_cross_alias)
 
 
 def _checked_saved_result(

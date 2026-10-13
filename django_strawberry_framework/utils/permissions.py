@@ -137,8 +137,8 @@ class ChannelsRequestAdapter:
     """
 
     def __init__(self, request: object, scope: ChannelsScope) -> None:
-        self._request = request
-        self._scope = scope
+        self._request: object = request
+        self._scope: ChannelsScope = scope
 
     @property
     def scope(self) -> ChannelsScope:
@@ -461,7 +461,7 @@ def invoke_permission_method(
             "or remove the attribute.",
         )
     if method is not None:
-        reject_async_in_sync_context(
+        _ = reject_async_in_sync_context(
             method(request),
             owner=type(bare_instance).__name__,
             method=method_name,

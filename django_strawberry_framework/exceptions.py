@@ -330,9 +330,9 @@ class PathResolutionError(ConfigurationError):
             f"Cannot classify path {_safe_arg_repr(field_path)} on model {model_label}: "
             f"segment {_safe_arg_repr(segment)} is not a traversable model-field relation.",
         )
-        self.model = model
-        self.field_path = field_path
-        self.segment = segment
+        self.model: object = model
+        self.field_path: str = field_path
+        self.segment: str = segment
 
     @override
     def __reduce__(self) -> tuple[object, ...]:
@@ -373,9 +373,9 @@ class LookupValidationError(ConfigurationError):
             f"Invalid lookup expression {_safe_arg_repr(lookup_expr)} for terminal "
             f"{terminal_label}: part {_safe_arg_repr(part)} is not a valid transform or lookup.",
         )
-        self.terminal = terminal
-        self.lookup_expr = lookup_expr
-        self.part = part
+        self.terminal: object = terminal
+        self.lookup_expr: str = lookup_expr
+        self.part: str = part
 
     @override
     def __reduce__(self) -> tuple[object, ...]:

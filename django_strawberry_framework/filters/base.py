@@ -32,7 +32,7 @@ five parity-floor primitives (spec-027 Decision 4):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar, cast, final
 
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -116,6 +116,7 @@ if TYPE_CHECKING:
     from typing import TypeAlias
 
     from django.core.files.uploadedfile import UploadedFile
+    from django.forms.fields import _ClassLevelWidgetT
     from django.utils.datastructures import MultiValueDict
     from django_filters.filterset import BaseFilterSet, FilterSetOptions
     from strawberry.schema import Schema
@@ -541,7 +542,7 @@ class EnumChoiceFilter(_EnumMemberFilterMixin, ChoiceFilter):  # pyright: ignore
     still applies none.
     """
 
-    field_class = _EnumChoiceField
+    field_class: type[_EnumChoiceField] = _EnumChoiceField
 
 
 class EnumLookupFilter(_EnumMemberFilterMixin, CharFilter):
@@ -615,7 +616,9 @@ class RangeField(Field):
         ["", ""],
         ("", ""),
     ]
-    widget = _RangeWidget
+    # basedpyright: django-stubs types a field's class-level ``widget`` as Any: a widget class
+    # here, the instance ``Field.__init__`` builds from it afterwards
+    widget: _ClassLevelWidgetT = _RangeWidget  # pyright: ignore[reportExplicitAny]
 
     @override
     def to_python(self, value: object) -> object:
@@ -628,7 +631,7 @@ class RangeField(Field):
 class RangeFilter(TypedFilter):
     """Filter that consumes a two-element list via `RangeField`."""
 
-    field_class = RangeField
+    field_class: type[RangeField] = RangeField
 
 
 class ListFilterMethod(_EmptyListAwareFilterMethod):
@@ -707,7 +710,7 @@ class _MembershipCSVWidget(BaseCSVWidget):
 class _MembershipCSVField(BaseCSVField):
     """``BaseCSVField`` bound to ``_MembershipCSVWidget``."""
 
-    base_widget_class = _MembershipCSVWidget
+    base_widget_class: type[_MembershipCSVWidget] = _MembershipCSVWidget
 
 
 class MembershipInFilter(BaseInFilter):
@@ -1326,6 +1329,7 @@ class _AbsentGlobalIDMultipleChoiceWidget(SelectMultiple):
         return super().value_from_datadict(data, files, name)
 
 
+@final
 class _GlobalIDMultipleChoiceField(MultipleChoiceField):
     """`MultipleChoiceField` that skips fixed-`choices` validation.
 
@@ -1393,7 +1397,7 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
     the no-constraint path.
     """
 
-    field_class = _GlobalIDMultipleChoiceField
+    field_class: type[_GlobalIDMultipleChoiceField] = _GlobalIDMultipleChoiceField
 
     @override
     def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
@@ -1530,6 +1534,7 @@ def _coerce_relation_identity(filter_instance: Filter, value: object) -> object:
     return coerce_field_value_or_none(column, value)
 
 
+@final
 class _RelationIdentityListField(Field):
     """Form field for a list of raw relation identities: no choice set, no existence check.
 
@@ -1598,7 +1603,7 @@ class RelationPkMultipleFilter(Filter):
     matches nothing. Omission (``None``) is the no-constraint path.
     """
 
-    field_class = _RelationIdentityListField
+    field_class: type[_RelationIdentityListField] = _RelationIdentityListField
 
     @override
     def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
@@ -1676,8 +1681,8 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
     # ``RelatedSetTargetMixin`` parameterization: the slots the shared
     # owner-bind / lazy-target machinery reads. The order
     # twin uses ``("_orderset", "bound_orderset")``.
-    _target_attr = "_filterset"
-    _owner_attr = "bound_filterset"
+    _target_attr: str = "_filterset"
+    _owner_attr: str = "bound_filterset"
     # The owning set the bind records under ``_owner_attr``. Annotation only: the slot stays
     # absent until the bind, which is how ``_bind_owner`` tells a first bind from a re-bind.
     bound_filterset: type[FilterSet]
@@ -1703,11 +1708,11 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
                 "`RelatedFilter` does not accept `lookups=`; the kwarg was "
                 "removed in 0.0.7 because it had no readers.",
             )
-        self._has_explicit_queryset = kwargs.get("queryset") is not None
+        self._has_explicit_queryset: bool = kwargs.get("queryset") is not None
         # basedpyright: the kwargs are forwarded verbatim and ``ModelChoiceFilter.__init__`` owns
         # their validation; it rejects ``object`` kwargs for the ``str | None`` params
         super().__init__(*args, **kwargs)  # pyright: ignore[reportArgumentType]
-        self._filterset = filterset
+        self._filterset: _FilterSetTarget = filterset
 
     def bind_filterset(self, filterset: type[FilterSet]) -> None:
         """Bind the owning `FilterSet` once; subsequent calls are no-ops.

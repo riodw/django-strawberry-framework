@@ -157,7 +157,7 @@ def _close_thread_connections() -> None:
             connection.close()
         handle: _DBAPIConnection | None = connection.connection
         if handle is not None:
-            handle.close()
+            _ = handle.close()
             connection.connection = None
 
 
@@ -173,7 +173,7 @@ async def _outlast_cancellation(done: asyncio.Future[None]) -> None:
     """
     while not done.done():
         with contextlib.suppress(asyncio.CancelledError):
-            await asyncio.wait((done,))
+            _ = await asyncio.wait((done,))
 
 
 class DjangoMutationExecutionContext(ExecutionContext):
@@ -681,7 +681,7 @@ class _RefusedConfiguration(SchemaExtension):
 
     def __init__(self, message: str) -> None:
         super().__init__()
-        self._message = message
+        self._message: str = message
 
     @override
     def on_parse(self) -> Iterator[None]:

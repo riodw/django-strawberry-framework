@@ -142,7 +142,7 @@ def __getattr__(name: str) -> Any:  # pyright: ignore[reportExplicitAny]
 
         from .rest_framework import require_drf
 
-        require_drf()
+        _ = require_drf()
         submodule, attr = target
         return getattr(import_module(submodule, __name__), attr)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

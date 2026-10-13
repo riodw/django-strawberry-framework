@@ -676,7 +676,7 @@ class SerializerMutation(DjangoMutation):
             label="optional_fields",
             flavor="SerializerMutation",
         )
-        resolve_optional_fields(serializer_class, optional_fields, tuple(effective))
+        _ = resolve_optional_fields(serializer_class, optional_fields, tuple(effective))
         # ``Meta.injected_fields``: the auditable, per-field server-data contract.
         # Normalized here (bare-string / duplicate rejected via the shared helper);
         # ``build_input`` subtracts these from the create-required guard and the resolver

@@ -1106,7 +1106,7 @@ class FilterSetMetaclass(_FilterSetMetaclassBase):
         # cannot drift from class-Meta aliasing. The consumer's
         # ``filter_fields`` attribute is left in place. Presence uses
         # ``hasattr`` (inherited Meta attributes count).
-        promote_set_meta_fields(attrs.get("Meta"), fields_alias=FILTERSET_FIELDS_ALIAS)
+        _ = promote_set_meta_fields(attrs.get("Meta"), fields_alias=FILTERSET_FIELDS_ALIAS)
 
         # Upstream's ``__new__`` is typed to return its own metaclass; ``cls`` built it.
         new_class = cast("FilterSetMetaclass", super().__new__(cls, name, bases, attrs))
@@ -1532,14 +1532,14 @@ class _UndeclaredHopSet:
 
     def __init__(self, hop: RelationHop, request: object) -> None:
         """Bind the face to ``hop``'s model and target type, with the walking set's request."""
-        self._meta = filterset.FilterSetOptions()
+        self._meta: filterset.FilterSetOptions = filterset.FilterSetOptions()
         self._meta.model = _hop_model(hop)
         self._owner_definition: DjangoTypeDefinition | None = (
             hop.target_type.__django_strawberry_definition__
             if hop.target_type is not None
             else None
         )
-        self.request = request
+        self.request: object = request
 
 
 def _require_relation_path(owner: type[FilterSet], declared_attr: str, f: RelatedFilter) -> None:
@@ -1730,7 +1730,7 @@ class FilterSet(
     related_filters: ClassVar[dict[str, RelatedFilter]]
 
     # Cache for fully-resolved filters per Layer 4 of Decision 3.
-    _expanded_filters = None
+    _expanded_filters: ClassVar[OrderedDict[str, Filter] | None] = None
     # The immutable expansion snapshot (``ExpansionSnapshot``) owning the
     # expanded filters AND the row-preserving-candidate metadata, published
     # atomically beside ``_expanded_filters`` inside ``get_filters`` under the
@@ -1749,7 +1749,7 @@ class FilterSet(
     _lookup_table: ClassVar[FilterLookupTable | None] = None
     # Recursion guard around `get_filters` so a self-referential
     # `RelatedFilter` does not blow the stack.
-    _is_expanding_filters = False
+    _is_expanding_filters: ClassVar[bool] = False
 
     # Family binding-state descriptor: the single source for the lifecycle attr
     # names `get_filters` (via `expanded_once`) and `registry.clear()` (via
@@ -4326,7 +4326,7 @@ class FilterSet(
         # Derived before any target set is read: a hop whose target does not resolve,
         # or has no registered type, raises here (``_branch_visibility_seed``).
         for hop in type(self)._visibility_hops(filter_instance):
-            self._hop_visible_rows(hop, using)
+            _ = self._hop_visible_rows(hop, using)
         chain = cast("_LeafChain", self._leaf_chain(filter_instance))
         terminal = chain.terminal
         negate = terminal.method is None and terminal.exclude

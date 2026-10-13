@@ -95,7 +95,7 @@ import traceback
 from collections.abc import Iterator, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, NamedTuple, TypedDict, cast
+from typing import TYPE_CHECKING, ClassVar, NamedTuple, TypedDict, cast
 
 from django.conf import settings
 from django.db import connections
@@ -231,7 +231,7 @@ class _CursorCaptureCoordinator:
     """
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
+        self._lock: threading.Lock = threading.Lock()
         self._active: dict[BaseDatabaseWrapper, _ActiveCapture] = {}
 
     def acquire(self, database_connection: "BaseDatabaseWrapper") -> _CaptureToken:
@@ -565,7 +565,7 @@ class _DebugOperationState(OperationState):
     document.
     """
 
-    __slots__ = ("payload", "snapshots")
+    __slots__: tuple[str, ...] = ("payload", "snapshots")
 
     def __init__(self, execution_context: "ExecutionContext") -> None:
         super().__init__(execution_context)
@@ -670,7 +670,7 @@ class DjangoDebugExtension(_OperationBoundExtension[_DebugOperationState]):
     the diagnostic keeping originals is its documented purpose).
     """
 
-    _reconstruction_refusal = (
+    _reconstruction_refusal: ClassVar[str] = (
         "A debug extension is configured when it is constructed; re-running its "
         "__init__ on an instance a schema is already serving requests with would "
         "replace the production-disclosure acknowledgement it was accepted with."
@@ -792,7 +792,7 @@ class DjangoDebugExtension(_OperationBoundExtension[_DebugOperationState]):
         with ExitStack() as stack:
             for database_connection in connections.all():
                 token = _coordinator.acquire(database_connection)
-                stack.callback(_coordinator.release, token)
+                _ = stack.callback(_coordinator.release, token)
                 snapshots.append(
                     _ConnectionSnapshot(
                         database_connection=database_connection,

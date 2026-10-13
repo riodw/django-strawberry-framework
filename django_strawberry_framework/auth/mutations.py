@@ -32,7 +32,7 @@ from __future__ import annotations
 import contextlib
 import functools
 import inspect
-from typing import TYPE_CHECKING, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, TypeAlias, TypeVar, cast, final
 
 import strawberry
 from django.contrib import auth
@@ -224,12 +224,12 @@ class _AuthMutationMetaSnapshot:
     refuse writes and deletes with ``ConfigurationError``.
     """
 
-    __slots__ = ("_sealed", "operation", "permission_classes")
+    __slots__: tuple[str, ...] = ("_sealed", "operation", "permission_classes")
 
     def __init__(self, operation: str, permission_classes: tuple[type[object], ...]) -> None:
-        self._sealed = False
-        self.operation = operation
-        self.permission_classes = permission_classes
+        self._sealed: bool = False
+        self.operation: str = operation
+        self.permission_classes: tuple[type[object], ...] = permission_classes
         self._sealed = True
 
     @override
@@ -537,7 +537,7 @@ def _close_unawaited(awaitable: object) -> None:
     with contextlib.suppress(BaseException):
         close = getattr(awaitable, "close", None)
         if callable(close):
-            close()
+            _ = close()
 
 
 def _authenticated_actor_or_none(request: object) -> _User | None:
@@ -1220,7 +1220,7 @@ def derive_register_fields(user_model: type[AbstractBaseUser]) -> tuple[str, ...
         )
     # Delegate unknown / non-editable / reverse-name rejection to the standard
     # narrowing validation (single-sited message naming field + model).
-    editable_input_fields(user_model, fields=deduped)
+    _ = editable_input_fields(user_model, fields=deduped)
     return deduped
 
 
@@ -1372,11 +1372,13 @@ def _synthesize_register_rider(
     register_fields = derive_register_fields(user_model)
     rider_permission_classes = list(permission_classes)
 
+    @final
     class Register(DjangoMutation):
         """The synthesized register rider: a narrow ``create`` over ``get_user_model()``."""
 
         _auth_surface = "register"
 
+        @final
         class Meta:
             model = user_model
             operation = "create"

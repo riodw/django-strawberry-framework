@@ -84,7 +84,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, ClassVar, TypeVar, cast
 
 import graphql
 from graphql import (
@@ -415,12 +415,12 @@ class _ValueBudget:
     """
 
     def __init__(self, policy: ResourcePolicy) -> None:
-        self.policy = policy
-        self.nodes = 0
-        self.relation_ids_total = 0
-        self.relation_ids_this_field = 0
-        self.upload_count = 0
-        self.upload_bytes = 0
+        self.policy: ResourcePolicy = policy
+        self.nodes: int = 0
+        self.relation_ids_total: int = 0
+        self.relation_ids_this_field: int = 0
+        self.upload_count: int = 0
+        self.upload_bytes: int = 0
 
     def _reject(
         self,
@@ -598,7 +598,7 @@ class _ValueBudget:
                 # whose Python shape does not match its declared input type.
                 # Charged for width and nodes, with no family classification -
                 # the family bounds are type-driven and there is no type here.
-                self._charge_container(
+                _ = self._charge_container(
                     node_value,
                     stack,
                     node_type,
@@ -929,11 +929,11 @@ class _DocumentBudget:
     """Running charges for one request's document shape."""
 
     def __init__(self, policy: ResourcePolicy) -> None:
-        self.policy = policy
-        self.selections = 0
-        self.fragments = 0
-        self.aliases = 0
-        self.cost = 0
+        self.policy: ResourcePolicy = policy
+        self.selections: int = 0
+        self.fragments: int = 0
+        self.aliases: int = 0
+        self.cost: int = 0
 
     def charge_selection(self, aliased: bool) -> None:
         """Charge one expanded field selection, and its alias when it has one."""
@@ -1175,16 +1175,16 @@ class _DocumentWalk:
         graphql_schema: GraphQLSchema,
         fragments: Mapping[str, FragmentDefinitionNode],
     ) -> None:
-        self.policy = policy
-        self.graphql_schema = graphql_schema
-        self.fragments = fragments
-        self.budget = _DocumentBudget(policy)
-        self.values = _ValueBudget(policy)
+        self.policy: ResourcePolicy = policy
+        self.graphql_schema: GraphQLSchema = graphql_schema
+        self.fragments: Mapping[str, FragmentDefinitionNode] = fragments
+        self.budget: _DocumentBudget = _DocumentBudget(policy)
+        self.values: _ValueBudget = _ValueBudget(policy)
         self.expanded: set[str] = set()
         self.unshaped: set[int] = set()
         self.variables: dict[str, object] | None = None
         self.read: set[str] | None = None
-        self.in_mutation = False
+        self.in_mutation: bool = False
 
     def charge_arguments(
         self,
@@ -1553,7 +1553,7 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension[OperationState]):
     enforces nothing.
     """
 
-    _reconstruction_refusal = (
+    _reconstruction_refusal: ClassVar[str] = (
         "A resource-policy extension is configured when it is constructed; "
         "re-running its __init__ on an instance a schema is already enforcing "
         "with would replace the policy it was accepted with."

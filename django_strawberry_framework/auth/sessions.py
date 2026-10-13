@@ -155,7 +155,7 @@ def classify_transport(request: object) -> Transport:
             "Channels request adapter.",
         ) from exc
     if is_channels:
-        require_channels()
+        _ = require_channels()
         adapter = request
         try:
             scope = adapter.scope
@@ -314,7 +314,7 @@ async def scope_session_lock(
         messages=_SCOPE_LOCK_MESSAGES,
     )
     try:
-        await lock.acquire()
+        _ = await lock.acquire()
     except ConfigurationError:
         raise
     except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):

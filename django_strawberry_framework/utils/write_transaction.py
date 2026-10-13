@@ -197,7 +197,7 @@ class WriteAliasContext:
     alias), so no pre-guard permission-cache warming is needed.
     """
 
-    __slots__ = (
+    __slots__: tuple[str, ...] = (
         "alias",
         "auth_aliases",
         "auth_phase",
@@ -691,7 +691,7 @@ def pipeline_alias_guard(owner: str, alias: str) -> Generator[None, None, None]:
         try:
             yield
         finally:
-            pre_save.disconnect(_block_cross_alias_save)
+            _ = pre_save.disconnect(_block_cross_alias_save)
 
 
 def current_write_pipeline() -> WriteAliasContext | None:
@@ -887,10 +887,10 @@ class _FileNameSnapshot(_ValueSnapshot):
     immutable ``name`` string instead makes that drift detectable.
     """
 
-    __slots__ = ("name",)
+    __slots__: tuple[str, ...] = ("name",)
 
     def __init__(self, name: str | None) -> None:
-        self.name = name
+        self.name: str | None = name
 
     @override
     def matches(self, current: object) -> bool:
@@ -926,20 +926,20 @@ class _SnapshotClose:
     ``None``.
     """
 
-    __slots__ = ("container_id", "token")
+    __slots__: tuple[str, ...] = ("container_id", "token")
 
     def __init__(self, token: str, container_id: int | None = None) -> None:
-        self.token = token
-        self.container_id = container_id
+        self.token: str = token
+        self.container_id: int | None = container_id
 
 
 class _FieldFingerprint(_ValueSnapshot):
     """A field value's iterative structural fingerprint (compared by digest, never deep-walked)."""
 
-    __slots__ = ("digest",)
+    __slots__: tuple[str, ...] = ("digest",)
 
     def __init__(self, digest: str) -> None:
-        self.digest = digest
+        self.digest: str = digest
 
     @override
     def matches(self, current: object) -> bool:

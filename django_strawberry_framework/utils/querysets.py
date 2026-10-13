@@ -294,7 +294,7 @@ def _dispose_sync_awaitable(value: object) -> None:
     if inspect.iscoroutine(value):
         value.close()
     elif asyncio.isfuture(value):
-        value.cancel()
+        _ = value.cancel()
 
 
 def model_for(type_cls: type[DjangoType]) -> type[models.Model]:
@@ -505,10 +505,10 @@ class _AsyncQuerySetRows:
     ORM iteration in an event-loop thread.
     """
 
-    __slots__ = ("_queryset",)
+    __slots__: tuple[str, ...] = ("_queryset",)
 
     def __init__(self, queryset: models.QuerySet[models.Model, object]) -> None:
-        self._queryset = queryset
+        self._queryset: models.QuerySet[models.Model, object] = queryset
 
     def __aiter__(self) -> AsyncIterator[object]:
         return self._queryset.__aiter__()
@@ -999,7 +999,7 @@ class _GraphWalk:
     unwinds to the caller immediately, so the entry is never consulted again.
     """
 
-    __slots__ = ("validated", "visiting")
+    __slots__: tuple[str, ...] = ("validated", "visiting")
 
     def __init__(self) -> None:
         self.visiting: set[int] = set()
@@ -2082,7 +2082,7 @@ def _reconstructed_value(value: object, memo: dict[int, object]) -> object:
         # ``base_table`` is a ``cached_property``; ``sql.Query.clone`` drops it so the
         # copy recomputes the first ``alias_map`` alias, and a reconstructed embedded
         # query must recompute it the same way.
-        rebuilt_state.pop("base_table", None)
+        _ = rebuilt_state.pop("base_table", None)
     return rebuilt
 
 

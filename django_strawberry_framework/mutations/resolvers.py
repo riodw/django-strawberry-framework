@@ -1354,7 +1354,7 @@ def save_or_field_errors(save_callable: Callable[[], object]) -> list[FieldError
     the write.
     """
     try:
-        save_callable()
+        _ = save_callable()
     except IntegrityError:
         return integrity_error_field_errors()
     return None

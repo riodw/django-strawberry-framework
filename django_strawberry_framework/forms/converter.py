@@ -91,7 +91,7 @@ class FormFieldConversion(FieldConversionBase):
     value-object shape is the shared ``utils/inputs.py::FieldConversionBase``.
     """
 
-    __slots__ = ()
+    __slots__: tuple[str, ...] = ()
 
 
 # The value shape of every form converter table entry: a ``forms.Field`` in, its

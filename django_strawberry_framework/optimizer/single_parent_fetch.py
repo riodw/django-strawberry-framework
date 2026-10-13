@@ -47,7 +47,7 @@ Two verified corrections to the original idea:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from django.db.models import QuerySet
 from typing_extensions import override
@@ -186,7 +186,7 @@ class SingleParentWindowQuerySet(RecognizedFetchQuerySet):
     another unrecognized shape - the windowed body runs).
     """
 
-    _dst_spec_attr = "_dst_single_parent_spec"
+    _dst_spec_attr: ClassVar[str] = "_dst_single_parent_spec"
     _dst_single_parent_spec: SingleParentWindowSpec | None = None
 
     @override

@@ -15,13 +15,13 @@ from django_strawberry_framework.management.commands._imports import (
 class Command(BaseCommand):
     """Export the GraphQL SDL for a strawberry.Schema symbol."""
 
-    help = "Export the GraphQL schema"
+    help: str = "Export the GraphQL schema"
 
     @override
     def add_arguments(self, parser: CommandParser) -> None:
         """Register the positional schema argument and the optional --path flag."""
-        parser.add_argument("schema", type=str, help="The schema location")
-        parser.add_argument(
+        _ = parser.add_argument("schema", type=str, help="The schema location")
+        _ = parser.add_argument(
             "--path",
             type=str,
             help="Write UTF-8 SDL to this file, overwriting it without prompting",
@@ -65,7 +65,7 @@ class Command(BaseCommand):
         if not isinstance(path, str) or not path.strip():
             raise CommandError("--path requires a non-empty value")
         try:
-            pathlib.Path(path).write_text(schema_output, encoding="utf-8", newline="")
+            _ = pathlib.Path(path).write_text(schema_output, encoding="utf-8", newline="")
         except (OSError, ValueError) as e:
             raise CommandError(str(e)) from e
         self.stdout.write(self.style.SUCCESS(f"Wrote schema to {path}"))

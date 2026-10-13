@@ -152,7 +152,7 @@ class SerializerFieldConversion(FieldConversionBase):
     ``utils/inputs.py::FieldConversionBase``.
     """
 
-    __slots__ = ()
+    __slots__: tuple[str, ...] = ()
 
 
 SerializerFieldConverter = Callable[["DRFField"], SerializerFieldConversion]

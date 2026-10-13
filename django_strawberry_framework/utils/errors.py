@@ -400,7 +400,7 @@ def build_error_key_map(
     result: ErrorKeyMap = {names[0]: value for names, value in entries if names}
     for names, value in entries:
         for alias in names[1:]:
-            result.setdefault(alias, value)
+            _ = result.setdefault(alias, value)
     return result
 
 

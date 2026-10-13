@@ -118,7 +118,8 @@ def require_debug_toolbar() -> ModuleType:
     return require_optional_module("debug_toolbar", install_hint=_DEBUG_TOOLBAR_INSTALL_HINT)
 
 
-require_debug_toolbar()
+_debug_toolbar = require_debug_toolbar()
+del _debug_toolbar  # only the raise is wanted; the module stays out of this namespace
 
 # Second wiring gate (spec-042 Error shapes): the top-level package imports, but
 # the ``debug_toolbar.middleware`` import below reaches

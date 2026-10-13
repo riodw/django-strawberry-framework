@@ -106,7 +106,7 @@ def _require_strategy(name: object) -> StrategySelection:
             "OptimizerHint.strategy(name) requires a strategy name ('windowed' | 'lateral' | 'auto') "
             f"or a NestedConnectionStrategy instance; got {_safe_type_name(name)}.",
         )
-    resolve_strategy(name)
+    _ = resolve_strategy(name)
     # ``resolve_strategy`` raises for anything that is not a strategy selection.
     return cast("StrategySelection", name)
 
@@ -189,7 +189,7 @@ class OptimizerHint:
                 "(use either select_related() or prefetch_related(), not both).",
             )
         if self.prefetch_obj is not None:
-            _require_prefetch(self.prefetch_obj)
+            _ = _require_prefetch(self.prefetch_obj)
             if self.force_select or self.force_prefetch:
                 raise ConfigurationError(
                     "OptimizerHint.prefetch(obj) (prefetch_obj=...) cannot be combined "
@@ -207,7 +207,7 @@ class OptimizerHint:
                 )
             # Route the name through ``_require_strategy`` for typo-loud
             # ConfigurationError parity (module-level import above; no cycle).
-            _require_strategy(self.nested_strategy)
+            _ = _require_strategy(self.nested_strategy)
 
     # ------------------------------------------------------------------
     # Factory classmethods

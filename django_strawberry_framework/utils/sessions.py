@@ -314,7 +314,7 @@ class ConnectionActorState:
     request's own loop.
     """
 
-    __slots__ = ("authenticated_provenance", "lock")
+    __slots__: tuple[str, ...] = ("authenticated_provenance", "lock")
 
     def __init__(self) -> None:
         self.authenticated_provenance: bool = False

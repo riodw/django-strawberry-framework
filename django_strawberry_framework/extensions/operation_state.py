@@ -126,7 +126,7 @@ import contextlib
 import functools
 from collections.abc import Callable, Iterable
 from contextvars import ContextVar, Token
-from typing import TYPE_CHECKING, Any, Generic, NamedTuple, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, NamedTuple, TypeVar, cast
 from weakref import ref
 
 from strawberry.extensions.base_extension import SchemaExtension
@@ -177,6 +177,7 @@ class OperationState:
     """
 
     __slots__: tuple[str, ...] = ("__weakref__", "_resumed_bindings", "execution_context")
+    __weakref__: object
 
     def __init__(self, execution_context: ExecutionContext) -> None:
         self.execution_context: ExecutionContext = execution_context
@@ -364,7 +365,7 @@ class _OperationModeMarker(SchemaExtension):
 
     def __init__(self, mode: OperationMode) -> None:
         super().__init__()
-        self.mode = mode
+        self.mode: OperationMode = mode
 
 
 def _declared_operation_mode(extensions: Iterable[SchemaExtension]) -> OperationMode | None:
@@ -500,7 +501,7 @@ class _OperationBoundExtension(SchemaExtension, Generic[_StateT]):
     #: Refusal raised when a constructor runs twice on one instance. Overridden
     #: by subclasses whose second construction replaces something more specific
     #: than the binding carrier.
-    _reconstruction_refusal = (
+    _reconstruction_refusal: ClassVar[str] = (
         "An extension is configured when it is constructed; re-running its "
         "__init__ on an instance a schema is already serving requests with "
         "would replace the state binding its operations are read through."
@@ -799,7 +800,7 @@ class _BoundScope:
     bindings are reset only once nothing is left to read them.
     """
 
-    __slots__ = (
+    __slots__: tuple[str, ...] = (
         "_bindings",
         "_runner_scope",
         "_scope",
@@ -812,9 +813,9 @@ class _BoundScope:
         states: _OperationStates,
         scope: ExtensionContextManagerBase,
     ) -> None:
-        self._runner_scope = runner_scope
-        self._states = states
-        self._scope = scope
+        self._runner_scope: _RunnerScope = runner_scope
+        self._states: _OperationStates = states
+        self._scope: ExtensionContextManagerBase = scope
         self._bindings: list[_Binding] = []
 
     def __enter__(self) -> None:
@@ -867,15 +868,15 @@ class _ResumedStream(Generic[_FrameT]):
     generator, and an attribute it grows by accident is one nobody reads back.
     """
 
-    __slots__ = ("_runner", "_source")
+    __slots__: tuple[str, ...] = ("_runner", "_source")
 
     def __init__(
         self,
         runner: DjangoExtensionsRunner,
         source: AsyncGenerator[_FrameT, None],
     ) -> None:
-        self._runner = runner
-        self._source = source
+        self._runner: DjangoExtensionsRunner = runner
+        self._source: AsyncGenerator[_FrameT, None] = source
 
     def __aiter__(self) -> _ResumedStream[_FrameT]:
         """Answer for itself, so the bindings cover every frame the caller pulls."""
@@ -938,8 +939,11 @@ class DjangoExtensionsRunner(SchemaExtensionsRunner):
         extensions: list[SchemaExtension] | None = None,
     ) -> None:
         super().__init__(execution_context=execution_context, extensions=extensions)
-        self._operation_states = _operation_states(self.extensions, execution_context)
-        self._operation_mode = _declared_operation_mode(self.extensions)
+        self._operation_states: _OperationStates = _operation_states(
+            self.extensions,
+            execution_context,
+        )
+        self._operation_mode: OperationMode | None = _declared_operation_mode(self.extensions)
         self._runner_scope: _RunnerScope | None = None
 
     def _scope(self) -> _RunnerScope:

@@ -120,13 +120,17 @@ _GRAPHQL_SCALAR_NAMES: dict[object, str] = {
 class Command(BaseCommand):
     """Print the per-field GraphQL resolution table for a finalized DjangoType."""
 
-    help = "Inspect a DjangoType's resolved per-field GraphQL types"
+    help: str = "Inspect a DjangoType's resolved per-field GraphQL types"
 
     @override
     def add_arguments(self, parser: CommandParser) -> None:
         """Register the positional ``type`` argument and the optional ``--schema`` flag."""
-        parser.add_argument("type", type=str, help="DjangoType name or fully-dotted object path")
-        parser.add_argument(
+        _ = parser.add_argument(
+            "type",
+            type=str,
+            help="DjangoType name or fully-dotted object path",
+        )
+        _ = parser.add_argument(
             "--schema",
             type=str,
             help=(

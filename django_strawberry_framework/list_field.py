@@ -290,11 +290,11 @@ class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):  # pyrigh
     ) -> None:
         if reason not in _KNOWN_LIST_ARGUMENT_REASONS:
             raise ValueError(f"Unknown ListArgumentError reason {reason!r}.")
-        self.field = field
-        self.argument = argument
-        self.reason = reason
-        self.ceiling = ceiling
-        self.order_argument = order_argument
+        self.field: str = field
+        self.argument: str = argument
+        self.reason: _ListArgumentReason = reason
+        self.ceiling: int | None = ceiling
+        self.order_argument: str | None = order_argument
 
         if reason == "non_integer":
             self.value: object = value if isinstance(value, str) else describe_value(value)

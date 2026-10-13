@@ -1519,7 +1519,7 @@ async def _attach_count_async(
         # ``_guard_total_count_countable`` raised for a non-QuerySet under ``want_count``; a
         # raising guard in another function cannot narrow ``nodes`` here
         counted = cast("models.QuerySet[models.Model, object]", nodes)
-        _set_total_count(conn, want_count=True, value=await counted.acount())
+        _ = _set_total_count(conn, want_count=True, value=await counted.acount())
     return conn
 
 

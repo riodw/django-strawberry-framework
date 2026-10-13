@@ -153,10 +153,10 @@ class ResourceLimitExceeded(GraphQLError, DjangoStrawberryFrameworkError):  # py
                 charged=charged,
             ),
         )
-        self.bound = bound
-        self.limit = limit
-        self.charged = charged
-        self.detail = detail
+        self.bound: str = bound
+        self.limit: int = limit
+        self.charged: int = charged
+        self.detail: str = detail
 
     @override
     def __reduce__(self) -> tuple[object, ...]:
@@ -539,7 +539,7 @@ class _AdmissionVerdict:
     this is what says so.
     """
 
-    __slots__ = ("rejection",)
+    __slots__: tuple[str, ...] = ("rejection",)
 
     def __init__(self) -> None:
         self.rejection: ResourceLimitExceeded | None = None
@@ -625,7 +625,7 @@ class _BudgetScope:
     is built, by whoever adopts it.
     """
 
-    __slots__ = ("adopted", "lease", "token")
+    __slots__: tuple[str, ...] = ("adopted", "lease", "token")
 
     def __init__(
         self,

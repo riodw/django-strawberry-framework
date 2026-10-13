@@ -183,7 +183,7 @@ class _ExecutionFrame:
     and an attribute grown by a typo is a memo nothing would ever read back.
     """
 
-    __slots__ = (
+    __slots__: tuple[str, ...] = (
         "converted",
         "key_parts",
         "optimizer",
@@ -205,11 +205,11 @@ class _ExecutionFrame:
         strategy: NestedConnectionStrategy | None,
         strictness: str | None,
     ) -> None:
-        self.stashes = stashes
-        self.publishes_to_context = publishes_to_context
-        self.optimizer = optimizer
-        self.strategy = strategy
-        self.strictness = strictness
+        self.stashes: dict[str, object] = stashes
+        self.publishes_to_context: bool = publishes_to_context
+        self.optimizer: DjangoOptimizerExtension | None = optimizer
+        self.strategy: NestedConnectionStrategy | None = strategy
+        self.strictness: str | None = strictness
         self.scoped_relations: set[str] = set()
         self.window_cursor_states: dict[str, CursorState] = {}
         self.plans: dict[PlanCacheKey, OptimizationPlan] = {}

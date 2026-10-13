@@ -373,7 +373,7 @@ def _ensure_field_specs(orderset_cls: type[OrderSet], input_value: object) -> No
     if callable(getattr(orderset_cls, "get_fields", None)) and not any(
         owner is orderset_cls for owner, _ in _field_specs
     ):
-        _build_input_fields(orderset_cls)
+        _ = _build_input_fields(orderset_cls)
 
 
 def materialize_input_class(name: str, input_cls: type[object]) -> None:

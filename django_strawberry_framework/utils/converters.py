@@ -54,7 +54,7 @@ class _MroContinue:
     registry can still run.
     """
 
-    __slots__ = ()
+    __slots__: tuple[str, ...] = ()
 
     @override
     def __repr__(self) -> str:

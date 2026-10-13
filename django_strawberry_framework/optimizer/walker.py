@@ -345,7 +345,7 @@ def _build_forward_names(
         candidate = graphql_names.get(generated)
         if candidate is None:
             candidate = to_camel_case(generated)
-        connections.setdefault(candidate, relation_name)
+        _ = connections.setdefault(candidate, relation_name)
     fields: dict[str, tuple[str, FieldMeta]] = {}
     for field in field_map.values():
         django_name: str | None = getattr(field, "name", None)
@@ -354,7 +354,7 @@ def _build_forward_names(
         candidate = graphql_names.get(django_name)
         if candidate is None:
             candidate = to_camel_case(django_name)
-        fields.setdefault(candidate, (django_name, field))
+        _ = fields.setdefault(candidate, (django_name, field))
     return _ForwardNames(converter, connections, fields)
 
 

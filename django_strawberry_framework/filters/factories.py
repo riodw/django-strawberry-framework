@@ -61,12 +61,12 @@ class FilterArgumentsFactory(GeneratedInputArgumentsFactory[FilterSet]):
     input_object_types: ClassVar[dict[str, type[object]]] = {}
     _type_filterset_registry: ClassVar[dict[str, type[FilterSet]]] = {}
 
-    _collision_registry_attr = "_type_filterset_registry"
-    _factory_label = "FilterArgumentsFactory"
-    _family_label = "FilterSet"
-    _rename_noun = "filterset"
-    _related_attr = "related_filters"
-    _related_target_attr = "filterset"
+    _collision_registry_attr: ClassVar[str] = "_type_filterset_registry"
+    _factory_label: ClassVar[str] = "FilterArgumentsFactory"
+    _family_label: ClassVar[str] = "FilterSet"
+    _rename_noun: ClassVar[str] = "filterset"
+    _related_attr: ClassVar[str] = "related_filters"
+    _related_target_attr: ClassVar[str] = "filterset"
 
     @override
     def _build_input_triples(

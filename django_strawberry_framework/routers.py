@@ -224,7 +224,7 @@ def _validated_websocket_url_pattern(value: object) -> str:
             f"{_INVALID_WEBSOCKET_URL_PATTERN_HINT}{describe_value(value)}.",
         )
     try:
-        re.compile(value)
+        _ = re.compile(value)
     except BaseException as exc:
         raise ConfigurationError(
             f"{_INVALID_WEBSOCKET_URL_PATTERN_HINT}{describe_value(value)}.",
@@ -263,7 +263,7 @@ def _require_factory_calling_convention(
     except Exception:
         return
     try:
-        signature.bind(schema=schema)
+        _ = signature.bind(schema=schema)
     except TypeError as exc:
         raise ConfigurationError(
             f"{_FACTORY_CONTRACT_HINT} The factory {describe_value(factory)} cannot accept "
@@ -400,7 +400,7 @@ def _build_router_class_uncached() -> type[ProtocolTypeRouter]:
     """
     global _router_class
 
-    require_channels()
+    _ = require_channels()
 
     try:
         from channels.auth import AuthMiddlewareStack

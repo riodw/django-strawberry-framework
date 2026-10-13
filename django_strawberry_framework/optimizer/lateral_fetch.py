@@ -73,7 +73,7 @@ adaptation semantics and was the source of incorrect parent-key fidelity.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from django.core.exceptions import EmptyResultSet, FullResultSet
 from django.db import connections
@@ -491,7 +491,7 @@ class LateralQuerySet(RecognizedFetchQuerySet):
     supplies the lateral spec slot and the ``_fetch_lateral_rows`` recognizer.
     """
 
-    _dst_spec_attr = "_dst_lateral_spec"
+    _dst_spec_attr: ClassVar[str] = "_dst_lateral_spec"
     _dst_lateral_spec: LateralWindowSpec | None = None
 
     @override
@@ -575,7 +575,7 @@ def _deduplicate_parent_ids(parent_ids: list[object]) -> list[object]:
     """De-duplicate hashable parent ids; discard NULL ids that cannot match a branch."""
     try:
         unique = dict.fromkeys(parent_ids)
-        unique.pop(None, None)
+        _ = unique.pop(None, None)
         return list(unique)
     except TypeError:
         # Unhashable values cannot be represented by the ordered dict, so
@@ -987,7 +987,7 @@ class LateralPrefetchStrategy:
     fetch-time surprise is windowed performance.
     """
 
-    name = "lateral"
+    name: str = "lateral"
 
     def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan) -> bool:
         """Attach the lateral-capable windowed prefetch (or downgrade)."""

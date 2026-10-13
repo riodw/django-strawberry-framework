@@ -1472,7 +1472,7 @@ class GeneratedInputArgumentsFactory(Generic[_FactorySetT]):
 
     def __init__(self, set_class: type[_FactorySetT]) -> None:
         """Store the root set class and its class-derived input type name."""
-        self.set_class = set_class
+        self.set_class: type[_FactorySetT] = set_class
         self.input_type_name: str = set_input_type_name(set_class)
 
     @property

@@ -619,7 +619,7 @@ def _index_advisory_already_emitted(key: _IndexAdvisoryKey) -> bool:
     _index_advisory_seen[key] = None
     if len(_index_advisory_seen) > _MAX_INDEX_ADVISORY_KEYS:
         with suppress(KeyError):
-            _index_advisory_seen.popitem(last=False)
+            _ = _index_advisory_seen.popitem(last=False)
     return False
 
 
@@ -986,7 +986,7 @@ def _keyset_window_slice_from_arguments(
             )
             seek = KeysetSeek(columns=columns, cursor=cursor)
         if before is not None:
-            decode_keyset_cursor(
+            _ = decode_keyset_cursor(
                 before,
                 columns,
                 fingerprint=fingerprint,
@@ -1375,7 +1375,7 @@ def plan_connection_relation(
     join = classify_relation_join(raw_relation_field)
     if not join.windowable:
         if keyset_context is not None:
-            settle(argument_pass)
+            _ = settle(argument_pass)
         return NestedConnectionPlanResult(plan=plan)
 
     # (a) Unwrap edges { node }; scalar-only selections plan with [] node children.
@@ -1411,7 +1411,7 @@ def plan_connection_relation(
     )
     if unwindowable_child_queryset_reason(base_queryset) is not None:
         if keyset_context is not None:
-            settle(argument_pass)
+            _ = settle(argument_pass)
         return NestedConnectionPlanResult(plan=plan)
 
     # (c) Build the child plan/queryset exactly like the list prefetch path, but
@@ -1505,7 +1505,7 @@ def plan_connection_relation(
                 order_by,
             )
         except GraphQLError:
-            settle(argument_pass)
+            _ = settle(argument_pass)
             _log_connection_fallback(
                 relation_field_name,
                 _response_keys(sel),

@@ -161,7 +161,7 @@ class _NormalizationLedger:
     -- or hold an input object alive -- past the resolution it belongs to.
     """
 
-    __slots__ = (
+    __slots__: tuple[str, ...] = (
         "_claimed",
         "_closed",
         "_lock",
@@ -169,10 +169,10 @@ class _NormalizationLedger:
     )
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
+        self._lock: threading.Lock = threading.Lock()
         self._records: list[_AppliedNormalization] = []
         self._claimed: list[tuple[type[OrderSet], object]] = []
-        self._closed = False
+        self._closed: bool = False
 
     def publish(self, record: _AppliedNormalization) -> None:
         """Append one attestation. Never replaces or removes another.
@@ -382,7 +382,7 @@ class OrderSetMetaclass(type):
         # No cookbook ``order_fields`` synonym (``fields_alias=None``); the
         # call still goes through the shared write-back so FilterSet / OrderSet
         # class Meta cannot grow divergent field-fingerprint rules.
-        promote_set_meta_fields(attrs.get("Meta"))
+        _ = promote_set_meta_fields(attrs.get("Meta"))
         new_class = super().__new__(cls, name, bases, attrs)
 
         # Collect the ``RelatedOrder`` declarations and bind each to the new
@@ -392,7 +392,7 @@ class OrderSetMetaclass(type):
         # first (reverse iteration lets earlier bases win) before the class
         # body's own ``attrs`` override - the behavior of
         # ``django_graphene_filters/orderset.py::OrderSetMetaclass.__new__``.
-        collect_related_declarations(
+        _ = collect_related_declarations(
             new_class,
             bases,
             own_items=attrs.items(),
@@ -451,7 +451,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
     # build never re-enters ``get_fields`` -- ``_expand_meta_fields`` expands
     # this class's own ``Meta.fields`` and never calls ``get_fields`` on a
     # ``RelatedOrder`` target -- so the order side passes no ``on_reentry``.
-    _is_expanding_fields = False
+    _is_expanding_fields: ClassVar[bool] = False
 
     # Family binding-state descriptor: the single source for the lifecycle attr
     # names ``get_fields`` (via ``expanded_once``) and ``registry.clear()`` (via
@@ -621,7 +621,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
                 )
             if model is not None:
                 try:
-                    classify_path(model, field_path)
+                    _ = classify_path(model, field_path)
                 except PathResolutionError as exc:
                     raise ConfigurationError(
                         f"OrderSet {cls.__qualname__}.Meta.fields contains invalid "

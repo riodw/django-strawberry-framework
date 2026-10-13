@@ -33,7 +33,7 @@ from __future__ import annotations
 import contextlib
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast, overload
 
 from asgiref.sync import sync_to_async
 from django.test import AsyncClient, Client, TestCase, TransactionTestCase
@@ -130,11 +130,11 @@ class _GraphQLTestClientBase(BaseGraphQLTestClient, Generic[_ClientT]):
     # without this pytest tries to collect them as test suites and warns - a
     # hard failure under the repo's ``-W error`` posture. Upstream carries the
     # same guard.
-    __test__ = False
+    __test__: ClassVar[bool] = False
 
     def __init__(self, path: str | None, client: _ClientT) -> None:
         resolved = path if path is not None else testing_endpoint_setting()
-        self.path = resolved
+        self.path: str = resolved
         # Forward the resolved endpoint as the base's ``url`` too, so the
         # inherited attribute never reads the base default while ``path``
         # reads the real endpoint. ``path`` stays the documented surface.

@@ -232,7 +232,7 @@ class PrivateMembership(Generic[MemberT]):
     """
 
     def __init__(self, attribute: str) -> None:
-        self._attribute = attribute
+        self._attribute: str = attribute
         self._accepted: dict[int, _Accepted[MemberT]] = {}
 
     def accept(self, owner: object, members: Iterable[MemberT]) -> None:

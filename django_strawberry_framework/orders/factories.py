@@ -64,12 +64,12 @@ class OrderArgumentsFactory(GeneratedInputArgumentsFactory[OrderSet]):
     input_object_types: ClassVar[dict[str, type[object]]] = {}
     _type_orderset_registry: ClassVar[dict[str, type[OrderSet]]] = {}
 
-    _collision_registry_attr = "_type_orderset_registry"
-    _factory_label = "OrderArgumentsFactory"
-    _family_label = "OrderSet"
-    _rename_noun = "orderset"
-    _related_attr = "related_orders"
-    _related_target_attr = "orderset"
+    _collision_registry_attr: ClassVar[str] = "_type_orderset_registry"
+    _factory_label: ClassVar[str] = "OrderArgumentsFactory"
+    _family_label: ClassVar[str] = "OrderSet"
+    _rename_noun: ClassVar[str] = "orderset"
+    _related_attr: ClassVar[str] = "related_orders"
+    _related_target_attr: ClassVar[str] = "orderset"
 
     @override
     def _build_input_triples(

@@ -59,7 +59,8 @@ class OperationLease(Generic[PayloadT]):
     construction and the only supported change is closing it.
     """
 
-    __slots__ = ("__weakref__", "_payload")
+    __slots__: tuple[str, ...] = ("__weakref__", "_payload")
+    __weakref__: object
 
     def __init__(self, payload: PayloadT) -> None:
         self._payload: PayloadT | None = payload

@@ -351,7 +351,7 @@ def _validate_cursor_field(
             f"sequence of order strings; got {_safe_arg_repr(value)}",
         )
     owner = f"{model.__name__}.Meta.cursor_field"
-    validate_cursor_field_references(entries, owner=owner)
+    _ = validate_cursor_field_references(entries, owner=owner)
     if not relay_shaped:
         raise ConfigurationError(
             f"{model.__name__}.Meta.cursor_field {_RELAY_NODE_GATE_LEAD} "
@@ -518,7 +518,7 @@ def _validate_globalid_callable(subject: str, value: Callable[..., object]) -> N
             f"got an `async def`. Expected `(type_cls, model, root) -> str`.",
         )
     try:
-        inspect.signature(value).bind(*_GLOBALID_CALLABLE_PARAMS)
+        _ = inspect.signature(value).bind(*_GLOBALID_CALLABLE_PARAMS)
     except (TypeError, ValueError) as exc:
         raise ConfigurationError(
             f"{subject} callable encoder must accept "
@@ -791,7 +791,7 @@ class DjangoType:
         # sentinel so ``{**synthesized, **consumer_annotations}`` below resolves them to
         # the model-inferred annotation rather than ``Any``.
         for name in auto_annotated_fields:
-            consumer_annotations.pop(name, None)
+            _ = consumer_annotations.pop(name, None)
         # Four-corner consumer-override contract: relation/scalar x annotation/
         # assignment. Full enumeration of the contract lives on the
         # ``_consumer_assigned_fields`` docstring; this union is the single

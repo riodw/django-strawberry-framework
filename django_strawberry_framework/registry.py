@@ -56,7 +56,7 @@ def _clear_if_importable(
     target = import_attr_if_importable(module_path, attr_name)
     if target is None:
         return
-    action(target)
+    _ = action(target)
 
 
 _subsystem_clears: dict[str, tuple[Callable[[], None], bool]] = {}
@@ -181,8 +181,8 @@ class TypeRegistry:
         types = self._types[model]
         types.remove(type_cls)
         if not types:
-            self._types.pop(model, None)
-        self._models.pop(type_cls, None)
+            _ = self._types.pop(model, None)
+        _ = self._models.pop(type_cls, None)
 
     @staticmethod
     def _already_registered(label: str, name: str, existing_name: str) -> ConfigurationError:
@@ -297,7 +297,7 @@ class TypeRegistry:
             except Exception:
                 teardowns.append(teardown)
                 raise
-        self._type_teardowns.pop(type_cls)
+        _ = self._type_teardowns.pop(type_cls)
 
     def unregister(self, type_cls: type[DjangoType]) -> None:
         """Remove all traces of ``type_cls`` from the registry.
@@ -336,8 +336,8 @@ class TypeRegistry:
         # finding ``model`` above guarantees ``type_cls`` is in ``_types[model]``.
         self._detach_type_from_model(model, type_cls)
         if self._primaries.get(model) is type_cls:
-            self._primaries.pop(model, None)
-        self._definitions.pop(type_cls, None)
+            _ = self._primaries.pop(model, None)
+        _ = self._definitions.pop(type_cls, None)
         self._pending = [
             pending for pending in self._pending if pending.source_type is not type_cls
         ]
@@ -478,7 +478,7 @@ class TypeRegistry:
             if appended:
                 self._detach_type_from_model(model, type_cls)
                 if pre_primary is None:
-                    self._primaries.pop(model, None)
+                    _ = self._primaries.pop(model, None)
                 else:
                     self._primaries[model] = pre_primary
             raise

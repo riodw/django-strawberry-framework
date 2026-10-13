@@ -78,7 +78,7 @@ def unencodable_text_error(field_name: str, value: object) -> FieldError | None:
     """
     if isinstance(value, str):
         try:
-            str.__str__(value).encode("utf-8")
+            _ = str.__str__(value).encode("utf-8")
         except UnicodeEncodeError:
             return field_error(
                 field_name,

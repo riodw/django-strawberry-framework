@@ -657,8 +657,8 @@ def path_traverses_to_many(model: type[models.Model], field_path: str) -> bool:
     subsystems.
     """
     try:
-        hash(model)
-        hash(field_path)
+        _ = hash(model)
+        _ = hash(field_path)
     except BaseException:
         return _traverses_to_many(classify_path, model, field_path)
     return _path_traverses_to_many_cached(model, field_path)

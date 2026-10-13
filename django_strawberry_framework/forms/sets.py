@@ -385,7 +385,7 @@ def _normalized_form_field_selection(
         meta,
         flavor="DjangoFormMutation / DjangoModelFormMutation",
     )
-    _resolve_effective_form_field_names(
+    _ = _resolve_effective_form_field_names(
         form_class,
         fields=fields,
         exclude=exclude,
@@ -1096,7 +1096,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         del info
         save = getattr(form, "save", None)
         if callable(save):
-            save()
+            _ = save()
 
     def check_permission(
         self,

@@ -390,7 +390,7 @@ def _validate_node_target(target_type: type[object], *, field: str) -> None:
     is passed; ``field`` is interpolated into the messages so each factory
     (``DjangoNodeField`` / ``DjangoNodesField``) names itself.
     """
-    _validate_relay_djangotype_target(
+    _ = _validate_relay_djangotype_target(
         target_type,
         None,
         field=field,

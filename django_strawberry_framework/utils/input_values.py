@@ -301,8 +301,8 @@ class RelatedDeclarationError(Exception):
 
     def __init__(self, kind: str, value: object = None) -> None:
         super().__init__(kind)
-        self.kind = kind
-        self.value = value
+        self.kind: str = kind
+        self.value: object = value
 
 
 def related_declaration_mapping(owner: object, related_attr: str) -> Mapping[object, object]:

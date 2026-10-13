@@ -3833,7 +3833,9 @@ async def test_shared_singleton_answers_each_operation_with_its_own_context():
                 overlapping.set()
             await asyncio.wait_for(overlapping.wait(), timeout=5)
             name = info.context["name"]
-            seen[name] = extension.execution_context.context
+            execution_context = extension.execution_context
+            assert execution_context is not None
+            seen[name] = execution_context.context
             return name
 
     schema = DjangoSchema(query=Query, extensions=[lambda: extension])
@@ -3947,7 +3949,7 @@ def test_a_nested_operation_does_not_take_the_outer_operations_optimizer_state()
             model = Item
             fields = ("id", "name", "category")
 
-    seen_contexts: list[ExecutionContext] = []
+    seen_contexts: list[ExecutionContext | None] = []
     seen_published: list[dict[str, object]] = []
 
     @strawberry.type
@@ -3983,6 +3985,7 @@ def test_a_nested_operation_does_not_take_the_outer_operations_optimizer_state()
     assert outer.errors is None, outer.errors
     before, after = seen_contexts
     assert before is after
+    assert after is not None
     assert after.query is not None
     assert after.query.startswith("{ nest")
     assert outer.data is not None

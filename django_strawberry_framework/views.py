@@ -1027,7 +1027,7 @@ def _evaluate_request_user(request: HttpRequest) -> None:
     the evaluation itself (a session or user store outage) propagates.
     """
     user: object = getattr(request, "user", None)
-    getattr(user, "is_authenticated", None)
+    _ = getattr(user, "is_authenticated", None)
 
 
 # basedpyright: the mixin defines no ``__init__`` (its base is ``object`` at run time), so

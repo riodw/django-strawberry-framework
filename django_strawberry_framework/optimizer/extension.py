@@ -35,7 +35,7 @@ import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import suppress
-from typing import TYPE_CHECKING, NamedTuple, TypeVar, cast
+from typing import TYPE_CHECKING, ClassVar, NamedTuple, TypeVar, cast
 
 from django.db import models
 from graphql.language.ast import (
@@ -636,7 +636,7 @@ def _doc_cache_entry(
     _doc_key_cache[key] = entry
     if len(_doc_key_cache) > _MAX_DOC_KEY_CACHE_SIZE:
         with suppress(KeyError):
-            _doc_key_cache.popitem(last=False)
+            _ = _doc_key_cache.popitem(last=False)
     return entry
 
 
@@ -887,7 +887,7 @@ class _OptimizerOperationState(OperationState):
     outer one is still resolving against.
     """
 
-    __slots__ = ("stashes",)
+    __slots__: tuple[str, ...] = ("stashes",)
 
     def __init__(self, execution_context: "ExecutionContext") -> None:
         super().__init__(execution_context)
@@ -956,7 +956,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
     consumer wrote ``Model.objects`` or ``Model.objects.all()``.
     """
 
-    _reconstruction_refusal = (
+    _reconstruction_refusal: ClassVar[str] = (
         "An optimizer extension is configured when it is constructed; re-running "
         "its __init__ on an instance a schema is already serving requests with "
         "would replace the strictness and the nested-connection strategy its "
@@ -986,7 +986,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         # migration notes). Unknown consumer kwargs still raise ``TypeError``
         # at construction so typos (``strict=True``) surface at the call site
         # rather than being silently absorbed.
-        self.execution_context = execution_context
+        self.execution_context: ExecutionContext | None = execution_context
         if not _is_valid_strictness(strictness):
             msg = f"strictness must be 'off', 'warn', or 'raise', got {_safe_arg_repr(strictness)}"
             raise ValueError(msg)
@@ -1007,8 +1007,8 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
             ),
         )
         self._plan_cache: OrderedDict[PlanCacheKey, OptimizationPlan] = OrderedDict()
-        self._cache_hits = 0
-        self._cache_misses = 0
+        self._cache_hits: int = 0
+        self._cache_misses: int = 0
 
     @override
     def _new_operation_state(
@@ -1411,7 +1411,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
                 # document-key cache guard with ``suppress``. A lost eviction
                 # only costs a stale entry, so the sweep absorbs the KeyError.
                 with suppress(KeyError):
-                    self._plan_cache.popitem(last=False)
+                    _ = self._plan_cache.popitem(last=False)
         if plan.cacheable:
             self._plan_cache[cache_key] = plan
         elif exec_memo is not None:

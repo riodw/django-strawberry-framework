@@ -905,8 +905,8 @@ def validate_offset_pagination(
     ``ListConnection`` without a ``try``: anything they still raise comes from
     the source or the rows, not from the client's arguments.
     """
-    decode_offset_cursor(after, argument="after", prefix=prefix)
-    decode_offset_cursor(before, argument="before", prefix=prefix)
+    _ = decode_offset_cursor(after, argument="after", prefix=prefix)
+    _ = decode_offset_cursor(before, argument="before", prefix=prefix)
     assert_relay_pagination_bound("first", first, cap=cap)
     assert_relay_pagination_bound("last", last, cap=cap)
 

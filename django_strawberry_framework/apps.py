@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 class DjangoStrawberryFrameworkConfig(AppConfig):
     """Register django-strawberry-framework with Django's app loader."""
 
-    name = "django_strawberry_framework"
+    name: str = "django_strawberry_framework"
     # Declared at the base type: ``AppConfig.verbose_name`` is a mutable attribute that
     # accepts a lazy translation, so a plain ``str`` here would narrow it covariantly.
     verbose_name: "StrOrPromise" = "Django Strawberry Framework"

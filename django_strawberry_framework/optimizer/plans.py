@@ -106,7 +106,7 @@ class _IndexedList(list[_T]):
     rebuild the list instead.
     """
 
-    __slots__ = ("_key", "_seen")
+    __slots__: tuple[str, ...] = ("_key", "_seen")
 
     def __init__(
         self,
@@ -120,7 +120,7 @@ class _IndexedList(list[_T]):
         # routed through an identity key callable, skipping a Python-level call
         # per append.
         super().__init__()
-        self._key = key
+        self._key: Callable[[_T], object] | None = key
         self._seen: set[object] = set()
         for value in values:
             self.append_unique(value)
@@ -1730,7 +1730,7 @@ def _reverse_order_by(order_by: Sequence[OrderEntry]) -> list[OrderEntry]:
             # Django's own reversal, the one its compiler applies to an ``OrderBy`` for
             # ``standard_ordering=False``: the flag flips and an explicit NULLS placement swaps.
             clone = entry.copy()
-            clone.reverse_ordering()
+            _ = clone.reverse_ordering()
             reversed_order.append(clone)
             continue
         # ``F.desc`` and ``Expression.desc`` both return an ``OrderBy``; the probe's

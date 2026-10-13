@@ -93,8 +93,8 @@ class RelatedOrder(RelatedSetTargetMixin):
     # ``RelatedSetTargetMixin`` parameterization: the slots the shared
     # owner-bind / lazy-target machinery reads. The filter
     # twin uses ``("_filterset", "bound_filterset")``.
-    _target_attr = "_orderset"
-    _owner_attr = "bound_orderset"
+    _target_attr: str = "_orderset"
+    _owner_attr: str = "bound_orderset"
     # The owning set the bind records under ``_owner_attr``. Annotation only: the slot stays
     # absent until the bind, which is how ``_bind_owner`` tells a first bind from a re-bind.
     bound_orderset: type[OrderSet]
@@ -102,8 +102,8 @@ class RelatedOrder(RelatedSetTargetMixin):
     def __init__(self, orderset: _OrderSetTarget, field_name: str | None = None) -> None:
         """Store the (possibly-lazy) target orderset and the ORM field name."""
         super().__init__()
-        self._orderset = orderset
-        self.field_name = field_name
+        self._orderset: _OrderSetTarget = orderset
+        self.field_name: str | None = field_name
 
     def bind_orderset(self, orderset: type[OrderSet]) -> None:
         """Bind the owning ``OrderSet`` once; subsequent calls are no-ops.

@@ -168,29 +168,139 @@ select = [
     "N",      # pep8-naming
     "C4",     # flake8-comprehensions
     "COM812", # flake8-commas: missing-trailing-comma (pairs with magic trailing comma in formatter)
+    "COM818", # flake8-commas: trailing comma on a bare tuple (COM819 conflicts with the formatter)
     "D",      # pydocstyle
+    "DJ",     # flake8-django
+    "DTZ",    # flake8-datetimez: naive datetimes
     "ERA",    # eradicate
+    "EXE",    # flake8-executable: shebang vs executable bit
+    "FA",     # flake8-future-annotations
+    "FIX",    # flake8-fixme: FIXME/XXX/HACK markers (TODO is the anchor convention)
     "FLY",    # flake8-flynt: static str .join() -> f-string
+    "FURB",   # refurb: modernizing rewrites
+    "G",      # flake8-logging-format: eager formatting in logging calls
+    "ICN",    # flake8-import-conventions
+    "INT",    # flake8-gettext
     "ISC003", # explicit-str-concat only (ISC001/002 conflict with the formatter)
+    "LOG",    # flake8-logging
     "PERF",   # Perflint: perf antipatterns (try/except in loop, manual comprehension)
-    "PLE",    # Pylint errors only (E-level; PLR/PLW/PLC excluded as noisy/opinionated)
+    "PGH",    # pygrep-hooks: blanket noqa / type: ignore
+    "PIE",    # flake8-pie
+    "PL",     # Pylint
+    "PT",     # flake8-pytest-style
+    "PTH",    # flake8-use-pathlib
+    "PYI",    # flake8-pyi
     "Q",      # flake8-quotes
+    "RET",    # flake8-return
     "RSE",    # flake8-raise: raise hygiene (no redundant parens on bare raise)
     "RUF",    # Ruff-specific: unused-noqa (RUF100), mutable-class-default (RUF012), ...
+    "S",      # flake8-bandit: security
     "SIM",    # flake8-simplify
-    "TC004",  # flake8-type-checking: TYPE_CHECKING-only import read at runtime (NameError <3.14)
-    "TRY004", # tryceratops: raise TypeError (not a vanilla error) on a type-check failure
+    "SLOT",   # flake8-slots
+    "T10",    # flake8-debugger
+    "T20",    # flake8-print
+    "TC",     # flake8-type-checking
+    "TD",     # flake8-todos
+    "TID",    # flake8-tidy-imports
+    "TRY",    # tryceratops
     "UP",     # pyupgrade
+    "YTT",    # flake8-2020: sys.version misuse
 ]
 ignore = [
-    "ANN002", # Missing type annotation for *args
-    "ANN003", # Missing type annotation for **kwargs
-    "ANN401", # Any type annotation
-    "D107",   # Missing docstring in __init__
-    "D417",   # Missing argument description in docstring
-    "RUF001", # ambiguous-unicode in strings — em-dashes/arrows are intentional here
-    "RUF002", # ambiguous-unicode in docstrings — ditto
-    "RUF003", # ambiguous-unicode in comments — ditto
+    # Off by design (docs/ruffing.md "Off by design").
+    "FIX002", # TODO markers are the `TODO(spec-NNN slice N)` anchor convention
+    "ICN001", # conventional import aliases
+    "PLC0415", # local imports break import cycles
+    "PLR0911", # too many return statements
+    "PLR0912", # too many branches
+    "PLR0913", # too many arguments
+    "PLR0915", # too many statements
+    "PLR0917", # too many positional arguments
+    "PLR2004", # magic value in comparison
+    "TC001",  # first-party import used only in annotations: annotations are read at runtime
+    "TC002",  # third-party import used only in annotations: ditto
+    "TC003",  # stdlib import used only in annotations: ditto
+    "TD002",  # TODO author: the anchor names a spec, not a person
+    "TD003",  # TODO issue link: the anchor names a spec, not an issue
+    "TD004",  # TODO colon: a wrapped anchor carries its text on the next line
+    "TD005",  # TODO description: ditto
+    "TID252", # relative imports inside the package
+    "TRY003", # long message passed to the exception constructor
+    # Ratchet: real sites still to fix (docs/ruffing.md); delete a line once its sites are fixed.
+    "ANN401",
+    "D107",
+    "DJ001",
+    "DJ008",
+    "DJ012",
+    "DTZ001",
+    "DTZ011",
+    "EXE001",
+    "FURB110",
+    "FURB136",
+    "FURB157",
+    "FURB167",
+    "FURB188",
+    "PIE790",
+    "PIE810",
+    "PLC0105",
+    "PLC0206",
+    "PLC0207",
+    "PLC0414",
+    "PLR0402",
+    "PLR1711",
+    "PLR1714",
+    "PLW0108",
+    "PLW0603",
+    "PLW1510",
+    "PLW1641",
+    "PLW2901",
+    "PT006",
+    "PT007",
+    "PT009",
+    "PT011",
+    "PT012",
+    "PT013",
+    "PT014",
+    "PT017",
+    "PT018",
+    "PT019",
+    "PT022",
+    "PT027",
+    "PT030",
+    "PTH101",
+    "PTH105",
+    "PTH107",
+    "PTH115",
+    "PTH116",
+    "PTH117",
+    "PTH123",
+    "PTH201",
+    "PTH211",
+    "PYI034",
+    "PYI036",
+    "PYI055",
+    "RET501",
+    "RET504",
+    "RET505",
+    "S101",
+    "S102",
+    "S105",
+    "S106",
+    "S107",
+    "S108",
+    "S110",
+    "S112",
+    "S301",
+    "S311",
+    "S324",
+    "S603",
+    "S607",
+    "S608",
+    "S610",
+    "SLOT000",
+    "SLOT001",
+    "TRY300",
+    "TRY301",
 ]
 
 [tool.ruff.lint.flake8-quotes]
@@ -212,14 +322,11 @@ ignore-variadic-names = true
 known-first-party = ["django_strawberry_framework"]
 
 [tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401"]
 "tests/**/*.py" = [
     "D",      # docstrings not required in test code
     "ANN",    # annotations not required in test code
     "ERA001", # commented-out code
-    "F841",   # unused local variable
     "SIM117", # nested with statements
-    "SIM118", # `key in dict.keys()`
     "E501",   # line too long
     "N802",   # function name not lowercase
     "N806",   # variable in function not lowercase
@@ -228,29 +335,25 @@ known-first-party = ["django_strawberry_framework"]
     "PERF",   # not a performance surface
     "RUF043", # plain `match="..."` substrings are the convention
     "ARG",    # an unused arg is an injected fixture or a framework-fixed signature; enforced on the package
+    "S101",   # assert is the pytest idiom
 ]
 "examples/**/*.py" = [
     "D",      # docstrings not required in example code
     "ANN",    # annotations not required in example code
     "ERA001", # commented-out code
-    "F841",   # unused local variable
     "SIM117", # nested with statements
-    "SIM118", # `key in dict.keys()`
     "E501",   # line too long
     "UP031",  # printf-style string formatting
-    "N806",   # variable in function not lowercase
-    "B018",   # bare `factory.arguments` triggers the lazy build under test
     "RUF012", # fixture classes use mutable attrs idiomatically
-    "PERF",   # not a performance surface
     "RUF043", # plain `match="..."` substrings are the convention
     "ARG",    # an unused arg is an injected fixture or a framework-fixed signature; enforced on the package
+    "S101",   # assert is the pytest idiom
 ]
 # PERF: one-shot build/maintenance scripts are not a performance surface.
-"scripts/**/*.py" = ["PERF"]
-"**/migrations/*.py" = ["D100", "D101", "D104"]
-"**/views.py" = ["D101"]
-"**/urls.py" = ["D100"]
-"**/admin.py" = ["D101"]
+# T201: print is the CLI output of scripts and the root tools.
+"scripts/**/*.py" = ["PERF", "T201"]
+"line_count.py" = ["T201"]
+"docs/dry/export_dry_review.py" = ["T201"]
 
 [tool.ruff.lint.pycodestyle]
 # The formatter wraps code at line-length (99); E501 only flags lines past 110

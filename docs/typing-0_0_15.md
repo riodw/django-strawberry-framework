@@ -5,22 +5,22 @@ rules still switched off and the `# pyright: ignore[...]` comments still in the 
 Each item is fixed at the root, gated (both passes 0 errors, full suite in one pass at 100% coverage), then committed.
 A split suite run on a tree other sessions are editing can drop modules from every part, so it is not a coverage gate.
 
-Progress: 21 done, 8 to do. Ignore comments: 1044 lines (1897 at the start of 0.0.15's ignore sweep).
+Progress: 21 done, 8 to do. Ignore comments: 1049 lines (1897 at the start of 0.0.15's ignore sweep).
 
-## Pre-commit (`uvx pre-commit run --all-files`, 7d8d1d72, clean clone)
+## Pre-commit (`uvx pre-commit run --all-files`, 4ce779e1, clean clone)
 
 | Hook | Result | Time | Scope |
 | --- | --- | --- | --- |
 | kanban tracked path constants | pass | 0.1s | whole tracked set |
-| source layout | pass | 4.5s | 621 files checked, 81 excluded, 0 violations |
-| ruff check | pass | 0.8s | 499 files |
-| ruff format | pass | 0.1s | 499 files |
-| basedpyright | pass | 15.9s | 499 files, 0 errors |
-| basedpyright floor (3.10) | pass | 16.0s | 499 files, 0 errors |
-| public API type completeness | pass | 4.7s | 100%, 2 allowlisted warnings |
+| source layout | pass | 3.4s | 633 files checked, 81 excluded, 0 violations |
+| ruff check | pass | 0.4s | 511 files |
+| ruff format | pass | 0.1s | 511 files |
+| basedpyright | pass | 16.4s | 511 files, 0 errors |
+| basedpyright floor (3.10) | pass | 14.6s | 511 files, 0 errors |
+| public API type completeness | pass | 4.8s | 100%, 2 allowlisted warnings |
 | kanban anchors | pass | 1.1s | 77 cards, 149 glossary anchors |
-| citations | pass | 3.3s | 3363 citations |
-| **Total** | **9/9 pass** | **48s wall** | |
+| citations | pass | 3.4s | 3400 citations |
+| **Total** | **9/9 pass** | **45s wall** | |
 
 ## Done
 
@@ -132,8 +132,8 @@ strawberry_django does?
 
 ## Ignore breakdown
 
-Lines carrying `# pyright: ignore[...]`: 1037 (1130 rule hits) in 179 files: tests 777, package 196, examples 62,
-scripts 2.
+Lines carrying `# pyright: ignore[...]`: 1049 (1143 rule hits) in 181 files: tests 776, package 203, examples 67,
+scripts 2, root 1.
 
 ### By cause
 
@@ -142,64 +142,66 @@ Unknown rules because the expression already suppressed for another rule evaluat
 
 | Cause | Lines | Unknown too | Plan |
 | --- | --- | --- | --- |
-| Deliberately ill-typed test input (hostile values, forged classes, stand-ins, rejected writes) | 430 | 4 | keep |
-| DRF stubs declare `ModelSerializer.Meta` | 142 | 0 | item 23 |
+| Deliberately ill-typed test input (hostile values, forged classes, stand-ins, rejected writes) | 426 | 4 | keep |
+| DRF stubs declare `ModelSerializer.Meta` | 148 | 0 | item 23 |
 | Django private QuerySet attributes (seam, `super()._clone()`, hostile writes, planted shapes) | 17 | 8 | keep |
 | Verbatim forwards (schema, consumers, ModelForm, ModelSerializer, field and `strawberry.type` forwards) | 42 | 0 | keep |
 | Django model `Meta` on proxy / MTI children | 10 | 0 | keep |
 | Third-party annotations only the Unknown rules report: Strawberry 16 (11 the `_graphql_core.py` alias rebinding, 5 bare generics), django-stubs 9 (7 migration M2M `_To`, `Prefetch`, a `re_path` route list), drf-stubs 8, graphql-core 3.2 bare generics 3, django-debug-toolbar 3, pytest 3, asgiref 1 | 43 | 43 | item 30 |
-| The rest, reviewed in item 21 or added since, each reason line stating its cause (framework `Meta` reads, mixin `__init__` chains, filter overrides, `Any` forwards, django-stubs / typeshed omissions) | 353 | 21 | keep |
+| Framework-fixed parameters a default never reads (keyword-called hooks, upstream-verbatim signatures, a fixture requested for teardown order); one more shares a line counted below | 7 | 0 | keep |
+| The rest, reviewed in item 21 or added since, each reason line stating its cause (framework `Meta` reads, mixin `__init__` chains, filter overrides, `Any` forwards, django-stubs / typeshed omissions) | 356 | 21 | keep |
 
 ### By rule
 
-| Rule | Hits | Package | Tests | Examples | Scripts |
-| --- | --- | --- | --- | --- | --- |
-| `reportArgumentType` | 320 | 24 | 291 | 5 | 0 |
-| `reportIncompatibleVariableOverride` | 204 | 5 | 175 | 24 | 0 |
-| `reportAttributeAccessIssue` | 153 | 26 | 126 | 1 | 0 |
-| `reportExplicitAny` | 97 | 61 | 22 | 12 | 2 |
-| `reportIncompatibleMethodOverride` | 74 | 7 | 62 | 5 | 0 |
-| `reportUnknownMemberType` | 60 | 29 | 29 | 2 | 0 |
-| `reportUnknownVariableType` | 38 | 23 | 15 | 0 | 0 |
-| `reportReturnType` | 27 | 1 | 25 | 1 | 0 |
-| `reportUnnecessaryIsInstance` | 19 | 19 | 0 | 0 | 0 |
-| `reportCallIssue` | 15 | 1 | 13 | 1 | 0 |
-| `reportAssignmentType` | 14 | 0 | 13 | 1 | 0 |
-| `reportUnknownArgumentType` | 14 | 4 | 3 | 7 | 0 |
-| `reportUnsafeMultipleInheritance` | 13 | 8 | 3 | 2 | 0 |
-| `reportIndexIssue` | 10 | 0 | 10 | 0 | 0 |
-| `reportMissingSuperCall` | 7 | 2 | 5 | 0 | 0 |
-| `reportUndefinedVariable` | 7 | 0 | 7 | 0 | 0 |
-| `reportUnreachable` | 7 | 5 | 2 | 0 | 0 |
-| `reportFunctionMemberAccess` | 6 | 4 | 1 | 1 | 0 |
-| `reportUnnecessaryComparison` | 6 | 5 | 1 | 0 | 0 |
-| `reportGeneralTypeIssues` | 5 | 0 | 5 | 0 | 0 |
-| `reportPropertyTypeMismatch` | 5 | 5 | 0 | 0 | 0 |
-| `reportDeprecated` | 4 | 3 | 1 | 0 | 0 |
-| `reportUnknownParameterType` | 4 | 1 | 3 | 0 | 0 |
-| `reportIncompatibleUnannotatedOverride` | 3 | 1 | 2 | 0 | 0 |
-| `reportInvalidCast` | 3 | 3 | 0 | 0 | 0 |
-| `reportInvalidTypeArguments` | 3 | 1 | 2 | 0 | 0 |
-| `reportInvalidTypeForm` | 3 | 0 | 3 | 0 | 0 |
-| `reportOptionalMemberAccess` | 3 | 3 | 0 | 0 | 0 |
-| `reportUntypedFunctionDecorator` | 2 | 2 | 0 | 0 | 0 |
-| `reportImplicitOverride` | 1 | 0 | 1 | 0 | 0 |
-| `reportMissingTypeArgument` | 1 | 0 | 1 | 0 | 0 |
-| `reportUntypedBaseClass` | 1 | 0 | 1 | 0 | 0 |
-| `reportUnusedImport` | 1 | 0 | 1 | 0 | 0 |
+| Rule | Hits | Package | Tests | Examples | Scripts | Root |
+| --- | --- | --- | --- | --- | --- | --- |
+| `reportArgumentType` | 316 | 24 | 287 | 5 | 0 | 0 |
+| `reportIncompatibleVariableOverride` | 210 | 5 | 178 | 27 | 0 | 0 |
+| `reportAttributeAccessIssue` | 153 | 26 | 126 | 1 | 0 | 0 |
+| `reportExplicitAny` | 100 | 62 | 22 | 14 | 2 | 0 |
+| `reportIncompatibleMethodOverride` | 74 | 7 | 62 | 5 | 0 | 0 |
+| `reportUnknownMemberType` | 60 | 29 | 29 | 2 | 0 | 0 |
+| `reportUnknownVariableType` | 38 | 23 | 15 | 0 | 0 | 0 |
+| `reportReturnType` | 27 | 1 | 25 | 1 | 0 | 0 |
+| `reportUnnecessaryIsInstance` | 19 | 19 | 0 | 0 | 0 | 0 |
+| `reportCallIssue` | 15 | 1 | 13 | 1 | 0 | 0 |
+| `reportAssignmentType` | 14 | 0 | 13 | 1 | 0 | 0 |
+| `reportUnknownArgumentType` | 14 | 4 | 3 | 7 | 0 | 0 |
+| `reportUnsafeMultipleInheritance` | 13 | 8 | 3 | 2 | 0 | 0 |
+| `reportIndexIssue` | 10 | 0 | 10 | 0 | 0 | 0 |
+| `reportUnusedParameter` | 8 | 7 | 0 | 0 | 0 | 1 |
+| `reportMissingSuperCall` | 7 | 2 | 5 | 0 | 0 | 0 |
+| `reportUndefinedVariable` | 7 | 0 | 7 | 0 | 0 | 0 |
+| `reportUnreachable` | 7 | 5 | 2 | 0 | 0 | 0 |
+| `reportFunctionMemberAccess` | 6 | 4 | 1 | 1 | 0 | 0 |
+| `reportUnnecessaryComparison` | 6 | 5 | 1 | 0 | 0 | 0 |
+| `reportGeneralTypeIssues` | 5 | 0 | 5 | 0 | 0 | 0 |
+| `reportPropertyTypeMismatch` | 5 | 5 | 0 | 0 | 0 | 0 |
+| `reportDeprecated` | 4 | 3 | 1 | 0 | 0 | 0 |
+| `reportUnknownParameterType` | 4 | 1 | 3 | 0 | 0 | 0 |
+| `reportIncompatibleUnannotatedOverride` | 3 | 1 | 2 | 0 | 0 | 0 |
+| `reportInvalidCast` | 3 | 3 | 0 | 0 | 0 | 0 |
+| `reportInvalidTypeArguments` | 3 | 1 | 2 | 0 | 0 | 0 |
+| `reportInvalidTypeForm` | 3 | 0 | 3 | 0 | 0 | 0 |
+| `reportOptionalMemberAccess` | 3 | 3 | 0 | 0 | 0 | 0 |
+| `reportUntypedFunctionDecorator` | 2 | 2 | 0 | 0 | 0 | 0 |
+| `reportImplicitOverride` | 1 | 0 | 1 | 0 | 0 | 0 |
+| `reportMissingTypeArgument` | 1 | 0 | 1 | 0 | 0 | 0 |
+| `reportUntypedBaseClass` | 1 | 0 | 1 | 0 | 0 | 0 |
+| `reportUnusedImport` | 1 | 0 | 1 | 0 | 0 | 0 |
 
 ### Most ignores per file
 
 | File | Lines |
 | --- | --- |
+| `tests/rest_framework/test_resolvers.py` | 65 |
 | `tests/utils/test_querysets.py` | 65 |
-| `tests/rest_framework/test_resolvers.py` | 64 |
 | `tests/rest_framework/test_sets.py` | 50 |
 | `tests/rest_framework/test_converter.py` | 45 |
+| `examples/fakeshop/apps/library/serializers.py` | 30 |
 | `tests/test_resource_policy.py` | 27 |
-| `examples/fakeshop/apps/library/serializers.py` | 26 |
 | `tests/test_list_field.py` | 22 |
-| `tests/rest_framework/test_inputs.py` | 18 |
+| `tests/rest_framework/test_inputs.py` | 20 |
 | `tests/test_error_policy.py` | 18 |
 | `tests/utils/test_relations.py` | 18 |
 

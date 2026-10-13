@@ -25,6 +25,13 @@ updates:
     commit-message:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
+    ignore:
+      # graphql-core 3.3 moves execution into ``graphql.execution.executor`` and
+      # drops the ``ExecutionContext`` that ``schema.py`` imports and
+      # ``_graphql_core_patches`` patches; ``pyproject.toml`` caps it at ``<3.3``
+      # until the package supports 3.3, so a 3.3 bump PR can only fail.
+      - dependency-name: "graphql-core"
+        versions: [">=3.3"]
     groups:
       # One PR for the routine dev-tooling churn (linters, pytest plugins, test
       # fixtures) so it does not crowd out the dependency PRs that change what

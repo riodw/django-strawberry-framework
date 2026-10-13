@@ -5,17 +5,27 @@ repositories and workspace roots under ``tmp_path``, never against this
 checkout's copies or a running Postgres. The rows that matter most are the ones
 whose failure would let a measurement read the wrong tree: the copy listing,
 the exact mirror, the scrubbed environment, the provenance check, the per-copy
-database match and the cleanup that must leave nothing. A live ``/graphql/``
-request has no wire shape for workspace copies, so none of these rows can
-move there. There is no live sibling in ``examples/fakeshop/test_query/``.
+database match, the cleanup that must leave nothing, the turn-taking of runs
+that share a copy and the locks that keep cleanup from taking a copy a command
+is using (each second owner in its own process, so each holds its own locks).
+A live ``/graphql/`` request has no wire shape for workspace copies, so none of
+these rows can move there. There is no live sibling in
+``examples/fakeshop/test_query/``.
 """
 
+import errno
+import fcntl
 import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
+import time
+from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
 import pytest
 import yaml
@@ -416,30 +426,525 @@ def _address(role: str, item: str = "pkg/a.py") -> workspace.Address:
     return workspace.Address("review", item, role)
 
 
+def _statuses(layout: workspace.Layout) -> dict[str, str | None]:
+    return {
+        slot: (bound["status"] if bound else None)
+        for slot, bound in workspace._load_state(layout)["slots"].items()
+    }
+
+
 def test_bind_reuses_an_address_and_gives_each_new_address_its_own_copy(
     layout: workspace.Layout,
 ) -> None:
     first = workspace.bind(layout, _address("perf-1"))
-    workspace._mark_synced(
-        layout,
-        first.slot,
-        _manifest({}),
-    )
     again = workspace.bind(layout, _address("perf-1"))
     second = workspace.bind(layout, _address("mech-1"))
-    refreshed = workspace.bind(layout, _address("perf-1"), fresh=True)
 
-    assert (first.slot, first.needs_sync) == ("slot-1", True)
-    assert (again.slot, again.needs_sync) == ("slot-1", False)
-    assert (second.slot, second.needs_sync) == ("slot-2", True)
-    assert refreshed.needs_sync is True
+    assert (first.slot, again.slot, second.slot) == ("slot-1", "slot-1", "slot-2")
+    assert _statuses(layout) == {"slot-1": "syncing", "slot-2": "syncing"}
     assert (layout.flow_dir / workspace.MARKER_NAME).exists()
 
 
-def test_an_unfinished_sync_resyncs_on_the_next_run(layout: workspace.Layout) -> None:
-    workspace.bind(layout, _address("perf-1"))
+@pytest.fixture
+def syncs(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    """Every copy synced in this process, in order; ``uv sync`` itself never runs."""
+    synced: list[Path] = []
 
-    assert workspace.bind(layout, _address("perf-1")).needs_sync is True
+    def _uv_sync(destination: Path) -> None:
+        synced.append(destination)
+
+    monkeypatch.setattr(workspace, "_uv_sync", _uv_sync)
+    return synced
+
+
+def test_lease_syncs_a_new_copy_once_reuses_it_with_its_edits_and_fresh_resyncs_it(
+    layout: workspace.Layout,
+    syncs: list[Path],
+) -> None:
+    with workspace.lease(layout, _address("perf-1")) as first:
+        _write(first.directory / "edit.txt", "kept\n")
+    with workspace.lease(layout, _address("perf-1")) as again:
+        kept = (again.directory / "edit.txt").exists()
+    with workspace.lease(layout, _address("perf-1"), fresh=True) as fresh:
+        wiped = not (fresh.directory / "edit.txt").exists()
+
+    assert (first.slot, again.slot, fresh.slot) == ("slot-1", "slot-1", "slot-1")
+    assert syncs == [first.directory, first.directory]
+    assert kept
+    assert wiped
+    assert again.manifest == first.manifest
+    assert _statuses(layout) == {"slot-1": "ready"}
+
+
+@pytest.mark.parametrize("fresh", [False, True], ids=["first-sync", "fresh-sync"])
+def test_a_sync_that_dies_part_way_resyncs_on_the_next_run(
+    layout: workspace.Layout,
+    syncs: list[Path],
+    monkeypatch: pytest.MonkeyPatch,
+    fresh: bool,
+) -> None:
+    if fresh:
+        with workspace.lease(layout, _address("perf-1")):
+            pass
+    real_uv_sync = workspace._uv_sync
+
+    def _dying_uv_sync(_destination: Path) -> None:
+        msg = "uv sync died"
+        raise workspace.WorkspaceError(msg)
+
+    monkeypatch.setattr(workspace, "_uv_sync", _dying_uv_sync)
+    with (
+        pytest.raises(workspace.WorkspaceError, match="uv sync died"),
+        workspace.lease(layout, _address("perf-1"), fresh=fresh),
+    ):
+        pass
+    left = _statuses(layout)
+    monkeypatch.setattr(workspace, "_uv_sync", real_uv_sync)
+    with workspace.lease(layout, _address("perf-1")) as held:
+        pass
+
+    assert left == {"slot-1": "syncing"}
+    assert syncs[-1] == held.directory
+    assert len(syncs) == (2 if fresh else 1)
+    assert _statuses(layout) == {"slot-1": "ready"}
+
+
+def test_a_sync_never_marks_a_copy_released_during_it(layout: workspace.Layout) -> None:
+    binding = workspace.bind(layout, _address("perf-1"))
+    _ = workspace.release(layout, "pkg/a.py")
+    _ = workspace.bind(layout, _address("mech-1", item="pkg/b.py"))
+
+    with pytest.raises(workspace.WorkspaceError, match="no longer holds"):
+        workspace._mark_synced(layout, binding.slot, _address("perf-1"), _manifest({}))
+    bound = workspace._load_state(layout)["slots"]["slot-1"]
+    assert bound is not None
+    assert (bound["address"], bound["status"]) == ("review/pkg/b.py/mech-1", "syncing")
+
+
+def test_copy_path_syncs_an_unsynced_copy_and_reuses_a_synced_one(
+    layout: workspace.Layout,
+    syncs: list[Path],
+) -> None:
+    _ = workspace.bind(layout, _address("perf-1"))
+
+    first = workspace.copy_path(layout, _address("perf-1"))
+    _write(first / "edit.txt", "kept\n")
+    again = workspace.copy_path(layout, _address("perf-1"))
+
+    assert first == again == layout.slot_dir("slot-1")
+    assert syncs == [first]
+    assert (again / "edit.txt").exists()
+
+
+# --------------------------------------------------------------------------------------------
+# Commands in other processes
+# --------------------------------------------------------------------------------------------
+
+#: One ``workspace.py`` command in its own process, so it holds its own locks on its own open
+#: file descriptions. It runs the real command line (``main``) against the test's layout; only
+#: what cannot run under test is replaced: ``uv sync``, the provenance probe and the worker's
+#: command, which records the ``*.edit`` files it finds in the copy and then leaves its own.
+#: Each step touches ``<name>.<step>`` when reached: ``bound`` once the address is bound,
+#: ``sync`` in ``uv sync``, ``in`` in the command, ``probe`` at a lock tried without waiting or
+#: creating, ``postgres`` and ``state`` at those reads. A step the test names as a pause then
+#: waits until ``<name>.go-<step>`` appears. ``die_in_sync`` kills the process in its sync;
+#: the ``hold`` command only holds the lock at ``path``, stepping ``opened`` each time it opens
+#: that file.
+_ACTOR = """
+import json, os, sys, time
+from pathlib import Path
+
+config = json.loads(sys.argv[1])
+sys.path.insert(0, config["scripts"])
+import workspace
+
+sync = Path(config["sync"])
+name = config["name"]
+pauses = set(config["pauses"])
+repo = Path(config["repo"])
+
+
+def step(event):
+    (sync / f"{name}.{event}").touch()
+    if event in pauses:
+        pauses.discard(event)
+        while not (sync / f"{name}.go-{event}").exists():
+            time.sleep(0.005)
+
+
+def stepped(event, function):
+    def wrapper(*args, **kwargs):
+        step(event)
+        return function(*args, **kwargs)
+    return wrapper
+
+
+real_bind = workspace.bind
+
+
+def bind(*args, **kwargs):
+    binding = real_bind(*args, **kwargs)
+    step("bound")
+    return binding
+
+
+def uv_sync(_destination):
+    step("sync")
+    if config.get("die_in_sync"):
+        os._exit(9)
+
+
+def probe(directory, _env):
+    return {
+        "executable": str(directory / ".venv" / "bin" / "python"),
+        "package_file": str(directory / workspace.PACKAGE_DIR / "__init__.py"),
+        "databases": {},
+    }
+
+
+def stream(command, _env, _log_path, _header, cwd=None):
+    copy = Path(command[command.index("--directory") + 1])
+    seen = sorted(path.stem for path in copy.glob("*.edit"))
+    (copy / f"{name}.edit").write_text(name)
+    (sync / f"{name}.json").write_text(json.dumps({"slot": copy.name, "seen": seen}))
+    step("in")
+    return 0
+
+
+real_file_lock = workspace.file_lock
+
+
+def file_lock(path, *, blocking=True, create=True):
+    if not blocking and not create:
+        step("probe")
+    return real_file_lock(path, blocking=blocking, create=create)
+
+
+def for_flow(flow, repo_root=repo):
+    return workspace.Layout(repo_root, workspace.workspace_base(repo_root), flow)
+
+
+workspace.REPO_ROOT = repo
+workspace.Layout.for_flow = staticmethod(for_flow)
+workspace.bind = bind
+workspace.file_lock = file_lock
+workspace.probe = probe
+workspace.stream = stream
+workspace._uv_sync = uv_sync
+workspace._free_bytes = lambda _path: workspace.MIN_FREE_BYTES * 2
+workspace._running_postgres = stepped("postgres", lambda _root: None)
+workspace._load_state = stepped("state", workspace._load_state)
+if config["argv"] == ["hold"]:
+    real_open = os.open
+
+    def opened(path, flags, mode=0o777, **kwargs):
+        descriptor = real_open(path, flags, mode, **kwargs)
+        if str(path) == config["path"]:
+            step("opened")
+        return descriptor
+
+    os.open = opened
+    step("waiting")
+    with real_file_lock(Path(config["path"])):
+        step("in")
+    sys.exit(0)
+sys.exit(workspace.main(config["argv"]))
+"""
+
+_ADDRESS = "review/pkg/a.py/perf-1"
+
+
+class _Actors:
+    """``workspace.py`` commands in separate processes, each stopped and let on at named steps."""
+
+    def __init__(self, layout: workspace.Layout, sync: Path) -> None:
+        self.layout = layout
+        self.sync = sync
+        self.processes: dict[str, subprocess.Popen[str]] = {}
+
+    def start(
+        self,
+        name: str,
+        *argv: str,
+        pauses: tuple[str, ...] = (),
+        **options: object,
+    ) -> None:
+        payload = {
+            "name": name,
+            "argv": list(argv),
+            "pauses": list(pauses),
+            "sync": str(self.sync),
+            "scripts": str(Path(workspace.__file__).parent),
+            "repo": str(self.layout.repo_root),
+            **options,
+        }
+        env = workspace.clean_env()
+        env[workspace.ROOT_ENV] = str(self.layout.base.parent)
+        _ = env.pop(workspace.SLOTS_ENV, None)
+        self.processes[name] = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _ACTOR,
+                json.dumps(payload),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+
+    def run(
+        self,
+        name: str,
+        address: str = _ADDRESS,
+        *flags: str,
+        pauses: tuple[str, ...] = (),
+        **options: object,
+    ) -> None:
+        self.start(name, "run", address, *flags, "--", "edit", pauses=pauses, **options)
+
+    def reached(
+        self,
+        name: str,
+        event: str,
+        within: float = 30.0,
+    ) -> bool:
+        deadline = time.monotonic() + within
+        while not (self.sync / f"{name}.{event}").exists():
+            if self.processes[name].poll() is not None or time.monotonic() > deadline:
+                return (self.sync / f"{name}.{event}").exists()
+            time.sleep(0.01)
+        return True
+
+    def go(self, name: str, event: str) -> None:
+        (self.sync / f"{name}.go-{event}").touch()
+
+    def finish(self, name: str, timeout: float = 30.0) -> tuple[int, str, str]:
+        """Return the command's exit code, stdout and stderr; fail on a wait that never ends."""
+        process = self.processes[name]
+        try:
+            out, err = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            _ = process.communicate()
+            pytest.fail(f"{name} never finished: a lock wait that never ends")
+        return process.returncode, out, err
+
+    def ran(self, name: str) -> dict[str, object] | None:
+        """Return what the command saw in its copy, or ``None`` when it never ran."""
+        record = self.sync / f"{name}.json"
+        if not record.exists():
+            return None
+        document: object = json.loads(record.read_text(encoding="utf-8"))
+        assert workspace._is_json_object(document)
+        return document
+
+    def synced(self, name: str) -> bool:
+        return (self.sync / f"{name}.sync").exists()
+
+
+@pytest.fixture
+def actors(layout: workspace.Layout, tmp_path: Path) -> Iterator[_Actors]:
+    sync = tmp_path / "sync"
+    sync.mkdir()
+    crew = _Actors(layout, sync)
+    yield crew
+    for process in crew.processes.values():
+        if process.poll() is None:
+            process.kill()
+        _ = process.communicate()
+
+
+def _edits(directory: Path) -> list[str]:
+    return sorted(path.stem for path in directory.glob("*.edit"))
+
+
+def _bound_to(layout: workspace.Layout) -> dict[str, str | None]:
+    return {
+        slot: bound["address"] if bound else None
+        for slot, bound in workspace._load_state(layout)["slots"].items()
+    }
+
+
+def _refusal(address: str, slot: str) -> str:
+    return (
+        f"workspace: {address}: {slot} was released while this command waited for it; "
+        "run it again\n"
+    )
+
+
+@pytest.mark.parametrize("queued", [["B"], ["B", "C"]], ids=["one-queued", "two-queued"])
+def test_runs_started_during_the_first_sync_reuse_its_copy_and_every_edit_since(
+    layout: workspace.Layout,
+    actors: _Actors,
+    queued: list[str],
+) -> None:
+    actors.run("A", pauses=("sync",))
+    assert actors.reached("A", "sync")
+    for name in queued:
+        actors.run(name)
+        assert actors.reached(name, "bound")
+    actors.go("A", "sync")
+
+    codes = [actors.finish(name)[0] for name in ["A", *queued]]
+
+    assert codes == [0] * (1 + len(queued))
+    assert [actors.synced(name) for name in queued] == [False] * len(queued)
+    for name in queued:
+        assert "A" in cast("list[str]", cast("dict[str, object]", actors.ran(name))["seen"])
+    assert _edits(layout.slot_dir("slot-1")) == sorted(["A", *queued])
+    assert _statuses(layout) == {"slot-1": "ready"}
+
+
+def test_a_fresh_run_started_during_the_first_sync_still_resyncs(
+    layout: workspace.Layout,
+    actors: _Actors,
+) -> None:
+    actors.run("A", pauses=("sync",))
+    assert actors.reached("A", "sync")
+    actors.run("B", _ADDRESS, "--fresh")
+    assert actors.reached("B", "bound")
+    actors.go("A", "sync")
+
+    assert [actors.finish("A")[0], actors.finish("B")[0]] == [0, 0]
+    assert actors.synced("B")
+    assert actors.ran("B") == {"slot": "slot-1", "seen": []}
+    assert _edits(layout.slot_dir("slot-1")) == ["B"]
+    assert _statuses(layout) == {"slot-1": "ready"}
+
+
+def test_a_run_started_during_a_first_sync_that_dies_resyncs(
+    layout: workspace.Layout,
+    actors: _Actors,
+) -> None:
+    actors.run("A", pauses=("sync",), die_in_sync=True)
+    assert actors.reached("A", "sync")
+    actors.run("B")
+    assert actors.reached("B", "bound")
+    actors.go("A", "sync")
+
+    assert [actors.finish("A")[0], actors.finish("B")[0]] == [9, 0]
+    assert actors.ran("A") is None
+    assert actors.synced("B")
+    assert actors.ran("B") == {"slot": "slot-1", "seen": []}
+    assert _statuses(layout) == {"slot-1": "ready"}
+
+
+def test_an_edit_at_the_printed_path_survives_a_run_started_during_paths_sync(
+    layout: workspace.Layout,
+    actors: _Actors,
+) -> None:
+    actors.start("P", "path", _ADDRESS, pauses=("sync",))
+    assert actors.reached("P", "sync")
+    actors.run("B", pauses=("bound",))
+    assert actors.reached("B", "bound")
+    actors.go("P", "sync")
+    assert actors.finish("P")[:2] == (0, f"{layout.slot_dir('slot-1')}\n")
+    _ = _write(layout.slot_dir("slot-1") / "worker.edit", "kept\n")
+    actors.go("B", "bound")
+
+    assert actors.finish("B")[0] == 0
+    assert not actors.synced("B")
+    assert actors.ran("B") == {"slot": "slot-1", "seen": ["worker"]}
+
+
+@pytest.mark.parametrize(
+    "after",
+    [[], ["C"], ["C", "D"]],
+    ids=["left-free", "taken-by-another", "address-moved"],
+)
+def test_a_run_whose_copy_is_released_while_it_waits_refuses_and_never_runs(
+    layout: workspace.Layout,
+    actors: _Actors,
+    after: list[str],
+) -> None:
+    actors.run("B", pauses=("bound",))
+    assert actors.reached("B", "bound")
+    released = workspace.release(layout, "pkg/a.py")
+    if "C" in after:
+        actors.run("C", "review/pkg/c.py/perf-1")
+        assert actors.finish("C")[0] == 0
+        _ = _write(layout.slot_dir("slot-1") / "worker.edit", "kept\n")
+    if "D" in after:
+        actors.run("D")
+        assert actors.finish("D")[0] == 0
+    actors.go("B", "bound")
+
+    code, out, err = actors.finish("B")
+
+    assert released == ["slot-1 review/pkg/a.py/perf-1"]
+    assert (code, out, err) == (workspace.REFUSED, "", _refusal(_ADDRESS, "slot-1"))
+    assert actors.ran("B") is None
+    assert not actors.synced("B")
+    assert _bound_to(layout) == {
+        "slot-1": "review/pkg/c.py/perf-1" if after else None,
+        **({"slot-2": _ADDRESS} if "D" in after else {}),
+    }
+    if after:
+        assert _edits(layout.slot_dir("slot-1")) == ["C", "worker"]
+        assert actors.ran("C") == {"slot": "slot-1", "seen": []}
+        assert set(_statuses(layout).values()) == {"ready"}
+    if "D" in after:
+        assert actors.ran("D") == {"slot": "slot-2", "seen": []}
+
+
+def test_a_run_whose_address_holds_its_copy_again_runs_in_that_binding(
+    layout: workspace.Layout,
+    actors: _Actors,
+) -> None:
+    actors.run("B", pauses=("bound",))
+    assert actors.reached("B", "bound")
+    released = workspace.release(layout, "pkg/a.py")
+    actors.run("D")
+    assert actors.finish("D")[0] == 0
+    actors.go("B", "bound")
+
+    code, out, _ = actors.finish("B")
+
+    assert released == ["slot-1 review/pkg/a.py/perf-1"]
+    assert (code, out) == (0, "")
+    assert actors.ran("D") == {"slot": "slot-1", "seen": []}
+    assert actors.ran("B") == {"slot": "slot-1", "seen": ["D"]}
+    assert not actors.synced("B")
+    assert _bound_to(layout) == {"slot-1": _ADDRESS}
+    assert _edits(layout.slot_dir("slot-1")) == ["B", "D"]
+    assert _statuses(layout) == {"slot-1": "ready"}
+
+
+def test_a_fresh_run_killed_in_its_sync_leaves_the_copy_to_resync(
+    layout: workspace.Layout,
+    actors: _Actors,
+) -> None:
+    actors.run("A")
+    assert actors.finish("A")[0] == 0
+    actors.run("F", _ADDRESS, "--fresh", die_in_sync=True)
+    assert actors.finish("F")[0] == 9
+    left = _statuses(layout)
+    actors.run("B")
+
+    assert actors.finish("B")[0] == 0
+    assert left == {"slot-1": "syncing"}
+    assert actors.synced("B")
+    assert actors.ran("B") == {"slot": "slot-1", "seen": []}
+    assert _statuses(layout) == {"slot-1": "ready"}
+
+
+def test_path_prints_a_synced_copy_while_a_command_runs_in_it(
+    layout: workspace.Layout,
+    actors: _Actors,
+) -> None:
+    actors.run("A")
+    assert actors.finish("A")[0] == 0
+    actors.run("B", pauses=("in",))
+    assert actors.reached("B", "in")
+    actors.start("P", "path", _ADDRESS)
+
+    printed = actors.finish("P", timeout=20)
+    actors.go("B", "in")
+
+    assert printed[:2] == (0, f"{layout.slot_dir('slot-1')}\n")
+    assert actors.finish("B")[0] == 0
 
 
 def test_bind_refuses_when_every_copy_is_bound_and_release_frees_them(
@@ -457,7 +962,8 @@ def test_bind_refuses_when_every_copy_is_bound_and_release_frees_them(
     reused = workspace.bind(layout, _address("before", item="pkg/b.py"))
 
     assert released == ["slot-1 review/pkg/a.py/before", "slot-2 review/pkg/a.py/perf-1"]
-    assert (reused.slot, reused.needs_sync) == ("slot-1", True)
+    assert reused.slot == "slot-1"
+    assert _statuses(layout) == {"slot-1": "syncing", "slot-2": None}
 
 
 def test_bind_refuses_a_new_copy_below_the_free_disk_guard(
@@ -559,15 +1065,295 @@ def test_gc_refuses_a_folder_it_did_not_create(layout: workspace.Layout) -> None
     assert (layout.flow_dir / "someone-elses.txt").exists()
 
 
-def test_gc_refuses_while_a_command_runs_unless_forced(layout: workspace.Layout) -> None:
+def test_gc_refuses_while_a_command_runs_and_names_its_copy(layout: workspace.Layout) -> None:
     binding = workspace.bind(layout, _address("perf-1"))
 
-    with workspace.file_lock(layout.slot_lock(binding.slot)):
-        with pytest.raises(workspace.LockBusyError, match="slot-1"):
+    with workspace.flow_lease(layout), workspace.file_lock(layout.slot_lock(binding.slot)):
+        with pytest.raises(workspace.LockBusyError, match=r"still runs in review \(slot-1\)"):
             workspace.gc(layout)
-        assert layout.flow_dir.exists()
-        workspace.gc(layout, force=True)
+        assert binding.directory.parent.exists()
+    workspace.gc(layout)
     assert not layout.flow_dir.exists()
+
+
+def test_gc_cut_short_keeps_the_marker_so_the_next_gc_finishes(
+    layout: workspace.Layout,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = workspace.bind(layout, _address("perf-1"))
+    _write(binding.directory / "file.txt", "x\n")
+    _write(layout.run_log, "{}\n")
+    real_rmtree = shutil.rmtree
+
+    def _fails_once(path: Path) -> None:
+        monkeypatch.setattr(shutil, "rmtree", real_rmtree)
+        real_rmtree(path)
+        raise OSError(66, "Directory not empty", str(path))
+
+    monkeypatch.setattr(shutil, "rmtree", _fails_once)
+
+    with pytest.raises(OSError, match="not empty"):
+        workspace.gc(layout)
+    assert (layout.flow_dir / workspace.MARKER_NAME).exists()
+    workspace.gc(layout)
+    assert not layout.flow_dir.exists()
+
+
+def test_a_lock_taken_after_gc_never_brings_the_flow_back(
+    layout: workspace.Layout,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(workspace.ROOT_ENV, str(layout.base.parent))
+    binding = workspace.bind(layout, _address("perf-1"))
+    workspace.gc(layout)
+
+    with pytest.raises(FileNotFoundError):
+        with workspace.file_lock(layout.slot_lock(binding.slot)):
+            pass
+    assert workspace.release(layout, "pkg/a.py") == []
+    assert workspace.status(layout.repo_root, layout.flow)[1] == "review: 0 of 4 copies"
+    assert not layout.flow_dir.exists()
+
+
+def test_a_flow_folder_is_made_while_another_gc_removes_the_empty_parents(
+    layout: workspace.Layout,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_mkdir = Path.mkdir
+    races = [errno.EINVAL, errno.ENOENT]
+
+    def _parent_removed_twice(
+        path: Path,
+        mode: int = 0o777,
+        parents: bool = False,
+        exist_ok: bool = False,
+    ) -> None:
+        if path == layout.flow_dir and races:
+            raise OSError(races.pop(0), "a parent was removed", str(path))
+        real_mkdir(path, mode, parents, exist_ok)
+
+    monkeypatch.setattr(Path, "mkdir", _parent_removed_twice)
+
+    with workspace.flow_lease(layout) as marked:
+        assert marked
+    assert races == []
+
+
+def test_a_flow_folder_gone_right_after_it_exists_is_made_again_and_a_file_there_raises(
+    layout: workspace.Layout,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_mkdir = Path.mkdir
+    vanished = [True]
+
+    def _exists_then_vanishes(
+        path: Path,
+        mode: int = 0o777,
+        parents: bool = False,
+        exist_ok: bool = False,
+    ) -> None:
+        if path == layout.flow_dir and vanished:
+            vanished.pop()
+            raise FileExistsError(errno.EEXIST, "made and removed again", str(path))
+        real_mkdir(path, mode, parents, exist_ok)
+
+    monkeypatch.setattr(Path, "mkdir", _exists_then_vanishes)
+    workspace._make_flow_dir(layout.flow_dir)
+    assert vanished == []
+    assert layout.flow_dir.is_dir()
+
+    layout.flow_dir.rmdir()
+    _write(layout.flow_dir, "not a folder\n")
+    with pytest.raises(FileExistsError):
+        workspace._make_flow_dir(layout.flow_dir)
+    assert layout.flow_dir.is_file()
+
+
+def test_status_marks_the_copy_a_command_holds(
+    layout: workspace.Layout,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(workspace.ROOT_ENV, str(layout.base.parent))
+    held = workspace.bind(layout, _address("perf-1"))
+    workspace.bind(layout, _address("mech-1"))
+
+    with workspace.file_lock(layout.slot_lock(held.slot)):
+        lines = workspace.status(layout.repo_root, layout.flow)
+
+    assert lines[2:4] == [
+        "  slot-1  review/pkg/a.py/perf-1 (syncing) RUNNING",
+        "  slot-2  review/pkg/a.py/mech-1 (syncing)",
+    ]
+
+
+# --------------------------------------------------------------------------------------------
+# Cleanup against other processes
+# --------------------------------------------------------------------------------------------
+
+
+def test_release_keeps_the_copy_until_its_binding_is_gone(
+    layout: workspace.Layout,
+    actors: _Actors,
+) -> None:
+    actors.run("run", pauses=("bound",))
+    assert actors.reached("run", "bound")
+    actors.start("release", "release", "review/pkg/a.py", pauses=("postgres",))
+    assert actors.reached("release", "postgres")
+    with pytest.raises(workspace.LockBusyError):
+        with workspace.file_lock(layout.slot_lock("slot-1"), blocking=False):
+            pass
+
+    actors.go("run", "bound")
+
+    with pytest.raises(workspace.LockBusyError):
+        with workspace.file_lock(layout.slot_lock("slot-1"), blocking=False):
+            pass
+    assert not actors.reached("run", "in", within=0.5)
+    actors.go("release", "postgres")
+    assert actors.finish("release") == (
+        0,
+        "released 1 copy(ies)\n  slot-1 review/pkg/a.py/perf-1\n",
+        "",
+    )
+    assert actors.finish("run") == (workspace.REFUSED, "", _refusal(_ADDRESS, "slot-1"))
+    assert actors.ran("run") is None
+    assert _bound_to(layout) == {"slot-1": None}
+
+
+def test_gc_refuses_while_a_run_waits_for_its_copy(
+    layout: workspace.Layout,
+    actors: _Actors,
+) -> None:
+    actors.run("run", pauses=("bound",))
+    assert actors.reached("run", "bound")
+
+    actors.start("gc", "gc", "review")
+
+    assert actors.finish("gc") == (
+        1,
+        "",
+        "workspace: a command still runs in review; wait for it to finish\n",
+    )
+    actors.go("run", "bound")
+    assert actors.finish("run")[0] == 0
+    assert actors.ran("run") == {"slot": "slot-1", "seen": []}
+
+
+def test_gc_keeps_the_flow_until_it_is_gone_and_the_run_it_held_off_holds_off_the_next(
+    layout: workspace.Layout,
+    actors: _Actors,
+) -> None:
+    old = workspace.bind(layout, _address("before"))
+    _write(old.directory / "retained.txt", "edits\n")
+    actors.start("gc", "gc", "review", pauses=("postgres",))
+    assert actors.reached("gc", "postgres")
+    flow = os.open(layout.flow_dir, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(flow, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    finally:
+        os.close(flow)
+
+    actors.run("run", pauses=("in",))
+
+    assert not actors.reached("run", "bound", within=0.5)
+    assert (old.directory / "retained.txt").exists()
+    actors.go("gc", "postgres")
+    assert actors.finish("gc") == (0, f"removed {layout.flow_dir} (0 MB)\n", "")
+    assert actors.reached("run", "in")
+    assert (layout.flow_dir / workspace.MARKER_NAME).exists()
+    assert _bound_to(layout) == {"slot-1": _ADDRESS}
+    assert not (old.directory / "retained.txt").exists()
+    actors.start("gc-again", "gc", "review")
+    assert actors.finish("gc-again") == (
+        1,
+        "",
+        "workspace: a command still runs in review (slot-1); wait for it to finish\n",
+    )
+    actors.go("run", "in")
+    assert actors.finish("run")[0] == 0
+    assert _edits(old.directory) == ["run"]
+
+
+def test_status_never_makes_a_release_refuse(layout: workspace.Layout, actors: _Actors) -> None:
+    bound = workspace.bind(layout, _address("perf-1"))
+    with workspace.file_lock(layout.slot_lock(bound.slot)):
+        pass
+    actors.start("status", "status", "review", pauses=("probe",))
+    assert actors.reached("status", "probe")
+    with pytest.raises(workspace.LockBusyError):
+        with workspace.file_lock(layout.pool_lock, blocking=False):
+            pass
+
+    actors.start("release", "release", "review/pkg/a.py")
+
+    assert not actors.reached("release", "state", within=0.5)
+    actors.go("status", "probe")
+    assert actors.finish("release") == (
+        0,
+        "released 1 copy(ies)\n  slot-1 review/pkg/a.py/perf-1\n",
+        "",
+    )
+    assert actors.finish("status") == (
+        0,
+        "\n".join(
+            [
+                f"root {layout.base}",
+                "review: 1 of 4 copies",
+                "  slot-1  review/pkg/a.py/perf-1 (syncing)",
+                "postgres: no fakeshop container runs",
+                "",
+            ],
+        ),
+        "",
+    )
+
+
+def test_release_and_a_syncing_run_never_wait_on_each_other(
+    layout: workspace.Layout,
+    actors: _Actors,
+) -> None:
+    actors.run("run", pauses=("sync",))
+    assert actors.reached("run", "sync")
+    actors.start("release", "release", "review/pkg/a.py", pauses=("state",))
+    assert actors.reached("release", "state")
+
+    actors.go("run", "sync")
+    time.sleep(0.3)
+    actors.go("release", "state")
+
+    assert actors.finish("release") == (
+        1,
+        "",
+        "workspace: review/pkg/a.py: a command still runs in slot-1\n",
+    )
+    assert actors.finish("run")[0] == 0
+    assert _bound_to(layout) == {"slot-1": _ADDRESS}
+    assert _statuses(layout) == {"slot-1": "ready"}
+
+
+def test_a_lock_file_replaced_while_waited_on_never_admits_two_holders(
+    actors: _Actors,
+    tmp_path: Path,
+) -> None:
+    lock = tmp_path / "copy.lock"
+    actors.start("first", "hold", pauses=("in",), path=str(lock))
+    assert actors.reached("first", "in")
+    actors.start("waiter", "hold", pauses=("in",), path=str(lock))
+    assert actors.reached("waiter", "opened")
+    lock.unlink()
+    actors.start("third", "hold", pauses=("in",), path=str(lock))
+    assert actors.reached("third", "in")
+
+    actors.go("first", "in")
+    assert actors.finish("first")[0] == 0
+
+    assert not actors.reached("waiter", "in", within=0.5)
+    actors.go("third", "in")
+    assert actors.reached("waiter", "in")
+    actors.go("waiter", "in")
+    assert actors.finish("waiter")[0] == 0
+    assert actors.finish("third")[0] == 0
 
 
 # --------------------------------------------------------------------------------------------

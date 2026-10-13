@@ -482,8 +482,8 @@ pass `<n>`). `<command>` is what follows `uv run` (`pytest <node> --no-cov`,
 `python scripts/count_queries.py ...`); its relative paths resolve inside the copy. An address's
 first run syncs a copy from the shared tree as it stands; later runs reuse that copy as it stands,
 edits included; `--fresh` resyncs it. `path` prints the copy for reading or editing, syncing it first when
-unbound: a verifier reverting a hunk edits there, never in the shared tree. Reverse-apply a diff
-inside a copy w/ `patch -R -p1 -d <copy> < <diff>`; `git apply` run from inside a checkout
+unbound or its sync never finished: a verifier reverting a hunk edits there, never in the shared
+tree. Reverse-apply a diff inside a copy w/ `patch -R -p1 -d <copy> < <diff>`; `git apply` run from inside a checkout
 resolves paths from that checkout's root and skips a hunk it cannot place w/o failing.
 
 Every run prints a provenance header on stderr: run id, copy, the package file it imports and its

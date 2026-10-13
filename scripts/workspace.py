@@ -17,14 +17,18 @@ Worker commands
         against the copy. The first run of an address binds it to a copy
         synced from the shared tree as it stands at that moment; later runs
         reuse that copy as it stands, edits included. ``--fresh`` resyncs it
-        from the shared tree first.
+        from the shared tree first. Runs of one address take turns in its
+        copy: a run waits while a command runs there, and decides whether to
+        sync only once its turn comes, so a run started during the first sync
+        reuses what that sync made and every edit since.
     ``prove <address> <manifest> [--cell ...] [--fresh] [-- <extra args>]``
         ``run`` of ``scripts/prove_failability.py`` in its workspace form:
         ``--workspace`` is the copy; ``--scratch-root`` and ``--json`` sit
         under this flow's evidence folder, never inside the copy.
     ``path <address>``
         Print the copy's directory, binding it first when unbound, so a
-        worker can read or edit files there.
+        worker can read or edit files there. A copy whose sync has not
+        finished is synced first, after any command running in it.
     ``diff <ITEM_BASELINE> [--output FILE | --check FILE] -- <paths...>``
         The item diff: ``git diff --binary <ITEM_BASELINE> -- <paths>``
         (tracked and staged changes, deletions, renames), then each
@@ -46,7 +50,11 @@ Worker-0 commands
         Return the item's copies to the pool; their Postgres databases are
         dropped. ``--keep before`` frees one phase's copies for the next while
         the pinned pre-edit copy stays. A release refuses while a command
-        still runs in a copy it would free.
+        still runs in a copy it would free, and holds each copy until its
+        binding is gone. A run still waiting for a copy that a release frees
+        refuses when its turn comes, naming the release, if the copy no
+        longer holds its address by then; it never binds its address again
+        or runs in a copy bound to another address.
     ``audit <record.md>...``
         Resolve every run id a record cites against the run log. For each id
         it prints the address, cell, exit code and package digest, and whether
@@ -71,11 +79,13 @@ Worker-0 commands
         cell and the floor pins.
     ``status [<flow>]``
         Print copies, bindings, active runs, disk use and Postgres leases.
-    ``gc <flow> [--force]``
+    ``gc <flow>``
         Delete everything the flow holds: copies, gate copy, run log, proof
         scratch and its Postgres databases. The Postgres container is stopped
         when this script started it and no database of any flow remains. Run
-        it after ``## Outcomes`` records what the evidence showed.
+        it after ``## Outcomes`` records what the evidence showed. It refuses
+        while any command of the flow runs, one waiting for a copy included;
+        stop that command, or wait for it, then run ``gc`` again.
 
 Every run prints a provenance header on stderr before its output and a footer
 after it. The header gives the run id, address, copy, the package file the
@@ -137,12 +147,30 @@ Guarantees, each one a hand-run failure this encodes away:
   the evidence the last one produced.
 * **Cleanup leaves nothing.** ``release`` unbinds copies and drops their
   databases. ``gc`` removes the flow folder, its databases, and the empty
-  parent folders. A crashed run's lock dies with its process; a crashed sync
-  resyncs on the address's next run.
+  parent folders; a removal cut short keeps the folder's marker, so ``gc``
+  finishes it on the next run. A crashed run's lock dies with its process; a
+  crashed sync, ``--fresh`` included, resyncs on the address's next run.
+* **A copy is settled under its own lock.** A run holds its copy's lock
+  from before it decides whether to sync until its command ends, and reads
+  its binding and the copy's sync status from ``state.json`` only once it
+  holds that lock; a copy is marked ``syncing`` before every sync and
+  ``ready`` only once that sync finishes.
+* **Cleanup never takes work from a running command.** Every command holds a
+  shared lease on its flow from its first touch of the folder to its last:
+  an ``flock`` on the flow folder itself, so ``gc`` deletes no lock anyone
+  can still open. ``gc`` takes that lease exclusively and keeps it until the
+  folder is gone. ``release`` takes each copy's lock and keeps it while it
+  unbinds the copy. Locks are taken in one order, flow lease, then copy, then
+  ``pool.lock`` (which guards ``state.json``); nothing waits for a copy's
+  lock while holding ``pool.lock``. ``release``, and the check that names a
+  copy ``RUNNING``, try a copy's lock under ``pool.lock`` without waiting, so
+  no two commands wait on each other and that check never makes a
+  ``release`` refuse.
 
 Exit codes: ``run`` and ``prove`` return the command's own exit code. ``125``
 means this script refused before the command ran (bad address, full pool,
-wrong provenance, Postgres unavailable), with the reason on stderr. The other
+its copy was released while it waited, wrong provenance, Postgres
+unavailable), with the reason on stderr. The other
 commands return ``0`` on success and ``1`` on a failed audit, a failed gate
 suite, a ``diff --check`` mismatch or a refusal.
 
@@ -156,6 +184,7 @@ import argparse
 import contextlib
 import dataclasses
 import datetime
+import errno
 import fcntl
 import hashlib
 import io
@@ -181,7 +210,7 @@ except ModuleNotFoundError:  # imported as ``scripts.workspace`` (repo root on p
     from scripts import _bench_common
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator, Mapping, Sequence
+    from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 
     from typing_extensions import TypeIs
 
@@ -504,31 +533,67 @@ def item_diff(repo_root: Path, baseline: str, paths: Sequence[str]) -> bytes:
     return bytes(body) + f"sha256 {hashlib.sha256(body).hexdigest()}\n".encode("ascii")
 
 
-@contextlib.contextmanager
-def file_lock(path: Path, *, blocking: bool = True) -> Generator[None, None, None]:
-    """Hold an exclusive ``flock`` on ``path``; the kernel drops it if the process dies."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+def _still_names(path: Path, descriptor: int) -> bool:
+    """Return whether ``path`` still names the file ``descriptor`` holds open."""
     try:
+        return os.path.samestat(os.fstat(descriptor), os.stat(path))
+    except FileNotFoundError:
+        return False
+
+
+def _flock(path: Path, flags: int, operation: int) -> int:
+    """Lock the file ``path`` names and return the descriptor holding it.
+
+    A file unlinked or replaced while this call waited on it is opened again,
+    so a holder always sits on the file the path names now, never on an inode
+    the path no longer reaches.
+
+    Raises:
+        BlockingIOError: ``operation`` carries ``LOCK_NB`` and another
+            descriptor holds a conflicting lock.
+        FileNotFoundError: ``path`` is missing and ``flags`` cannot create it.
+    """
+    while True:
+        descriptor = os.open(path, flags, 0o644)
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
-        except BlockingIOError:
-            msg = f"{path} is held: a command is still running there"
-            raise LockBusyError(msg) from None
-        yield
-    finally:
+            fcntl.flock(descriptor, operation)
+        except BaseException:
+            os.close(descriptor)
+            raise
+        if _still_names(path, descriptor):
+            return descriptor
         os.close(descriptor)
 
 
-def lock_is_busy(path: Path) -> bool:
-    """Report whether another process holds ``path``'s lock."""
-    if not path.exists():
-        return False
+@contextlib.contextmanager
+def file_lock(
+    path: Path,
+    *,
+    blocking: bool = True,
+    create: bool = True,
+) -> Generator[None, None, None]:
+    """Hold an exclusive ``flock`` on ``path``; the kernel drops it if the process dies.
+
+    ``create`` makes the file, and its folder, but never the folder above:
+    only :func:`flow_lease` creates a flow folder, so a lock taken after
+    ``gc`` removed one raises instead of bringing it back. Without ``create``
+    a missing file raises ``FileNotFoundError``.
+    """
+    if create:
+        path.parent.mkdir(exist_ok=True)
     try:
-        with file_lock(path, blocking=False):
-            return False
-    except LockBusyError:
-        return True
+        descriptor = _flock(
+            path,
+            os.O_RDWR | (os.O_CREAT if create else 0),
+            fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB),
+        )
+    except BlockingIOError:
+        msg = f"{path} is held: a command is still running there"
+        raise LockBusyError(msg) from None
+    try:
+        yield
+    finally:
+        os.close(descriptor)
 
 
 def _now() -> str:
@@ -711,6 +776,68 @@ class Layout:
         marker = self.flow_dir / MARKER_NAME
         if not marker.exists():
             _write_json(marker, {"repo_root": str(self.repo_root), "flow": self.flow})
+
+
+def _make_flow_dir(flow_dir: Path) -> None:
+    """Create the flow folder and its parents, again while a ``gc`` removes the empty parents.
+
+    A ``gc`` of another flow of this checkout removes the parents it finds
+    empty; a ``mkdir`` racing that removal fails with ``ENOENT``, or on macOS
+    ``EINVAL``, or finds the folder gone right after ``EEXIST``.
+    """
+    while True:
+        try:
+            flow_dir.mkdir(parents=True, exist_ok=True)
+        except FileExistsError:
+            if os.path.lexists(flow_dir):
+                raise
+        except OSError as error:
+            if error.errno not in {errno.ENOENT, errno.EINVAL}:
+                raise
+        else:
+            return
+
+
+def _lock_flow_dir(layout: Layout, operation: int, *, create: bool) -> int | None:
+    """Lock the flow folder itself; return the descriptor, or ``None`` when there is none.
+
+    ``create`` makes the folder first, again if a ``gc`` removed it while this
+    call waited.
+
+    Raises:
+        BlockingIOError: ``operation`` carries ``LOCK_NB`` and the lock is held.
+    """
+    while True:
+        if create:
+            _make_flow_dir(layout.flow_dir)
+        try:
+            return _flock(layout.flow_dir, os.O_RDONLY | os.O_DIRECTORY, operation)
+        except FileNotFoundError:
+            if not create:
+                return None
+
+
+@contextlib.contextmanager
+def flow_lease(layout: Layout, *, create: bool = True) -> Generator[bool, None, None]:
+    """Hold a shared lease on the flow for a whole command; yield whether the flow is marked.
+
+    The lease is an ``flock`` on the flow folder itself, so no lock file sits
+    in what ``gc`` removes. ``gc`` takes it exclusively and keeps it until the
+    folder is gone; a command that waited out a ``gc`` finds the path naming a
+    new folder, or none, and locks that. ``create`` makes and marks the
+    folder; without it nothing is created and an absent folder yields
+    ``False``.
+    """
+    descriptor = _lock_flow_dir(layout, fcntl.LOCK_SH, create=create)
+    if descriptor is None:
+        yield False
+        return
+    try:
+        if create:
+            layout.ensure_marked()
+        yield (layout.flow_dir / MARKER_NAME).exists()
+    finally:
+        os.close(descriptor)
 
 
 # --------------------------------------------------------------------------------------------
@@ -1380,11 +1507,19 @@ def _load_state(layout: Layout) -> _PoolState:
 
 @dataclasses.dataclass(frozen=True)
 class Binding:
-    """One address bound to one copy."""
+    """One address bound to one copy; :func:`lease` decides whether the copy needs a sync."""
 
     slot: str
     directory: Path
-    needs_sync: bool
+
+
+@dataclasses.dataclass(frozen=True)
+class Lease:
+    """An address's copy while this process holds its lock, synced for that address."""
+
+    slot: str
+    directory: Path
+    manifest: _Manifest
 
 
 def _free_bytes(path: Path) -> int:
@@ -1394,8 +1529,11 @@ def _free_bytes(path: Path) -> int:
     return shutil.disk_usage(probe).free
 
 
-def bind(layout: Layout, address: Address, *, fresh: bool = False) -> Binding:
+def bind(layout: Layout, address: Address) -> Binding:
     """Bind ``address`` to a copy: its existing one, a free warm one, or a new one.
+
+    A new binding is recorded ``syncing``: the copy holds no sync for this
+    address yet.
 
     Raises:
         WorkspaceError: every copy is bound to another address, or a new copy
@@ -1407,8 +1545,7 @@ def bind(layout: Layout, address: Address, *, fresh: bool = False) -> Binding:
         slots = state["slots"]
         for slot, bound in slots.items():
             if bound and bound["address"] == str(address):
-                needs = fresh or bound.get("status") != "ready"
-                return Binding(slot, layout.slot_dir(slot), needs)
+                return Binding(slot, layout.slot_dir(slot))
         free = sorted((slot for slot, bound in slots.items() if not bound), key=_slot_number)
         if free:
             slot = free[0]
@@ -1434,35 +1571,131 @@ def bind(layout: Layout, address: Address, *, fresh: bool = False) -> Binding:
             "status": "syncing",
         }
         _write_json(layout.state_path, state)
-        return Binding(slot, layout.slot_dir(slot), True)
+        return Binding(slot, layout.slot_dir(slot))
 
 
 def _slot_number(name: str) -> int:
     return int(name.rpartition("-")[2])
 
 
-def _mark_synced(layout: Layout, slot: str, manifest: _Manifest) -> None:
+def _admit(
+    layout: Layout,
+    address: Address,
+    slot: str,
+    *,
+    fresh: bool,
+) -> bool:
+    """Decide, with ``slot``'s lock held, whether the copy needs a sync before this run uses it.
+
+    ``state.json`` is read now, not when the address was bound. A sync is
+    recorded ``syncing`` before it starts, so a sync that dies part way,
+    ``fresh`` or not, resyncs on the address's next run.
+
+    Raises:
+        WorkspaceError: ``slot`` no longer holds ``address``: a ``release``
+            freed it while the run waited for its lock.
+    """
     with file_lock(layout.pool_lock):
         state = _load_state(layout)
         bound = state["slots"].get(slot)
-        if bound:
-            bound.update(
-                status="ready",
-                synced_at=manifest["synced_at"],
-                tree_digest=manifest["tree_digest"],
-                package_digest=manifest["package_digest"],
-            )
+        if not bound or bound["address"] != str(address):
+            msg = f"{address}: {slot} was released while this command waited for it; run it again"
+            raise WorkspaceError(msg)
+        if not fresh and bound["status"] == "ready" and layout.manifest_path(slot).exists():
+            return False
+        if bound["status"] != "syncing":
+            bound["status"] = "syncing"
             _write_json(layout.state_path, state)
+        return True
 
 
-def sync_slot(layout: Layout, slot: str) -> _Manifest:
-    """Resync one copy from the shared tree and drop its Postgres databases."""
+@contextlib.contextmanager
+def lease(
+    layout: Layout,
+    address: Address,
+    *,
+    fresh: bool = False,
+) -> Generator[Lease, None, None]:
+    """Hold ``address``'s copy, bound and synced for it, until the block ends.
+
+    The caller holds the flow's lease. The run waits for the copy's lock and
+    decides only then, from ``state.json`` read under it, whether to sync: a
+    copy already synced for the address is used as it stands, edits included,
+    however long the run waited; a copy still ``syncing`` (a new binding, or
+    a sync that never finished) or one ``fresh`` asks for is resynced.
+
+    Raises:
+        WorkspaceError: the copy no longer holds ``address``: a release freed
+            it while the run waited for its lock. The run never binds the
+            address again.
+    """
+    slot = bind(layout, address).slot
+    with file_lock(layout.slot_lock(slot)):
+        manifest = (
+            sync_slot(layout, slot, address)
+            if _admit(layout, address, slot, fresh=fresh)
+            # Only ``sync_slot`` writes a slot's manifest file, always from a ``_Manifest``.
+            else cast("_Manifest", _read_json_object(layout.manifest_path(slot), {}))
+        )
+        yield Lease(slot, layout.slot_dir(slot), manifest)
+
+
+def copy_path(layout: Layout, address: Address) -> Path:
+    """Return ``address``'s copy for reading or editing, bound and synced for it.
+
+    A copy whose sync for the address finished is returned at once, even while
+    a command runs in it: ``state.json`` is replaced whole, so that read needs
+    no lock. Anything else (unbound, still ``syncing``, its manifest gone) is
+    settled by :func:`lease`, after any command running in the copy. The
+    caller holds the flow's lease.
+    """
+    for slot, bound in _load_state(layout)["slots"].items():
+        if (
+            bound
+            and bound["address"] == str(address)
+            and bound["status"] == "ready"
+            and layout.manifest_path(slot).exists()
+        ):
+            return layout.slot_dir(slot)
+    with lease(layout, address) as held:
+        return held.directory
+
+
+def _mark_synced(
+    layout: Layout,
+    slot: str,
+    address: Address,
+    manifest: _Manifest,
+) -> None:
+    """Record ``manifest`` as the sync of ``slot`` for ``address``.
+
+    Raises:
+        WorkspaceError: ``slot`` no longer holds ``address``; no other binding
+            is ever stamped with this sync.
+    """
+    with file_lock(layout.pool_lock):
+        state = _load_state(layout)
+        bound = state["slots"].get(slot)
+        if not bound or bound["address"] != str(address):
+            msg = f"{slot} no longer holds {address}: it was released during the sync"
+            raise WorkspaceError(msg)
+        bound.update(
+            status="ready",
+            synced_at=manifest["synced_at"],
+            tree_digest=manifest["tree_digest"],
+            package_digest=manifest["package_digest"],
+        )
+        _write_json(layout.state_path, state)
+
+
+def sync_slot(layout: Layout, slot: str, address: Address) -> _Manifest:
+    """Resync one copy from the shared tree for ``address`` and drop its Postgres databases."""
     postgres = _running_postgres(layout.repo_root)
     if postgres is not None:
         _ = postgres.drop_matching(layout.db_name(slot), exact=True)
     manifest = sync_copy(layout.repo_root, layout.slot_dir(slot))
     _write_json(layout.manifest_path(slot), manifest)
-    _mark_synced(layout, slot, manifest)
+    _mark_synced(layout, slot, address, manifest)
     return manifest
 
 
@@ -1701,38 +1934,44 @@ def execute(
     cell: str = "default",
     fresh: bool = False,
 ) -> int:
-    """Bind, sync when needed, probe, then run the command in the address's copy."""
+    """Lease the address's copy, probe, then run the command in it."""
     check_shared_checkout(layout.repo_root)
-    binding = bind(layout, address, fresh=fresh)
-    with file_lock(layout.slot_lock(binding.slot)):
-        manifest = (
-            sync_slot(layout, binding.slot)
-            if binding.needs_sync or not layout.manifest_path(binding.slot).exists()
-            # Only ``sync_slot`` writes a slot's manifest file, always from a ``_Manifest``.
-            else cast("_Manifest", _read_json_object(layout.manifest_path(binding.slot), {}))
-        )
-        env, database = cell_env(layout, binding.slot, cell)
-        found = probe(binding.directory, env)
-        faults = provenance_faults(found, binding.directory, cell, database)
+    with flow_lease(layout):
+        return _execute_leased(layout, address, build_command, cell=cell, fresh=fresh)
+
+
+def _execute_leased(
+    layout: Layout,
+    address: Address,
+    build_command: Callable[[Path, str], list[str]],
+    *,
+    cell: str,
+    fresh: bool,
+) -> int:
+    with lease(layout, address, fresh=fresh) as held:
+        manifest = held.manifest
+        env, database = cell_env(layout, held.slot, cell)
+        found = probe(held.directory, env)
+        faults = provenance_faults(found, held.directory, cell, database)
         if faults:
             raise WorkspaceError("wrong tree: " + "; ".join(faults))
         run_id = new_run_id(layout.flow)
-        command = build_command(binding.directory, run_id)
+        command = build_command(held.directory, run_id)
         log_path = layout.evidence / "logs" / f"{run_id}.log"
         record: _RunRecord = {
             "run_id": run_id,
             "address": str(address),
             "item": address.item,
             "role": address.role,
-            "slot": binding.slot,
-            "directory": str(binding.directory),
+            "slot": held.slot,
+            "directory": str(held.directory),
             "synced_at": manifest.get("synced_at"),
             "tree_digest": manifest.get("tree_digest"),
             "package_file": found["package_file"],
-            "package_digest": _bench_common.package_digest(binding.directory / PACKAGE_DIR),
+            "package_digest": _bench_common.package_digest(held.directory / PACKAGE_DIR),
             "cell": cell,
             "databases": {alias: conf["NAME"] for alias, conf in found["databases"].items()},
-            "copy_edits": copy_edits(binding.directory, manifest),
+            "copy_edits": copy_edits(held.directory, manifest),
             "shared_moves": shared_moves(layout.repo_root, manifest),
             "command": command,
             "log": str(log_path),
@@ -1746,7 +1985,7 @@ def execute(
             "uv",
             "run",
             "--directory",
-            str(binding.directory),
+            str(held.directory),
             "--frozen",
             "--group",
             "pg",
@@ -1790,66 +2029,128 @@ def release(
     the pinned pre-edit copy stays. Only a whole-item release forgets the
     item's ``ITEM_BASELINE``.
 
+    Each copy's lock is taken without waiting and kept until its binding is
+    gone from ``state.json``, so no command enters a copy this release is
+    freeing; one that was bound but still waiting for the copy refuses when
+    it gets the lock, unless its address holds that copy again by then.
+
     Raises:
         LockBusyError: a command still runs in one of them.
     """
-    if not (layout.flow_dir / MARKER_NAME).exists():
-        return []
-    with file_lock(layout.pool_lock):
-        state = _load_state(layout)
-        chosen = [
-            slot
-            for slot, bound in state["slots"].items()
-            if bound
-            and bound["item"] == item
-            and (not roles or bound["role"] in roles)
-            and bound["role"] not in keep
-        ]
-        busy = [slot for slot in chosen if lock_is_busy(layout.slot_lock(slot))]
-        if busy:
-            msg = f"{layout.flow}/{item}: a command still runs in {', '.join(busy)}"
-            raise LockBusyError(msg)
-        postgres = _running_postgres(layout.repo_root)
-        released: list[str] = []
-        for slot in chosen:
-            if postgres is not None:
-                _ = postgres.drop_matching(layout.db_name(slot), exact=True)
-            # ``chosen`` holds only bound slots.
-            bound = cast("_SlotBinding", state["slots"][slot])
-            released.append(f"{slot} {bound['address']}")
-            state["slots"][slot] = None
-        if not roles and not keep:
-            _ = state["items"].pop(item, None)
-        if layout.state_path.exists():
-            _write_json(layout.state_path, state)
+    with flow_lease(layout, create=False) as marked:
+        if not marked:
+            return []
+        with file_lock(layout.pool_lock), contextlib.ExitStack() as leases:
+            state = _load_state(layout)
+            chosen = [
+                slot
+                for slot, bound in state["slots"].items()
+                if bound
+                and bound["item"] == item
+                and (not roles or bound["role"] in roles)
+                and bound["role"] not in keep
+            ]
+            busy: list[str] = []
+            for slot in chosen:
+                try:
+                    leases.enter_context(file_lock(layout.slot_lock(slot), blocking=False))
+                except LockBusyError:
+                    busy.append(slot)
+            if busy:
+                msg = f"{layout.flow}/{item}: a command still runs in {', '.join(busy)}"
+                raise LockBusyError(msg)
+            postgres = _running_postgres(layout.repo_root)
+            released: list[str] = []
+            for slot in chosen:
+                if postgres is not None:
+                    _ = postgres.drop_matching(layout.db_name(slot), exact=True)
+                # ``chosen`` holds only bound slots.
+                bound = cast("_SlotBinding", state["slots"][slot])
+                released.append(f"{slot} {bound['address']}")
+                state["slots"][slot] = None
+            forgot = not roles and not keep and state["items"].pop(item, None) is not None
+            if released or forgot:
+                _write_json(layout.state_path, state)
     return released
 
 
-def gc(layout: Layout, *, force: bool = False) -> list[str]:
-    """Delete the flow folder and its databases; stop Postgres when this script owns it idle."""
+def running_slots(layout: Layout, slots: Iterable[str]) -> list[str]:
+    """Return which of ``slots`` a command holds, without making any lock look held.
+
+    Each slot lock is tried without waiting, under ``pool.lock``: ``release``
+    tries slot locks only under ``pool.lock`` too, so this check never makes
+    it refuse, and a run waiting for its copy waits a moment longer. Nothing
+    is created; a lock file that is gone reads as free.
+    """
+    busy: list[str] = []
+    try:
+        with file_lock(layout.pool_lock, create=False):
+            for slot in slots:
+                try:
+                    with file_lock(layout.slot_lock(slot), blocking=False, create=False):
+                        pass
+                except LockBusyError:
+                    busy.append(slot)
+                except FileNotFoundError:
+                    continue
+    except FileNotFoundError:
+        return []
+    return busy
+
+
+def _remove_flow_dir(flow_dir: Path) -> None:
+    """Remove the flow folder, its marker last, so a removal that fails can be run again."""
+    for entry in flow_dir.iterdir():
+        if entry.name == MARKER_NAME:
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+    (flow_dir / MARKER_NAME).unlink()
+    flow_dir.rmdir()
+
+
+def gc(layout: Layout) -> list[str]:
+    """Delete the flow folder and its databases; stop Postgres when this script owns it idle.
+
+    The flow's lease is taken exclusively without waiting and kept until the
+    folder is gone, so ``gc`` refuses while any command of the flow runs, a
+    command waiting for a copy included, and no command starts inside it.
+
+    Raises:
+        LockBusyError: a command of the flow still runs.
+        WorkspaceError: the folder carries no marker of this script.
+    """
     report: list[str] = []
     flow_dir = layout.flow_dir
-    if flow_dir.exists():
-        if not (flow_dir / MARKER_NAME).exists():
+    try:
+        descriptor = _lock_flow_dir(layout, fcntl.LOCK_EX | fcntl.LOCK_NB, create=False)
+    except BlockingIOError:
+        state = _load_state(layout)
+        busy = running_slots(layout, sorted(state["slots"], key=_slot_number))
+        where = f" ({', '.join(busy)})" if busy else ""
+        msg = f"a command still runs in {layout.flow}{where}; wait for it to finish"
+        raise LockBusyError(msg) from None
+    try:
+        if descriptor is not None and not (flow_dir / MARKER_NAME).exists():
             msg = f"{flow_dir} carries no {MARKER_NAME} marker; refusing to delete it"
             raise WorkspaceError(msg)
-        locks = [*(flow_dir / "slots").glob("*.lock"), flow_dir / "gate.lock"]
-        busy = [lock.stem for lock in locks if lock_is_busy(lock)]
-        if busy and not force:
-            msg = f"a command still runs in {', '.join(busy)}; wait, or pass --force"
-            raise LockBusyError(msg)
-    postgres = _running_postgres(layout.repo_root)
-    if postgres is not None:
-        dropped = postgres.drop_matching(layout.db_prefix)
-        report.append(f"dropped {len(dropped)} Postgres database(s)")
-    if flow_dir.exists():
-        size = sum(
-            path.lstat().st_size
-            for path in flow_dir.rglob("*")
-            if path.is_file() and not path.is_symlink()
-        )
-        shutil.rmtree(flow_dir)
-        report.append(f"removed {flow_dir} ({size / 1024**2:.0f} MB)")
+        postgres = _running_postgres(layout.repo_root)
+        if postgres is not None:
+            dropped = postgres.drop_matching(layout.db_prefix)
+            report.append(f"dropped {len(dropped)} Postgres database(s)")
+        if descriptor is not None:
+            size = sum(
+                path.lstat().st_size
+                for path in flow_dir.rglob("*")
+                if path.is_file() and not path.is_symlink()
+            )
+            _remove_flow_dir(flow_dir)
+            report.append(f"removed {flow_dir} ({size / 1024**2:.0f} MB)")
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
     # The default ``dsf-ws`` parent is this script's to remove; a DSF_WS_ROOT folder is not.
     parents = [layout.base] if os.environ.get(ROOT_ENV) else [layout.base, layout.base.parent]
     for parent in parents:
@@ -1871,10 +2172,11 @@ def status(repo_root: Path, flow: str | None) -> list[str]:
         layout = Layout(repo_root, base, name)
         state = _load_state(layout)
         lines.append(f"{name}: {len(state['slots'])} of {pool_size()} copies")
+        running = set(running_slots(layout, state["slots"]))
         for slot, bound in sorted(state["slots"].items(), key=lambda pair: _slot_number(pair[0])):
-            running = " RUNNING" if lock_is_busy(layout.slot_lock(slot)) else ""
+            running_text = " RUNNING" if slot in running else ""
             where = f"{bound['address']} ({bound.get('status')})" if bound else "free (warm)"
-            lines.append(f"  {slot}  {where}{running}")
+            lines.append(f"  {slot}  {where}{running_text}")
         for item, entry in sorted(state["items"].items()):
             lines.append(f"  item {item}  ITEM_BASELINE={entry['item_baseline']}")
     postgres = _running_postgres(repo_root)
@@ -2091,9 +2393,8 @@ def summarize_suite(log_text: str) -> _SuiteSummary:
 def gate(layout: Layout, suites: Sequence[str]) -> int:
     """Run the gate suites in the gate copy; write and print the bound result."""
     check_shared_checkout(layout.repo_root)
-    layout.ensure_marked()
     repo_root = layout.repo_root
-    with file_lock(layout.flow_dir / "gate.lock", blocking=False):
+    with flow_lease(layout), file_lock(layout.flow_dir / "gate.lock", blocking=False):
         if not layout.gate_dir.exists() and _free_bytes(layout.base) < MIN_FREE_BYTES:
             msg = f"under {MIN_FREE_BYTES // 1024**3} GB free at {layout.base}; no gate copy"
             raise WorkspaceError(msg)
@@ -2271,11 +2572,9 @@ def _cmd_path(args: argparse.Namespace) -> int:
     address = Address.parse(args.address)
     layout = Layout.for_flow(address.flow)
     check_shared_checkout(layout.repo_root)
-    binding = bind(layout, address)
-    if binding.needs_sync or not layout.manifest_path(binding.slot).exists():
-        with file_lock(layout.slot_lock(binding.slot)):
-            _ = sync_slot(layout, binding.slot)
-    print(binding.directory)
+    with flow_lease(layout):
+        directory = copy_path(layout, address)
+    print(directory)
     return 0
 
 
@@ -2285,16 +2584,16 @@ def _cmd_baseline(args: argparse.Namespace) -> int:
     check_shared_checkout(layout.repo_root)
     sha = baseline_sha(layout.repo_root)
     address = Address(ref.flow, ref.item, "before")
-    binding = bind(layout, address, fresh=True)
-    with file_lock(layout.slot_lock(binding.slot)):
-        manifest = sync_slot(layout, binding.slot)
-    with file_lock(layout.pool_lock):
-        state = _load_state(layout)
-        state["items"][ref.item] = {"item_baseline": sha, "at": _now()}
-        _write_json(layout.state_path, state)
+    with flow_lease(layout):
+        with lease(layout, address, fresh=True) as held:
+            manifest = held.manifest
+        with file_lock(layout.pool_lock):
+            state = _load_state(layout)
+            state["items"][ref.item] = {"item_baseline": sha, "at": _now()}
+            _write_json(layout.state_path, state)
     print(f"ITEM_BASELINE={sha}")
     print(
-        f"before: {address} -> {binding.directory} "
+        f"before: {address} -> {held.directory} "
         f"(tree {manifest['tree_digest']}, package {manifest['package_digest']})",
     )
     return 0
@@ -2328,7 +2627,7 @@ def _cmd_release(args: argparse.Namespace) -> int:
 
 
 def _cmd_gc(args: argparse.Namespace) -> int:
-    for line in gc(Layout.for_flow(args.flow), force=args.force):
+    for line in gc(Layout.for_flow(args.flow)):
         print(line)
     return 0
 
@@ -2445,11 +2744,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     gc_parser = commands.add_parser("gc", help="delete everything the flow holds")
     _ = gc_parser.add_argument("flow")
-    _ = gc_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="delete even while a run holds a lock",
-    )
     gc_parser.set_defaults(handler=_cmd_gc)
     return parser
 

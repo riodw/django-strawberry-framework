@@ -22,6 +22,7 @@ from django.core.exceptions import FieldDoesNotExist, FieldError
 from django.db import models
 from django.db.models.sql.query import Query
 from graphql import GraphQLError
+from strawberry import relay
 
 from ..keyset import (
     CursorState,
@@ -934,6 +935,8 @@ def _connection_window_slice_from_arguments(
             first=first,
             last=last,
             max_results=_relay_max_results_from_info(info),
+            # Only generated connections are planned, and each inherits the stock edge class.
+            prefix=relay.Edge.CURSOR_PREFIX,
         )
     except PaginationArgumentError:
         return None

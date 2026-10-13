@@ -51,7 +51,6 @@ from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
 import strawberry
 from graphql import GraphQLError
-from strawberry import relay
 from strawberry.relay.utils import SliceMetadata, from_base64
 
 from ..exceptions import DjangoStrawberryFrameworkError, OptimizerError
@@ -694,7 +693,7 @@ class ConnectionWindowBounds:
 _OFFSET_CURSOR_MAX_DIGITS = len(str(sys.maxsize))
 
 
-def decode_offset_cursor(value: str | None, *, argument: str) -> int | None:
+def decode_offset_cursor(value: str | None, *, argument: str, prefix: str) -> int | None:
     """Decode one ``after`` / ``before`` offset cursor into the row index it names.
 
     The one validator of an offset cursor's position, read by both offset
@@ -709,12 +708,14 @@ def decode_offset_cursor(value: str | None, *, argument: str) -> int | None:
     Returns ``None`` when the cursor is absent by the engine's truthiness
     (``None``, ``""``, or a falsy sentinel such as ``UNSET``): ``SliceMetadata``
     reads ``if after:``, so an empty string sets no bound. Otherwise accepts only
-    the form the package and ``ListConnection`` mint: ``relay.Edge.CURSOR_PREFIX``,
-    a colon, and a canonical decimal (ASCII digits, no sign, no padding, no
-    leading zero) in ``0 <= index < sys.maxsize``. Both mints are non-negative by
-    construction (``ListConnection`` mints ``start + i``; the window mints the row
-    number minus one), so a negative or non-canonical payload is never a cursor
-    this API issued. The upper bound is the largest index a row can have: no
+    the form the package and ``ListConnection`` mint: ``prefix`` (the
+    connection's edge-class ``CURSOR_PREFIX``, the one both mints write under
+    and ``ListConnection`` decodes under), a colon, and a canonical decimal
+    (ASCII digits, no sign, no padding, no leading zero) in
+    ``0 <= index < sys.maxsize``. Both mints are non-negative by construction
+    (``ListConnection`` mints ``start + i``; the window mints the row number
+    minus one), so a negative or non-canonical payload is never a cursor this
+    API issued. The upper bound is the largest index a row can have: no
     Python sequence is longer than ``sys.maxsize``, ``SliceMetadata`` reserves
     ``sys.maxsize`` as its unbounded-end sentinel, and ``after`` adds one, so
     ``sys.maxsize - 1`` is the last index whose start still fits a 64-bit SQL
@@ -728,10 +729,10 @@ def decode_offset_cursor(value: str | None, *, argument: str) -> int | None:
         return None
     rejection = PaginationArgumentError(f"Argument '{argument}' contains a non-existing value.")
     try:
-        prefix, raw = from_base64(value)
+        cursor_prefix, raw = from_base64(value)
     except ValueError:
         raise rejection from None
-    if prefix != relay.Edge.CURSOR_PREFIX or not (raw.isascii() and raw.isdigit()):
+    if cursor_prefix != prefix or not (raw.isascii() and raw.isdigit()):
         raise rejection
     if len(raw) > _OFFSET_CURSOR_MAX_DIGITS:
         raise rejection
@@ -749,6 +750,7 @@ def derive_connection_window_bounds(
     first: int | None,
     last: int | None,
     max_results: int | None,
+    prefix: str,
 ) -> ConnectionWindowBounds:
     """Derive the window ``(offset, limit, reverse)`` from pagination arguments.
 
@@ -761,7 +763,10 @@ def derive_connection_window_bounds(
     resolve-time caps include the same ``max_page_size`` ceiling. The arguments
     handed to the engine go through ``page_arguments``, so a ``before`` cursor
     with no page argument is bounded by that same cap and ``last: 0`` is the
-    ``first: 0`` window.
+    ``first: 0`` window. ``prefix`` is the connection's edge-class
+    ``CURSOR_PREFIX``: the cursors are validated and handed to the engine under
+    it, the prefix the window mints its cursors under and ``ListConnection``
+    decodes them under.
 
     The arguments pass ``validate_offset_pagination`` before the engine sees
     them, so an invalid cursor or a negative / over-cap ``first`` / ``last``
@@ -806,6 +811,7 @@ def derive_connection_window_bounds(
         first=first,
         last=last,
         cap=effective_max_results,
+        prefix=prefix,
     )
     slice_meta = SliceMetadata.from_arguments(
         # The engine reads ``info`` only to find a cap when ``max_results`` is
@@ -816,6 +822,7 @@ def derive_connection_window_bounds(
         first=first,
         last=last,
         max_results=effective_max_results,
+        prefix=prefix,
     )
     # Cursor presence is the engine's truthiness, deliberately NOT the
     # package's ``is_supplied`` rule (under which ``""`` is active):
@@ -874,6 +881,7 @@ def validate_offset_pagination(
     first: object,
     last: object,
     cap: int,
+    prefix: str,
 ) -> None:
     """Reject every invalid offset pagination argument ``SliceMetadata.from_arguments`` rejects.
 
@@ -887,15 +895,18 @@ def validate_offset_pagination(
     against ``cap``, the already-resolved ``max_results`` the engine will be
     handed. ``first`` and ``last`` are each checked when supplied, as the
     engine checks them; their mutual exclusivity is the resolver's own guard.
+    ``prefix`` is the connection's edge-class ``CURSOR_PREFIX``, the one the
+    engine is handed (``ListConnection`` passes its edge class's).
 
-    Once this returns, the engine raises nothing for these arguments, so the
-    one window derivation (``derive_connection_window_bounds``) and the one
-    non-window slicing tail (``connection.py::_consume_fallback``) can call the
-    engine and ``ListConnection`` without a ``try``: anything they still raise
-    comes from the source or the rows, not from the client's arguments.
+    Once this returns, the engine raises nothing for these arguments under that
+    same prefix, so the one window derivation
+    (``derive_connection_window_bounds``) and the one non-window slicing tail
+    (``connection.py::_consume_fallback``) can call the engine and
+    ``ListConnection`` without a ``try``: anything they still raise comes from
+    the source or the rows, not from the client's arguments.
     """
-    decode_offset_cursor(after, argument="after")
-    decode_offset_cursor(before, argument="before")
+    decode_offset_cursor(after, argument="after", prefix=prefix)
+    decode_offset_cursor(before, argument="before", prefix=prefix)
     assert_relay_pagination_bound("first", first, cap=cap)
     assert_relay_pagination_bound("last", last, cap=cap)
 

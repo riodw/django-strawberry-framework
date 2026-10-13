@@ -23,7 +23,7 @@ nested ``pageInfo``, and shipped SDL field presence live in
 """
 
 import inspect
-from typing import get_args
+from typing import cast, get_args
 
 import pytest
 import pytest_django
@@ -2763,3 +2763,94 @@ def test_consume_window_offset_unwindowable_shape_propagates():
             max_results=100,
             want_count=False,
         )
+
+
+#: The ``CURSOR_PREFIX`` a consumer edge class declares in place of ``arrayconnection``.
+_CONSUMER_CURSOR_PREFIX = "bookcursor"
+
+
+def _consumer_edge_book_connection_class() -> type[DjangoConnection[DjangoType]]:
+    """A ``DjangoConnection`` subclass whose edge class declares its own ``CURSOR_PREFIX``.
+
+    No public path hands a window to a consumer connection (the planner windows
+    only generated connections), so the window consumer is driven directly.
+    """
+    from types import new_class
+
+    book_type = make_django_type("BookType", Book, ("id", "title"))
+    # ``make_django_type`` declares a Relay-Node-shaped type, so it is the
+    # ``relay.Node`` the edge is generic over.
+    relay_node = cast("type[relay.Node]", book_type)
+    edge_type = strawberry.type(
+        new_class(
+            "BookCursorEdge",
+            (relay.Edge[relay_node],),
+            exec_body=lambda namespace: namespace.update(CURSOR_PREFIX=_CONSUMER_CURSOR_PREFIX),
+        ),
+    )
+    connection_type = strawberry.type(
+        new_class(
+            "BookCursorConnection",
+            (DjangoConnection[book_type],),
+            exec_body=lambda namespace: namespace.update(
+                {"__annotations__": {"edges": list[edge_type]}},
+            ),
+        ),
+    )
+    finalize_django_types()
+    return connection_type
+
+
+def _consume_consumer_prefix_window(cursor_prefix: str) -> object:
+    """Consume a window on the consumer-prefix connection from an ``after`` cursor at index 0."""
+    from strawberry.relay.utils import to_base64
+
+    from django_strawberry_framework.connection import (
+        _consume_window,
+        _WindowedConnectionRows,
+    )
+
+    return _consume_window(
+        _consumer_edge_book_connection_class(),
+        _WindowedConnectionRows(
+            rows=_window_rows(1, 2, 3),
+            fallback=lambda: Book.objects.none(),
+        ),
+        info=make_info(),
+        before=None,
+        after=to_base64(cursor_prefix, 0),
+        first=2,
+        last=None,
+        max_results=100,
+        want_count=False,
+    )
+
+
+@pytest.mark.django_db
+def test_consume_window_serves_the_connections_own_prefix_cursor():
+    """A window is bounded by a cursor under the connection's own edge prefix and mints under it."""
+    from strawberry.relay.utils import from_base64
+
+    conn = _consume_consumer_prefix_window(_CONSUMER_CURSOR_PREFIX)
+    assert isinstance(conn, DjangoConnection)
+    edges = cast("list[relay.Edge[relay.Node]]", conn.edges)
+    assert [from_base64(edge.cursor) for edge in edges] == [
+        (_CONSUMER_CURSOR_PREFIX, "1"),
+        (_CONSUMER_CURSOR_PREFIX, "2"),
+    ]
+
+
+@pytest.mark.django_db
+def test_consume_window_refuses_a_stock_cursor_under_a_consumer_prefix():
+    """A stock ``arrayconnection`` cursor is the cursor error, never a position into the window.
+
+    It is not a cursor this connection issued, so the window derivation refuses
+    it under the connection's own edge prefix.
+    """
+    from django_strawberry_framework.utils.connections import PaginationArgumentError
+
+    with pytest.raises(
+        PaginationArgumentError,
+        match="^Argument 'after' contains a non-existing value.$",
+    ):
+        _consume_consumer_prefix_window(relay.Edge.CURSOR_PREFIX)

@@ -45,8 +45,8 @@ import copy
 import gc
 import warnings
 from collections.abc import Awaitable, Callable, Iterable, Iterator
-from types import SimpleNamespace
-from typing import TypeAlias, TypedDict, TypeVar, get_origin
+from types import SimpleNamespace, new_class
+from typing import TypeAlias, TypedDict, TypeVar, cast, get_origin
 
 import pytest
 import strawberry
@@ -61,6 +61,7 @@ from django.http import HttpRequest
 from graphql import GraphQLError
 from graphql_client import JSONObject
 from strawberry import relay
+from strawberry.relay.utils import from_base64, to_base64
 from strawberry.schema.config import StrawberryConfig
 from strawberry.types import Info
 from strawberry.types.base import get_object_definition
@@ -95,6 +96,7 @@ from django_strawberry_framework.utils._queryset_private import (
     set_queryset_deferred_filter,
     set_queryset_hints,
 )
+from django_strawberry_framework.utils.connections import PaginationArgumentError
 from tests._idioms import declare_django_type
 from tests._info import make_info
 
@@ -2102,6 +2104,204 @@ def test_registry_clear_also_clears_connection_type_cache():
     assert _connection_type_cache
     registry.clear()
     assert not _connection_type_cache
+
+
+@pytest.mark.parametrize("total_count", [None, True], ids=["bare", "total-count"])
+def test_generated_connections_decode_under_the_stock_edge_prefix(total_count: bool | None):
+    """Every generated connection mints and decodes under the stock ``relay.Edge`` prefix.
+
+    The nested planner derives window bounds under ``relay.Edge.CURSOR_PREFIX``
+    without holding the connection class, which is exact only because it plans
+    generated connections alone and each inherits the stock edge class.
+    """
+    from django_strawberry_framework.connection import _offset_cursor_prefix
+
+    node_type = _make_node_type(f"StockPrefix{total_count}Node", total_count=total_count)
+    connection_type = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
+    assert _offset_cursor_prefix(connection_type) == relay.Edge.CURSOR_PREFIX
+
+
+def test_registry_clear_also_clears_offset_cursor_prefix_memo():
+    """``registry.clear()`` drops the per-class offset cursor prefix memo with the class cache."""
+    from django_strawberry_framework.connection import _offset_cursor_prefix
+
+    node_type = _make_node_type("PrefixMemoNode", total_count=None)
+    _offset_cursor_prefix(
+        _connection_type_for(node_type, node_type.__django_strawberry_definition__),
+    )
+    assert _offset_cursor_prefix.cache_info().currsize
+    registry.clear()
+    assert not _offset_cursor_prefix.cache_info().currsize
+
+
+# =============================================================================
+# A consumer DjangoConnection subclass whose edge class declares its own prefix
+# =============================================================================
+
+#: The ``CURSOR_PREFIX`` the consumer edge class declares in place of ``arrayconnection``.
+_CONSUMER_CURSOR_PREFIX = "categorycursor"
+
+#: One page walk: three pages of two, forward from ``first`` or backward from ``last``.
+_CONSUMER_WALK_PAGES = 3
+
+
+def _consumer_edge_schema(node_type: type[DjangoType]) -> strawberry.Schema:
+    """Build a schema whose ``items`` is a consumer connection with its own cursor prefix.
+
+    Strawberry's documented customization: an ``Edge`` subclass declaring
+    ``CURSOR_PREFIX`` and a ``DjangoConnection`` subclass whose ``edges`` are
+    that edge, mounted with ``relay.connection`` over the same ordered source
+    ``_schema_for`` serves.
+    """
+    # The node type declares ``Meta.interfaces = (relay.Node,)``, so it is the
+    # ``relay.Node`` the edge is generic over.
+    relay_node = cast("type[relay.Node]", node_type)
+    edge_type = strawberry.type(
+        new_class(
+            "CategoryCursorEdge",
+            (relay.Edge[relay_node],),
+            exec_body=lambda namespace: namespace.update(CURSOR_PREFIX=_CONSUMER_CURSOR_PREFIX),
+        ),
+    )
+    connection_type = strawberry.type(
+        new_class(
+            "CategoryCursorConnection",
+            (DjangoConnection[node_type],),
+            exec_body=lambda namespace: namespace.update(
+                {"__annotations__": {"edges": list[edge_type]}},
+            ),
+        ),
+    )
+
+    def items_resolver() -> Iterable[Category]:
+        return Category.objects.all().order_by("pk")
+
+    query_namespace = {
+        "__annotations__": {"items": connection_type},
+        "items": relay.connection(connection_type, resolver=items_resolver),
+    }
+    query_cls = strawberry.type(type("Query", (), query_namespace))
+    finalize_django_types()
+    return strawberry.Schema(query=query_cls, config=strawberry_config())
+
+
+def _page_query(argument: str, cursor: str | None) -> str:
+    """One page of two, forward (``after`` + ``first``) or backward (``before`` + ``last``)."""
+    size = "first" if argument == "after" else "last"
+    bound = "" if cursor is None else f', {argument}: "{cursor}"'
+    return (
+        f"{{ items({size}: 2{bound}) {{ edges {{ cursor node {{ id }} }} "
+        "pageInfo { startCursor endCursor } } }"
+    )
+
+
+def _walk_pages(
+    execute: Callable[[str], JSONObject],
+    argument: str,
+) -> list[tuple[str, tuple[str, str]]]:
+    """Walk ``_CONSUMER_WALK_PAGES`` pages, each requested from the previous page's own cursor.
+
+    Returns every edge served as its node id beside its decoded cursor
+    ``(prefix, index)``, so a walk under one prefix compares to a walk under another.
+    """
+    walk: list[tuple[str, tuple[str, str]]] = []
+    cursor: str | None = None
+    for _ in range(_CONSUMER_WALK_PAGES):
+        items = cast("JSONObject", execute(_page_query(argument, cursor))["items"])
+        walk.extend(
+            (str(cast("JSONObject", edge["node"])["id"]), from_base64(str(edge["cursor"])))
+            for edge in cast("list[JSONObject]", items["edges"])
+        )
+        page_info = cast("JSONObject", items["pageInfo"])
+        cursor = str(page_info["endCursor" if argument == "after" else "startCursor"])
+    return walk
+
+
+def _sync_executor(schema: strawberry.Schema) -> Callable[[str], JSONObject]:
+    """Run one query synchronously and return its data, failing on any error."""
+
+    def execute(query: str) -> JSONObject:
+        result = schema.execute_sync(query)
+        assert result.errors is None, result.errors
+        assert result.data is not None
+        return result.data
+
+    return execute
+
+
+def _swap_prefix(walk: list[tuple[str, tuple[str, str]]]) -> list[tuple[str, tuple[str, str]]]:
+    """The same walk with every cursor re-prefixed under the consumer prefix."""
+    return [(node_id, (_CONSUMER_CURSOR_PREFIX, index)) for node_id, (_prefix, index) in walk]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("argument", ["after", "before"])
+def test_consumer_edge_prefix_pages_with_its_own_cursors(argument: str):
+    """A consumer edge prefix pages with the cursors it mints, as the stock connection does.
+
+    Each page is requested from the previous page's own cursor; the walk is the
+    stock connection's walk over the same rows with only the prefix changed.
+    """
+    services.seed_data(1)
+    stock = _walk_pages(
+        _sync_executor(_schema_for(_make_node_type("StockWalkNode", total_count=None))),
+        argument,
+    )
+    registry.clear()
+    consumer = _walk_pages(
+        _sync_executor(_consumer_edge_schema(_make_node_type("StockWalkNode", total_count=None))),
+        argument,
+    )
+    assert len(stock) == 2 * _CONSUMER_WALK_PAGES
+    assert {prefix for _node_id, (prefix, _index) in stock} == {relay.Edge.CURSOR_PREFIX}
+    assert consumer == _swap_prefix(stock)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("argument", ["after", "before"])
+def test_consumer_edge_prefix_refuses_a_stock_cursor(argument: str):
+    """A stock ``arrayconnection`` cursor on a consumer edge prefix is the cursor error.
+
+    The package's own validation refuses it under the connection's prefix,
+    so it never reaches ``ListConnection`` as a foreign cursor.
+    """
+    services.seed_data(1)
+    schema = _consumer_edge_schema(_make_node_type("ForeignCursorNode", total_count=None))
+    result = schema.execute_sync(_page_query(argument, to_base64(relay.Edge.CURSOR_PREFIX, 0)))
+    assert result.errors is not None
+    assert result.errors[0].message == f"Argument '{argument}' contains a non-existing value."
+    assert isinstance(result.errors[0].original_error, PaginationArgumentError)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_consumer_edge_prefix_pages_and_refuses_a_stock_cursor():
+    """Under async execution a consumer edge prefix pages with its own cursors and refuses a stock one."""
+    from asgiref.sync import sync_to_async
+
+    await sync_to_async(services.seed_data)(1)
+    schema = await sync_to_async(_consumer_edge_schema)(
+        _make_node_type("AsyncConsumerCursorNode", total_count=None),
+    )
+    first = await schema.execute(_page_query("after", None))
+    assert first.errors is None, first.errors
+    assert first.data is not None
+    items = cast("JSONObject", first.data["items"])
+    end_cursor = str(cast("JSONObject", items["pageInfo"])["endCursor"])
+    assert from_base64(end_cursor) == (_CONSUMER_CURSOR_PREFIX, "1")
+
+    second = await schema.execute(_page_query("after", end_cursor))
+    assert second.errors is None, second.errors
+    assert second.data is not None
+    edges = cast("list[JSONObject]", cast("JSONObject", second.data["items"])["edges"])
+    assert [from_base64(str(edge["cursor"])) for edge in edges] == [
+        (_CONSUMER_CURSOR_PREFIX, "2"),
+        (_CONSUMER_CURSOR_PREFIX, "3"),
+    ]
+
+    foreign = await schema.execute(_page_query("after", to_base64(relay.Edge.CURSOR_PREFIX, 0)))
+    assert foreign.errors is not None
+    assert foreign.errors[0].message == "Argument 'after' contains a non-existing value."
+    assert isinstance(foreign.errors[0].original_error, PaginationArgumentError)
 
 
 # spec-033 Slices 1-2 (DONE-033-0.0.9): root-connection no-regression fence. The

@@ -42,6 +42,7 @@ root (``django_strawberry_framework``) and dogfooded in the fakeshop example
 
 from __future__ import annotations
 
+import functools
 import inspect
 import types
 from collections.abc import (
@@ -365,6 +366,29 @@ def _window_edge_class(cls: type[_ConnectionT]) -> type[relay.Edge[relay.Node]]:
     )
 
 
+@functools.cache
+def _offset_cursor_prefix(cls: type[_ConnectionT]) -> str:
+    """Return the prefix ``cls``'s offset cursors are minted and decoded under.
+
+    The ``CURSOR_PREFIX`` of the connection's own edge class (``_window_edge_class``),
+    the prefix ``ListConnection`` mints and decodes under and the window mints
+    under, so ``derive_connection_window_bounds`` and
+    ``validate_offset_pagination`` accept exactly the cursors this connection
+    issues: ``arrayconnection`` for every generated connection, a consumer edge
+    class's own ``CURSOR_PREFIX`` otherwise. An edge class is fixed once its
+    connection is a Strawberry type, so the prefix is memoized per class rather
+    than resolving the ``edges`` field type again on every page; the memo is
+    cleared by ``registry.clear()``, beside the connection-type cache.
+    """
+    return _window_edge_class(cls).CURSOR_PREFIX
+
+
+register_subsystem_clear(
+    _offset_cursor_prefix.cache_clear,
+    owner="connection.offset_cursor_prefix",
+)
+
+
 def _resolve_from_window(
     cls: type[_ConnectionT],
     window: _WindowedConnectionRows,
@@ -624,7 +648,7 @@ def _resolve_from_window(
         # Keyset cursors are the rows' ordering-column VALUES, minted through
         # the canonical codec (opaque, authenticated-encrypted) - never the
         # row number. Edges are constructed directly (``resolve_edge`` would re-encode the
-        # cursor under the offset ``arrayconnection`` prefix).
+        # cursor under the edge class's offset ``CURSOR_PREFIX``).
         edges = [
             edge_class(
                 node=cls.resolve_node(node, info=info, **kwargs),
@@ -736,7 +760,12 @@ def _consume_window(
         # vocabulary -> the window is unservable; the per-parent pipeline runs.
         keyset_state = nodes.keyset_state if keyset_mode else None
         derive_bounds = (
-            derive_keyset_window_bounds if keyset_mode else derive_connection_window_bounds
+            derive_keyset_window_bounds
+            if keyset_mode
+            else functools.partial(
+                derive_connection_window_bounds,
+                prefix=_offset_cursor_prefix(cls),
+            )
         )
         bounds: ConnectionWindowBounds | None = None
         if not keyset_mode or keyset_state is not None:
@@ -864,6 +893,7 @@ def _consume_fallback(
         first=first,
         last=last,
         cap=max_results,
+        prefix=_offset_cursor_prefix(cls),
     )
     conn = super(DjangoConnection, cls).resolve_connection(
         nodes,
@@ -957,8 +987,8 @@ def _resolve_keyset_connection(
     per-parent fallback pipeline - through the one canonical codec, so a
     cursor minted anywhere replays everywhere (the cross-strategy parity
     invariant). Strawberry's ``ListConnection`` is never reached for a
-    keyset connection: it speaks only the offset ``arrayconnection``
-    vocabulary.
+    keyset connection: it speaks only the offset vocabulary (its edge
+    class's ``CURSOR_PREFIX``).
 
     The Relay pagination algorithm, in the value domain:
 

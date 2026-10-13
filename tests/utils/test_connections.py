@@ -15,6 +15,7 @@ from typing import cast
 import pytest
 import strawberry
 from graphql import GraphQLError
+from strawberry import relay
 from strawberry.relay.utils import SliceMetadata, to_base64
 from strawberry.schema.config import StrawberryConfig
 
@@ -48,6 +49,9 @@ from tests._info import make_info, unread_info
 # short-circuited) -- ``None`` is a safe stand-in for the engine ``Info`` here.
 _MAX = 100
 
+#: The stock edge class's offset cursor prefix, the one every generated connection uses.
+_PREFIX = relay.Edge.CURSOR_PREFIX
+
 
 @dataclass(frozen=True)
 class _Window:
@@ -79,6 +83,7 @@ def test_last_only_window_limit_is_literal_last_not_expected():
         first=None,
         last=2,
         max_results=_MAX,
+        prefix=_PREFIX,
     )
     assert bounds == ConnectionWindowBounds(offset=0, limit=2, reverse=True)
 
@@ -92,6 +97,7 @@ def test_forward_window_limit_is_expected_and_not_reverse():
         first=3,
         last=None,
         max_results=_MAX,
+        prefix=_PREFIX,
     )
     assert bounds == ConnectionWindowBounds(offset=0, limit=3, reverse=False)
 
@@ -111,6 +117,7 @@ def test_offset_window_applies_request_page_ceiling_to_plan_cap(
         first=None,
         last=None,
         max_results=100,
+        prefix=_PREFIX,
     )
 
     assert bounds == ConnectionWindowBounds(offset=4, limit=5, reverse=False)
@@ -131,6 +138,7 @@ def test_before_with_last_is_a_forward_window_not_reverse():
         first=None,
         last=2,
         max_results=_MAX,
+        prefix=_PREFIX,
     )
     assert bounds.reverse is False
 
@@ -168,6 +176,7 @@ def test_after_with_last_is_unwindowable_not_reverse_with_offset():
             first=None,
             last=3,
             max_results=_MAX,
+            prefix=_PREFIX,
         )
 
 
@@ -186,6 +195,7 @@ def test_after_with_first_stays_a_windowed_forward_offset():
         first=2,
         last=None,
         max_results=_MAX,
+        prefix=_PREFIX,
     )
     assert bounds == ConnectionWindowBounds(offset=3, limit=2, reverse=False)
 
@@ -222,6 +232,7 @@ def test_inverted_after_before_is_unwindowable_not_a_negative_limit_window():
             first=None,
             last=None,
             max_results=_MAX,
+            prefix=_PREFIX,
         )
     # The same inverted range with a trailing ``last:`` bound is unwindowable too.
     with pytest.raises(UnwindowableConnection):
@@ -232,6 +243,7 @@ def test_inverted_after_before_is_unwindowable_not_a_negative_limit_window():
             first=None,
             last=2,
             max_results=_MAX,
+            prefix=_PREFIX,
         )
 
 
@@ -262,7 +274,7 @@ def test_decode_offset_cursor_returns_the_minted_index_or_none_when_absent(
     this return. Rejection of every non-minted shape is pinned live in
     ``examples/fakeshop/test_query/test_connection_pagination_api.py``.
     """
-    assert decode_offset_cursor(value, argument="after") == expected
+    assert decode_offset_cursor(value, argument="after", prefix=_PREFIX) == expected
 
 
 def test_decode_offset_cursor_rejects_a_foreign_prefix_itself():
@@ -277,7 +289,62 @@ def test_decode_offset_cursor_rejects_a_foreign_prefix_itself():
         PaginationArgumentError,
         match="^Argument 'before' contains a non-existing value.$",
     ):
-        decode_offset_cursor(to_base64("GenreType", "1"), argument="before")
+        decode_offset_cursor(to_base64("GenreType", "1"), argument="before", prefix=_PREFIX)
+
+
+#: A consumer edge class's own ``CURSOR_PREFIX``, standing in for the stock one.
+_CUSTOM_PREFIX = "customcursor"
+
+
+@pytest.mark.parametrize(
+    ("prefix", "foreign"),
+    [(_CUSTOM_PREFIX, _PREFIX), (_PREFIX, _CUSTOM_PREFIX)],
+    ids=["custom-edge", "stock-edge"],
+)
+def test_decode_offset_cursor_reads_the_connection_prefix(prefix: str, foreign: str):
+    """The decoder accepts the prefix it is handed and refuses every other one.
+
+    A connection mints its offset cursors under its own edge class's
+    ``CURSOR_PREFIX``; a cursor under any other prefix, the stock
+    ``arrayconnection`` included, is not one this connection issued.
+    """
+    assert decode_offset_cursor(to_base64(prefix, "3"), argument="after", prefix=prefix) == 3
+    with pytest.raises(
+        PaginationArgumentError,
+        match="^Argument 'after' contains a non-existing value.$",
+    ):
+        decode_offset_cursor(to_base64(foreign, "3"), argument="after", prefix=prefix)
+
+
+@pytest.mark.parametrize(
+    ("argument", "expected"),
+    [
+        ("after", ConnectionWindowBounds(offset=2, limit=2, reverse=False)),
+        ("before", ConnectionWindowBounds(offset=0, limit=1, reverse=False)),
+    ],
+    ids=["after", "before"],
+)
+def test_window_bounds_decode_under_the_connection_prefix(
+    argument: str,
+    expected: ConnectionWindowBounds,
+):
+    """The window derivation hands the engine the prefix its cursors were validated under.
+
+    A cursor minted under a consumer edge prefix passes the decoder and then the
+    engine's own prefix check, so it bounds the window rather than failing as a
+    foreign cursor inside ``SliceMetadata``.
+    """
+    cursor = to_base64(_CUSTOM_PREFIX, "1")
+    bounds = derive_connection_window_bounds(
+        None,
+        before=cursor if argument == "before" else None,
+        after=cursor if argument == "after" else None,
+        first=2,
+        last=None,
+        max_results=_MAX,
+        prefix=_CUSTOM_PREFIX,
+    )
+    assert bounds == expected
 
 
 def test_non_inverted_after_before_stays_a_windowed_forward_offset():
@@ -294,6 +361,7 @@ def test_non_inverted_after_before_stays_a_windowed_forward_offset():
         first=None,
         last=None,
         max_results=_MAX,
+        prefix=_PREFIX,
     )
     assert bounds == ConnectionWindowBounds(offset=2, limit=2, reverse=False)
 
@@ -307,6 +375,7 @@ def test_zero_width_after_before_stays_windowable():
         first=None,
         last=None,
         max_results=_MAX,
+        prefix=_PREFIX,
     )
     assert bounds == ConnectionWindowBounds(offset=4, limit=0, reverse=False)
 
@@ -464,21 +533,37 @@ def test_validate_offset_pagination_matches_slice_metadata_text_and_order(
             first=call["first"],
             last=call["last"],
             cap=10,
+            prefix=_PREFIX,
         )
     assert rejection.value.message == str(engine.value)
 
 
 def test_validate_offset_pagination_accepts_what_the_engine_accepts():
     """Valid arguments, absent cursors and non-``int`` page sizes pass without a rejection."""
-    validate_offset_pagination(before=None, after=None, first=None, last=None, cap=10)
+    validate_offset_pagination(
+        before=None,
+        after=None,
+        first=None,
+        last=None,
+        cap=10,
+        prefix=_PREFIX,
+    )
     validate_offset_pagination(
         before=to_base64("arrayconnection", "4"),
         after=to_base64("arrayconnection", "0"),
         first=10,
         last=0,
         cap=10,
+        prefix=_PREFIX,
     )
-    validate_offset_pagination(before="", after="", first=strawberry.UNSET, last=None, cap=10)
+    validate_offset_pagination(
+        before="",
+        after="",
+        first=strawberry.UNSET,
+        last=None,
+        cap=10,
+        prefix=_PREFIX,
+    )
 
 
 def test_derive_connection_window_bounds_rejects_with_pagination_argument_error():
@@ -494,6 +579,7 @@ def test_derive_connection_window_bounds_rejects_with_pagination_argument_error(
             first=101,
             last=None,
             max_results=_MAX,
+            prefix=_PREFIX,
         )
     with pytest.raises(
         PaginationArgumentError,
@@ -506,6 +592,7 @@ def test_derive_connection_window_bounds_rejects_with_pagination_argument_error(
             first=2,
             last=None,
             max_results=_MAX,
+            prefix=_PREFIX,
         )
 
 
@@ -993,6 +1080,7 @@ def test_derive_connection_window_bounds_handles_strawberry_unset():
         first=strawberry.UNSET,
         last=strawberry.UNSET,
         max_results=_MAX,
+        prefix=_PREFIX,
     )
     assert bounds == ConnectionWindowBounds(offset=0, limit=_MAX, reverse=False)
 
@@ -1003,6 +1091,7 @@ def test_derive_connection_window_bounds_handles_strawberry_unset():
         first=5,
         last=strawberry.UNSET,
         max_results=_MAX,
+        prefix=_PREFIX,
     )
     assert bounds_first == ConnectionWindowBounds(offset=0, limit=5, reverse=False)
 
@@ -1013,6 +1102,7 @@ def test_derive_connection_window_bounds_handles_strawberry_unset():
         first=strawberry.UNSET,
         last=5,
         max_results=_MAX,
+        prefix=_PREFIX,
     )
     assert bounds_last == ConnectionWindowBounds(offset=0, limit=5, reverse=True)
 
@@ -1107,6 +1197,7 @@ def test_resolve_relay_max_results_handles_unset():
         first=5,
         last=None,
         max_results=strawberry.UNSET,
+        prefix=_PREFIX,
     )
     assert bounds == ConnectionWindowBounds(offset=0, limit=5, reverse=False)
 

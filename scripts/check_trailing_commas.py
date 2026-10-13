@@ -689,7 +689,7 @@ def _parse_footer(text: str) -> tuple[str, dict[str, list[str]], list[str]]:
         stripped = line.strip()
         if stripped in LINK_DEF_CATEGORIES:
             current = stripped
-            cats.setdefault(current, [])
+            _ = cats.setdefault(current, [])
         elif stripped == "":
             continue  # blank separators are rebuilt deterministically
         elif current is None:
@@ -710,7 +710,7 @@ def _render_footer(cats: dict[str, list[str]], orphan: list[str]) -> str:
         parts.extend(cats.get(cat, []))
         parts.append("")
     while parts and parts[-1] == "":
-        parts.pop()
+        _ = parts.pop()
     return "\n".join(parts) + "\n"
 
 
@@ -1305,7 +1305,7 @@ def read_source(path: Path) -> tuple[str, str]:
 def write_source(path: Path, text: str, newline: str) -> None:
     """Write ``text`` back, restoring the file's original line ending."""
     with path.open("w", encoding="utf-8", newline="") as handle:
-        handle.write(text.replace("\n", newline))
+        _ = handle.write(text.replace("\n", newline))
 
 
 MESSAGES = {
@@ -1380,23 +1380,23 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument(
+    _ = mode.add_argument(
         "--check",
         action="store_true",
         help="report violations and exit 1 (no edits)",
     )
-    mode.add_argument("--fix", action="store_true", help="auto-fix (the default)")
-    parser.add_argument(
+    _ = mode.add_argument("--fix", action="store_true", help="auto-fix (the default)")
+    _ = parser.add_argument(
         "--diff",
         action="store_true",
         help="with --check (implied): print the unified diff --fix would apply; writes nothing",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--json",
         action="store_true",
         help="print one JSON result document on stdout instead of human output",
     )
-    parser.add_argument("paths", nargs="*", help="files/dirs to process (default: whole repo)")
+    _ = parser.add_argument("paths", nargs="*", help="files/dirs to process (default: whole repo)")
     args = parser.parse_args(argv)
     if args.diff and args.fix:
         parser.error("--diff writes nothing; it cannot be combined with --fix")
@@ -1467,7 +1467,7 @@ def main(argv: list[str] | None = None) -> int:
             if inserts or deletes:
                 candidate = _apply(new, inserts, deletes)
                 try:
-                    ast.parse(candidate)
+                    _ = ast.parse(candidate)
                     new = candidate
                 except SyntaxError as exc:  # safety net -- never write broken syntax
                     comma_fixable = False

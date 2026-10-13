@@ -71,7 +71,7 @@ def embed_dashboard_data(html_path: Path, data_block: str) -> None:
     updated, replacements = DATA_BLOCK_RE.subn(lambda _match: data_block, html)
     if replacements != 1:
         raise RuntimeError(f"Expected exactly one kanban data block in {html_path}.")
-    html_path.write_text(updated, encoding="utf-8")
+    _ = html_path.write_text(updated, encoding="utf-8")
 
 
 def assert_placeholders_resolve(snapshot: DashboardData) -> None:

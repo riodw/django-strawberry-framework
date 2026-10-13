@@ -324,7 +324,7 @@ def auto_link_terms(
             # write the wrap, which would leave an orphaned ref-id.
             skipped.append(term)
             continue
-        spec_path.write_text(with_def, encoding="utf-8")
+        _ = spec_path.write_text(with_def, encoding="utf-8")
         linked.append(term)
     return linked, skipped
 
@@ -341,8 +341,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--spec", required=True, type=Path, help="Path to the spec markdown file.")
-    parser.add_argument(
+    _ = parser.add_argument(
+        "--spec",
+        required=True,
+        type=Path,
+        help="Path to the spec markdown file.",
+    )
+    _ = parser.add_argument(
         "--terms",
         type=Path,
         default=None,
@@ -351,13 +356,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
             "Defaults to `<spec-stem>-terms.csv` alongside the spec."
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--glossary",
         type=Path,
         default=Path("docs/GLOSSARY.md"),
         help="Path to the glossary (default: docs/GLOSSARY.md).",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--auto-link",
         action="store_true",
         help=(

@@ -344,13 +344,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         flag="--md",
         default=DEFAULT_MD_PATH,
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--package-dir",
         type=Path,
         default=DEFAULT_PACKAGE_DIR,
         help="Package directory to render. Defaults to django_strawberry_framework/.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--list-docstrings",
         nargs="*",
         type=Path,
@@ -362,12 +362,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "violation."
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--json",
         action="store_true",
         help="With --list-docstrings, emit the rows as JSON.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--max-hunks",
         type=int,
         default=DEFAULT_MAX_HUNKS,
@@ -1114,7 +1114,7 @@ def remove_target_replacements(
                 break
             node = child
         else:
-            node.children.pop(segments[-1], None)
+            _ = node.children.pop(segments[-1], None)
 
 
 def render_target_children(node: TargetNode, prefix: str = "") -> list[str]:

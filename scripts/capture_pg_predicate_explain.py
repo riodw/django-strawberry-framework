@@ -170,7 +170,7 @@ def _seed_library() -> dict[str, int]:
         for book_index, book in enumerate(books)
         for offset in range(LOANS_PER_BOOK)
     ]
-    Loan.objects.bulk_create(loans)
+    _ = Loan.objects.bulk_create(loans)
     return {
         "patrons": len(patrons),
         "cardio_patrons": sum(1 for index in range(N_PATRONS) if index % CARDIO_EVERY == 0),
@@ -228,7 +228,7 @@ def _production_qs(
     """
     from django.http import HttpRequest
 
-    filterset_cls.get_filters()  # publish the expansion snapshot (as apply_* does).
+    _ = filterset_cls.get_filters()  # publish the expansion snapshot (as apply_* does).
     filterset = filterset_cls(
         data={leaf: value},
         queryset=root.order_by("id"),
@@ -385,7 +385,7 @@ def main() -> None:
     from _bench_common import bootstrap_fakeshop_django
 
     # sys.path seam + settings + django.setup() + migrate; refuses non-Postgres.
-    bootstrap_fakeshop_django("pg")
+    _ = bootstrap_fakeshop_django("pg")
 
     import django
     from django.db import connection, transaction
@@ -395,7 +395,7 @@ def main() -> None:
 
     # The composed fakeshop schema registers every DjangoType and binds every
     # filter set to its owner type, so each declared hop resolves its target type.
-    importlib.import_module("config.schema")
+    _ = importlib.import_module("config.schema")
     from apps.library.filters import LoanFilter
     from apps.library.models import Book, Loan
     from apps.scalars.filters import ScalarSpecimenFilter
@@ -652,7 +652,7 @@ def main() -> None:
     # appended after the Environment section); the extra ``"\n"`` is the blank
     # separator line before the link-definition footer, which itself ends with a
     # final newline. This reproduces the checked-in artifact's tail exactly.
-    ARTIFACT_PATH.write_text(
+    _ = ARTIFACT_PATH.write_text(
         "\n".join(lines) + "\n" + LINK_DEFINITIONS_FOOTER,
         encoding="utf-8",
     )

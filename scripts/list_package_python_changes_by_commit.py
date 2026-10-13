@@ -181,7 +181,7 @@ def parse_name_status_z(output: str, package_dir: str) -> list[ChangedFile]:
     """Parse ``git diff-tree --name-status -z`` output into package Python changes."""
     fields = output.split("\0")
     if fields and fields[-1] == "":
-        fields.pop()
+        _ = fields.pop()
 
     changes: list[ChangedFile] = []
     index = 0
@@ -237,7 +237,7 @@ def dedupe_changes(changes: Iterable[ChangedFile]) -> list[ChangedFile]:
     """Return changes deduped by path pair and status kind."""
     deduped: dict[tuple[str, str | None, str], ChangedFile] = {}
     for change in changes:
-        deduped.setdefault((change.path, change.old_path, change.status_kind), change)
+        _ = deduped.setdefault((change.path, change.old_path, change.status_kind), change)
     return sorted(deduped.values(), key=ChangedFile.sort_key)
 
 
@@ -348,33 +348,33 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "List every commit's changed Python files under django_strawberry_framework/."
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--revision",
         default=DEFAULT_REVISION,
         help="Commit revision whose reachable history should be scanned. Defaults to HEAD.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--package-dir",
         default=DEFAULT_PACKAGE_DIR,
         help=(f"Repo-relative package directory to scan. Defaults to {DEFAULT_PACKAGE_DIR}/."),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--format",
         choices=("markdown", "json"),
         default="markdown",
         help="Output format. Defaults to markdown.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--output",
         type=Path,
         help="Write the report to this path instead of stdout.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--include-empty",
         action="store_true",
         help="Include commits that did not touch package Python files.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--allow-shallow",
         action="store_true",
         help=(
@@ -382,7 +382,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "because the report cannot prove it started at the project beginning."
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--merge-diff",
         choices=("first-parent", "all-parents"),
         default="first-parent",
@@ -400,7 +400,7 @@ def write_report(report: str, output: Path | None) -> None:
         print(report, end="")
         return
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(report)
+    _ = output.write_text(report)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

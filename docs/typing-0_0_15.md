@@ -75,8 +75,8 @@ of them.
   validator that narrows the payload into those `TypedDict`s, keeping today's behavior on a malformed response
 - [ ] 8. `reportUnannotatedClassAttribute`: 8367 (package 0, tests 6684, examples 1681, scripts 0, root 2); on for
   scripts/ and the package (their execution environments in `pyproject.toml`)
-- [ ] 9. `reportUnusedCallResult`: 4702 (package 0, tests 2897, examples 1527, scripts 245, root 33); on for the
-  package
+- [ ] 9. `reportUnusedCallResult`: 4458 (package 0, tests 2897, examples 1527, scripts 0, root 33); on for scripts/ and
+  the package
 - [ ] 10. `reportUnusedParameter`: 1700 (package 0, tests 1124, examples 571, scripts 0, root 5); on for scripts/ and
   the package
 

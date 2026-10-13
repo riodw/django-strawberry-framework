@@ -1387,7 +1387,7 @@ def _parse_unified_diff(text: str, label: str) -> dict[str, tuple[PatchHunk, ...
     """
     lines = text.split("\n")
     if lines and lines[-1] == "":
-        lines.pop()
+        _ = lines.pop()
     sections: dict[str, list[PatchHunk]] = {}
     current: list[PatchHunk] | None = None
     index = 0
@@ -1670,7 +1670,7 @@ def _new_capture(scratch_root: Path, entry: ProofEntry, run_name: str) -> RunCap
     probe_directory.mkdir(parents=True, exist_ok=True)
     probe_file = probe_directory / f"{PROBE_MODULE_NAME}.py"
     if not probe_file.is_file() or probe_file.read_text(encoding="utf-8") != PROBE_SOURCE:
-        probe_file.write_text(PROBE_SOURCE, encoding="utf-8")
+        _ = probe_file.write_text(PROBE_SOURCE, encoding="utf-8")
     runs = scratch_root / RUNS_DIRECTORY_NAME
     runs.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(entry.label.encode("utf-8")).hexdigest()[:8]
@@ -1718,7 +1718,7 @@ def _read_probe(path: Path) -> tuple[tuple[tuple[str, str], ...], tuple[Provenan
             if observed not in provenance:
                 provenance.append(observed)
         else:
-            crashes.setdefault(str(record.get("nodeid")), str(record.get("crash")))
+            _ = crashes.setdefault(str(record.get("nodeid")), str(record.get("crash")))
     return tuple(crashes.items()), tuple(provenance)
 
 
@@ -1803,7 +1803,7 @@ def _run_scope(entry: ProofEntry, capture: RunCapture | None = None) -> RunOutco
         )
     header = [f"argv: {json.dumps(command)}", f"cwd: {REPO_ROOT}"]
     header.extend(f"env: {name}={value}" for name, value in additions.items())
-    capture.log_path.write_text(
+    _ = capture.log_path.write_text(
         "\n".join(header)
         + f"\nexit code: {completed.returncode}\n\n--- stdout ---\n{completed.stdout}"
         + f"\n--- stderr ---\n{completed.stderr}",
@@ -1825,7 +1825,7 @@ def _run_scope(entry: ProofEntry, capture: RunCapture | None = None) -> RunOutco
 def _write_marker(path: Path, payload: dict[str, object]) -> None:
     """Write a scratch marker naming a live mutation or a failed restore."""
     payload = dict(payload, written_at=datetime.now(timezone.utc).isoformat())
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _ = path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _restore_and_prove(target: Path, pristine: Path) -> str:
@@ -1837,7 +1837,7 @@ def _restore_and_prove(target: Path, pristine: Path) -> str:
     mutated" and cannot mistake an ``OSError`` for an ordinary run failure.
     """
     try:
-        shutil.copyfile(pristine, target)
+        _ = shutil.copyfile(pristine, target)
         target_digest = _sha256(target)
         pristine_digest = _sha256(pristine)
     except OSError as error:
@@ -1901,7 +1901,7 @@ def execute_entry(
             scratch_root / PRISTINE_DIRECTORY_NAME / _pristine_name_for(entry, planned.target)
         )
         try:
-            shutil.copy2(planned.target, pristine)
+            _ = shutil.copy2(planned.target, pristine)
         except OSError as error:
             # Nothing has been mutated yet, so this is one entry's failure and not a
             # tree emergency - but it must never become "mutate first, copy later".
@@ -1925,7 +1925,7 @@ def execute_entry(
     mutated_blobs: dict[Path, str] = {}
     try:
         for planned in plan:
-            planned.target.write_bytes(planned.mutated)
+            _ = planned.target.write_bytes(planned.mutated)
             mutated_blobs[planned.target] = git_blob_id(planned.target.read_bytes())
         outcome = _run_scope(entry, _new_capture(scratch_root, entry, "mutant"))
     finally:
@@ -2573,8 +2573,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "scope, restore from a pre-mutation copy, and prove the restore by byte comparison."
         ),
     )
-    parser.add_argument("manifest", type=Path, help="path to the JSON proof manifest")
-    parser.add_argument(
+    _ = parser.add_argument("manifest", type=Path, help="path to the JSON proof manifest")
+    _ = parser.add_argument(
         "--only",
         action="append",
         default=[],
@@ -2586,7 +2586,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "flag is for), but a narrowed block is not a complete ARTIFACT.md subsection"
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--scratch-root",
         default=None,
         help=(
@@ -2596,7 +2596,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "directory under the system temporary directory, named in the run header"
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--baseline",
         action="store_true",
         dest="force_baseline",
@@ -2605,7 +2605,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "default. Given together with --no-baseline it wins, because it asks for the field"
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--no-baseline",
         action="store_false",
         dest="baseline",
@@ -2616,18 +2616,18 @@ def _build_parser() -> argparse.ArgumentParser:
             "field required by docs/builder/ARTIFACT.md"
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--check-anchors-only",
         action="store_true",
         help="verify every anchor matches exactly once; mutate nothing and run nothing",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--output",
         type=Path,
         default=None,
         help="also write the markdown report to this path",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--json",
         type=Path,
         default=None,
@@ -2638,7 +2638,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "blob ids, both runs' ids, crash lines, provenance, expectation and verdict"
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--workspace",
         type=Path,
         default=None,
@@ -2804,7 +2804,7 @@ def _write_json(output: Path | None, document: dict[str, object], *, label: str)
     """Write the JSON record to ``output`` when one was asked for."""
     if output is None:
         return
-    output.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    _ = output.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     print(f"{label} written to {output}", file=sys.stderr)
 
 
@@ -2812,7 +2812,7 @@ def _write_report(report: str, output: Path | None, *, label: str) -> None:
     """Write the rendered report to ``output`` when one was asked for."""
     if output is None:
         return
-    output.write_text(report, encoding="utf-8")
+    _ = output.write_text(report, encoding="utf-8")
     print(f"{label} written to {output}", file=sys.stderr)
 
 

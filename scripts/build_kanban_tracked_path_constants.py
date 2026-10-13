@@ -111,13 +111,13 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Render apps.kanban.constants from tracked package and test paths.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--output",
         type=Path,
         default=DEFAULT_OUTPUT,
         help="Constants file to write. Defaults to apps/kanban/constants.py.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--check",
         action="store_true",
         help="Exit with status 1 if the constants file is stale.",

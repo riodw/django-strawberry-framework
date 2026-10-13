@@ -289,7 +289,7 @@ def bootstrap_fakeshop_django(mode: BootstrapMode) -> BenchProvenance:
         msg = f"unknown bootstrap mode {mode!r}; expected one of {BOOTSTRAP_MODES}"
         raise ValueError(msg)
     sys.path.insert(0, str(FAKESHOP))
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+    _ = os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
     if mode == "pg" and not os.environ.get("FAKESHOP_PG_DSN"):
         sys.exit(
             "FAKESHOP_PG_DSN is required: the lateral strategy only executes on "
@@ -343,7 +343,7 @@ def bootstrap_fakeshop_django(mode: BootstrapMode) -> BenchProvenance:
 
     from django.core.management import call_command
 
-    call_command("migrate", run_syncdb=True, verbosity=0)
+    _ = call_command("migrate", run_syncdb=True, verbosity=0)
     return provenance
 
 
@@ -404,12 +404,12 @@ def seed_glossary_terms(count: int) -> dict[str, int]:
     terms = list(models.GlossaryTerm.objects.order_by("id"))
     while len(terms) < count:
         term = factories.make_glossary_term()
-        factories.make_glossary_alias(term=term)
-        factories.make_glossary_category_membership(term=term)
-        factories.make_glossary_source_link(term=term)
+        _ = factories.make_glossary_alias(term=term)
+        _ = factories.make_glossary_category_membership(term=term)
+        _ = factories.make_glossary_source_link(term=term)
         if terms:
             previous = terms[-1]
-            factories.make_glossary_term_link(source_term=term, target_term=previous)
+            _ = factories.make_glossary_term_link(source_term=term, target_term=previous)
             term.related_terms.add(previous)
         terms.append(term)
     return {
@@ -473,7 +473,10 @@ def build_report(
 
 def write_report(path: str | Path, report: Mapping[str, object]) -> None:
     """Write ``report`` as JSON with sorted keys so two runs diff line by line."""
-    Path(path).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _ = Path(path).write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def load_graphql_document(path: str | Path) -> str:

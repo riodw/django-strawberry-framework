@@ -71,7 +71,7 @@ def atomic_write(path: Path, content: str, *, force: bool) -> None:
             delete=False,
         ) as stream:
             temp_name = stream.name
-            stream.write(content)
+            _ = stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
         os.chmod(temp_name, existing_mode)

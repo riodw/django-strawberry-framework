@@ -777,29 +777,29 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Resolve every path::Symbol source reference against the tree.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--check",
         action="store_true",
         help="Accepted for parity with the other gates; the run is always read-only.",
     )
     scope = parser.add_mutually_exclusive_group()
-    scope.add_argument(
+    _ = scope.add_argument(
         "--paths",
         nargs="+",
         metavar="PATH",
         help="Check only the citations in these files; resolution still uses the whole tree.",
     )
-    scope.add_argument(
+    _ = scope.add_argument(
         "--cited-by",
         metavar="PATH[::Symbol]",
         help="List every citer of this path or symbol, gate corpus plus standing docs/.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--json",
         action="store_true",
         help="Print every citation as JSON on stdout; the summary line goes to stderr.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--substrings",
         action="store_true",
         help='Also check `path::Symbol #"text"` and `path #"text"` pinpoints.',

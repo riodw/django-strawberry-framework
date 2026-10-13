@@ -546,7 +546,7 @@ def configure_django() -> None:
     :data:`KANBAN_RENDER_MAX_LIST_ROWS`).
     """
     sys.path.insert(0, str(FAKESHOP_ROOT))
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+    _ = os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 
     import django
 
@@ -640,13 +640,13 @@ def render_parser(description: str, *, flag: str, default: Path) -> argparse.Arg
     Returned rather than parsed so a script can add its own arguments first.
     """
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument(
+    _ = parser.add_argument(
         flag,
         type=Path,
         default=default,
         help=f"File to write. Defaults to {default.relative_to(REPO_ROOT)}.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--check",
         action="store_true",
         help="Exit 1 if the file is not already up to date (0 fresh, 2 on error).",
@@ -1397,7 +1397,8 @@ def build_dashboard_snapshot(dashboard_data: DashboardData) -> DashboardData:
     cards = dashboard_data["cards"]
     for card in cards:
         for payload_key, (_accessor, sort_key) in CARD_CHILD_LISTS.items():
-            card.get(payload_key, []).sort(key=sort_key)
+            children: list[_JSONRow] = card.get(payload_key, [])
+            children.sort(key=sort_key)
     cards.sort(key=lambda card: card["number"])
 
     board_docs = dashboard_data["boardDocs"]

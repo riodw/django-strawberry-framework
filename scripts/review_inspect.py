@@ -544,7 +544,7 @@ class _StaticVisitor(ast.NodeVisitor):
         self._record_docstring(node, ".".join([*self._parent_stack, node.name]))
         self._parent_stack.append(node.name)
         self._visit_children_excluding_docstring(node)
-        self._parent_stack.pop()
+        _ = self._parent_stack.pop()
 
     @override
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -581,7 +581,7 @@ class _StaticVisitor(ast.NodeVisitor):
         self._record_hotspot(node, qualified_name)
         self._parent_stack.append(node.name)
         self._visit_children_excluding_docstring(node)
-        self._parent_stack.pop()
+        _ = self._parent_stack.pop()
 
     def _record_symbol(
         self,
@@ -655,77 +655,77 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         description="Generate static review aids for Python files without importing them.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("target", nargs="?", type=Path, help="Python file to inspect.")
-    parser.add_argument(
+    _ = parser.add_argument("target", nargs="?", type=Path, help="Python file to inspect.")
+    _ = parser.add_argument(
         "--all",
         action="store_true",
         help="Inspect every .py file under django_strawberry_framework/ recursively (never capped).",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--code-digest",
         nargs="+",
         metavar="SOURCE",
         default=None,
         help="Print the docstring-stripped AST digest of each file or <rev>:<path>; write nothing.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--output-dir",
         type=Path,
         default=Path("docs/shadow"),
         help="Directory for generated shadow and overview files.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--root",
         type=Path,
         default=Path.cwd(),
         help="Root used to compute stable output names, cited paths and the package root.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--outline-only",
         action="store_true",
         help="Write only imports, symbols, hotspots, and marker sections in the overview.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--stdout",
         action="store_true",
         help="Print the overview to stdout in addition to writing output files.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--no-cap",
         action="store_true",
         help="List every row in capped sections instead of a '... more not shown' notice.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--json",
         type=Path,
         default=None,
         help="Also write the overview and the per-symbol table as JSON to this path.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--long-function-lines",
         type=int,
         default=40,
         help="Line-count threshold for reporting long functions.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--long-function-branches",
         type=int,
         default=8,
         help="Branch-count threshold for reporting branchy functions.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--marker",
         action="append",
         default=[],
         help="Additional source marker to include in the Django/ORM marker table. May be repeated.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--first-party-prefix",
         action="append",
         default=["django_strawberry_framework"],
         help="Import prefix treated as first-party. May be repeated.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--literal-min-length",
         type=int,
         default=8,
@@ -2209,7 +2209,7 @@ def _now() -> str:
 
 def _write_json(path: Path, document: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    _ = path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
 
 
 # --- Entry points ---------------------------------------------------------------------
@@ -2249,11 +2249,11 @@ def _inspect_target(
     shadow_path = output_dir / f"{stem}.stripped.py"
     overview_path = output_dir / f"{stem}.overview.md"
 
-    shadow_path.write_text(stripped, encoding="utf-8")
+    _ = shadow_path.write_text(stripped, encoding="utf-8")
     analysis = _analyze(target, source, tree, stripped, args, markers, shadow_path, references)
     cap = not (args.no_cap or args.all)
     overview = _render_overview(analysis, args.outline_only, cap)
-    overview_path.write_text(overview, encoding="utf-8")
+    _ = overview_path.write_text(overview, encoding="utf-8")
     if documents is not None:
         documents.append(_analysis_json(analysis))
 

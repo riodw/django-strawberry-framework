@@ -293,7 +293,7 @@ executionEnvironments = [
     { root = "scripts", extraPaths = [
         "examples/fakeshop",
         ".",
-    ], reportUnannotatedClassAttribute = "error", reportUnusedParameter = "error" },
+    ], reportUnannotatedClassAttribute = "error", reportUnusedCallResult = "error", reportUnusedParameter = "error" },
     { root = "django_strawberry_framework/rest_framework", extraPaths = [
         ".",
     ], reportUnannotatedClassAttribute = "error", reportUnusedCallResult = "error", reportUnusedParameter = "error" },
@@ -320,9 +320,8 @@ reportUnusedFunction = "none"
 reportImportCycles = "none"
 reportUninitializedInstanceVariable = "none"
 # Off until their remaining sites are fixed (the ratchet): turn one on to list them.
-# reportUnannotatedClassAttribute and reportUnusedParameter are on for scripts/ and
-# django_strawberry_framework/, and reportUnusedCallResult for the package (their execution
-# environments above).
+# reportUnannotatedClassAttribute, reportUnusedCallResult and reportUnusedParameter are on
+# for scripts/ and django_strawberry_framework/ (their execution environments above).
 reportAny = "none"
 reportUnannotatedClassAttribute = "none"
 reportUnusedCallResult = "none"

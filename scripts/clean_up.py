@@ -122,7 +122,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Delete generated review, builder, and bug-hunt artifacts.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--quiet",
         action="store_true",
         help="Do not print deleted paths.",

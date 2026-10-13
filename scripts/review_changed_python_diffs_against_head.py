@@ -380,7 +380,7 @@ def _write_new_side(path: str, repo_root: Path, out_dir: Path | None = None) -> 
     if new_file.is_file():
         _inspect_quiet(new_file, out_dir, repo_root)
     else:
-        (out_dir / f"{_stem_for(path)}.stripped.py").write_text("")
+        _ = (out_dir / f"{_stem_for(path)}.stripped.py").write_text("")
 
 
 def _symbol_spans(tree: ast.AST) -> list[tuple[int, int, str]]:
@@ -489,7 +489,7 @@ def _write_diff(
             tofile=new_stripped.relative_to(dirs.label_base).as_posix(),
         ),
     )
-    (dirs.diff / f"{_stem_for(change.path)}.diff").write_text(header + diff)
+    _ = (dirs.diff / f"{_stem_for(change.path)}.diff").write_text(header + diff)
 
 
 def _render_change(
@@ -517,12 +517,12 @@ def _render_change(
             (new_src, change.path, dirs.new),
         ):
             view = "" if src is None else _code_view(src)
-            (side_dir / f"{_stem_for(side_path)}.stripped.py").write_text(view)
+            _ = (side_dir / f"{_stem_for(side_path)}.stripped.py").write_text(view)
     header = WORKTREE_HEADER if new_rev is None else ""
     _write_diff(change, dirs, collapse_blank=args.collapse_blank, header=header)
     if args.prose:
         prose = _prose_diff(old_src, new_src, old_path, change.path)
-        (dirs.diff / f"{_stem_for(change.path)}.prose.diff").write_text(
+        _ = (dirs.diff / f"{_stem_for(change.path)}.prose.diff").write_text(
             header + prose if prose else "",
         )
 
@@ -624,12 +624,12 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "changed .py file whose path does not contain 'test'."
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "commit_hash",
         nargs="?",
         help="Commit to diff HEAD against. Defaults to --since, then the latest tag.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--path",
         action="append",
         dest="paths",
@@ -639,49 +639,49 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "repository. E.g. --path django_strawberry_framework/filters."
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--output-dir",
         type=Path,
         help="Write old/, new/ and diff/ under this directory instead of docs/shadow/.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--against",
         choices=("head", "worktree"),
         default="head",
         help="Read the new side from HEAD (default) or from the working tree.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--include-tests",
         action="store_true",
         help="Include paths containing 'test' (e.g. django_strawberry_framework/testing/).",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--include-init",
         action="store_true",
         help="Include __init__.py files.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--keep-literals",
         action="store_true",
         help="Keep string literals and f-string bodies in the stripped files.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--collapse-blank",
         action="store_true",
         help="Drop blank lines before diffing.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--prose",
         action="store_true",
         help="Also write diff/<stem>.prose.diff with every comment/docstring change region.",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--list",
         action="store_true",
         help="Print only the changed-file inventory (writes nothing).",
     )
-    parser.add_argument("--json", action="store_true", help="With --list, print JSON.")
-    parser.add_argument(
+    _ = parser.add_argument("--json", action="store_true", help="With --list, print JSON.")
+    _ = parser.add_argument(
         "--since",
         metavar="REV",
         help="Base commit; alternative spelling of the positional commit.",

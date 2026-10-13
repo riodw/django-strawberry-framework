@@ -77,14 +77,14 @@ def _seed(parents: int, children: int) -> None:
     from apps.library.models import Book, Branch, Shelf
     from django.db import connection
 
-    Book.objects.all().delete()
-    Shelf.objects.all().delete()
-    Branch.objects.all().delete()
+    _ = Book.objects.all().delete()
+    _ = Shelf.objects.all().delete()
+    _ = Branch.objects.all().delete()
     branch = Branch.objects.create(name="bench-central")
     shelves = Shelf.objects.bulk_create(
         Shelf(code=f"s{index}", branch=branch) for index in range(parents)
     )
-    Book.objects.bulk_create(
+    _ = Book.objects.bulk_create(
         Book(title=f"s{shelf_index}-b{book_index}", shelf=shelf)
         for shelf_index, shelf in enumerate(shelves)
         for book_index in range(children)
@@ -117,7 +117,7 @@ def _build_schemas(*, lateral: bool = True) -> dict[str, strawberry.Schema]:
 
     from django_strawberry_framework import DjangoListField, finalize_django_types
 
-    make_django_type(
+    _ = make_django_type(
         "BookType",
         Book,
         ("id", "title"),
@@ -184,7 +184,7 @@ def _run(
     lateral_used = any("CROSS JOIN LATERAL" in entry["sql"] for entry in ctx.captured_queries)
     for _ in range(iterations):
         started = time.perf_counter()
-        schema.execute_sync(document)
+        _ = schema.execute_sync(document)
         samples.append((time.perf_counter() - started) * 1000.0)
     return samples, query_count, lateral_used, counted.data
 
@@ -200,26 +200,26 @@ def _postgres_server_version() -> str:
 def main() -> int:
     """Parse args, seed the target database, and print the strategy matrix."""
     parser = argparse.ArgumentParser(description=(__doc__ or "").partition("\n")[0])
-    parser.add_argument("--parents", type=int, default=200, help="shelf count (default 200)")
-    parser.add_argument(
+    _ = parser.add_argument("--parents", type=int, default=200, help="shelf count (default 200)")
+    _ = parser.add_argument(
         "--children",
         type=int,
         default=30,
         help="books per shelf (default 30)",
     )
-    parser.add_argument("--page-size", type=int, default=2, help="first: N page (default 2)")
-    parser.add_argument(
+    _ = parser.add_argument("--page-size", type=int, default=2, help="first: N page (default 2)")
+    _ = parser.add_argument(
         "--iterations",
         type=int,
         default=20,
         help="timed requests per mode (default 20)",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--sqlite-smoke",
         action="store_true",
         help="windowed vs per-parent on in-memory SQLite; lateral reported unavailable",
     )
-    parser.add_argument("--json", dest="json_path", help="also write the report as JSON here")
+    _ = parser.add_argument("--json", dest="json_path", help="also write the report as JSON here")
     args = parser.parse_args()
 
     provenance = bootstrap_fakeshop_django("sqlite-memory" if args.sqlite_smoke else "pg")

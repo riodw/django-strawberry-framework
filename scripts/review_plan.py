@@ -956,7 +956,7 @@ def _run_resume(args: argparse.Namespace) -> int:
         since=args.since,
     )
     with plan_path.open("ab") as stream:
-        stream.write(addition.encode("utf-8"))
+        _ = stream.write(addition.encode("utf-8"))
     print(
         f"Appended run {release} {generated_date}-{run_number} to {shown} "
         f"({counts['added']} new item(s), {counts['carried']} already itemized, "
@@ -1448,18 +1448,18 @@ def _run_reconcile(args: argparse.Namespace) -> int:
 def _add_scope_arguments(parser: argparse.ArgumentParser, scope_help: str) -> None:
     """Add the mutually exclusive ``--scope`` / ``--changed`` pair and ``--since``."""
     group = parser.add_mutually_exclusive_group()
-    group.add_argument(
+    _ = group.add_argument(
         "--scope",
         action="append",
         default=[],
         help=f"{scope_help} (repeatable; default: package)",
     )
-    group.add_argument(
+    _ = group.add_argument(
         "--changed",
         action="store_true",
         help="work the items covering committed package changes since --since",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--since",
         help="base revision for --changed (default: latest tag reachable from HEAD)",
     )
@@ -1468,7 +1468,7 @@ def _add_scope_arguments(parser: argparse.ArgumentParser, scope_help: str) -> No
 def _build_parser() -> argparse.ArgumentParser:
     """Build the ``plan`` / ``resume`` / ``scope`` / ``reconcile`` parser."""
     parser = argparse.ArgumentParser(description=(__doc__ or "").partition("\n")[0])
-    parser.add_argument(
+    _ = parser.add_argument(
         "--root",
         type=Path,
         default=REPO_ROOT,
@@ -1477,37 +1477,43 @@ def _build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
 
     plan = commands.add_parser("plan", help="write docs/review/review-<release>.md")
-    plan.add_argument("--mode", choices=MODES, default="autonomous")
+    _ = plan.add_argument("--mode", choices=MODES, default="autonomous")
     _add_scope_arguments(plan, "package folder or module to work this run")
-    plan.add_argument("--target-release", help="release to plan (default: package __version__)")
-    plan.add_argument(
+    _ = plan.add_argument(
+        "--target-release",
+        help="release to plan (default: package __version__)",
+    )
+    _ = plan.add_argument(
         "--output",
         type=Path,
         help="plan path (default: docs/review/review-<rel>.md)",
     )
-    plan.add_argument("--generated-date", help="ISO date for the Run: id (default: today)")
-    plan.add_argument(
+    _ = plan.add_argument("--generated-date", help="ISO date for the Run: id (default: today)")
+    _ = plan.add_argument(
         "--force",
         action="store_true",
         help="replace an existing plan whose ledger and outcomes are still empty",
     )
 
     resume = commands.add_parser("resume", help="append one run to an existing plan")
-    resume.add_argument(
+    _ = resume.add_argument(
         "--plan",
         type=Path,
         help="plan to resume (default: docs/review/review-<rel>.md)",
     )
     _add_scope_arguments(resume, "package folder or module this run works")
-    resume.add_argument("--target-release", help="release the plan must be for")
-    resume.add_argument("--generated-date", help="ISO date for the run id (default: today)")
+    _ = resume.add_argument("--target-release", help="release the plan must be for")
+    _ = resume.add_argument("--generated-date", help="ISO date for the run id (default: today)")
 
     scope = commands.add_parser("scope", help="print changed package .py files since a revision")
-    scope.add_argument("--since", help="base revision (default: latest tag reachable from HEAD)")
-    scope.add_argument("--json", action="store_true", help="emit JSON")
+    _ = scope.add_argument(
+        "--since",
+        help="base revision (default: latest tag reachable from HEAD)",
+    )
+    _ = scope.add_argument("--json", action="store_true", help="emit JSON")
 
     reconcile = commands.add_parser("reconcile", help="compare a plan with the inventory")
-    reconcile.add_argument("--plan", type=Path, required=True, help="plan to compare")
+    _ = reconcile.add_argument("--plan", type=Path, required=True, help="plan to compare")
     return parser
 
 

@@ -441,7 +441,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Measure the installed package's type completeness and judge it."""
-    parse_args(sys.argv[1:] if argv is None else argv)
+    _ = parse_args(sys.argv[1:] if argv is None else argv)
     with tempfile.TemporaryDirectory(prefix="dsf-verifytypes-") as scratch:
         root = Path(scratch).resolve()
         if root == REPO_ROOT or REPO_ROOT in root.parents:

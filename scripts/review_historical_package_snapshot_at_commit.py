@@ -100,7 +100,7 @@ def _run_git(args: Sequence[str]) -> str:
 def _validate_commit(commit: str) -> None:
     """Exit with code 2 if ``commit`` does not resolve to a real commit."""
     try:
-        subprocess.run(
+        _ = subprocess.run(
             [
                 "git",
                 "rev-parse",
@@ -261,14 +261,14 @@ def _publish_staged_snapshot(staging_dir: Path, output_dir: Path) -> None:
             ),
         )
         backup_dir = backup_root / output_dir.name
-        output_dir.replace(backup_dir)
+        _ = output_dir.replace(backup_dir)
     cleanup_backup = False
     try:
-        staging_dir.replace(output_dir)
+        _ = staging_dir.replace(output_dir)
     except BaseException as publish_error:
         if backup_dir is not None:
             try:
-                backup_dir.replace(output_dir)
+                _ = backup_dir.replace(output_dir)
             except BaseException as restore_error:
                 raise RuntimeError(
                     "snapshot publication and rollback both failed; "
@@ -296,13 +296,13 @@ def _materialize_and_inspect(commit: str, path: str, out_dir: Path) -> None:
     """
     contents = _file_at_commit(commit, path)
     if contents is None:
-        (out_dir / f"{_stem_for(path)}.stripped.py").write_text("")
+        _ = (out_dir / f"{_stem_for(path)}.stripped.py").write_text("")
         return
     with tempfile.TemporaryDirectory() as tmp:
         tmp_root = Path(tmp)
         tmp_target = tmp_root / path
         tmp_target.parent.mkdir(parents=True, exist_ok=True)
-        tmp_target.write_text(contents)
+        _ = tmp_target.write_text(contents)
         _inspect_quiet(tmp_target, out_dir, tmp_root)
 
 
@@ -313,8 +313,8 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "a package directory at the given commit."
         ),
     )
-    parser.add_argument("commit_hash", help="Commit hash to snapshot.")
-    parser.add_argument(
+    _ = parser.add_argument("commit_hash", help="Commit hash to snapshot.")
+    _ = parser.add_argument(
         "--package-dir",
         default=DEFAULT_PACKAGE_DIR,
         help=(

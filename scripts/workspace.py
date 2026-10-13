@@ -542,18 +542,17 @@ def new_run_id(flow: str) -> str:
 
 
 def _is_within(path: Path, root: Path) -> bool:
-    try:
-        path.resolve().relative_to(root.resolve())
-    except ValueError:
-        return False
-    return True
+    return path.resolve().is_relative_to(root.resolve())
 
 
 def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, indent=1, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    _ = temporary.write_text(
+        json.dumps(payload, indent=1, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _ = temporary.replace(path)
 
 
 def _is_json_object(value: object) -> TypeIs[dict[str, object]]:
@@ -798,7 +797,7 @@ def _copy_entry(source: Path, destination: Path, repo_root: Path) -> None:
             raise WorkspaceError(msg)
         os.symlink(target, destination)
     else:
-        shutil.copy2(source, destination)
+        _ = shutil.copy2(source, destination)
 
 
 def _remove_unwanted(
@@ -1053,7 +1052,7 @@ def ensure_floor_venv(layout: Layout) -> _FloorVenv:
         env = clean_env(UV_PROJECT_ENVIRONMENT=str(venv))
         for command in commands:
             _run_checked(command, env)
-        key_path.write_text(key, encoding="utf-8")
+        _ = key_path.write_text(key, encoding="utf-8")
     return {
         "python": str(python),
         "pins": pins,
@@ -1229,7 +1228,7 @@ class Postgres:
             self._container = self.find()
         if self._container is None:
             compose = self.repo_root / COMPOSE_FILE
-            self._docker(
+            _ = self._docker(
                 "compose",
                 "-p",
                 COMPOSE_PROJECT,
@@ -1276,8 +1275,8 @@ class Postgres:
 
     def recreate(self, database: str) -> None:
         """Drop ``database`` and every pytest database derived from it, then create it empty."""
-        self.drop_matching(database, exact=True)
-        self.sql(f'CREATE DATABASE "{database}"')
+        _ = self.drop_matching(database, exact=True)
+        _ = self.sql(f'CREATE DATABASE "{database}"')
 
     def databases(self, prefix: str = "ws_", *, exact: bool = False) -> list[str]:
         """Return the container's databases named ``prefix...`` or ``test_prefix...``.
@@ -1301,7 +1300,7 @@ class Postgres:
         """Drop every database ``databases`` returns for ``prefix``; return their names."""
         names = self.databases(prefix, exact=exact)
         for name in names:
-            self.sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+            _ = self.sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
         return names
 
     def stop_if_idle(self) -> str:
@@ -1316,7 +1315,7 @@ class Postgres:
         if container[2] != COMPOSE_PROJECT:
             return f"Postgres kept: container {container[0]} was not started by this script"
         compose = self.repo_root / COMPOSE_FILE
-        self._docker("compose", "-p", COMPOSE_PROJECT, "-f", str(compose), "down")
+        _ = self._docker("compose", "-p", COMPOSE_PROJECT, "-f", str(compose), "down")
         return f"Postgres stopped: container {container[0]}"
 
 
@@ -1460,7 +1459,7 @@ def sync_slot(layout: Layout, slot: str) -> _Manifest:
     """Resync one copy from the shared tree and drop its Postgres databases."""
     postgres = _running_postgres(layout.repo_root)
     if postgres is not None:
-        postgres.drop_matching(layout.db_name(slot), exact=True)
+        _ = postgres.drop_matching(layout.db_name(slot), exact=True)
     manifest = sync_copy(layout.repo_root, layout.slot_dir(slot))
     _write_json(layout.manifest_path(slot), manifest)
     _mark_synced(layout, slot, manifest)
@@ -1480,7 +1479,7 @@ def cell_env(layout: Layout, slot: str, cell: str) -> tuple[dict[str, str], str 
         return clean_env(FAKESHOP_SHARDED="1"), None
     database = layout.db_name(slot)
     postgres = Postgres(layout.repo_root)
-    postgres.ensure()
+    _ = postgres.ensure()
     if not postgres.databases(database, exact=True):
         postgres.recreate(database)
     return clean_env(FAKESHOP_PG_DSN=postgres.dsn(database)), database
@@ -1590,10 +1589,10 @@ def _pump(
     lock: threading.Lock,
 ) -> None:
     for chunk in iter(lambda: source.read1(1 << 16), b""):
-        sink.write(chunk)
+        _ = sink.write(chunk)
         sink.flush()
         with lock:
-            log.write(chunk)
+            _ = log.write(chunk)
 
 
 def stream(
@@ -1606,7 +1605,7 @@ def stream(
     """Run ``command`` in ``cwd``, copying its stdout and stderr through while logging both."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("wb") as log:
-        log.write(header.encode("utf-8"))
+        _ = log.write(header.encode("utf-8"))
         log.flush()
         process = subprocess.Popen(  # the worker's own command, in its copy
             list(command),
@@ -1740,8 +1739,8 @@ def execute(
             "started": _now(),
         }
         header = render_header(record)
-        sys.stderr.write(header)
-        sys.stderr.flush()
+        _ = sys.stderr.write(header)
+        _ = sys.stderr.flush()
         started = time.monotonic()
         uv_run = [
             "uv",
@@ -1757,8 +1756,8 @@ def execute(
         record.update(exit=code, seconds=seconds)
     layout.evidence.mkdir(parents=True, exist_ok=True)
     with layout.run_log.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, sort_keys=True) + "\n")
-    sys.stderr.write(f"workspace run {record['run_id']} exit {code} in {seconds}s\n")
+        _ = handle.write(json.dumps(record, sort_keys=True) + "\n")
+    _ = sys.stderr.write(f"workspace run {record['run_id']} exit {code} in {seconds}s\n")
     return code
 
 
@@ -1814,13 +1813,13 @@ def release(
         released: list[str] = []
         for slot in chosen:
             if postgres is not None:
-                postgres.drop_matching(layout.db_name(slot), exact=True)
+                _ = postgres.drop_matching(layout.db_name(slot), exact=True)
             # ``chosen`` holds only bound slots.
             bound = cast("_SlotBinding", state["slots"][slot])
             released.append(f"{slot} {bound['address']}")
             state["slots"][slot] = None
         if not roles and not keep:
-            state["items"].pop(item, None)
+            _ = state["items"].pop(item, None)
         if layout.state_path.exists():
             _write_json(layout.state_path, state)
     return released
@@ -2022,22 +2021,22 @@ def build_gate_git(repo_root: Path, gate_dir: Path) -> str:
         shutil.rmtree(git_dir)
     elif os.path.lexists(git_dir):
         git_dir.unlink()
-    _git(gate_dir, "init", "-q")
+    _ = _git(gate_dir, "init", "-q")
     common = Path(
         _git(repo_root, "rev-parse", "--path-format=absolute", "--git-common-dir").strip(),
     )
     (git_dir / "objects" / "info").mkdir(parents=True, exist_ok=True)
-    (git_dir / "objects" / "info" / "alternates").write_text(
+    _ = (git_dir / "objects" / "info" / "alternates").write_text(
         f"{common / 'objects'}\n",
         encoding="utf-8",
     )
     exclude = common / "info" / "exclude"
     if exclude.exists():
         (git_dir / "info").mkdir(parents=True, exist_ok=True)
-        shutil.copy2(exclude, git_dir / "info" / "exclude")
+        _ = shutil.copy2(exclude, git_dir / "info" / "exclude")
     head = _git(repo_root, "rev-parse", "HEAD").strip()
-    _git(gate_dir, "update-ref", "--no-deref", "HEAD", head)
-    _git(gate_dir, "read-tree", head)
+    _ = _git(gate_dir, "update-ref", "--no-deref", "HEAD", head)
+    _ = _git(gate_dir, "read-tree", head)
     return head
 
 
@@ -2146,10 +2145,10 @@ def gate(layout: Layout, suites: Sequence[str]) -> int:
                     "unverified": str(error),
                 }
                 all_passed = False
-                sys.stderr.write(f"gate {suite}: unverified: {error}\n")
+                _ = sys.stderr.write(f"gate {suite}: unverified: {error}\n")
                 continue
             header = f"workspace gate {run_id} suite={suite} cell={cell} copy={layout.gate_dir}\n"
-            sys.stderr.write(header)
+            _ = sys.stderr.write(header)
             started = time.monotonic()
             code = stream([*runner, *arguments], env, log_path, header, cwd=cwd)
             ran: _GateRun = {
@@ -2168,7 +2167,7 @@ def gate(layout: Layout, suites: Sequence[str]) -> int:
         if "pg" in suites:
             postgres = _running_postgres(repo_root)
             if postgres is not None:
-                postgres.drop_matching(layout.db_name("gate"), exact=True)
+                _ = postgres.drop_matching(layout.db_name("gate"), exact=True)
         result_path = layout.evidence / f"gate-{new_run_id(layout.flow)}.json"
         _write_json(result_path, result)
     print(f"gate {layout.flow}: bound to {bound_to}; result {result_path}")
@@ -2187,7 +2186,7 @@ def gate_env(layout: Layout, cell: str) -> tuple[dict[str, str], str | None]:
         return cell_env(layout, "gate", cell)
     database = layout.db_name("gate")
     postgres = Postgres(layout.repo_root)
-    postgres.ensure()
+    _ = postgres.ensure()
     postgres.recreate(database)
     return clean_env(FAKESHOP_PG_DSN=postgres.dsn(database)), database
 
@@ -2220,7 +2219,7 @@ def _append_gate_run(
     }
     layout.evidence.mkdir(parents=True, exist_ok=True)
     with layout.run_log.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, sort_keys=True) + "\n")
+        _ = handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
 # --------------------------------------------------------------------------------------------
@@ -2275,7 +2274,7 @@ def _cmd_path(args: argparse.Namespace) -> int:
     binding = bind(layout, address)
     if binding.needs_sync or not layout.manifest_path(binding.slot).exists():
         with file_lock(layout.slot_lock(binding.slot)):
-            sync_slot(layout, binding.slot)
+            _ = sync_slot(layout, binding.slot)
     print(binding.directory)
     return 0
 
@@ -2315,9 +2314,9 @@ def _cmd_diff(args: argparse.Namespace) -> int:
             return 1
         print(f"{args.check}: matches")
     elif args.output:
-        Path(args.output).write_bytes(diff)
+        _ = Path(args.output).write_bytes(diff)
     else:
-        sys.stdout.buffer.write(diff)
+        _ = sys.stdout.buffer.write(diff)
     return 0
 
 
@@ -2371,9 +2370,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="run a command in the address's copy",
         usage="%(prog)s <address> [--cell CELL] [--fresh] -- <what follows `uv run`>",
     )
-    run.add_argument("address", help="<flow>/<item>/<role>")
-    run.add_argument("--cell", choices=CELLS, default="default")
-    run.add_argument(
+    _ = run.add_argument("address", help="<flow>/<item>/<role>")
+    _ = run.add_argument("--cell", choices=CELLS, default="default")
+    _ = run.add_argument(
         "--fresh",
         action="store_true",
         help="resync the copy from the shared tree first",
@@ -2385,10 +2384,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="run prove_failability.py in the address's copy",
         usage="%(prog)s <address> <manifest> [--cell CELL] [--fresh] [-- <extra args>]",
     )
-    prove.add_argument("address", help="<flow>/<item>/<role>")
-    prove.add_argument("manifest", help="proof manifest (JSON)")
-    prove.add_argument("--cell", choices=CELLS, default="default")
-    prove.add_argument(
+    _ = prove.add_argument("address", help="<flow>/<item>/<role>")
+    _ = prove.add_argument("manifest", help="proof manifest (JSON)")
+    _ = prove.add_argument("--cell", choices=CELLS, default="default")
+    _ = prove.add_argument(
         "--fresh",
         action="store_true",
         help="resync the copy from the shared tree first",
@@ -2396,11 +2395,11 @@ def build_parser() -> argparse.ArgumentParser:
     prove.set_defaults(handler=_cmd_prove)
 
     path = commands.add_parser("path", help="print the address's copy directory")
-    path.add_argument("address", help="<flow>/<item>/<role>")
+    _ = path.add_argument("address", help="<flow>/<item>/<role>")
     path.set_defaults(handler=_cmd_path)
 
     baseline = commands.add_parser("baseline", help="ITEM_BASELINE + the pinned before copy")
-    baseline.add_argument("item", help="<flow>/<item>")
+    _ = baseline.add_argument("item", help="<flow>/<item>")
     baseline.set_defaults(handler=_cmd_baseline)
 
     diff_parser = commands.add_parser(
@@ -2408,23 +2407,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="an item's diff since its baseline, new files included, sha256-sealed",
         usage="%(prog)s <ITEM_BASELINE> [--output FILE | --check FILE] -- <paths...>",
     )
-    diff_parser.add_argument("baseline", help="the item's ITEM_BASELINE sha")
+    _ = diff_parser.add_argument("baseline", help="the item's ITEM_BASELINE sha")
     diff_target = diff_parser.add_mutually_exclusive_group()
-    diff_target.add_argument("--output", help="write the diff here instead of stdout")
-    diff_target.add_argument(
+    _ = diff_target.add_argument("--output", help="write the diff here instead of stdout")
+    _ = diff_target.add_argument(
         "--check",
         help="exit 1 unless this file holds exactly the diff the tree gives now",
     )
     diff_parser.set_defaults(handler=_cmd_diff)
 
     release_parser = commands.add_parser("release", help="return an item's copies to the pool")
-    release_parser.add_argument("item", help="<flow>/<item>")
-    release_parser.add_argument(
+    _ = release_parser.add_argument("item", help="<flow>/<item>")
+    _ = release_parser.add_argument(
         "--role",
         action="append",
         help="release only this role's copy (repeatable)",
     )
-    release_parser.add_argument(
+    _ = release_parser.add_argument(
         "--keep",
         action="append",
         help="release every copy but this role's (repeatable), e.g. --keep before",
@@ -2432,21 +2431,21 @@ def build_parser() -> argparse.ArgumentParser:
     release_parser.set_defaults(handler=_cmd_release)
 
     audit = commands.add_parser("audit", help="bind every run id a record cites")
-    audit.add_argument("records", nargs="+", help="record files to audit")
+    _ = audit.add_argument("records", nargs="+", help="record files to audit")
     audit.set_defaults(handler=_cmd_audit)
 
     gate_parser = commands.add_parser("gate", help="run the final gate suites in a gate copy")
-    gate_parser.add_argument("flow")
-    gate_parser.add_argument("--suites", default=",".join(GATE_SUITES))
+    _ = gate_parser.add_argument("flow")
+    _ = gate_parser.add_argument("--suites", default=",".join(GATE_SUITES))
     gate_parser.set_defaults(handler=_cmd_gate)
 
     status_parser = commands.add_parser("status", help="describe copies, runs and leases")
-    status_parser.add_argument("flow", nargs="?")
+    _ = status_parser.add_argument("flow", nargs="?")
     status_parser.set_defaults(handler=_cmd_status)
 
     gc_parser = commands.add_parser("gc", help="delete everything the flow holds")
-    gc_parser.add_argument("flow")
-    gc_parser.add_argument(
+    _ = gc_parser.add_argument("flow")
+    _ = gc_parser.add_argument(
         "--force",
         action="store_true",
         help="delete even while a run holds a lock",

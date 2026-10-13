@@ -382,7 +382,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "then generate the autonomous release-scoped bug-hunt progress file."
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--dicta",
         type=Path,
         default=DICTA_PATH,
@@ -391,7 +391,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
             f"Defaults to {DICTA_PATH.as_posix()!r}."
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--output",
         type=Path,
         default=None,
@@ -401,7 +401,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "version (dots as underscores)."
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--target-release",
         default=None,
         help=(
@@ -409,7 +409,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
             f"flows. Defaults to the package version in {PACKAGE_INIT.as_posix()}."
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--package-dir",
         default=DEFAULT_PACKAGE_DIR,
         help=(
@@ -418,7 +418,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
             f"Defaults to {DEFAULT_PACKAGE_DIR!r}."
         ),
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--force",
         action="store_true",
         help="Replace an existing progress file for an explicit maintainer-requested restart.",
@@ -455,7 +455,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.output is None:
         release_slug = release.replace(".", "_")
-        output_path = (repo_root / BUG_HUNT_DIR / f"bug_hunt-{release_slug}.md").resolve()
+        output_path: Path = (repo_root / BUG_HUNT_DIR / f"bug_hunt-{release_slug}.md").resolve()
     else:
         output_path = (repo_root / args.output).resolve()
     if output_path.exists() and not args.force:
@@ -508,7 +508,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text("\n".join(sections), encoding="utf-8")
+    _ = output_path.write_text("\n".join(sections), encoding="utf-8")
 
     try:
         display_output = output_path.relative_to(repo_root)

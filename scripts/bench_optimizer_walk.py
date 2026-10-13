@@ -219,7 +219,7 @@ def _bench_capture(capture: _Capture, iterations: int, warmup: int) -> list[int]
     timings: list[int] = []
     for i in range(iterations + warmup):
         start = time.perf_counter_ns()
-        plan_optimizations(
+        _ = plan_optimizations(
             capture.selections,
             capture.model,
             info=capture.info,
@@ -258,19 +258,39 @@ def main() -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--iterations", type=int, default=10000, help="measured walks per query")
-    parser.add_argument("--warmup", type=int, default=500, help="discarded warmup walks per query")
-    parser.add_argument("--seed", type=int, default=3, help="Item rows per Faker provider to seed")
-    parser.add_argument(
+    _ = parser.add_argument(
+        "--iterations",
+        type=int,
+        default=10000,
+        help="measured walks per query",
+    )
+    _ = parser.add_argument(
+        "--warmup",
+        type=int,
+        default=500,
+        help="discarded warmup walks per query",
+    )
+    _ = parser.add_argument(
+        "--seed",
+        type=int,
+        default=3,
+        help="Item rows per Faker provider to seed",
+    )
+    _ = parser.add_argument(
         "--glossary-terms",
         type=int,
         default=20,
         help="glossary terms to seed, each with one row per relation (default 20)",
     )
-    parser.add_argument("--rounds", type=int, default=3, help="timed rounds per query (default 3)")
-    parser.add_argument("--query", help="GraphQL file to bench instead of the built-in set")
-    parser.add_argument("--variables", help="JSON object of variables for --query")
-    parser.add_argument("--json", dest="json_path", help="also write the report as JSON here")
+    _ = parser.add_argument(
+        "--rounds",
+        type=int,
+        default=3,
+        help="timed rounds per query (default 3)",
+    )
+    _ = parser.add_argument("--query", help="GraphQL file to bench instead of the built-in set")
+    _ = parser.add_argument("--variables", help="JSON object of variables for --query")
+    _ = parser.add_argument("--json", dest="json_path", help="also write the report as JSON here")
     args = parser.parse_args()
     if args.rounds < 1 or args.iterations < 1:
         parser.error("--rounds and --iterations must be at least 1")
@@ -287,7 +307,7 @@ def main() -> int:
     from apps.products.services import seed_data
     from config.schema import _optimizer, schema
 
-    seed_data(args.seed)
+    _ = seed_data(args.seed)
     glossary_rows = seed_glossary_terms(args.glossary_terms)
     item_rows = Item.objects.count()
 

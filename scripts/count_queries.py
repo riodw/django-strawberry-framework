@@ -257,18 +257,18 @@ def seed_library_shelves(count: int) -> None:
     for index in range(Shelf.objects.filter(branch=branch).count(), count):
         shelf = Shelf.objects.create(code=f"s{index}", branch=branch)
         for book_index in range(BOOKS_PER_SHELF):
-            Book.objects.create(title=f"s{index}-b{book_index}", shelf=shelf)
+            _ = Book.objects.create(title=f"s{index}-b{book_index}", shelf=shelf)
 
 
 def _seed(seeder: str, count: int) -> None:
     if seeder == "products":
         from apps.products.services import seed_data
 
-        seed_data(count)
+        _ = seed_data(count)
     elif seeder == "library":
         seed_library_shelves(count)
     else:
-        seed_glossary_terms(count)
+        _ = seed_glossary_terms(count)
 
 
 def _schema(*, optimizer: bool) -> DjangoSchema:
@@ -309,33 +309,37 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     source = parser.add_argument_group("operation (one of --query / --operation-name)")
-    source.add_argument("--query", help="GraphQL file holding the operation")
-    source.add_argument(
+    _ = source.add_argument("--query", help="GraphQL file holding the operation")
+    _ = source.add_argument(
         "--operation-name",
         help=(
             "with --query: the GraphQL operationName to execute; alone: a built-in "
             f"operation ({', '.join(sorted(BUILTIN_OPERATIONS))})"
         ),
     )
-    parser.add_argument("--variables", help="JSON object of operation variables")
-    parser.add_argument(
+    _ = parser.add_argument("--variables", help="JSON object of operation variables")
+    _ = parser.add_argument(
         "--seeder",
         choices=("products", "library", "glossary"),
         help="fixture raised to each cardinality (default: the built-in's, else products)",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--cardinalities",
         default=DEFAULT_CARDINALITIES,
         help=f"comma-separated parent counts, one cell each (default {DEFAULT_CARDINALITIES})",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--no-optimizer",
         action="store_true",
         help="run without DjangoOptimizerExtension (positive control)",
     )
-    parser.add_argument("--show-sql", action="store_true", help="print every counted statement")
-    parser.add_argument("--json", dest="json_path", help="also write the report as JSON here")
-    parser.add_argument("--compare", help="baseline JSON from an earlier run; prints deltas")
+    _ = parser.add_argument(
+        "--show-sql",
+        action="store_true",
+        help="print every counted statement",
+    )
+    _ = parser.add_argument("--json", dest="json_path", help="also write the report as JSON here")
+    _ = parser.add_argument("--compare", help="baseline JSON from an earlier run; prints deltas")
     args = parser.parse_args()
     if not args.query and not args.operation_name:
         parser.error("pass --query PATH or --operation-name NAME")

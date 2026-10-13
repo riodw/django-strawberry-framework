@@ -1109,6 +1109,39 @@ def test_create_naive_datetime_input_is_made_timezone_aware():
     assert timezone.is_aware(row.occurred_at)
 
 
+@pytest.mark.django_db
+def test_create_unencodable_text_nested_in_a_json_value_is_field_error_before_save():
+    """A lone surrogate nested in a ``JSONField`` value is a path-keyed decode error; no row.
+
+    The model flavor runs the same storability walk as a top-level string, so a list
+    element inside the ``payload`` object is refused at decode (keyed ``payload.tags.1``)
+    instead of being handed to the column's encoder.
+    """
+    schema, CreateSpec = _build_scalar_specimen_schema()
+    assert CreateSpec._input_class is not None
+    input_name = CreateSpec._input_class.__name__
+    res = schema.execute_sync(
+        f"mutation($d: {input_name}!){{ createSpec(data:$d){{ node{{ id }} errors{{ field codes }} }} }}",
+        variable_values={
+            "d": {
+                "label": "spec-surrogate-json",
+                "occurredOn": "2024-01-01",
+                "occurredAt": "2024-01-01T12:00:00+00:00",
+                "occurredTime": "12:00:00",
+                "externalId": _SPEC_UUID,
+                "payload": {"tags": ["ok", "\ud800"]},
+            },
+        },
+    )
+    assert res.errors is None, res.errors
+    assert res.data is not None
+    assert res.data["createSpec"] == {
+        "node": None,
+        "errors": [{"field": "payload.tags.1", "codes": ["invalid"]}],
+    }
+    assert not scalars_models.ScalarSpecimen.objects.filter(label="spec-surrogate-json").exists()
+
+
 # ---------------------------------------------------------------------------
 # Scalar field named ``<x>_id`` regression (spec-036)
 #

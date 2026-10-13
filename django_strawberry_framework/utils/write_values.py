@@ -27,8 +27,14 @@ from typing import TYPE_CHECKING, Any, cast
 
 from strawberry import relay
 
-from ._narrowing import is_list
-from .errors import FIELD_ERROR_CODE_INVALID, field_error, relation_field_error
+from ..exceptions import _safe_text
+from ._narrowing import dict_items, is_dict, is_list, list_iter
+from .errors import (
+    FIELD_ERROR_CODE_INVALID,
+    field_error,
+    join_error_path,
+    relation_field_error,
+)
 from .inputs import FILE, RELATION_MULTI, RELATION_SINGLE, iter_provided_input_fields
 from .querysets import (
     coerce_field_value_or_none,
@@ -55,35 +61,72 @@ if TYPE_CHECKING:
 
 
 def unencodable_text_error(field_name: str, value: object) -> FieldError | None:
-    r"""Reject a string input that cannot be encoded for storage (unpaired surrogate).
+    r"""Reject an input value holding text that cannot be encoded for storage (lone surrogate).
 
-    A GraphQL ``String`` can carry lone UTF-16 surrogate code points (e.g. U+D800
-    via a JSON ``\ud800`` escape) that are not valid Unicode scalar values and
-    cannot be encoded to UTF-8. Such a value would otherwise reach a
-    DB-bound operation - ``validate_unique()``'s lookup query (a unique column) or
-    ``save()``'s INSERT (any text column) - where the backend raises a raw
-    ``UnicodeEncodeError``. That is a ``ValueError`` the resolver does NOT map (it is
-    neither the ``ValidationError`` ``full_clean`` raises nor the ``IntegrityError``
-    ``save`` raises), so it escapes as a top-level GraphQL error with ``data: null``
-    instead of the field-keyed envelope. Reject it
-    HERE, at decode, before any DB-bound work, as a ``FieldError`` naming the
-    offending input field - the same in-band envelope every other input failure
-    returns - so neither the unique-field ``validate_unique`` path nor the plain
-    ``save`` path can leak the raw exception. The base ``str``'s
-    ``encode("utf-8")`` is the universal storability test: a lone surrogate fails
-    it, while every valid scalar value (including an embedded ``NUL``) passes, so
-    this rejects ONLY genuinely unstorable text. A non-string value (an int, a
-    JSON dict whose own encoder escapes nested surrogates, a choice enum) is
-    passed through unchanged.
+    A GraphQL ``String`` (and every string inside a list or ``JSON`` value) can carry
+    lone UTF-16 surrogate code points (e.g. U+D800 via a JSON ``\ud800`` escape in the
+    request variables) that are not valid Unicode scalar values and cannot be encoded
+    to UTF-8. Such a value would otherwise reach a DB-bound operation -
+    ``validate_unique()``'s lookup query (a unique column) or ``save()``'s INSERT (a
+    text, array-of-text or ``hstore`` column, or a consumer write of the decoded
+    value) - where the backend raises a raw ``UnicodeEncodeError``. That is a
+    ``ValueError`` the resolver does NOT map (it is neither the ``ValidationError``
+    ``full_clean`` raises nor the ``IntegrityError`` ``save`` raises), so it escapes
+    as a top-level GraphQL error with ``data: null`` instead of the field-keyed
+    envelope. Reject it HERE, at decode, before any DB-bound work, as a
+    ``FieldError`` (the same in-band envelope every other input failure returns), so
+    neither the unique-field ``validate_unique`` path nor the plain ``save`` path can
+    leak the raw exception.
+
+    Every text leaf of the value is checked, not only a top-level string: each element
+    of a list and each key and value of a dict, at any depth (an explicit stack, so a
+    deeply nested ``JSON`` value cannot exhaust the interpreter stack). The error keys
+    to the leaf's dotted path under ``field_name`` (``tags.1``, ``attributes.color``,
+    ``rows.0.name``), the same indexed grammar a nested serializer error uses; an
+    unstorable dict KEY keys to the dict itself, since a path segment holding the key
+    would echo the unencodable text back in the error envelope. Containers are read
+    through the base ``list`` / ``dict`` slots, so a subclass's overridden iteration
+    cannot hide a leaf. The base ``str``'s ``encode("utf-8")`` is the universal
+    storability test: a lone surrogate fails it, while every valid scalar value
+    (including an embedded ``NUL``) passes, so this rejects ONLY genuinely unstorable
+    text. Any other leaf (an int, a ``None``, a choice enum, an upload) is passed
+    through unchanged. A ``JSON`` value is held to the same rule as a top-level string
+    rather than trusted to its column: whether a JSON column stores an escaped lone
+    surrogate depends on the backend and on the field's encoder (one dumping with
+    ``ensure_ascii=False`` cannot encode it), so the decode refuses it on every
+    backend.
     """
-    if isinstance(value, str):
-        try:
-            _ = str.__str__(value).encode("utf-8")
-        except UnicodeEncodeError:
-            return field_error(
-                field_name,
-                "Text contains invalid Unicode (unpaired surrogate code points).",
-                codes=FIELD_ERROR_CODE_INVALID,
+    pending: list[tuple[str, object]] = [(field_name, value)]
+    while pending:
+        path, current = pending.pop()
+        if isinstance(current, str):
+            try:
+                _ = str.__str__(current).encode("utf-8")
+            except UnicodeEncodeError:
+                return field_error(
+                    path,
+                    "Text contains invalid Unicode (unpaired surrogate code points).",
+                    codes=FIELD_ERROR_CODE_INVALID,
+                )
+        elif is_list(current):
+            pending.extend(
+                reversed(
+                    [
+                        (join_error_path(path, str(index)), element)
+                        for index, element in enumerate(list_iter(current))
+                    ],
+                ),
+            )
+        elif is_dict(current):
+            # Each key is a text leaf keyed to the dict, checked before its value.
+            pending.extend(
+                reversed(
+                    [
+                        entry
+                        for key, item in dict_items(current)
+                        for entry in ((path, key), (join_error_path(path, _safe_text(key)), item))
+                    ],
+                ),
             )
     return None
 
@@ -201,16 +244,15 @@ def decode_scalar_leaf(graphql_name: str, value: object) -> tuple[object, FieldE
 
     The two-step compose every write flavor runs on a provided scalar value -
     ``raw_choice_value`` (a choice-enum member unwrapped to the raw Django choice
-    value) then ``unencodable_text_error`` (an unstorable lone surrogate is a
-    field-keyed ``FieldError`` at decode, never a raw backend
-    ``UnicodeEncodeError`` at ``save()``). Unwrapping MUST happen first because
-    an enum member is not itself a string while its storage value can be one; a
-    preflight over the member would miss an invalid-Unicode choice value. The
-    primitives were already shared; this owns the compose so a fourth flavor
-    cannot mis-order it. Returns ``(decoded, None)`` on success or ``(None,
-    FieldError)``. Flavor-specific scalar steps (the model path's explicit-null
-    rejection and naive-datetime coercion) stay at the call site, composed
-    around this leaf.
+    value) then ``unencodable_text_error`` (an unstorable lone surrogate anywhere in
+    the value - a list element, a ``JSON`` key or value - is a ``FieldError`` keyed to
+    its path at decode, never a raw backend ``UnicodeEncodeError`` at ``save()``).
+    Unwrapping MUST happen first because an enum member is not itself a string while
+    its storage value can be one; a preflight over the member would miss an
+    invalid-Unicode choice value. This owns the compose so a fourth flavor cannot
+    mis-order it. Returns ``(decoded, None)`` on success or ``(None, FieldError)``.
+    Flavor-specific scalar steps (the model path's explicit-null rejection and
+    naive-datetime coercion) stay at the call site, composed around this leaf.
     """
     decoded = raw_choice_value(value)
     error = unencodable_text_error(graphql_name, decoded)

@@ -537,6 +537,38 @@ def test_set_card_files_changed_happy_path():
 
 
 @pytest.mark.django_db
+def test_set_card_files_unencodable_path_is_field_error_not_a_crash():
+    # ``paths`` is a ``JSON`` value whose strings the service stores in a text column; a
+    # lone surrogate in one element is refused at decode, keyed to that element, before
+    # the service writes a planned TrackedPath row (which SQLite cannot encode).
+    card = kf.make_card(status=kf.make_status("todo"))
+    client = _staff_client()
+
+    payload = _run(
+        "mutation($d: SetCardFilesFormInput!) { setCardFiles(data: $d) "
+        "{ ok errors { field codes } } }",
+        {
+            "d": {
+                "cardId": _card_gid(card),
+                "kind": "predicted",
+                "paths": [
+                    "django_strawberry_framework/surrogate_ok.py",
+                    "django_strawberry_framework/\ud800.py",
+                ],
+            },
+        },
+        client=client,
+    )
+
+    assert "errors" not in payload, payload
+    envelope = payload["data"]["setCardFiles"]
+    assert envelope["ok"] is False
+    assert envelope["errors"] == [{"field": "paths.1", "codes": ["invalid"]}]
+    assert not card.path_links.exists()
+    assert not models.TrackedPath.objects.filter(path__contains="surrogate_ok").exists()
+
+
+@pytest.mark.django_db
 def test_set_card_files_changed_on_undone_card_envelope():
     card = kf.make_card(status=kf.make_status("todo"))
     client = _staff_client()

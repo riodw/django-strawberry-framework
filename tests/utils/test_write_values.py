@@ -8,6 +8,7 @@ relation ids, batched ``pk__in`` cost, duplicate members, and empty M2M clears l
 ``examples/fakeshop/test_query/test_library_api.py``.
 """
 
+import sys
 from collections.abc import Iterator
 from enum import Enum
 from typing import TYPE_CHECKING, NoReturn
@@ -368,6 +369,62 @@ def test_decode_scalar_leaf_checks_choice_value_after_unwrapping():
     assert error is not None
     assert error.field == "status"
     assert error.codes == ["invalid"]
+
+    decoded, error = decode_scalar_leaf("statuses", [InvalidTextChoice.broken])
+    assert decoded is None
+    assert error is not None
+    assert error.field == "statuses.0"
+
+
+class _HidingList(list[object]):
+    """A list whose own iteration hides every element behind one valid string."""
+
+    @override
+    def __iter__(self) -> Iterator[object]:
+        return iter(["fine"])
+
+
+class _HidingDict(dict[object, object]):
+    """A dict whose own ``items`` refuses to be read."""
+
+    @override
+    def items(self) -> NoReturn:
+        raise AssertionError("the walk must not dispatch the override")
+
+
+@pytest.mark.parametrize(
+    ("value", "error_field"),
+    [
+        (_HidingList(["ok", "\ud800"]), "tags.1"),
+        ({"rows": _HidingList(["\ud800"])}, "tags.rows.0"),
+        (_HidingDict({"color": "\ud800"}), "tags.color"),
+        ([_HidingDict({"\ud800": "red"})], "tags.0"),
+    ],
+)
+def test_unencodable_text_error_reads_containers_through_the_base_slots(
+    value: object,
+    error_field: str,
+):
+    """A list / dict subclass's overridden iteration cannot hide an unstorable leaf."""
+    error = unencodable_text_error("tags", value)
+    assert error is not None
+    assert error.field == error_field
+
+
+def test_unencodable_text_error_walks_nesting_deeper_than_the_recursion_limit():
+    """The walk keeps an explicit stack, so a deeply nested ``JSON`` value cannot overflow it."""
+    depth = sys.getrecursionlimit() * 2
+    root: list[object] = []
+    level = root
+    for _ in range(depth):
+        child: list[object] = []
+        level.append(child)
+        level = child
+    level.append("\ud800")
+
+    error = unencodable_text_error("payload", root)
+    assert error is not None
+    assert error.path == ["payload", *(["0"] * (depth + 1))]
 
 
 def test_scalar_into_stores_decoded_leaf_and_keys_errors_to_field_name():

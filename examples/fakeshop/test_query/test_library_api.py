@@ -12367,6 +12367,53 @@ def test_serializer_input_field_description_threads_drf_metadata_over_http():
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("unencodable_input", "error_field"),
+    [
+        ({"tags": ["ok", "\ud800"]}, "tags.1"),
+        ({"attributes": {"color": "\ud800"}}, "attributes.color"),
+        ({"attributes": {"\ud800": "red"}}, "attributes"),
+        ({"attributes": {"\ud800": "\ud800"}}, "attributes"),
+        ({"attributes": {"sizes": ["s", {"m": "\ud800"}]}}, "attributes.sizes.1.m"),
+    ],
+)
+def test_serializer_unencodable_text_in_a_list_or_json_leaf_is_field_error_over_http(
+    unencodable_input: dict[str, object],
+    error_field: str,
+):
+    """A lone surrogate inside a list element or a ``JSON`` key / value is refused at decode.
+
+    The storability preflight walks every text leaf of a provided value, so a ``[String]``
+    element (``tags``, whose ``CharField`` child DRF would also refuse) and a ``DictField`` ->
+    ``JSON`` leaf (``attributes``, which DRF never inspects) both return the package's
+    ``invalid`` error keyed to the leaf's dotted path - an unstorable KEY to the dict itself -
+    before the serializer runs, and no shelf is written.
+    """
+    branch = models.Branch.objects.create(name="SurrogateBranch", city="Boston")
+
+    response = _post_graphql(
+        "mutation($d: ShelfMetadataSerializerInput!) { createShelfViaMetadataSerializer(data: $d) { "
+        "result { code } errors { field messages codes path } } }",
+        variables={"d": {"code": "SurrogateShelf", "branchId": branch.pk, **unencodable_input}},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfViaMetadataSerializer"]
+    assert result["result"] is None
+    assert result["errors"] == [
+        {
+            "field": error_field,
+            "messages": ["Text contains invalid Unicode (unpaired surrogate code points)."],
+            "codes": ["invalid"],
+            "path": error_field.split("."),
+        },
+    ]
+    assert not models.Shelf.objects.filter(code="SurrogateShelf").exists()
+
+
+@pytest.mark.django_db
 def test_serializer_error_envelope_carries_codes_and_path_over_http():
     """The mutation error envelope carries structured ``codes`` + ``path`` alongside ``field`` / ``messages``.
 

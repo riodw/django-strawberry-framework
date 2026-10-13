@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 58 done, 85 to do.
+Progress: 59 done, 88 to do.
 
 ## Done
 
@@ -129,6 +129,12 @@ Progress: 58 done, 85 to do.
   ChoiceField" over an `ArrayField` whose `base_field` is grouped too, where a `ChoiceField` writes one value into the list
   column; over such an array it now names a declared `MultipleChoiceField` or `ListField(child=ChoiceField)`, each element
   checked against the `base_field`'s flattened values (`6f1a6cd4`)
+- [x] 90. Nested list-of-choice serializer shapes (`ListField(child=MultipleChoiceField)`,
+  `ListField(child=ListField(child=ChoiceField))`) publish `[[String!]!]` by spec-039's one-level peel
+  (`serializer_choice_source`). Not a defect under rule 37 (no contract row: spec-039 states `list[list[str]]`; no wire input
+  writes a wrong value): they are reachable only as serializer-only fields, DRF checks every leaf with a field-keyed error
+  (`f.0.0`), declared over any column they are refused at build, and neither graphene-django nor strawberry-django types nested
+  choice lists as enums; no code. Found probing it: items 151-154
 
 ## To do: t3 robustness rows
 
@@ -160,8 +166,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## To do: found along the way
 
-- [ ] 90. Nested list-of-choice serializer shapes (`ListField(child=MultipleChoiceField)`, `ListField(child=ListField(child=ChoiceField))`)
-  still publish `[[String!]!]`; an enum there needs a deeper element unwrap than item 43's one level
 - [ ] 92. A consumer `save()` raising Django's `ValidationError` escapes the ModelForm flavor as a masked top-level error, while the
   serializer flavor maps it into the envelope
 - [ ] 97. A `FilterSet` declaring `{"<fo>": ["exact", "isnull"]}` over a forward `ForeignObject` raises django-filter's
@@ -251,6 +255,23 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 144. `workspace.py gc`'s Postgres `stop_if_idle` runs after the flow lease is released and can race another flow
   creating a database
 - [ ] 145. `workspace.py status` can raise `FileNotFoundError` reading `state.json` while a `gc` removes the flow
+- [ ] 151. A declared `MultipleChoiceField`, `ListField(child=ChoiceField)` or single `ChoiceField` over a nested
+  `ArrayField(ArrayField(<choices>))` builds, where every other field and flavor refuses the nested array, and writes a flat
+  list (or a scalar) into the 2-D column, unchecked against the inner `base_field`'s choices (`choices=[("zzz", ...)]` stores
+  `["zzz"]`): `rest_framework/serializer_converter.py::_model_backed_scalar_annotation` returns the declared enum before
+  `convert_scalar`'s nested refusal, and `_multiple_choice_element_column` stops at the inner `ArrayField` (item 127's path)
+- [ ] 152. A declared `ListField(child=ChoiceField(allow_null=True))` over an `ArrayField` whose `base_field` is NOT NULL
+  publishes `[XEnum]` and stores a `null` element (no database constraint covers an array element), so every later read of the
+  row's field fails "Cannot return null for non-nullable field" (with the field selected in the same mutation, the write rolls
+  back behind that top-level error): `_reject_choice_values_the_column_does_not_list` leaves `None` to the column
+- [ ] 153. A serializer field built by a `get_fields()` override or `Meta.extra_kwargs` (`child=`) is not consumer-declared
+  (`_is_consumer_declared`), so its input takes the backing column's read type whatever the field validates
+  (`ListField(child=MultipleChoiceField)` over a flat choices `ArrayField` publishes `[XEnum!]`, an `IntegerField` over a choice
+  column publishes the enum) and every non-empty write is refused field-keyed; robustness, item 125 is the ModelForm analogue
+- [ ] 154. `rest_framework/inputs.py::_fingerprint_converter_extra` records only a `ListField`'s direct child class and
+  `allow_null`, so a `get_serializer_for_schema()` that drifts a nested `ListField` leaf (`IntegerField` vs `CharField`, or its
+  `allow_null`) passes the bind's drift guard and schema construction raises a raw `TypeError: Mutation fields cannot be
+  resolved`; `serializer_schema_fingerprint`'s docstring claims every SDL axis
 
 ## To do: holes found re-checking the fixes
 
@@ -297,7 +318,9 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 91. CHANGELOG entry for item 43: a serializer `ListField(child=ChoiceField)` publishes a list of the field's generated enum
   (clients send enum names, not strings: `[a]`, `[MEMBER_1]`), and `MultipleChoiceField(allow_blank=True)` accepts `BLANK` as `""`
 - [ ] 45. Postgres: plain `ChoiceField` over an `ArrayField` builds, then the save fails (parked: needs a Postgres run)
-- [ ] 46. Postgres: `ListField(child=ChoiceField)` over an `ArrayField` is refused (parked: needs a Postgres run)
+- [ ] 46. Postgres: a declared `ListField(child=<non-choice scalar>)` over an `ArrayField` is refused at build ("Unsupported
+  Django field type 'ArrayField'": the agreement check in `_model_backed_scalar_annotation` calls `scalar_for_field`, which
+  has no `ArrayField` entry); a `ChoiceField` child builds (parked: needs a Postgres run)
 - [ ] 47. Postgres: `serializer_choice_field=MultipleChoiceField` over an `ArrayField` is unusable (parked: needs a Postgres run)
 - [ ] 93. CHANGELOG entry for item 44: a ModelForm mutation over a non-text choice column with `blank=True, null=False` answers
   `null` (or an omitted field with no default) with a field-keyed `null` FieldError instead of "An unexpected error occurred."

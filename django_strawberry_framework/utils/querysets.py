@@ -84,6 +84,7 @@ import sys
 import uuid
 import zoneinfo
 from collections.abc import AsyncIterable, Iterable
+from collections.abc import Set as AbstractSet
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Generic, ParamSpec, TypeGuard, TypeVar, cast, overload
 
@@ -4750,7 +4751,7 @@ def related_visibility_queryset_or_default(
     with a registered primary is scoped through its ``get_queryset`` visibility
     hook; one without gets its plain ``_default_manager.all()`` (existence
     semantics only). Each caller keeps its own tail (``.filter(pk=pk).first()``
-    vs the batched ``pk__in`` present-set).
+    vs the batched ``pk__in`` present-map).
     """
     queryset = related_visibility_queryset(related_model, info, async_recourse)
     if queryset is None:
@@ -4843,16 +4844,23 @@ def _stringified(pks: Iterable[object]) -> set[str]:
 def stringified_pks_present(
     queryset: models.QuerySet[models.Model],
     query_pks: Iterable[object],
-) -> set[str]:
-    """Return the stringified pks among ``query_pks`` actually present in ``queryset`` (one query).
+    key_attname: str | None = None,
+) -> dict[str, object]:
+    """Map each pk among ``query_pks`` present in ``queryset``, stringified, to its key (one query).
 
-    The ``{str(pk) for pk in queryset.filter(pk__in=...).values_list("pk", flat=True)}``
-    lookup the relation membership checks share (spec-039): the model
-    ``utils/write_values.py::decode_visible_relation_ids`` and the serializer
-    ``visible_related_objects`` both build this present-set in one query, stringifying
-    each pk for a type-agnostic membership compare (an int pk and its ``"3"`` string
-    form compare equal). Single-sites the query + the str-coercion so the
-    no-existence-leak comparison basis cannot drift.
+    The ``queryset.filter(pk__in=...)`` lookup the relation membership checks share
+    (spec-039): the model ``utils/write_values.py::decode_visible_relation_ids`` and the
+    serializer ``visible_related_objects`` both build this present-map in one query,
+    keyed by each pk stringified for a type-agnostic membership compare (an int pk and
+    its ``"3"`` string form compare equal; the keys are the present set). Single-sites
+    the query + the str-coercion so the no-existence-leak comparison basis cannot
+    drift.
+
+    Each value is the key a relation stores for that row. ``key_attname`` ``None``
+    reads the pk alone (``values_list("pk", flat=True)``), so the value is the pk; a
+    relation keyed by another column (a ``to_field``) names it and the same query
+    reads it beside the pk. A row whose key column is ``NULL`` cannot be linked by
+    that key and is left out, the same absence as a hidden or missing row.
 
     Inside an active write pipeline (``utils/write_transaction.py``) the query is
     pinned to the operation's write alias - a hook-re-routed queryset fails
@@ -4863,20 +4871,22 @@ def stringified_pks_present(
     the write before the transaction commits. Read surfaces run with no pipeline
     context and are byte-unchanged.
     """
-    queryset = pipeline_scoped_queryset(queryset, queryset.model)
-    return _stringified(queryset.filter(pk__in=list(query_pks)).values_list("pk", flat=True))
+    queryset = pipeline_scoped_queryset(queryset, queryset.model).filter(pk__in=list(query_pks))
+    if key_attname is None:
+        return {str(pk): pk for pk in queryset.values_list("pk", flat=True)}
+    return {str(pk): key for pk, key in queryset.values_list("pk", key_attname) if key is not None}
 
 
-def pks_all_present(declared_pks: Iterable[object], present: set[str]) -> bool:
+def pks_all_present(declared_pks: Iterable[object], present: AbstractSet[str]) -> bool:
     """Return whether every ``declared_pks`` member (stringified) is in ``present`` (spec-039).
 
     The subset-membership test the model relation guard
     (``utils/write_values.py::decode_visible_relation_ids``) and the serializer M2M
     decoder (``rest_framework/resolvers.py::_decode_relation_multi``) share: a
     ``declared`` set is fully present iff its stringified members are a subset of the
-    ``present`` set (typically from ``stringified_pks_present``). A missing / hidden
-    member fails the subset check, which each caller maps to the uniform field-keyed
-    relation error - the same no-existence-leak outcome.
+    ``present`` set (typically the keys of ``stringified_pks_present``'s map). A
+    missing / hidden member fails the subset check, which each caller maps to the
+    uniform field-keyed relation error - the same no-existence-leak outcome.
     """
     return _stringified(declared_pks) <= present
 
@@ -4930,24 +4940,27 @@ def visible_related_objects(
     pks: Iterable[object],
     info: object,
     async_recourse: str = _RELAY_ASYNC_RECOURSE,
-) -> set[str]:
-    """Return the VISIBLE pks among ``pks`` in ONE visibility-scoped ``pk__in`` query.
+    key_attname: str | None = None,
+) -> dict[str, object]:
+    """Map the VISIBLE pks among ``pks`` to their stored keys in ONE visibility-scoped query.
 
     The BATCHED counterpart to ``visible_related_object``: instead of one visibility query per
     id (the per-element multi-relation decode), decode/type-check all ids first, then confirm
     the whole set's visibility in ONE ``pk__in`` query through the related primary
     ``DjangoType.get_queryset`` (or the target's default manager when no primary is registered -
-    no visibility contract). Returns the set of pks actually visible (stringified for a
-    type-agnostic membership compare); the caller asserts the REQUESTED set is a subset, so a
-    hidden / missing member collapses to the same field-keyed relation error (no existence
-    leak), exactly as the single decoder does. An ``async def get_queryset`` raises
-    ``SyncMisuseError``. ``related_model`` has a primary type only when a typed relation input
-    was generated for it; a raw-pk relation resolves its primary the same way (``registry.get``).
+    no visibility contract). Returns ``stringified_pks_present``'s map: the pks actually visible
+    (stringified for a type-agnostic membership compare) to the value a relation keyed by
+    ``key_attname`` stores for each (the pk itself when ``None``); the caller asserts the
+    REQUESTED set is a subset of its keys, so a hidden / missing member collapses to the same
+    field-keyed relation error (no existence leak), exactly as the single decoder does. An
+    ``async def get_queryset`` raises ``SyncMisuseError``. ``related_model`` has a primary type
+    only when a typed relation input was generated for it; a raw-pk relation resolves its
+    primary the same way (``registry.get``).
     """
     # The visibility-or-default-manager base is single-sited in
     # ``related_visibility_queryset_or_default``.
     queryset = related_visibility_queryset_or_default(related_model, info, async_recourse)
-    return stringified_pks_present(queryset, pks)
+    return stringified_pks_present(queryset, pks, key_attname)
 
 
 @overload

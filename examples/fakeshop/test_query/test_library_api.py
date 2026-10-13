@@ -13294,6 +13294,105 @@ def test_serializer_to_field_relation_key_repointed_by_validator_is_rejected_ove
     ]
 
 
+_MODEL_PROFILE_UPDATE = (
+    "mutation($id: ID!, $d: PatronProfilePartialInput!) { "
+    f"updatePatronProfile(id: $id, data: $d) {{ {_PROFILE_SELECTION} }} }}"
+)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("genre", "ToFieldNew"),
+        ("genre_beside_one_named_like_its_id", "ToFieldNew"),
+        ("null", None),
+        ("omitted", "ToFieldOld"),
+    ],
+    ids=[
+        "genre",
+        "genre_beside_one_named_like_its_id",
+        "null",
+        "omitted",
+    ],
+)
+def test_model_to_field_relation_update_stores_the_target_key_over_http(
+    value: str,
+    expected: str | None,
+):
+    """A model update through a ``to_field`` key stores the chosen genre's NAME, never its id.
+
+    ``updatePatronProfile`` takes ``favoriteGenreId`` as the genre's ``GlobalID`` and
+    checks it against the genre's visibility by that id; the column it writes stores the
+    genre name (``ForeignKey(Genre, to_field="name")``), read by the same query. A
+    supplied genre replaces the stored name, including when another genre is NAMED like
+    the chosen genre's id (writing the id would link that genre), an explicit null
+    clears it and an omitted relation keeps it.
+    """
+    from apps.library.schema import GenreType, PatronProfileType
+
+    old = models.Genre.objects.create(name="ToFieldOld")
+    new = models.Genre.objects.create(name="ToFieldNew")
+    if value == "genre_beside_one_named_like_its_id":
+        models.Genre.objects.create(name=str(new.pk))
+    patron = models.Patron.objects.create(name="ToFieldModelUpdatePatron")
+    models.PatronProfile.objects.create(patron=patron, favorite_genre=old)
+    data: dict[str, object] = {"address_2": "Suite 3"}
+    if value in ("genre", "genre_beside_one_named_like_its_id"):
+        data["favoriteGenreId"] = global_id_for(GenreType, new.pk)
+    elif value == "null":
+        data["favoriteGenreId"] = None
+
+    response = _post_graphql(
+        _MODEL_PROFILE_UPDATE,
+        variables={"id": global_id_for(PatronProfileType, patron.pk), "d": data},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updatePatronProfile"]
+    assert result["errors"] == []
+    assert result["node"] == {
+        "secondaryAddress": "Suite 3",
+        "favoriteGenre": None if expected is None else {"name": expected},
+    }
+    assert _profile_genre_column(patron) == [expected]
+
+
+@pytest.mark.django_db
+def test_model_to_field_relation_update_rejects_a_missing_genre_over_http():
+    """A genre id no row answers is the uniform relation error; the stored name is kept."""
+    from apps.library.schema import GenreType, PatronProfileType
+
+    old = models.Genre.objects.create(name="ToFieldKept")
+    gone = models.Genre.objects.create(name="ToFieldGone")
+    gone_id = global_id_for(GenreType, gone.pk)
+    gone.delete()
+    patron = models.Patron.objects.create(name="ToFieldMissingPatron")
+    models.PatronProfile.objects.create(patron=patron, favorite_genre=old)
+
+    response = _post_graphql(
+        _MODEL_PROFILE_UPDATE,
+        variables={
+            "id": global_id_for(PatronProfileType, patron.pk),
+            "d": {"favoriteGenreId": gone_id},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"]["updatePatronProfile"] == {
+        "node": None,
+        "errors": [
+            {
+                "field": "favoriteGenreId",
+                "messages": ["Invalid id for relation 'favoriteGenreId'."],
+            },
+        ],
+    }
+    assert _profile_genre_column(patron) == ["ToFieldKept"]
+
+
 @pytest.mark.django_db
 def test_create_branch_with_nested_shelves_over_http():
     """An EXPLICIT opt-in nested serializer write creates a branch + nested shelves over HTTP.

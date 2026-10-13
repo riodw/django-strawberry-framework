@@ -1398,6 +1398,22 @@ class UpdateShelfCondition(DjangoMutation):
         permission_classes = []
 
 
+class UpdatePatronProfile(DjangoMutation):
+    """Update a ``PatronProfile``'s ``to_field`` ``favorite_genre`` key via the model pipeline.
+
+    ``favoriteGenreId`` names the genre by ``GenreType`` ``GlobalID`` (its id) and is
+    visibility-checked by that id; the saved ``favorite_genre_id`` column holds the
+    genre's ``name``, the key the relation stores. ``PatronProfileType`` is Relay-Node,
+    so the update ``id`` is a ``GlobalID``. Update only: the primary key is the
+    non-editable ``patron`` one-to-one key, so no model create can name the patron.
+    """
+
+    class Meta:
+        model = models.PatronProfile
+        operation = "update"
+        permission_classes = []
+
+
 class UpdateBookViaForm(DjangoModelFormMutation):
     """Update a ``Book`` via ``BookGenresModelForm`` - the live FORM partial-update M2M path.
 
@@ -2286,11 +2302,14 @@ class Mutation:
     ``createPatronProfileReplacingGenreRenamed`` (a custom ``create()`` re-pointing the
     validated genre, own-name and renamed) and ``createPatronProfileRepointingGenre``
     (a field validator renaming the validated genre in place) are refused.
+    ``updatePatronProfile`` is the model-flavor write of the same key: the genre id it is
+    sent is resolved to the genre name the column stores.
     """
 
     create_shelf_via_form = DjangoMutationField(CreateShelfViaForm)
     create_shelf = DjangoMutationField(CreateShelf)
     update_shelf_condition = DjangoMutationField(UpdateShelfCondition)
+    update_patron_profile = DjangoMutationField(UpdatePatronProfile)
     update_book_via_form = DjangoMutationField(UpdateBookViaForm)
     update_book_at_repair_desk_via_form = DjangoMutationField(UpdateBookAtRepairDeskViaForm)
     create_book_via_custom_input = DjangoMutationField(CreateBookViaCustomInput)

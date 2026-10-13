@@ -12,7 +12,7 @@ mutation resolver is not the utility module for the other write flavors):
 - ``decode_visible_relation`` - the visibility-on-every-branch single-relation
   decode spine (type-check -> visible object -> flavor projection);
 - ``decode_visible_relation_ids`` - the batched id-set compose (type-check each
-  id, then one visibility / existence ``pk__in`` query);
+  id, then one visibility / existence ``pk__in`` query answering the stored keys);
 - ``store_decoded`` / ``decoded_into`` / ``scalar_into`` / ``file_into`` /
   ``relation_into`` / ``decode_field_handlers`` - the SCALAR / RELATION / FILE
   store-into-dest vocabulary the write-flavor walks share;
@@ -360,6 +360,7 @@ def decode_visible_relation_ids(
     related_model: type[models.Model],
     info: Info[object, object],
     async_recourse: str,
+    key_attname: str | None = None,
 ) -> tuple[list[object] | None, FieldError | None]:
     """Type-check each relation id, then confirm the whole set in one visibility query.
 
@@ -375,9 +376,16 @@ def decode_visible_relation_ids(
     member is the same ``relation_field_error`` (hidden and missing
     indistinguishable, no existence leak).
 
+    The ids name rows by pk; the answer is the key a relation stores for each, read by
+    the same query: the pk itself when ``key_attname`` is ``None`` (the serializer, whose
+    DRF fields resolve pks), or the ``key_attname`` column of a relation keyed by
+    another column (``utils/relations.py::non_pk_relation_key_attname``), so a model
+    write never stores a pk where the column holds a ``to_field`` value. A visible row
+    whose key is ``NULL`` cannot be linked by it and is the same relation error.
+
     Flavor null policy stays at the caller: the model M2M path rejects a
     whole-list ``None``; the serializer passes it through so ``is_valid()``
-    decides. Returns ``(pks, None)`` on success or ``(None, FieldError)``.
+    decides. Returns ``(keys, None)`` in input order on success or ``(None, FieldError)``.
     """
     provided_values, container_error = materialize_relation_id_container(values, graphql_name)
     if container_error is not None:
@@ -397,10 +405,10 @@ def decode_visible_relation_ids(
         pks.append(pk)
     if not pks:
         return [], None
-    visible = visible_related_objects(related_model, pks, info, async_recourse)
-    if not pks_all_present(pks, visible):
+    visible = visible_related_objects(related_model, pks, info, async_recourse, key_attname)
+    if not pks_all_present(pks, visible.keys()):
         return None, relation_field_error(graphql_name)
-    return pks, None
+    return [visible[str(pk)] for pk in pks], None
 
 
 def _spec_field_name(spec: InputFieldSpec) -> str:

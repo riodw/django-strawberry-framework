@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, NoReturn
 import pytest
 import strawberry
 from apps.products.models import Category
+from apps.scalars.models import NullableScalarSpecimen
 from django.db.models import Model
 from strawberry import relay
 from typing_extensions import override
@@ -889,6 +890,42 @@ def test_decode_visible_relation_ids_accepts_duplicate_pks_with_one_query():
     assert error is None
     assert pks == [first.pk, second.pk, first.pk]
     assert len(ctx.captured_queries) == 1
+
+
+@pytest.mark.django_db
+def test_decode_visible_relation_ids_answers_the_key_a_non_pk_relation_stores():
+    """The ids name rows by pk; the answer is each row's ``key_attname`` value, in input order.
+
+    A relation keyed by a column other than the pk stores that column's value, read
+    in the same one visibility query; a visible row whose key is ``NULL`` cannot be
+    linked by it and is the uniform field-keyed relation error.
+    """
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    keyed = NullableScalarSpecimen.objects.create(label="Keyed")
+    other = NullableScalarSpecimen.objects.create(label="Other")
+    unkeyed = NullableScalarSpecimen.objects.create(label=None)
+
+    def decode(pks: list[object]):
+        return decode_visible_relation_ids(
+            pks,
+            graphql_name="partnerIds",
+            related_model=NullableScalarSpecimen,
+            info=unread_info(),
+            async_recourse="Use a synchronous visibility hook.",
+            key_attname="label",
+        )
+
+    with CaptureQueriesContext(connection) as ctx:
+        keys, error = decode([other.pk, keyed.pk, other.pk])
+    assert (keys, error) == (["Other", "Keyed", "Other"], None)
+    assert len(ctx.captured_queries) == 1
+
+    keys, error = decode([keyed.pk, unkeyed.pk])
+    assert keys is None
+    assert error is not None
+    assert error.field == "partnerIds"
 
 
 @pytest.mark.django_db

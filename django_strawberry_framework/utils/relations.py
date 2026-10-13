@@ -44,6 +44,7 @@ __all__ = [
     "m2m_through_link_fields",
     "m2m_through_model",
     "non_pk_forward_link",
+    "non_pk_relation_key_attname",
     "order_column_paths",
     "path_traverses_to_many",
     "relation_attr",
@@ -975,6 +976,23 @@ def non_pk_forward_link(field: object) -> RelationLink | None:
     # A forward single-valued relation with link pairs names a resolved model.
     related = cast("type[models.Model]", getattr(field, "related_model", None))
     return None if link.targets == (related._meta.pk,) else link
+
+
+def non_pk_relation_key_attname(field: object) -> str | None:
+    """Return the related column a write through ``field`` stores, when it is not the related pk.
+
+    A forward ``ForeignKey`` / ``OneToOneField`` stores the value of the column it
+    references (``ForeignKey.target_field``: a ``to_field``), and a forward M2M's through
+    row stores the value of the column its target-side foreign key references
+    (:func:`m2m_through_link_fields`), which is also what ``.set()`` reads a non-instance
+    member as. Both read through :func:`non_pk_forward_link`. ``None`` when that column
+    is the related pk (the pk is then the stored key itself) and for every field that is
+    neither shape.
+    """
+    if is_forward_many_to_many(field):
+        _source_fk, field = m2m_through_link_fields(field)
+    link = non_pk_forward_link(field)
+    return None if link is None else link.target_attnames[0]
 
 
 def order_column_paths(field_path: str, terminal: object) -> tuple[str, ...]:

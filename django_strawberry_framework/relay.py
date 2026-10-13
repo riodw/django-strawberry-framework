@@ -294,10 +294,10 @@ def _resolve_real_pk(
     relay.NodeID[...]`` annotation. The READ node field then filters
     ``{id_attr: value}`` and works off the row, so it never needs the pk. The WRITE
     consumers of ``decode_model_global_id`` instead use the returned value as an
-    actual primary key - ``locate_instance``'s ``get(pk=...)``, the relation
-    ``pk__in`` visibility query, and the FK / M2M assignment (``setattr(instance,
-    <fk>_id, pk)`` / ``instance.<m2m>.set(pks)``). Handing those the NodeID-attr
-    value (e.g. a ``slug``) looks up / assigns the wrong column - it usually fails
+    actual primary key - ``locate_instance``'s ``get(pk=...)`` and the relation
+    ``pk__in`` visibility query, which also reads the key the FK / M2M assignment
+    stores (the pk, or a ``to_field`` value). Handing those the NodeID-attr value
+    (e.g. a ``slug``) looks up the wrong column - it usually fails
     as not-found, and in the worst case targets a different row whose pk
     representation coincides with the NodeID value.
 

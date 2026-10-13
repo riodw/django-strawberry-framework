@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 54 done, 80 to do.
+Progress: 55 done, 81 to do.
 
 ## Done
 
@@ -121,6 +121,10 @@ Progress: 54 done, 80 to do.
   `ArrayField` of text or an `HStoreField` in every write flavor; a serializer `ListField(child=CharField())` element was
   already refused by DRF); the preflight now walks every list element and dict key and value, keyed to the leaf's dotted path
   (`ea0eea70`)
+- [x] 130. A model `DjangoMutation` (and register) wrote the related pk into a `to_field` relation's column: a wrong row
+  linked silently (including one the visibility scope hides) or a payload FieldError, for a FK, a OneToOne and an M2M whose
+  through model's target-side foreign key has a `to_field`; the one visibility query now also reads the key the relation
+  stores and that key is written (this commit)
 
 ## To do: t3 robustness rows
 
@@ -209,10 +213,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 128. `django_strawberry_framework/testing/relay.py::global_id_for` annotates `schema: Schema | None` with `Schema`
   imported only under `TYPE_CHECKING` and no `from __future__ import annotations`: importing the public module raises
   `NameError` on Python 3.10-3.13 (the floor run of `test_library_api.py` fails at collection; 3.14's lazy annotations hide it)
-- [ ] 130. Model `DjangoMutation` writes the related pk into a `to_field` ForeignKey column (`mutations/inputs.py` publishes
-  `<name>_id`; `mutations/resolvers.py::_decode_single_relation_id` returns the pk assigned to the attname): on
-  `PatronProfile.favorite_genre` a genre named like the chosen genre's pk is linked silently, otherwise a payload FieldError;
-  an integer `to_field` links whichever row's key equals the pk
 - [ ] 131. ModelForm: a declared `ModelChoiceField` without `to_field_name` over a `to_field` ForeignKey fails every partial
   update that omits it ("Select a valid choice"): `forms/resolvers.py::_reconstruct_partial_data` refills it with the stored
   `to_field` value while the bound field resolves by pk (its docstring claims the attname is the key the field resolves)
@@ -225,6 +225,10 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 135. A malformed GlobalID in an `[ID!]` list input (`genres: ["not-base64!!"]`) is a masked top-level error in the
   model, ModelForm and serializer flavors: Strawberry's `convert_argument` raises `GlobalIDValueError` before any package
   decode, where a single malformed id gets the field-keyed envelope
+- [ ] 137. ModelForm and serializer flavors: a relation id naming a visible row whose `to_field` key is `NULL` clears an
+  optional relation silently (the form binds `None`; the serializer's descriptor assignment stores `NULL`), where the model
+  flavor refuses it as the relation error since item 130; `forms/resolvers.py::_to_form_key_value` also falls back to
+  `obj.pk` when `to_field_name` does not resolve on the row
 
 ## To do: holes found re-checking the fixes
 
@@ -313,6 +317,10 @@ not real bugs and just get deleted from t3. One checkbox per area:
   value, any depth) is a field-keyed `invalid` error at decode, keyed to the leaf's dotted path (`tags.1`; a bad dict key to
   the dict); a `JSON` value carrying one is refused on every backend, and a serializer `ListField(child=CharField())` element
   gets the package's message instead of DRF's
+- [ ] 138. CHANGELOG entry for item 130: a model `DjangoMutation` or register mutation writing a `ForeignKey(to_field=...)`
+  / `OneToOneField(to_field=...)`, or an M2M whose through model keys the target by a `to_field`, stores the key of the row
+  its id names (it stored the pk: a wrong row, or a payload error); a visible row whose `to_field` key is `NULL` is the
+  relation error
 
 ## Hunt not finished in t3
 

@@ -38,6 +38,7 @@ from apps.library.models import (
 )
 from apps.products.models import Category, Entry, Item, Property
 from apps.products.services import seed_data
+from apps.scalars.models import NullableScalarSpecimen
 from django.apps.registry import Apps
 from django.contrib.auth.models import AnonymousUser
 from django.db import connection, models, router
@@ -307,7 +308,9 @@ def test_relation_write_visibility_boundary_is_controlled_by_type_registration()
     registry.clear()
     category = Category.objects.create(name="VisibilityBoundary")
     try:
-        assert visible_related_objects(Category, [category.pk], info=None) == {str(category.pk)}
+        assert visible_related_objects(Category, [category.pk], info=None) == {
+            str(category.pk): category.pk,
+        }
 
         class CategoryType(DjangoType):
             class Meta:
@@ -321,7 +324,37 @@ def test_relation_write_visibility_boundary_is_controlled_by_type_registration()
                 return queryset.exclude(pk=category.pk)
 
         del CategoryType
-        assert visible_related_objects(Category, [category.pk], info=None) == set()
+        assert visible_related_objects(Category, [category.pk], info=None) == {}
+    finally:
+        registry.clear()
+
+
+@pytest.mark.django_db
+def test_visible_related_objects_reads_a_non_pk_key_beside_the_pk_in_one_query():
+    """A relation keyed by another column reads it in the membership query; NULL links nothing.
+
+    Each visible pk maps to the ``key_attname`` value a relation keyed by that column
+    stores, read beside the pk in the one ``pk__in`` query. A row whose key is ``NULL``
+    cannot be linked by it and is left out, the absence a hidden or missing row has.
+    """
+    registry.clear()
+    keyed = NullableScalarSpecimen.objects.create(label="Keyed")
+    unkeyed = NullableScalarSpecimen.objects.create(label=None)
+    pks = [keyed.pk, unkeyed.pk]
+    try:
+        with CaptureQueriesContext(connection) as ctx:
+            present = visible_related_objects(
+                NullableScalarSpecimen,
+                pks,
+                info=None,
+                key_attname="label",
+            )
+        assert present == {str(keyed.pk): "Keyed"}
+        assert len(ctx.captured_queries) == 1
+        assert visible_related_objects(NullableScalarSpecimen, pks, info=None) == {
+            str(keyed.pk): keyed.pk,
+            str(unkeyed.pk): unkeyed.pk,
+        }
     finally:
         registry.clear()
 

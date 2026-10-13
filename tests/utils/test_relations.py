@@ -46,6 +46,7 @@ from django_strawberry_framework.utils.relations import (
     is_single_column_foreign_key,
     m2m_through_link_fields,
     non_pk_forward_link,
+    non_pk_relation_key_attname,
     order_column_paths,
     path_traverses_to_many,
     relation_bool,
@@ -1734,6 +1735,41 @@ def test_non_pk_forward_link_answers_only_links_keyed_by_other_columns(
     """
     link = non_pk_forward_link(field())
     assert (None if link is None else link.carrier_attnames) == carriers
+
+
+@pytest.mark.parametrize(
+    ("field", "key"),
+    [
+        (lambda: LnkSlugChild._meta.get_field("parent"), "slug"),
+        (lambda: LnkParent._meta.get_field("tags"), "code"),
+        (lambda: Book._meta.get_field("shelf"), None),
+        (lambda: MembershipCard._meta.get_field("patron"), None),
+        (lambda: Book._meta.get_field("genres"), None),
+        (lambda: LnkParent._meta.get_field("slug_children"), None),
+        (lambda: Book._meta.get_field("title"), None),
+    ],
+    ids=[
+        "to_field_fk",
+        "to_field_through_m2m",
+        "fk",
+        "o2o",
+        "m2m",
+        "reverse_fk",
+        "non_relation",
+    ],
+)
+def test_non_pk_relation_key_attname_names_the_stored_column_only_when_not_the_pk(
+    field: Callable[[], object],
+    key: str | None,
+):
+    """A write through a relation stores the column its link references; only a non-pk one is named.
+
+    The ``to_field`` FK stores the parent's ``slug``; the ``LnkParent.tags`` through row
+    stores the tag's ``code`` (its target-side key's ``to_field``); a pk-keyed FK,
+    OneToOne and auto-through M2M store the pk, and a reverse relation or a column
+    writes no key.
+    """
+    assert non_pk_relation_key_attname(field()) == key
 
 
 @pytest.mark.parametrize(

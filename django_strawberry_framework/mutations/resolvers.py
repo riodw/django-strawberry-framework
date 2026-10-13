@@ -111,6 +111,7 @@ from ..utils.querysets import (
     run_in_one_sync_boundary,
     sync_pipeline_recourse,
 )
+from ..utils.relations import non_pk_relation_key_attname
 from ..utils.typing import strawberry_schema_from_info
 from ..utils.write_transaction import (
     authorization_phase,
@@ -171,7 +172,7 @@ if TYPE_CHECKING:
         def __init__(self, **fields: object) -> None: ...
 
     # The provided M2M replace-sets the model decode hands its write step, in
-    # assignment order: ``(m2m field name, decoded pk list)``.
+    # assignment order: ``(m2m field name, decoded key list)``.
     _M2MAssignments: TypeAlias = list[tuple[str, object]]
     # The model ``decode_step`` product: ``(target, m2m_assignments, exclude)``, plus the
     # captured ``excluded_values`` when the bind stashed an ``EXCLUDED`` spec.
@@ -498,17 +499,18 @@ def _decode_relations(
     specs: Sequence[InputFieldSpec],
     model_fields: ModelFieldIndex,
 ) -> tuple[dict[str, object], _M2MAssignments, dict[str, object], FieldError | None]:
-    """Decode provided input fields into model attrs + M2M pk lists.
+    """Decode provided input fields into model attrs + M2M key lists.
 
     The model rider of ``utils/write_values.py::decode_provided_fields`` (spec-036
     Decision 8 step 1): bind-stashed ``InputFieldSpec`` records route each
     provided attr by ``kind``. Dest policy stays on the handlers:
 
     - SCALAR / FILE / RELATION_SINGLE -> ``scalar_and_fk_attrs`` (FK as
-      ``<field>_id`` -> pk). FILE rides the scalar handler so an explicit
+      ``<field>_id`` -> the stored key: the related pk, or the ``to_field``
+      value). FILE rides the scalar handler so an explicit
       ``null`` on a required file column still hits ``_explicit_null_error``
       (spec-037: no file-specific resolver branch).
-    - RELATION_MULTI -> a separate ``{m2m_name: pks}`` dest; ``.items()``
+    - RELATION_MULTI -> a separate ``{m2m_name: keys}`` dest; ``.items()``
       preserves assignment order for the post-save write step.
     - EXCLUDED (spec-040 D6) -> ``excluded_values``; the raw value never
       reaches ``model(**scalar_and_fk_attrs)``.
@@ -550,7 +552,7 @@ def _decode_relations(
         )
 
     scalar_and_fk_attrs: dict[str, object] = {}
-    m2m_pks: dict[str, object] = {}
+    m2m_keys: dict[str, object] = {}
     excluded_values: dict[str, object] = {}
     scalar_handler = decoded_into(scalar_and_fk_attrs, _model_scalar_decode)
 
@@ -566,7 +568,7 @@ def _decode_relations(
 
     handlers = {
         RELATION_SINGLE: relation_handler(scalar_and_fk_attrs),
-        RELATION_MULTI: relation_handler(m2m_pks),
+        RELATION_MULTI: relation_handler(m2m_keys),
         FILE: scalar_handler,
         EXCLUDED: decoded_into(excluded_values, _model_excluded_decode),
     }
@@ -578,7 +580,7 @@ def _decode_relations(
     )
     if error is not None:
         return {}, [], {}, error
-    return scalar_and_fk_attrs, list(m2m_pks.items()), excluded_values, None
+    return scalar_and_fk_attrs, list(m2m_keys.items()), excluded_values, None
 
 
 def _explicit_null_error(
@@ -637,8 +639,11 @@ def _decode_single_relation_id(
 
     Wraps the single value in a one-element list, delegates to
     ``decode_visible_relation_ids`` (type-check + coerce + visibility), and unwraps
-    the single pk. A non-``GlobalID`` value (a raw pk) is coerced and
-    visibility-checked by that compose, the same contract the M2M path uses.
+    the single stored key. A non-``GlobalID`` value (a raw pk) is coerced and
+    visibility-checked by that compose, the same contract the M2M path uses. The id
+    names the related row by pk; the value returned for the ``<field>_id`` attname is
+    the key the column stores (``ForeignKey.target_field``: the pk, or a ``to_field``
+    value), read by the same visibility query.
 
     An explicit ``None`` is the clear signal for a **nullable** FK / OneToOne and
     returns ``(None, None)`` without a membership query. On a ``null=False`` relation
@@ -654,17 +659,18 @@ def _decode_single_relation_id(
         if getattr(relation_field, "null", False):
             return None, None
         return None, null_field_error(graphql_name)
-    pks, error = decode_visible_relation_ids(
+    keys, error = decode_visible_relation_ids(
         [value],
         graphql_name=graphql_name,
         related_model=related_model,
         info=info,
         async_recourse=_MUTATION_ASYNC_RECOURSE,
+        key_attname=non_pk_relation_key_attname(relation_field),
     )
     if error is not None:
         return None, error
-    # The shared decoder answers ``pks`` exactly when it reports no error.
-    return cast("list[object]", pks)[0], None
+    # The shared decoder answers ``keys`` exactly when it reports no error.
+    return cast("list[object]", keys)[0], None
 
 
 def _decode_relation_id_list(
@@ -675,7 +681,7 @@ def _decode_relation_id_list(
     info: Info[object, object],
     relation_field: ModelField,
 ) -> tuple[list[object], FieldError | None]:
-    """Decode an M2M ``list[<id>]`` to pks: null-reject, then the shared set decoder.
+    """Decode an M2M ``list[<id>]`` to stored keys: null-reject, then the shared set decoder.
 
     The list is the replace-set the post-save step assigns. An explicit
     ``null`` (reachable because the generated optional M2M field is
@@ -684,23 +690,25 @@ def _decode_relation_id_list(
     than iterating ``None`` into a resolver exception. A non-null list
     delegates to ``decode_visible_relation_ids`` (the same type-check + coerce +
     one-query visibility contract the FK path uses; spec-036 Decision 10).
-    ``relation_field`` is accepted for ``relation_into`` extra() symmetry; M2M
+    ``relation_field`` names the key the through row stores for each target (the
+    target pk, or the column the through table's target-side foreign key references),
+    which is what ``_assign_m2m``'s ``.set()`` reads a non-instance member as; M2M
     nullability is the list contract, not ``relation_field.null``.
     """
-    del relation_field
     if value is None:
         return [], _relation_null_error(graphql_name)
-    pks, error = decode_visible_relation_ids(
+    keys, error = decode_visible_relation_ids(
         value,
         graphql_name=graphql_name,
         related_model=related_model,
         info=info,
         async_recourse=_MUTATION_ASYNC_RECOURSE,
+        key_attname=non_pk_relation_key_attname(relation_field),
     )
     if error is not None:
         return [], error
-    # The shared decoder answers ``pks`` exactly when it reports no error.
-    return cast("list[object]", pks), None
+    # The shared decoder answers ``keys`` exactly when it reports no error.
+    return cast("list[object]", keys), None
 
 
 def _relation_null_error(field_name: str) -> FieldError:
@@ -788,7 +796,7 @@ def _provided_attr_names(
     names: set[str] = set()
     for attr in scalar_and_fk_attrs:
         names.add(model_fields[attr].name)
-    for m2m_name, _pks in m2m_assignments:
+    for m2m_name, _keys in m2m_assignments:
         names.add(m2m_name)
     return names
 
@@ -852,14 +860,15 @@ def _unique_constraint_groups(model: type[models.Model]) -> list[set[str]]:
 def _assign_m2m(instance: models.Model, m2m_assignments: _M2MAssignments) -> None:
     """Assign provided M2M relations on a saved instance.
 
-    For each provided ``(m2m_field_name, [pk, ...])``: ``instance.<m2m>.set([
+    For each provided ``(m2m_field_name, [key, ...])``: ``instance.<m2m>.set([
     ...])`` replaces the entire relation set (a provided empty list clears it);
     an omitted M2M field is never in ``m2m_assignments`` so it is left unchanged.
-    Related objects resolve through the target model's default manager (the pks
-    decoded in step 1). Runs inside the transaction, after ``save()``.
+    The keys are the through-row values decoded in step 1 (the target pk, or the
+    ``to_field`` value the through table's target-side foreign key stores). Runs
+    inside the transaction, after ``save()``.
     """
-    for m2m_name, pks in m2m_assignments:
-        getattr(instance, m2m_name).set(pks)
+    for m2m_name, keys in m2m_assignments:
+        getattr(instance, m2m_name).set(keys)
 
 
 def refetch_optimized(

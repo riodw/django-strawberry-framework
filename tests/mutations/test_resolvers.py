@@ -1978,3 +1978,208 @@ def test_all_fields_mutation_writes_a_foreign_object_through_its_carriers(
         assert updated.data["updateChild"]["errors"] == []
         assert updated.data["updateChild"]["node"]["parent"] == {"label": "pc"}
         assert child_model.objects.get(pk=row.pk).parent == parents["pc"]
+
+
+def _build_link_key_schema(hidden_label: str):
+    """Relation-input mutations over the ``Lnk*`` links keyed by ``to_field`` columns.
+
+    ``CreateSlugChild`` / ``UpdateSlugChild`` write ``LnkSlugChild.parent`` (a
+    ``ForeignKey(to_field="slug")``) through ``parentId``; ``UpdateParentTags`` writes
+    ``LnkParent.tags``, whose through row stores the tag's ``code``. The parent
+    primary hides the parent labelled ``hidden_label``. Returns the schema and the
+    parent, tag and child primaries the ids are minted against.
+    """
+
+    class LnkParentT(DjangoType, relay.Node):
+        class Meta:
+            model = _link_models.LnkParent
+            fields = ("id", "label")
+
+        @classmethod
+        @override
+        def get_queryset(
+            cls,
+            queryset: QuerySet[_link_models.LnkParent],
+            info: strawberry.Info,
+            **kwargs: object,
+        ):
+            return queryset.exclude(label=hidden_label)
+
+    class LnkTagT(DjangoType, relay.Node):
+        class Meta:
+            model = _link_models.LnkTag
+            fields = ("id", "name")
+
+    class LnkSlugChildT(DjangoType, relay.Node):
+        class Meta:
+            model = _link_models.LnkSlugChild
+            fields = ("id", "name", "parent")
+
+    class CreateSlugChild(DjangoMutation):
+        class Meta:
+            model = _link_models.LnkSlugChild
+            operation = "create"
+            fields = ("name", "parent")
+            permission_classes = [_AllowAll]
+
+    class UpdateSlugChild(DjangoMutation):
+        class Meta:
+            model = _link_models.LnkSlugChild
+            operation = "update"
+            fields = ("name", "parent")
+            permission_classes = [_AllowAll]
+
+    class UpdateParentTags(DjangoMutation):
+        class Meta:
+            model = _link_models.LnkParent
+            operation = "update"
+            fields = ("tags",)
+            permission_classes = [_AllowAll]
+
+    @strawberry.type
+    class Mutation:
+        create_slug_child = DjangoMutationField(CreateSlugChild)
+        update_slug_child = DjangoMutationField(UpdateSlugChild)
+        update_parent_tags = DjangoMutationField(UpdateParentTags)
+
+    finalize_django_types()
+    return _schema(Mutation), LnkParentT, LnkTagT, LnkSlugChildT
+
+
+_SLUG_CHILD_PAYLOAD = "node { name parent { label } } errors { field messages }"
+_SLUG_CHILD_RELATION_ERROR = [
+    {"field": "parentId", "messages": ["Invalid id for relation 'parentId'."]},
+]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    (
+        "operation",
+        "target",
+        "expected_errors",
+        "expected_keys",
+    ),
+    [
+        (
+            "create",
+            "pa",
+            [],
+            ["s-a"],
+        ),
+        (
+            "create",
+            "pc",
+            _SLUG_CHILD_RELATION_ERROR,
+            [],
+        ),
+        (
+            "update",
+            "pa",
+            [],
+            ["s-a"],
+        ),
+        (
+            "update",
+            "pc",
+            _SLUG_CHILD_RELATION_ERROR,
+            ["s-b"],
+        ),
+    ],
+    ids=[
+        "create_visible",
+        "create_hidden",
+        "update_visible",
+        "update_hidden",
+    ],
+)
+def test_to_field_relation_input_stores_the_key_of_the_visible_row_it_names(
+    operation: str,
+    target: str,
+    expected_errors: list[dict[str, object]],
+    expected_keys: list[str],
+):
+    """A ``to_field`` FK input names its target by id and stores the target's key column.
+
+    The hidden ``pc``'s ``slug`` is ``pa``'s id, so storing the id ``pa`` is named by
+    would link ``pc``: a create and an update (of ``b1``, linked to ``pb``) naming
+    ``pa`` store ``pa``'s slug and answer ``pa``, and naming the hidden ``pc`` is the
+    uniform relation error that writes nothing (no row created, ``b1`` keeps ``pb``'s
+    slug).
+    """
+    from django.db import connection
+
+    with _link_models.link_fixture_tables(connection):
+        parents = {p.label: p for p in _link_models.LnkParent.objects.all()}
+        _link_models.LnkParent.objects.filter(pk=parents["pc"].pk).update(
+            slug=str(parents["pa"].pk),
+        )
+        schema, parent_type, _tag_type, child_type = _build_link_key_schema(hidden_label="pc")
+        parent_id = global_id_for(parent_type, parents[target].pk)
+        if operation == "create":
+            name = "new"
+            result = schema.execute_sync(
+                "mutation($d: LnkSlugChildInput!) "
+                f"{{ createSlugChild(data: $d) {{ {_SLUG_CHILD_PAYLOAD} }} }}",
+                variable_values={"d": {"name": name, "parentId": parent_id}},
+            )
+        else:
+            name = "b1"
+            child = _link_models.LnkSlugChild.objects.get(name=name)
+            result = schema.execute_sync(
+                "mutation($id: ID!, $d: LnkSlugChildPartialInput!) "
+                f"{{ updateSlugChild(id: $id, data: $d) {{ {_SLUG_CHILD_PAYLOAD} }} }}",
+                variable_values={
+                    "id": global_id_for(child_type, child.pk),
+                    "d": {"parentId": parent_id},
+                },
+            )
+        assert result.errors is None, result.errors
+        assert result.data is not None
+        answer = result.data[f"{operation}SlugChild"]
+        assert answer["errors"] == expected_errors
+        expected_node = (
+            {"name": name, "parent": {"label": target}} if not expected_errors else None
+        )
+        assert answer["node"] == expected_node
+        stored = _link_models.LnkSlugChild.objects.filter(name=name).values_list(
+            "parent_id",
+            flat=True,
+        )
+        assert list(stored) == expected_keys
+
+
+@pytest.mark.django_db(transaction=True)
+def test_to_field_through_m2m_input_sets_the_key_its_through_rows_store():
+    """An M2M whose through row keys the target by ``to_field`` stores each tag's ``code``.
+
+    ``LnkTagging.tag`` is ``ForeignKey(LnkTag, to_field="code")``; the ``tags`` input
+    names tags by id, and the replace-set written is their codes, which ``.set()``
+    reads a non-instance member as.
+    """
+    from django.db import connection
+
+    update = (
+        "mutation($id: ID!, $d: LnkParentTagsPartialInput!) "
+        "{ updateParentTags(id: $id, data: $d) { node { id } errors { field messages } } }"
+    )
+
+    with _link_models.link_fixture_tables(connection):
+        schema, parent_type, tag_type, _child_type = _build_link_key_schema(hidden_label="")
+        parent = _link_models.LnkParent.objects.get(label="pb")
+        tags = {t.name: t for t in _link_models.LnkTag.objects.all()}
+        result = schema.execute_sync(
+            update,
+            variable_values={
+                "id": global_id_for(parent_type, parent.pk),
+                "d": {"tags": [global_id_for(tag_type, tags[name].pk) for name in ("t3", "t2")]},
+            },
+        )
+        assert result.errors is None, result.errors
+        assert result.data is not None
+        assert result.data["updateParentTags"]["errors"] == []
+        stored = _link_models.LnkTagging.objects.filter(parent=parent).values_list(
+            "tag_id",
+            flat=True,
+        )
+        assert sorted(stored) == ["c-t2", "c-t3"]

@@ -79,7 +79,12 @@ from ..sets_mixins import RelatedSetTargetMixin
 # so a module-top ``filters/base.py -> types/relay.py`` import does not close a load
 # cycle (spec-031). These are the single source of truth for the
 # strategy->payload-shape mapping shared with the encoder and the decoder.
-from ..types.relay import MODEL_LABEL_STRATEGIES, TYPE_NAME_STRATEGIES
+from ..types.relay import (
+    MODEL_LABEL_STRATEGIES,
+    TYPE_NAME_STRATEGIES,
+    node_definition_for_published_name,
+    published_node_type_name,
+)
 from ..utils._narrowing import is_class, is_list_or_tuple
 from ..utils.errors import (
     FILTER_INVALID_ERROR_CODE,
@@ -89,6 +94,7 @@ from ..utils.errors import (
 )
 from ..utils.querysets import base_queryset, coerce_field_value_or_none
 from ..utils.relations import relation_kind, relation_link
+from ..utils.typing import strawberry_schema_from_info
 
 # The three framework strategies whose emitted GlobalID a filter input CAN
 # decode + validate (``model`` / ``type`` / ``type+model``). Derived from the
@@ -112,6 +118,7 @@ if TYPE_CHECKING:
     from django.core.files.uploadedfile import UploadedFile
     from django.utils.datastructures import MultiValueDict
     from django_filters.filterset import BaseFilterSet, FilterSetOptions
+    from strawberry.schema import Schema
 
     from ..types.definition import DjangoTypeDefinition
     from ..utils.typing import ConcreteField
@@ -993,17 +1000,29 @@ def resolve_globalid_target_definition(
     return current_def
 
 
-def _accepted_globalid_type_names(definition: DjangoTypeDefinition | None) -> set[str] | None:
+def _accepted_globalid_type_names(
+    definition: DjangoTypeDefinition | None,
+    schema: Schema | None = None,
+) -> set[str] | None:
     """Return the accepted ``type_name`` payload(s) for a resolved definition's strategy.
 
     Strategy-aware target validation keyed on the resolved owner/target
     definition's recorded ``effective_globalid_strategy`` (spec-031 Decision 13) -
     the same field decode reads, so encode, decode, and filter validation all
-    agree on one contract:
+    agree on one contract. The set is what a matching id of the target carries
+    (the ``expected`` side of the mismatch error, and ``None`` when no guard
+    applies); whether a received slot names the target is ``_slot_names_target``,
+    which resolves a type-name slot the way decode does:
 
     - ``model`` -> the model label only (``definition.model._meta.label_lower``).
-    - ``type`` -> the ``graphql_type_name`` only (pre-0.0.9 behavior).
-    - ``type+model`` -> either the model label or the ``graphql_type_name``.
+    - ``type`` -> the type name only: the name the executing ``schema`` published
+      for the target (what a ``type``-strategy id of this schema carries, under
+      whatever ``NameConverter`` it runs); the ``graphql_type_name`` - the default
+      converter's spelling - when no schema is at hand (a filterset applied
+      outside the request pipeline) or the schema publishes no object type for
+      the target (no id of this schema can name it, so only its own spelling
+      remains).
+    - ``type+model`` -> either the model label or that type name.
     - ``definition is None`` (unbound owner / unresolvable target) -> ``None``
       (node-id-only fallback; the ``type_name`` guard is skipped).
 
@@ -1021,8 +1040,61 @@ def _accepted_globalid_type_names(definition: DjangoTypeDefinition | None) -> se
     if strategy in MODEL_LABEL_STRATEGIES:
         accepted.add(definition.model._meta.label_lower)
     if strategy in TYPE_NAME_STRATEGIES:
-        accepted.add(definition.graphql_type_name)
+        published = None if schema is None else published_node_type_name(schema, definition.origin)
+        accepted.add(definition.graphql_type_name if published is None else published)
     return accepted or None
+
+
+def _slot_names_target(
+    definition: DjangoTypeDefinition,
+    type_name: str,
+    schema: Schema | None,
+) -> bool:
+    """Return whether a decoded ``type_name`` slot names the filter target ``definition``.
+
+    One authority with decode: a model-label slot (a dot) names the target when
+    its strategy emits model labels and the label is the target model's; a
+    type-name slot names it when the strategy decodes type names and the slot
+    resolves to the target through ``types/relay.py::node_definition_for_published_name``
+    - the same resolution ``node(id:)`` runs under the executing ``schema`` - so a
+    slot this schema publishes for another type is refused even when it equals the
+    target's own default spelling. With no schema at hand (a filterset applied
+    outside the request pipeline) the target's ``graphql_type_name`` is the one
+    accepted spelling.
+    """
+    strategy = definition.effective_globalid_strategy
+    if "." in type_name:
+        return (
+            strategy in MODEL_LABEL_STRATEGIES and type_name == definition.model._meta.label_lower
+        )
+    if strategy not in TYPE_NAME_STRATEGIES:
+        return False
+    if schema is None:
+        return type_name == definition.graphql_type_name
+    try:
+        return node_definition_for_published_name(schema, type_name) is definition
+    except ConfigurationError:
+        return False
+
+
+def _filter_schema(filter_instance: Filter) -> Schema | None:
+    """Return the Strawberry schema executing the request ``filter_instance`` filters for.
+
+    Read off the owning ``FilterSet``'s ``_apply_info`` - the resolver ``info``
+    ``apply_sync`` / ``apply_async`` stash on the top-level instance and
+    ``_q_for_branch`` on every nested sibling - climbing from a relation leaf's
+    child instance (``FilterSet._projection_child``) to the instance that owns
+    it, so the GlobalID type-name check validates against the names THIS schema
+    published. ``None`` for a filterset built outside the apply pipeline (a
+    direct unit-test construction), where no schema exists to consult.
+    """
+    owner = getattr(filter_instance, "parent", None)
+    while owner is not None:
+        info = getattr(owner, "_apply_info", None)
+        if info is not None:
+            return strawberry_schema_from_info(info)
+        owner = getattr(owner, "_projection_owner", None)
+    return None
 
 
 def _decode_and_validate_global_id(
@@ -1040,9 +1112,13 @@ def _decode_and_validate_global_id(
     ID round-trips while the bare GraphQL type name is rejected (and vice
     versa for the `type` strategy). Raises `GraphQLError("GlobalID type
     mismatch: filter expects <expected> but received <actual>")` when the
-    decoded `type_name` is not in the accepted set for the three framework
+    decoded `type_name` does not name the target for the three framework
     strategies (spec-027 #"filter expects <expected> but received <actual>",
-    now strategy-aware per spec-031 Decision 13). An unbound owner or an
+    now strategy-aware per spec-031 Decision 13): `_slot_names_target` resolves a
+    type-name slot through the executing schema's published names exactly as
+    decode does, and `<expected>` is `_accepted_globalid_type_names`. A received
+    slot equal to an expected spelling that this schema publishes for another type
+    reads `... but received <actual>, which this schema publishes for another type`. An unbound owner or an
     unresolvable target (`definition is None`) falls back to node-id-only (the
     `type_name` guard is skipped). A target on a `callable` / `custom`
     (encode-only) strategy, or a known target whose
@@ -1130,12 +1206,24 @@ def _decode_and_validate_global_id(
                 message,
                 extensions=coded_error_extensions(GLOBALID_UNVALIDATABLE_ERROR_CODE),
             )
-    accepted = _accepted_globalid_type_names(definition)
-    if accepted is not None and decoded.type_name not in accepted:
+    schema = _filter_schema(filter_instance)
+    accepted = _accepted_globalid_type_names(definition, schema)
+    if (
+        accepted is not None
+        and definition is not None
+        and not _slot_names_target(definition, decoded.type_name, schema)
+    ):
         suffix = "" if index is None else f" at index {index}"
         expected = " or ".join(sorted(accepted))
+        # An accepted spelling refused anyway names a different type in this schema.
+        shadowed = (
+            ", which this schema publishes for another type"
+            if decoded.type_name in accepted
+            else ""
+        )
         raise GraphQLError(
-            f"GlobalID type mismatch: filter expects {expected} but received {decoded.type_name}{suffix}",
+            "GlobalID type mismatch: filter expects "
+            f"{expected} but received {decoded.type_name}{shadowed}{suffix}",
         )
     if decoded.node_id in EMPTY_VALUES:
         # A well-typed GlobalID whose id part is empty decodes to ``""`` and clears

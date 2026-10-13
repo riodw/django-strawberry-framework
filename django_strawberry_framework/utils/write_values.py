@@ -36,6 +36,7 @@ from .querysets import (
     visible_related_object,
     visible_related_objects,
 )
+from .typing import strawberry_schema_from_info
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -151,6 +152,7 @@ def type_check_relation_id(
     *,
     graphql_name: str,
     related_model: type[models.Model],
+    info: object = None,
 ) -> tuple[object, FieldError | None]:
     """Type-check + coerce ONE relation id to a pk WITHOUT a DB fetch.
 
@@ -166,9 +168,11 @@ def type_check_relation_id(
 
     The batched set decoder (``decode_visible_relation_ids``) runs this per
     element, then confirms the whole set in one visibility query. A
-    ``relay.GlobalID`` is decoded against the target model (a non-``OK`` status is
-    the uniform ``relation_field_error``); a raw pk is coerced through the target
-    pk field (``None`` -> the uniform error).
+    ``relay.GlobalID`` is decoded against the target model under the schema
+    executing ``info`` (``strawberry_schema_from_info``), whose published type
+    names a ``type``-strategy slot carries (a non-``OK`` status is the uniform
+    ``relation_field_error``); a raw pk is coerced through the target pk field
+    (``None`` -> the uniform error) and never reads ``info``.
 
     The ``decode_model_global_id`` / ``GlobalIDDecode`` import is function-local:
     the package's ``relay`` module imports ``utils.querysets`` at module level, so
@@ -178,7 +182,11 @@ def type_check_relation_id(
     if isinstance(value, relay.GlobalID):
         from ..relay import GlobalIDDecode, decode_model_global_id
 
-        result = decode_model_global_id(value, related_model)
+        result = decode_model_global_id(
+            value,
+            related_model,
+            schema=strawberry_schema_from_info(info),
+        )
         if result.status is not GlobalIDDecode.OK:
             return None, relation_field_error(graphql_name)
         return result.pk, None
@@ -250,6 +258,7 @@ def decode_visible_relation(
         value,
         graphql_name=graphql_name,
         related_model=related_model,
+        info=info,
     )
     if error is not None:
         return None, error
@@ -339,6 +348,7 @@ def decode_visible_relation_ids(
             value,
             graphql_name=graphql_name,
             related_model=related_model,
+            info=info,
         )
         if error is not None:
             return None, error

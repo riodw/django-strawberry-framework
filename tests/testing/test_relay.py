@@ -10,7 +10,10 @@ Construction-time and throwaway-strategy residue of
 
 What stays here has no fakeshop wire: ``type`` / ``type+model`` strategy
 equality (no shipped type sets ``Meta.globalid_strategy``; a flag on a live
-type would rewrite every GlobalID for that type), ``callable`` / ``custom`` /
+type would rewrite every GlobalID for that type), the ``schema=`` mint under a
+type-renaming converter (the live rows in
+``examples/fakeshop/test_query/test_globalid_naming_api.py`` read emitted ids
+off the wire, never through this helper), ``callable`` / ``custom`` /
 unfinalized / non-Node / stale-registry / hostile-input refusals, the
 Phase-3-stamped-unfinalized gate, ``decode_global_id`` identity re-export, and
 int/str/UUID round-trips through the helper (kanban UUID types are non-Relay).
@@ -26,6 +29,8 @@ from apps.products import services
 from apps.products.models import Category, Item
 from django.db import models
 from strawberry import relay
+from strawberry.schema.name_converter import NameConverter
+from strawberry.types.base import StrawberryObjectDefinition
 from typing_extensions import override
 
 from django_strawberry_framework import DjangoType, finalize_django_types, strawberry_config
@@ -68,7 +73,12 @@ def _make_node_type(
     return node_type
 
 
-def _schema_with_row(node_type: type, model: type[models.Model]) -> strawberry.Schema:
+def _schema_with_row(
+    node_type: type,
+    model: type[models.Model],
+    *,
+    converter: NameConverter | None = None,
+) -> strawberry.Schema:
     """Finalize, then build a schema exposing ``row`` -> the lowest-pk instance."""
 
     def row() -> models.Model | None:
@@ -78,7 +88,8 @@ def _schema_with_row(node_type: type, model: type[models.Model]) -> strawberry.S
         type("Query", (), {"row": strawberry.field(resolver=row, graphql_type=node_type)}),
     )
     finalize_django_types()
-    return strawberry.Schema(query=query_cls, config=strawberry_config())
+    config = strawberry_config(name_converter=converter or NameConverter())
+    return strawberry.Schema(query=query_cls, config=config)
 
 
 _ROW_ID_QUERY = "{ row { id } }"
@@ -120,6 +131,53 @@ def test_global_id_for_type_plus_model_strategy():
     assert row is not None
     assert live_id == global_id_for(category_node, row.pk)
     assert relay.GlobalID.from_id(live_id).type_name == "products.category"
+
+
+class _ApiPrefix(NameConverter):
+    """Publish every output object type and interface as ``Api<name>``; inputs keep theirs."""
+
+    @override
+    def from_object(self, object_type: StrawberryObjectDefinition) -> str:
+        name = super().from_object(object_type)
+        return name if object_type.is_input else f"Api{name}"
+
+
+@pytest.mark.django_db
+def test_global_id_for_type_strategy_with_schema_mints_the_published_name():
+    """Under a renaming converter, ``schema=`` mints the live id; schema-less keeps the default spelling."""
+    services.seed_data(1)
+    category_node = _make_node_type("CategoryNode", strategy="type")
+    schema = _schema_with_row(category_node, Category, converter=_ApiPrefix())
+    row = Category.objects.order_by("pk").first()
+    assert row is not None
+    result = schema.execute_sync(_ROW_ID_QUERY)
+    assert result.errors is None
+    assert result.data is not None
+    live_id = result.data["row"]["id"]
+
+    assert live_id == global_id_for(category_node, row.pk, schema=schema)
+    assert relay.GlobalID.from_id(live_id).type_name == "ApiCategoryNode"
+    assert global_id_for(category_node, row.pk) == str(relay.GlobalID("CategoryNode", str(row.pk)))
+    assert decode_global_id(live_id, schema=schema) == (category_node, str(row.pk))
+
+
+def test_global_id_for_model_label_strategy_ignores_the_schema():
+    """A model-label payload is the same with or without ``schema=``."""
+    category_node = _make_node_type("CategoryNode", strategy="type+model")
+    schema = _schema_with_row(category_node, Category, converter=_ApiPrefix())
+    assert global_id_for(category_node, 5, schema=schema) == global_id_for(category_node, 5)
+
+
+def test_global_id_for_type_strategy_refuses_a_schema_not_publishing_the_type():
+    """``schema=`` must publish the type; a schema that does not is a ``ConfigurationError``."""
+    category_node = _make_node_type("CategoryNode", strategy="type")
+    item_node = _make_node_type("ItemNode", model=Item, strategy="type")
+    schema = _schema_with_row(category_node, Category, converter=_ApiPrefix())
+    with pytest.raises(
+        ConfigurationError,
+        match="ItemNode is not published as a Relay-Node object type by the given schema",
+    ):
+        global_id_for(item_node, 1, schema=schema)
 
 
 # ---------------------------------------------------------------------------

@@ -2800,7 +2800,7 @@ blocked on `DONE-030-0.0.9` ([`DjangoConnectionField`](docs/GLOSSARY.md#djangoco
 - [x] Filter / order arguments accepted on Connection fields when the corresponding `*_class` is declared on the type.
 - [x] Permission-aware Node lookup: `node(id:)` returns `null` for hidden rows; no existence leak via error timing.
 - [x] Six schema-validation diagnostics from Goal 6 raise [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) with the documented messages.
-- [x] `django_strawberry_framework.testing.relay` module exposes `global_id_for(type_cls, id)` and `decode_global_id(gid)`.
+- [x] `django_strawberry_framework.testing.relay` module exposes `global_id_for(type_cls, id, *, schema=None)` and `decode_global_id(gid, *, schema=None)`.
 - [x] The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-066-0.1.5`.
 - [x] 100% coverage across the new code paths; tests pin both happy paths and every validation failure.
 

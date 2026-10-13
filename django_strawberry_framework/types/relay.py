@@ -14,6 +14,10 @@ lifecycle phase:
   The last uses the ``__func__`` identity test that distinguishes
   consumer-overridden ``resolve_*`` methods from the ``relay.Node`` defaults
   inherited through MRO.
+- Request time: the ``type``-strategy GlobalID naming authority -
+  ``published_node_type_name`` / ``node_definition_for_published_name`` read
+  the type names the executing schema published (a lazy per-schema table), so
+  a ``type`` id round-trips under whatever ``NameConverter`` that schema runs.
 
 Direct ports of behavior from ``strawberry_django/type.py`` and
 ``strawberry_django/relay/utils.py`` cited in the spec; the upstream
@@ -24,12 +28,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, TypeGuard, TypeVar, cast
+from weakref import WeakKeyDictionary
 
 from django.apps import apps
 from django.db import models
 from django.db.models import CompositePrimaryKey
 from strawberry import relay
 from strawberry.relay.exceptions import NodeIDAnnotationError
+from strawberry.types.base import StrawberryObjectDefinition
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_class_name, _safe_type_name
 from ..resource_policy import check_deadline
@@ -48,6 +54,7 @@ from ..utils.querysets import (
 )
 
 if TYPE_CHECKING:
+    from strawberry.schema import Schema
     from strawberry.types import Info
     from strawberry.utils.await_maybe import AwaitableOrValue
 
@@ -571,14 +578,15 @@ def encode_typename(
 
     - ``model`` / ``type+model`` -> ``definition.model._meta.label_lower``
       (Django's canonical ``"app_label.modelname"``, e.g. ``products.item``).
-    - ``type`` -> ``definition.graphql_type_name`` (matches Strawberry's
-      ``info.path.typename`` default). The framework installs a ``type`` closure
-      only when shadowing a framework closure inherited from a concrete Relay
-      parent - see ``install_globalid_typename_resolver`` step 2 - so the
-      shadow-install is the only route into this branch during ``id``
-      resolution. ``testing/relay.py::global_id_for`` calls this helper directly
-      with a type's recorded strategy and reaches the branch with no installed
-      closure.
+    - ``type`` -> ``definition.graphql_type_name``, the name the DEFAULT
+      ``NameConverter`` publishes for the type. The live slot is the name the
+      executing schema published (Strawberry's ``info.path.typename`` default,
+      kept in place for ``type``; the shadow-install closure of
+      ``install_globalid_typename_resolver`` step 2 reads the same value), which
+      a type-renaming consumer converter can spell differently. No ``id``
+      resolution reaches this branch: only the schema-less
+      ``testing/relay.py::global_id_for`` call does, and with a schema that
+      helper reads ``published_node_type_name`` instead.
     - callable -> the consumer callable's ``(type_cls, model, root) -> str``
       return, validated non-empty ``str``. A non-``str`` or empty return raises
       ``ConfigurationError`` naming the type and the contract, rather than
@@ -612,8 +620,119 @@ def encode_typename(
         return normalized
     if strategy in MODEL_LABEL_STRATEGIES:
         return definition.model._meta.label_lower
-    # ``type`` (the only remaining string strategy): the GraphQL type name.
+    # ``type`` (the only remaining string strategy): the GraphQL type name as
+    # the default ``NameConverter`` publishes it.
     return definition.graphql_type_name
+
+
+#: ``{Relay-Node DjangoType: published GraphQL name}`` per executable schema,
+#: built once per schema from the names Strawberry published (each already
+#: passed through that schema's ``NameConverter`` at build) and dropped with the
+#: schema. Keyed per schema because one process-global registry can serve
+#: several schemas whose converters spell one class differently.
+_published_node_names: WeakKeyDictionary[Schema, dict[type, str]] = WeakKeyDictionary()
+
+
+def _registered_node_definition(origin: object) -> DjangoTypeDefinition | None:
+    """Return the registry definition of a Relay-Node ``DjangoType`` ``origin``, else ``None``."""
+    from ..registry import registry
+
+    definition = registry.get_definition(origin)
+    if definition is None or not implements_relay_node(definition.origin):
+        return None
+    return definition
+
+
+def _published_node_name_table(schema: Schema) -> dict[type, str]:
+    """Return ``schema``'s ``{Relay-Node DjangoType: published name}`` table.
+
+    Reads the schema converter's type map: the name a client of this schema sees
+    as ``__typename``, and the one Strawberry's ``Node.resolve_typename`` puts in
+    a ``type``-strategy GlobalID. The converter itself is never invoked: it is
+    consumer code that already ran at schema build, so the published map is
+    read back the way ``list_field.py::_published_wire_name`` reads an
+    argument's wire name. Built on first use and memoized for the schema's
+    lifetime; every entry that is not a Relay-Node ``DjangoType`` object type is
+    skipped.
+    """
+    memoized = _published_node_names.get(schema)
+    if memoized is not None:
+        return memoized
+    table: dict[type, str] = {}
+    for published_name, concrete in schema.schema_converter.type_map.items():
+        definition = concrete.definition
+        if isinstance(definition, StrawberryObjectDefinition) and (
+            _registered_node_definition(definition.origin) is not None
+        ):
+            table[definition.origin] = published_name
+    _published_node_names[schema] = table
+    return table
+
+
+def published_node_type_name(schema: Schema, type_cls: type[object]) -> str | None:
+    """Return the GraphQL type name ``schema`` published for ``type_cls``, or ``None``.
+
+    The forward half of the ``type``-strategy naming authority: what a
+    ``type``-strategy ``type_cls`` emits in its GlobalID type-name slot under
+    ``schema``. ``None`` when ``schema`` publishes no Relay-Node object type for
+    the class (it is unreachable from that schema's roots).
+    """
+    return _published_node_name_table(schema).get(type_cls)
+
+
+def node_definition_for_published_name(schema: Schema, name: str) -> DjangoTypeDefinition:
+    """Return the Relay-Node ``DjangoTypeDefinition`` a type-name slot names in ``schema``.
+
+    The reverse half of the ``type``-strategy naming authority, and the
+    type-name branch of ``decode_global_id`` when the decoder knows its schema.
+    ``schema.get_type_by_name`` is the converter-keyed type map Strawberry's own
+    ``GlobalID.resolve_type`` reads, so a ``type``-strategy id decodes by the
+    same name it was minted with, under whatever ``NameConverter`` the schema
+    runs; Strawberry refuses two types sharing one published name at schema
+    build, so that match is unique by construction.
+
+    A name the schema publishes nothing under falls back to the schema-less
+    ``registry.definition_for_graphql_name`` (the default converter's spelling),
+    accepted only when the schema publishes no object type for the definition it
+    names: an id for a Relay type this schema does not expose (minted by another
+    schema, or by ``testing/relay.py::global_id_for``) decodes as it would with
+    no schema, while the default spelling of a type this schema publishes under
+    another name stays rejected, since no id of this schema carries it.
+
+    Two registered Relay-Node types sharing one ``graphql_type_name`` are not
+    ambiguous here when the schema publishes the name for one of them: the
+    published one is the type the slot names.
+
+    Raises:
+        ConfigurationError: ``name`` is published as something other than a
+            Relay-Node ``DjangoType`` (a non-``DjangoType`` object type, an
+            interface, enum, scalar or union, or a ``DjangoType`` that is not
+            Relay-Node-shaped), reported with the registry's miss text; or it is
+            published as nothing and names no registered Relay-Node definition
+            (the registry's miss / ambiguity error), or names one ``schema``
+            publishes under another name.
+    """
+    from ..registry import registry
+
+    published = schema.get_type_by_name(name)
+    if published is None:
+        definition = registry.definition_for_graphql_name(name)
+        if published_node_type_name(schema, definition.origin) is None:
+            return definition
+        raise ConfigurationError(
+            f"No Relay-Node DjangoType is published as GraphQL type {name!r} in this schema",
+        )
+    if (
+        isinstance(published, StrawberryObjectDefinition)
+        and (definition := _registered_node_definition(published.origin)) is not None
+    ):
+        return definition
+    # The registry's own miss text: under the default converter a published
+    # non-Node name (``Query``, ``PageInfo``, an interface, a connection, a scalar)
+    # reads exactly as the schema-less decode reports it.
+    raise ConfigurationError(
+        f"No registered Relay-Node DjangoType has GraphQL type name {name!r}",
+    )
 
 
 # Sentinel attribute stamped on every framework-installed ``resolve_typename``
@@ -701,12 +820,13 @@ def install_globalid_typename_resolver(
        setting snapshot, never a per-type setting read); install the framework closure for
        ``model`` / ``type+model`` / ``callable`` (the closure validates a
        non-empty ``str`` callable return); install NOTHING for ``type``
-       (Strawberry's default returns ``info.path.typename``, byte-identical to
-       pre-0.0.9) - UNLESS the MRO-resolved attribute is a framework closure
-       inherited from a concrete Relay parent, in which case ``type`` installs
-       its own closure too (``encode_typename``'s ``type`` branch): the
-       inherited closure captured the PARENT's definition and would otherwise
-       keep shadowing Strawberry's default, emitting the parent's payload.
+       (Strawberry's default returns ``info.path.typename``, the name the
+       executing schema published for the type) - UNLESS the MRO-resolved
+       attribute is a framework closure inherited from a concrete Relay parent,
+       in which case ``type`` installs its own closure too, one that reads the
+       same ``info.path.typename``: the inherited closure captured the PARENT's
+       definition and would otherwise keep shadowing Strawberry's default,
+       emitting the parent's payload.
     3. **Record** the classification string (``model`` / ``type`` /
        ``type+model`` / ``callable`` / ``custom``) on
        ``definition.effective_globalid_strategy`` - the single value decode and
@@ -747,21 +867,37 @@ def _install_typename_closure(
     ``id``-resolution hot path does no strategy lookup (spec-031 Decision 5).
     ``model`` / ``type+model`` / ``callable`` always reach here; ``type``
     reaches here only when shadowing a framework closure inherited from a
-    concrete Relay parent (otherwise ``type`` keeps Strawberry's default). The
-    closure is stamped with ``_FRAMEWORK_CLOSURE_MARKER`` so the override test
-    never mistakes it - inherited through a subclass's MRO - for a consumer
-    override.
+    concrete Relay parent (otherwise ``type`` keeps Strawberry's default), and
+    its closure answers exactly what that default answers - the name the
+    executing schema published for the type (``info.path.typename``) - so a
+    ``type`` child under a converter emits the same slot as a ``type`` type
+    that installed nothing. The closure is stamped with
+    ``_FRAMEWORK_CLOSURE_MARKER`` so the override test never mistakes it -
+    inherited through a subclass's MRO - for a consumer override.
     """
+    if strategy == "type":
+        node_default = relay.Node.resolve_typename.__func__
 
-    def resolve_typename(
-        cls: type[_RelayDjangoType],
-        root: object,
-        info: Info[object, object],  # noqa: ARG001
-    ) -> str:
-        # Strawberry's resolve_typename seam passes ``(cls, root, info)``; the
-        # encoder contract dropped ``info`` (pre-1.0), so only ``root`` is
-        # forwarded to ``encode_typename``.
-        return encode_typename(definition, strategy, cls, root)
+        def resolve_typename(
+            cls: type[_RelayDjangoType],
+            root: object,
+            info: Info[object, object],
+        ) -> str:
+            # Strawberry's own ``Node.resolve_typename`` (``info.path.typename``):
+            # the name the executing schema published for the type.
+            return node_default(cls, root, info)
+
+    else:
+
+        def resolve_typename(
+            cls: type[_RelayDjangoType],
+            root: object,
+            info: Info[object, object],  # noqa: ARG001
+        ) -> str:
+            # Strawberry's resolve_typename seam passes ``(cls, root, info)``; the
+            # encoder contract dropped ``info`` (pre-1.0), so only ``root`` is
+            # forwarded to ``encode_typename``.
+            return encode_typename(definition, strategy, cls, root)
 
     setattr(resolve_typename, _FRAMEWORK_CLOSURE_MARKER, True)
     # basedpyright: a runtime classmethod install; it rejects the ``classmethod`` for
@@ -782,7 +918,11 @@ def _plain_globalid_slot(slot: object) -> str | None:
     return str.__str__(slot)
 
 
-def decode_global_id(gid: object) -> tuple[type[_RelayDjangoType], str]:
+def decode_global_id(
+    gid: object,
+    *,
+    schema: Schema | None = None,
+) -> tuple[type[_RelayDjangoType], str]:
     """Decode a ``GlobalID`` to its ``(DjangoType, node_id)`` via resolve-then-enforce.
 
     The decode half of the GlobalID-encoding feature (spec-031 Decision 8), and the
@@ -815,9 +955,20 @@ def decode_global_id(gid: object) -> tuple[type[_RelayDjangoType], str]:
     - **Step 1 - resolve a candidate.** A model-label slot (the ``type_name``
       contains a dot, ``"app_label.modelname"``) resolves via
       ``apps.get_model`` -> ``registry.get(model)`` (the primary / lone type,
-      honoring ``Meta.primary``). A GraphQL-type-name slot (no dot) resolves via
+      honoring ``Meta.primary``). A GraphQL-type-name slot (no dot) is the name
+      the EMITTING SCHEMA published for the type (what Strawberry's default
+      ``resolve_typename`` reads off ``info.path.typename``), so it resolves
+      through that schema: ``node_definition_for_published_name(schema, name)``
+      (``schema.get_type_by_name``, the converter-keyed type map Strawberry's own
+      ``GlobalID.resolve_type`` reads), falling back to the default spelling
+      only for a Relay type the schema does not publish at all. Every
+      request-time caller passes the executing schema
+      (``utils/typing.py::strawberry_schema_from_info``). A schema-less call -
+      the public helper used outside a request - resolves via
       ``registry.definition_for_graphql_name`` (keyed on ``graphql_type_name``,
-      Relay-Node definitions only).
+      the spelling the default ``NameConverter`` publishes, Relay-Node
+      definitions only), which is the same answer whenever no consumer
+      converter renames the type.
     - **Step 2 - enforce the recorded strategy permits the payload shape.** Reads
       the candidate's stamped ``effective_globalid_strategy``: a model-label
       payload is permitted iff ``_accepts_model_label_decode`` (``model`` /
@@ -896,7 +1047,11 @@ def decode_global_id(gid: object) -> tuple[type[_RelayDjangoType], str]:
             )
         definition = registry.get_definition(target_type)
     else:
-        definition = registry.definition_for_graphql_name(type_name)
+        definition = (
+            registry.definition_for_graphql_name(type_name)
+            if schema is None
+            else node_definition_for_published_name(schema, type_name)
+        )
         target_type = definition.origin
 
     strategy = definition.effective_globalid_strategy if definition is not None else None

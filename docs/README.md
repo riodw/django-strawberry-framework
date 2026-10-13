@@ -77,7 +77,7 @@ class CategoryNode(DjangoType):
         interfaces = (relay.Node,)
 ```
 
-The default `GlobalID` payload is the Django model label (`products.item:42`), not the GraphQL type name, so renaming a type does not invalidate cached IDs. `Meta.globalid_strategy` (per type) and `RELAY_GLOBALID_STRATEGY` (schema-wide) select `model` (default), `type`, `type+model` (decoding old type-anchored IDs while emitting model-anchored ones), or a callable encoder.
+The default `GlobalID` payload is the Django model label (`products.item:42`), not the GraphQL type name, so renaming a type does not invalidate cached IDs. `Meta.globalid_strategy` (per type) and `RELAY_GLOBALID_STRATEGY` (schema-wide) select `model` (default), `type`, `type+model` (decoding old type-anchored IDs while emitting model-anchored ones), or a callable encoder. Under `type` the payload is the name the schema publishes for the type, its `__typename`: a `NameConverter` passed through `strawberry_config(name_converter=...)` that renames object types renames the IDs too, and every `node` / `nodes` refetch, mutation id and `GlobalID` filter of that schema reads them back by the same name.
 
 > **Multiple `DjangoType`s per model under the `model` default.** A model-label payload is shared by every `DjangoType` over that model and always decodes to the model's **primary** type (`Meta.primary`), so a secondary Relay-Node type's IDs refetch as the primary, taking the primary's `get_queryset` scope with them. Finalization warns and names the collapsing secondaries; give a secondary its own identity with `Meta.globalid_strategy = "type"`.
 
@@ -247,7 +247,7 @@ class Query:
     genre: GenreType | None = DjangoNodeField(GenreType)  # typed form
 ```
 
-The `id:` argument is a raw `ID!` decoded server-side, so the client's claim about which type an id belongs to is never trusted. Resolution honors `get_queryset`: hidden, missing, and uncoercible-pk ids return `null` with no existence leak, while a malformed id raises a `GraphQLError` with `extensions={"code": "GLOBALID_INVALID"}`. `nodes` is per-type batched and order-preserving, with duplicate ids and `null` holes supported. For tests, `django_strawberry_framework.testing.relay` exports `global_id_for(type_cls, id)` and `decode_global_id(gid)`. See [`GLOSSARY.md#djangonodefield`][glossary-djangonodefield].
+The `id:` argument is a raw `ID!` decoded server-side, so the client's claim about which type an id belongs to is never trusted. Resolution honors `get_queryset`: hidden, missing, and uncoercible-pk ids return `null` with no existence leak, while a malformed id raises a `GraphQLError` with `extensions={"code": "GLOBALID_INVALID"}`. `nodes` is per-type batched and order-preserving, with duplicate ids and `null` holes supported. For tests, `django_strawberry_framework.testing.relay` exports `global_id_for(type_cls, id, *, schema=None)` and `decode_global_id(gid, *, schema=None)`; pass `schema=` for a `type`-strategy ID under a converter that renames object types (without it both use the default converter's spelling). See [`GLOSSARY.md#djangonodefield`][glossary-djangonodefield].
 
 ### Filtering with `FilterSet`
 

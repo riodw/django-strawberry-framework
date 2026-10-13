@@ -403,7 +403,8 @@ def test_decode_relation_single_wrong_model_global_id_is_field_error():
         wrong_gid,
         graphql_name="genreId",
         related_model=library_models.Genre,
-        info=unread_info(),
+        # A GlobalID decode reads the executing schema off ``info``.
+        info=make_info(),
     )
     assert pk is None
     assert error is not None
@@ -1248,7 +1249,8 @@ def test_relation_decode_consumes_recorded_strategy_after_strategy_resolver_fail
         gid,
         graphql_name="categoryId",
         related_model=product_models.Category,
-        info=unread_info(),
+        # A GlobalID decode reads the executing schema off ``info``.
+        info=make_info(),
     )
     assert error is None
     assert pk == category.pk

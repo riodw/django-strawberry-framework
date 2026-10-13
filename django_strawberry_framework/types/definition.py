@@ -248,6 +248,8 @@ class DjangoTypeDefinition:
     def graphql_type_name(self) -> str:
         """Return the GraphQL type name Strawberry emits for this definition.
 
+        That is the name under the default ``NameConverter``; a schema's converter
+        can publish another name (``types/relay.py::published_node_type_name``).
         Strawberry derives the surface name as ``self.name`` when set,
         falling back to ``self.origin.__name__``. Centralized here so
         every call site that needs the same derivation rule reads from

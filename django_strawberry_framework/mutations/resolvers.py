@@ -111,6 +111,7 @@ from ..utils.querysets import (
     run_in_one_sync_boundary,
     sync_pipeline_recourse,
 )
+from ..utils.typing import strawberry_schema_from_info
 from ..utils.write_transaction import (
     authorization_phase,
     base_locked_queryset,
@@ -143,6 +144,7 @@ if TYPE_CHECKING:
     from typing import Protocol, TypeAlias, TypeVar
 
     from django.db import models
+    from strawberry.schema import Schema
     from strawberry.types import Info
 
     from ..auth.mutations import _SealedAuthHolderMeta
@@ -324,6 +326,7 @@ def run_write_pipeline_sync(
                 id,
                 cast("type[DjangoType]", primary_type),
                 using=using,
+                schema=strawberry_schema_from_info(info),
             )
             if id_error is not None:
                 return _error_payload([id_error])
@@ -1362,6 +1365,7 @@ def coerce_lookup_id(
     target_type: type[DjangoType],
     *,
     using: str | None = None,
+    schema: Schema | None = None,
 ) -> tuple[object, FieldError | None]:
     """Coerce the update/delete ``id:`` to a pk: GlobalID for a Relay primary, raw pk otherwise.
 
@@ -1395,7 +1399,10 @@ def coerce_lookup_id(
     alias, so it is threaded explicitly rather than recovered from pipeline state
     here: ``relay.py::_resolve_real_pk`` performs that recovery for the relation
     riders that cannot thread one, and a second read of the same context variable
-    at this seam could only ever return the same answer.
+    at this seam could only ever return the same answer. ``schema`` is the
+    executing Strawberry schema (``strawberry_schema_from_info(info)``): a
+    ``type``-strategy id carries the name that schema published for its type,
+    so the decode resolves it through that schema's own type map.
 
     **Non-Relay primary** - no GlobalID names such a type, so the wire value is the
     raw pk, coerced through the target model's pk field by the same
@@ -1415,7 +1422,7 @@ def coerce_lookup_id(
         if pk is None:
             return None, not_found_error()
         return pk, None
-    result = decode_model_global_id(id, target_model, using=using)
+    result = decode_model_global_id(id, target_model, using=using, schema=schema)
     if result.status in (GlobalIDDecode.DECODE_FAILED, GlobalIDDecode.WRONG_MODEL):
         return None, _invalid_lookup_id_error()
     if result.status is GlobalIDDecode.UNCOERCIBLE_PK:

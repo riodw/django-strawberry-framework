@@ -1821,6 +1821,14 @@ class FilterSet(
     # request's child and each ``_q_for_branch`` sibling builds its own.
     _projection_children: dict[type[FilterSet], FilterSet] | None = None
 
+    # The instance whose ``_projection_children`` holds this one, set by
+    # ``_projection_child``; ``None`` on every other instance. A child carries
+    # its owner's request but not its resolver ``info`` (its own relation leaves
+    # keep the visibility they always read), so a filter running inside it
+    # reaches the request's schema through this link
+    # (``filters/base.py::_filter_schema``).
+    _projection_owner: FilterSet | None = None
+
     # Visibility-scoped target rows per declared hop a flat relation leaf walks,
     # keyed by ``(id(<RelatedFilter declaration>), <database alias>)``
     # (``_hop_visible_rows``). One map serves the whole request: a hop's
@@ -2537,6 +2545,7 @@ class FilterSet(
                 queryset=base_queryset(child_model, using=parent_qs.db),
                 request=self.request,
             )
+            child._projection_owner = self
             children[filterset_cls] = child
         return child
 

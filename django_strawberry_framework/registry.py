@@ -492,15 +492,21 @@ class TypeRegistry:
     def definition_for_graphql_name(self, name: str) -> DjangoTypeDefinition:
         """Return the unique Relay-Node ``DjangoTypeDefinition`` for a GraphQL type ``name``.
 
-        The GlobalID type-name decode entry point (spec-031 Decision 8 Step 1,
-        type-name branch). Inverts the ``type`` strategy's encode (which emits
-        ``definition.graphql_type_name``) by scanning ``iter_definitions()`` for a
-        unique ``graphql_type_name`` match over **Relay-Node definitions only** -
-        a non-Node type can never be the target of a ``GlobalID``.
+        The SCHEMA-LESS GlobalID type-name decode (spec-031 Decision 8 Step 1,
+        type-name branch, for a ``types/relay.py::decode_global_id`` call made
+        outside a request). The ``type`` strategy's live slot is the name the
+        executing schema published for the type; with no schema at hand this
+        resolves the spelling the default ``NameConverter`` publishes,
+        ``definition.graphql_type_name``, by scanning ``iter_definitions()`` for a
+        unique match over **Relay-Node definitions only** - a non-Node type can
+        never be the target of a ``GlobalID``. Request-time decode goes through
+        ``types/relay.py::node_definition_for_published_name`` instead, which
+        reads the schema's own published-name map.
 
         Keyed on ``definition.graphql_type_name`` (which honors ``Meta.name``),
         NOT ``type_cls.__name__``, so a class ``ItemType`` with ``Meta.name =
-        "Item"`` emits ``Item:<pk>`` and decodes by inverting the same function.
+        "Item"`` emits ``Item:<pk>`` under the default converter and decodes by
+        inverting the same function.
 
         Raises:
             ConfigurationError: no Relay-Node definition matches ``name`` (the

@@ -8,6 +8,7 @@
 none of those are a JSON selection.
 """
 
+import enum
 import functools
 from typing import Any
 
@@ -19,9 +20,11 @@ from apps.products.models import Category, Item
 from asgiref.sync import sync_to_async
 from django.db.models import CompositePrimaryKey, Model, QuerySet
 from strawberry import relay
+from strawberry.schema.name_converter import NameConverter
+from strawberry.types.base import StrawberryObjectDefinition
 from typing_extensions import override
 
-from django_strawberry_framework import DjangoType, conf, finalize_django_types
+from django_strawberry_framework import DjangoType, conf, finalize_django_types, strawberry_config
 from django_strawberry_framework.exceptions import ConfigurationError, _safe_class_name
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import base as types_base
@@ -31,6 +34,7 @@ from django_strawberry_framework.types.base import (
 )
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
 from django_strawberry_framework.types.relay import (
+    _published_node_name_table,
     _resolve_id_attr_default,
     _resolve_id_default,
     _resolve_node_default,
@@ -40,6 +44,7 @@ from django_strawberry_framework.types.relay import (
     encode_typename,
     implements_relay_node,
     install_relay_node_resolvers,
+    published_node_type_name,
 )
 from django_strawberry_framework.utils.querysets import model_for
 from tests._idioms import async_relay_hooks, relay_hooks
@@ -1739,20 +1744,35 @@ def test_apply_interfaces_diagnostic_survives_hostile_class_names():
 # ---------------------------------------------------------------------------
 
 
-def _emitted_typename(type_cls: type[DjangoType], *, node_id: str = "1") -> str:
+def _emitted_typename(
+    type_cls: type[DjangoType],
+    *,
+    node_id: str = "1",
+    published_name: str | None = None,
+) -> str:
     """Return the GlobalID type-name slot a finalized Relay type emits.
 
     For ``model`` / ``type+model`` / ``callable`` the framework-installed
     ``resolve_typename`` closure ignores ``info`` (it computes the slot from the
     definition), so a synthetic ``root`` and ``info=None`` faithfully exercise
-    the emit path without standing up a whole schema.
+    the emit path without standing up a whole schema. A ``type`` closure reads
+    the name the executing schema published off ``info.path.typename`` (what
+    Strawberry's default reads), so ``published_name`` stands in for that
+    schema-published name.
     """
 
     class _FakeRoot:
         _meta = type_cls.__django_strawberry_definition__.model._meta
         id = node_id
 
-    return relay_hooks(type_cls, model_for(type_cls)).resolve_typename(_FakeRoot(), None)
+    class _FakePath:
+        typename = published_name
+
+    class _FakeInfo:
+        path = _FakePath()
+
+    info = None if published_name is None else _FakeInfo()
+    return relay_hooks(type_cls, model_for(type_cls)).resolve_typename(_FakeRoot(), info)
 
 
 def _definition_of(type_cls: type[DjangoType]):
@@ -2239,7 +2259,10 @@ def test_type_strategy_child_shadows_inherited_framework_closure():
     the GraphQL type name) - but here the inherited attribute is the parent's
     framework closure, which captured the PARENT's definition and would emit
     the model label. The child must install its own ``type`` closure to shadow
-    it (``encode_typename``'s ``type`` branch goes live for exactly this shape).
+    it, and that closure answers what Strawberry's default answers: the name
+    the executing schema published for the child (``info.path.typename``), so a
+    ``type`` child emits the same slot under a converter as a ``type`` type that
+    installed nothing.
     """
 
     class ItemNode(DjangoType):
@@ -2263,7 +2286,12 @@ def test_type_strategy_child_shadows_inherited_framework_closure():
     finalize_django_types()
     assert _definition_of(TypeScopedChild).effective_globalid_strategy == "type"
     assert _framework_closure_func(TypeScopedChild) is not None
-    assert _emitted_typename(TypeScopedChild) == "TypeScopedItem"
+    assert _emitted_typename(TypeScopedChild, published_name="TypeScopedItem") == "TypeScopedItem"
+    # Under a type-renaming converter the child emits the published spelling,
+    # never the parent's model label and never its own default-converter name.
+    assert _emitted_typename(TypeScopedChild, published_name="ApiTypeScopedItem") == (
+        "ApiTypeScopedItem"
+    )
     # The parent keeps emitting the model label through its own closure.
     assert _emitted_typename(ItemNode) == "products.item"
 
@@ -3054,3 +3082,192 @@ def test_decode_model_label_unregistered_model_raises():
     # has no registered type to decode to.
     with pytest.raises(ConfigurationError, match="no registered"):
         decode_global_id(relay.GlobalID("products.item", "1"))
+
+
+# ---------------------------------------------------------------------------
+# decode_global_id(schema=): the executing schema names a type-name slot
+# ---------------------------------------------------------------------------
+#
+# Live siblings (every request-time decode, under a type-renaming converter):
+# ``examples/fakeshop/test_query/test_globalid_naming_api.py``. What stays here is
+# the helper called with a schema outside any request: each kind of published
+# name it refuses, the per-schema name table, and a plain ``strawberry.Schema``.
+
+
+class _ApiPrefix(NameConverter):
+    """Publish every output object type and interface as ``Api<name>``; inputs keep theirs."""
+
+    @override
+    def from_object(self, object_type: StrawberryObjectDefinition) -> str:
+        name = super().from_object(object_type)
+        return name if object_type.is_input else f"Api{name}"
+
+
+@strawberry.enum
+class _Shade(enum.Enum):
+    LIGHT = "light"
+
+
+def _type_strategy_node(name: str, model: type[Model] = Category) -> type[DjangoType]:
+    meta = _meta(
+        model=model,
+        fields=("id", "name"),
+        interfaces=(relay.Node,),
+        globalid_strategy="type",
+    )
+    return type(name, (DjangoType,), {"Meta": meta})
+
+
+def _converted_schema(
+    *published: type[object],
+    converter: NameConverter | None = None,
+    schema_cls: type[strawberry.Schema] = strawberry.Schema,
+) -> strawberry.Schema:
+    """Finalize, then build a schema publishing ``published`` (plus ``shade``) under ``converter``."""
+    finalize_django_types()
+    namespace: dict[str, object] = {
+        "shade": strawberry.field(resolver=lambda: _Shade.LIGHT, graphql_type=_Shade),
+    }
+    for index, type_cls in enumerate(published):
+        namespace[f"t{index}"] = strawberry.field(
+            resolver=lambda: None,
+            graphql_type=type_cls | None,
+        )
+    query = strawberry.type(type("Query", (), namespace))
+    config = strawberry_config(name_converter=converter or NameConverter())
+    return schema_cls(query=query, config=config)
+
+
+def test_decode_with_schema_resolves_the_published_name():
+    """``ApiCategoryNode`` decodes to ``CategoryNode`` under the schema that published it."""
+    category_node = _type_strategy_node("CategoryNode")
+    schema = _converted_schema(category_node, converter=_ApiPrefix())
+    assert decode_global_id(relay.GlobalID("ApiCategoryNode", "7"), schema=schema) == (
+        category_node,
+        "7",
+    )
+    # Schema-less, the published spelling names nothing the registry knows.
+    with pytest.raises(ConfigurationError, match="'ApiCategoryNode'"):
+        decode_global_id(relay.GlobalID("ApiCategoryNode", "7"))
+
+
+def test_decode_with_schema_works_on_a_plain_strawberry_schema():
+    """The published-name table reads ``schema_converter.type_map``, which a plain schema has."""
+    category_node = _type_strategy_node("CategoryNode")
+    schema = _converted_schema(category_node, converter=_ApiPrefix(), schema_cls=strawberry.Schema)
+    assert type(schema) is strawberry.Schema
+    assert published_node_type_name(schema, category_node) == "ApiCategoryNode"
+
+
+@pytest.mark.parametrize(
+    ("prefixed", "name"),
+    [
+        (True, "ApiNode"),
+        (True, "_Shade"),
+        (True, "ApiQuery"),
+        (True, "ApiPlainCategory"),
+        (False, "Node"),
+        (False, "Query"),
+        (False, "PlainCategory"),
+    ],
+    ids=[
+        "prefixed-interface",
+        "prefixed-enum",
+        "prefixed-non-djangotype-object",
+        "prefixed-non-relay-djangotype",
+        "default-interface",
+        "default-non-djangotype-object",
+        "default-non-relay-djangotype",
+    ],
+)
+def test_decode_with_schema_refuses_a_name_published_as_no_relay_node(prefixed: bool, name: str):
+    """A published name that is not a Relay-Node ``DjangoType`` is refused with the registry's miss text.
+
+    Under the default converter the message is the one a schema-less decode gives
+    for the same name.
+    """
+    category_node = _type_strategy_node("CategoryNode")
+    plain = type(
+        "PlainCategory",
+        (DjangoType,),
+        {"Meta": _meta(model=Item, fields=("id", "name"))},
+    )
+    schema = _converted_schema(
+        category_node,
+        plain,
+        converter=_ApiPrefix() if prefixed else None,
+    )
+    assert schema.get_type_by_name(name) is not None
+    expected = f"No registered Relay-Node DjangoType has GraphQL type name '{name}'"
+    with pytest.raises(ConfigurationError, match=expected):
+        decode_global_id(relay.GlobalID(name, "1"), schema=schema)
+    if not prefixed:
+        with pytest.raises(ConfigurationError, match=expected):
+            decode_global_id(relay.GlobalID(name, "1"))
+
+
+def test_decode_with_schema_resolves_the_published_one_of_two_sharing_a_name():
+    """Two registered types sharing a ``graphql_type_name``: the schema publishing one names it.
+
+    Schema-less, the name is ambiguous across the registry; under a schema that
+    publishes only one of them, the slot names the published type.
+    """
+    category_node = _type_strategy_node("SharedNode")
+    item_node = type(
+        "ItemSharedNode",
+        (DjangoType,),
+        {
+            "Meta": _meta(
+                model=Item,
+                fields=("id", "name"),
+                interfaces=(relay.Node,),
+                globalid_strategy="type",
+                name="SharedNode",
+            ),
+        },
+    )
+    schema = _converted_schema(item_node)
+    assert decode_global_id(relay.GlobalID("SharedNode", "4"), schema=schema) == (item_node, "4")
+    assert published_node_type_name(schema, category_node) is None
+    with pytest.raises(ConfigurationError, match="ambiguous"):
+        decode_global_id(relay.GlobalID("SharedNode", "4"))
+
+
+def test_decode_with_schema_falls_back_for_a_type_the_schema_does_not_publish():
+    """The default spelling of an unpublished Relay type decodes as it would with no schema."""
+    category_node = _type_strategy_node("CategoryNode")
+    unpublished = _type_strategy_node("ItemNode", Item)
+    schema = _converted_schema(category_node, converter=_ApiPrefix())
+    assert published_node_type_name(schema, unpublished) is None
+    assert decode_global_id(relay.GlobalID("ItemNode", "3"), schema=schema) == (unpublished, "3")
+
+
+def test_decode_with_schema_refuses_the_default_spelling_of_a_renamed_type():
+    """``CategoryNode`` is published as ``ApiCategoryNode``, so its default spelling is refused."""
+    category_node = _type_strategy_node("CategoryNode")
+    schema = _converted_schema(category_node, converter=_ApiPrefix())
+    with pytest.raises(ConfigurationError, match="'CategoryNode' in this schema"):
+        decode_global_id(relay.GlobalID("CategoryNode", "3"), schema=schema)
+
+
+def test_decode_with_schema_keeps_the_registry_miss_for_an_unknown_name():
+    """A name neither the schema nor the registry knows keeps the registry's miss error."""
+    category_node = _type_strategy_node("CategoryNode")
+    schema = _converted_schema(category_node, converter=_ApiPrefix())
+    with pytest.raises(ConfigurationError, match="No registered Relay-Node DjangoType"):
+        decode_global_id(relay.GlobalID("Nowhere", "3"), schema=schema)
+
+
+def test_published_name_table_is_per_schema_and_built_once():
+    """Two schemas over one registry keep their own names; each table is memoized."""
+    category_node = _type_strategy_node("CategoryNode")
+    prefixed = _converted_schema(category_node, converter=_ApiPrefix())
+    default = _converted_schema(category_node)
+    assert published_node_type_name(prefixed, category_node) == "ApiCategoryNode"
+    assert published_node_type_name(default, category_node) == "CategoryNode"
+    assert decode_global_id(relay.GlobalID("CategoryNode", "1"), schema=default) == (
+        category_node,
+        "1",
+    )
+    assert _published_node_name_table(prefixed) is _published_node_name_table(prefixed)
+    assert _published_node_name_table(prefixed) == {category_node: "ApiCategoryNode"}

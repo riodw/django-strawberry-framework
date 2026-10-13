@@ -70,7 +70,7 @@ Spec: [Decision 5 — Precedence: `Meta.globalid_strategy` → `RELAY_GLOBALID_S
 
 ### Alternatives considered (and rejected)
 
-- **Resolve per request.** Rejected: the `GlobalID` format is a durable client contract; varying it per request would mint inconsistent IDs and defeat caching.
+- **Resolve per request.** Rejected: the `GlobalID` format is a durable client contract; varying it per request would mint inconsistent IDs and defeat caching. (The `type` slot's spelling is fixed per schema - the name that schema published - never per request.)
 - **Setting-only (no per-type override).** Rejected: the card wants per-type `Meta.globalid_strategy` so a consumer can keep one type type-scoped while the rest go model-anchored (disjoint auth/cache scopes).
 
 ## Decision 6 — `Meta.globalid_strategy` is a net-new `ALLOWED_META_KEYS` key, stored on the definition
@@ -111,16 +111,18 @@ Spec: [Decision 8 — Decode routes through Django's app registry then the frame
 
 - Django's `apps.get_model` is the canonical `app_label.model → model` resolver and the durable anchor the whole card is built on; routing through it (then `registry.get`) reuses the registry's existing primary-resolution contract rather than inventing a parallel label index.
 - Primary-routing matches how relation targets already resolve ([`DjangoTypeDefinition.related_target_for`][definition] uses `registry.get`), so a decoded ID and a traversed relation land on the same type.
-- Keying type-name decode on `graphql_type_name` (not `type_cls.__name__`) is the only spelling that round-trips a `type`-strategy ID: the encode side emits `graphql_type_name`, so the decode side must invert the same function or a [`Meta.name`][glossary-metaname] rename silently breaks refetch.
+- Keying type-name decode on the name the executing schema published (not `type_cls.__name__`) is the only spelling that round-trips a `type`-strategy ID: the encode side emits Strawberry's `info.path.typename` (`graphql_type_name` under the default `NameConverter`), so the decode side must invert the same function - that schema's own type map - or a [`Meta.name`][glossary-metaname] rename or a type-renaming converter silently breaks refetch. A schema-less decode has no published map to read and inverts the default converter's spelling instead.
 - Resolving the candidate's strategy and enforcing the payload shape (Step 2) is what gives each strategy its documented contract — without it the decoder is permissive-by-default and `model` / `type` / `type+model` collapse into one indistinguishable behavior.
 
 ### Alternatives considered (and rejected)
 
 - **Decode to a secondary type.** Rejected: ambiguous which secondary; the primary is the canonical relation-resolution target, and `type`-scoped IDs are the explicit path for disjoint scopes.
 - **A package-owned `{label: type}` index instead of Django's app registry.** Rejected: duplicates Django's model registry, misses proxy/MTI label resolution Django already handles, and drifts on app renames.
-- **Reuse Strawberry's native `GlobalID.resolve_type`.** Rejected: it is hardcoded to `info.schema.get_type_by_name(type_name)` (a GraphQL type name), so it cannot resolve a model label; the package must own the model-label dispatch.
+- **Reuse Strawberry's native `GlobalID.resolve_type`.** Rejected: it is hardcoded to `info.schema.get_type_by_name(type_name)` (a GraphQL type name), so it cannot resolve a model label; the package must own the model-label dispatch. Its type-name half is the lookup the package's published-name decode performs (the same `get_type_by_name` map), followed by the Relay-Node and recorded-strategy checks it lacks.
+- **One registry-wide spelling for the `type` slot (a framework closure emitting `graphql_type_name` on every `type` type).** Rejected: under a type-renaming converter the slot would differ from the client's `__typename`, giving up the standard-Relay payload the `type` strategy exists to keep; and one process-wide spelling cannot serve two schemas whose converters name one class differently.
+- **Refuse a type-renaming converter under the `type` strategy.** Rejected: a consumer `NameConverter` passed through `strawberry_config` is supported configuration; the fix is one naming authority per schema, not a forbidden combination.
 - **A permissive decoder that accepts any resolvable shape (no Step-2 strategy enforcement).** Rejected: it makes `type+model` indistinguishable from the default, lets a `model`-strategy type keep accepting stale type-anchored IDs, and dissolves the `type` strategy's type-scoped guarantee.
-- **Type-name decode via `type_cls.__name__`.** Rejected: the `type` strategy emits `graphql_type_name`, so a `Meta.name`-renamed type would emit its `Meta.name` value yet be undecodable by class name; decode must invert the encode function.
+- **Type-name decode via `type_cls.__name__`.** Rejected: the `type` strategy emits the schema-published name (`graphql_type_name` under the default converter), so a `Meta.name`-renamed type would emit its `Meta.name` value yet be undecodable by class name; decode must invert the encode function.
 - **Authorize a model-label payload's shape from the *set* of all registered definitions for the model (while still routing to the primary), instead of the finalization invariant.** Rejected in favor of the stricter invariant: it leaves the schema in a state where a model-label ID is *accepted* but its resolved row comes from the primary's `get_queryset`, not the emitter's — a subtler identity confusion than a loud finalization error, and harder to reason about. The invariant makes the misconfiguration impossible to ship.
 
 ## Decision 9 — Changing the default to `model` is a breaking wire-format change, acceptable pre-`1.0.0`
@@ -185,7 +187,7 @@ Spec: [Decision 13 — `GlobalID` filter validation is strategy-aware][spec-031-
 ### Justification
 
 - For the three framework strategies the `type_name` check is a defense-in-depth sanity guard, so making it strategy-aware keeps the guard where the label can be computed and never blocks a legitimate emitted ID. For `callable` / `custom` the framework cannot compute the expected label AND has no decode path, so the correct posture is to fail closed rather than degrade to node-id-only matching: an encode-only target's IDs are not framework-consumable, and accepting them on `node_id` alone would silently admit arbitrary payloads.
-- Reading the recorded `effective_globalid_strategy` keeps the filter layer on the single durable contract decode already uses — no second source of truth, no per-request settings read.
+- Reading the recorded `effective_globalid_strategy` keeps the filter layer on the single durable contract decode already uses — no second source of truth, no per-request settings read. The accepted type name is the one the executing schema published, read through the same per-schema table the decoder's forward half uses, so a filter and a `node(id:)` refetch accept the same `type` ids.
 - Rejecting at schema build (the [`_audit_globalid_filter_strategies`][finalizer] Phase-2.5 audit) surfaces the misconfiguration at the earliest fail-loud point; the runtime `GLOBALID_UNVALIDATABLE` `GraphQLError` in [`_decode_and_validate_global_id`][filters-base] only backstops hand-built filtersets that never went through binding.
 
 ### Alternatives considered (and rejected)

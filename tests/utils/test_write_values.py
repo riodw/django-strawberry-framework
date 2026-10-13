@@ -757,8 +757,9 @@ def test_decode_visible_relation_ids_accepts_global_id_members_with_one_query():
 
     A valid ``GlobalID`` beside a raw pk decodes both to real pks and confirms
     visibility in the single ``pk__in`` query (the GlobalID decode itself is
-    non-raising and query-free for a pk ``id_attr``); a wrong-model GlobalID
-    and a malformed pk token are the uniform field-keyed error.
+    non-raising and query-free for a pk ``id_attr``; it reads the executing schema
+    off ``info``); a wrong-model GlobalID and a malformed pk token are the uniform
+    field-keyed error.
     """
     from django.db import connection
     from django.test.utils import CaptureQueriesContext
@@ -783,7 +784,7 @@ def test_decode_visible_relation_ids_accepts_global_id_members_with_one_query():
             [relay.GlobalID("products.category", str(row.pk)), row.pk],
             graphql_name="categoryIds",
             related_model=Category,
-            info=unread_info(),
+            info=make_info(),
             async_recourse=recourse,
         )
     assert error is None
@@ -798,7 +799,7 @@ def test_decode_visible_relation_ids_accepts_global_id_members_with_one_query():
             [bad_gid],
             graphql_name="categoryIds",
             related_model=Category,
-            info=unread_info(),
+            info=make_info(),
             async_recourse=recourse,
         )
         assert pks is None

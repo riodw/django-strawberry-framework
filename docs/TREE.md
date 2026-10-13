@@ -712,6 +712,7 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── test_debug_toolbar_api.py     # Live HTTP tests for ``DebugToolbarMiddleware`` across GraphQL, panel, and pass-through routes.
 ├── test_error_policy_api.py      # Live ``/graphql/`` production-error-policy acceptance tests.
 ├── test_extension_isolation_api.py  # Live GraphQL HTTP tests for what one operation's extensions may be answered from.
+├── test_globalid_naming_api.py   # Live GraphQL HTTP tests for type-strategy GlobalIDs under a type-renaming name converter.
 ├── test_glossary_api.py          # Live GraphQL HTTP tests for the glossary docs-as-data API.
 ├── test_input_shapes_api.py      # Live GraphQL HTTP tests for the relation-id and payload-slot shapes of generated write inputs.
 ├── test_joined_relation_visibility_api.py  # Live GraphQL proof that a consumer JOIN never outranks a planned visibility ``Prefetch``.

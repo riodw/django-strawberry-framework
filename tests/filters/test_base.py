@@ -18,6 +18,7 @@ from collections.abc import Callable, Iterable, Iterator
 from typing import TypeVar
 
 import pytest
+import strawberry
 from apps.library import models
 from django.core.exceptions import ValidationError
 from django.db.models import Model, QuerySet
@@ -55,6 +56,7 @@ from django_strawberry_framework.filters.base import (
     _accepted_globalid_type_names,
     _bound_field_name,
     _decode_and_validate_global_id,
+    _filter_schema,
     _relation_uses_non_pk_to_field,
     _target_definition_for,
     membership_in_filter_class,
@@ -1015,6 +1017,33 @@ def test_accepted_globalid_type_names_per_strategy():
     assert _accepted_globalid_type_names(model_owner) == {"library.book"}
     assert _accepted_globalid_type_names(type_owner) == {"OwnerType"}
     assert _accepted_globalid_type_names(both_owner) == {"library.book", "OwnerType"}
+
+
+def test_accepted_globalid_type_names_keep_the_default_spelling_for_an_unpublished_target():
+    """A schema publishing no object type for the target keeps the ``graphql_type_name``.
+
+    Live siblings accept the schema-published name on every GlobalID filter shape
+    (``examples/fakeshop/test_query/test_globalid_naming_api.py``); a schema that
+    cannot emit an id for the target has only the type's own spelling to accept.
+    """
+
+    @strawberry.type
+    class Query:
+        ping: str = "pong"
+
+    schema = strawberry.Schema(query=Query)
+    assert _accepted_globalid_type_names(_owner("type"), schema) == {"OwnerType"}
+    assert _accepted_globalid_type_names(_owner("type+model"), schema) == {
+        "library.book",
+        "OwnerType",
+    }
+
+
+def test_filter_schema_is_none_outside_the_apply_pipeline():
+    """A filterset constructed directly carries no resolver ``info``, so no schema."""
+    f = _global_id_filter_with_owner("id", _owner("type"))
+    assert _filter_schema(f) is None
+    assert _filter_schema(GlobalIDFilter(field_name="id")) is None
 
 
 @pytest.mark.parametrize("strategy", ["callable", "custom", None])

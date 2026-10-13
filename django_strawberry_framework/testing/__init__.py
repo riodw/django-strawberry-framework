@@ -33,9 +33,10 @@ Currently exports
   ``django_strawberry_framework.testing.relay`` submodule path (NOT
   re-exported here - the dotted submodule path is the public one). Minting the
   strategy-aware encoded ``GlobalID`` a finalized Relay-Node-shaped type
-  emits, and decoding one back to ``(target_type, node_id)`` - see
-  :mod:`django_strawberry_framework.testing.relay` for the full contract,
-  including the secondary-emitter decode asymmetry. Keeping them out of this
+  emits, and decoding one back to ``(target_type, node_id)``, each optionally
+  under a given ``schema=`` (the published type names a ``type``-strategy id
+  carries) - see :mod:`django_strawberry_framework.testing.relay` for the full
+  contract, including the secondary-emitter decode asymmetry. Keeping them out of this
   ``__init__`` also keeps ``import django_strawberry_framework.testing``
   light - the submodule's ``types``-package imports are paid only by suites
   that import it (the client module's own ``django.test`` /

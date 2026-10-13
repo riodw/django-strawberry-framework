@@ -70,7 +70,7 @@ def global_id_for(
     type_cls: type[object],
     id: object,  # noqa: A002
     *,
-    schema: Schema | None = None,
+    schema: "Schema | None" = None,
 ) -> str:
     """Return the encoded ``GlobalID`` string ``type_cls`` emits for ``id``.
 

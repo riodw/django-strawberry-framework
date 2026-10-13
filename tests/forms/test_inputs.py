@@ -48,6 +48,7 @@ from apps.scalars import models as scalar_models
 from django import forms
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
+from django.db.models.expressions import Combinable
 from strawberry import UNSET, relay
 from strawberry.types.base import StrawberryList, StrawberryOptional, get_object_definition
 from strawberry.types.enum import StrawberryEnumDefinition
@@ -868,7 +869,7 @@ class _TaggedBook(models.Model):
 class _GroupedBook(models.Model):
     """An unmanaged owner of a ``status`` column declaring Django's grouped-choices form."""
 
-    status: models.CharField[str, str] = models.CharField(
+    status: models.CharField[str | int | Combinable, str] = models.CharField(
         max_length=4,
         choices=[("Shelf", [("a", "A"), ("b", "B")]), ("Desk", [("c", "C")])],
     )
@@ -881,10 +882,12 @@ class _GroupedBook(models.Model):
 class _PickedShelfNote(models.Model):
     """An unmanaged owner of a ``shelf`` foreign key that declares ``choices``."""
 
-    shelf: models.ForeignKey[library_models.Shelf, library_models.Shelf] = models.ForeignKey(
-        library_models.Shelf,
-        on_delete=models.CASCADE,
-        choices=[(1, "First"), (2, "Second")],
+    shelf: models.ForeignKey[library_models.Shelf | Combinable, library_models.Shelf] = (
+        models.ForeignKey(
+            library_models.Shelf,
+            on_delete=models.CASCADE,
+            choices=[(1, "First"), (2, "Second")],
+        )
     )
 
     class Meta:

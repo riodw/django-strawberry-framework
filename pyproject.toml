@@ -178,6 +178,7 @@ select = [
     "RSE",    # flake8-raise: raise hygiene (no redundant parens on bare raise)
     "RUF",    # Ruff-specific: unused-noqa (RUF100), mutable-class-default (RUF012), ...
     "SIM",    # flake8-simplify
+    "TC004",  # flake8-type-checking: TYPE_CHECKING-only import read at runtime (NameError <3.14)
     "TRY004", # tryceratops: raise TypeError (not a vanilla error) on a type-check failure
     "UP",     # pyupgrade
 ]
@@ -195,6 +196,10 @@ ignore = [
 [tool.ruff.lint.flake8-quotes]
 inline-quotes = "double"
 multiline-quotes = "double"
+
+[tool.ruff.lint.flake8-type-checking]
+# TC004 fixes an annotation by quoting it, keeping the import under TYPE_CHECKING.
+quote-annotations = true
 
 [tool.ruff.lint.flake8-unused-arguments]
 # Unused ``*args`` / ``**kwargs`` are signature padding for protocol/forward

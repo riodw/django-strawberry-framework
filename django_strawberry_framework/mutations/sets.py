@@ -87,7 +87,7 @@ from .permissions import DjangoModelPermission, run_permission_classes
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
-    from typing import Protocol, TypeAlias, TypeVar
+    from typing import Protocol, TypeAlias
 
     from strawberry.types import Info
     from strawberry.types.base import WithStrawberryObjectDefinition

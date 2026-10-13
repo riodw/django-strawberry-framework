@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 59 done, 150 to do.
+Progress: 60 done, 150 to do.
 
 ## Done
 
@@ -145,6 +145,11 @@ Progress: 59 done, 150 to do.
   writes a wrong value): they are reachable only as serializer-only fields, DRF checks every leaf with a field-keyed error
   (`f.0.0`), declared over any column they are refused at build, and neither graphene-django nor strawberry-django types nested
   choice lists as enums; no code. Found probing it: items 151-154
+- [x] 128. `testing/relay.py::global_id_for` annotated `schema` with a `TYPE_CHECKING`-only `Schema` in a module without
+  `from __future__ import annotations`, so importing the public module raised `NameError` on Python 3.10-3.13 (the CI floor
+  cell failed collection; nothing static caught it); the annotation is quoted (`7413c7b5`) and ruff `TC004` (quoting fix)
+  now fails an eager annotation naming a `TYPE_CHECKING`-only import (this commit); unreleased (no CHANGELOG
+  entry). Found fixing it: item 212
 
 ## Outside review of the fixes
 
@@ -271,9 +276,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 126. A plain `Form` `ChoiceField` publishes `String`, while a serializer-only `ChoiceField` publishes a generated enum
 - [ ] 127. Lead: a serializer single `ChoiceField` over an `ArrayField` may skip
   `_reject_choice_values_the_column_does_not_list` (`column.choices` is `None`) and publish a scalar enum
-- [ ] 128. `django_strawberry_framework/testing/relay.py::global_id_for` annotates `schema: Schema | None` with `Schema`
-  imported only under `TYPE_CHECKING` and no `from __future__ import annotations`: importing the public module raises
-  `NameError` on Python 3.10-3.13 (the floor run of `test_library_api.py` fails at collection; 3.14's lazy annotations hide it)
 - [ ] 131. ModelForm: a declared `ModelChoiceField` without `to_field_name` over a `to_field` ForeignKey fails every partial
   update that omits it ("Select a valid choice"): `forms/resolvers.py::_reconstruct_partial_data` refills it with the stored
   `to_field` value while the bound field resolves by pk (its docstring claims the attname is the key the field resolves)
@@ -433,6 +435,10 @@ not real bugs and just get deleted from t3. One checkbox per area:
   was reported but never reproduced
 - [ ] 195. Seen early in the fixes, re-check: `test_audit_marks_target_parse_failure_as_incomplete` (DRY-review export) fails at
   HEAD, and three `async_executor` tests are broken
+- [ ] 212. No static gate for a name defined inside a `TYPE_CHECKING` block (a `TypeVar`, `Protocol` or `TypeAlias`) used in
+  an eager annotation of a module without `from __future__ import annotations`: it raises `NameError` at import on 3.10-3.13
+  while ruff (`TC004` covers imports only, `F821` sees a binding) and basedpyright pass; six package modules define such names
+  (all quoted today); only the floor run of `tests/base/test_init.py` catches it
 
 ## To do: holes found re-checking the fixes
 

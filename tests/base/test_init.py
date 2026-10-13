@@ -432,6 +432,8 @@ def test_every_module_imports_without_django_stubs_ext_patch():
     settings), asserts the patch is absent, then imports every package module.
     ``debug_toolbar`` and ``STATIC_URL`` are there because
     ``middleware.debug_toolbar`` refuses to import without the app installed.
+    On 3.10-3.13 it is also the runtime catch for an eager annotation naming a
+    ``TYPE_CHECKING``-only import (ruff ``TC004`` is the static one).
     """
     result = _run_without_django_stubs_ext(_UNPATCHED_IMPORT)
     assert result.returncode == 0, result.stderr

@@ -11006,6 +11006,60 @@ def test_update_book_via_form_explicit_null_genres_is_form_required_error():
     assert set(book.genres.values_list("pk", flat=True)) == {genre.pk}
 
 
+_UPDATE_BOOK_AT_REPAIR_DESK = (
+    "mutation($id: ID!, $d: BookRepairDeskFormPartialInput!){ "
+    "updateBookAtRepairDeskViaForm(id:$id, data:$d){ node{ circulationStatus } "
+    "errors{ field messages } } }"
+)
+
+
+@pytest.mark.django_db
+def test_update_book_at_repair_desk_publishes_only_the_form_choices_over_http():
+    """A form ``ChoiceField`` narrower than its column publishes only the values it admits.
+
+    ``BookRepairDeskForm.circulation_status`` admits ``available`` / ``repair`` of the
+    column's three values, so the input enum carries those two: ``repair`` writes and reads
+    back through the read enum's same-named member, and ``checked_out`` is refused by enum
+    coercion with the row untouched, never reaching the form as an ``invalid_choice``.
+    """
+    from apps.library.schema import BookType
+
+    assert _enum_member_names("BookRepairDeskFormPartialInputCirculationStatusEnum") == [
+        "available",
+        "repair",
+    ]
+    book = models.Book.objects.create(
+        title="DeskBook",
+        shelf=_seed_shelf(),
+        circulation_status=models.Book.CirculationStatus.CHECKED_OUT,
+    )
+    book_id = global_id_for(BookType, book.pk)
+
+    response = _post_graphql(
+        _UPDATE_BOOK_AT_REPAIR_DESK,
+        variables={"id": book_id, "d": {"circulationStatus": "repair"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateBookAtRepairDeskViaForm"]
+    assert result == {"node": {"circulationStatus": "repair"}, "errors": []}
+    book.refresh_from_db()
+    assert book.circulation_status == "repair"
+
+    refused = _post_graphql(
+        _UPDATE_BOOK_AT_REPAIR_DESK,
+        variables={"id": book_id, "d": {"circulationStatus": "checked_out"}},
+    ).json()
+    assert refused.get("data") is None
+    assert (
+        "does not exist in 'BookRepairDeskFormPartialInputCirculationStatusEnum'"
+        in (refused["errors"][0]["message"])
+    )
+    book.refresh_from_db()
+    assert book.circulation_status == "repair"
+
+
 @pytest.mark.django_db
 def test_update_book_via_form_partial_update_preserves_optional_nullable_scalar_over_http():
     """A ``title``-only ``updateBookViaForm`` preserves the OMITTED optional ``subtitle``.

@@ -114,7 +114,9 @@ vocabulary used throughout the spec:
   [`Upload` scalar][glossary-upload-scalar] — the converters the form-field mapping
   reuses where a form field's type overlaps a Django column type (so a
   form-derived input field resolves to the same scalar / enum / `Upload` the
-  read side and the `036` model-driven input use)
+  read side and the `036` model-driven input use; a choice field whose static
+  choices admit fewer of the column's values publishes a generated enum of the
+  values it admits)
   ([Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)).
 - [`ConfigurationError`][glossary-configurationerror] /
   [`SyncMisuseError`][glossary-syncmisuseerror] — the validation / misuse
@@ -185,7 +187,8 @@ package-internal; Slice 4 is the live consumer surface.
     and class. Where a form field maps to a Django column type the read side already
     converts, reuse the [Scalar field conversion][glossary-scalar-field-conversion] /
     [Choice enum generation][glossary-choice-enum-generation] registry rather than
-    re-deriving the scalar.
+    re-deriving the scalar; a choice field whose static choices admit fewer of a choice
+    column's values publishes a generated enum of the admitted column values instead.
     Record, per generated input field, a
     [`utils/inputs.py`][utils-inputs]`::InputFieldSpec` — the one reverse-map record
     type every write flavor shares, whose `target_name` on this path is the form's
@@ -992,7 +995,24 @@ on `models.Field` subclasses (an MRO walk), **not** on `forms.Field`: the overla
 reuse is reachable only for a **`ModelForm`** field that has a backing column —
 resolve it via `form_class._meta.model._meta.get_field(name)` and route the column
 through `convert_scalar` / `convert_choices_to_enum` (and a relation through
-[`mutations/inputs.py`][mutations-inputs] `relation_input_annotation`). A **plain
+[`mutations/inputs.py`][mutations-inputs] `relation_input_annotation`). The form validates
+the value, so a choice field whose **static choices admit fewer of the column's
+values than the column lists** publishes a generated `<Input><Field>Enum` of exactly the
+admitted values instead (members and values the column's, flattened from a grouped column;
+`BLANK` only where the column lists `""` and the form admits it: a single-value field that is
+not required, or a list field whose choices list `""`),
+built by the shared `build_enum_from_choices` core
+(`django_strawberry_framework/forms/inputs.py::_form_choice_narrowing`); a field admitting
+every listed value (Django's generated `TypedChoiceField`, an equal set, a superset whose
+extra values the column never stores) keeps the read enum. A `MultipleChoiceField` narrows
+an `ArrayField`'s `base_field` elements and is a schema-build
+[`ConfigurationError`][glossary-configurationerror] over a single-value choice column (it
+writes a list); a field admitting no non-empty value the column lists is a
+`ConfigurationError` (its input could carry at most the empty value, so no non-empty value
+passes the form). The input is built once, at schema
+build, from the field basis, so callable choices (re-evaluated on every read) and choices
+assigned in `__init__` are request-time state: they keep the column's enum and the bound form
+refuses a value outside its request-time choices. A **plain
 `Form`** field with no model column (a `captcha`, a `confirm_email`) has no read-side
 equivalent and necessarily uses the form-field → Strawberry table in
 [`forms/converter.py`][forms-converter] — which is therefore genuinely net-new
@@ -1106,8 +1126,9 @@ effective field set)` ([`mutations/inputs.py`][mutations-inputs]
 `mutation_input_shape` / `mutation_input_type_name`) plus one component the form
 flavor needs. The fourth component is the **basis content** the `get_form_fields` hook
 contributes, not a fifth concept: `forms/inputs.py::_form_basis_content_identity`
-projects each basis field to its converter-dispatch type, its requiredness and a
-column-less relation field's related model, so two mutations over one form whose hooks
+projects each basis field to its converter-dispatch type, its requiredness, a
+column-less relation field's related model and the column values a choice field narrows
+its enum to, so two mutations over one form whose hooks
 produce identical bases dedupe onto one input, and any content difference builds a
 separate one. The **operation kind** component is the
 `DjangoModelFormMutation`'s `"create"` / `"update"`, or the fixed sentinel **`"form"`**
@@ -1567,12 +1588,14 @@ plain `ContactForm`, and `products/schema.py` exposes them via
   `DefaultCategoryItemModelForm` (the write-time `IntegrityError` case),
   `StampedItemModelForm` (kwarg-requiring, the `get_form_kwargs` case), `ContactForm`
   and `PingForm` (the `DenyAll` default).
-- **`library`** — `CreateShelfViaForm`, `UpdateBookViaForm`, `CreateBranchWithShelf`
-  and `CreateBranchPair` over `ShelfRelationsForm` / `BookGenresModelForm` /
-  `BranchWithShelfForm` / `BranchPairForm`. Library carries the cases products cannot:
+- **`library`** — `CreateShelfViaForm`, `UpdateBookViaForm`, `UpdateBookAtRepairDeskViaForm`,
+  `CreateBranchWithShelf` and `CreateBranchPair` over `ShelfRelationsForm` /
+  `BookGenresModelForm` / `BookRepairDeskForm` / `BranchWithShelfForm` / `BranchPairForm`. Library carries the cases products cannot:
   the **non-Relay raw-pk** relation decode, the `to_field_name` conversion, the
   request-scoped-`queryset` idiom, the plain-form `perform_mutate` rollback, and the
-  write-time blank integer choice column (`Shelf.tier`).
+  write-time blank integer choice column (`Shelf.tier`), and the narrowed form choice field
+  (`UpdateBookAtRepairDeskViaForm` over `BookRepairDeskForm`, whose `circulation_status`
+  admits two of the column's three values).
 - **`scalars`** — `CreateMediaSpecimenImageViaForm`, the image-column flavor of the
   `Upload` routing.
 
@@ -1650,7 +1673,7 @@ Rationale companion: [Decision 14][rationale-d14].
 
 | Slice | Files | Tests |
 | --- | --- | --- |
-| 1 — form-field converter + reverse map + the two form-derived inputs | [`forms/converter.py`][forms-converter] (`convert_form_field` fail-loud dispatch + the four `kind` constants, re-exported from [`utils/inputs.py`][utils-inputs]), [`forms/inputs.py`][forms-inputs] (`<FormClass>Input` + `<FormClass>PartialInput` from `base_fields`, the per-field [`utils/inputs.py`][utils-inputs]`::InputFieldSpec` reverse-map record, shape identity, narrowing + create / partial required guards, `get_form_fields()` basis), [`forms/__init__.py`][forms-init] | [`tests/forms/test_converter.py`][test-forms] + [`tests/forms/test_inputs.py`][test-forms] — every form-field class, id mapping, `Upload`, the reverse-map + `kind` flag, custom-field raise, `base_fields` discovery, the create + partial input shapes, shape-identity collision/dedupe, `Meta.fields`/`exclude` fail-loud + empty-set + required guards |
+| 1 — form-field converter + reverse map + the two form-derived inputs | [`forms/converter.py`][forms-converter] (`convert_form_field` fail-loud dispatch + the four `kind` constants, re-exported from [`utils/inputs.py`][utils-inputs]), [`forms/inputs.py`][forms-inputs] (`<FormClass>Input` + `<FormClass>PartialInput` from `base_fields`, the per-field [`utils/inputs.py`][utils-inputs]`::InputFieldSpec` reverse-map record, a choice field's narrowed column enum, shape identity, narrowing + create / partial required guards, `get_form_fields()` basis), [`forms/__init__.py`][forms-init] | [`tests/forms/test_converter.py`][test-forms] + [`tests/forms/test_inputs.py`][test-forms] — every form-field class, id mapping, `Upload`, the reverse-map + `kind` flag, custom-field raise, `base_fields` discovery, the create + partial input shapes, shape-identity collision/dedupe, `Meta.fields`/`exclude` fail-loud + empty-set + required guards |
 | 2 — the two base classes + `Meta` validation + bind seams | [`forms/sets.py`][forms-sets] (the form bases, their declaration registry via the shared `make_declaration_registry`), [`mutations/sets.py`][mutations-sets] (the overridable `_validate_meta` / `build_input` / `input_type_name` / `input_module_path` / `resolve_sync` / `resolve_async` seams, model-defaulted), [`mutations/inputs.py`][mutations-inputs] (`build_payload_type` emits the model-less `{ ok errors }` plain-form payload from the same builder + materialize ledger, selected by a `resolve_object_type` returning `None`), [`types/finalizer.py`][types-finalizer] (`bind_form_mutations()` in phase 2.5), the three form clear rows announced via `register_subsystem_clear` and drained by [`registry.py`][registry]'s `iter_subsystem_clears()`, [`__init__.py`][init] (two exports) | [`tests/forms/test_sets.py`][test-forms] + [`tests/mutations/test_sets.py`][test-mutations] — `Meta` matrix incl. `delete`-rejected + `form_class`-accepted, both bind paths, no-primary error, model-flavor seam defaults |
 | 3 — form relation decoder + resolver pipeline + field-factory dispatch | [`forms/resolvers.py`][forms-resolvers] (the visibility-on-every-branch form relation decoder, the `kind`-split decode, the partial-update reconstruction, the sync/async entries over `run_write_pipeline_sync`), [`forms/sets.py`][forms-sets] (`resolve_*` seams via `resolver_seams`, `get_form_kwargs` / `get_form` construction hooks on both bases, `perform_mutate` / `check_permission` on the plain base, the `guard_required` waiver, `_input_field_specs` stashed at bind for the decode reverse map), [`mutations/fields.py`][mutations-fields] (duck-typed `_has_mutation_protocol` target check, `resolve_sync` / `resolve_async` dispatch with the `operation != "form"` `id` gate, `data:` lazy-ref via `input_type_name` / `input_module_path`) | [`tests/forms/test_resolvers.py`][test-forms] + [`tests/mutations/test_fields.py`][test-mutations] — create/update, decode `data=`/`files=` split, relation visibility on Relay **and** raw-pk single+multi, `to_field_name`, `IntegrityError` envelope, `get_form_kwargs`/`get_form` hooks, partial-update preservation + required-extra rule, envelope + `"__all__"`, plain-form `ok`+`errors`, visibility locate, write-auth, sync+async, G2 plan-shape, model-flavor dispatch |
 | 4 — products live form surface | [`products/forms.py`][products-forms], [`products/schema.py`][products-schema], `Item.attachment` | [`test_products_api.py`][test-products-api] — live create/update via `ModelForm`, `categoryId`-through-form, partial-update preservation, `form.errors` envelope, write-auth, a raw multipart `Upload` test, plain-form success + validation + deny-by-default |
@@ -1699,6 +1722,11 @@ Rationale companion: [Decision 14][rationale-d14].
   read side uses ([Choice enum generation][glossary-choice-enum-generation]); the
   decode unwraps the enum member to its raw choice value before the form sees it
   (through the shared [`utils/write_values.py`][utils-write-values]`::raw_choice_value`).
+  A declared field whose static choices admit fewer of the column's values publishes the
+  generated enum of the admitted values ([Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth));
+  one admitting none of the column's non-empty values, or a `MultipleChoiceField` over a
+  single-value choice column,
+  is a schema-build `ConfigurationError`.
 - **Relation visibility is not delegated to the form's queryset.** A
   `ModelChoiceField`'s default queryset is `Category.objects.all()` (not
   request-scoped), so the decode type- and visibility-checks the id through the
@@ -1802,7 +1830,9 @@ behavior reachable through `/graphql/`, package tests own internals.
   `__init__` requires it (the construction-hook migration case); the plain `Form`
   mutation's **success** (`ok: true`, empty `errors`) **and** validation-failure
   (`ok: false`, field-keyed `errors`) shapes, and the deny-by-default plain form
-  (`submitPing`, top-level denial). **Write-time `IntegrityError`** — a valid
+  (`submitPing`, top-level denial). **Narrowed choice field** — `updateBookAtRepairDeskViaForm`
+  publishes only the two `circulationStatus` members `BookRepairDeskForm` admits, `repair`
+  writes, and `checked_out` is an enum-coercion error with no write. **Write-time `IntegrityError`** — a valid
   `ModelForm.save()` that hits a constraint the form's validation excluded
   (`createDefaultCategoryItemViaForm`) surfaces the **`FieldError` envelope**, not a
   top-level GraphQL error. **Write-time blank non-text choice column** — an explicit
@@ -1825,7 +1855,13 @@ behavior reachable through `/graphql/`, package tests own internals.
     fields optional, **a required non-model extra field still required**); fields
     from `form_class.base_fields` (no instantiation; an overridable `get_form_fields()`
     honored), narrowed by `Meta.fields` / `Meta.exclude`; materialization as
-    a module global; a form-only (non-model) field included. **Shape identity:**
+    a module global; a form-only (non-model) field included. **Narrowed choice
+    fields:** a subset (typed, optional, grouped, declared empty option) publishes the
+    admitted values on both inputs, an equal / superset / callable / per-request set keeps
+    the read enum, `BLANK` follows `required`, an integer column keeps its `int` values, an
+    `ArrayField` narrows its elements, a grouped column binds a narrowed field and refuses
+    one admitting every value, and a disjoint field and a `MultipleChoiceField` over a
+    single-value column are refused. **Shape identity:**
     the same form with two different `Meta.fields` narrowings → two **distinct**
     generated names; two repeats of the **same** `(form_class, op, effective set)` →
     **dedupe** (one materialized class); two **different** form classes with the
@@ -1841,7 +1877,9 @@ behavior reachable through `/graphql/`, package tests own internals.
     missing field(s), waived when `get_form_kwargs` is overridden**;
     **`Meta.fields` bare-string / duplicate-name / unknown-name against
     `form.base_fields`**; `fields` + `exclude` both set; unknown key); **plain-form
-    input dedupe via the `"form"` sentinel**; registration; phase-2.5 binding (both
+    input dedupe via the `"form"` sentinel**; a stateful `get_form_fields` hook narrowing a
+    choice field differently per class → the materialize collision (the narrowed values are
+    part of the basis content identity); registration; phase-2.5 binding (both
     paths); the no-registered-primary-type error for `DjangoModelFormMutation`.
   - `test_resolvers.py` — create / update happy paths; `form.is_valid()` failure →
     envelope (null object), incl. a `NON_FIELD_ERRORS` `clean()` error → `"__all__"`;
@@ -1955,7 +1993,9 @@ The completion contract.
    `NullBooleanField` requiredness rule single-sited in `form_field_required` — reusing
    the read-side [scalar][glossary-scalar-field-conversion] /
    [choice-enum][glossary-choice-enum-generation] /
-   [`Upload`][glossary-upload-scalar] converters where overlapping) with a **fail-loud
+   [`Upload`][glossary-upload-scalar] converters where overlapping; a choice field
+   admitting fewer of its column's values publishes the generated enum of the values it
+   admits) with a **fail-loud
    dispatch — no base-`forms.Field` catch-all**: a bare `forms.Field` → `str` (exact
    special case), a known subclass maps via MRO, but a custom `forms.Field` subclass
    hits the **raising** default → [`ConfigurationError`][glossary-configurationerror]
@@ -1973,7 +2013,7 @@ The completion contract.
    operation component is the `DjangoModelFormMutation` verb or the plain `"form"`
    sentinel, and the fourth component is
    `forms/inputs.py::_form_basis_content_identity` (each basis field's dispatch type,
-   requiredness and column-less related model) — with canonical /
+   requiredness, column-less related model and narrowed choice values) — with canonical /
    shape-derived names, dedupe, and a finalize-time **collision
    [`ConfigurationError`][glossary-configurationerror]** for two distinct shapes on one
    name (incl. different forms sharing a `__name__`, which always collide);

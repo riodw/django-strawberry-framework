@@ -13,7 +13,9 @@ that HAS a backing model column routes through the read-side
 ``convert_scalar`` / ``convert_choices_to_enum`` / ``relation_input_annotation``
 at the ``forms/inputs.py`` build site (keyed on the resolved ``models.Field``),
 so a ``choices`` form field resolves to the SAME generated enum the read
-``DjangoType`` synthesizes (the symmetric wire contract). The two key spaces -
+``DjangoType`` synthesizes (the symmetric wire contract), unless its static choices
+admit fewer of the column's values, when it publishes the generated enum of the
+admitted values (``forms/inputs.py::_form_choice_narrowing``). The two key spaces -
 ``forms.Field`` here, ``models.Field`` on the read side - stay strictly separate.
 
 **Fail-loud dispatch.** The registry registers each supported class
@@ -166,8 +168,9 @@ def _kind_converter(kind: str, annotation: object = None) -> FormFieldConverter:
 # through the MRO walk in ``convert_form_field`` - ``EmailField`` / ``SlugField``
 # / ``URLField`` / ``RegexField`` resolve under ``CharField``, the parity
 # behavior. ``ChoiceField`` -> ``str`` is the model-less default; a ``ChoiceField``
-# over a ModelForm model's ``choices`` is routed through the read-side enum at the
-# build site instead. ``ModelChoiceField`` / ``ModelMultipleChoiceField`` /
+# over a ModelForm model's ``choices`` is routed through the read-side enum (or the
+# enum of the column values it admits) at the build site instead.
+# ``ModelChoiceField`` / ``ModelMultipleChoiceField`` /
 # ``MultipleChoiceField`` / ``FileField`` / ``ImageField`` are deliberately NOT in
 # this scalar table - they resolve by ``kind`` in ``convert_form_field`` before the
 # walk reaches it.

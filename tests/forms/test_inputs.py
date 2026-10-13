@@ -13,7 +13,10 @@ substrate):
   ``FileField`` -> ``Upload`` mapping, and the reverse map (``category`` ->
   ``category_id`` / ``categoryId`` / ``relation_single``);
 - the ``ChoiceField``-over-model-``choices`` symmetric-enum reuse (proves the
-  overlap routes through the read converter, not a parallel table);
+  overlap routes through the read converter, not a parallel table), and a choice
+  field admitting fewer of the column's values publishing the generated enum of the
+  admitted values (or refused at build when it admits no non-empty one, or writes a
+  list over a single-value column);
 - ``Meta.fields`` / ``Meta.exclude`` narrowing + fail-loud, the empty-effective-set
   raise, and the create-required-narrowing guard + its waiver;
 - shape-identity dedupe + the distinct-shape / same-``__name__`` collision raise
@@ -32,7 +35,8 @@ fail-loud, shape identity, and throwaway-type id mapping.
 from __future__ import annotations
 
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from enum import Enum
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
@@ -43,11 +47,12 @@ from apps.products import models as product_models
 from apps.scalars import models as scalar_models
 from django import forms
 from django.core.exceptions import FieldDoesNotExist
+from django.db import models
 from strawberry import UNSET, relay
-from strawberry.types.base import StrawberryOptional, get_object_definition
+from strawberry.types.base import StrawberryList, StrawberryOptional, get_object_definition
 from strawberry.types.enum import StrawberryEnumDefinition
 from strawberry.types.field import StrawberryField
-from typing_extensions import override
+from typing_extensions import Never, override
 
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -637,6 +642,378 @@ def test_choices_modelform_field_resolves_to_read_side_enum():
     inner = _inner_type(fields["circulation_status"])
     assert isinstance(inner, StrawberryEnumDefinition)
     assert inner.wrapped_cls is read_enum
+
+
+# ---------------------------------------------------------------------------
+# A choice field admitting fewer of the column's values -> a generated enum
+# ---------------------------------------------------------------------------
+
+_DESK_CHOICES = [("available", "Available"), ("repair", "Repair")]
+_ALL_STATUS_CHOICES = [*_DESK_CHOICES, ("checked_out", "Checked out")]
+
+
+def _book_status_form(status_field: forms.Field) -> FormClass:
+    """A ``Book`` ``ModelForm`` declaring ``circulation_status`` as ``status_field``."""
+
+    class BookStatusForm(forms.ModelForm[library_models.Book]):
+        circulation_status = status_field
+
+        class Meta:
+            model = library_models.Book
+            fields = ("title", "circulation_status")
+
+    return BookStatusForm
+
+
+def _shelf_form(name: str, shelf_field: forms.Field) -> FormClass:
+    """A ``Shelf`` ``ModelForm`` declaring the ``name`` column's field as ``shelf_field``."""
+    meta = type("Meta", (), {"model": library_models.Shelf, "fields": (name,)})
+    return type("ShelfChoiceForm", (forms.ModelForm,), {name: shelf_field, "Meta": meta})
+
+
+def _enum_of(field: StrawberryField) -> type[Enum]:
+    """Return the enum class a generated input field publishes."""
+    inner = _inner_type(field)
+    assert isinstance(inner, StrawberryEnumDefinition)
+    enum_cls = inner.wrapped_cls
+    assert issubclass(enum_cls, Enum)
+    return enum_cls
+
+
+def _members(enum_cls: type[Enum]) -> dict[str, object]:
+    return {member.name: member.value for member in enum_cls}
+
+
+@pytest.mark.parametrize(
+    "status_field",
+    [
+        pytest.param(
+            lambda: forms.TypedChoiceField(choices=_DESK_CHOICES, coerce=str),
+            id="typed-choice",
+        ),
+        pytest.param(
+            lambda: forms.ChoiceField(choices=_DESK_CHOICES, required=False),
+            id="optional",
+        ),
+        pytest.param(
+            lambda: forms.ChoiceField(choices=[("Desk", _DESK_CHOICES)]),
+            id="grouped",
+        ),
+        pytest.param(
+            lambda: forms.ChoiceField(choices=[("", "---"), *_DESK_CHOICES], required=False),
+            id="declared-empty-option",
+        ),
+    ],
+)
+def test_choice_field_narrower_than_column_publishes_admitted_values(
+    status_field: Callable[[], forms.Field],
+):
+    """A choice field admitting fewer of the column's values publishes only those values.
+
+    ``Book.circulation_status`` lists ``available`` / ``checked_out`` / ``repair`` and lists
+    no ``""`` (not ``blank``), so a field admitting ``available`` / ``repair`` publishes a
+    generated ``<Input><Field>Enum`` of exactly those two, members and values the column's,
+    on both the create and the partial input; the read enum is left untouched.
+    """
+    from django_strawberry_framework.types.converters import convert_choices_to_enum
+
+    column = library_models.Book._meta.get_field("circulation_status")
+    assert isinstance(column, models.Field)
+    read_enum = convert_choices_to_enum(column, "BookType")
+    form_class = _book_status_form(status_field())
+    cre, _, par, _ = build_form_inputs(form_class, operation_kind=CREATE)
+    for input_cls, enum_name in (
+        (cre, "BookStatusFormInputCirculationStatusEnum"),
+        (par, "BookStatusFormPartialInputCirculationStatusEnum"),
+    ):
+        enum_cls = _enum_of(_field_map(input_cls)["circulation_status"])
+        assert enum_cls is not read_enum
+        assert enum_cls.__name__ == enum_name
+        assert _members(enum_cls) == {"available": "available", "repair": "repair"}
+    assert len(read_enum) == 3
+
+
+@pytest.mark.parametrize(
+    "status_field",
+    [
+        pytest.param(lambda: forms.ChoiceField(choices=_ALL_STATUS_CHOICES), id="equal"),
+        pytest.param(
+            lambda: forms.ChoiceField(choices=[*_ALL_STATUS_CHOICES, ("archived", "Archived")]),
+            id="superset",
+        ),
+        pytest.param(lambda: forms.ChoiceField(choices=lambda: _DESK_CHOICES), id="callable"),
+        pytest.param(lambda: forms.ChoiceField(choices=[]), id="assigned-per-request"),
+        pytest.param(lambda: forms.CharField(), id="not-a-choice-field"),
+    ],
+)
+def test_choice_field_admitting_every_column_value_keeps_read_enum(
+    status_field: Callable[[], forms.Field],
+):
+    """A field admitting every column value, or with no static choices, keeps the read enum.
+
+    An equal set and a superset (whose extra value the column never stores, and the enum
+    cannot carry) admit every value the column lists. Callable choices and an empty
+    class-level set (choices assigned per request in ``__init__``) are not known at build,
+    so the column's read enum is published and the bound form refuses at request time.
+    """
+    from django_strawberry_framework.types.converters import convert_choices_to_enum
+
+    column = library_models.Book._meta.get_field("circulation_status")
+    assert isinstance(column, models.Field)
+    read_enum = convert_choices_to_enum(column, "BookType")
+    cre, _, _, _ = build_form_inputs(_book_status_form(status_field()), operation_kind=CREATE)
+    assert _enum_of(_field_map(cre)["circulation_status"]) is read_enum
+
+
+@pytest.mark.parametrize(
+    ("required", "members"),
+    [(False, ["BLANK", "good", "worn"]), (True, ["good", "worn"])],
+)
+def test_choice_field_narrowing_keeps_blank_only_when_the_form_admits_it(
+    required: bool,
+    members: list[str],
+):
+    """``BLANK`` stays only where the form admits ``""``: a field that is not required.
+
+    ``Shelf.condition`` is ``blank=True``, so the column lists ``""``. A single-value
+    ``ChoiceField`` passes ``""`` without reading its choices when it is not required and
+    refuses it as required otherwise, so the narrowed enum keeps ``BLANK`` exactly then.
+    """
+    form_class = _shelf_form(
+        "condition",
+        forms.ChoiceField(choices=[("good", "G"), ("worn", "W")], required=required),
+    )
+    cre, _, _, _ = build_form_inputs(form_class, operation_kind=CREATE)
+    assert list(_members(_enum_of(_field_map(cre)["condition"]))) == members
+
+
+def test_typed_choice_field_narrowing_over_integer_column_keeps_column_values():
+    """An integer column's narrowed members carry the column's ``int`` values.
+
+    ``Shelf.tier`` is an ``IntegerChoices`` column; a ``TypedChoiceField(coerce=int)``
+    declaring ``"1"`` / ``"2"`` admits the column's ``1`` / ``2`` (Django's ``valid_value``
+    also compares as ``str``), so the generated enum holds the column's values.
+    """
+    form_class = _shelf_form(
+        "tier",
+        forms.TypedChoiceField(choices=[("1", "Low"), ("2", "Mid")], coerce=int),
+    )
+    cre, _, _, _ = build_form_inputs(form_class, operation_kind=CREATE)
+    assert _members(_enum_of(_field_map(cre)["tier"])) == {"MEMBER_1": 1, "MEMBER_2": 2}
+
+
+def test_choice_field_admitting_no_column_value_is_refused():
+    """A field admitting no non-empty value the column lists is refused at build."""
+    form_class = _book_status_form(forms.ChoiceField(choices=[("lost", "Lost")]))
+    with pytest.raises(
+        ConfigurationError,
+        match="admits none of the non-empty values the choice column",
+    ):
+        build_form_inputs(form_class, operation_kind=CREATE)
+
+
+def test_multiple_choice_field_over_single_value_choice_column_is_refused():
+    """A ``MultipleChoiceField`` writes a list, which no single-value choice column lists."""
+    form_class = _book_status_form(forms.MultipleChoiceField(choices=_DESK_CHOICES))
+    with pytest.raises(ConfigurationError, match="over the single-value choice column"):
+        build_form_inputs(form_class, operation_kind=CREATE)
+
+
+def test_choice_field_whose_valid_value_raises_is_refused_typed():
+    """A broken ``valid_value`` is a typed build error naming the form field."""
+
+    class BrokenChoiceField(forms.ChoiceField):
+        @override
+        def valid_value(self, value: object) -> bool:
+            raise RuntimeError("broken")
+
+    form_class = _book_status_form(BrokenChoiceField(choices=_DESK_CHOICES))
+    with pytest.raises(ConfigurationError, match="valid_value raised RuntimeError: broken"):
+        build_form_inputs(form_class, operation_kind=CREATE)
+
+
+class _FakeArrayField(models.Field[object, object]):
+    """An ``ArrayField`` stand-in: ``django.contrib.postgres`` needs a Postgres driver.
+
+    Mirrors the real field's metadata propagation, so ``base_field`` carries the model and the
+    name the element enum and the narrowing read.
+    """
+
+    def __init__(self, base_field: models.Field[Never, object]):
+        super().__init__()
+        self.base_field = base_field
+
+    @override
+    def contribute_to_class(
+        self,
+        cls: type[models.Model],
+        name: str,
+        private_only: bool = False,
+    ) -> None:
+        super().contribute_to_class(cls, name, private_only=private_only)
+        self.base_field.set_attributes_from_name(name)
+        self.base_field.model = cls
+
+
+class _TaggedBook(models.Model):
+    """An unmanaged owner of a ``tags`` array column whose ``base_field`` lists ``a`` / ``b``."""
+
+    tags = _FakeArrayField(models.CharField(max_length=5, choices=[("a", "A"), ("b", "B")]))
+
+    class Meta:
+        managed = False
+        app_label = "test_forms_array_choices"
+
+
+class _GroupedBook(models.Model):
+    """An unmanaged owner of a ``status`` column declaring Django's grouped-choices form."""
+
+    status: models.CharField[str, str] = models.CharField(
+        max_length=4,
+        choices=[("Shelf", [("a", "A"), ("b", "B")]), ("Desk", [("c", "C")])],
+    )
+
+    class Meta:
+        managed = False
+        app_label = "test_forms_grouped_choices"
+
+
+class _PickedShelfNote(models.Model):
+    """An unmanaged owner of a ``shelf`` foreign key that declares ``choices``."""
+
+    shelf: models.ForeignKey[library_models.Shelf, library_models.Shelf] = models.ForeignKey(
+        library_models.Shelf,
+        on_delete=models.CASCADE,
+        choices=[(1, "First"), (2, "Second")],
+    )
+
+    class Meta:
+        managed = False
+        app_label = "test_forms_relation_choices"
+
+
+def test_choice_field_over_non_choice_column_keeps_column_type():
+    """A choice field over a column without choices keeps the column's scalar.
+
+    ``Book.title`` lists no choices, so there is no column value to narrow to: the field
+    publishes the column's ``str`` and the form validates its own choices at request time.
+    """
+    form_class = type(
+        "BookTitlePickForm",
+        (forms.ModelForm,),
+        {
+            "title": forms.ChoiceField(choices=[("Dune", "Dune")]),
+            "Meta": type("Meta", (), {"model": library_models.Book, "fields": ("title",)}),
+        },
+    )
+    cre, _, _, _ = build_form_inputs(form_class, operation_kind=CREATE)
+    assert _inner_type(_field_map(cre)["title"]) is str
+
+
+def test_choice_field_over_relation_column_with_choices_keeps_relation_input():
+    """A relation column declaring choices keeps its id input and relation kind.
+
+    The decode routes a value by its spec ``kind``, so a choice field narrower than the
+    foreign key's ``choices`` still publishes the ``shelfId`` relation input, never an enum
+    of pk values under a scalar kind.
+    """
+    meta = type("Meta", (), {"model": _PickedShelfNote, "fields": ("shelf",)})
+    shelf_field = forms.TypedChoiceField(choices=[(1, "First")], coerce=int)
+    form_class = type("ShelfPickForm", (forms.ModelForm,), {"shelf": shelf_field, "Meta": meta})
+    cre, specs, _, _ = build_form_inputs(form_class, operation_kind=CREATE)
+    assert list(_field_map(cre)) == ["shelf_id"]
+    assert [spec.kind for spec in specs] == [RELATION_SINGLE]
+
+
+def _list_enum_of(field: StrawberryField) -> type[Enum]:
+    """Return the element enum class of a generated ``list[<enum>]`` input field."""
+    outer = _inner_type(field)
+    assert isinstance(outer, StrawberryList)
+    element = outer.of_type
+    assert isinstance(element, StrawberryEnumDefinition)
+    enum_cls = element.wrapped_cls
+    assert issubclass(enum_cls, Enum)
+    return enum_cls
+
+
+@pytest.mark.parametrize(
+    ("tags_field", "members", "keeps_read_enum"),
+    [
+        pytest.param(
+            lambda: forms.MultipleChoiceField(choices=[("a", "A")]),
+            {"a": "a"},
+            False,
+            id="multiple-subset",
+        ),
+        pytest.param(
+            lambda: forms.MultipleChoiceField(choices=[("a", "A"), ("b", "B"), ("c", "C")]),
+            {"a": "a", "b": "b"},
+            True,
+            id="multiple-superset",
+        ),
+        pytest.param(
+            lambda: forms.ChoiceField(choices=[("a", "A")]),
+            {"a": "a", "b": "b"},
+            True,
+            id="single-value",
+        ),
+    ],
+)
+def test_array_choice_column_narrows_its_elements(
+    monkeypatch: pytest.MonkeyPatch,
+    tags_field: Callable[[], forms.Field],
+    members: dict[str, object],
+    keeps_read_enum: bool,
+):
+    """A ``MultipleChoiceField`` over an ``ArrayField`` narrows the ``base_field``'s values.
+
+    Each element is checked against the values the ``base_field`` lists, so a subset publishes
+    ``list[<Input><Field>Enum]`` of the admitted values; a superset, and a single-value
+    ``ChoiceField`` over the array, keep the column's ``list`` of the element's read enum.
+    """
+    from django_strawberry_framework.types import converters
+
+    monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
+    column = _TaggedBook._meta.get_field("tags")
+    assert isinstance(column, _FakeArrayField)
+    meta = type("Meta", (), {"model": _TaggedBook, "fields": ("tags",)})
+    form_class = type("TagsForm", (forms.ModelForm,), {"tags": tags_field(), "Meta": meta})
+    cre, _, _, _ = build_form_inputs(form_class, operation_kind=CREATE)
+    enum_cls = _list_enum_of(_field_map(cre)["tags"])
+    assert _members(enum_cls) == members
+    read_enum = converters.convert_choices_to_enum(column.base_field, "TaggedBookType")
+    assert (enum_cls is read_enum) is keeps_read_enum
+    if not keeps_read_enum:
+        assert enum_cls.__name__ == "TagsFormInputTagsEnum"
+
+
+@pytest.mark.parametrize(
+    ("status_choices", "members"),
+    [
+        pytest.param([("a", "A"), ("c", "C")], {"a": "a", "c": "c"}, id="flat-subset"),
+        pytest.param([("Desk", [("c", "C")])], {"c": "c"}, id="grouped-subset"),
+        pytest.param([("a", "A"), ("b", "B"), ("c", "C")], None, id="every-value"),
+    ],
+)
+def test_choice_field_over_grouped_column_binds_only_when_narrowed(
+    status_choices: list[tuple[str, object]],
+    members: dict[str, object] | None,
+):
+    """A narrowed field over a grouped column binds; one admitting every value is refused.
+
+    The grouped column has no read enum; the values it lists are its groups flattened, so a
+    field admitting a subset of them publishes its own generated enum, while a field admitting
+    every value takes the column's type and meets the grouped-choices refusal.
+    """
+    meta = type("Meta", (), {"model": _GroupedBook, "fields": ("status",)})
+    status_field = forms.ChoiceField(choices=status_choices)
+    form_class = type("GroupedForm", (forms.ModelForm,), {"status": status_field, "Meta": meta})
+    if members is None:
+        with pytest.raises(ConfigurationError, match="grouped-choices form"):
+            build_form_inputs(form_class, operation_kind=CREATE)
+        return
+    cre, _, _, _ = build_form_inputs(form_class, operation_kind=CREATE)
+    assert _members(_enum_of(_field_map(cre)["status"])) == members
 
 
 # ---------------------------------------------------------------------------

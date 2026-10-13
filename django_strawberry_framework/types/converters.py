@@ -680,12 +680,14 @@ def build_enum_from_choices(
     """Build a Strawberry ``Enum`` from a flat ``(value, label)`` choice sequence.
 
     The shared choices -> enum CORE reused by the read-side model-choice path
-    (``convert_choices_to_enum``, keyed + cached per ``(model, field_name)``) and the
+    (``convert_choices_to_enum``, keyed + cached per ``(model, field_name)``), the
     serializer-only ``ChoiceField`` / ``MultipleChoiceField`` path
     (``rest_framework/serializer_converter.py``, keyed by the descriptor-derived name -
-    spec-039). Both build a GraphQL-safe enum from the SAME rules, so the
-    grouped-form rejection, the value-not-label sanitization, and the sanitize-collision
-    guard cannot drift between the two flavors:
+    spec-039), and a ``ModelForm`` choice field admitting fewer of its column's values
+    (``forms/inputs.py::_form_choice_annotation``, one enum per input class). All build a
+    GraphQL-safe enum from the SAME rules, so the grouped-form rejection, the
+    value-not-label sanitization, and the sanitize-collision guard cannot drift between
+    the flavors:
 
     1. leave out every ``None``-valued pair (the ``(None, label)`` pair ``Choices.__empty__``
        adds, or one declared by hand): it labels the empty option, which travels as ``null``
@@ -876,18 +878,20 @@ def _column_admits_empty_string(field: "ConcreteField") -> bool:
     return bool(field.blank and field.empty_strings_allowed)
 
 
-def choice_column_values(field: "ConcreteField") -> list[object]:
-    """Return the values a choice column lists, in order: the write side's admissible set.
+def choice_column_pairs(field: "ConcreteField") -> list[tuple[object, object]]:
+    """Return the ``(value, label)`` pairs a choice column lists, in order.
 
-    The column's choice values with every group of Django's grouped-choices form flattened in
+    The column's choice pairs with every group of Django's grouped-choices form flattened in
     order (Django's ``Field.flatchoices``, which ``Field.validate`` checks a stored value
-    against), never ``None`` (a ``None``-valued pair labels the empty option), plus ``""`` when
+    against), never a ``None``-valued pair (it labels the empty option), plus ``("", "")`` when
     ``_column_admits_empty_string`` holds and no listed value is ``""``. Every entry, a group's
     inner entries included, passes the same ``_normalize_choice_pairs`` checks as the read enum,
     so a malformed column raises the same specific ``ConfigurationError``. For a flat column the
-    list is exactly the member values ``convert_choices_to_enum`` builds; a grouped column has
-    values but no read enum. No enum is built or registered, so a write-side caller cannot claim
-    the column enum's GraphQL name.
+    pairs are exactly the ones ``convert_choices_to_enum`` builds its members from; a grouped
+    column has pairs but no read enum. No enum is built or registered, so a write-side caller
+    cannot claim the column enum's GraphQL name; a caller publishing a subset of the pairs builds
+    its own enum through ``build_enum_from_choices``
+    (``forms/inputs.py::_form_choice_annotation``).
     """
     try:
         choices = field.choices
@@ -903,7 +907,16 @@ def choice_column_values(field: "ConcreteField") -> list[object]:
         flatten_groups=True,
     )
     _insert_blank_pair(pairs, include_blank=include_blank)
-    return [value for value, _label in pairs]
+    return pairs
+
+
+def choice_column_values(field: "ConcreteField") -> list[object]:
+    """Return the values a choice column lists, in order: the write side's admissible set.
+
+    The values of ``choice_column_pairs``: for a flat column exactly the member values
+    ``convert_choices_to_enum`` builds; a grouped column has values but no read enum.
+    """
+    return [value for value, _label in choice_column_pairs(field)]
 
 
 def choice_column_is_grouped(field: "ConcreteField") -> bool:

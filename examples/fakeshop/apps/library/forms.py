@@ -12,6 +12,8 @@ request-time queryset in ``__init__``, so schema construction and relation decod
 cannot re-derive the target model from the class-level field. ``BookGenresModelForm`` adds the live FORM
 partial-update M2M-preservation case over the Relay-Node ``BookType``: an omitted
 required ``genres`` M2M is reconstructed from the located row rather than cleared.
+``BookRepairDeskForm`` declares a ``circulation_status`` ``ChoiceField`` narrower than
+the column, so its generated input publishes only the values the form admits.
 ``BranchWithShelfForm`` and ``BranchPairForm`` add model-less plain-form
 ``perform_mutate`` write-hook and transaction-rollback cases.
 """
@@ -85,6 +87,30 @@ class BookGenresModelForm(forms.ModelForm[models.Book]):
     class Meta:
         model = models.Book
         fields = ("title", "subtitle", "genres")
+
+
+class BookRepairDeskForm(forms.ModelForm[models.Book]):
+    """A ``Book`` ``ModelForm`` for the repair desk, which shelves a book or sends it to repair.
+
+    Checking a book out is the loan desk's job, so ``circulation_status`` declares a
+    ``ChoiceField`` admitting two of the column's three ``CirculationStatus`` values. The
+    generated input publishes a generated enum of exactly those two values rather than the
+    column's read enum, so every member the schema offers is one the form accepts.
+    """
+
+    circulation_status = forms.ChoiceField(
+        choices=[
+            (
+                models.Book.CirculationStatus.AVAILABLE,
+                models.Book.CirculationStatus.AVAILABLE.label,
+            ),
+            (models.Book.CirculationStatus.REPAIR, models.Book.CirculationStatus.REPAIR.label),
+        ],
+    )
+
+    class Meta:
+        model = models.Book
+        fields = ("circulation_status",)
 
 
 class BranchWithShelfForm(forms.Form):

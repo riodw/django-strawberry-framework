@@ -1415,6 +1415,20 @@ class UpdateBookViaForm(DjangoModelFormMutation):
         permission_classes = []
 
 
+class UpdateBookAtRepairDeskViaForm(DjangoModelFormMutation):
+    """Update a ``Book``'s circulation via ``BookRepairDeskForm`` - a narrowed form choice field.
+
+    The form's ``circulation_status`` admits ``available`` / ``repair`` only, so the
+    partial input publishes ``BookRepairDeskFormPartialInputCirculationStatusEnum`` with those
+    two members; ``checked_out`` is refused by enum coercion before the form runs.
+    """
+
+    class Meta:
+        form_class = forms.BookRepairDeskForm
+        operation = "update"
+        permission_classes = []
+
+
 # --------------------------------------------------------------------------- #
 # Custom mutation-input overrides (spec-036 Meta.input_class / partial_input_class)
 # over the Relay-Node ``Book`` (which carries no other model-backed mutation, so the
@@ -2201,6 +2215,7 @@ class Mutation:
     create_shelf = DjangoMutationField(CreateShelf)
     update_shelf_condition = DjangoMutationField(UpdateShelfCondition)
     update_book_via_form = DjangoMutationField(UpdateBookViaForm)
+    update_book_at_repair_desk_via_form = DjangoMutationField(UpdateBookAtRepairDeskViaForm)
     create_book_via_custom_input = DjangoMutationField(CreateBookViaCustomInput)
     update_book_via_custom_input = DjangoMutationField(UpdateBookViaCustomInput)
     create_publisher = DjangoMutationField(CreatePublisher)

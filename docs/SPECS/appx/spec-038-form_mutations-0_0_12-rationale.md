@@ -174,8 +174,9 @@ duplicating the scalar table.
   `required` overrides — wrong for a plain `Form`, and divergent from the consumer's
   declared form contract for a `ModelForm`.
 - **A parallel form-field scalar table independent of the read converters.**
-  Rejected: it would let a `choices` form field resolve to a different enum than the
-  read side, breaking the symmetric wire contract.
+  Rejected: it would let a `choices` form field resolve to an enum whose members are not
+  the read side's, breaking the symmetric wire contract (a field admitting fewer of the
+  column's values publishes a subset of the column's own members, never members of its own).
 ## Decision 8 — Resolver pipeline: instantiate → `is_valid()` → `form.errors` → `save()` → optimizer re-fetch → payload
 
 Spec: [Decision 8 — Resolver pipeline: instantiate → `is_valid()` → `form.errors` → `save()` → optimizer re-fetch → payload][spec-038-d8].

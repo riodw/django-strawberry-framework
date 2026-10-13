@@ -13,8 +13,8 @@ Covers ``django_strawberry_framework/forms/sets.py``:
 - the shape-cache dedupe contract keyed on basis CONTENT identity
   (``forms/inputs.py::_form_basis_content_identity``): shared-hook siblings /
 distinct hook functions / a default-vs-custom identical basis all dedupe onto
-one input class, a stateful hook's requiredness drift stays LOUD at the
-materialize ledger, and two distinct same-named form classes still collide;
+one input class, a stateful hook's requiredness or choice-narrowing drift stays
+LOUD at the materialize ledger, and two distinct same-named form classes still collide;
 - declaration registration (the ``ModelForm`` flavor in the ``DjangoMutation``
   registry, the plain flavor in the disjoint plain-form registry, abstract bases
   nowhere, post-finalize rejected);
@@ -42,6 +42,7 @@ from collections.abc import Callable, Iterator
 
 import pytest
 import strawberry
+from apps.library import models as library_models
 from apps.products import models as product_models
 from django import forms
 from django.db import models
@@ -1637,6 +1638,90 @@ def test_stateful_shared_hook_requiredness_drift_is_loud():
 
     with pytest.raises(ConfigurationError, match="materialized by two distinct"):
         finalize_django_types()
+
+
+def test_stateful_shared_hook_choice_narrowing_drift_is_loud():
+    """A shared hook narrowing a choice field differently per class lands on the LOUD collision.
+
+    Field type and requiredness agree, so only the column values each sibling's
+    ``circulation_status`` admits tell the two bases apart: each builds its own
+    generated enum, and the materialize ledger rejects the second distinct class under
+    one name - never one sibling silently publishing the other's members."""
+
+    class BookT(DjangoType):
+        class Meta:
+            model = library_models.Book
+            fields = ("id", "circulation_status")
+            primary = True
+
+    class RepairDeskForm(forms.ModelForm[library_models.Book]):
+        class Meta:
+            model = library_models.Book
+            fields = ("circulation_status",)
+
+    class StatefulBase(DjangoModelFormMutation):
+        @classmethod
+        @override
+        def get_form_fields(cls):
+            choices = [("available", "Available"), ("repair", "Repair")]
+            if cls.__name__ == "DriftB":
+                choices = choices[:1]
+            fields: dict[str, forms.Field] = {
+                "circulation_status": forms.ChoiceField(choices=choices),
+            }
+            return fields
+
+    class DriftA(StatefulBase):
+        class Meta:
+            form_class = RepairDeskForm
+            operation = "create"
+
+    class DriftB(StatefulBase):
+        class Meta:
+            form_class = RepairDeskForm
+            operation = "create"
+
+    assert registry.get(library_models.Book) is BookT
+    assert {DriftA, DriftB} <= set(iter_mutations())
+    with pytest.raises(ConfigurationError, match="materialized by two distinct"):
+        finalize_django_types()
+
+
+def test_excluded_choice_field_admitting_no_column_value_still_binds():
+    """An excluded field never refuses the build, though the shape identity reads it.
+
+    ``circulation_status`` admits none of the non-empty values its column lists, which refuses
+    an emitted field; the shape identity walks the whole hook basis, excluded fields included, so the
+    refusal must stay out of it, and the mutation binds without the field."""
+
+    class BookT(DjangoType):
+        class Meta:
+            model = library_models.Book
+            fields = ("id", "title")
+            primary = True
+
+    class LostShelfForm(forms.ModelForm[library_models.Book]):
+        circulation_status = forms.ChoiceField(choices=[("lost", "Lost")], required=False)
+
+        class Meta:
+            model = library_models.Book
+            fields = ("title", "circulation_status")
+
+    class RetitleBook(DjangoModelFormMutation):
+        class Meta:
+            form_class = LostShelfForm
+            operation = "update"
+            exclude = ("circulation_status",)
+
+    finalize_django_types()
+
+    assert registry.get(library_models.Book) is BookT
+    assert RetitleBook._input_class is not None
+    slots = {
+        field.python_name
+        for field in get_object_definition(RetitleBook._input_class, strict=True).fields
+    }
+    assert slots == {"title"}
 
 
 def test_two_distinct_form_classes_sharing_name_still_collide():

@@ -178,7 +178,12 @@ register_subsystem_clear(clear_form_mutation_registry, owner="forms.declarations
 # is co-cleared from ``registry.clear()`` (a ``registry.clear()``-only reset, NOT a
 # pre-bind input clear - it is a per-pass build cache).
 _form_shape_build_cache: dict[
-    tuple[FormClass, str, frozenset[str], tuple[tuple[str, type[forms.Field], bool, object], ...]],
+    tuple[
+        FormClass,
+        str,
+        frozenset[str],
+        tuple[tuple[str, type[forms.Field], bool, object, object], ...],
+    ],
     tuple[type[object], list[InputFieldSpec]],
 ]
 clear_form_shape_build_cache: Callable[[], None]

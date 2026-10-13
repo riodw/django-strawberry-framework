@@ -23,8 +23,10 @@ The shape is the ``036`` discipline adapted to forms (spec-038 Decision 7):
   form still has a discoverable shape), not the model's editable columns.
 - Where a ``ModelForm`` field has a backing model column, the annotation routes
   through ``model_column_input_annotation`` so the wire contract is symmetric
-  with the read ``DjangoType``. A plain ``Form`` field with no column uses
-  ``converter.convert_form_field`` (the model-less table). The two key spaces
+  with the read ``DjangoType``; a choice field whose static choices admit fewer of
+  a choice column's values than the column lists publishes a generated enum of the
+  admitted values instead (``_form_choice_narrowing``). A plain ``Form`` field with
+  no column uses ``converter.convert_form_field`` (the model-less table). The two key spaces
   (``forms.Field`` / ``models.Field``) stay strictly separate: the column is
   resolved first, then handed to the ``models.Field``-keyed converters.
 - Shape identity is ``(form_class, operation_kind, frozenset(effective field
@@ -43,10 +45,12 @@ wrapper, in the spirit of ``mutations/inputs.py``.
 from __future__ import annotations
 
 import keyword
+from types import GenericAlias
 from typing import TYPE_CHECKING, Any, cast
 
 from django import forms
 from django.core.exceptions import FieldDoesNotExist
+from django.utils.choices import CallableChoiceIterator
 
 from ..exceptions import (
     ConfigurationError,
@@ -64,6 +68,12 @@ from ..mutations.inputs import (
 )
 from ..registry import register_subsystem_clear, registry
 from ..scalars import Upload
+from ..types.converters import (
+    _field_has_choices,
+    array_element_field,
+    build_enum_from_choices,
+    choice_column_pairs,
+)
 from ..utils.inputs import (
     InputFieldSpec,
     build_strawberry_input_class,
@@ -75,11 +85,12 @@ from ..utils.inputs import (
     resolve_effective_fields,
 )
 from ..utils.relations import is_forward_concrete_relation, is_forward_many_to_many
-from ..utils.strings import graphql_camel_name
+from ..utils.strings import graphql_camel_name, pascal_case
 from .converter import (
     FILE,
     RELATION_MULTI,
     RELATION_SINGLE,
+    SCALAR,
     convert_form_field,
     form_field_required,
 )
@@ -326,7 +337,7 @@ def _related_model_of(field: forms.Field) -> object:
 def _form_basis_content_identity(
     form_class: FormClass,
     form_fields: Mapping[str, forms.Field] | None = None,
-) -> tuple[tuple[str, type[forms.Field], bool, object], ...]:
+) -> tuple[tuple[str, type[forms.Field], bool, object, object], ...]:
     """Return a hashable projection of the hook basis that determines input content.
 
     The per-shape build cache (``forms/sets.py::_cached_build_form_input``) keys
@@ -335,11 +346,12 @@ def _form_basis_content_identity(
     build consumes - the converter-dispatch type (``type(field)``, the MRO walk
     in ``convert_form_field``), the ONE requiredness decision
     (``converter.form_field_required`` with the field's backing column, the
-    same resolution the build site uses), and a column-less relation field's
+    same resolution the build site uses), a column-less relation field's
     related model (``_related_model_of``, which fixes the
-    Relay-``GlobalID``-vs-raw-pk id annotation) - so two calls with identical
-    projections build identical input classes and MUST dedupe onto one class
-    object (the per-shape dedupe contract: two mutations over one form +
+    Relay-``GlobalID``-vs-raw-pk id annotation), and the column values a choice
+    field narrows its published enum to (``_choice_narrowing_identity``) - so
+    two calls with identical projections build identical input classes and
+    MUST dedupe onto one class object (the per-shape dedupe contract: two mutations over one form +
     effective set reuse one input, however their bases were produced - the
     default hook, one hook shared on an intermediate base, or two different
     hook functions), while any content difference (a stateful
@@ -358,13 +370,7 @@ def _form_basis_content_identity(
     try:
         basis = _form_field_basis(form_class, form_fields)
         return tuple(
-            (
-                name,
-                type(field),
-                form_field_required(field, column=_model_column_for(form_class, name)),
-                _related_model_of(field),
-            )
-            for name, field in basis.items()
+            _basis_field_identity(form_class, name, field) for name, field in basis.items()
         )
     except ConfigurationError:
         raise
@@ -375,6 +381,26 @@ def _form_basis_content_identity(
             "a mapping of field names to forms.Field instances; reading the field basis "
             f"for the input shape identity raised {type(exc).__name__}: {detail}.",
         ) from exc
+
+
+def _basis_field_identity(
+    form_class: FormClass,
+    name: str,
+    field: forms.Field,
+) -> tuple[str, type[forms.Field], bool, object, object]:
+    """Return one basis field's ``_form_basis_content_identity`` entry.
+
+    The backing column is resolved once and shared by the requiredness decision and the
+    choice-narrowing projection, the same resolution ``_field_triple_and_spec`` receives.
+    """
+    column = _model_column_for(form_class, name)
+    return (
+        name,
+        type(field),
+        form_field_required(field, column=column),
+        _related_model_of(field),
+        _choice_narrowing_identity(name, field, column, form_class),
+    )
 
 
 def resolve_effective_form_fields(
@@ -562,6 +588,166 @@ def _model_less_relation_annotation(
     )
 
 
+def _form_admits_choice_value(
+    name: str,
+    field: forms.ChoiceField,
+    value: object,
+    *,
+    writes_list: bool,
+    form_class: FormClass,
+) -> bool:
+    """Return whether a form choice field admits ``value``, the way its own ``validate`` decides.
+
+    A single-value ``ChoiceField`` passes an empty value (``""``) without consulting its choices
+    when the field is not required (``ChoiceField.validate`` checks ``valid_value`` only for a
+    non-empty value), and refuses it as required otherwise; every other value, and every element
+    of a ``MultipleChoiceField`` list, is admitted exactly when ``valid_value`` admits it (the
+    field's own choices, option groups descended, compared as given and as ``str``). A
+    ``valid_value`` that raises is a broken field, refused typed naming the form field.
+    """
+    if not writes_list and isinstance(value, str) and value == "":
+        return not field.required
+    try:
+        return bool(field.valid_value(value))
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"Form {_safe_class_name(form_class)} field {_safe_arg_repr(name)} could not check "
+            f"whether it admits the choice value {_safe_arg_repr(value)}; its valid_value raised "
+            f"{_safe_type_name(exc)}: {_safe_text(exc)}.",
+        ) from exc
+
+
+def _form_choice_narrowing(
+    name: str,
+    field: forms.Field,
+    column: ConcreteField,
+    form_class: FormClass,
+) -> tuple[list[tuple[object, object]], bool] | None:
+    """Return the column choices a form choice field narrows its input to, or ``None``.
+
+    The form validates the value (spec-038 Decision 7: the form is the input source of truth),
+    so the published input carries the values the column lists AND the form field admits. When
+    the field admits every value the column lists (the ``TypedChoiceField`` Django generates
+    from the column, an equal declared set, a declared superset whose extra values the column
+    never stores), the column's own type is published (``None``: the read enum, the symmetric
+    wire contract). Otherwise the result is ``(pairs, writes_list)``: the column's
+    ``(value, label)`` pairs the field admits (``types/converters.py::choice_column_pairs``, a
+    grouped column flattened, ``""`` where the column admits it), in column order, and whether
+    the field writes a list. Members and values are the column's, so a narrowed enum is a subset
+    of the read enum's member names and decodes to the raw value the column stores.
+
+    Only static choices narrow: the published type is built once, at schema build, from the
+    field basis (``base_fields``, or the ``get_form_fields`` hook's fields), never from a bound
+    form, so callable choices (re-evaluated on every read) and an empty set (choices assigned
+    per request in ``__init__``) leave the column's type published, and the bound form still
+    refuses a value outside its request-time choices.
+
+    A ``MultipleChoiceField`` writes a list, so it narrows the element choices of an
+    ``ArrayField`` (its ``base_field``) and is refused over a single-value choice column, where
+    no list is a value the column lists. A field admitting no non-empty value the column lists
+    is refused: its input could carry at most the empty value (where the column lists ``""``
+    and the form admits it), and every other value fails validation. A column without choices, a
+    relation or file column (even one declaring choices), a non-choice form field and a
+    single-value ``ChoiceField`` over an ``ArrayField`` keep the column's type.
+    """
+    if not isinstance(field, forms.ChoiceField) or isinstance(field, forms.ModelChoiceField):
+        return None
+    element = array_element_field(column)
+    choice_column = element or column
+    if not _field_has_choices(choice_column):
+        return None
+    if model_column_write_kind(column) != SCALAR:
+        # A relation or file column declaring choices keeps its own kind and id / ``Upload``
+        # type: the published type must match the kind the decode routes the value by.
+        return None
+    writes_list = isinstance(field, forms.MultipleChoiceField)
+    if writes_list and element is None:
+        raise ConfigurationError(
+            f"Form {_safe_class_name(form_class)} field {_safe_arg_repr(name)} is a "
+            f"{_safe_type_name(field)} over the single-value choice column "
+            f"{column.model.__name__}.{column.name}: it writes a list, which is not one of the "
+            "column's choices. Declare a ChoiceField to write one value, or store many values in "
+            "an ArrayField column whose base_field declares the choices.",
+        )
+    if element is not None and not writes_list:
+        return None
+    choices: object = field.choices
+    if isinstance(choices, CallableChoiceIterator) or not list(cast("Iterable[object]", choices)):
+        return None
+    listed = choice_column_pairs(choice_column)
+    admitted = [
+        (value, label)
+        for value, label in listed
+        if _form_admits_choice_value(
+            name,
+            field,
+            value,
+            writes_list=writes_list,
+            form_class=form_class,
+        )
+    ]
+    if len(admitted) == len(listed):
+        return None
+    if all(isinstance(value, str) and value == "" for value, _label in admitted):
+        raise ConfigurationError(
+            f"Form {_safe_class_name(form_class)} field {_safe_arg_repr(name)} admits none of the "
+            "non-empty values the choice column "
+            f"{choice_column.model.__name__}.{choice_column.name} lists, so no non-empty value "
+            "its input could carry passes the form. Declare choices the column lists, or drop "
+            "the field via Meta.fields / Meta.exclude.",
+        )
+    return admitted, writes_list
+
+
+def _form_choice_annotation(
+    name: str,
+    pairs: list[tuple[object, object]],
+    *,
+    writes_list: bool,
+    type_name: str,
+    form_class: FormClass,
+) -> object:
+    """Return the generated enum annotation for a form choice field's narrowed column choices.
+
+    The enum is ``<InputTypeName><FieldName>Enum`` (the serializer flavor's naming for a declared
+    choice field's generated enum), built by the shared ``build_enum_from_choices`` core from the
+    ``_form_choice_narrowing`` pairs, so member sanitization and ``BLANK`` follow the read enum's
+    rules; a list-writing field publishes ``list[<enum>]`` with a non-null element. One input
+    class references it, and the per-shape build cache builds each input once.
+    """
+    enum_cls = build_enum_from_choices(
+        pairs,
+        f"{type_name}{pascal_case(name)}Enum",
+        source_label=f"Form {_safe_class_name(form_class)} field {_safe_arg_repr(name)}",
+    )
+    return GenericAlias(list, (enum_cls,)) if writes_list else enum_cls
+
+
+def _choice_narrowing_identity(
+    name: str,
+    field: forms.Field,
+    column: ConcreteField | None,
+    form_class: FormClass,
+) -> object:
+    """Project the column values a choice field narrows its input to, for the shape identity.
+
+    ``None`` when the field publishes its column's type; otherwise ``(writes_list, values)``.
+    A refusal projects ``None`` instead of escaping the identity walk: the projection walks the
+    whole basis, an excluded field must not fail the build, and the build re-runs the narrowing
+    for every emitted field, where the refusal is raised.
+    """
+    if column is None:
+        return None
+    try:
+        narrowing = _form_choice_narrowing(name, field, column, form_class)
+    except BaseException:
+        return None
+    if narrowing is None:
+        return None
+    pairs, writes_list = narrowing
+    return writes_list, tuple(value for value, _label in pairs)
+
+
 def _simple_triple(name: str, annotation: object, kind: str) -> tuple[str, str, object, str]:
     """Return ``(input_attr, graphql_name, annotation, kind)`` for a NON-relation form field.
 
@@ -587,7 +773,10 @@ def _field_triple_and_spec(
     ``model_column_input_annotation`` (keyed on the resolved ``models.Field``):
     a relation column -> ``<name>_id`` / ``categoryId`` + the Relay-vs-raw-pk
     id type, ``relation_single`` / ``relation_multi``; a file/image column ->
-    ``Upload`` (``file``); else the read-side scalar / choice-enum (``scalar``).
+    ``Upload`` (``file``); else the read-side scalar / choice-enum (``scalar``),
+    except a choice field admitting fewer of a choice column's values than it
+    lists, which publishes the generated enum of the admitted values
+    (``_form_choice_narrowing``).
     A column-less field (a plain ``Form`` field or a ``ModelForm`` extra field)
     uses ``converter.convert_form_field`` (the model-less table) for the kind,
     and the relation / file annotations are finalized here (where ``Upload`` and
@@ -612,7 +801,21 @@ def _field_triple_and_spec(
     # (so a NullBooleanField backed by a nullable model column is forced optional
     # too, not just the model-less one) - see ``converter.form_field_required``.
     field_required = form_field_required(field, column=column)
-    if column is not None:
+    narrowing = None if column is None else _form_choice_narrowing(name, field, column, form_class)
+    if narrowing is not None:
+        pairs, writes_list = narrowing
+        python_attr, graphql_name, annotation, kind = _simple_triple(
+            name,
+            _form_choice_annotation(
+                name,
+                pairs,
+                writes_list=writes_list,
+                type_name=type_name,
+                form_class=form_class,
+            ),
+            SCALAR,
+        )
+    elif column is not None:
         # ModelForm field with a backing model column: the shared column mapper
         # types the GraphQL id / Upload / scalar; kind comes from
         # ``model_column_write_kind``; related_model stays here for the reverse map.

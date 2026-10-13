@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 53 done, 79 to do.
+Progress: 54 done, 80 to do.
 
 ## Done
 
@@ -116,6 +116,11 @@ Progress: 53 done, 79 to do.
   update (the attestation compared the stored `to_field` value with the pk) and, with an integer `to_field`, passed a
   wrong-row write; the snapshot captures the key the relation stores, the walk refuses it re-pointed in place and the
   attestation compares the column with it (this commit)
+- [x] 88. A lone surrogate inside a list element or a JSON key or value skipped the decode text preflight (top-level `str`
+  only) and reached the backend raw as a masked top-level `UnicodeEncodeError` (fakeshop `setCardFiles` paths; on Postgres an
+  `ArrayField` of text or an `HStoreField` in every write flavor; a serializer `ListField(child=CharField())` element was
+  already refused by DRF); the preflight now walks every list element and dict key and value, keyed to the leaf's dotted path
+  (`ea0eea70`)
 
 ## To do: t3 robustness rows
 
@@ -137,7 +142,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## To do: found along the way
 
-- [ ] 88. `ListField(child=CharField())` elements skip the lone-surrogate text preflight (top-level `str` only) and reach `save()` raw
 - [ ] 89. The grouped-choices `ArrayField` refusal tells a list column to "declare a flat ChoiceField", which cannot write a list
 - [ ] 90. Nested list-of-choice serializer shapes (`ListField(child=MultipleChoiceField)`, `ListField(child=ListField(child=ChoiceField))`)
   still publish `[[String!]!]`; an enum there needs a deeper element unwrap than item 43's one level
@@ -218,6 +222,9 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 133. A `PrimaryKeyRelatedField` to a model whose pk is a `OneToOneField` (`PatronProfile`) is refused at schema build
   ("Unsupported Django field type 'OneToOneField' on PatronProfile.patron"); a FK to such a model cannot be written by a
   serializer mutation (fails loud)
+- [ ] 135. A malformed GlobalID in an `[ID!]` list input (`genres: ["not-base64!!"]`) is a masked top-level error in the
+  model, ModelForm and serializer flavors: Strawberry's `convert_argument` raises `GlobalIDValueError` before any package
+  decode, where a single malformed id gets the field-keyed envelope
 
 ## To do: holes found re-checking the fixes
 
@@ -302,6 +309,10 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 134. CHANGELOG entry for item 106: a `SerializerMutation` writing a `ForeignKey(to_field=...)` through a declared
   `PrimaryKeyRelatedField` now saves (every non-null create and update was a masked error); a validator, nested write or
   custom `create()` / `update()` that re-points a validated relation's stored key is refused with `ConfigurationError`
+- [ ] 136. CHANGELOG entry for item 88: a lone surrogate anywhere in a list or `JSON` input value (an element, a dict key or
+  value, any depth) is a field-keyed `invalid` error at decode, keyed to the leaf's dotted path (`tags.1`; a bad dict key to
+  the dict); a `JSON` value carrying one is refused on every backend, and a serializer `ListField(child=CharField())` element
+  gets the package's message instead of DRF's
 
 ## Hunt not finished in t3
 

@@ -934,7 +934,7 @@ fold-in only.
 
 ### Decision 13 — What the masking rule does not reach
 
-**Decision.** The four consequences below follow from
+**Decision.** The five consequences below follow from
 [Decision 8](#decision-8--the-classification-rule-is-structural-not-an-allowlist)'s structural
 rule and from where the masking hook is installed. Each is a boundary of the shipped contract
 rather than a gap in it, and a later pass must not read one as an omission.
@@ -968,6 +968,16 @@ subscription seam is the Channels consumer result source, and nothing in the pac
 subscriptions over HTTP. A transport that later serves subscriptions over multipart or SSE
 through a package-owned view needs the same `mask_execution_result` call at its own per-event
 delivery point; the requirement travels with the transport that creates it.
+
+**Incremental delivery is refused, not masked.** A `@defer` / `@stream` payload is delivered
+after the one response the masking hook is installed on, so no seam here reaches it.
+`DjangoSchema` therefore refuses a `config=` with Strawberry's
+`enable_experimental_incremental_execution` set, raising `ConfigurationError` at construction
+(`django_strawberry_framework/schema.py::_refuse_incremental_execution`), and no `DjangoSchema`
+operation produces an incremental frame. The shape exclusion in `is_maskable_result` stays for
+the frame type upstream's signatures still name; a consumer assembling a plain
+`strawberry.Schema` around the exported extension with the flag on gets unmasked deferred
+payloads, the same boundary as a hook failure there.
 
 **The debug payload caps are not configurable, and that is not an omission.**
 [`AGENTS.md`][agents] pins the rule: add a settings key when the feature that needs it lands, not

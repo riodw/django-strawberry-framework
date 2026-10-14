@@ -135,7 +135,7 @@ The factory merges `extra_scalar_map` over the package's defaults. A key already
 
 ### Composing with custom `StrawberryConfig` options
 
-Every other [`StrawberryConfig`][config] field (`auto_camel_case`, `name_converter`, `default_resolver`, `relay_max_results`, `relay_use_legacy_global_id`, `disable_field_suggestions`, `info_class`, `enable_experimental_incremental_execution`, `batching_config`) is passed directly to `strawberry_config(...)`:
+Every other [`StrawberryConfig`][config] field (`auto_camel_case`, `name_converter`, `default_resolver`, `relay_max_results`, `relay_use_legacy_global_id`, `disable_field_suggestions`, `info_class`, `enable_experimental_incremental_execution`, `batching_config`) is passed directly to `strawberry_config(...)`. The helper forwards `enable_experimental_incremental_execution` like any other field, but a `DjangoSchema` built with it set raises `ConfigurationError` at construction (`django_strawberry_framework/schema.py::_refuse_incremental_execution`):
 
 ```python path=null start=null
 schema = strawberry.Schema(

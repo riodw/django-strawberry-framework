@@ -108,6 +108,7 @@ if TYPE_CHECKING:
     from graphql import FieldNode, GraphQLFieldMap, GraphQLObjectType
     from graphql.pyutils import AwaitableOrValue, Path
     from strawberry.extensions.runner import SchemaExtensionsRunner
+    from strawberry.schema.config import StrawberryConfig
     from strawberry.schema.schema import StreamResult
     from strawberry.types import ExecutionContext as StrawberryExecutionContext
     from strawberry.types import ExecutionResult as StrawberryExecutionResult
@@ -775,7 +776,8 @@ class DjangoSchema(strawberry.Schema):
     The REQUIRED schema class for any schema exposing generated mutations
     (``DjangoMutationField`` targets): the write pipeline refuses to run outside
     the managed transaction this schema's execution context opens. Drop-in
-    otherwise - every constructor argument passes through, and a consumer
+    otherwise - every constructor argument passes through (a ``config=`` that
+    enables incremental delivery is refused, below), and a consumer
     needing a custom execution context subclasses
     ``DjangoMutationExecutionContext`` and passes it explicitly.
 
@@ -827,6 +829,13 @@ class DjangoSchema(strawberry.Schema):
     is refused when the operation resolves it (:meth:`get_extensions`): a
     factory is consumer code, and what it returns next request is not something
     accepting it this request can answer for.
+
+    **Incremental delivery is refused at construction.** A ``config=`` with
+    ``enable_experimental_incremental_execution`` set raises
+    ``ConfigurationError`` (:func:`_refuse_incremental_execution`): masking, the
+    resource bounds and deadline, and the mutation transaction window each hold
+    for one response per operation, and a ``@defer`` / ``@stream`` payload is
+    delivered outside it.
     """
 
     def __init__(
@@ -851,6 +860,7 @@ class DjangoSchema(strawberry.Schema):
             resource_policy if declared_resource is None else declared_resource,
         )
         resolved_error = resolve_error_policy(error_policy)
+        _refuse_incremental_execution(kwargs.get("config"))
         if kwargs.get("execution_context_class") is None:
             kwargs["execution_context_class"] = DjangoMutationExecutionContext
         kwargs["extensions"] = entries
@@ -1341,6 +1351,37 @@ def _admitted_chain(resolved: list[SchemaExtension], *, sync: bool) -> list[Sche
         AdmissionGuard(),
         _OperationModeMarker(_operation_mode(sync=sync)),
     ]
+
+
+def _refuse_incremental_execution(config: StrawberryConfig | None) -> None:
+    """Refuse a config that turns on incremental delivery (``@defer`` / ``@stream``).
+
+    Every guarantee this schema enforces is enforced on ONE response per
+    operation: the error policy masks the result an operation hands back, the
+    resource bounds and the deadline are armed for the operation's scope, and a
+    generated mutation's transaction spans the completion of its own payload.
+    A deferred payload is delivered after that response, outside all three, so
+    a schema that accepted the flag would publish those guarantees while serving
+    frames none of them reach. On the graphql-core this package pins the flag
+    has no executor at all and fails every operation with a raw ``RuntimeError``
+    outside every extension; refusing it here names that misconfiguration at
+    startup instead of on every request.
+
+    The flag is read the way Strawberry reads it - by truthiness, from the
+    ``config=`` argument - because that is what decides whether Strawberry takes
+    the incremental path. ``config`` cannot arrive positionally: the ``extensions``
+    and ``execution_context_class`` arguments before it are always supplied by
+    keyword from :meth:`DjangoSchema.__init__`.
+    """
+    if config is None or not config.enable_experimental_incremental_execution:
+        return
+    raise ConfigurationError(
+        "DjangoSchema does not support incremental delivery (@defer / @stream): the "
+        "error policy, the execution resource bounds and deadline, and a generated "
+        "mutation's transaction are each enforced on one response per operation, "
+        "and a deferred payload is delivered outside it. Remove "
+        "enable_experimental_incremental_execution from the StrawberryConfig.",
+    )
 
 
 def _consumer_extension_entries(

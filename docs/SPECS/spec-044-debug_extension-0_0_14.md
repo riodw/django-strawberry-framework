@@ -610,7 +610,10 @@ The engine and Django facts the decisions build on:
   before the ordinary extension-result assignment — the two-list,
   one-final-map contract does not define which of the initial and
   subsequent payloads would carry debug data. The contract covers
-  **non-incremental query/mutation `ExecutionResult`s only**.
+  **non-incremental query/mutation `ExecutionResult`s only**. A
+  `DjangoSchema` refuses that config at construction
+  (`django_strawberry_framework/schema.py::_refuse_incremental_execution`),
+  so under it no incremental result object is produced.
 - **Async SQL-capture fidelity.** Exception capture is
   execution-color-agnostic; SQL capture is guaranteed on the ordinary
   non-reentrant sync execution path and documented as **typically empty**
@@ -2290,7 +2293,8 @@ through these gets its own targeted unit — named owner, never a blanket claim.
 - **Subscriptions** — no debug contract for per-event results
   ([Non-goals](#non-goals)).
 - **Experimental incremental execution** (`@defer` / `@stream` payload
-  semantics) — excluded from the contract ([Non-goals](#non-goals)).
+  semantics) — excluded from the contract, and refused by `DjangoSchema`
+  at construction ([Non-goals](#non-goals)).
 - **Explicitly cross-thread-shared connection wrappers**
   (`inc_thread_sharing()`) — unsupported / best-effort
   ([Edge cases](#edge-cases-and-constraints)); the non-interference rule

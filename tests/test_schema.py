@@ -28,12 +28,14 @@ from graphql import ExecutionContext, FieldNode, GraphQLError, NameNode, print_a
 from graphql.pyutils import Path
 from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.extensions.runner import SchemaExtensionsRunner
+from strawberry.schema.config import StrawberryConfig
 from strawberry.schema.exceptions import InvalidOperationTypeError
 from strawberry.types import ExecutionContext as StrawberryExecutionContext
 from strawberry.types import ExecutionResult
 from strawberry.types.graphql import OperationType
 from typing_extensions import override
 
+from django_strawberry_framework import strawberry_config
 from django_strawberry_framework.error_policy import ErrorPolicy
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.extensions.error_policy import DjangoErrorPolicyExtension
@@ -769,6 +771,44 @@ def test_two_entries_declaring_a_policy_of_their_own_are_refused():
                 DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=3)),
             ],
         )
+
+
+@pytest.mark.parametrize(
+    "config_factory",
+    [StrawberryConfig, strawberry_config],
+    ids=["StrawberryConfig", "strawberry_config"],
+)
+@pytest.mark.parametrize("with_mutation", [False, True], ids=["query-only", "with-mutation"])
+def test_incremental_execution_is_refused_at_construction(
+    config_factory: Callable[..., StrawberryConfig],
+    with_mutation: bool,
+):
+    """Incremental delivery serves frames outside the one response every guarantee holds for.
+
+    Refused for every schema shape, not only one exposing mutations: a deferred
+    query payload escapes masking and the resource bounds as surely as a
+    deferred mutation payload escapes its transaction. Both spellings of the
+    config are refused, since ``strawberry_config()`` forwards the flag verbatim.
+    """
+    config = config_factory(enable_experimental_incremental_execution=True)
+    with pytest.raises(ConfigurationError, match="enable_experimental_incremental_execution"):
+        DjangoSchema(
+            query=DummyQuery,
+            mutation=DummyMutation if with_mutation else None,
+            config=config,
+        )
+
+
+@pytest.mark.parametrize(
+    "config",
+    [None, strawberry_config(), StrawberryConfig(enable_experimental_incremental_execution=False)],
+    ids=["no-config", "strawberry_config", "flag-off"],
+)
+def test_a_config_without_incremental_execution_constructs(config: StrawberryConfig | None):
+    """The refusal reads the flag alone: an omitted config or one with the flag off is accepted."""
+    schema = DjangoSchema(query=DummyQuery, config=config)
+
+    assert not schema.config.enable_experimental_incremental_execution
 
 
 def test_a_policy_declared_by_an_entry_becomes_the_schemas_own():

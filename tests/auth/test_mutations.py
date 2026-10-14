@@ -27,6 +27,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Callable, Iterable, Iterator, MutableMapping
+from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -1222,13 +1223,17 @@ _PROTECTED_FIELD_REJECT = (
 )
 
 
-def _privilege_required_user():
+def _privilege_required_user(
+    username_field: str = "username",
+    required_fields: Iterable[str] = ("is_staff",),
+):
     """Return a freshly declared user model whose ``REQUIRED_FIELDS`` exposes ``is_staff``.
 
-    A factory rather than one shared class: each call needs its own
-    ``_unique_app_label()`` so Django's app registry does not warn about a
-    re-registered model, and
-    the class name is load-bearing - ``_PROTECTED_FIELD_REJECT`` matches on it.
+    ``username_field`` / ``required_fields`` replace the two declarations, so a
+    caller can declare a protected name as a ``str`` subclass. A factory rather
+    than one shared class: each call needs its own ``_unique_app_label()`` so
+    Django's app registry does not warn about a re-registered model, and the class
+    name is load-bearing - ``_PROTECTED_FIELD_REJECT`` matches on it.
     Fakeshop's ``AUTH_USER_MODEL`` is Django's ``auth.User``, and a user model
     whose ``REQUIRED_FIELDS`` names ``is_staff`` is the shape the package refuses to
     expose, so it alone reaches the protected-field raise in
@@ -1239,8 +1244,8 @@ def _privilege_required_user():
         username: _Char = djmodels.CharField(max_length=150)
         is_staff: _Bool = djmodels.BooleanField(default=False)
 
-        USERNAME_FIELD = "username"
-        REQUIRED_FIELDS = ["is_staff"]
+        USERNAME_FIELD = username_field
+        REQUIRED_FIELDS = list(required_fields)
 
         class Meta(AbstractBaseUser.Meta):
             app_label = _unique_app_label()
@@ -1282,6 +1287,68 @@ def test_derive_register_fields_rejects_privilege_fields():
     model = _privilege_required_user()
     with pytest.raises(ConfigurationError, match=_PROTECTED_FIELD_REJECT):
         derive_register_fields(model)
+
+
+class _ReprRaisingName(str):
+    """A field name whose ``repr`` raises; the reject names it by its value."""
+
+    __slots__ = ()
+
+    @override
+    def __repr__(self) -> str:
+        raise RuntimeError("repr boom")
+
+
+class _OrderRaisingName(str):
+    """A field name whose ordering raises; the reject sorts the names as plain text."""
+
+    __slots__ = ()
+
+    @override
+    def __lt__(self, other: str) -> bool:
+        raise RuntimeError("lt boom")
+
+
+class _UserField(str, Enum):
+    """An enum of field names, the ordinary ``str`` subclass a model may declare with."""
+
+    IS_STAFF = "is_staff"
+
+
+@pytest.mark.parametrize(
+    ("username_field", "required_fields", "named"),
+    [
+        ("username", [_ReprRaisingName("is_staff")], "['is_staff']"),
+        (_ReprRaisingName("is_staff"), [], "['is_staff']"),
+        (
+            "username",
+            [_OrderRaisingName("is_superuser"), _OrderRaisingName("is_staff")],
+            "['is_staff', 'is_superuser']",
+        ),
+        ("username", [_UserField.IS_STAFF], "['is_staff']"),
+    ],
+    ids=[
+        "repr-raises-required",
+        "repr-raises-username",
+        "order-raises",
+        "str-enum",
+    ],
+)
+def test_derive_register_fields_names_a_protected_str_subclass_by_value(
+    username_field: str,
+    required_fields: list[str],
+    named: str,
+):
+    """A protected entry declared as a ``str`` subclass is refused and named by its value."""
+    model = _privilege_required_user(username_field, required_fields)
+    with pytest.raises(ConfigurationError) as exc:
+        derive_register_fields(model)
+    assert str(exc.value) == (
+        f"register_mutation() cannot auto-expose protected user field(s) {named} "
+        "derived from PrivilegeRequiredUser.USERNAME_FIELD / REQUIRED_FIELDS; remove "
+        "those fields from the automatic registration surface and initialize account "
+        "privileges and activation state in server-owned registration logic."
+    )
 
 
 def test_register_mutation_rejects_a_protected_required_field_at_the_factory_call(

@@ -829,9 +829,10 @@ seam set is the spine of
    those are **bind** outputs, and the field is constructed at import — when
    `@strawberry.type class Mutation` evaluates — before the bind runs. Concreteness
    is a separate check of the class's **own** `_mutation_meta` snapshot plus current
-   membership of a declaration ledger (`iter_mutations()` or `iter_form_mutations()`),
-   because an MRO lookup would let an unregistered child inherit its parent's
-   snapshot and a stale own snapshot can outlive a `registry.clear()`.
+   membership, by identity, of a declaration ledger (`iter_mutations()` or
+   `iter_form_mutations()`; equality would let a drained class equal to its
+   redeclaration pass), because an MRO lookup would let an unregistered child inherit
+   its parent's snapshot and a stale own snapshot can outlive a `registry.clear()`.
 2. **Resolver dispatch.** `DjangoMutationField._resolve` calls
    `mutation_cls.resolve_sync` / `resolve_async`: the model base's seams delegate to
    [`mutations/resolvers.py`][mutations-resolvers]'s model pipeline, the form flavors'

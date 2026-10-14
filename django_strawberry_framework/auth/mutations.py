@@ -42,7 +42,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from typing_extensions import override
 
-from ..exceptions import ConfigurationError, _safe_arg_repr
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_text
 from ..mutations.fields import (
     DjangoMutationField,
     _lazy_ref,
@@ -1210,7 +1210,13 @@ def derive_register_fields(user_model: type[AbstractBaseUser]) -> tuple[str, ...
         )
     names = [username_field, *user_model.REQUIRED_FIELDS, "password"]
     deduped = tuple(dict.fromkeys(names))
-    protected = sorted(_REGISTER_PROTECTED_FIELDS.intersection(deduped))
+    # A matched entry is the consumer's own value, possibly a ``str`` subclass (an enum
+    # member, say) whose ``__repr__`` / ``__lt__`` would otherwise run while the reject is
+    # sorted and rendered; read through the base ``str`` slot, each entry names its field
+    # by value and sorts as plain text.
+    protected = sorted(
+        _safe_text(name) for name in _REGISTER_PROTECTED_FIELDS.intersection(deduped)
+    )
     if protected:
         raise ConfigurationError(
             f"register_mutation() cannot auto-expose protected user field(s) {protected!r} "

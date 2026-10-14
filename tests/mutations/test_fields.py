@@ -18,10 +18,12 @@ from collections.abc import Iterator
 import pytest
 import strawberry
 from apps.products import models as product_models
+from django import forms
 from strawberry import relay
 from typing_extensions import override
 
 from django_strawberry_framework import (
+    DjangoFormMutation,
     DjangoMutation,
     DjangoMutationField,
     DjangoSchema,
@@ -29,7 +31,9 @@ from django_strawberry_framework import (
     finalize_django_types,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.forms.sets import DjangoFormMutationMetaclass
 from django_strawberry_framework.mutations.inputs import INPUTS_MODULE_PATH
+from django_strawberry_framework.mutations.sets import DjangoMutationMetaclass
 from django_strawberry_framework.registry import registry
 
 
@@ -251,6 +255,100 @@ def test_inherited_meta_target_rejected_at_construction():
     assert CreateItemRedeclared not in iter_mutations()
     with pytest.raises(ConfigurationError, match="current registry lifecycle"):
         DjangoMutationField(CreateItemRedeclared)
+
+
+class _ByNameMutationMetaclass(DjangoMutationMetaclass):
+    """Equates two mutation classes by qualified name, as a reload-tolerant metaclass might."""
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, type) and other.__qualname__ == self.__qualname__
+
+    __hash__ = DjangoMutationMetaclass.__hash__
+
+
+class _ByNameFormMutationMetaclass(DjangoFormMutationMetaclass):
+    """The plain-form twin of ``_ByNameMutationMetaclass``."""
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, type) and other.__qualname__ == self.__qualname__
+
+    __hash__ = DjangoFormMutationMetaclass.__hash__
+
+
+def _declare_by_name_mutation(flavor: str) -> type[DjangoMutation | DjangoFormMutation]:
+    """Declare one fresh class per call, every call under the same qualified name."""
+    if flavor == "model":
+
+        class CreateItem(DjangoMutation, metaclass=_ByNameMutationMetaclass):
+            class Meta:
+                model = product_models.Item
+                operation = "create"
+                permission_classes = [_AllowAll]
+
+        return CreateItem
+
+    class ContactForm(forms.Form):
+        message = forms.CharField()
+
+    class Submit(DjangoFormMutation, metaclass=_ByNameFormMutationMetaclass):
+        class Meta:
+            form_class = ContactForm
+            permission_classes = [_AllowAll]
+
+    return Submit
+
+
+@pytest.mark.parametrize(("flavor", "name"), [("model", "CreateItem"), ("form", "Submit")])
+def test_stale_target_equal_to_its_redeclaration_rejected_at_construction(flavor: str, name: str):
+    """Ledger membership is identity, so a metaclass ``__eq__`` cannot pass a drained target.
+
+    The class ``registry.clear()`` drained compares equal to its redeclaration in
+    the current ledger, yet finalization binds only the redeclaration.
+    """
+    stale = _declare_by_name_mutation(flavor)
+    registry.clear()
+    current = _declare_by_name_mutation(flavor)
+    assert stale == current
+    assert stale is not current
+    with pytest.raises(ConfigurationError) as exc:
+        DjangoMutationField(stale)
+    assert str(exc.value) == (
+        f"DjangoMutationField target {name} is not registered for finalization "
+        "in the current registry lifecycle. Declare the mutation after the most recent "
+        "registry.clear()."
+    )
+    assert DjangoMutationField(current) is not None
+
+
+class _RaisingEqMutationMetaclass(DjangoMutationMetaclass):
+    """A mutation metaclass whose ``__eq__`` raises."""
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        raise RuntimeError("eq boom")
+
+    __hash__ = DjangoMutationMetaclass.__hash__
+
+
+def test_registered_target_with_raising_metaclass_eq_constructs():
+    """The ledger check never compares a target with another declaration."""
+
+    class CreateItem(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "create"
+            permission_classes = [_AllowAll]
+
+    class UpdateItem(DjangoMutation, metaclass=_RaisingEqMutationMetaclass):
+        class Meta:
+            model = product_models.Item
+            operation = "update"
+            permission_classes = [_AllowAll]
+
+    assert DjangoMutationField(CreateItem) is not None
+    assert DjangoMutationField(UpdateItem) is not None
 
 
 # ---------------------------------------------------------------------------

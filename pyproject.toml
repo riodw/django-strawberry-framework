@@ -240,8 +240,6 @@ ignore = [
     "FBT002", # boolean default positional parameter: ditto
     "FBT003", # boolean positional argument in a call: ditto
     "FIX002", # TODO markers are the `TODO(spec-NNN slice N)` anchor convention
-    "ICN001", # conventional import aliases
-    "INP001", # examples/fakeshop/tests/ is not a package; scripts/ runs as plain files
     "PLC0415", # local imports break import cycles
     "PLR0911", # too many return statements
     "PLR0912", # too many branches
@@ -336,6 +334,25 @@ ignore = [
     "TRY301",
 ]
 
+[tool.ruff.lint.flake8-import-conventions.aliases]
+# ruff's default alias map minus `datetime = dt`: the project imports `datetime` plainly.
+"altair" = "alt"
+"holoviews" = "hv"
+"matplotlib" = "mpl"
+"matplotlib.pyplot" = "plt"
+"networkx" = "nx"
+"numpy" = "np"
+"numpy.typing" = "npt"
+"pandas" = "pd"
+"panel" = "pn"
+"plotly.express" = "px"
+"polars" = "pl"
+"pyarrow" = "pa"
+"seaborn" = "sns"
+"tensorflow" = "tf"
+"tkinter" = "tk"
+"xml.etree.ElementTree" = "ET"
+
 [tool.ruff.lint.flake8-quotes]
 inline-quotes = "double"
 multiline-quotes = "double"
@@ -384,9 +401,14 @@ known-first-party = ["django_strawberry_framework"]
 ]
 # PERF: one-shot build/maintenance scripts are not a performance surface.
 # T201: print is the CLI output of scripts and the root tools.
-"scripts/**/*.py" = ["PERF", "T201"]
+# INP001: these folders deliberately have no `__init__.py` (plain scripts, pytest rootdir-relative
+# test modules, and fakeshop's top-level modules on `pythonpath`).
+"scripts/**/*.py" = ["PERF", "T201", "INP001"]
 "line_count.py" = ["T201"]
-"docs/dry/export_dry_review.py" = ["T201"]
+"docs/dry/export_dry_review.py" = ["T201", "INP001"]
+"examples/fakeshop/*.py" = ["INP001"]
+"examples/fakeshop/tests/*.py" = ["INP001"]
+"examples/fakeshop/test_query/**/*.py" = ["INP001"]
 
 [tool.ruff.lint.pycodestyle]
 # The formatter wraps code at line-length (99); E501 only flags lines past 110

@@ -82,9 +82,13 @@ from django.db.models.expressions import Col, Window
 from django.db.models.sql.where import AND, WhereNode
 from typing_extensions import override
 
-from ..keyset import keyset_seek_sql
-from ..utils._narrowing import is_list_or_tuple
-from ..utils.connections import assert_window_fetch_mode_for, window_range_plan
+from django_strawberry_framework.keyset import keyset_seek_sql
+from django_strawberry_framework.utils._narrowing import is_list_or_tuple
+from django_strawberry_framework.utils.connections import (
+    assert_window_fetch_mode_for,
+    window_range_plan,
+)
+
 from .join_taxonomy import LateralJoinShape
 from .nested_fetch import (
     WINDOWED_STRATEGY,
@@ -113,8 +117,9 @@ if TYPE_CHECKING:
     from django.db.models.sql.query import Query
     from django.utils.tree import Node, _NodeChildren
 
-    from ..keyset import KeysetSeek
-    from ..utils.typing import ConcreteField, ForeignKeyField
+    from django_strawberry_framework.keyset import KeysetSeek
+    from django_strawberry_framework.utils.typing import ConcreteField, ForeignKeyField
+
     from .plans import OrderEntry
 
     #: A canonical window-qual signature (``window_predicate_signature``): an
@@ -830,8 +835,11 @@ def _keyset_seek_quals_match(nodes: _NodeChildren, spec: LateralWindowSpec) -> b
     seek = cast("KeysetSeek", spec.keyset_seek)
     plan = seek.plan()
     column_names = [column.field.column for column in seek.columns]
-    if len(nodes) != 2 or len(column_names) != len(plan.values):
-        return False
+    match nodes:
+        case [lead, expansion] if len(column_names) == len(plan.values):
+            pass
+        case _:
+            return False
 
     def is_lookup(node: object, lookup_name: str, index: int) -> bool:
         if getattr(node, "lookup_name", None) != lookup_name:
@@ -849,7 +857,6 @@ def _keyset_seek_quals_match(nodes: _NodeChildren, spec: LateralWindowSpec) -> b
     def is_cmp(node: object, index: int) -> bool:
         return is_lookup(node, "gt" if plan.greater[index] else "lt", index)
 
-    lead, expansion = nodes
     if not is_lookup(lead, "gte" if plan.lead_greater else "lte", 0):
         return False
     if len(column_names) == 1:

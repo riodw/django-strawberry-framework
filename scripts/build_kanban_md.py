@@ -24,7 +24,6 @@ from __future__ import annotations
 import argparse
 import re
 from collections import defaultdict
-from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import groupby
 from pathlib import Path
@@ -62,6 +61,8 @@ except ModuleNotFoundError:  # imported as ``scripts.build_kanban_md`` (repo roo
     )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping, Sequence
+
     from _kanban_lib import (
         BoardDocRow,
         CardLink,

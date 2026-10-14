@@ -61,9 +61,14 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Case, Exists, F, OuterRef, Q, When
 from django.db.models.constants import LOOKUP_SEP
 
-from ..exceptions import ConfigurationError, OptimizerError
-from ..utils.querysets import VisibleRowExists
-from ..utils.relations import m2m_through_link_fields, relation_bool, relation_kind, relation_link
+from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
+from django_strawberry_framework.utils.querysets import VisibleRowExists
+from django_strawberry_framework.utils.relations import (
+    m2m_through_link_fields,
+    relation_bool,
+    relation_kind,
+    relation_link,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -72,8 +77,8 @@ if TYPE_CHECKING:
     from django.db import models
     from django.db.models import QuerySet
 
-    from ..utils.relations import RelationLink
-    from ..utils.typing import ConcreteField, ForeignKeyField, ModelField
+    from django_strawberry_framework.utils.relations import RelationLink
+    from django_strawberry_framework.utils.typing import ConcreteField, ForeignKeyField, ModelField
 
 _M = TypeVar("_M", bound="models.Model")
 

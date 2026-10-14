@@ -22,12 +22,13 @@ from typing import TYPE_CHECKING, ClassVar
 
 from typing_extensions import override
 
-from ..utils.inputs import GeneratedInputArgumentsFactory
+from django_strawberry_framework.utils.inputs import GeneratedInputArgumentsFactory
+
 from .inputs import _build_input_fields
 from .sets import OrderSet
 
 if TYPE_CHECKING:
-    from ..types.definition import DjangoTypeDefinition
+    from django_strawberry_framework.types.definition import DjangoTypeDefinition
 
 
 class OrderArgumentsFactory(GeneratedInputArgumentsFactory[OrderSet]):

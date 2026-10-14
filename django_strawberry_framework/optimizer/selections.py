@@ -44,7 +44,6 @@ its converted-selection memo lives on - both below it in the dependency order.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
@@ -56,10 +55,12 @@ from graphql.language.ast import (
     VariableNode,
 )
 
-from ..utils.typing import schema_config_from_info
+from django_strawberry_framework.utils.typing import schema_config_from_info
+
 from ._context import converted_selections_memo
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable, Mapping, Sequence
     from typing import TypeAlias
 
     from graphql.language.ast import (

@@ -74,11 +74,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping, Sequence
+
     from typing_extensions import TypeIs
 
 # ``json.loads`` returns ``Any``; this alias hands callers an ``object`` to narrow.
@@ -391,6 +392,7 @@ def _basedpyright_python_version(document: object) -> str:
 
     Raises:
         KeyError: A table on the path lacks its key, or a value on it is not a table.
+
     """
     value = document
     for key in ("tool", "basedpyright", "pythonVersion"):

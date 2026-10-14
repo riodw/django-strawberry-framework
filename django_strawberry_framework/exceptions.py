@@ -7,10 +7,12 @@ anywhere without circulars.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import ParamSpec, TypeVar, cast
+from typing import TYPE_CHECKING, ParamSpec, TypeVar, cast
 
 from typing_extensions import override
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 __all__ = (
     "ConfigurationError",

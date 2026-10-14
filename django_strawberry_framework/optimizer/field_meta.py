@@ -23,8 +23,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, cast
 
-from ..exceptions import OptimizerError, _safe_type_name
-from ..utils.relations import (
+from django_strawberry_framework.exceptions import OptimizerError, _safe_type_name
+from django_strawberry_framework.utils.relations import (
     RelationLink,
     has_composite_pk,
     instance_accessor,
@@ -39,8 +39,8 @@ from ..utils.relations import (
 if TYPE_CHECKING:
     from django.db import models
 
-    from ..utils.relations import RelationKind
-    from ..utils.typing import ConcreteField, ModelField
+    from django_strawberry_framework.utils.relations import RelationKind
+    from django_strawberry_framework.utils.typing import ConcreteField, ModelField
 
 
 class _DjangoFieldLike(Protocol):
@@ -168,6 +168,7 @@ class FieldMeta:
             model's object-id column (``getattr(field, "object_id_field_name",
             None)``); ``None`` otherwise. The optimizer partitions the
             windowed prefetch by this column's attname.
+
     """
 
     name: str
@@ -231,6 +232,7 @@ class FieldMeta:
                 typed failure at stamp time (``DjangoType`` construction
                 or the walker's unregistered fallback map-build) rather
                 than a late ``AttributeError`` mid-walk.
+
         """
         try:
             field_name = field.name

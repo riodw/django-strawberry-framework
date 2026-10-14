@@ -52,7 +52,7 @@ from django import forms
 from django.core.exceptions import FieldDoesNotExist
 from django.utils.choices import CallableChoiceIterator
 
-from ..exceptions import (
+from django_strawberry_framework.exceptions import (
     ConfigurationError,
     _safe_arg_repr,
     _safe_attr,
@@ -62,22 +62,22 @@ from ..exceptions import (
     _safe_text,
     _safe_type_name,
 )
-from ..mutations.inputs import (
+from django_strawberry_framework.mutations.inputs import (
     CREATE,
     PARTIAL,
     annotate_queryset_relation,
     model_column_input_annotation,
     model_column_write_kind,
 )
-from ..registry import register_subsystem_clear, registry
-from ..scalars import Upload
-from ..types.converters import (
+from django_strawberry_framework.registry import register_subsystem_clear, registry
+from django_strawberry_framework.scalars import Upload
+from django_strawberry_framework.types.converters import (
     _field_has_choices,
     array_element_field,
     build_enum_from_choices,
     choice_column_pairs,
 )
-from ..utils.inputs import (
+from django_strawberry_framework.utils.inputs import (
     InputFieldSpec,
     build_strawberry_input_class,
     guard_dropped_required,
@@ -87,8 +87,12 @@ from ..utils.inputs import (
     optional_input_field,
     resolve_effective_fields,
 )
-from ..utils.relations import is_forward_concrete_relation, is_forward_many_to_many
-from ..utils.strings import graphql_camel_name, pascal_case
+from django_strawberry_framework.utils.relations import (
+    is_forward_concrete_relation,
+    is_forward_many_to_many,
+)
+from django_strawberry_framework.utils.strings import graphql_camel_name, pascal_case
+
 from .converter import (
     FILE,
     RELATION_MULTI,
@@ -104,7 +108,7 @@ if TYPE_CHECKING:
 
     from django.db import models
 
-    from ..utils.typing import ConcreteField
+    from django_strawberry_framework.utils.typing import ConcreteField
 
     # A declarative form class - the only kind a form mutation's ``Meta.form_class``
     # validates to (``forms.Form`` / ``forms.ModelForm`` are siblings under

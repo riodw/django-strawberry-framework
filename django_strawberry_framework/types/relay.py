@@ -26,7 +26,6 @@ package is not imported at runtime.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, TypeGuard, TypeVar, cast
 from weakref import WeakKeyDictionary
 
@@ -37,16 +36,21 @@ from strawberry import relay
 from strawberry.relay.exceptions import NodeIDAnnotationError
 from strawberry.types.base import StrawberryObjectDefinition
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_class_name, _safe_type_name
-from ..resource_policy import check_deadline
-from ..utils.execution_mode import async_execution
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_class_name,
+    _safe_type_name,
+)
+from django_strawberry_framework.resource_policy import check_deadline
+from django_strawberry_framework.utils.execution_mode import async_execution
 
 # ``SyncMisuseError`` moved to ``utils/querysets.py``; the
 # redundant ``as`` alias re-exports it from this module so ``from
 # ...types.relay import SyncMisuseError`` and the ``types/__init__.py`` re-export
 # keep working unchanged.
-from ..utils.querysets import SyncMisuseError as SyncMisuseError  # noqa: PLC0414 - kept re-export path
-from ..utils.querysets import (
+from django_strawberry_framework.utils.querysets import SyncMisuseError as SyncMisuseError  # noqa: PLC0414 - kept re-export path
+from django_strawberry_framework.utils.querysets import (
     apply_type_visibility_async,
     apply_type_visibility_sync,
     initial_queryset,
@@ -54,6 +58,8 @@ from ..utils.querysets import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+
     from strawberry.schema import Schema
     from strawberry.types import Info
     from strawberry.utils.await_maybe import AwaitableOrValue
@@ -164,6 +170,7 @@ def apply_interfaces(type_cls: type[DjangoType], definition: DjangoTypeDefinitio
             consumers see "cannot add interface X" rather than a raw layout
             or hostile-metaclass exception
             (spec-015 Decision 1 #"never as a raw layout error").
+
     """
     additions = tuple(iface for iface in definition.interfaces if iface not in type_cls.__mro__)
     if not additions:
@@ -360,7 +367,7 @@ def _node_value_or_none(cls: type[_RelayDjangoType], node_id: object) -> object:
     """
     # In-function import: ``relay.py`` imports this module at module top, so a
     # module-top import back would close the load cycle.
-    from ..relay import _coerce_pk_or_none
+    from django_strawberry_framework.relay import _coerce_pk_or_none
 
     return _coerce_pk_or_none(cls, _coerce_node_id(node_id))
 
@@ -460,7 +467,8 @@ def _validated_globalid_setting() -> GlobalIDStrategy | None:
     # load - so the local import resolves cheaply. Same cycle-dodge justification
     # ``base.py`` documents for its ``FilterSet`` / ``OrderSet`` in-function
     # imports. Do NOT hoist either import to module top.
-    from ..conf import relay_globalid_strategy_setting
+    from django_strawberry_framework.conf import relay_globalid_strategy_setting
+
     from .base import _validate_globalid_strategy
 
     setting = relay_globalid_strategy_setting()
@@ -636,7 +644,7 @@ _published_node_names: WeakKeyDictionary[Schema, dict[type, str]] = WeakKeyDicti
 
 def _registered_node_definition(origin: object) -> DjangoTypeDefinition | None:
     """Return the registry definition of a Relay-Node ``DjangoType`` ``origin``, else ``None``."""
-    from ..registry import registry
+    from django_strawberry_framework.registry import registry
 
     definition = registry.get_definition(origin)
     if definition is None or not implements_relay_node(definition.origin):
@@ -712,8 +720,9 @@ def node_definition_for_published_name(schema: Schema, name: str) -> DjangoTypeD
             published as nothing and names no registered Relay-Node definition
             (the registry's miss / ambiguity error), or names one ``schema``
             publishes under another name.
+
     """
-    from ..registry import registry
+    from django_strawberry_framework.registry import registry
 
     published = schema.get_type_by_name(name)
     if published is None:
@@ -989,7 +998,7 @@ def decode_global_id(
     # must not import ``registry`` at module top - the same cycle-dodge
     # ``_resolve_globalid_strategy`` above documents for its ``conf`` / ``base``
     # imports. Decode runs well after module load, so the local import is cheap.
-    from ..registry import registry
+    from django_strawberry_framework.registry import registry
 
     if not isinstance(gid, (relay.GlobalID, str)):
         raise ConfigurationError(

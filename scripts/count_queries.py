@@ -54,7 +54,6 @@ import argparse
 import hashlib
 import json
 import sys
-from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
@@ -74,7 +73,7 @@ from graphql import GraphQLError, OperationDefinitionNode, parse
 from typing_extensions import NotRequired
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     from typing_extensions import TypeIs
 
@@ -127,6 +126,7 @@ def classify_counts(counts: list[int]) -> str:
 
     Raises:
         ValueError: fewer than two counts, since one count has no shape.
+
     """
     if len(counts) < 2:
         msg = "classify_counts needs counts at two or more cardinalities"
@@ -158,6 +158,7 @@ def parse_cardinalities(raw: str) -> list[int]:
 
     Raises:
         ValueError: a value is not a positive int, or the list repeats one.
+
     """
     values = sorted(int(part) for part in raw.split(",") if part.strip())
     if any(value < 1 for value in values):
@@ -253,6 +254,7 @@ def compare_reports(baseline: _Report, current: _Report) -> list[str]:
         ValueError: the reports measured a different operation or seeder.
             ``graphql_operation_name`` is the executed operation's name, so a
             report that recorded only the requested name can refuse.
+
     """
     before_params = baseline["header"]["params"]
     after_params = current["header"]["params"]

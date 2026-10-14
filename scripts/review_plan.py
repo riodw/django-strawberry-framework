@@ -89,10 +89,12 @@ import json
 import re
 import subprocess
 import sys
-from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, TypedDict
+from typing import TYPE_CHECKING, Protocol, TypedDict
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Sequence
 
 try:
     import _plan_common

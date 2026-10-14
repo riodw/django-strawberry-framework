@@ -33,18 +33,20 @@ families import it without a cycle -- same contract as ``utils/permissions.py``
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NoReturn, cast
 
-from ..exceptions import ConfigurationError, _safe_attr, _safe_type_name
+from django_strawberry_framework.exceptions import ConfigurationError, _safe_attr, _safe_type_name
+
 from ._narrowing import dict_get, dict_items, is_dict, is_list, is_mapping, list_iter
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator, Mapping
     from typing import TypeAlias
 
-    from ..filters.sets import FilterSet
-    from ..orders.sets import OrderSet
+    from django_strawberry_framework.filters.sets import FilterSet
+    from django_strawberry_framework.orders.sets import OrderSet
+
     from .inputs import GeneratedInputFieldSpec
 
     #: A set family's field-spec map, keyed by ``(set class, python attr)``. Mapping

@@ -27,7 +27,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 from strawberry import relay
 
-from ..exceptions import _safe_text
+from django_strawberry_framework.exceptions import _safe_text
+
 from ._narrowing import dict_items, is_dict, is_list, list_iter
 from .errors import (
     FIELD_ERROR_CODE_INVALID,
@@ -51,7 +52,8 @@ if TYPE_CHECKING:
     from django.db import models
     from strawberry import Info
 
-    from ..mutations.inputs import FieldError
+    from django_strawberry_framework.mutations.inputs import FieldError
+
     from .inputs import InputFieldSpec
 
     #: One kind handler: decode ``(spec, value)``, store it, and report a ``FieldError``.
@@ -223,7 +225,7 @@ def type_check_relation_id(
     package.
     """
     if isinstance(value, relay.GlobalID):
-        from ..relay import GlobalIDDecode, decode_model_global_id
+        from django_strawberry_framework.relay import GlobalIDDecode, decode_model_global_id
 
         result = decode_model_global_id(
             value,

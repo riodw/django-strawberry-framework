@@ -40,10 +40,12 @@ import copy
 import inspect
 import json
 import threading
-from collections.abc import Callable, Iterator, Mapping
-from typing import Protocol, TypeVar
+from typing import TYPE_CHECKING, Protocol, TypeVar
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator, Mapping
 
 
 class _Closeable(Protocol):
@@ -79,7 +81,7 @@ def _opened_outside_main_thread_sync_context() -> bool:
 
 
 def _open_tracked(
-    original: Callable[[_Wrapper, object], _Closeable],
+    original: "Callable[[_Wrapper, object], _Closeable]",
     wrapper: _Wrapper,
     conn_params: object,
 ) -> _Closeable:
@@ -125,7 +127,7 @@ _install_postgres_connection_tracking()
 @pytest.fixture(autouse=True, scope="session")
 def _close_stray_postgres_connections(
     django_db_setup: None,
-) -> Iterator[None]:
+) -> "Iterator[None]":
     """Close tracked stray Postgres connections before the test DBs drop.
 
     Depending on ``django_db_setup`` orders this fixture's teardown BEFORE

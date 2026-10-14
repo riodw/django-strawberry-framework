@@ -105,12 +105,18 @@ from django.db.models.query import (
 )
 from django.db.models.sql.where import ExtraWhere, WhereNode
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_type_name,
+)
+
 from ._narrowing import (
     is_class,
     is_exact_dict,
     is_exact_list,
     is_exact_list_or_tuple,
+    is_exact_pair,
     is_exact_set_or_frozenset,
     is_exact_tuple,
     is_exact_tuple_or_list,
@@ -135,9 +141,10 @@ if TYPE_CHECKING:
 
     from django.db.models.query import BaseIterable
 
-    from ..filters.sets import FilterSet
-    from ..orders.sets import OrderSet
-    from ..types.base import DjangoType
+    from django_strawberry_framework.filters.sets import FilterSet
+    from django_strawberry_framework.orders.sets import OrderSet
+    from django_strawberry_framework.types.base import DjangoType
+
     from .typing import ModelField
 
     #: A ``Prefetch`` as the seal rebuilds it: a string lookup over a model-row child.
@@ -2232,7 +2239,7 @@ def _query_container_defect(query: object) -> tuple[str, str] | None:
         for alias, payload in extra.items():
             if type(alias) is not str:
                 return ("untrusted", f"query {attr} has a non-string key")
-            if not is_exact_tuple(payload) or len(payload) != 2:
+            if not is_exact_pair(payload):
                 return ("untrusted", f"query {attr}[{alias!r}] has a malformed payload")
             statement, params = payload
             if type(statement) is not str:
@@ -2803,7 +2810,7 @@ def _deferred_value_defect(value: object, walk: _GraphWalk, label: str) -> tuple
         for child in q_children:
             if type(child) is models.Q:
                 child_defect = _deferred_value_defect(child, walk, label)
-            elif is_exact_tuple(child) and len(child) == 2 and type(child[0]) is str:
+            elif is_exact_pair(child) and type(child[0]) is str:
                 child_defect = _deferred_value_defect(child[1], walk, label)
             else:
                 return ("untrusted", f"{label} Q child is a {_safe_type_name(child)}")
@@ -2832,6 +2839,10 @@ def _deferred_value_defect(value: object, walk: _GraphWalk, label: str) -> tuple
     return ("untrusted", f"{label} is a {_safe_type_name(value)}")
 
 
+# Django's ``_deferred_filter`` is ``(negate, args, kwargs)``.
+_DEFERRED_FILTER_ARITY = 3
+
+
 def _bake_deferred_filter_or_defect(
     rebuilt_query: sql.Query,
     deferred: object,
@@ -2855,7 +2866,7 @@ def _bake_deferred_filter_or_defect(
     """
     # Exact-shape gate BEFORE the unpack: tuple unpacking dispatches ``__iter__``,
     # so an arbitrary object planted in the slot must be rejected without iteration.
-    if not is_exact_tuple(deferred) or len(deferred) != 3:
+    if not is_exact_tuple(deferred) or len(deferred) != _DEFERRED_FILTER_ARITY:
         return ("untrusted", f"{cls_name} deferred filter is malformed")
     negate, args, kwargs = deferred
     if type(negate) is not bool:
@@ -4736,7 +4747,7 @@ def related_visibility_queryset(
     written once (spec-039). An ``async def get_queryset`` met here raises
     ``SyncMisuseError`` (inherited from ``apply_type_visibility_sync``).
     """
-    from ..registry import registry
+    from django_strawberry_framework.registry import registry
 
     related_type = registry.get(related_model)
     if related_type is None:
@@ -4788,7 +4799,7 @@ def relation_target_type(
     type, and one reaching the child model answers with ``root``. Any other
     model answers with ``registry.get``'s type; ``None`` when it has none.
     """
-    from ..registry import registry
+    from django_strawberry_framework.registry import registry
 
     if (
         root is not None

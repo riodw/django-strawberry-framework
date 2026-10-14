@@ -12,11 +12,15 @@ from strawberry import relay
 from strawberry.schema.schema_converter import GraphQLCoreConverter
 from strawberry.utils.str_converters import to_camel_case
 
-from ..exceptions import ConfigurationError, OptimizerError
-from ..registry import register_subsystem_clear, registry
-from ..utils._queryset_private import queryset_db, queryset_hints, queryset_prefetch_lookups
-from ..utils.connections import relay_max_results_from_info
-from ..utils.querysets import (
+from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
+from django_strawberry_framework.registry import register_subsystem_clear, registry
+from django_strawberry_framework.utils._queryset_private import (
+    queryset_db,
+    queryset_hints,
+    queryset_prefetch_lookups,
+)
+from django_strawberry_framework.utils.connections import relay_max_results_from_info
+from django_strawberry_framework.utils.querysets import (
     _COMBINED_WHAT,
     _LIST_RELATION_CHILD_POLICY,
     _PREFETCH_CHILD_POLICY,
@@ -25,9 +29,14 @@ from ..utils.querysets import (
     apply_type_visibility_sync,
     base_queryset,
 )
-from ..utils.relations import instance_accessor, is_many_side_relation_kind, relation_kind
-from ..utils.strings import snake_case
-from ..utils.typing import schema_config_from_info
+from django_strawberry_framework.utils.relations import (
+    instance_accessor,
+    is_many_side_relation_kind,
+    relation_kind,
+)
+from django_strawberry_framework.utils.strings import snake_case
+from django_strawberry_framework.utils.typing import schema_config_from_info
+
 from . import logger
 from . import nested_planner as _nested_planner
 from .field_meta import FieldMeta
@@ -71,8 +80,9 @@ if TYPE_CHECKING:
     from strawberry.types.field import StrawberryField
     from strawberry.types.nodes import Arguments
 
-    from ..types.base import DjangoType
-    from ..types.definition import DjangoTypeDefinition
+    from django_strawberry_framework.types.base import DjangoType
+    from django_strawberry_framework.types.definition import DjangoTypeDefinition
+
     from .plans import PrefetchLookup
     from .selections import ConvertedSelection, FieldSelection
 
@@ -1722,7 +1732,7 @@ def _has_custom_id_resolver(
     # Lazy import: ``types.definition`` pulls in ``optimizer.field_meta`` at
     # module load, so importing it at the top of the walker risks an
     # import-time cycle through the optimizer package init.
-    from ..types.definition import origin_has_custom_id_resolver
+    from django_strawberry_framework.types.definition import origin_has_custom_id_resolver
 
     return origin_has_custom_id_resolver(target_type, target_pk_name)
 

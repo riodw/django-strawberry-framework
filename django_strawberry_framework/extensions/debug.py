@@ -94,7 +94,6 @@ Capture mechanism and its documented boundaries:
 import math
 import threading
 import traceback
-from collections.abc import Iterator, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, NamedTuple, TypedDict, cast
@@ -105,12 +104,15 @@ from graphql import ExecutionResult as GraphQLExecutionResult
 from graphql import GraphQLError
 from typing_extensions import override
 
-from .. import logger
-from ..exceptions import ConfigurationError, describe_value
-from ..utils.private_state import PrivateAuthority
+from django_strawberry_framework import logger
+from django_strawberry_framework.exceptions import ConfigurationError, describe_value
+from django_strawberry_framework.utils.private_state import PrivateAuthority
+
 from .operation_state import OperationState, _OperationBoundExtension
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator, Mapping
+
     from django.db.backends.base.base import BaseDatabaseWrapper
     from strawberry.types import ExecutionContext
 
@@ -753,7 +755,7 @@ class DjangoDebugExtension(_OperationBoundExtension[_DebugOperationState]):
         return self._acknowledged() or getattr(settings, "DEBUG", None) is True
 
     @override
-    def on_operation(self) -> Iterator[None]:
+    def on_operation(self) -> "Iterator[None]":
         """Bracket the operation with the debug cursor; assemble the payload at teardown.
 
         One synchronous generator serves both execution colors (the engine
@@ -820,7 +822,7 @@ class DjangoDebugExtension(_OperationBoundExtension[_DebugOperationState]):
                 self._stash_payload_if_executed(state)
 
     @override
-    def on_execute(self) -> Iterator[None]:
+    def on_execute(self) -> "Iterator[None]":
         """Stash the payload the moment graphql-core returns, before any operation teardown.
 
         The engine's streaming path reads the extension results inside the

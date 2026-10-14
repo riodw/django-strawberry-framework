@@ -53,7 +53,6 @@ import argparse
 import statistics
 import sys
 import time
-from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 from unittest import mock
@@ -71,6 +70,8 @@ from _bench_common import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
+
     from _bench_common import BenchProvenance
     from django.db import models
     from graphql.type.definition import GraphQLResolveInfo

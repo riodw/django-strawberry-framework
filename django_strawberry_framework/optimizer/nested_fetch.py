@@ -71,7 +71,6 @@ it is schema-static and needs no plan-cache-key change.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import cache
 from types import MappingProxyType
@@ -82,18 +81,28 @@ from django.db.models import Prefetch, QuerySet
 from django.db.models.query import ModelIterable
 from typing_extensions import override
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_attr, _safe_type_name
-from ..utils._queryset_private import chain_queryset, super_clone_queryset
-from ..utils.connections import assert_window_fetch_mode_for
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_attr,
+    _safe_type_name,
+)
+from django_strawberry_framework.utils._queryset_private import (
+    chain_queryset,
+    super_clone_queryset,
+)
+from django_strawberry_framework.utils.connections import assert_window_fetch_mode_for
+
 from ._context import active_nested_strategy
-from .join_taxonomy import RelationJoinDescriptor
 from .plans import OptimizationPlan, append_prefetch_unique, apply_window_pagination
 
 if TYPE_CHECKING:
-    from collections.abc import MutableSequence
+    from collections.abc import Callable, Mapping, MutableSequence
 
-    from ..keyset import KeysetSeek
-    from ..utils.typing import ModelField
+    from django_strawberry_framework.keyset import KeysetSeek
+    from django_strawberry_framework.utils.typing import ModelField
+
+    from .join_taxonomy import RelationJoinDescriptor
     from .lateral_fetch import WindowSignature
     from .plans import OrderEntry, PrefetchLookup
 
@@ -458,7 +467,7 @@ def resolve_strategy(value: object) -> NestedConnectionStrategy:
     ``ConfigurationError`` with an arbitrary exception.
     """
     if value is None:
-        from ..conf import nested_connection_strategy_setting
+        from django_strawberry_framework.conf import nested_connection_strategy_setting
 
         value = nested_connection_strategy_setting()
     if isinstance(value, str):

@@ -28,7 +28,6 @@ the same dig from plan-time graphql-core ``info`` and resolve-time Strawberry
 import enum
 import functools
 import inspect
-from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any, Final, TypeGuard, TypeVar, cast, get_args, get_origin
 
 from asgiref.sync import iscoroutinefunction
@@ -36,6 +35,7 @@ from graphql import GraphQLList, GraphQLNonNull
 from typing_extensions import Never
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
     from typing import Protocol, TypeAlias
 
     from django.db import models
@@ -219,7 +219,9 @@ def _callable_inspection_target(value: object) -> object:
     )
 
 
-def is_async_callable(value: object) -> TypeGuard[Callable[..., Coroutine[object, Never, object]]]:
+def is_async_callable(
+    value: object,
+) -> TypeGuard["Callable[..., Coroutine[object, Never, object]]"]:
     """Return whether calling ``value`` yields a coroutine.
 
     ``inspect.iscoroutinefunction`` only reports on the value handed to it
@@ -271,7 +273,7 @@ def is_async_callable(value: object) -> TypeGuard[Callable[..., Coroutine[object
 # stay ``Any`` as in typeshed's own guard, where ``object`` would refuse that result
 def is_marked_coroutine_function(
     value: object,
-) -> TypeGuard[Callable[..., Coroutine[Any, Any, Any]]]:  # pyright: ignore[reportExplicitAny]
+) -> TypeGuard["Callable[..., Coroutine[Any, Any, Any]]"]:  # pyright: ignore[reportExplicitAny]
     """Return whether Django's own coroutine detector reads ``value`` as async.
 
     asgiref's ``iscoroutinefunction`` is ``inspect.iscoroutinefunction`` from
@@ -301,6 +303,7 @@ def unwrap_graphql_type(gql_type: object) -> object:
         ``NonNull(List(NonNull(Inner)))`` -> ``Inner``;
         ``Inner`` -> ``Inner`` (no wrapper to peel);
         ``None`` -> ``None`` (no ``of_type`` attribute).
+
     """
     for _ in range(MAX_TYPE_WRAPPER_DEPTH + 1):
         inner = getattr(gql_type, "of_type", MISSING_ATTRIBUTE)
@@ -428,6 +431,7 @@ def unwrap_return_type(rt: object) -> object:
         layer; chain calls if you need full unwrapping);
         ``StrawberryList(of_type=int)`` -> ``int``;
         ``int`` -> ``int`` (no wrapper to peel).
+
     """
     inner = getattr(rt, "of_type", MISSING_ATTRIBUTE)
     if inner is not MISSING_ATTRIBUTE:

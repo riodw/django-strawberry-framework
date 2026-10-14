@@ -26,14 +26,14 @@ from typing import TYPE_CHECKING, cast
 
 from typing_extensions import override
 
-from ..exceptions import (
+from django_strawberry_framework.exceptions import (
     ConfigurationError,
     _safe_arg_repr,
     _safe_class_name,
     _safe_type_name,
 )
-from ..sets_mixins import RelatedSetTargetMixin
-from ..utils._narrowing import is_class
+from django_strawberry_framework.sets_mixins import RelatedSetTargetMixin
+from django_strawberry_framework.utils._narrowing import is_class
 
 if TYPE_CHECKING:
     from collections.abc import Callable

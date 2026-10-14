@@ -98,10 +98,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
-from collections.abc import AsyncGenerator, Callable
 from typing import TYPE_CHECKING, TypeVar, cast
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Callable
+
     from django.contrib.sessions.backends.base import SessionBase
 
     from .permissions import MutableChannelsScope
@@ -184,7 +185,7 @@ def scope_singleton(
       something else owns the key, and quietly overwriting it would trade a
       loud configuration error for two systems sharing one slot.
     """
-    from ..exceptions import ConfigurationError, _safe_type_name
+    from django_strawberry_framework.exceptions import ConfigurationError, _safe_type_name
 
     try:
         value = scope.get(key)
@@ -224,7 +225,7 @@ def session_store_class() -> type[SessionBase]:
     from django.conf import settings
     from django.utils.module_loading import import_string
 
-    from ..exceptions import ConfigurationError, describe_value
+    from django_strawberry_framework.exceptions import ConfigurationError, describe_value
 
     try:
         engine: object = settings.SESSION_ENGINE

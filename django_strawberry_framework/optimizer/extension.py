@@ -46,39 +46,40 @@ from graphql.language.printer import print_ast
 from graphql.type.definition import GraphQLInterfaceType
 from typing_extensions import override
 
-from ..exceptions import _safe_arg_repr
-from ..extensions.operation_state import (
+from django_strawberry_framework.exceptions import _safe_arg_repr
+from django_strawberry_framework.extensions.operation_state import (
     OperationState,
     _OperationBoundExtension,
 )
-from ..extensions.operation_state import (
+from django_strawberry_framework.extensions.operation_state import (
     operation_is_nested as _operation_is_nested,
 )
-from ..registry import register_subsystem_clear, registry
-from ..utils._narrowing import (
+from django_strawberry_framework.registry import register_subsystem_clear, registry
+from django_strawberry_framework.utils._narrowing import (
     is_abstract_set,
     is_list,
     is_mapping,
     is_set_or_frozenset,
     is_tuple,
 )
-from ..utils.private_state import PrivateAuthority
-from ..utils.querysets import (
+from django_strawberry_framework.utils.private_state import PrivateAuthority
+from django_strawberry_framework.utils.querysets import (
     normalize_query_source,
     unwrap_async_queryset_adapter,
     wrap_async_queryset_adapter,
 )
-from ..utils.typing import (
+from django_strawberry_framework.utils.typing import (
     MISSING_ATTRIBUTE,
     return_type_of,
     unwrap_graphql_type,
 )
-from ..utils.typing import (
+from django_strawberry_framework.utils.typing import (
     strawberry_schema_from_info as _strawberry_schema_from_info,
 )
-from ..utils.typing import (
+from django_strawberry_framework.utils.typing import (
     strawberry_schema_from_schema as _strawberry_schema_from_schema,
 )
+
 from . import logger
 from ._context import (
     DST_OPTIMIZER_FK_ID_ELISIONS,
@@ -154,8 +155,9 @@ if TYPE_CHECKING:
     from strawberry.types.execution import ExecutionContext
     from strawberry.types.nodes import Selection
 
-    from ..types.base import DjangoType
-    from ..utils.typing import EitherInfo
+    from django_strawberry_framework.types.base import DjangoType
+    from django_strawberry_framework.utils.typing import EitherInfo
+
     from ._context import FrozenVariableValue, PlanCacheKey
     from .field_meta import FieldMeta
     from .plans import OptimizationPlan

@@ -33,7 +33,6 @@ flat leaf walks.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, cast
@@ -41,7 +40,13 @@ from typing import TYPE_CHECKING, cast
 from django.db.models.constants import LOOKUP_SEP
 from django.http import HttpRequest
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_attr, _safe_type_name
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_attr,
+    _safe_type_name,
+)
+
 from ._narrowing import dict_items, is_dict, is_mapping, mapping_get
 from .input_values import (
     LEAF,
@@ -60,13 +65,14 @@ from .relations import leading_relation_hops
 from .strings import flatten_lookup_path
 
 if TYPE_CHECKING:
-    from collections.abc import MutableMapping
+    from collections.abc import Callable, Mapping, MutableMapping
     from typing import TypeAlias
 
     from django.db import models
 
-    from ..sets_mixins import ActiveInputPermissionMixin
-    from ..types.base import DjangoType
+    from django_strawberry_framework.sets_mixins import ActiveInputPermissionMixin
+    from django_strawberry_framework.types.base import DjangoType
+
     from .input_values import FieldSpecMap, RelatedBranch
 
     #: A Channels connection scope as the adapter holds it. A scope its producer typed

@@ -29,12 +29,14 @@ callable that still needs ``field``).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from typing_extensions import override
 
 from .inputs import SCALAR, FieldConversionBase
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping, Sequence
 
 __all__ = [
     "MRO_CONTINUE",

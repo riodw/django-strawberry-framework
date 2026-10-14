@@ -27,12 +27,15 @@ from typing import TYPE_CHECKING, cast
 
 import strawberry
 from django.db.models import F
-from django.db.models.expressions import Expression, OrderBy
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
-from ..registry import register_subsystem_clear
-from ..utils.input_values import RELATED, iter_active_fields
-from ..utils.inputs import (
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_type_name,
+)
+from django_strawberry_framework.registry import register_subsystem_clear
+from django_strawberry_framework.utils.input_values import RELATED, iter_active_fields
+from django_strawberry_framework.utils.inputs import (
     GeneratedInputFieldSpec,
     build_strawberry_input_class,
     emit_set_input_field_triples,
@@ -40,12 +43,15 @@ from ..utils.inputs import (
     make_set_input_namespace,
     set_input_type_name,
 )
-from ..utils.relations import carrier_backed_link
-from ..utils.strings import graphql_camel_name
+from django_strawberry_framework.utils.relations import carrier_backed_link
+from django_strawberry_framework.utils.strings import graphql_camel_name
 
 if TYPE_CHECKING:
-    from ..types.definition import DjangoTypeDefinition
-    from ..utils.inputs import SetInputNamespace
+    from django.db.models.expressions import Expression, OrderBy
+
+    from django_strawberry_framework.types.definition import DjangoTypeDefinition
+    from django_strawberry_framework.utils.inputs import SetInputNamespace
+
     from .base import RelatedOrder
     from .sets import OrderSet
 

@@ -58,16 +58,15 @@ through ``_merged_serializer_kwargs`` (spec-039).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from rest_framework import serializers
 from typing_extensions import override
 
-from ..exceptions import ConfigurationError, _safe_arg_repr
-from ..mutations.inputs import CREATE
-from ..mutations.operations import NON_DELETE_OPERATION_INPUT_KIND
-from ..mutations.sets import (
+from django_strawberry_framework.exceptions import ConfigurationError, _safe_arg_repr
+from django_strawberry_framework.mutations.inputs import CREATE
+from django_strawberry_framework.mutations.operations import NON_DELETE_OPERATION_INPUT_KIND
+from django_strawberry_framework.mutations.sets import (
     MODEL_BACKED_WRITE_META_KEYS,
     DjangoMutation,
     _ValidatedMutationMeta,
@@ -84,11 +83,12 @@ from ..mutations.sets import (
     resolver_seams,
     validate_select_for_update,
 )
-from ..mutations.sets import (
+from django_strawberry_framework.mutations.sets import (
     _validate_permission_classes as _validate_mutation_permission_classes,
 )
-from ..utils._narrowing import is_mapping
-from ..utils.inputs import normalize_field_name_sequence
+from django_strawberry_framework.utils._narrowing import is_mapping
+from django_strawberry_framework.utils.inputs import normalize_field_name_sequence
+
 from .inputs import (
     SERIALIZER_INPUTS_MODULE_PATH,
     NestedSerializerConfig,
@@ -118,11 +118,14 @@ from .inputs import (
 from .serializer_converter import is_nested_serializer_field, nested_serializer_child
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from django.db import models
     from strawberry.types import Info
 
-    from ..types.base import DjangoType
-    from ..utils.inputs import InputFieldSpec
+    from django_strawberry_framework.types.base import DjangoType
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
     from .hook_context import SerializerHookContext
     from .serializer_converter import DRFBaseSerializer, DRFField, DRFSerializer
 

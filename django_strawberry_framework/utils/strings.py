@@ -17,12 +17,12 @@ Every name transform the package applies at the GraphQL/Django boundary:
 """
 
 import functools
-from collections.abc import Callable
 from typing import TYPE_CHECKING, cast
 
 from django_strawberry_framework.exceptions import ConfigurationError, _safe_type_name
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from typing import Protocol
 
     class _CachedNameTransform(Protocol):
@@ -148,6 +148,7 @@ def snake_case(name: str) -> str:
         ``"isPrivate"`` -> ``"is_private"``;
         ``"HTTPServer2API"`` -> ``"http_server2_api"``;
         ``"_legacyId"`` -> ``"_legacy_id"``.
+
     """
     return _snake_case_cached(_plain_text(name))
 
@@ -205,6 +206,7 @@ def pascal_case(name: str) -> str:
         ``"trailing_"`` -> ``"Trailing_"``;
         ``"___x_foo"`` -> ``"___XFoo"``;
         ``"double__underscore"`` -> ``"DoubleUnderscore"``.
+
     """
     name = _plain_text(name)
     parts = [part for part in name.split("_") if part]
@@ -219,7 +221,7 @@ def pascal_case(name: str) -> str:
     return f"{leading}{stem}{trailing}"
 
 
-def pascal_case_or_raise(name: str, *, make_error: Callable[[str], Exception]) -> str:
+def pascal_case_or_raise(name: str, *, make_error: "Callable[[str], Exception]") -> str:
     """Return ``pascal_case(name)``, raising ``make_error(name)`` when it is empty.
 
     Single-sites the no-token check both consumers wrap:

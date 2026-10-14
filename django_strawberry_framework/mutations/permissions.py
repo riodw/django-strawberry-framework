@@ -28,9 +28,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
-from ..exceptions import ConfigurationError, _safe_arg_repr
-from ..utils.permissions import request_from_info
-from ..utils.querysets import reject_async_in_sync_context
+from django_strawberry_framework.exceptions import ConfigurationError, _safe_arg_repr
+from django_strawberry_framework.utils.permissions import request_from_info
+from django_strawberry_framework.utils.querysets import reject_async_in_sync_context
+
 from .operations import _OPERATION_PERMISSION_ACTION
 
 if TYPE_CHECKING:
@@ -40,7 +41,8 @@ if TYPE_CHECKING:
     from django.db import models
     from strawberry.types import Info
 
-    from ..forms.sets import DjangoFormMutation
+    from django_strawberry_framework.forms.sets import DjangoFormMutation
+
     from .sets import DjangoMutation
 
     class _ModelResolvingMutation(Protocol):

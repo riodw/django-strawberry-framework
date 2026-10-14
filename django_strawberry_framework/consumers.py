@@ -366,7 +366,6 @@ import asyncio
 import contextlib
 import math
 import time
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast, get_origin
 
 from django.core.exceptions import DisallowedHost
@@ -384,7 +383,7 @@ from .utils.sessions import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import MutableMapping
+    from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, MutableMapping
     from typing import Protocol
 
     from asgiref.typing import (

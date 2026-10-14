@@ -48,31 +48,29 @@ offending type cannot be fixed in place.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Generic, TypeVar, cast
 
 import strawberry
-from django.db import models
 from strawberry import relay
 from strawberry.types.field import StrawberryField
 from strawberry.utils.str_converters import to_camel_case
 
-from ..exceptions import (
+from django_strawberry_framework.exceptions import (
     ConfigurationError,
     _safe_arg_repr,
     _safe_attr,
     _safe_class_name,
     _safe_type_name,
 )
-from ..optimizer import logger
-from ..optimizer.field_meta import FieldMeta
-from ..registry import GLOBALID_SETTING_UNSET, registry
-from ..utils.imports import loaded_attr
-from ..utils.relations import instance_accessor
+from django_strawberry_framework.optimizer import logger
+from django_strawberry_framework.registry import GLOBALID_SETTING_UNSET, registry
+from django_strawberry_framework.utils.imports import loaded_attr
+from django_strawberry_framework.utils.relations import instance_accessor
+
 from .converters import resolved_relation_annotation
-from .relations import PendingRelation
 from .relay import (
     _accepts_model_label_decode,
     _check_composite_pk_for_relay_node,
@@ -86,16 +84,20 @@ from .relay import (
 from .resolvers import _attach_file_resolvers, _attach_relation_resolvers
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
 
+    from django.db import models
     from strawberry.types.fields.resolver import StrawberryResolver
 
-    from ..filters.sets import FilterSet
-    from ..orders.sets import OrderSet
-    from ..utils.inputs import GeneratedInputArgumentsFactory
-    from ..utils.typing import ModelField
+    from django_strawberry_framework.filters.sets import FilterSet
+    from django_strawberry_framework.optimizer.field_meta import FieldMeta
+    from django_strawberry_framework.orders.sets import OrderSet
+    from django_strawberry_framework.utils.inputs import GeneratedInputArgumentsFactory
+    from django_strawberry_framework.utils.typing import ModelField
+
     from .base import DjangoType
     from .definition import DjangoTypeDefinition
+    from .relations import PendingRelation
 
 # The sidecar family one phase-2.5 binding pass runs over: every hook in one
 # ``_SidecarBindingSpec`` takes the same family's set classes.
@@ -699,7 +701,11 @@ def _synthesize_relation_connections() -> None:
     # ``_node_fields_declared`` precedent in ``finalize_django_types``). A
     # contract step must never be silently skipped, so deliberately no
     # try/except here.
-    from ..connection import _build_relation_connection_resolver, _connection_type_for
+    from django_strawberry_framework.connection import (
+        _build_relation_connection_resolver,
+        _connection_type_for,
+    )
+
     from .base import DEFAULT_RELATION_SHAPE
 
     for type_cls, definition in registry.iter_definitions():
@@ -1050,7 +1056,7 @@ def finalize_django_types() -> None:
             # violation raises before Phase 3 flips ``finalized`` (pure
             # validation - idempotent under the partial-finalize rerun).
             # Function-local import mirrors the sibling local-import idiom.
-            from ..keyset import validate_cursor_field_columns
+            from django_strawberry_framework.keyset import validate_cursor_field_columns
 
             validate_cursor_field_columns(
                 _safe_class_name(type_cls),
@@ -1068,7 +1074,7 @@ def finalize_django_types() -> None:
     # ``types/``) and PLAIN - unlike ``registry.clear()``'s best-effort
     # teardown blocks, a contract check must never be silently skipped, so
     # there is deliberately no try/except-ImportError here.
-    from ..relay import _node_fields_declared
+    from django_strawberry_framework.relay import _node_fields_declared
 
     if _node_fields_declared and not any(
         implements_relay_node(type_cls) for type_cls, _ in registry.iter_definitions()
@@ -1124,8 +1130,8 @@ def finalize_django_types() -> None:
     # phase filter selects emitted namespaces and per-pass caches, never declaration
     # registries or full-clear-only state. Optional subsystems remain absent unless
     # their owner was imported, so this does not pull DRF or auth into other schemas.
-    from ..mutations.sets import bind_mutations
-    from ..registry import iter_subsystem_clears
+    from django_strawberry_framework.mutations.sets import bind_mutations
+    from django_strawberry_framework.registry import iter_subsystem_clears
 
     for clear in iter_subsystem_clears(before_bind=True):
         clear()
@@ -1165,7 +1171,7 @@ def finalize_django_types() -> None:
     # resolves them. Function-local import (cycle-safe, mirroring the
     # ``bind_mutations`` idiom); the bind only matters when the consumer imported
     # the form-mutations subsystem.
-    from ..forms.sets import bind_form_mutations
+    from django_strawberry_framework.forms.sets import bind_form_mutations
 
     bind_form_mutations()
     _bind_filtersets()
@@ -2063,9 +2069,9 @@ def _bind_ordersets() -> None:
     # package's module-load order. The phase-2.5 binding only runs when a
     # definition declares ``orderset_class``, which only works when the orders
     # subsystem has been imported by the consumer.
-    from ..orders import _helper_referenced_ordersets
-    from ..orders.factories import OrderArgumentsFactory
-    from ..orders.inputs import materialize_input_class
+    from django_strawberry_framework.orders import _helper_referenced_ordersets
+    from django_strawberry_framework.orders.factories import OrderArgumentsFactory
+    from django_strawberry_framework.orders.inputs import materialize_input_class
 
     _bind_sidecar_sets(
         _SidecarBindingSpec(
@@ -2108,7 +2114,7 @@ def _audit_globalid_filter_strategies(wired: list[type[FilterSet]]) -> None:
     backstop reject in ``_decode_and_validate_global_id`` on the first request
     that hits the input.
     """
-    from ..filters.base import (
+    from django_strawberry_framework.filters.base import (
         ENCODE_ONLY_GLOBALID_STRATEGIES,
         GlobalIDFilter,
         GlobalIDMultipleChoiceFilter,
@@ -2209,9 +2215,9 @@ def _bind_filtersets() -> None:
     # package's module-load order. The phase-2.5 binding only runs when a
     # definition declares ``filterset_class``, which only works when the filters
     # subsystem has been imported by the consumer.
-    from ..filters import _helper_referenced_filtersets
-    from ..filters.factories import FilterArgumentsFactory
-    from ..filters.inputs import materialize_input_class
+    from django_strawberry_framework.filters import _helper_referenced_filtersets
+    from django_strawberry_framework.filters.factories import FilterArgumentsFactory
+    from django_strawberry_framework.filters.inputs import materialize_input_class
 
     _bind_sidecar_sets(
         _SidecarBindingSpec(

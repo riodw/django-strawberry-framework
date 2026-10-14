@@ -32,23 +32,24 @@ function-locally (the repo's established cross-package seam, see
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, cast
 
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.db import models
 from django.utils.functional import Promise
 
-from ..exceptions import _safe_predicate, _safe_text, _unprintable
+from django_strawberry_framework.exceptions import _safe_predicate, _safe_text, _unprintable
+
 from ._narrowing import is_iterable, is_list_or_tuple, is_set_or_frozenset
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
     from typing import TypeAlias
 
     from typing_extensions import TypeIs
 
-    from ..mutations.inputs import FieldError
+    from django_strawberry_framework.mutations.inputs import FieldError
+
     from .inputs import InputFieldSpec
     from .typing import ModelField
 
@@ -179,7 +180,7 @@ def field_error(path: str, messages: object, *, codes: object = None) -> FieldEr
     ``ErrorDetail.code``s / Django ``ValidationError.code``s (or a framework code); ``None``
     yields ``[]``.
     """
-    from ..mutations.inputs import NON_FIELD_ERROR_KEY, FieldError
+    from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY, FieldError
 
     normalized_path = _safe_text(path, fallback="")
     key = normalized_path or NON_FIELD_ERROR_KEY

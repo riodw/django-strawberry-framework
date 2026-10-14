@@ -869,6 +869,7 @@ def code_digest(source: str) -> str:
 
     Raises:
         SyntaxError: ``source`` does not parse.
+
     """
     tree = ast.parse(source)
     for node in ast.walk(tree):
@@ -908,6 +909,7 @@ def _print_code_digests(sources: Sequence[str]) -> int:
     Returns:
         ``0`` when every digest is equal, ``1`` when two differ or a source fails
         to parse, ``2`` on a missing source.
+
     """
     digests: set[str] = set()
     for source in sources:
@@ -2312,6 +2314,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     Returns:
         ``0`` on success, ``1`` when a target fails to parse, ``2`` on a
         caller-correctable error.
+
     """
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     single_target: Path | None = args.target

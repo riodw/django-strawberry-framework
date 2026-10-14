@@ -13,7 +13,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..exceptions import ConfigurationError, _safe_arg_repr
+from django_strawberry_framework.exceptions import ConfigurationError, _safe_arg_repr
+
 from .inputs import CREATE, PARTIAL
 
 

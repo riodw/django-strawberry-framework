@@ -85,7 +85,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache, lru_cache
 from types import SimpleNamespace
@@ -104,6 +103,8 @@ from .utils._narrowing import is_dict, is_list
 from .utils.imports import require_optional_module
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from cryptography.hazmat.primitives.ciphers.aead import AESSIV
 
     from .types.definition import DjangoTypeDefinition

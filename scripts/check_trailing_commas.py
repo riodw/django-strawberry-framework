@@ -162,7 +162,6 @@ import sys
 import tokenize
 from bisect import bisect_right
 from collections import Counter
-from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from fnmatch import fnmatch, fnmatchcase
 from pathlib import Path
@@ -170,6 +169,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator, Mapping, Sequence
+
     from typing_extensions import TypeIs
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -186,6 +187,7 @@ def _ruff_line_length(document: object) -> int:
     Raises:
         KeyError: A table on the path lacks its key.
         TypeError: A value on the path is not a table, or the length is not a number or string.
+
     """
     value = document
     for key in ("tool", "ruff", "line-length"):
@@ -928,6 +930,7 @@ def render_link_definitions(cats: Mapping[str, Sequence[str]], orphan: Sequence[
     Raises:
         ValueError: A key of ``cats`` is not one of ``LINK_DEF_CATEGORIES`` (its def
             lines would otherwise be dropped without a word).
+
     """
     unknown = sorted(set(cats) - set(LINK_DEF_CATEGORIES))
     if unknown:
@@ -1658,6 +1661,7 @@ def _python_pass(text: str, threshold: int) -> _PythonPass:
     Raises:
         SyntaxError: ``text`` does not parse.
         tokenize.TokenError: ``text`` does not tokenize.
+
     """
     analysis = _analyze(text, threshold)
     new, broken = text, None

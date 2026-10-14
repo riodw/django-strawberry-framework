@@ -32,15 +32,18 @@ from __future__ import annotations
 
 import sys
 from collections import Counter
-from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Generic, TypeVar, cast
 
 import strawberry
-from django.db import models as django_models
 from typing_extensions import override
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_type_name,
+)
+
 from ._narrowing import dict_items, is_dict, is_mapping, is_set_or_frozenset
 from .canonical import base_container_values, canonical_sort_key
 from .imports import import_attr_if_importable
@@ -61,14 +64,16 @@ _FactorySetT = TypeVar("_FactorySetT", bound="ClassBasedTypeNameMixin")
 _SpecT = TypeVar("_SpecT", bound="_NamedInputSpec")
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
     from typing import Protocol, TypeAlias
 
+    from django.db import models as django_models
     from strawberry.types.base import StrawberryObjectDefinition, WithStrawberryObjectDefinition
     from strawberry.types.field import StrawberryField
 
-    from ..sets_mixins import ClassBasedTypeNameMixin
-    from ..types.definition import DjangoTypeDefinition
+    from django_strawberry_framework.sets_mixins import ClassBasedTypeNameMixin
+    from django_strawberry_framework.types.definition import DjangoTypeDefinition
+
     from .typing import OptionalWidenable
 
     class _NamedInputSpec(Protocol):

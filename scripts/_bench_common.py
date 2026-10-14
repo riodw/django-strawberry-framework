@@ -184,6 +184,7 @@ def package_digest(package_root: str | Path) -> str:
     Raises:
         ValueError: ``package_root`` holds no ``.py`` file, so the digest
             would fingerprint an empty population.
+
     """
     root = Path(package_root)
     files = sorted((path.relative_to(root).as_posix(), path) for path in root.rglob("*.py"))
@@ -250,6 +251,7 @@ def assert_package_in_tree(package_file: str | Path, root: Path = REPO_ROOT) -> 
 
     Raises:
         RuntimeError: ``package_file`` does not lie under ``root``.
+
     """
     resolved = Path(package_file).resolve()
     if not resolved.is_relative_to(root.resolve()):
@@ -270,6 +272,7 @@ def assert_not_tracked_db(name: object, tracked: Path = TRACKED_DB) -> None:
 
     Raises:
         RuntimeError: ``name`` is the tracked database file.
+
     """
     if is_memory_db_name(name) or not str(name):
         return
@@ -303,6 +306,7 @@ def bootstrap_fakeshop_django(mode: BootstrapMode) -> BenchProvenance:
     Raises:
         ValueError: ``mode`` is not one of ``BOOTSTRAP_MODES``.
         RuntimeError: the package or the database lies outside this tree's rules.
+
     """
     if mode not in BOOTSTRAP_MODES:
         msg = f"unknown bootstrap mode {mode!r}; expected one of {BOOTSTRAP_MODES}"
@@ -386,6 +390,7 @@ def capture_queries(alias: str = "default") -> Generator[CaptureQueriesContext, 
     Yields:
         The context; ``len(ctx)`` is the query count and
         ``ctx.captured_queries`` the ``{"sql", "time"}`` entries.
+
     """
     from django.db import connections
     from django.test.utils import CaptureQueriesContext
@@ -421,6 +426,7 @@ def seed_glossary_terms(count: int) -> dict[str, int]:
 
     Returns:
         The total rows present per glossary model the candidates select.
+
     """
     from apps.glossary import factories, models
 
@@ -455,6 +461,7 @@ def summarize_rounds(rounds: Sequence[Sequence[float]]) -> dict[str, float]:
 
     Raises:
         ValueError: no round, or an empty round.
+
     """
     if not rounds or any(not samples for samples in rounds):
         msg = "summarize_rounds needs at least one non-empty round"
@@ -522,6 +529,7 @@ def parse_variables(raw: str | None) -> dict[str, object] | None:
 
     Raises:
         TypeError: ``raw`` is JSON but not an object.
+
     """
     if raw is None:
         return None

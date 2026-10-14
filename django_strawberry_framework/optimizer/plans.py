@@ -32,7 +32,6 @@ in a single pass once the walk completes.
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Iterable, MutableSequence, Sequence
 from dataclasses import dataclass, field, fields, replace
 from typing import TYPE_CHECKING, ClassVar, TypeVar, cast
 
@@ -41,23 +40,27 @@ from django.db.models import Count, F, OrderBy, Prefetch, Q, Value, Window
 from django.db.models.functions import RowNumber
 from typing_extensions import override
 
-from ..exceptions import OptimizerError
-from ..keyset import (
+from django_strawberry_framework.exceptions import OptimizerError
+from django_strawberry_framework.keyset import (
     CursorColumn,
     CursorState,
     _is_supported_cursor_field,
     keyset_contract_error,
     order_fingerprint,
 )
-from ..utils._narrowing import is_dict
-from ..utils.connections import assert_window_fetch_mode, window_range_plan
-from ..utils.querysets import applied_order
-from ..utils.relations import instance_accessor, relation_kind
+from django_strawberry_framework.utils._narrowing import is_dict
+from django_strawberry_framework.utils.connections import (
+    assert_window_fetch_mode,
+    window_range_plan,
+)
+from django_strawberry_framework.utils.querysets import applied_order
+from django_strawberry_framework.utils.relations import instance_accessor, relation_kind
+
 from .field_meta import FieldMeta
 from .predicates import visible_value_path
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Iterable, Mapping, MutableSequence, Sequence
     from typing import TypeAlias
 
     from django.db import models
@@ -66,9 +69,9 @@ if TYPE_CHECKING:
     from django.db.models.options import Options
     from django.db.models.sql.query import Query
 
-    from ..keyset import KeysetSeek
-    from ..utils.connections import WindowRangePlan
-    from ..utils.typing import ConcreteField, ModelField
+    from django_strawberry_framework.keyset import KeysetSeek
+    from django_strawberry_framework.utils.connections import WindowRangePlan
+    from django_strawberry_framework.utils.typing import ConcreteField, ModelField
 
     #: One ``QuerySet.prefetch_related`` lookup: a plain lookup path or a ``Prefetch``.
     PrefetchLookup: TypeAlias = str | Prefetch[str]

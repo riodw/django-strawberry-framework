@@ -237,6 +237,7 @@ def relation_kind(field: object) -> RelationKind:
         ``OneToOneRel``-like -> ``"reverse_one_to_one"``;
         ``ForeignKey``-like -> ``"forward_single"``;
         MTI ``<parent>_ptr``-like -> ``"forward_single"``.
+
     """
     many_to_many = relation_bool(field, "many_to_many")
     one_to_many = relation_bool(field, "one_to_many")

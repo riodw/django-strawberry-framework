@@ -44,6 +44,7 @@ Example:
     uv run python scripts/review_historical_package_snapshot_at_commit.py \
         9096519590040fa25484e05b6a104cb5652b9676 \
         --package-dir examples/fakeshop/apps/library
+
 """
 
 from __future__ import annotations
@@ -55,8 +56,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 if __package__:
     from scripts.review_inspect import main as review_inspect_main

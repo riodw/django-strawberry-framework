@@ -15,6 +15,7 @@ Examples:
     uv run python scripts/list_package_python_changes_by_commit.py
     uv run python scripts/list_package_python_changes_by_commit.py --format json
     uv run python scripts/list_package_python_changes_by_commit.py --output package-history.md
+
 """
 
 from __future__ import annotations
@@ -23,10 +24,12 @@ import argparse
 import json
 import subprocess
 import sys
-from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Sequence
 
 DEFAULT_PACKAGE_DIR = "django_strawberry_framework"
 DEFAULT_REVISION = "HEAD"

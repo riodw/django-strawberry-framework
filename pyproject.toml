@@ -184,6 +184,7 @@ select = [
     "D407",   # dashed section underline (ditto)
     "D408",   # section underline on the line after the name (ditto)
     "D409",   # section underline length (ditto)
+    "D413",   # blank line after the last section (ditto)
     "DJ",     # flake8-django
     "DTZ",    # flake8-datetimez: naive datetimes
     "E",      # pycodestyle errors
@@ -237,18 +238,12 @@ ignore = [
     "CPY001", # copyright headers
     "D203",   # blank line before a class docstring: D211 (Google) is the opposite
     "D213",   # summary on the second line: D212 (Google) is the opposite
-    "D413",   # blank line after the last section: ditto
     "EM101",  # string literal in the exception constructor: exception-message style only
     "EM102",  # f-string in the exception constructor: ditto
     "FIX002", # TODO markers are the `TODO(spec-NNN slice N)` anchor convention
     "PLC0415", # local imports break import cycles
-    "PLR2004", # magic value in comparison
     "SLF001", # private member access: the package shares underscore names across modules
-    "TC001",  # first-party import used only in annotations: annotations are read at runtime
-    "TC002",  # third-party import used only in annotations: ditto
-    "TC003",  # stdlib import used only in annotations: ditto
     "TD003",  # TODO issue link: the anchor names a spec, not an issue
-    "TID252", # relative imports inside the package
     "TRY003", # long message passed to the exception constructor
 ]
 # The package logger is re-exported from `django_strawberry_framework`; naming it lets BLE001 see a
@@ -287,9 +282,39 @@ allow-star-arg-any = true
 inline-quotes = "double"
 multiline-quotes = "double"
 
+[tool.ruff.lint.flake8-tidy-imports]
+# Siblings import relatively (`from .x import y`); anything above the current package is absolute
+# (`from django_strawberry_framework.x import y`), which TID252 enforces.
+ban-relative-imports = "parents"
+
 [tool.ruff.lint.flake8-type-checking]
-# TC004 fixes an annotation by quoting it, keeping the import under TYPE_CHECKING.
+# TC001-TC003 move an import used only in annotations under TYPE_CHECKING and quote the annotation
+# (TC004 does the same for an import already there), so an annotation Strawberry or Django
+# evaluates at run time must keep its import real: the three settings below name those.
 quote-annotations = true
+# Strawberry evaluates the field annotations of a class these decorators build.
+runtime-evaluated-decorators = [
+    "strawberry.type",
+    "strawberry.input",
+    "strawberry.interface",
+    "strawberry.enum",
+    "strawberry.field",
+    "strawberry.mutation",
+    "strawberry.subscription",
+    "strawberry.schema_directive",
+]
+# The finalizer reads a DjangoType subclass's class-body annotations (`cls.__annotations__`) and
+# hands them to Strawberry (only tests/ and examples/ subclass it today). FilterSet, OrderSet and
+# the mutation sets read only `Meta` and declared attributes, never their body annotations, so
+# they are not listed. One entry per import path a consumer uses.
+runtime-evaluated-base-classes = [
+    "django_strawberry_framework.DjangoType",
+    "django_strawberry_framework.types.DjangoType",
+    "django_strawberry_framework.types.base.DjangoType",
+]
+# `strawberry` joins the default `typing`: a resolver parameter such as `Info` is detected by its
+# annotation when the schema is built, so a `strawberry` import must stay a real import.
+exempt-modules = ["typing", "typing_extensions", "strawberry"]
 
 [tool.ruff.lint.flake8-unused-arguments]
 # Unused ``*args`` / ``**kwargs`` are signature padding for protocol/forward
@@ -321,6 +346,12 @@ classmethod-decorators = ["django.utils.decorators.classonlymethod"]
     "S107",   # same
     "S603",   # subprocess runs git/uv/ruff/sys.executable by name with a fixed argv
     "S607",   # same
+    # TC001-TC003: test and example modules build strawberry / DjangoType classes inside functions,
+    # mostly without `from __future__ import annotations`; the fix would quote ~790 annotations.
+    "TC001",
+    "TC002",
+    "TC003",
+    "PLR2004", # assertions compare against literal expected values
 ]
 "examples/**/*.py" = [
     "D106",   # as in tests/
@@ -330,6 +361,10 @@ classmethod-decorators = ["django.utils.decorators.classonlymethod"]
     "SLOT000", # fakeshop's hostile `str`-subclass fixtures, as in tests/
     "S105",   # the never-deployed example's dev SECRET_KEY, seed password and fixture credentials
     "S106",   # same
+    "TC001",  # as in tests/
+    "TC002",  # as in tests/
+    "TC003",  # as in tests/
+    "PLR2004", # as in tests/
 ]
 # A test function's name is its summary; the contract docstring most tests carry is not required.
 "tests/**/test_*.py" = ["D102", "D103"]
@@ -342,7 +377,8 @@ classmethod-decorators = ["django.utils.decorators.classonlymethod"]
 # untrusted argv; the package and examples have no subprocess calls and stay checked.
 # INP001: these folders deliberately have no `__init__.py` (plain scripts, pytest rootdir-relative
 # test modules, and fakeshop's top-level modules on `pythonpath`).
-"scripts/**/*.py" = ["PERF", "T201", "INP001", "S603", "S607"]
+# PLR2004: CLI and report scripts compare against literal expected values.
+"scripts/**/*.py" = ["PERF", "T201", "INP001", "S603", "S607", "PLR2004"]
 "line_count.py" = ["T201"]
 "docs/dry/export_dry_review.py" = ["T201", "INP001"]
 "examples/fakeshop/*.py" = ["INP001"]

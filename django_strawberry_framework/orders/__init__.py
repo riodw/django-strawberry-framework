@@ -27,8 +27,9 @@ from __future__ import annotations
 
 from typing import Generic, TypeVar
 
-from ..registry import register_subsystem_clear
-from ..utils.inputs import build_lazy_input_annotation
+from django_strawberry_framework.registry import register_subsystem_clear
+from django_strawberry_framework.utils.inputs import build_lazy_input_annotation
+
 from .base import RelatedOrder
 from .inputs import INPUTS_MODULE_PATH, Ordering, _input_type_name_for
 from .sets import OrderSet, OrderSetMetaclass
@@ -96,6 +97,7 @@ def order_input_type(orderset_class: type[OrderSet]) -> object:
 
     Raises:
         TypeError: ``orderset_class`` is not an ``OrderSet`` subclass.
+
     """
     return _order_input_annotation(orderset_class, helper_spelling="order_input_type()")
 
@@ -135,6 +137,7 @@ class OrderInput(Generic[_OrderSetT]):
 
         Raises:
             TypeError: ``orderset_class`` is not an ``OrderSet`` subclass.
+
         """
         return _order_input_annotation(orderset_class, helper_spelling="OrderInput[...]")
 

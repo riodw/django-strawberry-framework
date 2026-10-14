@@ -45,12 +45,15 @@ separation ``resource_policy.py`` draws for its own default.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from .conf import error_policy_setting
 from .exceptions import ConfigurationError, describe_value
 from .utils.policies import canonical_policy, resolve_policy
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 __all__ = (
     "DEFAULT_ERROR_POLICY",

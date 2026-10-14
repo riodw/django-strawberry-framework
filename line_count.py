@@ -26,6 +26,7 @@ def count_lines(filepath: Path) -> tuple[int, int, int]:
     Returns:
         (total_lines, code_lines, comment_lines)
         where code_lines = total - blank - comments
+
     """
     total = 0
     blank = 0
@@ -71,6 +72,7 @@ def scan_directory(root: Path) -> dict[str, tuple[int, int, int]]:
 
     Returns:
         dict mapping relative file path to (total, code, comments)
+
     """
     results: dict[str, tuple[int, int, int]] = {}
     for dirpath, dirnames, filenames in os.walk(root):

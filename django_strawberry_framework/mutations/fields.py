@@ -51,19 +51,21 @@ classmethod form on the mutation base.
 from __future__ import annotations
 
 import inspect
-from collections.abc import Sequence
 from typing import TYPE_CHECKING, Annotated
 
 import strawberry
 from strawberry.types import Info
 
-from ..exceptions import ConfigurationError, _safe_arg_repr
-from ..utils.directives import validated_field_directives
-from ..utils.execution_mode import async_execution
+from django_strawberry_framework.exceptions import ConfigurationError, _safe_arg_repr
+from django_strawberry_framework.utils.directives import validated_field_directives
+from django_strawberry_framework.utils.execution_mode import async_execution
+
 from .inputs import INPUTS_MODULE_PATH
 from .operations import operation_takes_data, operation_takes_id
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from .sets import WriteMutationClass
 
 # The attribute name ``DjangoMutationField`` stamps its synthesized resolver with,
@@ -155,7 +157,8 @@ def _is_registered_mutation_target(mutation_cls: type[object]) -> bool:
     drained by ``registry.clear()`` that compares equal to its redeclaration would
     pass, and a raising ``__eq__`` would escape at the construction line.
     """
-    from ..forms.sets import iter_form_mutations
+    from django_strawberry_framework.forms.sets import iter_form_mutations
+
     from .sets import iter_mutations
 
     return any(

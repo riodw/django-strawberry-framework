@@ -483,6 +483,10 @@ _PATCH_OWNER_ATTRIBUTE = "_django_strawberry_framework_patch_owner"
 _PATCH_ORIGINAL_ATTRIBUTE = "_django_strawberry_framework_original"
 _PATCH_OWNER = "django_strawberry_framework._strawberry_patches"
 
+# Parameters of each upstream method ``_validate_upstream_shape`` pins, ``self`` included:
+# ``(self, data)`` / ``(self, params)`` / ``(self, request)``.
+_UPSTREAM_METHOD_ARITY = 2
+
 
 def _captured_upstream_method(owner: type[object] | None, name: str) -> object:
     """Return the upstream method, retaining it across an in-process reload.
@@ -651,7 +655,7 @@ def _validate_upstream_shape() -> _UpstreamCaptures:
         (upstream.async_parse_multipart, "AsyncBaseHTTPView.parse_multipart", "request"),
     ):
         parameters = tuple(inspect.signature(method).parameters.values())
-        if len(parameters) != 2 or any(
+        if len(parameters) != _UPSTREAM_METHOD_ARITY or any(
             parameter.kind is not inspect.Parameter.POSITIONAL_OR_KEYWORD
             for parameter in parameters
         ):

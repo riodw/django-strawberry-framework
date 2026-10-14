@@ -32,7 +32,7 @@ from django.db import models, router
 from strawberry.types import Info
 from strawberry.utils.await_maybe import AwaitableOrValue
 
-from ..exceptions import OptimizerError
+from django_strawberry_framework.exceptions import OptimizerError
 
 # Share the optimizer subpackage's logger so consumers configuring
 # "django_strawberry_framework" see N+1 warnings. The optimizer subpackage
@@ -40,38 +40,44 @@ from ..exceptions import OptimizerError
 # "_resolver_logger" alias so the surfacing site reads explicitly as
 # "_resolver_logger.warning(...)" rather than as "logger.warning(...)"
 # (which would mask the cross-subpackage origin).
-from ..optimizer import logger as _resolver_logger
-from ..optimizer._context import (
+from django_strawberry_framework.optimizer import logger as _resolver_logger
+from django_strawberry_framework.optimizer._context import (
     DST_OPTIMIZER_FK_ID_ELISIONS,
     DST_OPTIMIZER_PLANNED,
     DST_OPTIMIZER_STRICTNESS,
 )
-from ..optimizer._context import (
-    active_strictness as _active_strictness,
-)
-from ..optimizer._context import (
-    optimizer_value as _optimizer_value,
-)
-from ..optimizer._context import (
+from django_strawberry_framework.optimizer._context import active_strictness as _active_strictness
+from django_strawberry_framework.optimizer._context import optimizer_value as _optimizer_value
+from django_strawberry_framework.optimizer._context import (
     relation_is_optimizer_scoped as _relation_is_optimizer_scoped,
 )
-from ..optimizer.field_meta import FieldMeta
-from ..optimizer.plans import resolver_key, runtime_path_from_info
-from ..registry import registry
-from ..resource_policy import bounded_rows, bounded_rows_async, check_deadline
-from ..utils.execution_mode import async_execution
-from ..utils.querysets import (
+from django_strawberry_framework.optimizer.field_meta import FieldMeta
+from django_strawberry_framework.optimizer.plans import resolver_key, runtime_path_from_info
+from django_strawberry_framework.registry import registry
+from django_strawberry_framework.resource_policy import (
+    bounded_rows,
+    bounded_rows_async,
+    check_deadline,
+)
+from django_strawberry_framework.utils.execution_mode import async_execution
+from django_strawberry_framework.utils.querysets import (
     apply_type_visibility_async,
     apply_type_visibility_sync,
     initial_queryset,
     materialized_rows,
     normalized_row_source,
 )
-from ..utils.relations import RelationKind, instance_accessor, is_many_side_relation_kind
+from django_strawberry_framework.utils.relations import (
+    RelationKind,
+    instance_accessor,
+    is_many_side_relation_kind,
+)
+
 from .converters import _field_output_type_for
 
 if TYPE_CHECKING:
-    from ..utils.typing import ModelField
+    from django_strawberry_framework.utils.typing import ModelField
+
     from .base import DjangoType
 
 # Every generated relation resolver: Strawberry binds ``(root, info)``.

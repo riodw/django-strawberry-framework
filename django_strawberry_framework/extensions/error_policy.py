@@ -72,7 +72,6 @@ from __future__ import annotations
 
 import contextlib
 import copy
-from collections.abc import Iterator
 from typing import TYPE_CHECKING, TypeVar
 
 from django.conf import settings
@@ -81,11 +80,18 @@ from graphql.execution import ExecutionResult as GraphQLExecutionResult
 from strawberry.types.execution import ExecutionResult as StrawberryExecutionResult
 from typing_extensions import override
 
-from .. import logger
-from ..error_policy import _PACKAGE_ERROR_POLICY, ErrorPolicy, new_correlation_id
+from django_strawberry_framework import logger
+from django_strawberry_framework.error_policy import (
+    _PACKAGE_ERROR_POLICY,
+    ErrorPolicy,
+    new_correlation_id,
+)
+
 from .operation_state import OperationState, _OperationBoundExtension
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from typing_extensions import TypeIs
 
 #: Either result shape ``is_maskable_result`` admits; masking hands back the same shape.

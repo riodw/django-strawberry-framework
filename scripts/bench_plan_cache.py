@@ -61,7 +61,6 @@ import argparse
 import statistics
 import sys
 import time
-from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
 
@@ -80,6 +79,8 @@ from _bench_common import (
 from typing_extensions import NotRequired
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
     from django_strawberry_framework import DjangoSchema
     from django_strawberry_framework.optimizer.extension import CacheInfo, DjangoOptimizerExtension
 
@@ -208,6 +209,7 @@ def _probe(
 
     Raises:
         RuntimeError: the query returned errors.
+
     """
     with capture_queries() as ctx:
         result = schema.execute_sync(query, variable_values=variables)
@@ -240,6 +242,7 @@ def _measure(
 
     Raises:
         RuntimeError: the query returned errors.
+
     """
     root_rows, sql_queries = _probe(schema, query, variables)
     warm_rounds: list[list[int]] = []

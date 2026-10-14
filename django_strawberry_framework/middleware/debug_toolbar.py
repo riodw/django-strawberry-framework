@@ -55,13 +55,12 @@ from __future__ import annotations
 
 import collections
 import json
+from http import HTTPStatus
 from typing import TYPE_CHECKING
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.core.serializers.json import DjangoJSONEncoder
-from django.http.request import HttpRequest
-from django.http.response import HttpResponse
 from django.template.loader import render_to_string
 from django.utils.encoding import force_str
 from strawberry.django.views import BaseView
@@ -72,6 +71,11 @@ from django_strawberry_framework.utils.imports import require_optional_module
 
 if TYPE_CHECKING:
     from types import ModuleType
+
+    from debug_toolbar.panels import Panel
+    from debug_toolbar.toolbar import DebugToolbar
+    from django.http.request import HttpRequest
+    from django.http.response import HttpResponse
 
 # The single django-debug-toolbar install-hint string (spec-042 Decision 5).
 # Every toolbar-absent raise routes through ``require_debug_toolbar()`` so the
@@ -145,8 +149,6 @@ if not apps.is_installed("debug_toolbar"):
 from debug_toolbar.middleware import (  # noqa: E402
     DebugToolbarMiddleware as _DebugToolbarMiddleware,
 )
-from debug_toolbar.panels import Panel  # noqa: E402
-from debug_toolbar.toolbar import DebugToolbar  # noqa: E402
 
 # The content-type sniff set for the HTML injection path (upstream verbatim).
 _HTML_TYPES = {"text/html", "application/xhtml+xml"}
@@ -299,7 +301,7 @@ class DebugToolbarMiddleware(_DebugToolbarMiddleware):
         is_html = content_type in _HTML_TYPES
         is_graphiql = _is_graphiql_request(request)
 
-        if is_html and is_graphiql and response.status_code == 200:
+        if is_html and is_graphiql and response.status_code == HTTPStatus.OK:
             template = render_to_string("django_strawberry_framework/debug_toolbar.html")
             response.write(template)
             if "Content-Length" in response:

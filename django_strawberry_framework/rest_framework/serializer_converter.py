@@ -62,24 +62,26 @@ import datetime
 import decimal
 import uuid
 from collections.abc import Callable, Mapping
-from enum import Enum
 from types import GenericAlias
 from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
 import strawberry
 from django.core.exceptions import FieldDoesNotExist
-from django.db import models
 from rest_framework import serializers
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
-from ..mutations.inputs import (
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_type_name,
+)
+from django_strawberry_framework.mutations.inputs import (
     annotate_queryset_relation,
     model_column_write_annotation,
     model_column_write_kind,
 )
-from ..registry import register_subsystem_clear, registry
-from ..scalars import Upload
-from ..types.converters import (
+from django_strawberry_framework.registry import register_subsystem_clear, registry
+from django_strawberry_framework.scalars import Upload
+from django_strawberry_framework.types.converters import (
     array_element_field,
     build_enum_from_choices,
     choice_column_is_grouped,
@@ -87,7 +89,7 @@ from ..types.converters import (
     convert_scalar,
     scalar_for_field,
 )
-from ..utils.converters import (
+from django_strawberry_framework.utils.converters import (
     convert_with_mro,
     finish_field_conversion,
     make_kind_converter,
@@ -103,19 +105,27 @@ from ..utils.converters import (
 # ``Serializer`` (single) / ``ListSerializer`` (many), whose recursion is owned
 # by ``rest_framework/inputs.py`` (this converter module has no knowledge of
 # the recursion; it only names the kinds + detects a nested field).
-from ..utils.inputs import FILE as FILE  # noqa: PLC0414 - explicit re-export
-from ..utils.inputs import RELATION_MULTI as RELATION_MULTI  # noqa: PLC0414 - explicit re-export
-from ..utils.inputs import RELATION_SINGLE as RELATION_SINGLE  # noqa: PLC0414 - explicit re-export
-from ..utils.inputs import SCALAR as SCALAR  # noqa: PLC0414 - explicit re-export
-from ..utils.inputs import FieldConversionBase, InputFieldSpec
-from ..utils.strings import graphql_camel_name, pascal_case
+from django_strawberry_framework.utils.inputs import FILE as FILE  # noqa: PLC0414 - explicit re-export
+from django_strawberry_framework.utils.inputs import RELATION_MULTI as RELATION_MULTI  # noqa: PLC0414 - explicit re-export
+from django_strawberry_framework.utils.inputs import RELATION_SINGLE as RELATION_SINGLE  # noqa: PLC0414 - explicit re-export
+from django_strawberry_framework.utils.inputs import SCALAR as SCALAR  # noqa: PLC0414 - explicit re-export
+from django_strawberry_framework.utils.inputs import FieldConversionBase, InputFieldSpec
+from django_strawberry_framework.utils.strings import graphql_camel_name, pascal_case
+
 from .accessors import child_relation_of, declared_fields_of, is_serializer, list_child_of
 
 if TYPE_CHECKING:
+    from enum import Enum
     from typing import TypeAlias
 
-    from ..types.base import DjangoType
-    from ..utils.typing import ConcreteField, ModelField, OptionalWidenable
+    from django.db import models
+
+    from django_strawberry_framework.types.base import DjangoType
+    from django_strawberry_framework.utils.typing import (
+        ConcreteField,
+        ModelField,
+        OptionalWidenable,
+    )
 
     # DRF's stub generics are invariant in every parameter, so the all-``Any``
     # parametrization is the stub's universal form for a field and a serializer

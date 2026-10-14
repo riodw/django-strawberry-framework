@@ -60,8 +60,8 @@ import enum
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
-from ..exceptions import _safe_attr, _safe_call
-from ..utils.relations import (
+from django_strawberry_framework.exceptions import _safe_attr, _safe_call
+from django_strawberry_framework.utils.relations import (
     RelationKind,
     is_single_column_foreign_key,
     m2m_through_link_fields,
@@ -75,7 +75,8 @@ from ..utils.relations import (
 if TYPE_CHECKING:
     from django.db import models
 
-    from ..utils.typing import ForeignKeyField, ModelField
+    from django_strawberry_framework.utils.typing import ForeignKeyField, ModelField
+
     from .field_meta import FieldMeta
 
 

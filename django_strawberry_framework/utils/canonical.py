@@ -33,7 +33,12 @@ from __future__ import annotations
 
 from typing import TypeVar, overload
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_type_name,
+)
+
 from ._narrowing import (
     dict_items,
     frozenset_iter,

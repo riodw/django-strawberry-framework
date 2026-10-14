@@ -91,9 +91,12 @@ import os
 import re
 import string
 import sys
-from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -354,6 +357,7 @@ def _collect(
         in_function: Whether ``node`` sits inside a function body.
         spans: When given, maps each recorded name to its ``(start, end,
             qualified name)`` line spans.
+
     """
     for child in ast.iter_child_nodes(node):
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -585,6 +589,7 @@ def iter_citation_records(text: str, *, substrings: bool = False) -> Iterator[Ci
     Yields:
         One ``Citation`` per checkable reference; upstream and family citations
         are skipped.
+
     """
     found: list[tuple[int, Citation]] = []
     continuations: set[int] = set()
@@ -833,6 +838,7 @@ def evaluate_source(
 
     Raises:
         CitationCheckError: ``source`` cannot be read.
+
     """
     relative = _relative(source)
     try:
@@ -921,6 +927,7 @@ def _named_sources(paths: Sequence[str]) -> list[tuple[Path, bool]]:
 
     Raises:
         CitationCheckError: A named path is missing or outside the repo.
+
     """
     named: list[tuple[Path, bool]] = []
     specs = set(iter_spec_sources())
@@ -939,6 +946,7 @@ def _repo_path(raw: str) -> Path:
 
     Raises:
         CitationCheckError: ``raw`` lies outside the repo.
+
     """
     given = Path(raw)
     if given.is_absolute():
@@ -960,6 +968,7 @@ def _gate_sources(corpus: Sequence[Path]) -> list[tuple[Path, bool]]:
         CitationCheckError: A gated markdown source is missing, or the spec corpus
             is empty (a moved or renamed spec tree would otherwise pass by checking
             nothing).
+
     """
     sources = [(path, True) for path in corpus if _relative(path) not in SYNTHETIC_SOURCES]
     for name in MARKDOWN_SOURCES:
@@ -1019,6 +1028,7 @@ def _parse_target(spec: str) -> tuple[Path, str, str | None]:
 
     Raises:
         CitationCheckError: The symbol half is not a dotted identifier.
+
     """
     raw, separator, symbol = spec.partition("::")
     if separator and not re.fullmatch(r"[A-Za-z_][\w]*(\.[A-Za-z_][\w]*)*", symbol):
@@ -1064,6 +1074,7 @@ def cited_by(spec: str, *, as_json: bool) -> int:
 
     Returns:
         ``0``; the listing is a query, not a gate.
+
     """
     target, relative, symbol = _parse_target(spec)
     corpus = iter_python_sources()

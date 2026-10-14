@@ -22,7 +22,6 @@ import decimal
 import enum
 import uuid
 from collections import OrderedDict
-from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from types import GenericAlias, MappingProxyType
 from typing import TYPE_CHECKING, Annotated, cast
@@ -41,13 +40,17 @@ from django_filters.filters import BaseCSVFilter
 from django_filters.utils import get_model_field
 from strawberry import UNSET, relay
 
-from ..conf import hide_flat_filters_setting
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
-from ..registry import register_subsystem_clear
-from ..utils._narrowing import is_list_or_tuple
-from ..utils.converters import MRO_CONTINUE, convert_with_mro
-from ..utils.input_values import is_inactive_value, iter_input_items
-from ..utils.inputs import (
+from django_strawberry_framework.conf import hide_flat_filters_setting
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_type_name,
+)
+from django_strawberry_framework.registry import register_subsystem_clear
+from django_strawberry_framework.utils._narrowing import is_list_or_tuple
+from django_strawberry_framework.utils.converters import MRO_CONTINUE, convert_with_mro
+from django_strawberry_framework.utils.input_values import is_inactive_value, iter_input_items
+from django_strawberry_framework.utils.inputs import (
     GeneratedInputFieldSpec,
     build_strawberry_input_class,
     emit_set_input_field_triples,
@@ -56,7 +59,12 @@ from ..utils.inputs import (
     optional_field_kwargs,
     set_input_type_name,
 )
-from ..utils.strings import flatten_lookup_path, graphql_camel_name, pascal_case_or_raise
+from django_strawberry_framework.utils.strings import (
+    flatten_lookup_path,
+    graphql_camel_name,
+    pascal_case_or_raise,
+)
+
 from .base import (
     ArrayFilter,
     EnumMemberValue,
@@ -85,11 +93,18 @@ _iter_filterset_subclasses = iter_set_subclasses
 _input_type_name_for = set_input_type_name
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator, Mapping
+
     from django_filters.filterset import FilterSetOptions
 
-    from ..types.definition import DjangoTypeDefinition
-    from ..utils.inputs import SetInputNamespace
-    from ..utils.typing import ConcreteField, ModelField, OptionalWidenable
+    from django_strawberry_framework.types.definition import DjangoTypeDefinition
+    from django_strawberry_framework.utils.inputs import SetInputNamespace
+    from django_strawberry_framework.utils.typing import (
+        ConcreteField,
+        ModelField,
+        OptionalWidenable,
+    )
+
     from .sets import FilterSet
 
 # Module path the ``strawberry.lazy(...)`` marker references; pinned as a
@@ -341,7 +356,7 @@ def _scalar_from_model_field(model_field: ModelField | None) -> OptionalWidenabl
     """
     if model_field is None:
         return str
-    from ..types.converters import scalar_for_field
+    from django_strawberry_framework.types.converters import scalar_for_field
 
     # A ``SCALAR_MAP`` value is a registered runtime annotation (a class or ``NewType``).
     # basedpyright: ``TypeForm`` also admits forms with no runtime ``__or__`` (a string forward
@@ -427,7 +442,7 @@ def _choice_enum_from_filter(
     "side-effect on a filter during input-class construction" trap.
     """
     # Local import to avoid a top-level cycle through ``types.converters``.
-    from ..types.converters import convert_choices_to_enum
+    from django_strawberry_framework.types.converters import convert_choices_to_enum
 
     if model_field is None or not getattr(model_field, "choices", None):
         raise ConfigurationError(

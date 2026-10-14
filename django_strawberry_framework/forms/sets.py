@@ -47,11 +47,15 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 from django import forms
 from typing_extensions import override
 
-from ..exceptions import ConfigurationError, _safe_text
-from ..mutations.inputs import PARTIAL
-from ..mutations.operations import NON_DELETE_OPERATION_INPUT_KIND
-from ..mutations.permissions import DenyAll, DjangoModelPermission, run_permission_classes
-from ..mutations.sets import (
+from django_strawberry_framework.exceptions import ConfigurationError, _safe_text
+from django_strawberry_framework.mutations.inputs import PARTIAL
+from django_strawberry_framework.mutations.operations import NON_DELETE_OPERATION_INPUT_KIND
+from django_strawberry_framework.mutations.permissions import (
+    DenyAll,
+    DjangoModelPermission,
+    run_permission_classes,
+)
+from django_strawberry_framework.mutations.sets import (
     COMMON_WRITE_META_KEYS,
     MODEL_BACKED_WRITE_META_KEYS,
     DjangoMutation,
@@ -76,9 +80,10 @@ from ..mutations.sets import (
     resolve_meta_model,
     resolver_seams,
 )
-from ..registry import register_subsystem_clear
-from ..utils._narrowing import is_class
-from ..utils.inputs import make_shape_build_cache
+from django_strawberry_framework.registry import register_subsystem_clear
+from django_strawberry_framework.utils._narrowing import is_class
+from django_strawberry_framework.utils.inputs import make_shape_build_cache
+
 from .inputs import (
     FORM,
     _form_basis_content_identity,
@@ -103,9 +108,10 @@ if TYPE_CHECKING:
     from django.db import models
     from strawberry.types import Info
 
-    from ..mutations.sets import DeclarationRegistry
-    from ..types.base import DjangoType
-    from ..utils.inputs import InputFieldSpec
+    from django_strawberry_framework.mutations.sets import DeclarationRegistry
+    from django_strawberry_framework.types.base import DjangoType
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
     from .inputs import FormClass
 
 # The form ``Meta``'s allowed-key sets (spec-038 Decision 6), composed from

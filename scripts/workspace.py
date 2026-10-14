@@ -187,7 +187,6 @@ import datetime
 import errno
 import fcntl
 import hashlib
-import io
 import json
 import os
 import re
@@ -210,6 +209,7 @@ except ModuleNotFoundError:  # imported as ``scripts.workspace`` (repo root on p
     from scripts import _bench_common
 
 if TYPE_CHECKING:
+    import io
     from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 
     from typing_extensions import TypeIs
@@ -295,6 +295,7 @@ LINT_COMMANDS = (
     "python scripts/check_trailing_commas.py --check",
     "python scripts/check_citations.py --check",
     "python scripts/build_kanban_tracked_path_constants.py --check",
+    "python scripts/check_kanban_anchors.py",
     "python scripts/build_kanban_md.py --check",
     "python scripts/build_kanban_html.py --check",
     "python scripts/build_glossary_md.py --check",
@@ -555,6 +556,7 @@ def _flock(path: Path, flags: int, operation: int) -> int:
         BlockingIOError: ``operation`` carries ``LOCK_NB`` and another
             descriptor holds a conflicting lock.
         FileNotFoundError: ``path`` is missing and ``flags`` cannot create it.
+
     """
     while True:
         descriptor = os.open(path, flags, 0o644)
@@ -809,6 +811,7 @@ def _lock_flow_dir(layout: Layout, operation: int, *, create: bool) -> int | Non
 
     Raises:
         BlockingIOError: ``operation`` carries ``LOCK_NB`` and the lock is held.
+
     """
     while True:
         if create:
@@ -862,6 +865,7 @@ def wanted_files(repo_root: Path) -> dict[str, Path]:
     Raises:
         WorkspaceError: the listing does not include the package's
             ``__init__.py``, so it enumerated something other than this tree.
+
     """
     listing = _git(repo_root, "ls-files", "-z", "-co", "--exclude-standard")
     names = {name for name in listing.split("\0") if name}
@@ -996,6 +1000,7 @@ def mirror_tree(
 
     Raises:
         WorkspaceError: the shared tree kept changing during every attempt.
+
     """
     raced: list[str] = []
     for _attempt in range(attempts):
@@ -1075,6 +1080,7 @@ def _project_declarations(
     Raises:
         KeyError: a key is missing.
         TypeError: ``[project]`` is not a table or ``dependencies`` is not an array.
+
     """
     project = loads(text)["project"]
     if not _is_json_object(project):
@@ -1564,6 +1570,7 @@ def bind(layout: Layout, address: Address) -> Binding:
     Raises:
         WorkspaceError: every copy is bound to another address, or a new copy
             would drop free disk below the guard.
+
     """
     layout.ensure_marked()
     with file_lock(layout.pool_lock):
@@ -1620,6 +1627,7 @@ def _admit(
     Raises:
         WorkspaceError: ``slot`` no longer holds ``address``: a ``release``
             freed it while the run waited for its lock.
+
     """
     with file_lock(layout.pool_lock):
         state = _load_state(layout)
@@ -1654,6 +1662,7 @@ def lease(
         WorkspaceError: the copy no longer holds ``address``: a release freed
             it while the run waited for its lock. The run never binds the
             address again.
+
     """
     slot = bind(layout, address).slot
     with file_lock(layout.slot_lock(slot)):
@@ -1698,6 +1707,7 @@ def _mark_synced(
     Raises:
         WorkspaceError: ``slot`` no longer holds ``address``; no other binding
             is ever stamped with this sync.
+
     """
     with file_lock(layout.pool_lock):
         state = _load_state(layout)
@@ -2062,6 +2072,7 @@ def release(
 
     Raises:
         LockBusyError: a command still runs in one of them.
+
     """
     with flow_lease(layout, create=False) as marked:
         if not marked:
@@ -2147,6 +2158,7 @@ def gc(layout: Layout) -> list[str]:
     Raises:
         LockBusyError: a command of the flow still runs.
         WorkspaceError: the folder carries no marker of this script.
+
     """
     report: list[str] = []
     flow_dir = layout.flow_dir

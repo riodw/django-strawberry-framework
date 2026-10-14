@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING, Any
 from strawberry import auto
 
 # The package logger comes first among the package's own imports (isort sorts ``._logger``
-# ahead of every subpackage), since subpackages read it as ``from .. import logger``.
+# ahead of every subpackage), since subpackages read it as
+# ``from django_strawberry_framework import logger``.
 from ._logger import logger as logger
 from .connection import DjangoConnection, DjangoConnectionField
 from .error_policy import (

@@ -41,9 +41,14 @@ from django.db.models.constants import LOOKUP_SEP
 from strawberry import UNSET
 from typing_extensions import override
 
-from ..exceptions import ConfigurationError, PathResolutionError, _safe_arg_repr, _safe_type_name
-from ..optimizer.predicates import visible_row_exists, visible_value
-from ..sets_mixins import (
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    PathResolutionError,
+    _safe_arg_repr,
+    _safe_type_name,
+)
+from django_strawberry_framework.optimizer.predicates import visible_row_exists, visible_value
+from django_strawberry_framework.sets_mixins import (
     ActiveInputPermissionAttrs,
     ActiveInputPermissionMixin,
     ClassBasedTypeNameMixin,
@@ -54,11 +59,14 @@ from ..sets_mixins import (
     require_re_readable_field_declaration,
     should_cache_expansion,
 )
-from ..utils._narrowing import is_exact_list, is_exact_tuple
-from ..utils.input_values import SetInputTraversal
-from ..utils.inputs import promote_set_meta_fields, read_set_meta_fields
-from ..utils.permissions import set_bound_type, walk_declared_relation_path
-from ..utils.querysets import (
+from django_strawberry_framework.utils._narrowing import is_exact_list, is_exact_pair
+from django_strawberry_framework.utils.input_values import SetInputTraversal
+from django_strawberry_framework.utils.inputs import promote_set_meta_fields, read_set_meta_fields
+from django_strawberry_framework.utils.permissions import (
+    set_bound_type,
+    walk_declared_relation_path,
+)
+from django_strawberry_framework.utils.querysets import (
     apply_type_visibility_async,
     apply_type_visibility_sync,
     base_queryset,
@@ -66,16 +74,17 @@ from ..utils.querysets import (
     relation_target_type,
     run_in_one_sync_boundary,
 )
-from ..utils.relations import (
+from django_strawberry_framework.utils.relations import (
     classify_path,
     leading_relation_hops,
     non_pk_forward_link,
     order_column_paths,
 )
-from ..utils.relations import (
+from django_strawberry_framework.utils.relations import (
     path_traverses_to_many as _path_traverses_to_many,
 )
-from ..utils.strings import flatten_lookup_path
+from django_strawberry_framework.utils.strings import flatten_lookup_path
+
 from .base import RelatedOrder
 from .inputs import (
     Ordering,
@@ -92,8 +101,8 @@ if TYPE_CHECKING:
     from django.db.models.expressions import OrderBy
     from typing_extensions import TypeIs
 
-    from ..types.base import DjangoType
-    from ..types.definition import DjangoTypeDefinition
+    from django_strawberry_framework.types.base import DjangoType
+    from django_strawberry_framework.types.definition import DjangoTypeDefinition
 
 _NormalizedTerms = tuple[tuple[str, "Ordering | None"], ...]
 _M = TypeVar("_M", bound=models.Model)
@@ -301,14 +310,10 @@ def _is_normalized_term(term: object) -> TypeIs[tuple[str, Ordering | None]]:
     Exact-type checks only, so no consumer ``__len__`` / ``__getitem__`` /
     ``__eq__`` fires while the term is inspected.
     """
-    if not is_exact_tuple(term):
+    if not is_exact_pair(term):
         return False
-    members = term
-    return (
-        len(members) == 2
-        and type(members[0]) is str
-        and (members[1] is None or type(members[1]) is Ordering)
-    )
+    name, ordering = term
+    return type(name) is str and (ordering is None or type(ordering) is Ordering)
 
 
 def _are_normalized_terms(terms: list[object]) -> TypeGuard[list[tuple[str, Ordering | None]]]:

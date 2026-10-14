@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..utils.imports import require_optional_module
+from django_strawberry_framework.utils.imports import require_optional_module
 
 if TYPE_CHECKING:
     from types import ModuleType

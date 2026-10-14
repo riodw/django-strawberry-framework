@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import copy
 from collections import OrderedDict
-from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import cache
 from types import MappingProxyType
@@ -53,15 +52,15 @@ from graphql import GraphQLError
 from strawberry import UNSET
 from typing_extensions import override
 
-from ..exceptions import ConfigurationError, _safe_arg_repr
-from ..optimizer.predicates import (
+from django_strawberry_framework.exceptions import ConfigurationError, _safe_arg_repr
+from django_strawberry_framework.optimizer.predicates import (
     attach_exists,
     correlated_inner_root,
     correlates_related_rows,
     related_rows_exist,
 )
-from ..registry import registry
-from ..sets_mixins import (
+from django_strawberry_framework.registry import registry
+from django_strawberry_framework.sets_mixins import (
     ActiveInputPermissionAttrs,
     ActiveInputPermissionMixin,
     ClassBasedTypeNameMixin,
@@ -72,10 +71,13 @@ from ..sets_mixins import (
     require_re_readable_field_declaration,
     should_cache_expansion,
 )
-from ..types.relay import implements_relay_node
-from ..utils._narrowing import dict_items, is_dict, is_list_or_tuple
-from ..utils.errors import FILTER_INVALID_ERROR_CODE, coded_error_extensions
-from ..utils.input_values import (
+from django_strawberry_framework.types.relay import implements_relay_node
+from django_strawberry_framework.utils._narrowing import dict_items, is_dict, is_list_or_tuple
+from django_strawberry_framework.utils.errors import (
+    FILTER_INVALID_ERROR_CODE,
+    coded_error_extensions,
+)
+from django_strawberry_framework.utils.input_values import (
     DEFAULT_SET_INPUT_TRAVERSAL_DEPTH,
     LEAF,
     LOGIC,
@@ -86,13 +88,16 @@ from ..utils.input_values import (
     iter_input_items,
     raise_set_traversal_depth_exceeded,
 )
-from ..utils.inputs import FILTERSET_FIELDS_ALIAS, promote_set_meta_fields
-from ..utils.permissions import (
+from django_strawberry_framework.utils.inputs import (
+    FILTERSET_FIELDS_ALIAS,
+    promote_set_meta_fields,
+)
+from django_strawberry_framework.utils.permissions import (
     RelationHop,
     relation_path_gates,
     walk_declared_relation_path,
 )
-from ..utils.querysets import (
+from django_strawberry_framework.utils.querysets import (
     SyncMisuseError,
     apply_type_visibility_async,
     apply_type_visibility_sync,
@@ -101,7 +106,7 @@ from ..utils.querysets import (
     relation_path_visibility_types,
     run_in_one_sync_boundary,
 )
-from ..utils.relations import (
+from django_strawberry_framework.utils.relations import (
     ClassifiedPath,
     classify_path,
     is_many_side_relation_kind,
@@ -109,6 +114,7 @@ from ..utils.relations import (
     path_traverses_to_many,
     relation_kind,
 )
+
 from .base import (
     _GLOBALID_RELATION_PK_ATTR,
     ArrayFilter,
@@ -147,6 +153,7 @@ from .inputs import (
 _LOGIC_PYTHON_ATTRS: frozenset[str] = frozenset(op.python_attr for op in LOGIC_OPERATORS)
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator, Mapping, Sequence
     from types import MethodType
     from typing import TypeAlias
 
@@ -154,9 +161,9 @@ if TYPE_CHECKING:
     from django_filters.filterset import FilterSetOptions
     from typing_extensions import Self
 
-    from ..types.base import DjangoType
-    from ..types.definition import DjangoTypeDefinition
-    from ..utils.typing import ForeignKeyField, ModelField
+    from django_strawberry_framework.types.base import DjangoType
+    from django_strawberry_framework.types.definition import DjangoTypeDefinition
+    from django_strawberry_framework.utils.typing import ForeignKeyField, ModelField
 
     # ``(field_name, target_type, child_filterset, child_input, child_base)`` per active
     # related branch, as ``FilterSet._iter_visibility_steps`` yields it.
@@ -850,12 +857,17 @@ def _dynamic_csv_profile_for(klass: type[object]) -> _FilterFamilyProfile | None
     """
     bases = klass.__bases__
     empty_body = frozenset(vars(klass)) == _EMPTY_BODY_DYNAMIC_CSV_ATTRS
-    if len(bases) == 2 and bases[0] is MembershipInFilter and empty_body:
-        klass = bases[1]
-        bases = klass.__bases__
-    if len(bases) != 2:
-        return None
-    csv_base, scalar_base = bases
+    match bases:
+        case (wrapper_base, wrapped) if wrapper_base is MembershipInFilter and empty_body:
+            klass = wrapped
+            bases = klass.__bases__
+        case _:
+            pass
+    match bases:
+        case (csv_base, scalar_base):
+            pass
+        case _:
+            return None
     if csv_base is not BaseInFilter and csv_base is not BaseRangeFilter:
         return None
     if scalar_base not in _FILTER_FAMILY_REGISTRY:

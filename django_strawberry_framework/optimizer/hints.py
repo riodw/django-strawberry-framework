@@ -28,8 +28,8 @@ from typing import TYPE_CHECKING, ClassVar, cast
 
 from django.db.models import Prefetch
 
-from ..exceptions import ConfigurationError, _safe_attr, _safe_type_name
-from ..utils.relations import safe_truthy
+from django_strawberry_framework.exceptions import ConfigurationError, _safe_attr, _safe_type_name
+from django_strawberry_framework.utils.relations import safe_truthy
 
 # The shared public strategy-selection type (and the validator it feeds) are
 # owned by ``nested_fetch`` beside ``NestedConnectionStrategy``. They are
@@ -140,6 +140,7 @@ class OptimizerHint:
             Decision 11), so strategy selection never depends on request-varying
             data. Strategy selection MUST never depend on request-varying data
             outside the cache key.
+
     """
 
     force_select: bool = False

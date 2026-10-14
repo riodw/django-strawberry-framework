@@ -76,10 +76,12 @@ the address.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from types import MethodType
-from typing import Generic, NamedTuple, TypeVar, cast
+from typing import TYPE_CHECKING, Generic, NamedTuple, TypeVar, cast
 from weakref import ReferenceType, ref
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 __all__ = ("PrivateAuthority", "PrivateMembership")
 

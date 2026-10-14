@@ -174,7 +174,7 @@ def test_validate_orderset_class_uses_local_import() -> None:
     # module-load cycle.
     assert "OrderSet" not in vars(base_mod)
     src = inspect.getsource(base_mod._validate_orderset_class)
-    assert "from ..orders.sets import OrderSet" in src
+    assert "from django_strawberry_framework.orders.sets import OrderSet" in src
 
 
 # ---------------------------------------------------------------------------

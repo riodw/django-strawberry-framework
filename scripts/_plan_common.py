@@ -102,6 +102,7 @@ def package_version(package_root: Path) -> str:
 
     Raises:
         ValueError: the file is unreadable or carries no ``__version__`` literal.
+
     """
     init_path = package_root / "__init__.py"
     try:

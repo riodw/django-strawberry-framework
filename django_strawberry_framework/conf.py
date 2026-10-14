@@ -39,13 +39,16 @@ legitimate shapes, and coercion is unconditionally correct. Do not
 unify the two.
 """
 
-from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 from django.conf import settings as django_settings
 from django.test.signals import setting_changed
 
 from django_strawberry_framework.exceptions import ConfigurationError, _safe_type_name
 from django_strawberry_framework.utils._narrowing import is_exact_dict, is_mapping
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 DJANGO_SETTINGS_KEY = "DJANGO_STRAWBERRY_FRAMEWORK"
 _DISPATCH_UID = "django_strawberry_framework.conf.reload_settings"
@@ -219,7 +222,7 @@ def _normalize_user_settings(value: object) -> dict[object, object]:
 class Settings:
     """Attribute-style accessor for user-provided library settings."""
 
-    def __init__(self, user_settings: Mapping[str, object] | None = None) -> None:
+    def __init__(self, user_settings: "Mapping[str, object] | None" = None) -> None:
         """Build a ``Settings`` instance.
 
         ``None`` (the default) defers loading until first attribute access, at
@@ -293,7 +296,7 @@ class Settings:
         self._user_settings = normalized
         return self._user_settings
 
-    def reload(self, value: Mapping[str, object] | None) -> None:
+    def reload(self, value: "Mapping[str, object] | None") -> None:
         """Replace the cached user-settings mapping in place.
 
         ``None`` restores django-backed lazy reload on next attribute access.

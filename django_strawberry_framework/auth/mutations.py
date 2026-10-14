@@ -42,13 +42,13 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from typing_extensions import override
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_text
-from ..mutations.fields import (
+from django_strawberry_framework.exceptions import ConfigurationError, _safe_arg_repr, _safe_text
+from django_strawberry_framework.mutations.fields import (
     DjangoMutationField,
     _lazy_ref,
     build_lazy_field_signature,
 )
-from ..mutations.inputs import (
+from django_strawberry_framework.mutations.inputs import (
     CREATE,
     INPUTS_MODULE_PATH,
     build_mutation_input,
@@ -59,22 +59,23 @@ from ..mutations.inputs import (
     mutation_input_shape,
     payload_object_slot,
 )
-from ..mutations.sets import (
+from django_strawberry_framework.mutations.sets import (
     DjangoMutation,
     _validate_permission_classes,
     backing_model_of,
     make_declaration_registry,
 )
-from ..mutations.sets import (
+from django_strawberry_framework.mutations.sets import (
     register_mutation as record_mutation_declaration,
 )
-from ..registry import register_subsystem_clear, registry
-from ..resource_policy import check_deadline
-from ..utils.directives import validated_field_directives
-from ..utils.execution_mode import async_execution
-from ..utils.permissions import request_from_info
-from ..utils.querysets import run_in_one_sync_boundary
-from ..utils.sessions import actor_transition
+from django_strawberry_framework.registry import register_subsystem_clear, registry
+from django_strawberry_framework.resource_policy import check_deadline
+from django_strawberry_framework.utils.directives import validated_field_directives
+from django_strawberry_framework.utils.execution_mode import async_execution
+from django_strawberry_framework.utils.permissions import request_from_info
+from django_strawberry_framework.utils.querysets import run_in_one_sync_boundary
+from django_strawberry_framework.utils.sessions import actor_transition
+
 from . import sessions
 
 if TYPE_CHECKING:
@@ -89,11 +90,18 @@ if TYPE_CHECKING:
     from strawberry.types import Info
     from strawberry.types.base import WithStrawberryObjectDefinition
 
-    from ..mutations.inputs import ModelFieldIndex
-    from ..mutations.resolvers import StepFailure, _GeneratedPayload, _M2MAssignments
-    from ..mutations.sets import DeclarationRegistry, _ValidatedMutationMeta
-    from ..types.base import DjangoType
-    from ..utils.permissions import ChannelsRequestAdapter
+    from django_strawberry_framework.mutations.inputs import ModelFieldIndex
+    from django_strawberry_framework.mutations.resolvers import (
+        StepFailure,
+        _GeneratedPayload,
+        _M2MAssignments,
+    )
+    from django_strawberry_framework.mutations.sets import (
+        DeclarationRegistry,
+        _ValidatedMutationMeta,
+    )
+    from django_strawberry_framework.types.base import DjangoType
+    from django_strawberry_framework.utils.permissions import ChannelsRequestAdapter
 
     # The register decode product: the constructed (unsaved) user, the M2M
     # replace-sets, the ``full_clean`` exclude list, and the captured raw password.
@@ -633,8 +641,8 @@ def _failed_login_payload(payload_cls: type[object], slot: str) -> object:
     wrong-password / unknown-user / inactive-under-``ModelBackend`` / unstorable
     credential collapse to a byte-identical payload (the enumeration guard).
     """
-    from ..mutations import resolvers
-    from ..utils.errors import field_error
+    from django_strawberry_framework.mutations import resolvers
+    from django_strawberry_framework.utils.errors import field_error
 
     error = field_error("", _INCORRECT_CREDENTIALS_MESSAGE)
     return resolvers.build_payload(payload_cls, slot, None, [error])
@@ -676,7 +684,7 @@ def _login_result_payload(payload_cls: type[object], slot: str, user: _User | No
     build the payload here and THEN early-return on the failed case, preserving both
     the failed-login early return and the payload-before-mutation ordering.
     """
-    from ..mutations import resolvers
+    from django_strawberry_framework.mutations import resolvers
 
     if user is None:
         return _failed_login_payload(payload_cls, slot)
@@ -715,8 +723,8 @@ def _login_authenticate(
     sync-only so BOTH the native sync body and the native async body (inside its one
     ``sync_to_async`` boundary) reuse it without duplicating the state machine.
     """
-    from ..mutations import resolvers
-    from ..utils.write_values import unencodable_text_error
+    from django_strawberry_framework.mutations import resolvers
+    from django_strawberry_framework.utils.write_values import unencodable_text_error
 
     request, transport, session = _transport_prologue(
         info,
@@ -936,7 +944,7 @@ def _logout_prologue(
     called for its rejection side effect; its return is unused because logout's
     durability is the native flush, not a resolver-side save.
     """
-    from ..mutations import resolvers
+    from django_strawberry_framework.mutations import resolvers
 
     request, transport, _session = _transport_prologue(
         info,
@@ -1248,7 +1256,7 @@ def _register_decode_step(
     required input field (``AbstractBaseUser.password`` has no default / blank),
     so a reached decode always captured it.
     """
-    from ..mutations import resolvers
+    from django_strawberry_framework.mutations import resolvers
 
     # The rider is a model-backed create: its snapshot carries the user model and the
     # bind stashed the decode's reverse maps.
@@ -1295,9 +1303,13 @@ def _register_write_step(
     through ``mutation_cls``'s specs (``first_name`` -> ``firstName``) -
     ``validate_password`` + ``set_password`` are the ONLY auth-specific steps.
     """
-    from ..mutations import resolvers
-    from ..utils.errors import FIELD_ERROR_CODE_INVALID, field_error, null_field_error
-    from ..utils.write_values import unencodable_text_error
+    from django_strawberry_framework.mutations import resolvers
+    from django_strawberry_framework.utils.errors import (
+        FIELD_ERROR_CODE_INVALID,
+        field_error,
+        null_field_error,
+    )
+    from django_strawberry_framework.utils.write_values import unencodable_text_error
 
     user, m2m_assignments, exclude, raw_password = decoded
     if raw_password is None:
@@ -1342,7 +1354,7 @@ def _run_register_pipeline_sync(
     decode / write step pair. Structurally a fourth decode/write STEP PAIR, not a
     fourth plumbing kit.
     """
-    from ..mutations.resolvers import run_write_pipeline_sync
+    from django_strawberry_framework.mutations.resolvers import run_write_pipeline_sync
 
     return run_write_pipeline_sync(
         mutation_cls,

@@ -54,7 +54,6 @@ from __future__ import annotations
 import contextlib
 import copy
 import inspect
-from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from enum import Enum
 from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, Protocol, TypeVar, cast, overload
 
@@ -80,7 +79,7 @@ from .utils.querysets import (
 from .utils.typing import strawberry_schema_from_info
 
 if TYPE_CHECKING:
-    from collections.abc import Sized
+    from collections.abc import Awaitable, Iterable, Mapping, Sequence, Sized
 
     from django.db import models
     from strawberry import relay

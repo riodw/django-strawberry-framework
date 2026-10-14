@@ -22,14 +22,16 @@ validated on the same terms.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
 from dataclasses import fields
 from typing import TYPE_CHECKING, TypeVar
 
-from ..exceptions import ConfigurationError, describe_value
+from django_strawberry_framework.exceptions import ConfigurationError, describe_value
+
 from ._narrowing import is_mapping
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
+
     from _typeshed import DataclassInstance
 
 __all__ = ("canonical_policy", "copy_policy", "resolve_policy")

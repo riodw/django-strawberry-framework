@@ -36,7 +36,6 @@ symmetric by construction (spec-036 Decision 6).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterable
 from types import GenericAlias
 from typing import TYPE_CHECKING, NamedTuple, cast
 
@@ -46,12 +45,12 @@ from django.db import models
 from strawberry import relay
 from strawberry.utils.str_converters import to_camel_case
 
-from ..exceptions import ConfigurationError, _safe_arg_repr
-from ..registry import register_subsystem_clear, registry
-from ..scalars import Upload
-from ..types.converters import convert_scalar, scalar_for_field
-from ..types.relay import implements_relay_node
-from ..utils.inputs import (
+from django_strawberry_framework.exceptions import ConfigurationError, _safe_arg_repr
+from django_strawberry_framework.registry import register_subsystem_clear, registry
+from django_strawberry_framework.scalars import Upload
+from django_strawberry_framework.types.converters import convert_scalar, scalar_for_field
+from django_strawberry_framework.types.relay import implements_relay_node
+from django_strawberry_framework.utils.inputs import (
     FILE,
     RELATION_MULTI,
     RELATION_SINGLE,
@@ -66,21 +65,22 @@ from ..utils.inputs import (
     pascalize_token,
     resolve_effective_fields,
 )
-from ..utils.relations import (
+from django_strawberry_framework.utils.relations import (
     RelationLink,
     carrier_backed_link,
     is_forward_concrete_relation,
     is_forward_many_to_many,
 )
-from ..utils.strings import graphql_camel_name
+from django_strawberry_framework.utils.strings import graphql_camel_name
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Collection, Iterable
     from typing import TypeAlias
 
     from strawberry.types.base import WithStrawberryObjectDefinition
 
-    from ..types.base import DjangoType
-    from ..utils.typing import ConcreteField, ModelField
+    from django_strawberry_framework.types.base import DjangoType
+    from django_strawberry_framework.utils.typing import ConcreteField, ModelField
 
     # The bind-time ``input attr -> Django field`` index the model decode reads.
     ModelFieldIndex: TypeAlias = dict[str, ModelField]

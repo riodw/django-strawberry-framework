@@ -34,6 +34,7 @@ Examples:
         X=1   ->    398 rows
         X=5   ->   1194 rows
         X=50  ->  10149 rows
+
 """
 
 from __future__ import annotations
@@ -205,6 +206,7 @@ def seed_data(count: int, db_alias: str = "default") -> dict[str, int]:
 
     Returns:
         A summary dict with counts of newly created rows.
+
     """
     from faker import Faker
 
@@ -322,6 +324,7 @@ def create_users(count: int = 1, db_alias: str = "default") -> dict[str, int]:
 
     Returns:
         A summary dict with the number of newly created users.
+
     """
     # ``config.settings`` keeps Django's default ``AUTH_USER_MODEL``, so the concrete
     # ``auth.User`` is the configured model and its ``UserManager`` owns ``create_user``.

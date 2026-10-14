@@ -11,7 +11,6 @@ cannot leak partial directives into the walker's parent plan.
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -24,13 +23,13 @@ from django.db.models.sql.query import Query
 from graphql import GraphQLError
 from strawberry import relay
 
-from ..keyset import (
+from django_strawberry_framework.keyset import (
     CursorState,
     KeysetSeek,
     declared_cursor_state_for_definition,
     decode_keyset_cursor,
 )
-from ..utils.connections import (
+from django_strawberry_framework.utils.connections import (
     ConnectionWindowBounds,
     FetchMode,
     PaginationArgumentError,
@@ -45,9 +44,12 @@ from ..utils.connections import (
 # same function (``optimizer.walker._relay_max_results_from_info``, imported by
 # ``tests/optimizer/test_walker.py``). The dig itself has one owner in
 # ``utils/connections.py``, shared with the resolve-time cap.
-from ..utils.connections import relay_max_results_from_info as _relay_max_results_from_info
-from ..utils.imports import import_attr_if_importable
-from ..utils.relations import instance_accessor
+from django_strawberry_framework.utils.connections import (
+    relay_max_results_from_info as _relay_max_results_from_info,
+)
+from django_strawberry_framework.utils.imports import import_attr_if_importable
+from django_strawberry_framework.utils.relations import instance_accessor
+
 from . import logger
 from .hints import hint_is_skip
 from .join_taxonomy import RelationJoinDescriptor, classify_relation_join
@@ -82,7 +84,7 @@ from .selections import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import MutableSequence
+    from collections.abc import Callable, Mapping, MutableSequence, Sequence
     from typing import TypeAlias
 
     from django.contrib.postgres.indexes import BTreeIndex
@@ -92,10 +94,11 @@ if TYPE_CHECKING:
     from graphql.type.definition import GraphQLResolveInfo
     from strawberry.types.nodes import Arguments
 
-    from ..keyset import CursorColumn
-    from ..types.base import DjangoType
-    from ..types.definition import DjangoTypeDefinition
-    from ..utils.typing import ConcreteField, ModelField
+    from django_strawberry_framework.keyset import CursorColumn
+    from django_strawberry_framework.types.base import DjangoType
+    from django_strawberry_framework.types.definition import DjangoTypeDefinition
+    from django_strawberry_framework.utils.typing import ConcreteField, ModelField
+
     from .field_meta import FieldMeta
     from .hints import OptimizerHint
     from .nested_fetch import NestedConnectionStrategy, StrategySelection

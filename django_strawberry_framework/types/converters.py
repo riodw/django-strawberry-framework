@@ -65,7 +65,6 @@ import decimal
 import keyword
 import re
 import uuid
-from collections.abc import Callable, Iterable
 from enum import Enum, EnumMeta
 from types import GenericAlias
 from typing import TYPE_CHECKING, TypeGuard, TypeVar, cast
@@ -74,32 +73,39 @@ import strawberry
 from django.db import models
 from django.db.models.fields.files import FieldFile, ImageFieldFile
 
-from ..exceptions import (
+from django_strawberry_framework.exceptions import (
     ConfigurationError,
     _safe_arg_repr,
     _safe_attr,
     _safe_text,
     _safe_type_name,
 )
-from ..optimizer.field_meta import FieldMeta
-from ..registry import registry
-from ..scalars import BigInt
-from ..utils._narrowing import is_iterable, is_list_or_tuple
-from ..utils.imports import import_attr_if_importable
-from ..utils.strings import pascal_case
+from django_strawberry_framework.optimizer.field_meta import FieldMeta
+from django_strawberry_framework.registry import registry
+from django_strawberry_framework.scalars import BigInt
+from django_strawberry_framework.utils._narrowing import is_iterable, is_list_or_tuple
+from django_strawberry_framework.utils.imports import import_attr_if_importable
+from django_strawberry_framework.utils.strings import pascal_case
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+
     from django.contrib.postgres.fields import ArrayField, HStoreField
     from typing_extensions import Never, TypeForm
 
-    from ..utils.typing import ConcreteField, ModelField, OptionalWidenable
+    from django_strawberry_framework.utils.typing import (
+        ConcreteField,
+        ModelField,
+        OptionalWidenable,
+    )
+
     from .base import DjangoType
 
 
 _T = TypeVar("_T")
 
 
-def _safe_file_attr(read: Callable[[], _T]) -> _T | None:
+def _safe_file_attr(read: "Callable[[], _T]") -> _T | None:
     """Run one storage-backed ``FieldFile`` read, degrading storage failures to ``None``.
 
     The single per-subfield guard shared by every nullable subfield resolver
@@ -308,6 +314,9 @@ FILESYSTEM_PATH_OUTPUT_TYPE_MAP: dict[type[DjangoFileType], type[DjangoFileType]
     DjangoFileType: DjangoFilePathType,
 }
 
+# A choices entry is a ``(value, label-or-group)`` pair.
+_CHOICE_ENTRY_LENGTH = 2
+
 _NON_IDENT = re.compile(r"\W+", flags=re.ASCII)
 _GRAPHQL_RESERVED_ENUM_VALUES = frozenset(
     {"false", "null", "true"},
@@ -452,6 +461,7 @@ def convert_scalar(
             - ``<Model>.<field> uses Django's grouped-choices form`` -
               raised from ``convert_choices_to_enum`` for nested-tuple
               choice declarations.
+
     """
     # The tri-state collapses to a single boolean computed once: the
     # override (``force_nullable``) wins when set, otherwise the column's
@@ -606,8 +616,10 @@ def _is_enum_reserved_member(name: str, *, enum_name: str | None = None) -> bool
     them. ``__dunder__`` names are already handled by the ``startswith("__")``
     branch in :func:`_sanitize_member_name`.
     """
+    # ``len(name) > 1`` is enough to keep ``name[1]`` in range: a two-character name fails
+    # ``name[1] != "_"`` anyway, so the outcome equals ``enum``'s own ``len(name) > 2``.
     if name == "mro" or (
-        len(name) > 2 and name[0] == "_" and name[-1] == "_" and name[1] != "_" and name[-2] != "_"
+        len(name) > 1 and name[0] == "_" and name[-1] == "_" and name[1] != "_" and name[-2] != "_"
     ):
         return True
     if enum_name is None:
@@ -668,7 +680,7 @@ def _sanitize_member_name(value: object, *, enum_name: str | None = None) -> str
 
 
 def build_enum_from_choices(
-    choice_pairs: Iterable[object],
+    choice_pairs: "Iterable[object]",
     enum_name: str,
     *,
     source_label: str,
@@ -716,6 +728,7 @@ def build_enum_from_choices(
     Raises:
         ConfigurationError: empty sequence (or one holding only ``None``-valued pairs),
             grouped-choices form, or two values that sanitize to the same enum member.
+
     """
     normalized_pairs = _normalize_choice_pairs(choice_pairs, source_label=source_label)
     _insert_blank_pair(normalized_pairs, include_blank=include_blank)
@@ -787,7 +800,7 @@ def _unpack_choice_entry(entry: object, *, source_label: str) -> tuple[object, o
 
 
 def _normalize_choice_pairs(
-    choice_pairs: Iterable[object],
+    choice_pairs: "Iterable[object]",
     *,
     source_label: str,
     flatten_groups: bool = False,
@@ -930,7 +943,9 @@ def choice_column_is_grouped(field: "ConcreteField") -> bool:
             f"Could not inspect choices for {_field_label(field)}.",
         ) from exc
     return any(
-        is_list_or_tuple(entry) and len(entry) == 2 and _is_choice_group(entry[1])
+        is_list_or_tuple(entry)
+        and len(entry) == _CHOICE_ENTRY_LENGTH
+        and _is_choice_group(entry[1])
         for entry in entries
     )
 
@@ -956,6 +971,7 @@ def convert_choices_to_enum(field: "ConcreteField", type_name: str) -> type[Enum
         ConfigurationError: empty ``field.choices``, Django's grouped-choices form, or
             two choice values that sanitize to the same enum member (all raised by
             ``build_enum_from_choices``).
+
     """
     try:
         model = field.model

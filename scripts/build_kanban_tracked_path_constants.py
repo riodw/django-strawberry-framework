@@ -6,8 +6,11 @@ import argparse
 import json
 import re
 import sys
-from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 try:
     from _kanban_lib import run_git as _run_git

@@ -124,7 +124,6 @@ from __future__ import annotations
 
 import contextlib
 import functools
-from collections.abc import Callable, Iterable
 from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, NamedTuple, TypeVar, cast
 from weakref import ref
@@ -133,13 +132,13 @@ from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.extensions.runner import SchemaExtensionsRunner
 from typing_extensions import override
 
-from ..exceptions import ConfigurationError
-from ..utils.execution_mode import OperationMode, bind_operation_mode
-from ..utils.operation_lease import OperationLease
-from ..utils.private_state import PrivateAuthority
+from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.utils.execution_mode import OperationMode, bind_operation_mode
+from django_strawberry_framework.utils.operation_lease import OperationLease
+from django_strawberry_framework.utils.private_state import PrivateAuthority
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator
+    from collections.abc import AsyncGenerator, Callable, Generator, Iterable
     from types import TracebackType
 
     from strawberry.extensions.context import ExtensionContextManagerBase
@@ -471,7 +470,7 @@ def _binds_operation_state(execution_context: object) -> bool:
     the context is an engine object on the supported path and an arbitrary
     consumer object on every other.
     """
-    from ..schema import DjangoSchema
+    from django_strawberry_framework.schema import DjangoSchema
 
     try:
         schema = getattr(execution_context, "schema", None)

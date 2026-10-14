@@ -52,7 +52,6 @@ import hashlib
 import os
 import sys
 from collections import Counter, defaultdict
-from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -60,6 +59,8 @@ from typing import TYPE_CHECKING
 from typing_extensions import override
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator, Sequence
+
     from typing_extensions import TypeIs
 
 try:

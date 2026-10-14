@@ -63,11 +63,10 @@ from __future__ import annotations
 import contextlib
 import math
 import time
-from collections.abc import AsyncIterable, Iterable, Iterator, Mapping
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, fields, replace
 from itertools import islice
-from typing import TypeGuard, TypeVar, cast, overload
+from typing import TYPE_CHECKING, TypeGuard, TypeVar, cast, overload
 
 from django.db.models import Model, QuerySet
 from graphql import GraphQLError
@@ -80,6 +79,9 @@ from .utils.errors import coded_error_extensions
 from .utils.operation_lease import OperationLease
 from .utils.policies import canonical_policy, copy_policy, resolve_policy
 from .utils.querysets import is_async_only_iterable, normalized_row_source
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterable, Iterable, Iterator, Mapping
 
 __all__ = (
     "DEFAULT_RESOURCE_POLICY",

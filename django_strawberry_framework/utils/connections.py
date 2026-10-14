@@ -45,7 +45,6 @@ re-exports the same helper for argument-comparison); this helper assumes its
 from __future__ import annotations
 
 import sys
-from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Protocol, TypeVar, cast
@@ -54,12 +53,15 @@ import strawberry
 from graphql import GraphQLError
 from strawberry.relay.utils import SliceMetadata, from_base64, to_base64
 
-from ..exceptions import DjangoStrawberryFrameworkError, OptimizerError
-from ..resource_policy import effective_bound, policy_from_info
+from django_strawberry_framework.exceptions import DjangoStrawberryFrameworkError, OptimizerError
+from django_strawberry_framework.resource_policy import effective_bound, policy_from_info
+
 from .input_values import is_inactive_value
 from .typing import schema_config_from_info
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
+
     from strawberry import Info
 
     from .typing import EitherInfo

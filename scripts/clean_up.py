@@ -22,8 +22,11 @@ from __future__ import annotations
 
 import argparse
 import shutil
-from collections.abc import Iterable, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CLEAR_DIRECTORIES = ("docs/shadow", "docs/review/temp-tests", "docs/builder/temp-tests")

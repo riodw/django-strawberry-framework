@@ -65,7 +65,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
-from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, NoReturn, TypeVar, cast
@@ -101,7 +100,7 @@ from .utils.private_state import PrivateAuthority, PrivateMembership
 from .utils.write_transaction import managed_write_transaction, resolve_write_alias
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Callable, Iterable, Iterator, Mapping
     from typing import Protocol, TypeAlias
 
     from django.db.transaction import Atomic

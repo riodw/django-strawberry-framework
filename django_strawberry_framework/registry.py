@@ -17,16 +17,17 @@ fixture.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
 from enum import Enum
 from typing import TYPE_CHECKING, Final, Literal, cast
-
-from django.db import models
 
 from .exceptions import ConfigurationError
 from .utils.imports import import_attr_if_importable
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable, Iterator
+
+    from django.db import models
+
     from .types.base import DjangoType
     from .types.definition import DjangoTypeDefinition, GlobalIDStrategy
     from .types.relations import PendingRelation
@@ -235,6 +236,7 @@ class TypeRegistry:
                 different ``model``); duplicate-primary collision; primary
                 flag flipped on idempotent re-register; the registry is
                 finalized.
+
         """
         self._check_mutable()
         existing_model = self._models.get(type_cls)
@@ -428,7 +430,7 @@ class TypeRegistry:
         Drives ``_audit_primary_ambiguity`` without exposing the
         internal ``_types`` dict to the finalizer.
         """
-        return (model for model, types in self._types.items() if len(types) >= 2)
+        return (model for model, types in self._types.items() if len(types) > 1)
 
     def register_definition(
         self,
@@ -513,6 +515,7 @@ class TypeRegistry:
             ConfigurationError: no Relay-Node definition matches ``name`` (the
                 miss), or two or more share the same ``graphql_type_name`` (the
                 ambiguity).
+
         """
         # In-function import: ``registry.py`` is imported very early and must not
         # couple its module top to ``types.relay``; the ``clear()`` helpers and the
@@ -598,6 +601,7 @@ class TypeRegistry:
                 Re-registering the *same* enum class is a no-op so the
                 normal ``get_enum``-then-``register_enum`` cache pattern
                 in ``convert_choices_to_enum`` still works under retry.
+
         """
         self._check_mutable()
         key = (model, field_name)

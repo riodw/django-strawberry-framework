@@ -77,8 +77,13 @@ from django.db.models.fields.files import FieldFile
 from django.db.models.signals import pre_save
 from typing_extensions import override
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
-from ..utils.errors import FIELD_ERROR_CODE_CONFLICT, field_error
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_type_name,
+)
+from django_strawberry_framework.utils.errors import FIELD_ERROR_CODE_CONFLICT, field_error
+
 from ._narrowing import is_dict, is_list_or_tuple, is_set_or_frozenset
 from ._queryset_private import queryset_db
 from .canonical import base_container_values, canonical_sort_key
@@ -92,8 +97,9 @@ if TYPE_CHECKING:
     from django.db.models import QuerySet
     from typing_extensions import TypeIs
 
-    from ..mutations.inputs import FieldError
-    from ..mutations.sets import WriteMutationClass
+    from django_strawberry_framework.mutations.inputs import FieldError
+    from django_strawberry_framework.mutations.sets import WriteMutationClass
+
     from .typing import ConcreteField
 
     #: The ``execute`` callable a connection hands an ``execute_wrapper``: the

@@ -62,16 +62,16 @@ from graphql import GraphQLError
 from strawberry import relay
 from typing_extensions import override
 
-from ..exceptions import (
+from django_strawberry_framework.exceptions import (
     ConfigurationError,
     _safe_arg_repr,
     _safe_class_name,
     _safe_type_name,
 )
-from ..sets_mixins import (
+from django_strawberry_framework.sets_mixins import (
     LazyRelatedClassMixin as LazyRelatedClassMixin,  # noqa: PLC0414 - kept re-export path
 )  # re-exported via filters.__init__
-from ..sets_mixins import RelatedSetTargetMixin
+from django_strawberry_framework.sets_mixins import RelatedSetTargetMixin
 
 # ``filters -> types`` is the documented safe (acyclic) import direction:
 # ``types/relay.py`` module-top imports are stdlib/django/strawberry/``..exceptions``
@@ -79,22 +79,22 @@ from ..sets_mixins import RelatedSetTargetMixin
 # so a module-top ``filters/base.py -> types/relay.py`` import does not close a load
 # cycle (spec-031). These are the single source of truth for the
 # strategy->payload-shape mapping shared with the encoder and the decoder.
-from ..types.relay import (
+from django_strawberry_framework.types.relay import (
     MODEL_LABEL_STRATEGIES,
     TYPE_NAME_STRATEGIES,
     node_definition_for_published_name,
     published_node_type_name,
 )
-from ..utils._narrowing import is_class, is_list_or_tuple
-from ..utils.errors import (
+from django_strawberry_framework.utils._narrowing import is_class, is_list_or_tuple
+from django_strawberry_framework.utils.errors import (
     FILTER_INVALID_ERROR_CODE,
     GLOBALID_INVALID_ERROR_CODE,
     GLOBALID_UNVALIDATABLE_ERROR_CODE,
     coded_error_extensions,
 )
-from ..utils.querysets import base_queryset, coerce_field_value_or_none
-from ..utils.relations import relation_kind, relation_link
-from ..utils.typing import strawberry_schema_from_info
+from django_strawberry_framework.utils.querysets import base_queryset, coerce_field_value_or_none
+from django_strawberry_framework.utils.relations import relation_kind, relation_link
+from django_strawberry_framework.utils.typing import strawberry_schema_from_info
 
 # The three framework strategies whose emitted GlobalID a filter input CAN
 # decode + validate (``model`` / ``type`` / ``type+model``). Derived from the
@@ -121,8 +121,9 @@ if TYPE_CHECKING:
     from django_filters.filterset import BaseFilterSet, FilterSetOptions
     from strawberry.schema import Schema
 
-    from ..types.definition import DjangoTypeDefinition
-    from ..utils.typing import ConcreteField
+    from django_strawberry_framework.types.definition import DjangoTypeDefinition
+    from django_strawberry_framework.utils.typing import ConcreteField
+
     from .sets import FilterSet
 
     # A form-field validator (``validate_range`` checks any value's shape).
@@ -561,6 +562,10 @@ class EnumLookupFilter(_EnumMemberFilterMixin, CharFilter):
     field_class: type[CharField] = _EnumCharField
 
 
+# A range filter takes exactly a lower and an upper bound (django-filter's ``RangeField`` too).
+_RANGE_BOUNDS = 2
+
+
 def validate_range(value: object) -> None:
     """Reject range values whose length is not exactly two.
 
@@ -568,7 +573,7 @@ def validate_range(value: object) -> None:
     standard form-field contract); a one-element, three-element list, or
     non-sequence raises `ValidationError(code="invalid")`.
     """
-    if not is_list_or_tuple(value) or len(value) != 2:
+    if not is_list_or_tuple(value) or len(value) != _RANGE_BOUNDS:
         raise ValidationError(
             "Invalid range specified: it needs to contain 2 values.",
             code="invalid",
@@ -589,7 +594,7 @@ class _RangeWidget(MultiWidget):
     @override
     def decompress(self, value: object) -> list[object]:
         """Split a two-element value, or two empty boxes when nothing is bound."""
-        if is_list_or_tuple(value) and len(value) == 2:
+        if is_list_or_tuple(value) and len(value) == _RANGE_BOUNDS:
             return list(value)
         return [None, None]
 
@@ -896,7 +901,7 @@ class IntegerRangeFilter(BaseRangeFilter, NumberFilter):
             bounds: list[object] = list(value)
         except Exception:  # noqa: BLE001 - consumer code may raise anything
             return qs
-        if len(bounds) != 2:
+        if len(bounds) != _RANGE_BOUNDS:
             return qs
         # ``BaseRangeField`` validates length == 2 before we run, and the generated
         # ``list[BigInt!]`` input carries non-null elements, so both bounds are present.

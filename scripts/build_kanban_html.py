@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 try:
@@ -38,6 +37,8 @@ except ModuleNotFoundError:  # imported as ``scripts.build_kanban_html`` (repo r
     )
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from _kanban_lib import DashboardData
 
 DEFAULT_HTML_PATH = REPO_ROOT / "KANBAN.html"

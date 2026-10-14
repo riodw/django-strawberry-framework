@@ -131,6 +131,7 @@ __all__ = (
     "is_exact_dict",
     "is_exact_list",
     "is_exact_list_or_tuple",
+    "is_exact_pair",
     "is_exact_set_or_frozenset",
     "is_exact_tuple",
     "is_exact_tuple_or_list",
@@ -200,6 +201,21 @@ def is_exact_list(value: object) -> TypeGuard[list[object]]:
 def is_exact_tuple(value: object) -> TypeGuard[tuple[object, ...]]:
     """Return whether ``value`` is EXACTLY a builtin ``tuple`` (never a subclass)."""
     return type(value) is tuple
+
+
+def is_exact_pair(value: object) -> TypeGuard[tuple[object, object]]:
+    """Return whether ``value`` is EXACTLY a builtin ``tuple`` of two members (never a subclass).
+
+    The type is proven first, so the length read and the pattern never dispatch a
+    consumer ``__len__`` / ``__getitem__``.
+    """
+    if not is_exact_tuple(value):
+        return False
+    match value:
+        case (_, _):
+            return True
+        case _:
+            return False
 
 
 def is_exact_list_or_tuple(value: object) -> TypeGuard[list[object] | tuple[object, ...]]:

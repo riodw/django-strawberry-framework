@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
-from typing import TypedDict, cast
+from typing import TYPE_CHECKING, TypedDict, cast
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 try:
     from _kanban_lib import (

@@ -191,6 +191,7 @@ def _run_child() -> tuple[str, str]:
 
     Raises:
         RuntimeError: the child failed to import the package.
+
     """
     completed = subprocess.run(
         [

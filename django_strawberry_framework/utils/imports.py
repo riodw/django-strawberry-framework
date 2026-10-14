@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import importlib
 import sys
-from types import ModuleType
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 __all__ = [
     "CHANNELS_FLOOR",

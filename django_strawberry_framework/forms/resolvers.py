@@ -111,17 +111,17 @@ from django import forms
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist, ValidationError
 from django.forms.models import model_to_dict
 
-from ..mutations.resolvers import (
+from django_strawberry_framework.mutations.resolvers import (
     StepFailure,
     make_resolver_entries,
     run_write_pipeline_sync,
     save_or_field_errors,
 )
-from ..mutations.sets import backing_model_of
-from ..utils.querysets import sync_pipeline_recourse
-from ..utils.relations import is_single_column_foreign_key
-from ..utils.write_transaction import pipeline_write_phase
-from ..utils.write_values import (
+from django_strawberry_framework.mutations.sets import backing_model_of
+from django_strawberry_framework.utils.querysets import sync_pipeline_recourse
+from django_strawberry_framework.utils.relations import is_single_column_foreign_key
+from django_strawberry_framework.utils.write_transaction import pipeline_write_phase
+from django_strawberry_framework.utils.write_values import (
     decode_field_handlers,
     decode_provided_fields,
     decode_visible_relation,
@@ -136,9 +136,13 @@ if TYPE_CHECKING:
     from strawberry.types import Info
     from typing_extensions import TypeIs
 
-    from ..mutations.inputs import FieldError
-    from ..mutations.resolvers import _AsyncResolverEntry, _SyncResolverEntry
-    from ..utils.typing import ForeignKeyField
+    from django_strawberry_framework.mutations.inputs import FieldError
+    from django_strawberry_framework.mutations.resolvers import (
+        _AsyncResolverEntry,
+        _SyncResolverEntry,
+    )
+    from django_strawberry_framework.utils.typing import ForeignKeyField
+
     from .sets import DjangoFormMutation, DjangoModelFormMutation
 
     # A form-flavor mutation class: the ``ModelForm`` or the model-less plain base.
@@ -524,7 +528,10 @@ def _form_errors_to_field_errors(
     form spec's ``target_name`` IS the form field name); a form field the input
     does not expose keeps its form field name. No parallel mapper.
     """
-    from ..utils.errors import build_error_key_map, validation_error_to_field_errors
+    from django_strawberry_framework.utils.errors import (
+        build_error_key_map,
+        validation_error_to_field_errors,
+    )
 
     return validation_error_to_field_errors(
         ValidationError(form.errors.as_data()),

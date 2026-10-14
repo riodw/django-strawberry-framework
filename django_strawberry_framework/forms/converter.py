@@ -53,8 +53,12 @@ from typing import cast
 import strawberry
 from django import forms
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
-from ..utils.converters import (
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_type_name,
+)
+from django_strawberry_framework.utils.converters import (
     MRO_CONTINUE,
     convert_with_mro,
     finish_field_conversion,
@@ -67,11 +71,11 @@ from ..utils.converters import (
 # copy); re-exported here (the ``as`` form marks the explicit re-export) so the
 # form resolver, the input builder, and the tests keep addressing them on
 # this module (spec-038 Decision 7).
-from ..utils.inputs import FILE as FILE  # noqa: PLC0414 - explicit re-export
-from ..utils.inputs import RELATION_MULTI as RELATION_MULTI  # noqa: PLC0414 - explicit re-export
-from ..utils.inputs import RELATION_SINGLE as RELATION_SINGLE  # noqa: PLC0414 - explicit re-export
-from ..utils.inputs import SCALAR as SCALAR  # noqa: PLC0414 - explicit re-export
-from ..utils.inputs import FieldConversionBase
+from django_strawberry_framework.utils.inputs import FILE as FILE  # noqa: PLC0414 - explicit re-export
+from django_strawberry_framework.utils.inputs import RELATION_MULTI as RELATION_MULTI  # noqa: PLC0414 - explicit re-export
+from django_strawberry_framework.utils.inputs import RELATION_SINGLE as RELATION_SINGLE  # noqa: PLC0414 - explicit re-export
+from django_strawberry_framework.utils.inputs import SCALAR as SCALAR  # noqa: PLC0414 - explicit re-export
+from django_strawberry_framework.utils.inputs import FieldConversionBase
 
 
 class FormFieldConversion(FieldConversionBase):

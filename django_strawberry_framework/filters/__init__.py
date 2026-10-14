@@ -22,8 +22,9 @@ from typing import Generic, TypeVar
 
 from django_filters import Filter
 
-from ..registry import register_subsystem_clear
-from ..utils.inputs import build_lazy_input_annotation
+from django_strawberry_framework.registry import register_subsystem_clear
+from django_strawberry_framework.utils.inputs import build_lazy_input_annotation
+
 from .base import (
     ArrayFilter,
     ArrayFilterMethod,
@@ -100,6 +101,7 @@ def filter_input_type(filterset_class: type[FilterSet]) -> object:
 
     Raises:
         TypeError: ``filterset_class`` is not a ``FilterSet`` subclass.
+
     """
     return _filter_input_annotation(filterset_class, helper_spelling="filter_input_type()")
 
@@ -137,6 +139,7 @@ class FilterInput(Generic[_FilterSetT]):
 
         Raises:
             TypeError: ``filterset_class`` is not a ``FilterSet`` subclass.
+
         """
         return _filter_input_annotation(filterset_class, helper_spelling="FilterInput[...]")
 

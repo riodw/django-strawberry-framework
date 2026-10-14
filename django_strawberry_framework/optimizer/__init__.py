@@ -22,7 +22,8 @@ so the logger name lives in exactly one source location and future
 subpackages (filters, orders, aggregates) can pick it up the same way.
 """
 
-from .. import logger
+from django_strawberry_framework import logger
+
 from .extension import DjangoOptimizerExtension
 
 __all__ = ("DjangoOptimizerExtension", "logger")

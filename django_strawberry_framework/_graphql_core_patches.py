@@ -78,6 +78,10 @@ _PATCH_OWNER_ATTRIBUTE = "_django_strawberry_framework_patch_owner"
 _PATCH_ORIGINAL_ATTRIBUTE = "_django_strawberry_framework_original"
 _PATCH_OWNER = "django_strawberry_framework._graphql_core_patches"
 
+# Parameters of upstream ``ExecutionContext.complete_list_value``, ``self`` included:
+# ``(self, return_type, field_nodes, info, path, result)``.
+_COMPLETE_LIST_VALUE_ARITY = 6
+
 
 def _captured_upstream_method(owner: type[object] | None, name: str) -> object:
     if owner is None:
@@ -130,7 +134,7 @@ def _upstream_captures() -> _UpstreamCaptures:
 def _validate_upstream_shape() -> _UpstreamCaptures:
     upstream = _upstream_captures()
     parameters = tuple(inspect.signature(upstream.complete_list_value).parameters.values())
-    if len(parameters) != 6 or any(
+    if len(parameters) != _COMPLETE_LIST_VALUE_ARITY or any(
         parameter.kind is not inspect.Parameter.POSITIONAL_OR_KEYWORD for parameter in parameters
     ):
         raise RuntimeError(

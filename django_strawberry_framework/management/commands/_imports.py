@@ -1,16 +1,18 @@
 """Import helpers that translate bad management-command paths to ``CommandError``."""
 
-from collections.abc import Callable
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 from django.core.management.base import CommandError
 from django.utils.module_loading import import_string
 from strawberry.utils.importer import import_module_symbol
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 T = TypeVar("T")
 
 
-def import_or_command_error(importer: Callable[[], T]) -> T:
+def import_or_command_error(importer: "Callable[[], T]") -> T:
     """Run ``importer`` and re-raise ``ImportError``/``AttributeError`` as ``CommandError``.
 
     Returns the importer's value unchanged (call sites that import purely for

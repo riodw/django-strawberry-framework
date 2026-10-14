@@ -91,7 +91,6 @@ context.
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Callable, Iterable
 from contextvars import ContextVar
 from functools import lru_cache
 from typing import TYPE_CHECKING, NamedTuple, TypeGuard, TypeVar
@@ -131,6 +130,8 @@ from .utils.querysets import (
 from .utils.relations import is_single_column_foreign_key
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+
     from .types.base import DjangoType
     from .utils.typing import ForeignKeyField, ModelField
 
@@ -611,6 +612,7 @@ def apply_cascade_permissions(
             async twin ``aapply_cascade_permissions`` wraps this same sync walk, so
             it raises identically -- the recourse is to make the target hook sync,
             or pass ``fields=`` to skip the async-hooked edge (Decision 10).
+
     """
     model = model_for(cls)
     # The helper is called from inside a consumer-owned ``get_queryset`` hook,

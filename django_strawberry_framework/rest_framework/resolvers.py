@@ -121,7 +121,6 @@ import enum
 import fractions
 import threading
 import uuid
-from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
@@ -136,16 +135,21 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.settings import api_settings
 
-from ..exceptions import ConfigurationError, _safe_type_name
-from ..mutations.inputs import NON_FIELD_ERROR_KEY, FieldError
-from ..mutations.resolvers import (
+from django_strawberry_framework.exceptions import ConfigurationError, _safe_type_name
+from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY, FieldError
+from django_strawberry_framework.mutations.resolvers import (
     StepFailure,
     make_resolver_entries,
     run_write_pipeline_sync,
 )
-from ..mutations.sets import backing_model_of
-from ..utils._narrowing import is_dict, is_list, is_list_or_tuple, is_mapping
-from ..utils.errors import (
+from django_strawberry_framework.mutations.sets import backing_model_of
+from django_strawberry_framework.utils._narrowing import (
+    is_dict,
+    is_list,
+    is_list_or_tuple,
+    is_mapping,
+)
+from django_strawberry_framework.utils.errors import (
     FIELD_ERROR_CODE_INVALID,
     FIELD_ERROR_CODE_TRUNCATED,
     build_error_key_map,
@@ -157,14 +161,17 @@ from ..utils.errors import (
     rekey_error_segment,
     validation_error_to_field_errors,
 )
-from ..utils.inputs import optional_input_field
-from ..utils.permissions import request_from_info
-from ..utils.querysets import (
+from django_strawberry_framework.utils.inputs import optional_input_field
+from django_strawberry_framework.utils.permissions import request_from_info
+from django_strawberry_framework.utils.querysets import (
     related_visibility_queryset,
     sync_pipeline_recourse,
 )
-from ..utils.relations import is_forward_many_to_many, is_single_column_foreign_key
-from ..utils.write_transaction import (
+from django_strawberry_framework.utils.relations import (
+    is_forward_many_to_many,
+    is_single_column_foreign_key,
+)
+from django_strawberry_framework.utils.write_transaction import (
     assert_no_target_drift,
     base_locked_queryset,
     column_values_match,
@@ -174,13 +181,14 @@ from ..utils.write_transaction import (
     pks_match,
     require_write_pipeline,
 )
-from ..utils.write_values import (
+from django_strawberry_framework.utils.write_values import (
     decode_field_handlers,
     decode_provided_fields,
     decode_visible_relation,
     decode_visible_relation_ids,
     decoded_into,
 )
+
 from .accessors import bound_fields, child_relation_of, is_drf_field, serializer_errors
 from .hook_context import SerializerHookContext, UploadMetadata
 from .inputs import (
@@ -199,7 +207,7 @@ from .serializer_converter import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Generator, Iterable, Iterator, Mapping
     from typing import Protocol, TypeAlias
 
     from django.db import models
@@ -207,11 +215,15 @@ if TYPE_CHECKING:
     from strawberry.types import Info
     from typing_extensions import TypeIs
 
-    from ..mutations.resolvers import _AsyncResolverEntry, _SyncResolverEntry
-    from ..mutations.sets import _ValidatedMutationMeta
-    from ..utils.errors import ErrorKeyMap
-    from ..utils.inputs import InputFieldSpec
-    from ..utils.typing import ForeignKeyField, ModelField
+    from django_strawberry_framework.mutations.resolvers import (
+        _AsyncResolverEntry,
+        _SyncResolverEntry,
+    )
+    from django_strawberry_framework.mutations.sets import _ValidatedMutationMeta
+    from django_strawberry_framework.utils.errors import ErrorKeyMap
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+    from django_strawberry_framework.utils.typing import ForeignKeyField, ModelField
+
     from .serializer_converter import DRFField, DRFSerializer
     from .sets import SerializerMutation
 

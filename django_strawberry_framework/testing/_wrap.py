@@ -19,17 +19,20 @@ Django private-symbol move degrades the helper instead of making the
 public ``django_strawberry_framework.testing`` import crash.
 """
 
-from collections.abc import Callable
-
-from django.db.backends.base.base import BaseDatabaseWrapper
+from typing import TYPE_CHECKING
 
 from django_strawberry_framework._django_patches import _is_database_failure
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from django.db.backends.base.base import BaseDatabaseWrapper
+
 
 def safe_wrap_connection_method(
-    connection: BaseDatabaseWrapper,
+    connection: "BaseDatabaseWrapper",
     method_name: str,
-    wrapper: Callable[..., object],
+    wrapper: "Callable[..., object]",
 ) -> bool:
     """Wrap a connection method, declining if Django wrapped it first.
 
@@ -134,6 +137,7 @@ def safe_wrap_connection_method(
             ``lambda: connection.cursor()``) surfaces here rather than
             as a delayed ``TypeError`` deep inside Django's ORM
             machinery at the next ``connection.<method>()`` call.
+
     """
     if not callable(wrapper):
         # basedpyright: the annotation is the contract; this rejects a caller with no type

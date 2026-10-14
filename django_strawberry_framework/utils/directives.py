@@ -34,7 +34,8 @@ propagating.
 
 from typing import Any
 
-from ..exceptions import ConfigurationError, _safe_type_name
+from django_strawberry_framework.exceptions import ConfigurationError, _safe_type_name
+
 from ._narrowing import is_text_or_bytes
 
 __all__ = ("validated_field_directives",)

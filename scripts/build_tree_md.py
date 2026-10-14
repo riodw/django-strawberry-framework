@@ -50,10 +50,12 @@ import json
 import re
 import subprocess
 import sys
-from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Protocol, TypeVar, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Iterator, Sequence
 
 try:
     from _kanban_lib import (

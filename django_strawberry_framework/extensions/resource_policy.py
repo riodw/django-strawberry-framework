@@ -83,7 +83,6 @@ Where each pass reaches, stated as the boundary rather than as parity:
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, TypeVar, cast
 
@@ -118,8 +117,8 @@ from graphql.utilities import value_from_ast_untyped
 from strawberry.extensions.base_extension import SchemaExtension
 from typing_extensions import override
 
-from ..mutations.fields import MUTATION_CLASS_MARKER
-from ..resource_policy import (
+from django_strawberry_framework.mutations.fields import MUTATION_CLASS_MARKER
+from django_strawberry_framework.resource_policy import (
     _PACKAGE_RESOURCE_POLICY,
     DST_RESOURCE_DEADLINE,
     DST_RESOURCE_POLICY,
@@ -134,23 +133,28 @@ from ..resource_policy import (
     end_resource_budget,
     record_admission_rejection,
 )
-from ..utils._narrowing import (
+from django_strawberry_framework.utils._narrowing import (
     is_exact_dict,
     is_list_or_tuple,
     is_mapping,
     is_memoryview,
     mapping_get,
 )
-from ..utils.context import (
-    restored_context_keys,
+from django_strawberry_framework.utils.context import restored_context_keys
+from django_strawberry_framework.utils.inputs import RELATION_MULTI
+from django_strawberry_framework.utils.policies import copy_policy
+from django_strawberry_framework.utils.private_state import PrivateAuthority
+from django_strawberry_framework.utils.typing import (
+    graphql_type_of,
+    is_graphql_list,
+    unwrap_non_null,
 )
-from ..utils.inputs import RELATION_MULTI
-from ..utils.policies import copy_policy
-from ..utils.private_state import PrivateAuthority
-from ..utils.typing import graphql_type_of, is_graphql_list, unwrap_non_null
+
 from .operation_state import OperationState, _OperationBoundExtension
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+
     from graphql import (
         ArgumentNode,
         DocumentNode,
@@ -168,7 +172,7 @@ if TYPE_CHECKING:
     )
     from strawberry.types import ExecutionContext
 
-    from ..utils.inputs import InputFieldSpec
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
 
     #: One pending input node: its declared type, its value, the containers it sits
     #: in, and the mutation input spec (and nested spec map) it decodes through.

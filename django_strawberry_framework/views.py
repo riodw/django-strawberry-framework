@@ -103,7 +103,7 @@ from django_strawberry_framework._boundary_ordering import (
 from django_strawberry_framework._request_body import body_exceeds_limit
 from django_strawberry_framework.conf import max_request_body_bytes_setting
 from django_strawberry_framework.exceptions import ConfigurationError, describe_value
-from django_strawberry_framework.utils._narrowing import is_exact_tuple
+from django_strawberry_framework.utils._narrowing import is_exact_pair
 from django_strawberry_framework.utils.querysets import run_in_one_sync_boundary
 from django_strawberry_framework.utils.typing import is_marked_coroutine_function
 
@@ -462,7 +462,7 @@ def _boundary_view(upstream_view: Callable[..., object]) -> Callable[..., object
     # attribute); its dispatch is sync on one view, a coroutine on the other
     def prepared_view(request: HttpRequest) -> Any:  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - untyped request attribute
         prepared = getattr(request, _BOUNDARY_PREPARED_VIEW, None)
-        if not is_exact_tuple(prepared) or len(prepared) != 2 or prepared[0] is not mount:
+        if not is_exact_pair(prepared) or prepared[0] is not mount:
             return None
         delattr(request, _BOUNDARY_PREPARED_VIEW)
         return prepared[1]

@@ -18,8 +18,7 @@ schema cannot emit a value the parser would reject.
 """
 
 import re
-from collections.abc import Mapping
-from typing import Any, NewType
+from typing import TYPE_CHECKING, Any, NewType
 
 import strawberry
 from strawberry.file_uploads.scalars import Upload
@@ -28,6 +27,9 @@ from strawberry.schema.config import StrawberryConfig
 from strawberry.types.scalar import ScalarDefinition
 
 from .exceptions import _safe_arg_repr, _safe_attr, _safe_type_name
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 # Strawberry binds its ``UploadDefinition`` without an annotation; the re-export
 # declares the ``ScalarDefinition`` that ``strawberry.scalar(...)`` returns.
@@ -138,7 +140,7 @@ _PACKAGE_SCALAR_MAP: dict[object, ScalarDefinition] = {
 
 def strawberry_config(
     *,
-    extra_scalar_map: Mapping[object, ScalarDefinition] | None = None,
+    extra_scalar_map: "Mapping[object, ScalarDefinition] | None" = None,
     # basedpyright: forwarded verbatim to StrawberryConfig, whose dataclass fields vary across
     # the uncapped supported strawberry range, so its keyword types cannot be pinned here
     **config_kwargs: Any,  # pyright: ignore[reportExplicitAny]

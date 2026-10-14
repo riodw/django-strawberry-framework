@@ -91,6 +91,7 @@ Example:
         1e6b5830766545d3cb46e3aff21c6dd58a935da4 \
         --path django_strawberry_framework/filters \
         --output-dir /tmp/review-diff
+
 """
 
 from __future__ import annotations
@@ -103,10 +104,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 if __package__:
     from scripts.review_historical_package_snapshot_at_commit import (

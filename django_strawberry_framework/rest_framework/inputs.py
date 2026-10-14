@@ -62,10 +62,10 @@ from django.db import models
 from rest_framework import serializers
 from rest_framework.fields import empty
 
-from ..exceptions import ConfigurationError, _safe_arg_repr
-from ..mutations.inputs import CREATE, PARTIAL
-from ..registry import register_subsystem_clear
-from ..utils.inputs import (
+from django_strawberry_framework.exceptions import ConfigurationError, _safe_arg_repr
+from django_strawberry_framework.mutations.inputs import CREATE, PARTIAL
+from django_strawberry_framework.registry import register_subsystem_clear
+from django_strawberry_framework.utils.inputs import (
     InputFieldSpec,
     build_strawberry_input_class,
     generated_input_type_name,
@@ -79,7 +79,8 @@ from ..utils.inputs import (
     pascalize_token,
     resolve_effective_fields,
 )
-from ..utils.strings import graphql_camel_name
+from django_strawberry_framework.utils.strings import graphql_camel_name
+
 from .accessors import child_relation_of
 from .serializer_converter import (
     NESTED_MULTI,

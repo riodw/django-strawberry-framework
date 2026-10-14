@@ -82,15 +82,15 @@ from django.db.models import ProtectedError, RestrictedError
 from django.utils import timezone
 from graphql import GraphQLError
 
-from ..exceptions import _safe_arg_repr
-from ..optimizer.extension import (
+from django_strawberry_framework.exceptions import _safe_arg_repr
+from django_strawberry_framework.optimizer.extension import (
     apply_connection_optimization,
     mutation_payload_child_selections,
 )
-from ..relay import GlobalIDDecode, decode_model_global_id
-from ..resource_policy import check_deadline
-from ..types.relay import implements_relay_node
-from ..utils.errors import (
+from django_strawberry_framework.relay import GlobalIDDecode, decode_model_global_id
+from django_strawberry_framework.resource_policy import check_deadline
+from django_strawberry_framework.types.relay import implements_relay_node
+from django_strawberry_framework.utils.errors import (
     FIELD_ERROR_CODE_INVALID,
     FIELD_ERROR_CODE_NOT_FOUND,
     FIELD_ERROR_CODE_NULL,
@@ -102,18 +102,18 @@ from ..utils.errors import (
     null_field_error,
     validation_error_to_field_errors,
 )
-from ..utils.inputs import FILE, RELATION_MULTI, RELATION_SINGLE
-from ..utils.permissions import auth_aliases_for_permission_classes
-from ..utils.querysets import (
+from django_strawberry_framework.utils.inputs import FILE, RELATION_MULTI, RELATION_SINGLE
+from django_strawberry_framework.utils.permissions import auth_aliases_for_permission_classes
+from django_strawberry_framework.utils.querysets import (
     apply_type_visibility_sync,
     initial_queryset,
     model_for,
     run_in_one_sync_boundary,
     sync_pipeline_recourse,
 )
-from ..utils.relations import non_pk_relation_key_attname
-from ..utils.typing import strawberry_schema_from_info
-from ..utils.write_transaction import (
+from django_strawberry_framework.utils.relations import non_pk_relation_key_attname
+from django_strawberry_framework.utils.typing import strawberry_schema_from_info
+from django_strawberry_framework.utils.write_transaction import (
     authorization_phase,
     base_locked_queryset,
     check_instance_write_alias,
@@ -128,7 +128,7 @@ from ..utils.write_transaction import (
     require_write_pipeline,
     snapshot_target_state,
 )
-from ..utils.write_values import (
+from django_strawberry_framework.utils.write_values import (
     coerce_relation_pk_or_none,
     decode_provided_fields,
     decode_scalar_leaf,
@@ -136,6 +136,7 @@ from ..utils.write_values import (
     decoded_into,
     relation_into,
 )
+
 from .inputs import EXCLUDED, FieldError, payload_object_slot
 from .operations import operation_takes_id
 from .permissions import _require_sync_bool_auth_result
@@ -148,11 +149,12 @@ if TYPE_CHECKING:
     from strawberry.schema import Schema
     from strawberry.types import Info
 
-    from ..auth.mutations import _SealedAuthHolderMeta
-    from ..types.base import DjangoType
-    from ..utils.errors import ErrorKeyMap
-    from ..utils.inputs import InputFieldSpec
-    from ..utils.typing import ConcreteField, ModelField
+    from django_strawberry_framework.auth.mutations import _SealedAuthHolderMeta
+    from django_strawberry_framework.types.base import DjangoType
+    from django_strawberry_framework.utils.errors import ErrorKeyMap
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+    from django_strawberry_framework.utils.typing import ConcreteField, ModelField
+
     from .inputs import ModelFieldIndex
     from .sets import DjangoMutation, WriteMutationClass
 

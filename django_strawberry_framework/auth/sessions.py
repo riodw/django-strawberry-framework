@@ -51,14 +51,14 @@ from typing import TYPE_CHECKING, cast
 
 from django.http import HttpRequest
 
-from ..exceptions import (
+from django_strawberry_framework.exceptions import (
     ConfigurationError,
     _safe_arg_repr,
     _safe_type_name,
 )
-from ..utils.imports import CHANNELS_FLOOR, require_optional_module
-from ..utils.permissions import ChannelsRequestAdapter
-from ..utils.sessions import (
+from django_strawberry_framework.utils.imports import CHANNELS_FLOOR, require_optional_module
+from django_strawberry_framework.utils.permissions import ChannelsRequestAdapter
+from django_strawberry_framework.utils.sessions import (
     ScopeSingletonMessages,
     scope_key,
     scope_singleton,
@@ -70,7 +70,7 @@ if TYPE_CHECKING:
 
     from django.contrib.sessions.backends.base import SessionBase
 
-    from ..utils.permissions import MutableChannelsScope
+    from django_strawberry_framework.utils.permissions import MutableChannelsScope
 
 # The single channels-ABSENT install hint for the auth transport (mirrors
 # ``routers.py::_CHANNELS_INSTALL_HINT`` but keyed to this feature so hint strings

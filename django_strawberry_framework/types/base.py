@@ -62,14 +62,25 @@ from strawberry.types.auto import StrawberryAuto
 from strawberry.types.field import StrawberryField
 from typing_extensions import override
 
-from ..conf import RELAY_GLOBALID_STRATEGY_KEY
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_text, _safe_type_name
-from ..optimizer.field_meta import FieldMeta
-from ..optimizer.hints import OptimizerHint
-from ..registry import registry
-from ..utils._narrowing import is_class, is_dict, is_list_or_tuple, is_mapping
-from ..utils.relations import is_single_column_foreign_key
-from ..utils.typing import is_async_callable
+from django_strawberry_framework.conf import RELAY_GLOBALID_STRATEGY_KEY
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_text,
+    _safe_type_name,
+)
+from django_strawberry_framework.optimizer.field_meta import FieldMeta
+from django_strawberry_framework.optimizer.hints import OptimizerHint
+from django_strawberry_framework.registry import registry
+from django_strawberry_framework.utils._narrowing import (
+    is_class,
+    is_dict,
+    is_list_or_tuple,
+    is_mapping,
+)
+from django_strawberry_framework.utils.relations import is_single_column_foreign_key
+from django_strawberry_framework.utils.typing import is_async_callable
+
 from .converters import _field_output_type_for, convert_field_output
 from .definition import _GRAPHQL_NAME_RE, DjangoTypeDefinition
 from .relations import PendingRelation, PendingRelationAnnotation
@@ -80,9 +91,10 @@ if TYPE_CHECKING:
 
     from typing_extensions import TypeIs
 
-    from ..filters.sets import FilterSet
-    from ..orders.sets import OrderSet
-    from ..utils.typing import ConcreteField, ModelField
+    from django_strawberry_framework.filters.sets import FilterSet
+    from django_strawberry_framework.orders.sets import OrderSet
+    from django_strawberry_framework.utils.typing import ConcreteField, ModelField
+
     from .definition import GlobalIDStrategy
 
 _SidecarT = TypeVar("_SidecarT")
@@ -203,7 +215,7 @@ def _validate_filterset_class(
         return None
     # In-function import: dodges the `types -> filters -> types` module-load
     # cycle. Do NOT hoist to module top.
-    from ..filters.sets import FilterSet
+    from django_strawberry_framework.filters.sets import FilterSet
 
     return _validate_set_sidecar(
         model,
@@ -235,7 +247,7 @@ def _validate_orderset_class(
         return None
     # In-function import: dodges the `types -> orders -> types` module-load
     # cycle. Do NOT hoist to module top.
-    from ..orders.sets import OrderSet
+    from django_strawberry_framework.orders.sets import OrderSet
 
     return _validate_set_sidecar(
         model,
@@ -333,7 +345,7 @@ def _validate_cursor_field(
     # In-function import: ``keyset`` imports only leaf modules today, but the
     # function-scope import keeps ``types/base.py`` order-independent of it,
     # matching the filterset / orderset validator idiom above.
-    from ..keyset import validate_cursor_field_references
+    from django_strawberry_framework.keyset import validate_cursor_field_references
 
     if isinstance(value, str) or not isinstance(value, Sequence):
         raise ConfigurationError(
@@ -1398,6 +1410,7 @@ def _validate_meta(cls: type[DjangoType], meta: object) -> _ValidatedMeta:
 
     Raises:
         ConfigurationError: any of the above violations.
+
     """
     model = _meta_attr(meta, "model")
     if model is None:
@@ -1592,6 +1605,7 @@ def _validate_optimizer_hints(
             ``Meta.model`` so the empty-``fields`` shape (e.g. ``Meta.exclude`` covering every
             field) is not fatal - earlier shapes inferred the model from
             ``fields[0].model`` and ``IndexError``'d here.
+
     """
     if not hints:
         return
@@ -1723,6 +1737,7 @@ def _validate_nullability_override_targets(
     Raises:
         ConfigurationError: any target is unknown / excluded / consumer-authored
             / the Relay-suppressed pk / a relation field.
+
     """
     targets = nullable_overrides | required_overrides
     if not targets:
@@ -1800,6 +1815,7 @@ def _validate_filesystem_path_targets(
     Raises:
         ConfigurationError: any target is unknown / not selected /
             consumer-authored / not a file or image column.
+
     """
     if not filesystem_path_fields:
         return
@@ -1865,6 +1881,7 @@ def _validate_relation_shape_targets(
     Raises:
         ConfigurationError: any key names an unknown / excluded / non-relation
             / single-valued / consumer-authored field.
+
     """
     if not relation_shapes:
         return
@@ -1942,6 +1959,7 @@ def _select_fields(
             field that does not exist on ``Meta.model``. The error names
             the model, the unknown values, and the available field set
             so typos surface loudly instead of silently dropping.
+
     """
     all_fields = list(model._meta.get_fields())
     all_names = [f.name for f in all_fields]
@@ -2065,6 +2083,7 @@ def _build_annotations(
             (raised by ``convert_scalar`` via ``convert_field_output``), or a
             selected relation has no concrete related model to map to a
             GraphQL type.
+
     """
     annotations: dict[str, object] = {}
     pending: list[PendingRelation] = []

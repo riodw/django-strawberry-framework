@@ -215,7 +215,6 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import takewhile
@@ -223,6 +222,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
     from typing_extensions import TypeIs
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

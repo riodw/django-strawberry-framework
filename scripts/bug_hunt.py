@@ -36,8 +36,11 @@ import io
 import re
 import subprocess
 import sys
-from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 if __package__:
     from scripts import _plan_common
@@ -159,6 +162,7 @@ def _package_release(repo_root: Path) -> str:
 
     Raises:
         ValueError: the ``__init__`` is unreadable or carries no ``__version__``.
+
     """
     return _plan_common.package_version(repo_root / PACKAGE_INIT.parent)
 

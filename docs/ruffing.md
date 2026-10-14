@@ -7,11 +7,11 @@ A rule family is selected whole. Every stable code is on except the off-by-desig
 block is empty. A site the rule is wrong about carries a `# noqa: CODE - reason`; a whole folder the rule is wrong
 about gets a per-file ignore with its reason in `pyproject.toml`.
 
-Progress: 37 done, 0 to do. Stable rules: 815, every one named in the config: 799 on, 16 in `ignore` (off by
-design). The 139 preview-only rules stay off with `preview`. `# noqa` comments: 326 lines in 98 files.
+Progress: 38 done, 0 to do. Stable rules: 815, every one named in the config: 805 on, 10 in `ignore` (off by
+design). The 139 preview-only rules stay off with `preview`. `# noqa` comments: 324 lines in 98 files.
 
 Counts below were measured on ruff 0.17.0 at ee9c8161 (items 1-27), 8ca6a481 (items 28-35) and the tree after
-e42952a5 (items 36-37) and fa4182a9 (item 31). "Root" is `conftest.py`, `line_count.py` and `docs/dry/export_dry_review.py`.
+e42952a5 (items 36-37), fa4182a9 (item 31) and ee1a2367 (item 38). "Root" is `conftest.py`, `line_count.py` and `docs/dry/export_dry_review.py`.
 
 ## Done: rules on
 
@@ -122,6 +122,15 @@ e42952a5 (items 36-37) and fa4182a9 (item 31). "Root" is `conftest.py`, `line_co
   `SIM117` fixed at every site. The four `tests/test_django_patches.py` upstream-shape methods stay unannotated inside
   a `# ruff: disable[ANN206]` fence: `inspect.getsource` of the two accepted shapes must match Django's source byte for
   byte, and the two rejected shapes differ from an audited body only in the drift under test
+- [x] 38. Four off-by-design codes turned on. `D413`: selected by code (the Google preset drops it), 79 safe fixes.
+  `TC001`-`TC003`: 164 imports in the package, scripts/ and root moved under `TYPE_CHECKING` (14 annotations quoted in
+  the 8 files without `from __future__ import annotations`); `exempt-modules` adds `strawberry` (a resolver's `Info`
+  is detected by its annotation at schema build), and `runtime-evaluated-decorators` / `-base-classes` name the
+  Strawberry decorators and `DjangoType`; tests/ and examples/ keep the per-file ignore. `PLR2004`: the 18 package
+  hits refactored (`HTTPStatus.OK`, `utils/_narrowing.py::is_exact_pair`, `match` destructuring, named upstream
+  arities); tests/, examples/ and scripts/ keep the per-file ignore. `TID252`: 937 parent-relative imports made
+  absolute (`ban-relative-imports = "parents"` stated; siblings stay relative); 4 source-text test assertions
+  follow. `debug_toolbar.py` drops 2 `E402` with its typing-only imports
 
 ## Still ignored in tests/ and examples/
 
@@ -139,28 +148,24 @@ e42952a5 (items 36-37) and fa4182a9 (item 31). "Root" is `conftest.py`, `line_co
 | `UP031` (`test_query/` only) | 0 | 48 | GraphQL query text is all braces; `str.format` / f-strings would double them |
 | `S105`, `S106`, `S107` | 15 | 27 | fixture credentials and the example's dev `SECRET_KEY` |
 | `S603`, `S607` | 32 | 0 | fixed argv of git / `sys.executable` |
+| `TC001`, `TC002`, `TC003` | 276 | 160 | strawberry / `DjangoType` classes built inside functions, mostly without `from __future__ import annotations`; the fix would quote about 790 annotations |
+| `PLR2004` | 442 | 794 | assertions compare against literal expected values |
 
-scripts/ keeps `PERF` (16 sites) and `S603` / `S607` (40).
+scripts/ keeps `PERF` (16 sites), `S603` / `S607` (40) and `PLR2004` (25).
 
 ## Rules still off
 
 Off by design (not planned):
 
 - `PLC0415` (2081, import outside top level): import cycles are broken by local imports
-- `TC001`-`TC003` (607): Strawberry and Django read annotations at run time, so a typing-only import would be a
-  `NameError`
 - `SLF001` (2559, private member access): the package shares underscore names across its modules
   (`reportPrivateUsage` is off for the same reason)
-- `TID252` (917, relative imports): the package imports its siblings relatively
 - `EM101`, `EM102`, `TRY003` (3097): exception-message style only
-- `PLR2004` (1276, magic value in comparison): 1235 of them are test and example assertions
 - `FIX002` (10), `TD003` (10): a TODO is the `TODO(spec-NNN slice N): ...` anchor convention, which names a spec or
   a backlog entry, not an issue link; the rest of `TD` and `FIX` is on
 - `CPY001` (513, copyright headers)
 - `D203`, `D213`: the opposites of `D211` and `D212`, which the Google convention selects (ruff drops one of each
   pair)
-- `D413` (71, blank line after the last section): the Google convention ends a docstring right after its last
-  section, and ruff's `google` preset turns `D413` off
 
 ## Files ruff skips
 
@@ -171,21 +176,23 @@ content, so the formatter owns `.py` only. No file carries a file-level `# ruff:
 
 ## Config ignores
 
-Global `ignore`: the off-by-design block only (16): `CPY001`, `D203`, `D213`, `D413`, `EM101`, `EM102`, `FIX002`,
-`PLC0415`, `PLR2004`, `SLF001`, `TC001`-`TC003`, `TD003`, `TID252`, `TRY003`. Rule settings: `logger-objects` (the
+Global `ignore`: the off-by-design block only (10): `CPY001`, `D203`, `D213`, `EM101`, `EM102`, `FIX002`, `PLC0415`,
+`SLF001`, `TD003`, `TRY003`. Rule settings: `logger-objects` (the
 package logger, for `BLE001` / `LOG`), `flake8-annotations.allow-star-arg-any`, `flake8-import-conventions.aliases`
-(ruff's map minus `datetime = dt`), `pep8-naming.classmethod-decorators` (Django's `classonlymethod`), and the
+(ruff's map minus `datetime = dt`), `flake8-tidy-imports.ban-relative-imports = "parents"`, `flake8-type-checking`
+(`quote-annotations`, `runtime-evaluated-decorators`, `runtime-evaluated-base-classes`, `exempt-modules`),
+`pep8-naming.classmethod-decorators` (Django's `classonlymethod`), and the
 `mccabe` / `pylint` complexity ratchets of item 36.
 
 Per-file ignores:
 
 | Glob | Codes |
 | --- | --- |
-| `tests/**/*.py` | `D106`, `D401`, `N806`, `RUF012`, `S101`, `DJ008`, `SLOT000`, `SLOT001`, `S106`, `S107`, `S603`, `S607` |
-| `examples/**/*.py` | `D106`, `D401`, `RUF012`, `S101`, `SLOT000`, `S105`, `S106` |
+| `tests/**/*.py` | `D106`, `D401`, `N806`, `RUF012`, `S101`, `DJ008`, `SLOT000`, `SLOT001`, `S106`, `S107`, `S603`, `S607`, `TC001`-`TC003`, `PLR2004` |
+| `examples/**/*.py` | `D106`, `D401`, `RUF012`, `S101`, `SLOT000`, `S105`, `S106`, `TC001`-`TC003`, `PLR2004` |
 | `tests/**/test_*.py`, `examples/**/test_*.py` | `D102`, `D103` |
 | `examples/**/migrations/*.py` | `D` |
-| `scripts/**/*.py` | `PERF`, `T201`, `INP001`, `S603`, `S607` |
+| `scripts/**/*.py` | `PERF`, `T201`, `INP001`, `S603`, `S607`, `PLR2004` |
 | `line_count.py` | `T201` |
 | `docs/dry/export_dry_review.py` | `T201`, `INP001` |
 | `examples/fakeshop/*.py`, `examples/fakeshop/tests/*.py` | `INP001` |
@@ -225,14 +232,14 @@ Ruff-side notes:
 - After any `--unsafe-fixes` pass, rerun the whole pipeline script first: `PLR1714`, `SIM101` and `C4` can write a
   single-line 4-item literal.
 
-Planned rules: the `TC`, `TID252`, `EM` and `D413` autofixes and a `CPY001` header were measured against the
-pipeline with no ping-pong. A `CPY001` header would have to be emitted by
+Rules: the `TC`, `TID252` and `D413` autofixes (item 38) and the planned `EM` autofix and `CPY001` header were
+measured against the pipeline with no ping-pong. A `CPY001` header would have to be emitted by
 `scripts/build_kanban_tracked_path_constants.py::render_constants`, since the module it generates passes the same
 pipeline.
 
 ## `# noqa` breakdown
 
-Lines carrying `# noqa`: 326 (none bare) in 98 files: package 197, tests 66, examples 56, scripts 4, root 3.
+Lines carrying `# noqa`: 324 (none bare) in 98 files: package 195, tests 66, examples 56, scripts 4, root 3.
 
 | Code | Hits | Package | Tests | Examples | Scripts / root | Why |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -250,7 +257,7 @@ Lines carrying `# noqa`: 326 (none bare) in 98 files: package 197, tests 66, exa
 | `N805`, `N818` | 6 | 4 | 2 | 0 | 0 | metaclass methods take `cls`; control-flow exceptions |
 | `B009`, `B004`, `B010`, `B904`, `TRY004` | 10 | 10 | 0 | 0 | 0 | `getattr` / `setattr` past the stubs, a `__call__` probe, `raise` chaining, `ValueError` for bad input |
 | `S101`, `S608`, `PT009`, `PLW0603`, `PYI034`, `FBT001`, `RUF012` | 15 | 15 | 0 | 0 | 0 | django-filter's asserts, the lateral SQL, the unittest mixin, patched module caches, a metaclass `__new__`, Django's positional `many`, a stub-typed list |
-| `E402`, `PERF203`, `RUF063`, `FBT002`, `TRY301`, `PTH115`, others | 24 | 8 | 7 | 3 | 6 | one to three each |
+| `E402`, `PERF203`, `RUF063`, `FBT002`, `TRY301`, `PTH115`, others | 22 | 6 | 7 | 3 | 6 | one to three each |
 
 ### Most `# noqa` per file
 
@@ -288,11 +295,6 @@ Lines carrying `# noqa`: 326 (none bare) in 98 files: package 197, tests 66, exa
 - The 46 example `filter:` resolver parameters (`A002`): a fakeshop-level Strawberry `NameConverter` that strips a
   trailing `_` would let them read `filter_` with the wire name unchanged, but `FilterInput`'s docstring prescribes
   `filter:` for consumers. Adopt the converter in the example project?
-- `TC001` / `TC002` / `TC003`: `exempt-modules = ["typing", "typing_extensions", "strawberry.types"]` plus the autofix
-  moves 519 imports under `TYPE_CHECKING` with the schema still building; the dynamic `strawberry.type(cls)` paths
-  only a full suite run can clear. Do it once you are ready to run the suite after it?
-- `TID252` autofixes cleanly (65 files, +172 lines) but leaves sibling imports relative and parent imports absolute;
-  judged a wash, so not done.
 - The per-file ignores are policy calls: `DJ008`, `SLOT000` / `SLOT001`, `S105`-`S107` for tests/ and
   examples/, `S603` / `S607` for tests/ and scripts/. The alternatives were 127 `__str__`s, 62 `__slots__ = ()`, and
   about 115 `noqa` lines.

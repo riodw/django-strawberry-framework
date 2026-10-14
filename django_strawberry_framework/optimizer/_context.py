@@ -22,8 +22,12 @@ import contextlib
 from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING, NamedTuple
 
-from ..utils.context import clear_context_key, get_context_value, stash_on_context
-from ..utils.operation_lease import OperationLease
+from django_strawberry_framework.utils.context import (
+    clear_context_key,
+    get_context_value,
+    stash_on_context,
+)
+from django_strawberry_framework.utils.operation_lease import OperationLease
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -32,8 +36,9 @@ if TYPE_CHECKING:
     from django.db import models
     from strawberry.types.nodes import Selection
 
-    from ..keyset import CursorState
-    from ..types.base import DjangoType
+    from django_strawberry_framework.keyset import CursorState
+    from django_strawberry_framework.types.base import DjangoType
+
     from .extension import DjangoOptimizerExtension
     from .nested_fetch import NestedConnectionStrategy
     from .plans import OptimizationPlan

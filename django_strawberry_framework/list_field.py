@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import contextlib
 import inspect
-from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from types import GenericAlias
 from typing import TYPE_CHECKING, Literal, TypeVar, cast, get_args
@@ -112,7 +111,7 @@ from .utils.querysets import (
 from .utils.typing import is_async_callable
 
 if TYPE_CHECKING:
-    from collections.abc import Coroutine, Mapping
+    from collections.abc import Callable, Coroutine, Mapping, Sequence
 
     from django.db.models.expressions import Expression
     from django.db.models.options import Options
@@ -127,6 +126,9 @@ if TYPE_CHECKING:
 __all__ = ("DjangoListField", "ListArgumentError")
 
 _TargetT = TypeVar("_TargetT")
+
+# Strawberry calls a resolver with at most ``(root, info)`` positionally.
+_RESOLVER_POSITIONAL_INPUTS = 2
 
 _ListArgumentReason = Literal[
     "negative",
@@ -1285,7 +1287,7 @@ def _resolver_root_and_info(
     kwargs: Mapping[str, object],
 ) -> tuple[object, Info[object, object]]:
     """Extract Strawberry's positional resolver context and reject unknown call inputs."""
-    if len(args) > 2:
+    if len(args) > _RESOLVER_POSITIONAL_INPUTS:
         raise TypeError("DjangoListField resolver accepts only root and info positional inputs.")
     unexpected = set(kwargs) - {"info", "root"}
     if unexpected:

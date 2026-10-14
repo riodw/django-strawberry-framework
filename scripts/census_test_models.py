@@ -22,8 +22,11 @@ from __future__ import annotations
 import ast
 import collections
 import functools
-from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TESTS_ROOT = REPO_ROOT / "tests"

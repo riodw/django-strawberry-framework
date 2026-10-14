@@ -24,11 +24,12 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Callable, Container, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, TypedDict, cast
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Container, Mapping, Sequence
+
     from _typeshed import SupportsRichComparison
     from django.db.backends.base.base import BaseDatabaseWrapper
     from typing_extensions import TypeIs

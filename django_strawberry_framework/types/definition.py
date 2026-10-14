@@ -3,25 +3,29 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-from django.db import models
-
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_attr, _safe_type_name
-from ..optimizer.field_meta import FieldMeta
-from ..optimizer.hints import OptimizerHint
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_attr,
+    _safe_type_name,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
     from typing import TypeAlias
 
+    from django.db import models
     from django.utils.functional import Promise
 
-    from ..filters.sets import FilterSet
-    from ..orders.sets import OrderSet
-    from ..utils.typing import ModelField
+    from django_strawberry_framework.filters.sets import FilterSet
+    from django_strawberry_framework.optimizer.field_meta import FieldMeta
+    from django_strawberry_framework.optimizer.hints import OptimizerHint
+    from django_strawberry_framework.orders.sets import OrderSet
+    from django_strawberry_framework.utils.typing import ModelField
+
     from .base import DjangoType
 
     #: A consumer ``globalid_strategy`` encoder, validated to bind
@@ -310,7 +314,7 @@ class DjangoTypeDefinition:
         # TYPE_CHECKING). Do NOT hoist to module top.
         from django.core.exceptions import FieldDoesNotExist
 
-        from ..registry import registry
+        from django_strawberry_framework.registry import registry
 
         # Memoize the lookup per field name. ``_meta.get_field`` is
         # cheap but not free, and the registry lookup involves two

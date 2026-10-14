@@ -45,7 +45,6 @@ never resolved.
 from __future__ import annotations
 
 import operator
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast, get_origin
 
@@ -55,23 +54,24 @@ from strawberry import relay
 from strawberry.types.base import StrawberryList
 from typing_extensions import override
 
-from ..exceptions import (
+from django_strawberry_framework.exceptions import (
     ConfigurationError,
     _safe_arg_repr,
     _safe_attr,
     _safe_class_name,
     _safe_predicate,
 )
-from ..registry import register_subsystem_clear, registry
-from ..utils._narrowing import is_class
-from ..utils.imports import import_attr
-from ..utils.inputs import (
+from django_strawberry_framework.registry import register_subsystem_clear, registry
+from django_strawberry_framework.utils._narrowing import is_class
+from django_strawberry_framework.utils.imports import import_attr
+from django_strawberry_framework.utils.inputs import (
     InputFieldSpec,
     get_or_store_shape_build,
     make_shape_build_cache,
     normalize_field_name_sequence,
 )
-from ..utils.typing import unwrap_return_type
+from django_strawberry_framework.utils.typing import unwrap_return_type
+
 from .inputs import (
     CREATE,
     INPUTS_MODULE_PATH,
@@ -93,18 +93,19 @@ from .operations import (
 from .permissions import DjangoModelPermission, run_permission_classes
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
+    from collections.abc import Callable, Iterable, Mapping, Sequence
     from typing import Protocol, TypeAlias
 
     from strawberry.types import Info
     from strawberry.types.base import WithStrawberryObjectDefinition
     from strawberry.types.field import StrawberryField
 
-    from ..forms.inputs import FormClass
-    from ..forms.sets import DjangoFormMutation
-    from ..rest_framework.inputs import NestedSerializerConfig
-    from ..rest_framework.serializer_converter import DRFSerializer
-    from ..types.base import DjangoType
+    from django_strawberry_framework.forms.inputs import FormClass
+    from django_strawberry_framework.forms.sets import DjangoFormMutation
+    from django_strawberry_framework.rest_framework.inputs import NestedSerializerConfig
+    from django_strawberry_framework.rest_framework.serializer_converter import DRFSerializer
+    from django_strawberry_framework.types.base import DjangoType
+
     from .inputs import ModelFieldIndex, MutationInputShape
     from .permissions import WritePermissionClass
 

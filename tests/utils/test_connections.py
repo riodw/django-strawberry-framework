@@ -36,8 +36,10 @@ from django_strawberry_framework.utils.connections import (
     connection_sidecar_inputs_from_kwargs,
     decode_offset_cursor,
     derive_connection_window_bounds,
+    derive_keyset_window_bounds,
     has_connection_sidecar_input,
     has_connection_sidecar_kwargs,
+    resolve_relay_max_results,
     split_window_rows,
     validate_offset_pagination,
     window_range_plan,
@@ -128,7 +130,6 @@ def test_before_with_last_is_a_forward_window_not_reverse() -> None:
     after = SliceMetadata.from_arguments(unread_info(), first=5, max_results=_MAX)
     # Build a real ``before`` cursor from the forward window's end so the helper
     # takes the ``before is not None`` path that keeps ``reverse`` False.
-    from strawberry.relay.utils import to_base64
 
     before_cursor = to_base64("arrayconnection", after.end)
     bounds = derive_connection_window_bounds(
@@ -1118,8 +1119,6 @@ def test_derive_connection_window_bounds_handles_strawberry_unset() -> None:
 
 def test_derive_keyset_window_bounds_handles_strawberry_unset() -> None:
     """`derive_keyset_window_bounds` correctly ignores `strawberry.UNSET` inputs."""
-    from django_strawberry_framework.utils.connections import derive_keyset_window_bounds
-
     bounds = derive_keyset_window_bounds(
         None,
         before=strawberry.UNSET,
@@ -1143,10 +1142,6 @@ def test_derive_keyset_window_bounds_handles_strawberry_unset() -> None:
 
 def test_split_window_rows_handles_iterators_and_generators() -> None:
     """`split_window_rows` accepts one-shot generators and iterators without losing probe flags."""
-    from django_strawberry_framework.utils.connections import (
-        split_window_rows,
-        window_range_plan,
-    )
 
     class _Row:
         def __init__(self, rn: int) -> None:
@@ -1177,11 +1172,6 @@ def test_split_window_rows_handles_iterators_and_generators() -> None:
 
 def test_connection_sidecar_kwargs_handles_none_and_empty() -> None:
     """Sidecar helper functions safely accept None and empty dicts."""
-    from django_strawberry_framework.utils.connections import (
-        connection_sidecar_inputs_from_kwargs,
-        has_connection_sidecar_kwargs,
-    )
-
     assert connection_sidecar_inputs_from_kwargs(None) == (None, None)
     assert has_connection_sidecar_kwargs(None) is False
     assert connection_sidecar_inputs_from_kwargs({}) == (None, None)
@@ -1190,12 +1180,6 @@ def test_connection_sidecar_kwargs_handles_none_and_empty() -> None:
 
 def test_resolve_relay_max_results_handles_unset() -> None:
     """`resolve_relay_max_results` treats `strawberry.UNSET` as unspecified."""
-    from django_strawberry_framework.utils.connections import (
-        derive_connection_window_bounds,
-        derive_keyset_window_bounds,
-        resolve_relay_max_results,
-    )
-
     cap = resolve_relay_max_results(None, strawberry.UNSET)
     assert cap == 100
 

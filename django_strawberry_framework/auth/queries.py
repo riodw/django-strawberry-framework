@@ -23,6 +23,7 @@ from __future__ import annotations
 import functools
 from typing import TYPE_CHECKING, cast
 
+from django_strawberry_framework.mutations import resolvers
 from django_strawberry_framework.mutations.fields import _lazy_ref
 from django_strawberry_framework.registry import register_subsystem_clear
 from django_strawberry_framework.utils.inputs import make_input_namespace
@@ -98,8 +99,6 @@ def _current_user_resolve_body(
     require authentication supplies an ``IsAuthenticated``-style class, which
     denies the anonymous caller with the ``GraphQLError`` instead of ``null``.
     """
-    from django_strawberry_framework.mutations import resolvers
-
     request = request_from_info(info, family_label=_AUTH_FAMILY_LABEL)
     # The Channels adapter returns ``None`` when its scope has no auth middleware;
     # a bare HttpRequest without AuthenticationMiddleware has no ``user`` attribute.

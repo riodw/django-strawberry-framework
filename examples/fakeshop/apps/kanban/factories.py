@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Literal, TypeVar
 from django.db.models import Manager, Max, Model
 from faker import Faker
 
+from apps.glossary.factories import make_glossary_term
 from apps.kanban import models
 
 if TYPE_CHECKING:
@@ -285,8 +286,6 @@ def make_card_glossary_term(
     **fields: object,
 ) -> models.CardGlossaryTerm:
     """Link a kanban Card to a glossary term (creates both ends if omitted)."""
-    from apps.glossary.factories import make_glossary_term
-
     card = card or make_card()
     term = term or make_glossary_term()
     fields.setdefault("raw_text", "")

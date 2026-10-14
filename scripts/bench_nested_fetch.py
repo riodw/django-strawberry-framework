@@ -52,6 +52,8 @@ import sys
 import time
 from typing import TYPE_CHECKING, Protocol
 
+import django.conf
+import strawberry
 from _bench_common import (
     attr_or,
     bootstrap_fakeshop_django,
@@ -61,11 +63,13 @@ from _bench_common import (
     is_memory_db_name,
     write_report,
 )
+from django.db import connection
+
+from django_strawberry_framework import DjangoListField, finalize_django_types
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    import strawberry
     from typing_extensions import TypeIs
 
 
@@ -91,7 +95,6 @@ def _seed(parents: int, children: int) -> None:
     partition and the lateral win shrinks to "skips the global sort".
     """
     from apps.library.models import Book, Branch, Shelf
-    from django.db import connection
 
     _ = Book.objects.all().delete()
     _ = Shelf.objects.all().delete()
@@ -127,11 +130,8 @@ def _build_schemas(*, lateral: bool = True) -> dict[str, strawberry.Schema]:
     differently-constructed schemas. ``lateral=False`` omits the lateral
     schema for a vendor that cannot run it.
     """
-    import strawberry
     from apps.library.models import Book, Shelf
     from strategy_schemas import build_strategy_schema, make_django_type
-
-    from django_strawberry_framework import DjangoListField, finalize_django_types
 
     _ = make_django_type(
         "BookType",
@@ -208,8 +208,6 @@ def _run(
 
 
 def _postgres_server_version() -> str:
-    from django.db import connection
-
     with connection.cursor() as cursor:
         cursor.execute("SHOW server_version")
         if not _is_row_reader(cursor):
@@ -259,9 +257,6 @@ def main() -> int:
     args = parser.parse_args(namespace=_Args())
 
     provenance = bootstrap_fakeshop_django("sqlite-memory" if args.sqlite_smoke else "pg")
-
-    import django.conf
-    from django.db import connection
 
     # Fakeshop settings refuse to load with DEBUG off; set explicitly so every
     # mode's timed loop pays the same debug-cursor cost whatever the settings say.

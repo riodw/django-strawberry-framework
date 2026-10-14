@@ -1,5 +1,6 @@
 """Kanban service tests for card resolution, creation, tracked paths, validation, and rollback."""
 
+import uuid as uuid_module
 from typing import NoReturn
 
 import pytest
@@ -601,8 +602,6 @@ def test_resolve_card_by_slug(beta_version: models.TargetVersion) -> None:
 
 @pytest.mark.django_db
 def test_resolve_card_unknown_uuid_raises_unresolvable() -> None:
-    import uuid as uuid_module
-
     with pytest.raises(services.KanbanServiceError) as error:
         services.resolve_card({"uuid": str(uuid_module.uuid4())})
     assert error.value.code == "unresolvable_card"

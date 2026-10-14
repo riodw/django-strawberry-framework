@@ -1653,7 +1653,7 @@ def _filter_set_class() -> type[FilterSet]:
     time -- the same cycle-keeping contract as
     ``orders/base.py::_order_set_class``.
     """
-    from .sets import FilterSet
+    from .sets import FilterSet  # noqa: PLC0415 - import cycle
 
     return FilterSet
 

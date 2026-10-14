@@ -225,7 +225,7 @@ def type_check_relation_id(
     package.
     """
     if isinstance(value, relay.GlobalID):
-        from django_strawberry_framework.relay import GlobalIDDecode, decode_model_global_id
+        from django_strawberry_framework.relay import GlobalIDDecode, decode_model_global_id  # noqa: PLC0415 - import cycle
 
         result = decode_model_global_id(
             value,

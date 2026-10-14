@@ -54,6 +54,13 @@ from graphql.language.ast import (
     InlineFragmentNode,
     VariableNode,
 )
+from strawberry.types.nodes import (
+    FragmentSpread,
+    InlineFragment,
+    SelectedField,
+    convert_arguments,
+    convert_directives,
+)
 
 from django_strawberry_framework.utils.typing import schema_config_from_info
 
@@ -72,9 +79,6 @@ if TYPE_CHECKING:
     from graphql.type.definition import GraphQLResolveInfo
     from strawberry.types.info import Info
     from strawberry.types.nodes import (
-        FragmentSpread,
-        InlineFragment,
-        SelectedField,
         Selection,
     )
 
@@ -185,14 +189,6 @@ def ast_to_converted_selections(
         converted = memo.get(memo_key)
         if converted is not None:
             return converted
-
-    from strawberry.types.nodes import (
-        FragmentSpread,
-        InlineFragment,
-        SelectedField,
-        convert_arguments,
-        convert_directives,
-    )
 
     def _convert(nodes: Iterable[AstSelection]) -> list[Selection]:
         out: list[Selection] = []

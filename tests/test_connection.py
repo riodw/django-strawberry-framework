@@ -42,6 +42,7 @@ response cannot uniquely show:
 
 import asyncio
 import copy
+import functools
 import gc
 import warnings
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator
@@ -53,9 +54,11 @@ import strawberry
 from apps.kanban.models import Status
 from apps.products import services
 from apps.products.models import Category, Item
+from asgiref.sync import sync_to_async
 from django.contrib.auth.models import AnonymousUser
 from django.db import models
 from django.db.models import F, Q
+from django.db.models.functions import Lower
 from django.db.models.sql import Query
 from django.http import HttpRequest
 from graphql import GraphQLError
@@ -82,11 +85,19 @@ from django_strawberry_framework.connection import (
     _ends_in_unique_column,
     _finalize_queryset,
     _guard_first_and_last,
+    _guard_non_queryset_iterable,
+    _offset_cursor_prefix,
+    _pipeline_async,
+    _pipeline_sync,
     _total_count_requested,
+    _window_rows_are_annotated,
+    _WindowedConnectionRows,
     clear_connection_type_cache,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.filters import FilterSet, _helper_referenced_filtersets
+from django_strawberry_framework.optimizer.extension import apply_connection_optimization
+from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER, _keyset_order_ref
 from django_strawberry_framework.orders import OrderSet, _helper_referenced_ordersets
 from django_strawberry_framework.permissions import apply_cascade_permissions
 from django_strawberry_framework.registry import registry
@@ -416,8 +427,6 @@ async def test_total_count_async_path_counts_via_acount() -> None:
     (``test_connection_pagination_api.py::test_total_count_is_a_field_only_on_the_connection_that_opted_in``).
     ``.acount()`` vs ``.count()`` is not uniquely visible in a response.
     """
-    from asgiref.sync import sync_to_async
-
     await sync_to_async(services.seed_data)(2)
     expected = await Category.objects.acount()
 
@@ -887,7 +896,6 @@ def test_guard_non_queryset_iterable_admits_getitem_only_sequence() -> None:
     the sequence protocol, yet Relay's slicer paginates it via the
     slice-subscript path - so the guard must not reject it.
     """
-    from django_strawberry_framework.connection import _guard_non_queryset_iterable
 
     class LegacySequence:
         def __getitem__(self, index: int) -> object:
@@ -908,8 +916,6 @@ async def test_async_consumer_resolver_set_source_paginates_without_total_count(
     the count helper runs synchronously); before the gate the eager
     ``.count`` read leaked ``AttributeError`` here too.
     """
-    from asgiref.sync import sync_to_async
-
     await sync_to_async(services.seed_data)(2)
     rows = await sync_to_async(lambda: list(Category.objects.all()))()
 
@@ -980,8 +986,6 @@ async def test_async_consumer_resolver_iterable_with_total_count_selected_raises
     deterministic no-leak assertion lives in
     ``test_attach_count_async_awaits_before_guard_raises``.
     """
-    from asgiref.sync import sync_to_async
-
     await sync_to_async(services.seed_data)(1)
     rows = await sync_to_async(lambda: list(Category.objects.all()))()
 
@@ -1006,8 +1010,6 @@ async def test_async_consumer_resolver_iterable_with_total_count_selected_raises
 @pytest.mark.django_db
 def test_default_ordering_applied_when_unordered() -> None:
     """An unordered base + no ``orderBy`` gets ``order_by(pk)`` applied."""
-    from django_strawberry_framework.connection import _pipeline_sync
-
     services.seed_data(1)
     node_type = _make_sidecar_node_type("DefaultOrderNode")
     info = _capture_info(node_type)
@@ -1028,8 +1030,6 @@ def test_default_ordering_applied_when_unordered() -> None:
 @pytest.mark.django_db
 def test_default_ordering_preserves_supplied_orderby() -> None:
     """A queryset already ordered (e.g. by a supplied ``orderBy``) is NOT pk-overridden."""
-    from django_strawberry_framework.connection import _pipeline_sync
-
     services.seed_data(1)
     node_type = _make_sidecar_node_type("PreservedOrderNode")
     info = _capture_info(node_type)
@@ -1056,8 +1056,6 @@ def test_default_ordering_preserves_meta_ordering() -> None:
     descending pre-order stands in for a model ``Meta.ordering`` - the pk default
     must not fire because ``qs.ordered`` is already True.
     """
-    from django_strawberry_framework.connection import _pipeline_sync
-
     services.seed_data(1)
     node_type = _make_sidecar_node_type("MetaOrderNode")
     info = _capture_info(node_type)
@@ -1206,8 +1204,6 @@ async def test_connection_resolver_async_dispatch() -> None:
     Sync HTTP ``totalCount`` is live; this row pins the default field's async
     ``execute`` path using ``.acount()``, which a response cannot uniquely show.
     """
-    from asgiref.sync import sync_to_async
-
     await sync_to_async(services.seed_data)(2)
     expected = await Category.objects.acount()
     schema = await sync_to_async(_field_schema)(
@@ -1247,8 +1243,6 @@ async def test_connection_async_generator_resolver_executes_on_async_path() -> N
 
     Shipped connections use the default seed, not a consumer async generator.
     """
-    from asgiref.sync import sync_to_async
-
     await sync_to_async(services.seed_data)(2)
     rows = await sync_to_async(list)(Category.objects.order_by("pk"))
 
@@ -1274,8 +1268,6 @@ def test_connection_partial_async_generator_resolver_raises_sync_misuse() -> Non
     (an async-only iterable), and the sync-misuse guard rejects it before
     Relay's synchronous slicer can consume it.
     """
-    import functools
-
     services.seed_data(1)
     rows = list(Category.objects.all())
 
@@ -1369,8 +1361,6 @@ async def test_async_execution_default_connection_async_get_queryset_raises_sync
     ``utils/querysets.py::reject_async_in_sync_context`` instead of being awaited.
     Driving an async hook through a connection requires an ``async def`` ``resolver=``.
     """
-    from asgiref.sync import sync_to_async
-
     await sync_to_async(services.seed_data)(1)
 
     async def get_queryset(
@@ -1729,8 +1719,6 @@ def test_apply_connection_optimization_short_circuits_without_optimizer() -> Non
     ``active_optimizer()`` returns ``None`` and the helper short-circuits
     (``spec-030-connection_field-0_0_9`` Decision 11).
     """
-    from django_strawberry_framework.optimizer.extension import apply_connection_optimization
-
     node = _make_node_type("P3aNode", total_count=None)
     qs = Category.objects.all()
     assert apply_connection_optimization(node, qs, make_info()) is qs
@@ -1742,7 +1730,6 @@ def test_apply_connection_optimization_short_circuits_when_target_has_no_model()
     Hits the ``target_model is None`` guard before the optimizer lookup: a type the
     registry does not know maps to no Django model, so there is nothing to optimize.
     """
-    from django_strawberry_framework.optimizer.extension import apply_connection_optimization
 
     class _UnregisteredNode(DjangoType):
         class Meta:
@@ -1765,8 +1752,6 @@ def test_ends_in_unique_column_false_for_unnameable_terminal() -> None:
     ``Lower("name")``) exposes no ``.expression.name``, so the helper conservatively
     reports False and ``_finalize_queryset`` appends the pk tiebreaker.
     """
-    from django.db.models.functions import Lower
-
     assert _ends_in_unique_column((Lower("name"),), Category) is False
 
 
@@ -1778,8 +1763,6 @@ def test_pipeline_async_coerces_manager_source_and_finalizes() -> None:
     ``.all()``, the async ``get_queryset`` hook, then ``_finalize_queryset`` (which
     appends the pk tiebreaker to the otherwise-unordered base).
     """
-    from django_strawberry_framework.connection import _pipeline_async
-
     node_type = _make_sidecar_node_type("AsyncManagerNode")
     info = _capture_info(node_type)
     qs = asyncio.run(
@@ -1806,7 +1789,6 @@ async def test_connection_async_pipeline_applies_filter_and_order() -> None:
     ``orderset_class.apply_async``) that the sync path covers via HTTP. ``_CategoryFilter``
     / ``_CategoryOrder`` carry no permission gate, so an anonymous request runs through.
     """
-    from asgiref.sync import sync_to_async
 
     async def resolver(_root: object, _info: object) -> models.QuerySet[Category]:
         # An async resolver forces the connection through the ASYNC pipeline; the
@@ -2137,8 +2119,6 @@ def test_generated_connections_decode_under_the_stock_edge_prefix(
     without holding the connection class, which is exact only because it plans
     generated connections alone and each inherits the stock edge class.
     """
-    from django_strawberry_framework.connection import _offset_cursor_prefix
-
     node_type = _make_node_type(f"StockPrefix{total_count}Node", total_count=total_count)
     connection_type = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
     assert _offset_cursor_prefix(connection_type) == relay.Edge.CURSOR_PREFIX
@@ -2146,8 +2126,6 @@ def test_generated_connections_decode_under_the_stock_edge_prefix(
 
 def test_registry_clear_also_clears_offset_cursor_prefix_memo() -> None:
     """``registry.clear()`` drops the per-class offset cursor prefix memo with the class cache."""
-    from django_strawberry_framework.connection import _offset_cursor_prefix
-
     node_type = _make_node_type("PrefixMemoNode", total_count=None)
     _offset_cursor_prefix(
         _connection_type_for(node_type, node_type.__django_strawberry_definition__),
@@ -2299,8 +2277,6 @@ def test_consumer_edge_prefix_refuses_a_stock_cursor(argument: str) -> None:
 @pytest.mark.django_db(transaction=True)
 async def test_async_consumer_edge_prefix_pages_and_refuses_a_stock_cursor() -> None:
     """Under async execution a consumer edge prefix pages with its own cursors and refuses a stock one."""
-    from asgiref.sync import sync_to_async
-
     await sync_to_async(services.seed_data)(1)
     schema = await sync_to_async(_consumer_edge_schema)(
         _make_node_type("AsyncConsumerCursorNode", total_count=None),
@@ -2565,8 +2541,6 @@ def test_connection_hostile_hook_narrows_edges_and_total_count_sync() -> None:
 @pytest.mark.django_db(transaction=True)
 async def test_connection_hostile_hook_narrows_edges_and_total_count_async() -> None:
     """Async twin: the hostile ``.acount()`` / slicing overrides are sealed away too."""
-    from asgiref.sync import sync_to_async
-
     public_names = await sync_to_async(_seed_public_private_categories)()
     node_type = _make_sidecar_node_type(
         "AsyncHostileConnNode",
@@ -2734,7 +2708,6 @@ def test_connection_resolver_manager_alias_drift_fails_closed() -> None:
 @pytest.mark.django_db(transaction=True)
 async def test_connection_resolver_manager_degrading_to_list_fails_closed_async() -> None:
     """Sync/async parity: the Manager-degrade failure propagates on the async path too."""
-    from asgiref.sync import sync_to_async
 
     async def resolver(_root: object, _info: object) -> models.Manager[Category]:
         return _degrading_manager()
@@ -2795,7 +2768,6 @@ def test_connection_field_directives_hostile_attribute_rejected() -> None:
 
 def test_window_rows_are_annotated_hostile_iter_returns_false() -> None:
     """``_window_rows_are_annotated`` with hostile ``__iter__`` returns ``False`` (not ``ValueError``)."""
-    from django_strawberry_framework.connection import _window_rows_are_annotated
 
     class HostileList(list[object]):
         @override
@@ -2813,14 +2785,11 @@ def test_window_rows_are_annotated_hostile_key_error_returns_false() -> None:
         def __iter__(self) -> NoReturn:
             raise KeyError("hostile key")
 
-    from django_strawberry_framework.connection import _window_rows_are_annotated
-
     assert _window_rows_are_annotated(HostileList([object()])) is False
 
 
 def test_keyset_order_ref_hostile_entry_returns_none() -> None:
     """``_keyset_order_ref`` with a hostile ``__str__`` or attribute access returns ``None``."""
-    from django_strawberry_framework.optimizer.plans import _keyset_order_ref
 
     class Hostile:
         def __getattr__(self, name: str) -> NoReturn:
@@ -2832,13 +2801,10 @@ def test_keyset_order_ref_hostile_entry_returns_none() -> None:
 
 def test_consume_window_hostile_pagination_is_graphql_error() -> None:
     """A windowed ``_WindowedConnectionRows`` with ``first: -1`` is ``GraphQLError`` (not ``ValueError``)."""
-    from django_strawberry_framework.connection import _WindowedConnectionRows
-
     node = _make_sidecar_node_type("WindowHostileNode")
     finalize_django_types()
     conn_type = _connection_type_for(node, node.__django_strawberry_definition__)
     # Create a window marker with one annotated row
-    from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER
 
     row = Category(id=1, name="a")
     setattr(row, WINDOW_ROW_NUMBER, 1)

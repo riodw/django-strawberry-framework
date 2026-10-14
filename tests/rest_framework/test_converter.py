@@ -59,8 +59,10 @@ from typing import TYPE_CHECKING, Any, NoReturn, get_args, get_origin
 import pytest
 import strawberry
 from apps.library import models as library_models
+from apps.library.models import Book, Genre
 from apps.products import models as product_models
 from apps.scalars import models as scalar_models
+from apps.scalars.models import MediaSpecimen
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from rest_framework import serializers
@@ -83,10 +85,13 @@ from django_strawberry_framework.rest_framework.serializer_converter import (
     register_serializer_field_converter,
     require_one_segment_source,
     resolve_serializer_field,
+    serializer_field_description,
     serializer_field_graphql_name,
     serializer_only_relation_annotation,
 )
 from django_strawberry_framework.scalars import Upload
+from django_strawberry_framework.types import converters
+from django_strawberry_framework.types.converters import convert_choices_to_enum
 from tests._idioms import ModelSerializerBase, bind_unparented
 
 if TYPE_CHECKING:
@@ -162,7 +167,6 @@ def _register_products_types() -> None:
 
 def _make_relay_target() -> tuple[type[library_models.Genre], type[DjangoType]]:
     """Register a Relay-Node ``DjangoType`` over ``library.Genre`` and return both."""
-    from apps.library.models import Genre
 
     class GenreNode(DjangoType, relay.Node):
         class Meta:
@@ -1611,7 +1615,6 @@ def test_integer_choices_column_accepts_its_own_choices() -> None:
 
 def test_declared_choice_allow_blank_over_blank_choice_column_accepted() -> None:
     """Over a ``blank=True`` choice column both the input enum and the read enum carry ``BLANK``."""
-    from django_strawberry_framework.types.converters import convert_choices_to_enum
 
     class ConditionSer(ModelSerializerBase[library_models.Shelf]):
         condition = serializers.ChoiceField(
@@ -1686,7 +1689,6 @@ def test_auto_model_serializer_over_empty_label_column_builds_the_read_enum() ->
     check leaves ``None`` to ``allow_null`` (the column's read enum has no member for it), so the
     field resolves to the column's read enum instead of being refused.
     """
-    from django_strawberry_framework.types.converters import convert_choices_to_enum
 
     class AutoConditionSer(ModelSerializerBase[library_models.Shelf]):
         class Meta:
@@ -1917,8 +1919,6 @@ def _array_choice_column(
     blank: bool = False,
 ) -> _FakeArrayField:
     """A ``tags`` array column whose ``base_field`` declares ``a`` / ``b``."""
-    from django_strawberry_framework.types import converters
-
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
     element: _Char = models.CharField(max_length=5, choices=[("a", "A"), ("b", "B")], blank=blank)
     column = _FakeArrayField(element)
@@ -2030,8 +2030,6 @@ def test_multiple_choice_over_empty_label_array_base_accepted(
     The field's choices carry ``None`` from ``Choices.__empty__``; the element check leaves it to
     ``allow_null``, and the element enum has no ``_None`` member.
     """
-    from django_strawberry_framework.types import converters
-
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
     element: _Char = models.CharField(max_length=5, choices=_Condition.choices)
     column = _FakeArrayField(element)
@@ -2202,8 +2200,6 @@ def test_field_taking_the_read_enum_of_a_grouped_column_refused(
 
 def _grouped_array_choice_column(monkeypatch: pytest.MonkeyPatch) -> _FakeArrayField:
     """A ``tags`` array column whose ``base_field`` declares the grouped choices."""
-    from django_strawberry_framework.types import converters
-
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
     element: _Char = models.CharField(max_length=8, choices=_GROUPED_CHOICES)
     column = _FakeArrayField(element)
@@ -2433,10 +2429,6 @@ def test_auto_generated_model_field_is_not_conflict_checked() -> None:
 
 def test_serializer_field_description_combines_help_text_and_constraints() -> None:
     """``help_text`` heads the description; a constraint summary is appended (#9)."""
-    from django_strawberry_framework.rest_framework.serializer_converter import (
-        serializer_field_description,
-    )
-
     field = bind_unparented(
         serializers.CharField(help_text="The item name.", min_length=2, max_length=20),
         "name",
@@ -2450,19 +2442,11 @@ def test_serializer_field_description_combines_help_text_and_constraints() -> No
 
 def test_serializer_field_description_none_without_metadata() -> None:
     """A field with neither help text nor constraints yields ``None`` (no description emitted)."""
-    from django_strawberry_framework.rest_framework.serializer_converter import (
-        serializer_field_description,
-    )
-
     assert serializer_field_description(bind_unparented(serializers.CharField(), "f")) is None
 
 
 def test_serializer_field_description_notes_numeric_bounds_and_allow_blank() -> None:
     """Numeric bounds + ``allow_blank`` are summarized even without help text (#9)."""
-    from django_strawberry_framework.rest_framework.serializer_converter import (
-        serializer_field_description,
-    )
-
     numeric = serializer_field_description(
         bind_unparented(serializers.IntegerField(min_value=0, max_value=9), "n"),
     )
@@ -2475,10 +2459,6 @@ def test_serializer_field_description_notes_numeric_bounds_and_allow_blank() -> 
 
 def test_serializer_field_description_notes_allow_empty_false() -> None:
     """``allow_empty=False`` is included in the SDL metadata summary (#9)."""
-    from django_strawberry_framework.rest_framework.serializer_converter import (
-        serializer_field_description,
-    )
-
     field = bind_unparented(
         serializers.ListField(child=serializers.CharField(), allow_empty=False),
         "tags",
@@ -2488,9 +2468,6 @@ def test_serializer_field_description_notes_allow_empty_false() -> None:
 
 def test_serializer_field_description_hostile_metadata_is_configuration_error() -> None:
     """A hostile help-text descriptor cannot replace the typed schema error."""
-    from django_strawberry_framework.rest_framework.serializer_converter import (
-        serializer_field_description,
-    )
 
     class HostileText:
         def __bool__(self) -> bool:
@@ -2509,9 +2486,6 @@ def test_serializer_field_description_hostile_metadata_is_configuration_error() 
 
 def test_serializer_field_description_handles_an_unreadable_field_name_in_diagnostic() -> None:
     """The diagnostic names an unreadable field as ``<unavailable>`` rather than raising itself."""
-    from django_strawberry_framework.rest_framework.serializer_converter import (
-        serializer_field_description,
-    )
 
     class HostileField:
         @property
@@ -2574,8 +2548,6 @@ def test_non_relation_field_over_relation_column_fails_loud() -> None:
 def test_consumer_declared_scalar_disagreeing_with_choices_column_fails_loud() -> None:
     """A consumer-declared field whose scalar disagrees with a choices column fails loud."""
     _register_products_types()
-
-    from apps.library.models import Book
 
     class BookStatusSer(ModelSerializerBase[Book]):
         circulation_status = serializers.IntegerField()
@@ -2651,7 +2623,6 @@ def test_backing_model_field_nonexistent_column_returns_none() -> None:
 
 def test_resolve_serializer_field_model_backed_file_field() -> None:
     """A FileField backed by a models.FileField resolves to Upload annotation and kind FILE."""
-    from apps.scalars.models import MediaSpecimen
 
     class MediaSpecimenSer(ModelSerializerBase[MediaSpecimen]):
         class Meta:

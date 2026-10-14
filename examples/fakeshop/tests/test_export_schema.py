@@ -4,6 +4,7 @@ from io import StringIO
 from pathlib import Path
 
 import pytest
+from config import schema as config_schema
 from django.core.management import CommandError, call_command
 from strawberry.printer import print_schema
 
@@ -23,17 +24,13 @@ def test_export_schema_writes_fakeshop_sdl_to_stdout_by_default() -> None:
 )
 def test_export_schema_stdout_matches_print_schema(selector: str) -> None:
     """Stdout SDL bytes match ``print_schema`` for both selector spellings."""
-    from config.schema import schema
-
     out = StringIO()
     call_command("export_schema", selector, stdout=out)
-    assert out.getvalue() == print_schema(schema)
+    assert out.getvalue() == print_schema(config_schema.schema)
 
 
 def test_export_schema_path_file_matches_print_schema(tmp_path: Path) -> None:
     """``--path`` writes the same UTF-8 SDL bytes ``print_schema`` returns."""
-    from config.schema import schema
-
     path = tmp_path / "schema.graphql"
     call_command(
         "export_schema",
@@ -42,7 +39,7 @@ def test_export_schema_path_file_matches_print_schema(tmp_path: Path) -> None:
         str(path),
         stdout=StringIO(),
     )
-    assert path.read_text(encoding="utf-8") == print_schema(schema)
+    assert path.read_text(encoding="utf-8") == print_schema(config_schema.schema)
 
 
 def test_export_schema_raises_command_error_for_unimportable_module() -> None:

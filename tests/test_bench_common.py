@@ -12,12 +12,18 @@ that measures the package, so there is no live sibling in
 
 import json
 import subprocess
+from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType
 
 import pytest
+from django.db import models
+from graphql import OperationDefinitionNode, parse
 
+import django_strawberry_framework.optimizer.extension as extension_module
+from django_strawberry_framework import DjangoOptimizerExtension
+from django_strawberry_framework.optimizer.plans import OptimizationPlan
 from scripts import _bench_common
 
 SCRIPTS = Path(_bench_common.__file__).resolve().parent
@@ -282,15 +288,6 @@ def test_reset_plan_cache_clears_the_plan_cache_and_the_document_key_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The reset leaves both optimizer caches empty and the counters zeroed."""
-    from collections import OrderedDict
-
-    from django.db import models
-    from graphql import OperationDefinitionNode, parse
-
-    import django_strawberry_framework.optimizer.extension as extension_module
-    from django_strawberry_framework import DjangoOptimizerExtension
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
-
     empty_cache: OrderedDict[tuple[str, str | None], tuple[str, frozenset[str]]] = OrderedDict()
     monkeypatch.setattr(extension_module, "_doc_key_cache", empty_cache)
     operation = parse("query Q { field }").definitions[0]

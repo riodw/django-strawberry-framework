@@ -44,6 +44,7 @@ from django_strawberry_framework.forms.converter import (
     convert_form_field,
     form_field_required,
 )
+from django_strawberry_framework.forms.inputs import build_form_input_class
 
 
 @pytest.mark.parametrize(
@@ -133,8 +134,6 @@ def test_null_boolean_validating_subclass_generates_required_input() -> None:
         flag = RequiredNullableBoolean(required=True)
 
     assert convert_form_field(ProbeForm.base_fields["flag"]).annotation is bool
-
-    from django_strawberry_framework.forms.inputs import build_form_input_class
 
     input_cls, _ = build_form_input_class(ProbeForm, operation_kind="form")
     field = get_object_definition(input_cls, strict=True).fields[0]

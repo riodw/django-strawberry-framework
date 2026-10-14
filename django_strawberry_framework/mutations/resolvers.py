@@ -137,6 +137,7 @@ from django_strawberry_framework.utils.write_values import (
     relation_into,
 )
 
+from . import inputs
 from .inputs import EXCLUDED, FieldError, payload_object_slot
 from .operations import operation_takes_id
 from .permissions import _require_sync_bool_auth_result
@@ -1472,8 +1473,6 @@ def payload_cls_for(mutation_cls: _AuthorizedClass) -> type[_GeneratedPayload]:
     the plain via ``bind_form_mutations``), so this one ``getattr`` serves the model,
     ``ModelForm``, and plain-form pipelines alike (spec-038).
     """
-    from . import inputs
-
     # An auth permission holder reaching a pipeline is a bound ``login`` / ``logout``
     # holder, whose payload name the auth bind stashed; the bind materialized that
     # payload class as a module global of ``mutations.inputs``.

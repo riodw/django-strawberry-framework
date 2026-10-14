@@ -78,6 +78,7 @@ from django_strawberry_framework.keyset import (
     CursorState,
     cursor_columns_for,
     declared_cursor_state_for_definition,
+    encode_keyset_cursor,
     order_fingerprint,
 )
 from django_strawberry_framework.optimizer.nested_planner import (
@@ -93,6 +94,7 @@ from django_strawberry_framework.optimizer.plans import (
 )
 from django_strawberry_framework.orders import Ordering, OrderSet, RelatedOrder
 from django_strawberry_framework.utils.connections import UnwindowableConnection
+from tests._definition import make_definition
 from tests._info import make_info
 from tests.optimizer._link_models import LnkPairChild, link_fixture_tables
 
@@ -234,8 +236,6 @@ def test_keyset_window_without_a_published_vocabulary_is_served_per_parent(*, se
     the keyset slicer instead, on a first page and on an ``after:`` page alike,
     even where the window could serve the forward page.
     """
-    from django_strawberry_framework.keyset import encode_keyset_cursor
-
     issue_type = _make_issue_type("KeysetUnpublishedWindowNode")
     finalize_django_types()
     connection_type = _issue_connection_of(issue_type)
@@ -311,8 +311,6 @@ def _issue_order_state() -> CursorState:
 
 def _state_stub(model: type[Model], cursor_field: tuple[str, ...]) -> CursorState:
     """A hand-built declared state over a directly built definition of ``model``."""
-    from tests._definition import make_definition
-
     return CursorState(
         definition=make_definition(model, cursor_field=cursor_field),
         cursor_field=cursor_field,
@@ -607,7 +605,6 @@ def test_keyset_window_slice_from_arguments_arms() -> None:
     # A valid minted cursor decodes into the seek.
     periodical = Periodical.objects.create(name="P")
     issue = Issue.objects.create(periodical=periodical, number=1, title="one")
-    from django_strawberry_framework.keyset import encode_keyset_cursor
 
     cursor = encode_keyset_cursor(columns, issue, fingerprint=fingerprint)
     sliced = _keyset_window_slice_from_arguments(

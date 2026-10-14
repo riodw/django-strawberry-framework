@@ -28,11 +28,13 @@ from typing import NoReturn, SupportsIndex, TypeVar, overload
 
 import pytest
 import strawberry
-from apps.library.models import Book, Branch, Genre, Shelf, TaggedItem
+from apps.library.models import Book, Branch, Genre, Patron, PatronProfile, Shelf, TaggedItem
+from asgiref.sync import sync_to_async
 from django.contrib.auth.models import AnonymousUser, User
-from django.db.models import F, Model, QuerySet
+from django.db.models import F, Min, Model, QuerySet
 from django.http import HttpRequest
 from graphql import GraphQLError
+from strawberry import UNSET
 from typing_extensions import override
 
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -41,17 +43,28 @@ from django_strawberry_framework.orders import sets as sets_module
 from django_strawberry_framework.orders.factories import OrderArgumentsFactory
 from django_strawberry_framework.orders.inputs import (
     _field_specs,
+    _get_concrete_field_names_for_order,
     _materialized_names,
+    clear_order_input_namespace,
 )
 from django_strawberry_framework.orders.sets import (
     _ORDER_NORMALIZATION_CAPTURE,
+    OrderSetMetaclass,
     _AppliedNormalization,
     _NormalizationLedger,
     _validate_normalized_terms,
     capture_applied_order_normalization,
 )
 from django_strawberry_framework.types.base import DjangoType
-from django_strawberry_framework.utils.querysets import model_for
+from django_strawberry_framework.utils import relations
+from django_strawberry_framework.utils.inputs import (
+    promote_set_meta_fields,
+    read_set_meta_fields,
+)
+from django_strawberry_framework.utils.querysets import SyncMisuseError, model_for
+from django_strawberry_framework.utils.relations import (
+    path_traverses_to_many as _path_traverses_to_many,
+)
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
 from tests._idioms import is_object_list, run_capturing
 
@@ -289,12 +302,6 @@ def test_orderset_meta_fields_none_returns_only_related_orders() -> None:
 
 def test_orderset_metaclass_and_expansion_share_factory_fields_owner() -> None:
     """Class Meta write-back and Layer-4 expansion ride the shared fingerprint."""
-    from django_strawberry_framework.orders.sets import OrderSetMetaclass
-    from django_strawberry_framework.utils.inputs import (
-        promote_set_meta_fields,
-        read_set_meta_fields,
-    )
-
     assert "promote_set_meta_fields" in OrderSetMetaclass.__new__.__code__.co_names
     assert "read_set_meta_fields" in OrderSet._expand_meta_fields.__code__.co_names
     assert (
@@ -361,12 +368,6 @@ def test_orderset_resolve_order_expressions_rejects_unknown_order_path() -> None
 
 def test_orderset_all_excludes_virtual_generic_fields() -> None:
     """``__all__`` leaves out the virtual GenericRelation / GFK descriptors."""
-    from apps.library.models import Branch, TaggedItem
-
-    from django_strawberry_framework.orders.inputs import (
-        _get_concrete_field_names_for_order,
-    )
-
     assert "tags" not in _get_concrete_field_names_for_order(Branch)
     assert "content_object" not in _get_concrete_field_names_for_order(TaggedItem)
 
@@ -813,10 +814,6 @@ def test_orderset_apply_async_returns_queryset_when_all_directions_filter_to_emp
 
 def test_path_traverses_to_many_detects_multiplying_relations() -> None:
     """``_path_traverses_to_many`` flags reverse-FK / M2M paths, not scalar / to-one."""
-    from django_strawberry_framework.utils.relations import (
-        path_traverses_to_many as _path_traverses_to_many,
-    )
-
     assert _path_traverses_to_many(Branch, "shelves__code") is True  # reverse FK
     assert _path_traverses_to_many(Book, "genres__name") is True  # forward M2M
     assert _path_traverses_to_many(Genre, "books__title") is True  # reverse M2M
@@ -827,11 +824,6 @@ def test_path_traverses_to_many_detects_multiplying_relations() -> None:
 
 def test_path_traverses_to_many_is_cached() -> None:
     """Repeated to-many path checks reuse the metadata walk."""
-    from django_strawberry_framework.utils import relations
-    from django_strawberry_framework.utils.relations import (
-        path_traverses_to_many as _path_traverses_to_many,
-    )
-
     relations._path_traverses_to_many_cache_clear()
     try:
         assert _path_traverses_to_many(Branch, "shelves__code") is True
@@ -850,7 +842,6 @@ def test_resolve_order_expressions_aggregates_to_many_orders_scalar_directly() -
     Consumer two-term ``MIN(`` SQL is
     ``test_library_books_order_by_two_to_many_terms_each_get_their_own_aggregate``.
     """
-    from django.db.models import Min
 
     class _MultBranchOrder(OrderSet):
         class Meta:
@@ -930,10 +921,6 @@ def test_path_traverses_to_many_returns_false_for_nonmultiplying_paths() -> None
     (a ``GenericForeignKey``), and a path that resolves entirely through to-one
     relations without ever reaching a to-many.
     """
-    from django_strawberry_framework.utils.relations import (
-        path_traverses_to_many as _path_traverses_to_many,
-    )
-
     # Unresolvable terminal / mid segment -> FieldDoesNotExist exit.
     assert _path_traverses_to_many(Branch, "does_not_exist") is False
     assert _path_traverses_to_many(Book, "shelf__nope") is False
@@ -946,7 +933,6 @@ def test_path_traverses_to_many_returns_false_for_nonmultiplying_paths() -> None
 @pytest.mark.django_db
 def test_modelless_orderset_uses_queryset_model_for_to_many_order() -> None:
     """A direct model-less orderset application still keeps the row-preserving aggregate."""
-    from django.db.models import Min
 
     class ShelfOrderML(OrderSet):
         class Meta:
@@ -977,7 +963,6 @@ def test_modelless_orderset_uses_queryset_model_for_to_many_order() -> None:
 @pytest.mark.django_db
 def test_queryset_model_overrides_conflicting_orderset_meta_model() -> None:
     """To-many detection follows the concrete queryset, never stale class metadata."""
-    from django.db.models import Min
 
     class ShelfOrder(OrderSet):
         class Meta:
@@ -1037,7 +1022,6 @@ def test_resolve_order_expressions_rejects_non_ordering_direction() -> None:
 @pytest.mark.django_db
 def test_orderset_apply_sync_handles_unset_in_nested_dict() -> None:
     """apply_sync with UNSET fields normalizes cleanly and preserves queryset."""
-    from strawberry import UNSET
 
     class ShelfOrder(OrderSet):
         class Meta:
@@ -1291,8 +1275,6 @@ def test_orderset_expand_meta_fields_handles_non_class_meta_model() -> None:
 @pytest.mark.django_db
 def test_get_concrete_field_names_for_order_rejects_non_model() -> None:
     """_get_concrete_field_names_for_order raises ConfigurationError on non-model objects."""
-    from django_strawberry_framework.orders.inputs import _get_concrete_field_names_for_order
-
     with pytest.raises(ConfigurationError, match="Expected a Django Model class"):
         _get_concrete_field_names_for_order("NotAModel")
 
@@ -1320,7 +1302,6 @@ def test_resolve_order_expressions_handles_non_class_model_on_path_error() -> No
 
 def test_orderset_clear_order_input_namespace_clears_subclass_caches() -> None:
     """clear_order_input_namespace clears _expanded_fields on base and subclass OrderSets."""
-    from django_strawberry_framework.orders.inputs import clear_order_input_namespace
 
     class BaseOrder(OrderSet):
         class Meta:
@@ -1362,7 +1343,6 @@ assert Genre is not None
 
 def test_input_has_active_terms() -> None:
     """OrderSet._input_has_active_terms detects presence of active ordering terms."""
-    import strawberry
 
     class ShelfOrder(OrderSet):
         class Meta:
@@ -2932,8 +2912,6 @@ def test_scoped_hops_read_every_hop_of_an_undeclared_to_many_path() -> None:
 @pytest.mark.usefixtures("isolate_global_registry")
 def test_scoped_hops_read_a_pk_segment_on_a_relation_keyed_model_as_that_relation() -> None:
     """``pk`` on ``PatronProfile`` (keyed by ``patron``) is the relation, named by its field."""
-    from apps.library.models import Patron, PatronProfile
-
     patron_type = _hiding_type(Patron, "HidingPatronType", name="secret")
 
     class ProfilePaths(OrderSet):
@@ -3058,9 +3036,6 @@ def test_apply_async_awaits_an_async_only_hook_behind_a_related_term(
     expected: list[str],
 ) -> None:
     """``apply_async`` derives an async-only target ``get_queryset`` up front; ``apply_sync`` refuses it."""
-    from asgiref.sync import sync_to_async
-
-    from django_strawberry_framework.utils.querysets import SyncMisuseError
 
     async def hide_secret_async(
         _cls: type[DjangoType],

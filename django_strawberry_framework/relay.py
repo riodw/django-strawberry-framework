@@ -77,6 +77,7 @@ from .utils.querysets import (
     reject_async_in_sync_context,
 )
 from .utils.typing import strawberry_schema_from_info
+from .utils.write_transaction import current_write_pipeline
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Iterable, Mapping, Sequence, Sized
@@ -325,7 +326,6 @@ def _resolve_real_pk(
         # NodeID -> real-pk lookup cannot fall back to the router's default read
         # database. Standalone callers have no pipeline and keep the historical
         # default-manager behavior.
-        from .utils.write_transaction import current_write_pipeline
 
         pipeline = current_write_pipeline()
         using = None if pipeline is None else pipeline.alias

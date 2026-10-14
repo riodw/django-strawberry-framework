@@ -49,6 +49,9 @@ import enum
 from collections.abc import AsyncGenerator, MutableMapping
 from typing import TYPE_CHECKING, cast
 
+from django.contrib.sessions.backends.signed_cookies import (
+    SessionStore as SignedCookieSessionStore,
+)
 from django.http import HttpRequest
 
 from django_strawberry_framework.exceptions import (
@@ -341,10 +344,6 @@ def uses_signed_cookie_sessions() -> bool:
     signed-cookie store so a deployment subclassing that engine (which shares its
     no-server-side-record limitation) is recognized too.
     """
-    from django.contrib.sessions.backends.signed_cookies import (
-        SessionStore as SignedCookieSessionStore,
-    )
-
     try:
         store_cls = session_store_class()
     except ConfigurationError:

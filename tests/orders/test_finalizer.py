@@ -31,6 +31,7 @@ Finalize-time bind / orphan / collision have no request. Shipped
 
 from __future__ import annotations
 
+import inspect
 import sys
 from collections import OrderedDict
 from collections.abc import Iterator
@@ -41,10 +42,12 @@ import strawberry
 from apps.library.models import Book, Branch, Genre, LendingDesk, ProxyBranch, Shelf, Venue
 from django.db import models
 from django.db.models import QuerySet
+from django.test import RequestFactory
 from strawberry import relay
 from typing_extensions import override
 
-from django_strawberry_framework import DjangoType, finalize_django_types
+import django_strawberry_framework.types.base as base_mod
+from django_strawberry_framework import DjangoListField, DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.orders import (
     OrderInput,
@@ -132,10 +135,6 @@ def test_validate_orderset_class_uses_local_import() -> None:
     inside the function so the ``types -> orders -> types`` module-load
     cycle stays inert.
     """
-    import inspect
-
-    import django_strawberry_framework.types.base as base_mod
-
     # Module-top namespace must NOT carry ``OrderSet`` -- the validator
     # imports it locally.
     assert "OrderSet" not in vars(base_mod)
@@ -1021,9 +1020,6 @@ def test_an_orderset_subclass_binds_its_own_owner_apart_from_its_base(
     bound to: through the hiding owner a hidden shelf sorts as a missing one
     (last under ``ASC_NULLS_LAST``), through the plain owner by its topic.
     """
-    from django.test import RequestFactory
-
-    from django_strawberry_framework import DjangoListField
 
     class ShelfOrder(OrderSet):
         class Meta:

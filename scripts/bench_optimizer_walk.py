@@ -69,6 +69,10 @@ from _bench_common import (
     write_report,
 )
 
+from django_strawberry_framework.optimizer import extension as ext_mod
+from django_strawberry_framework.optimizer import walker as walker_mod
+from django_strawberry_framework.optimizer.walker import plan_optimizations
+
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
 
@@ -173,9 +177,6 @@ def _capture_walk_inputs(
 
     Returns ``None`` when the query triggers no walk (nothing to optimize).
     """
-    from django_strawberry_framework.optimizer import extension as ext_mod
-    from django_strawberry_framework.optimizer import walker as walker_mod
-
     real_plan_optimizations = walker_mod.plan_optimizations
     captured: list[_Capture] = []
 
@@ -215,8 +216,6 @@ def _bench_capture(capture: _Capture, iterations: int, warmup: int) -> list[int]
     ``with_runtime_prefix`` build fresh clones), so replaying on the captured
     list is deterministic.
     """
-    from django_strawberry_framework.optimizer.walker import plan_optimizations
-
     timings: list[int] = []
     for i in range(iterations + warmup):
         start = time.perf_counter_ns()
@@ -234,8 +233,6 @@ def _bench_capture(capture: _Capture, iterations: int, warmup: int) -> list[int]
 
 def _plan_shape(capture: _Capture) -> str:
     """Return a compact ``sr/pf/only/fk/keys`` summary of the built plan."""
-    from django_strawberry_framework.optimizer.walker import plan_optimizations
-
     plan = plan_optimizations(
         capture.selections,
         capture.model,

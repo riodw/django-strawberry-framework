@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 import pytest
 from apps.library import models as library_models
+from apps.library.models import Book, Genre
 from apps.products import models as product_models
 from django.db import models
 from rest_framework import serializers
@@ -45,6 +46,7 @@ from strawberry.types.enum import StrawberryEnumDefinition
 from strawberry.types.field import StrawberryField
 from typing_extensions import override
 
+import django_strawberry_framework as dsf
 from django_strawberry_framework import DjangoType, SerializerMutation
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.mutations.inputs import CREATE, PARTIAL
@@ -55,9 +57,13 @@ from django_strawberry_framework.rest_framework.inputs import (
     SERIALIZER_INPUTS_MODULE_PATH,
     NestedSerializerConfig,
     SerializerInputShape,
+    _fingerprint_choices,
     _fingerprint_relation_target,
+    _serializer_shape_build_cache,
     build_serializer_input_class,
     clear_serializer_input_namespace,
+    clear_serializer_shape_build_cache,
+    dedupe_serializer_input_shape,
     describe_serializer_input,
     get_serializer_for_schema,
     guard_create_required_serializer_fields,
@@ -68,6 +74,9 @@ from django_strawberry_framework.rest_framework.inputs import (
     resolve_injected_field_specs,
     resolve_optional_fields,
     runtime_validated_data_fields,
+    serializer_input_type_name,
+    serializer_schema_fingerprint,
+    validate_nested_config_keys,
 )
 from django_strawberry_framework.rest_framework.serializer_converter import (
     NESTED_MULTI,
@@ -76,7 +85,8 @@ from django_strawberry_framework.rest_framework.serializer_converter import (
     SCALAR,
 )
 from django_strawberry_framework.scalars import Upload
-from django_strawberry_framework.utils.inputs import normalize_field_name_sequence
+from django_strawberry_framework.types.converters import convert_choices_to_enum
+from django_strawberry_framework.utils.inputs import InputFieldSpec, normalize_field_name_sequence
 from tests._idioms import ModelSerializerBase, bind_unparented, definition_raises
 
 if TYPE_CHECKING:
@@ -215,7 +225,6 @@ def _register_products_types() -> None:
 
 def _make_relay_target() -> tuple[type[models.Model], type[DjangoType]]:
     """Register a Relay-Node ``DjangoType`` over ``library.Genre`` and return both."""
-    from apps.library.models import Genre
 
     class GenreNode(DjangoType, relay.Node):
         class Meta:
@@ -449,9 +458,6 @@ def test_choices_modelserializer_field_resolves_to_read_side_enum() -> None:
     ``convert_choices_to_enum`` (the symmetric wire contract), not a parallel
     serializer-field table.
     """
-    from apps.library.models import Book
-
-    from django_strawberry_framework.types.converters import convert_choices_to_enum
 
     class BookType(DjangoType):
         class Meta:
@@ -483,7 +489,6 @@ def test_get_fields_hook_allow_blank_over_strict_choice_column_refused() -> None
     has ``allow_blank=False``; the hook turns it on, which would offer an input ``BLANK`` the
     column's read enum cannot serialize.
     """
-    from apps.library.models import Book
 
     class HookBlankSer(ModelSerializerBase[Book]):
         class Meta:
@@ -709,8 +714,6 @@ def test_descriptor_name_distinguishes_relation_target_model() -> None:
     different models by a schema hook) collide on one materialized name. Exercises the
     ``related_model`` fold in the per-field token directly.
     """
-    from django_strawberry_framework.rest_framework.inputs import serializer_input_type_name
-    from django_strawberry_framework.utils.inputs import InputFieldSpec
 
     class HookSer(serializers.Serializer[object]):
         pass
@@ -797,12 +800,6 @@ def test_dedupe_serializer_input_shape_is_sole_cache_protocol() -> None:
     the frozen descriptor's identity, so two independently declared but textually
     identical serializers are two distinct descriptors and never share a cache entry.
     """
-    from django_strawberry_framework.rest_framework.inputs import (
-        _serializer_shape_build_cache,
-        clear_serializer_shape_build_cache,
-        dedupe_serializer_input_shape,
-    )
-
     _register_products_types()
     clear_serializer_shape_build_cache()
     serializer_cls = _item_serializer()
@@ -1341,7 +1338,6 @@ def test_dropped_required_not_injected_still_raises() -> None:
 
 def test_describe_serializer_input_reports_shape() -> None:
     """``describe_serializer_input`` describes a built shape and returns ``None`` for an unknown name."""
-    from django_strawberry_framework.rest_framework.inputs import describe_serializer_input
 
     class SourceSer(serializers.Serializer[object]):
         display_name = serializers.CharField(source="name", help_text="Public display name.")
@@ -1377,7 +1373,6 @@ def test_materialize_collision_message_enriched_with_shape_description() -> None
 
 def test_schema_fingerprint_sensitive_to_choices_and_help_text() -> None:
     """The hook fingerprint changes when only choice members or help_text differ."""
-    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class C1(serializers.Serializer[object]):
         color = serializers.ChoiceField(choices=[("r", "R")])
@@ -1406,7 +1401,6 @@ def test_schema_fingerprint_sensitive_to_choices_and_help_text() -> None:
 
 def test_schema_fingerprint_sensitive_to_converter_extras() -> None:
     """The fingerprint changes when a ``ModelField`` wrapped field or a ``ListField`` child differs."""
-    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class ModelFieldA(serializers.Serializer[object]):
         wrapped = serializers.ModelField(
@@ -1450,8 +1444,6 @@ def test_choice_fingerprint_folds_allow_blank(
     make_field: Callable[..., serializers.ChoiceField | serializers.ListField],
 ) -> None:
     """Every choice-sourced shape fingerprints its ``allow_blank`` beside its values."""
-    from django_strawberry_framework.rest_framework.inputs import _fingerprint_choices
-
     strict = make_field(choices=[("r", "R")])
     blank = make_field(choices=[("r", "R")], allow_blank=True)
     assert _fingerprint_choices(strict) == (("r",), False)
@@ -1460,7 +1452,6 @@ def test_choice_fingerprint_folds_allow_blank(
 
 def test_schema_fingerprint_sensitive_to_listfield_choice_child_values() -> None:
     """A ``ListField`` choice child's values build its enum, so a hook changing them is drift."""
-    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class C1(serializers.Serializer[object]):
         tags = serializers.ListField(child=serializers.ChoiceField(choices=[("r", "R")]))
@@ -1481,10 +1472,6 @@ def test_schema_fingerprint_sensitive_to_choice_allow_blank() -> None:
     The whole-field fingerprint also differs through the description's constraint summary;
     the choice discriminant is asserted directly so the member-set axis stands on its own.
     """
-    from django_strawberry_framework.rest_framework.inputs import (
-        _fingerprint_choices,
-        serializer_schema_fingerprint,
-    )
 
     class Strict(serializers.Serializer[object]):
         color = serializers.ChoiceField(choices=[("r", "R")])
@@ -1509,7 +1496,6 @@ def test_schema_fingerprint_sensitive_to_list_child_allow_null(
     child_cls: type[serializers.CharField | serializers.IntegerField | serializers.BooleanField],
 ) -> None:
     """A ``ListField`` child's ``allow_null`` decides element nullability, so it is fingerprinted."""
-    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class Strict(serializers.Serializer[object]):
         tags = serializers.ListField(child=child_cls())
@@ -1541,8 +1527,6 @@ def _nested_child_serializer() -> type[serializers.Serializer[object]]:
 
 def test_nested_serializer_config_defaults_and_root_import() -> None:
     """``NestedSerializerConfig`` is importable from the package root and defaults to all-None."""
-    import django_strawberry_framework as dsf
-
     assert dsf.NestedSerializerConfig is NestedSerializerConfig
     config = NestedSerializerConfig()
     assert config.fields is None
@@ -1844,7 +1828,6 @@ def test_build_serializer_inputs_threads_nested_into_both_shapes() -> None:
 
 def test_recursive_fingerprint_sensitive_to_nested_shape_change() -> None:
     """The fingerprint recurses into an OPTED-IN nested serializer's fields (a nested change is detected)."""
-    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class ChildA(serializers.Serializer[object]):
         code = serializers.CharField()
@@ -1871,7 +1854,6 @@ def test_recursive_fingerprint_sensitive_to_nested_shape_change() -> None:
 
 def test_recursive_fingerprint_terminates_on_nested_cycle() -> None:
     """The recursive fingerprint terminates (a cycle marker) for an OPTED-IN self-nesting serializer."""
-    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class SelfNest(serializers.Serializer[object]):
         x = serializers.CharField()
@@ -1919,7 +1901,6 @@ def test_fingerprint_skips_read_only_nested_serializer() -> None:
     class validation - it never produces an input field, so the writable-scoped fingerprint
     skips it (its ``.fields`` is never materialized).
     """
-    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class RaisingChild(serializers.Serializer[object]):
         @override
@@ -1939,7 +1920,6 @@ def test_fingerprint_skips_read_only_nested_serializer() -> None:
 
 def test_fingerprint_wraps_nested_fields_error_as_configuration_error() -> None:
     """An OPTED-IN nested serializer whose ``.fields`` cannot be read is a clear ConfigurationError."""
-    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class RaisingWritableChild(serializers.Serializer[object]):
         @override
@@ -1966,7 +1946,6 @@ def test_fingerprint_unopted_nested_raising_child_is_shallow_not_materialized() 
     reading its ``.fields``; the field walk (``build_serializer_input_class``) is what raises the
     opt-in error.
     """
-    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class RaisingChild(serializers.Serializer[object]):
         @override
@@ -2032,7 +2011,6 @@ def test_nested_dotted_source_rejected() -> None:
 
 def test_fingerprint_propagates_nested_configuration_error_unwrapped() -> None:
     """A nested ``get_fields()`` raising ConfigurationError propagates it unchanged, not double-wrapped."""
-    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class BadConfigChild(serializers.Serializer[object]):
         @override
@@ -2054,7 +2032,6 @@ def test_fingerprint_propagates_nested_configuration_error_unwrapped() -> None:
 
 def test_fingerprint_propagates_deep_nested_configuration_error_unwrapped() -> None:
     """A ConfigurationError from a SECOND-level nested ``get_fields()`` propagates unchanged too."""
-    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class BadConfigGrandchild(serializers.Serializer[object]):
         @override
@@ -2139,7 +2116,6 @@ def test_build_serializer_input_class_rejects_non_nested_config_items() -> None:
 
 def test_resolve_injected_field_specs_unknown_field_raises_configuration_error() -> None:
     """resolve_injected_field_specs raises ConfigurationError when an injected field is missing."""
-    from django_strawberry_framework.rest_framework.inputs import resolve_injected_field_specs
 
     class S(serializers.Serializer[object]):
         a = serializers.CharField()
@@ -2167,7 +2143,6 @@ def test_build_serializer_inputs_preserves_optional_fields_one_shot_iterator() -
 
 def test_validate_nested_config_keys_not_a_mapping() -> None:
     """A non-mapping ``Meta.nested_fields`` is a ConfigurationError, not a silent skip."""
-    from django_strawberry_framework.rest_framework.inputs import validate_nested_config_keys
 
     class S(serializers.Serializer[object]):
         pass

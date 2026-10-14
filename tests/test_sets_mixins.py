@@ -18,20 +18,40 @@ empty-input no-ops live in ``examples/fakeshop/test_query/test_library_api.py``,
 ``test_kanban_api.py`` (``CardOrderInputType``).
 """
 
+import types
 from collections.abc import Iterator
+from dataclasses import dataclass, replace
 from typing import NoReturn
 
 import pytest
 from apps.library import models as library_models
+from apps.library.filters import BookFilter
+from apps.library.models import Book
+from django.db.models import Model
+from strawberry import UNSET
+from strawberry import UNSET as _UNSET
 from typing_extensions import override
 
+import django_strawberry_framework.filters.sets as filter_sets
+import django_strawberry_framework.orders.inputs as order_inputs
+import django_strawberry_framework.sets_mixins as sm
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.filters import FilterSet, RelatedFilter
+from django_strawberry_framework.filters.inputs import _field_specs as _filter_specs
 from django_strawberry_framework.orders import OrderSet, RelatedOrder
+from django_strawberry_framework.orders.inputs import _field_specs as _order_specs
 from django_strawberry_framework.sets_mixins import (
+    ActiveInputPermissionAttrs,
     ActiveInputPermissionMixin,
+    ClassBasedTypeNameMixin,
+    LazyRelatedClassMixin,
+    RelatedSetTargetMixin,
+    SetLifecycleAttrs,
+    collect_related_declarations,
+    expanded_once,
     is_re_readable_field_declaration,
     require_re_readable_field_declaration,
+    should_cache_expansion,
 )
 from django_strawberry_framework.utils.input_values import SetInputTraversal
 from django_strawberry_framework.utils.inputs import GeneratedInputFieldSpec
@@ -96,8 +116,6 @@ def test_permission_fallback_path_is_the_family_remap_hook() -> None:
     mapping spelling the head (``shelf__home_branch``) or its input attr
     (``shelf_home_branch``) gates on the same path. A key naming no head gates on itself.
     """
-    from apps.library.filters import BookFilter
-
     assert BookFilter._permission_fallback_path("shelf__home_branch") == "shelf__home_branch"
     assert BookFilter._permission_fallback_path("shelf_home_branch") == "shelf__home_branch"
     assert BookFilter._permission_fallback_path("shelf_code") == "shelf__code"
@@ -118,8 +136,6 @@ def test_apply_pipelines_remain_family_owned() -> None:
 
 def test_sets_mixins_all_exports_are_complete() -> None:
     """``__all__`` names every public symbol. A request cannot prove absence of extras."""
-    import django_strawberry_framework.sets_mixins as sm
-
     assert "should_cache_expansion" in sm.__all__
     for symbol in sm.__all__:
         assert hasattr(sm, symbol), f"Symbol {symbol!r} in __all__ but not in sets_mixins"
@@ -131,9 +147,6 @@ def test_should_cache_expansion_gates_on_dict_and_unresolved_strings() -> None:
     Expansion cache is class-creation state; a request cannot see whether a
     half-resolved related target was cached.
     """
-    import types
-
-    from django_strawberry_framework.sets_mixins import should_cache_expansion
 
     class _MockTarget:
         pass
@@ -192,10 +205,6 @@ def test_class_based_type_name_mixin() -> None:
     ``BranchOrderInputType``, ``CardOrderInputType``). Custom suffixes and a
     field path with no word characters never reach a schema.
     """
-    import pytest
-
-    from django_strawberry_framework.exceptions import ConfigurationError
-    from django_strawberry_framework.sets_mixins import ClassBasedTypeNameMixin
 
     class _SampleSet(ClassBasedTypeNameMixin):
         _root_type_suffix = "RootType"
@@ -227,10 +236,6 @@ def test_lazy_related_class_mixin() -> None:
     (``test_book_genres_uses_absolute_import_path_related_filter`` is the
     consumer path, not this resolver).
     """
-    import pytest
-
-    from django_strawberry_framework.sets_mixins import LazyRelatedClassMixin
-
     mixin = LazyRelatedClassMixin()
     # Class object passed through
     assert mixin.resolve_lazy_class(_ModuleScopedTargetClass, None) is _ModuleScopedTargetClass
@@ -243,7 +248,6 @@ def test_lazy_related_class_mixin() -> None:
 
     # Absolute import string resolved
     resolved = mixin.resolve_lazy_class("django.db.models.Model", None)
-    from django.db.models import Model
 
     assert resolved is Model
 
@@ -262,7 +266,6 @@ def test_related_set_target_mixin() -> None:
     Bind/lazy machinery has no wire shape; family type gates are the next two
     rows and the shipped ``RelatedFilter`` / ``RelatedOrder`` overrides.
     """
-    from django_strawberry_framework.sets_mixins import RelatedSetTargetMixin
 
     class _TargetStub:
         pass
@@ -316,9 +319,6 @@ def test_related_set_target_mixin_hook_is_abstract_without_a_family_validator() 
     the mixin fires: a future set family that forgets to supply it fails at
     first resolved read instead of silently accepting any target.
     """
-    import pytest
-
-    from django_strawberry_framework.sets_mixins import RelatedSetTargetMixin
 
     class _Hookless(RelatedSetTargetMixin):
         _target_attr = "_target"
@@ -339,10 +339,6 @@ def test_related_set_target_mixin_gates_resolved_targets_at_the_seam() -> None:
     resolved target is rejected at the shared seam, and the ``None``
     placeholder passes through without consulting the validator.
     """
-    import pytest
-
-    from django_strawberry_framework.exceptions import ConfigurationError
-    from django_strawberry_framework.sets_mixins import RelatedSetTargetMixin
 
     class _FamilyTarget:
         pass
@@ -381,10 +377,6 @@ def test_both_families_supply_their_own_target_validator() -> None:
     Identity of the override vs the mixin's abstract ``NotImplementedError``.
     A request never sees a hookless ``RelatedFilter``.
     """
-    from django_strawberry_framework.filters.base import RelatedFilter
-    from django_strawberry_framework.orders.base import RelatedOrder
-    from django_strawberry_framework.sets_mixins import RelatedSetTargetMixin
-
     mixin_hook = _unbound(RelatedSetTargetMixin, "_validate_target")
     assert _unbound(RelatedFilter, "_validate_target") is not mixin_hook
     assert _unbound(RelatedOrder, "_validate_target") is not mixin_hook
@@ -396,10 +388,6 @@ def test_collect_related_declarations() -> None:
     Declaration maps are class-creation; live related-filter/order rows use
     already-collected shipped sets.
     """
-    from django_strawberry_framework.sets_mixins import (
-        RelatedSetTargetMixin,
-        collect_related_declarations,
-    )
 
     class _Decl(RelatedSetTargetMixin):
         _target_attr = "_t"
@@ -437,7 +425,6 @@ def test_expanded_once() -> None:
     Class-level cache/guard; a request cannot tell a cached expansion from a
     fresh one except by stale related-target bugs this gate exists to prevent.
     """
-    from django_strawberry_framework.sets_mixins import expanded_once
 
     class _ProbeSet:
         # The slot ``cache_attr`` names; a bare annotation adds nothing to ``__dict__``.
@@ -489,8 +476,6 @@ def test_set_lifecycle_attrs() -> None:
 
     Attr-name descriptor consumed by ``registry.clear()``. No wire shape.
     """
-    from django_strawberry_framework.sets_mixins import SetLifecycleAttrs
-
     lifecycle = SetLifecycleAttrs(
         owner="_owner",
         cache="_cache",
@@ -518,10 +503,6 @@ def test_active_input_permission_mixin_hooks() -> None:
     ``test_library_branches_order_empty_list_and_null_direction_no_op``).
     This pin is that the mixin hooks exist as overridable no-ops.
     """
-    from django_strawberry_framework.sets_mixins import (
-        ActiveInputPermissionAttrs,
-        ActiveInputPermissionMixin,
-    )
 
     class _ProbePermissionSet(ActiveInputPermissionMixin):
         _permission = ActiveInputPermissionAttrs(
@@ -551,9 +532,6 @@ def test_active_input_permission_mixin_hooks() -> None:
 
 def test_lazy_related_class_mixin_fallback_and_non_class_types() -> None:
     """Non-class values pass through; an unresolvable relative string raises ImportError."""
-    import pytest
-
-    from django_strawberry_framework.sets_mixins import LazyRelatedClassMixin
 
     class _Scope:
         pass
@@ -571,9 +549,6 @@ def test_lazy_related_class_mixin_fallback_and_non_class_types() -> None:
 
 def test_expanded_once_resets_guard_on_exception() -> None:
     """``expanded_once`` clears the reentry guard in ``finally`` after ``build`` raises."""
-    import pytest
-
-    from django_strawberry_framework.sets_mixins import expanded_once
 
     class _ErrorSet:
         _guard = False
@@ -599,10 +574,6 @@ def test_collect_related_declarations_diamond_tombstone() -> None:
 
     Diamond MRO at metaclass collect time. No GraphQL spelling.
     """
-    from django_strawberry_framework.sets_mixins import (
-        RelatedSetTargetMixin,
-        collect_related_declarations,
-    )
 
     class _Decl(RelatedSetTargetMixin):
         _target_attr = "_t"
@@ -637,10 +608,6 @@ def test_collect_related_declarations_diamond_tombstone() -> None:
 
 def test_collect_related_declarations_base_declarations_precedence() -> None:
     """A non-related entry in ``base_declarations_attr`` shadows a related declaration."""
-    from django_strawberry_framework.sets_mixins import (
-        RelatedSetTargetMixin,
-        collect_related_declarations,
-    )
 
     class _Decl(RelatedSetTargetMixin):
         _target_attr = "_t"
@@ -684,13 +651,6 @@ def test_active_input_permission_mixin_field_paths_and_branches() -> None:
     ``test_order_check_permission_denies_active_related_branch``). This pin is
     the walker return values themselves.
     """
-    import types
-    from dataclasses import dataclass
-
-    from django_strawberry_framework.sets_mixins import (
-        ActiveInputPermissionAttrs,
-        ActiveInputPermissionMixin,
-    )
 
     class _OtherSet(OrderSet):
         pass
@@ -761,11 +721,6 @@ def test_family_input_traversal_is_derived_from_the_permission_config() -> None:
     ``and``/``or``/``not`` and list ``orderBy`` are live; ``field_specs is``
     identity is not.
     """
-    from strawberry import UNSET as _UNSET
-
-    from django_strawberry_framework.filters.inputs import _field_specs as _filter_specs
-    from django_strawberry_framework.orders.inputs import _field_specs as _order_specs
-
     filter_traversal = FilterSet._input_traversal()
     assert isinstance(filter_traversal, SetInputTraversal)
     assert filter_traversal.related_attr == "related_filters"
@@ -790,9 +745,6 @@ def test_order_normalizer_consumes_the_family_permission_traversal(
     Monkeypatch of the helper; a request cannot observe which config object
     was passed. Order apply itself is live.
     """
-    import django_strawberry_framework.orders.inputs as order_inputs
-    from django_strawberry_framework.sets_mixins import ActiveInputPermissionAttrs
-
     sentinel = object()
     captured: dict[str, SetInputTraversal] = {}
 
@@ -842,8 +794,6 @@ def test_filter_normalizer_consumes_the_family_permission_traversal(
     replaces an assertion that a module-level singleton NAME was absent, which
     any differently-named singleton would also have satisfied.
     """
-    import django_strawberry_framework.filters.sets as filter_sets
-
     captured = {}
 
     def _spy(
@@ -870,11 +820,6 @@ def test_filter_normalizer_honors_a_subclass_unset_sentinel_override() -> None:
     GraphQL omitted fields are always ``UNSET``; a custom Python sentinel
     cannot appear on the wire.
     """
-    from dataclasses import replace
-
-    from apps.library.models import Book
-    from strawberry import UNSET
-
     marker = object()
 
     class _SentinelOverrideFilter(FilterSet):

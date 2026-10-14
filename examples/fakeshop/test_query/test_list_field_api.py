@@ -22,7 +22,7 @@ from apps.library import models as library_models
 from apps.library import schema as library_schema
 from apps.library.orders import BranchOrder
 from apps.products import schema as products_schema
-from apps.products.services import seed_data
+from apps.products.services import seed_cascade_split, seed_data
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import connection, models
@@ -3928,8 +3928,6 @@ def test_a_policy_a_resolver_widened_does_not_outlive_its_own_request(
 @pytest.mark.django_db
 def test_holder_item_list_field_drops_rows_under_a_hidden_category() -> None:
     """``DjangoListField`` over ``ItemType`` applies the cascade inside ``get_queryset``."""
-    from apps.products.services import seed_cascade_split
-
     chain = seed_cascade_split()
 
     @strawberry.type

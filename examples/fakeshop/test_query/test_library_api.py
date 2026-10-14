@@ -20,12 +20,15 @@ from typing import TYPE_CHECKING, NamedTuple, TypeAlias, cast
 import pytest
 import strawberry
 from apps.library import models
+from apps.library import schema as library_schema
 from apps.library.filters_genre import GenreFilter
 from apps.products.services import create_users
 from asgiref.sync import sync_to_async
+from config import schema as config_schema
 from django.conf import settings
-from django.contrib.auth.models import User
-from django.db import connection
+from django.contrib.auth.models import Permission, User
+from django.contrib.contenttypes.models import ContentType
+from django.db import connection, transaction
 from django.db.models import Model, QuerySet
 from django.http import HttpRequest
 from django.http.response import HttpResponseBase
@@ -36,17 +39,24 @@ from graphql_client import JSONObject
 from graphql_client import assert_graphql_data as _assert_graphql_data
 from graphql_client import post_graphql as _post_graphql
 from strawberry import relay
+from strawberry.types import Info
 from typing_extensions import override
 
 from django_strawberry_framework import (
     DjangoConnection,
     DjangoConnectionField,
+    DjangoListField,
     DjangoNodesField,
+    DjangoOptimizerExtension,
     DjangoSchema,
     DjangoType,
+    OptimizerHint,
+    finalize_django_types,
     strawberry_config,
 )
+from django_strawberry_framework.filters import FilterInput, FilterSet, GlobalIDFilter
 from django_strawberry_framework.permissions import apply_cascade_permissions
+from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing import AsyncTestClient, TestClient
 from django_strawberry_framework.testing.relay import decode_global_id, global_id_for
 from django_strawberry_framework.utils._queryset_private import (
@@ -986,9 +996,7 @@ def test_sliced_book_hook_on_plain_list_relation_is_refused_over_http(
     produces. The capture proves the refusal happens at plan time: no book query
     ran at all.
     """
-    from apps.library.schema import BookType
-
-    monkeypatch.setattr(BookType, "get_queryset", classmethod(_sliced_book_hook))
+    monkeypatch.setattr(library_schema.BookType, "get_queryset", classmethod(_sliced_book_hook))
     _seed_library_graph()
 
     with CaptureQueriesContext(connection) as captured:
@@ -1020,9 +1028,7 @@ def test_sliced_book_hook_on_nested_connection_is_refused_at_resolve_time(
     defect. The distinguishing evidence is WHERE: the parent genre query has already
     run, where the list-relation row refuses before any query at all.
     """
-    from apps.library.schema import BookType
-
-    monkeypatch.setattr(BookType, "get_queryset", classmethod(_sliced_book_hook))
+    monkeypatch.setattr(library_schema.BookType, "get_queryset", classmethod(_sliced_book_hook))
     _seed_library_graph()
 
     with CaptureQueriesContext(connection) as captured:
@@ -1307,9 +1313,8 @@ def test_library_relay_node_global_id_round_trips() -> None:
     assert type_name == models.Genre._meta.label_lower
     assert node_id == str(genre.pk)
     assert genres[0]["name"] == "Speculative"
-    from apps.library.schema import GenreType
 
-    assert genres[0]["id"] == global_id_for(GenreType, genre.pk)
+    assert genres[0]["id"] == global_id_for(library_schema.GenreType, genre.pk)
 
 
 # ---------------------------------------------------------------------------
@@ -1660,8 +1665,6 @@ def test_library_undeclared_relation_key_answers_as_if_hidden_rows_were_absent_o
     with those rows present prove the hidden row is the only link. Flat and
     nested spellings through the declared ``branch`` hop agree.
     """
-    from django.db import transaction
-
     query, hidden_key = _UNDECLARED_RELATION_SPELLINGS[spelling]
     pk = _seed_undeclared_relation_world()[hidden_key].pk
     staff = User.objects.create_user(username="staff", password="pw", is_staff=True)
@@ -2125,8 +2128,6 @@ def test_library_all_fields_filterset_filters_by_forward_relation_pks_over_http(
     hidden from the anonymous request by the desk's own visibility cascade, so its
     shelf's pk matches nothing, the same answer as a pk no shelf carries.
     """
-    from django.contrib.contenttypes.models import ContentType
-
     branch = models.Branch.objects.create(name="Home", city="Boston")
     open_shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
     other_shelf = models.Shelf.objects.create(code="B-2", topic="general", branch=branch)
@@ -2300,8 +2301,6 @@ def test_relay_relation_isnull_is_boolean_not_globalid_list_over_http() -> None:
     is never a GlobalID). ``true`` matches books with no genres; ``false``
     matches books with at least one; a string literal is rejected.
     """
-    from django_strawberry_framework.registry import registry
-
     branch = models.Branch.objects.create(name="IsNull Branch", city="Boston")
     shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
     genre = models.Genre.objects.create(name="Speculative")
@@ -3875,8 +3874,6 @@ def test_relay_global_id_filter_through_a_relation_primary_key_validates_the_ter
     type mismatch, and a well-typed id whose node id is not an integer is the
     coded ``GLOBALID_INVALID`` rejection rather than a raw Django ``ValueError``.
     """
-    from django_strawberry_framework.registry import registry
-
     _ada, ada_card = _relation_pk_global_id_rows()
     card_label = models.MembershipCard._meta.label_lower
     right = str(relay.GlobalID(type_name=card_label, node_id=str(ada_card.pk)))
@@ -3914,8 +3911,6 @@ def test_relay_global_id_filter_on_a_relation_primary_key_validates_its_target()
     so its Meta.fields ``exact`` leaf carries a ``library.patron`` id, never a
     ``library.patronprofile`` one.
     """
-    from django_strawberry_framework.registry import registry
-
     ada, _ada_card = _relation_pk_global_id_rows()
     right = str(relay.GlobalID(type_name=models.Patron._meta.label_lower, node_id=str(ada.pk)))
     profile_label = models.PatronProfile._meta.label_lower
@@ -5416,7 +5411,6 @@ def test_secondary_book_global_id_refetches_as_primary_book_type_over_http(
 
     with override_settings(FAKESHOP_TEST_RELAY_SECONDARY_NODE=True):
         project_schema_override()
-        from apps.library.schema import BookType, NullabilityOverrideBookType
 
         listed = _post_graphql(
             """
@@ -5432,14 +5426,14 @@ def test_secondary_book_global_id_refetches_as_primary_book_type_over_http(
         assert len(rows) == 1
         emitted = rows[0]["id"]
         assert rows[0]["title"] == "Parable of the Sower"
-        assert emitted == global_id_for(NullabilityOverrideBookType, book.pk)
-        assert emitted == global_id_for(BookType, book.pk)
+        assert emitted == global_id_for(library_schema.NullabilityOverrideBookType, book.pk)
+        assert emitted == global_id_for(library_schema.BookType, book.pk)
         type_name, node_id = _decode_global_id(emitted)
         assert type_name == models.Book._meta.label_lower
         assert node_id == str(book.pk)
         # The one decode primitive ``node(id:)`` shares routes the model-label
         # payload to the PRIMARY type object, never to the secondary that minted it.
-        assert decode_global_id(emitted) == (BookType, str(book.pk))
+        assert decode_global_id(emitted) == (library_schema.BookType, str(book.pk))
 
         as_primary = _post_node(
             emitted,
@@ -7134,9 +7128,8 @@ def _holder_graphql_view(request: HttpRequest) -> HttpResponseBase:
 
 
 async def _async_shipped_graphql_view(request: HttpRequest) -> HttpResponseBase:
-    from config.schema import schema
 
-    return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
+    return await AsyncDjangoGraphQLView.as_view(schema=config_schema.schema)(request)
 
 
 async def _async_holder_graphql_view(request: HttpRequest) -> HttpResponseBase:
@@ -7171,12 +7164,11 @@ def _async_genre_connection_holder_schema() -> DjangoSchema:
     ``GenreType`` it composes.
     """
     importlib.import_module("config.schema")
-    from apps.library.schema import GenreType
 
     @strawberry.type
     class Query:
-        genres: DjangoConnection[GenreType] = DjangoConnectionField(
-            GenreType,
+        genres: DjangoConnection[library_schema.GenreType] = DjangoConnectionField(
+            library_schema.GenreType,
             resolver=_async_genres_resolver,
         )
 
@@ -7233,11 +7225,6 @@ def _relay_relation_isnull_holder_schema() -> strawberry.Schema:
     ``isnull`` / ``exact`` bag would collide. This holder is the consumer
     surface that declares the relation lookups without a RelatedFilter.
     """
-    from strawberry.types import Info
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-    from django_strawberry_framework.filters import FilterInput, FilterSet
-    from django_strawberry_framework.registry import registry
 
     class HolderRelayIsnullGenreType(DjangoType):
         class Meta:
@@ -7287,11 +7274,6 @@ def _relation_pk_global_id_holder_schema() -> strawberry.Schema:
     a Meta.fields relation lookup), ``card`` (``patron__card``) and ``pkCard``
     (``pk__card``, the same hop spelled through the ``pk`` alias).
     """
-    from strawberry.types import Info
-
-    from django_strawberry_framework import finalize_django_types
-    from django_strawberry_framework.filters import FilterInput, FilterSet, GlobalIDFilter
-    from django_strawberry_framework.registry import registry
 
     class HolderRelationPkCardType(DjangoType):
         class Meta:
@@ -7352,13 +7334,6 @@ def test_generic_relation_tags_resolve_over_http_with_optimizer() -> None:
     claim: the generic relation is prefetched, so the two branches read the tag
     table once between them rather than once each.
     """
-    from django_strawberry_framework import (
-        DjangoOptimizerExtension,
-        DjangoType,
-        finalize_django_types,
-    )
-    from django_strawberry_framework.registry import registry
-
     branch = models.Branch.objects.create(name="GfkHolder", city="Boston")
     tag_row = models.TaggedItem.objects.create(content_object=branch, tag="public")
     other_branch = models.Branch.objects.create(name="GfkHolderTwo", city="Salem")
@@ -7473,23 +7448,20 @@ def _hostile_book_hook(
 
 def _typed_genre_nodes_schema() -> strawberry.Schema:
     """Holder schema whose only root field is typed ``DjangoNodesField(GenreType)``."""
-    from apps.library.schema import GenreType
 
     @strawberry.type
     class Query:
-        genres: list[GenreType | None] = DjangoNodesField(GenreType)
+        genres: list[library_schema.GenreType | None] = DjangoNodesField(library_schema.GenreType)
 
     return strawberry.Schema(query=Query, config=strawberry_config())
 
 
 def _patch_book_cascade(monkeypatch: pytest.MonkeyPatch) -> None:
     """Compose ``BookType.get_queryset`` with ``apply_cascade_permissions`` (shelf visibility)."""
-    from apps.library.schema import BookType
-
-    original = BookType.get_queryset.__func__
+    original = library_schema.BookType.get_queryset.__func__
 
     def _cascading(
-        cls: type[BookType],
+        cls: type[library_schema.BookType],
         queryset: QuerySet[models.Book],
         info: strawberry.Info[object, object],
         **kwargs: object,
@@ -7497,7 +7469,7 @@ def _patch_book_cascade(monkeypatch: pytest.MonkeyPatch) -> None:
         del kwargs
         return apply_cascade_permissions(cls, original(cls, queryset, info), info)
 
-    monkeypatch.setattr(BookType, "get_queryset", classmethod(_cascading))
+    monkeypatch.setattr(library_schema.BookType, "get_queryset", classmethod(_cascading))
 
 
 def _seed_cascade_visible_and_hidden_books() -> tuple[models.Book, models.Book]:
@@ -7541,10 +7513,8 @@ def test_node_refetch_genre() -> None:
 @pytest.mark.django_db
 def test_typed_node_field_live() -> None:
     """The typed ``genre(id:)`` field resolves a genre GlobalID to the row."""
-    from apps.library.schema import GenreType
-
     genre = models.Genre.objects.create(name="Speculative")
-    gid = global_id_for(GenreType, genre.pk)
+    gid = global_id_for(library_schema.GenreType, genre.pk)
 
     response = _post_graphql(f'query {{ genre(id: "{gid}") {{ id name }} }}')
     assert response.status_code == 200
@@ -7563,10 +7533,8 @@ def test_typed_node_field_mismatch_live() -> None:
     assigned code, and this id decoded fine - and the nullable field itself
     carries ``null`` beneath the error.
     """
-    from apps.library.schema import BookType
-
     book = models.Book.objects.create(title="Kindred", shelf=_seed_shelf())
-    book_gid = global_id_for(BookType, book.pk)
+    book_gid = global_id_for(library_schema.BookType, book.pk)
 
     response = _post_graphql(f'query {{ genre(id: "{book_gid}") {{ name }} }}')
     assert response.status_code == 200
@@ -7623,12 +7591,10 @@ def test_node_uncoercible_pk_live() -> None:
 @pytest.mark.django_db
 def test_node_missing_row_null_live() -> None:
     """A well-formed id for a nonexistent row resolves to null with NO error over HTTP."""
-    from apps.library.schema import BookType
-
     shelf = _seed_shelf()
     book = models.Book.objects.create(title="ExistingBook", shelf=shelf)
     missing_pk = book.pk + 9999
-    missing_gid = global_id_for(BookType, missing_pk)
+    missing_gid = global_id_for(library_schema.BookType, missing_pk)
     payload = _post_node(missing_gid, "... on BookType { title }")
     assert "errors" not in payload, payload
     assert payload["data"] == {"node": None}
@@ -7637,8 +7603,6 @@ def test_node_missing_row_null_live() -> None:
 @pytest.mark.django_db
 def test_node_hidden_and_missing_issue_equal_queries_live() -> None:
     """Hidden and missing refetches issue the SAME query count (no existence oracle)."""
-    from apps.library.schema import BookType
-
     shelf = _seed_shelf()
     visible = models.Book.objects.create(title="VisibleBook", shelf=shelf)
     hidden = models.Book.objects.create(
@@ -7647,8 +7611,8 @@ def test_node_hidden_and_missing_issue_equal_queries_live() -> None:
         circulation_status=models.Book.CirculationStatus.REPAIR,
     )
     missing_pk = max(visible.pk, hidden.pk) + 9999
-    hidden_gid = global_id_for(BookType, hidden.pk)
-    missing_gid = global_id_for(BookType, missing_pk)
+    hidden_gid = global_id_for(library_schema.BookType, hidden.pk)
+    missing_gid = global_id_for(library_schema.BookType, missing_pk)
 
     with CaptureQueriesContext(connection) as hidden_captured:
         hidden_payload = _post_node(hidden_gid, "... on BookType { title }")
@@ -7677,8 +7641,6 @@ def test_nodes_batch_mixed_types_order_and_null() -> None:
     that distinction by shifting positions. The uncoercible literal never poisons
     the batch ``pk__in``.
     """
-    from apps.library.schema import BookType, GenreType
-
     shelf = _seed_shelf()
     genre = models.Genre.objects.create(name="Speculative")
     book = models.Book.objects.create(title="Kindred", shelf=shelf)
@@ -7688,11 +7650,11 @@ def test_nodes_batch_mixed_types_order_and_null() -> None:
         circulation_status=models.Book.CirculationStatus.REPAIR,
     )
     ids = (
-        global_id_for(GenreType, genre.pk),
-        global_id_for(GenreType, 999999),
+        global_id_for(library_schema.GenreType, genre.pk),
+        global_id_for(library_schema.GenreType, 999999),
         str(relay.GlobalID("library.genre", "abc")),
-        global_id_for(BookType, book.pk),
-        global_id_for(BookType, hidden_book.pk),
+        global_id_for(library_schema.BookType, book.pk),
+        global_id_for(library_schema.BookType, hidden_book.pk),
     )
     document = _nodes_query(ids)
 
@@ -7729,10 +7691,8 @@ def test_nodes_duplicates_and_empty_live() -> None:
     before any per-type fetch: a genre row exists, and no query touches its
     table.
     """
-    from apps.library.schema import GenreType
-
     genre = models.Genre.objects.create(name="Speculative")
-    gid = global_id_for(GenreType, genre.pk)
+    gid = global_id_for(library_schema.GenreType, genre.pk)
 
     duplicated = _post_graphql(
         f'query {{ nodes(ids: ["{gid}", "{gid}"]) {{ ... on GenreType {{ name }} }} }}',
@@ -7760,10 +7720,8 @@ def test_nodes_malformed_id_mid_batch_live() -> None:
     ``GLOBALID_INVALID`` is not absorbed into a positional ``null`` hole; the
     non-null list nulls the enclosing ``data``.
     """
-    from apps.library.schema import GenreType
-
     genre = models.Genre.objects.create(name="Speculative")
-    gid = global_id_for(GenreType, genre.pk)
+    gid = global_id_for(library_schema.GenreType, genre.pk)
     response = _post_graphql(
         "query ($ids: [ID!]!) { nodes(ids: $ids) { __typename } }",
         variables={"ids": [gid, "this-is-not-base64"]},
@@ -7784,17 +7742,15 @@ def test_nodes_batches_per_type_live() -> None:
     Two genre ids around one book id still produce one ``library_genre`` fetch
     and one ``library_book`` fetch - the per-decoded-type batch, not per id.
     """
-    from apps.library.schema import BookType, GenreType
-
     shelf = _seed_shelf()
     first = models.Genre.objects.create(name="Alpha")
     second = models.Genre.objects.create(name="Beta")
     book = models.Book.objects.create(title="Kindred", shelf=shelf)
     document = _nodes_query(
         (
-            global_id_for(GenreType, first.pk),
-            global_id_for(BookType, book.pk),
-            global_id_for(GenreType, second.pk),
+            global_id_for(library_schema.GenreType, first.pk),
+            global_id_for(library_schema.BookType, book.pk),
+            global_id_for(library_schema.GenreType, second.pk),
         ),
     )
 
@@ -7821,8 +7777,6 @@ def test_nodes_hidden_and_missing_issue_equal_per_table_queries() -> None:
     requests issue exactly one ``library_genre`` query and one ``library_book``
     query, and both payloads are ``[genre, null]``.
     """
-    from apps.library.schema import BookType, GenreType
-
     shelf = _seed_shelf()
     genre = models.Genre.objects.create(name="Speculative")
     hidden = models.Book.objects.create(
@@ -7830,9 +7784,9 @@ def test_nodes_hidden_and_missing_issue_equal_per_table_queries() -> None:
         shelf=shelf,
         circulation_status=models.Book.CirculationStatus.REPAIR,
     )
-    genre_gid = global_id_for(GenreType, genre.pk)
-    hidden_doc = _nodes_query((genre_gid, global_id_for(BookType, hidden.pk)))
-    missing_doc = _nodes_query((genre_gid, global_id_for(BookType, 999999)))
+    genre_gid = global_id_for(library_schema.GenreType, genre.pk)
+    hidden_doc = _nodes_query((genre_gid, global_id_for(library_schema.BookType, hidden.pk)))
+    missing_doc = _nodes_query((genre_gid, global_id_for(library_schema.BookType, 999999)))
 
     with CaptureQueriesContext(connection) as hidden_captured:
         hidden_response = _post_graphql(hidden_doc)
@@ -7864,15 +7818,16 @@ def test_typed_nodes_field_resolves_targets_live() -> None:
     The shipped query exposes typed ``genre(id:)`` only, so this rides the
     ``/graphql-test/`` holder.
     """
-    from apps.library.schema import GenreType
-
     first = models.Genre.objects.create(name="Alpha")
     second = models.Genre.objects.create(name="Beta")
     response = _post_holder(
         _typed_genre_nodes_schema(),
         "query ($ids: [ID!]!) { genres(ids: $ids) { name } }",
         variables={
-            "ids": [global_id_for(GenreType, second.pk), global_id_for(GenreType, first.pk)],
+            "ids": [
+                global_id_for(library_schema.GenreType, second.pk),
+                global_id_for(library_schema.GenreType, first.pk),
+            ],
         },
     )
     assert response.status_code == 200
@@ -7889,15 +7844,16 @@ def test_typed_nodes_field_mismatch_live() -> None:
     id is a client bug surfaced loudly, never a per-position ``null``. The
     error carries no ``extensions`` code, and the non-null list nulls ``data``.
     """
-    from apps.library.schema import BookType, GenreType
-
     genre = models.Genre.objects.create(name="Speculative")
     book = models.Book.objects.create(title="Kindred", shelf=_seed_shelf())
     response = _post_holder(
         _typed_genre_nodes_schema(),
         "query ($ids: [ID!]!) { genres(ids: $ids) { name } }",
         variables={
-            "ids": [global_id_for(GenreType, genre.pk), global_id_for(BookType, book.pk)],
+            "ids": [
+                global_id_for(library_schema.GenreType, genre.pk),
+                global_id_for(library_schema.BookType, book.pk),
+            ],
         },
     )
     assert response.status_code == 200
@@ -7912,10 +7868,8 @@ def test_typed_nodes_field_mismatch_live() -> None:
 @pytest.mark.django_db(transaction=True)
 async def test_node_refetch_genre_async() -> None:
     """The shipped ``node(id:)`` refetches a Genre GlobalID over ``/graphql-async/``."""
-    from apps.library.schema import GenreType
-
     genre = await models.Genre.objects.acreate(name="Speculative")
-    gid = global_id_for(GenreType, genre.pk)
+    gid = global_id_for(library_schema.GenreType, genre.pk)
     payload = await _post_async_shipped(
         f'query {{ node(id: "{gid}") {{ __typename ... on GenreType {{ name }} }} }}',
     )
@@ -7941,8 +7895,6 @@ async def test_genres_connection_filter_applies_async() -> None:
 @pytest.mark.django_db(transaction=True)
 async def test_nodes_batch_mixed_types_async() -> None:
     """``nodes(ids:)`` over ``/graphql-async/`` preserves order across GenreType and BookType."""
-    from apps.library.schema import BookType, GenreType
-
     branch = await models.Branch.objects.acreate(name="Relay", city="Boston")
     shelf = await models.Shelf.objects.acreate(
         code="R-async",
@@ -7952,7 +7904,10 @@ async def test_nodes_batch_mixed_types_async() -> None:
     genre = await models.Genre.objects.acreate(name="Speculative")
     book = await models.Book.objects.acreate(title="Kindred", shelf=shelf)
     document = _nodes_query(
-        (global_id_for(BookType, book.pk), global_id_for(GenreType, genre.pk)),
+        (
+            global_id_for(library_schema.BookType, book.pk),
+            global_id_for(library_schema.GenreType, genre.pk),
+        ),
     )
     payload = await _post_async_shipped(document)
     assert "errors" not in payload, payload
@@ -9415,14 +9370,12 @@ def test_node_hidden_row_null_live() -> None:
     VISIBILITY outcome indistinguishable from a missing row (no errors
     entry), and the same id resolves for a staff request.
     """
-    from apps.library.schema import BookType
-
     book = models.Book.objects.create(
         title="Withdrawn",
         circulation_status=models.Book.CirculationStatus.REPAIR,
         shelf=_seed_shelf(),
     )
-    gid = global_id_for(BookType, book.pk)
+    gid = global_id_for(library_schema.BookType, book.pk)
 
     anonymous = _post_node(gid, "... on BookType { title }")
     assert "errors" not in anonymous, anonymous
@@ -9445,9 +9398,7 @@ def test_node_hostile_subclass_hook_is_sealed_sync(monkeypatch: pytest.MonkeyPat
     predicate-erasing ``.filter()`` and synthetic ``.first()`` / ``.get()``
     overrides never dispatch on the sealed plain queryset.
     """
-    from apps.library.schema import BookType
-
-    monkeypatch.setattr(BookType, "get_queryset", classmethod(_hostile_book_hook))
+    monkeypatch.setattr(library_schema.BookType, "get_queryset", classmethod(_hostile_book_hook))
     shelf = _seed_shelf()
     public = models.Book.objects.create(title="Kindred", shelf=shelf)
     private = models.Book.objects.create(
@@ -9456,11 +9407,17 @@ def test_node_hostile_subclass_hook_is_sealed_sync(monkeypatch: pytest.MonkeyPat
         circulation_status=models.Book.CirculationStatus.REPAIR,
     )
 
-    hidden = _post_node(global_id_for(BookType, private.pk), "... on BookType { title }")
+    hidden = _post_node(
+        global_id_for(library_schema.BookType, private.pk),
+        "... on BookType { title }",
+    )
     assert "errors" not in hidden, hidden
     assert hidden["data"]["node"] is None
 
-    visible = _post_node(global_id_for(BookType, public.pk), "... on BookType { title }")
+    visible = _post_node(
+        global_id_for(library_schema.BookType, public.pk),
+        "... on BookType { title }",
+    )
     assert "errors" not in visible, visible
     assert visible["data"]["node"] == {"title": "Kindred"}
 
@@ -9468,9 +9425,7 @@ def test_node_hostile_subclass_hook_is_sealed_sync(monkeypatch: pytest.MonkeyPat
 @pytest.mark.django_db(transaction=True)
 async def test_node_hostile_subclass_hook_is_sealed_async(monkeypatch: pytest.MonkeyPatch) -> None:
     """Async single-node refetch over ``/graphql-async/`` ignores synthetic ``.afirst()``."""
-    from apps.library.schema import BookType
-
-    monkeypatch.setattr(BookType, "get_queryset", classmethod(_hostile_book_hook))
+    monkeypatch.setattr(library_schema.BookType, "get_queryset", classmethod(_hostile_book_hook))
     branch = await models.Branch.objects.acreate(name="Relay", city="Boston")
     shelf = await models.Shelf.objects.acreate(
         code="R-h",
@@ -9484,14 +9439,16 @@ async def test_node_hostile_subclass_hook_is_sealed_async(monkeypatch: pytest.Mo
         circulation_status=models.Book.CirculationStatus.REPAIR,
     )
 
+    private_id = global_id_for(library_schema.BookType, private.pk)
     hidden = await _post_async_shipped(
-        f'query {{ node(id: "{global_id_for(BookType, private.pk)}") {{ ... on BookType {{ title }} }} }}',
+        f'query {{ node(id: "{private_id}") {{ ... on BookType {{ title }} }} }}',
     )
     assert "errors" not in hidden, hidden
     assert hidden["data"]["node"] is None
 
+    public_id = global_id_for(library_schema.BookType, public.pk)
     visible = await _post_async_shipped(
-        f'query {{ node(id: "{global_id_for(BookType, public.pk)}") {{ ... on BookType {{ title }} }} }}',
+        f'query {{ node(id: "{public_id}") {{ ... on BookType {{ title }} }} }}',
     )
     assert "errors" not in visible, visible
     assert visible["data"]["node"] == {"title": "Kindred"}
@@ -9506,9 +9463,7 @@ async def test_nodes_hostile_subclass_hook_is_sealed_async_aiter(
     The hidden pk becomes a positional ``null`` hole and the visible pk
     resolves - never the ``secret-from-aiter`` synthetic row.
     """
-    from apps.library.schema import BookType
-
-    monkeypatch.setattr(BookType, "get_queryset", classmethod(_hostile_book_hook))
+    monkeypatch.setattr(library_schema.BookType, "get_queryset", classmethod(_hostile_book_hook))
     branch = await models.Branch.objects.acreate(name="Relay", city="Boston")
     shelf = await models.Shelf.objects.acreate(
         code="R-ha",
@@ -9522,7 +9477,10 @@ async def test_nodes_hostile_subclass_hook_is_sealed_async_aiter(
         circulation_status=models.Book.CirculationStatus.REPAIR,
     )
     document = _nodes_query(
-        (global_id_for(BookType, private.pk), global_id_for(BookType, public.pk)),
+        (
+            global_id_for(library_schema.BookType, private.pk),
+            global_id_for(library_schema.BookType, public.pk),
+        ),
     )
     payload = await _post_async_shipped(document)
     assert "errors" not in payload, payload
@@ -9537,21 +9495,26 @@ def test_node_refetch_of_cascade_hidden_row_returns_null(monkeypatch: pytest.Mon
     ``ShelfType``'s ``topic="secret"`` filter applies across the FK. Anonymous
     callers see ``null`` with no error; staff sees the row.
     """
-    from apps.library.schema import BookType
-
     _patch_book_cascade(monkeypatch)
     visible, hidden = _seed_cascade_visible_and_hidden_books()
 
-    anonymous = _post_node(global_id_for(BookType, hidden.pk), "... on BookType { title }")
+    anonymous = _post_node(
+        global_id_for(library_schema.BookType, hidden.pk),
+        "... on BookType { title }",
+    )
     assert "errors" not in anonymous, anonymous
     assert anonymous["data"]["node"] is None
 
-    control = _post_node(global_id_for(BookType, visible.pk), "... on BookType { title }")
+    control = _post_node(
+        global_id_for(library_schema.BookType, visible.pk),
+        "... on BookType { title }",
+    )
     assert "errors" not in control, control
     assert control["data"]["node"] == {"title": "Kindred"}
 
+    hidden_id = global_id_for(library_schema.BookType, hidden.pk)
     staff = _post_graphql_as_staff(
-        f'query {{ node(id: "{global_id_for(BookType, hidden.pk)}") {{ ... on BookType {{ title }} }} }}',
+        f'query {{ node(id: "{hidden_id}") {{ ... on BookType {{ title }} }} }}',
     )
     assert staff.status_code == 200
     staff_payload = staff.json()
@@ -9566,12 +9529,13 @@ def test_nodes_batch_holes_for_cascade_hidden_rows(monkeypatch: pytest.MonkeyPat
     Staff filling that hole on the same document proves the null is visibility,
     not absence.
     """
-    from apps.library.schema import BookType
-
     _patch_book_cascade(monkeypatch)
     visible, hidden = _seed_cascade_visible_and_hidden_books()
     document = _nodes_query(
-        (global_id_for(BookType, hidden.pk), global_id_for(BookType, visible.pk)),
+        (
+            global_id_for(library_schema.BookType, hidden.pk),
+            global_id_for(library_schema.BookType, visible.pk),
+        ),
     )
 
     response = _post_graphql(document)
@@ -11101,8 +11065,6 @@ def test_update_book_via_form_partial_update_preserves_m2m_over_http() -> None:
     ``_to_form_key_value``). ``BookType`` is Relay-Node so the update ``id`` is a
     ``GlobalID``; ``title`` changes while the two genres survive untouched.
     """
-    from apps.library.schema import BookType
-
     shelf = _seed_shelf()
     genre_one = models.Genre.objects.create(name="UpdGenreOne")
     genre_two = models.Genre.objects.create(name="UpdGenreTwo")
@@ -11111,7 +11073,10 @@ def test_update_book_via_form_partial_update_preserves_m2m_over_http() -> None:
 
     response = _post_graphql(
         _UPDATE_BOOK_VIA_FORM,
-        variables={"id": global_id_for(BookType, book.pk), "d": {"title": "AfterFormTitle"}},
+        variables={
+            "id": global_id_for(library_schema.BookType, book.pk),
+            "d": {"title": "AfterFormTitle"},
+        },
     )
     assert response.status_code == 200
     payload = response.json()
@@ -11133,8 +11098,6 @@ def test_update_book_via_form_explicit_null_genres_is_form_required_error() -> N
     multi decoder. The bound ``BookGenresModelForm`` rejects the empty M2M as its
     own required-field error on ``genres``; membership is unchanged.
     """
-    from apps.library.schema import BookType
-
     shelf = _seed_shelf()
     genre = models.Genre.objects.create(name="NullGenreKeep")
     book = models.Book.objects.create(title="NullBeforeTitle", shelf=shelf)
@@ -11142,7 +11105,7 @@ def test_update_book_via_form_explicit_null_genres_is_form_required_error() -> N
 
     response = _post_graphql(
         _UPDATE_BOOK_VIA_FORM,
-        variables={"id": global_id_for(BookType, book.pk), "d": {"genres": None}},
+        variables={"id": global_id_for(library_schema.BookType, book.pk), "d": {"genres": None}},
     )
     assert response.status_code == 200
     payload = response.json()
@@ -11171,8 +11134,6 @@ def test_update_book_at_repair_desk_publishes_only_the_form_choices_over_http() 
     back through the read enum's same-named member, and ``checked_out`` is refused by enum
     coercion with the row untouched, never reaching the form as an ``invalid_choice``.
     """
-    from apps.library.schema import BookType
-
     assert _enum_member_names("BookRepairDeskFormPartialInputCirculationStatusEnum") == [
         "available",
         "repair",
@@ -11182,7 +11143,7 @@ def test_update_book_at_repair_desk_publishes_only_the_form_choices_over_http() 
         shelf=_seed_shelf(),
         circulation_status=models.Book.CirculationStatus.CHECKED_OUT,
     )
-    book_id = global_id_for(BookType, book.pk)
+    book_id = global_id_for(library_schema.BookType, book.pk)
 
     response = _post_graphql(
         _UPDATE_BOOK_AT_REPAIR_DESK,
@@ -11221,8 +11182,6 @@ def test_update_book_via_form_partial_update_preserves_optional_nullable_scalar_
     row (``_reconstruct_partial_data`` via ``model_to_dict``) rather than reset to null,
     so the seeded subtitle survives a ``title``-only change.
     """
-    from apps.library.schema import BookType
-
     shelf = _seed_shelf()
     genre = models.Genre.objects.create(name="SubtitleGenre")
     book = models.Book.objects.create(
@@ -11234,7 +11193,10 @@ def test_update_book_via_form_partial_update_preserves_optional_nullable_scalar_
 
     response = _post_graphql(
         _UPDATE_BOOK_VIA_FORM,
-        variables={"id": global_id_for(BookType, book.pk), "d": {"title": "SubAfterTitle"}},
+        variables={
+            "id": global_id_for(library_schema.BookType, book.pk),
+            "d": {"title": "SubAfterTitle"},
+        },
     )
     assert response.status_code == 200
     payload = response.json()
@@ -11412,8 +11374,6 @@ def test_create_book_via_custom_input_attaches_provided_genres() -> None:
     The model pipeline assigns the M2M after save; both given genres stick, and
     a third seeded genre that was never in the input stays off the row.
     """
-    from apps.library.schema import GenreType
-
     shelf = _seed_shelf()
     g1 = models.Genre.objects.create(name="CreateSciFi")
     g2 = models.Genre.objects.create(name="CreateFantasy")
@@ -11426,7 +11386,10 @@ def test_create_book_via_custom_input_attaches_provided_genres() -> None:
                 "title": "GenreCreateBook",
                 "subtitle": "with genres",
                 "shelfId": shelf.pk,
-                "genres": [global_id_for(GenreType, g1.pk), global_id_for(GenreType, g2.pk)],
+                "genres": [
+                    global_id_for(library_schema.GenreType, g1.pk),
+                    global_id_for(library_schema.GenreType, g2.pk),
+                ],
             },
         },
     )
@@ -11478,8 +11441,6 @@ def test_update_book_via_custom_input_saves_circulation_status_choice_value() ->
     unwrap it before ``full_clean`` / ``save``, exactly as create does; the row
     ends at ``"checked_out"``, not at the member object.
     """
-    from apps.library.schema import BookType
-
     shelf = _seed_shelf()
     book = models.Book.objects.create(
         title="ChoiceUpdateBook",
@@ -11492,7 +11453,7 @@ def test_update_book_via_custom_input_saves_circulation_status_choice_value() ->
         "mutation($id: ID!, $d: BookPartialInput!){ updateBookViaCustomInput(id:$id, data:$d){ "
         "node{ title circulationStatus } errors{ field messages } } }",
         variables={
-            "id": global_id_for(BookType, book.pk),
+            "id": global_id_for(library_schema.BookType, book.pk),
             "d": {"title": "ChoiceUpdateBook", "circulationStatus": "checked_out"},
         },
     )
@@ -11528,8 +11489,6 @@ def test_update_book_via_custom_input_genres_omit_vs_empty_list(
     Both arms send the required ``title`` (the merged partial input pins it).
     The must-not is the other arm: omit must not clear, empty must not keep.
     """
-    from apps.library.schema import BookType
-
     shelf = _seed_shelf()
     genre = models.Genre.objects.create(name="KeepGenre")
     title = "OmitKeep" if not data_extra else "EmptyClear"
@@ -11540,7 +11499,7 @@ def test_update_book_via_custom_input_genres_omit_vs_empty_list(
     response = _post_graphql(
         "mutation($id: ID!, $d: BookPartialInput!){ updateBookViaCustomInput(id:$id, data:$d){ "
         "node{ title } errors{ field messages } } }",
-        variables={"id": global_id_for(BookType, book.pk), "d": data},
+        variables={"id": global_id_for(library_schema.BookType, book.pk), "d": data},
     )
     assert response.status_code == 200
     payload = response.json()
@@ -11582,8 +11541,6 @@ def test_create_book_via_custom_input_explicit_null_genres_is_field_error() -> N
 @pytest.mark.django_db
 def test_create_book_via_custom_input_wrong_type_genre_id_is_field_error() -> None:
     """A Book GlobalID in ``genres`` is a ``FieldError`` on ``genres``, no write."""
-    from apps.library.schema import BookType
-
     shelf = _seed_shelf()
     decoy = models.Book.objects.create(title="WrongTypeDecoy", shelf=shelf)
 
@@ -11594,7 +11551,7 @@ def test_create_book_via_custom_input_wrong_type_genre_id_is_field_error() -> No
                 "title": "WrongTypeGenresBook",
                 "subtitle": "wrong type",
                 "shelfId": shelf.pk,
-                "genres": [global_id_for(BookType, decoy.pk)],
+                "genres": [global_id_for(library_schema.BookType, decoy.pk)],
             },
         },
     )
@@ -11610,8 +11567,6 @@ def test_create_book_via_custom_input_wrong_type_genre_id_is_field_error() -> No
 @pytest.mark.django_db
 def test_create_book_via_custom_input_uncoercible_genre_pk_is_field_error() -> None:
     """A well-formed Genre GlobalID with ``node_id="abc"`` is in-band on ``genres``."""
-    from apps.library.schema import GenreType
-
     shelf = _seed_shelf()
 
     response = _post_graphql(
@@ -11621,7 +11576,7 @@ def test_create_book_via_custom_input_uncoercible_genre_pk_is_field_error() -> N
                 "title": "UncoercibleGenresBook",
                 "subtitle": "uncoercible",
                 "shelfId": shelf.pk,
-                "genres": [global_id_for(GenreType, "abc")],
+                "genres": [global_id_for(library_schema.GenreType, "abc")],
             },
         },
     )
@@ -11664,15 +11619,16 @@ def test_update_book_via_custom_partial_input_happy_path() -> None:
     available book is visible to the anonymous caller) then re-fetched into the payload.
     The omitted optional ``subtitle`` is reconstructed from the row, not reset.
     """
-    from apps.library.schema import BookType
-
     shelf = _seed_shelf()
     book = models.Book.objects.create(title="OldBookTitle", subtitle="keep", shelf=shelf)
 
     response = _post_graphql(
         "mutation($id: ID!, $d: BookPartialInput!){ updateBookViaCustomInput(id:$id, data:$d){ "
         "node{ title } errors{ field messages } } }",
-        variables={"id": global_id_for(BookType, book.pk), "d": {"title": "NewBookTitle"}},
+        variables={
+            "id": global_id_for(library_schema.BookType, book.pk),
+            "d": {"title": "NewBookTitle"},
+        },
     )
     assert response.status_code == 200
     payload = response.json()
@@ -11695,8 +11651,6 @@ def test_update_book_replaces_m2m_and_returns_row_after_visibility_exit_over_htt
     payload still returns the row because post-write re-fetch intentionally uses
     the default manager; a visibility-scoped re-fetch would incorrectly lose it.
     """
-    from apps.library.schema import BookType, GenreType
-
     shelf = _seed_shelf()
     old_one = models.Genre.objects.create(name="ReplaceOldOne")
     old_two = models.Genre.objects.create(name="ReplaceOldTwo")
@@ -11708,11 +11662,11 @@ def test_update_book_replaces_m2m_and_returns_row_after_visibility_exit_over_htt
         "mutation($id: ID!, $d: BookPartialInput!){ updateBookViaCustomInput(id:$id, data:$d){ "
         "node{ title } errors{ field messages } } }",
         variables={
-            "id": global_id_for(BookType, book.pk),
+            "id": global_id_for(library_schema.BookType, book.pk),
             "d": {
                 "title": "HiddenAfterUpdate",
                 "circulationStatus": "repair",
-                "genres": [global_id_for(GenreType, replacement.pk)],
+                "genres": [global_id_for(library_schema.GenreType, replacement.pk)],
             },
         },
     )
@@ -12672,8 +12626,6 @@ def test_serializer_update_injected_field_contract_over_http() -> None:
     update SUCCEEDS with the injected value - previously the agreement guard raised a spurious
     ``ConfigurationError`` naming mismatched enum identities on EVERY update invocation.
     """
-    from apps.library.schema import BookType
-
     shelf = _seed_shelf()
     book = models.Book.objects.create(title="BeforeInject", shelf=shelf)
 
@@ -12685,7 +12637,10 @@ def test_serializer_update_injected_field_contract_over_http() -> None:
         "mutation($id: ID!, $d: " + input_name + "!) { "
         "updateBookWithInjectedStatus(id: $id, data: $d) { "
         "node { title subtitle } errors { field messages } } }",
-        variables={"id": global_id_for(BookType, book.pk), "d": {"title": "AfterInject"}},
+        variables={
+            "id": global_id_for(library_schema.BookType, book.pk),
+            "d": {"title": "AfterInject"},
+        },
     )
     assert response.status_code == 200
     payload = response.json()
@@ -12960,8 +12915,6 @@ def test_serializer_update_with_select_for_update_over_http() -> None:
     row is genuinely locked. ``BookType`` is Relay-Node, so the update ``id`` is a ``GlobalID``
     and the payload slot is ``node``.
     """
-    from apps.library.schema import BookType
-
     shelf = _seed_shelf()
     book = models.Book.objects.create(title="BeforeLock", shelf=shelf)
 
@@ -12969,7 +12922,10 @@ def test_serializer_update_with_select_for_update_over_http() -> None:
         "mutation($id: ID!, $d: BookSerializerPartialInput!) { "
         "updateBookViaSerializerWithLock(id: $id, data: $d) { "
         "node { title } errors { field messages } } }",
-        variables={"id": global_id_for(BookType, book.pk), "d": {"title": "AfterLock"}},
+        variables={
+            "id": global_id_for(library_schema.BookType, book.pk),
+            "d": {"title": "AfterLock"},
+        },
     )
     assert response.status_code == 200
     payload = response.json()
@@ -12989,8 +12945,6 @@ def test_serializer_update_provided_genres_list_replaces_complete_set_over_http(
     ``set()``s the provided list inside the pipeline transaction, so the stored set after the
     write is EXACTLY the provided membership - prior members not in the list are detached.
     """
-    from apps.library.schema import BookType, GenreType
-
     shelf = _seed_shelf()
     old_genre = models.Genre.objects.create(name="ReplaceOld")
     new_genre = models.Genre.objects.create(name="ReplaceNew")
@@ -13002,8 +12956,8 @@ def test_serializer_update_provided_genres_list_replaces_complete_set_over_http(
         "updateBookGenresViaSerializer(id: $id, data: $d) { "
         "node { title } errors { field messages } } }",
         variables={
-            "id": global_id_for(BookType, book.pk),
-            "d": {"genres": [global_id_for(GenreType, new_genre.pk)]},
+            "id": global_id_for(library_schema.BookType, book.pk),
+            "d": {"genres": [global_id_for(library_schema.GenreType, new_genre.pk)]},
         },
     )
     assert response.status_code == 200
@@ -13021,8 +12975,6 @@ def test_serializer_update_omitted_genres_leaves_relation_unchanged_over_http() 
     must not clear or rewrite the M2M - ``partial=True`` means unsent fields keep their
     stored values.
     """
-    from apps.library.schema import BookType
-
     shelf = _seed_shelf()
     kept = models.Genre.objects.create(name="KeptGenre")
     book = models.Book.objects.create(title="KeepGenres", shelf=shelf)
@@ -13032,7 +12984,10 @@ def test_serializer_update_omitted_genres_leaves_relation_unchanged_over_http() 
         "mutation($id: ID!, $d: BookGenresSerializerPartialInput!) { "
         "updateBookGenresViaSerializer(id: $id, data: $d) { "
         "node { title } errors { field messages } } }",
-        variables={"id": global_id_for(BookType, book.pk), "d": {"title": "TitleOnly"}},
+        variables={
+            "id": global_id_for(library_schema.BookType, book.pk),
+            "d": {"title": "TitleOnly"},
+        },
     )
     assert response.status_code == 200
     payload = response.json()
@@ -13056,8 +13011,6 @@ def test_unauthorized_book_genres_update_never_queries_m2m_membership_over_http(
     (authorize, then snapshot) is pinned from both sides rather than only by the
     absence of a query on the denied one.
     """
-    from django.contrib.auth.models import Permission
-
     create_users(1)
     shelf = _seed_shelf()
     kept = models.Genre.objects.create(name="AuthOrderKept")
@@ -13072,9 +13025,8 @@ def test_unauthorized_book_genres_update_never_queries_m2m_membership_over_http(
 
     with override_settings(FAKESHOP_TEST_BOOK_GENRES_REQUIRE_PERM=True):
         project_schema_override()
-        from apps.library.schema import BookType
 
-        book_id = global_id_for(BookType, book.pk)
+        book_id = global_id_for(library_schema.BookType, book.pk)
         variables = {"id": book_id, "d": {"title": "DeniedTitle"}}
         with CaptureQueriesContext(connection) as captured:
             response = _post_graphql(mutation, variables=variables)
@@ -13126,8 +13078,6 @@ def test_unauthorized_book_genres_update_never_queries_m2m_membership_over_http(
 @pytest.mark.django_db
 def test_serializer_update_genres_empty_and_duplicates_have_set_semantics_over_http() -> None:
     """Duplicate members normalize to one relation and an explicit empty list clears it."""
-    from apps.library.schema import BookType, GenreType
-
     shelf = _seed_shelf()
     genre = models.Genre.objects.create(name="SetSemanticsGenre")
     book = models.Book.objects.create(title="SetSemanticsBook", shelf=shelf)
@@ -13136,8 +13086,8 @@ def test_serializer_update_genres_empty_and_duplicates_have_set_semantics_over_h
         "updateBookGenresViaSerializer(id: $id, data: $d) { "
         "node { title } errors { field messages } } }"
     )
-    book_id = global_id_for(BookType, book.pk)
-    genre_id = global_id_for(GenreType, genre.pk)
+    book_id = global_id_for(library_schema.BookType, book.pk)
+    genre_id = global_id_for(library_schema.GenreType, genre.pk)
 
     duplicate_response = _post_graphql(
         mutation,
@@ -13163,8 +13113,6 @@ def test_serializer_update_invalid_or_hidden_genre_preserves_prior_set_over_http
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Invalid and visibility-hidden members fail before M2M mutation, preserving the prior set."""
-    from apps.library.schema import BookType, GenreType
-
     shelf = _seed_shelf()
     kept = models.Genre.objects.create(name="FailureKeptGenre")
     hidden = models.Genre.objects.create(name="FailureHiddenGenre")
@@ -13175,13 +13123,13 @@ def test_serializer_update_invalid_or_hidden_genre_preserves_prior_set_over_http
         "updateBookGenresViaSerializer(id: $id, data: $d) { "
         "node { title } errors { field messages codes } } }"
     )
-    book_id = global_id_for(BookType, book.pk)
+    book_id = global_id_for(library_schema.BookType, book.pk)
 
     invalid_response = _post_graphql(
         mutation,
         variables={
             "id": book_id,
-            "d": {"genres": [global_id_for(GenreType, hidden.pk + 100_000)]},
+            "d": {"genres": [global_id_for(library_schema.GenreType, hidden.pk + 100_000)]},
         },
     )
     invalid_result = invalid_response.json()["data"]["updateBookGenresViaSerializer"]
@@ -13190,17 +13138,20 @@ def test_serializer_update_invalid_or_hidden_genre_preserves_prior_set_over_http
     assert list(book.genres.values_list("pk", flat=True)) == [kept.pk]
 
     def _hide_genre(
-        cls: type[GenreType],
+        cls: type[library_schema.GenreType],
         queryset: QuerySet[models.Genre],
         info: strawberry.Info[object, object],
     ) -> QuerySet[models.Genre]:
         del cls, info
         return queryset.exclude(pk=hidden.pk)
 
-    monkeypatch.setattr(GenreType, "get_queryset", classmethod(_hide_genre))
+    monkeypatch.setattr(library_schema.GenreType, "get_queryset", classmethod(_hide_genre))
     hidden_response = _post_graphql(
         mutation,
-        variables={"id": book_id, "d": {"genres": [global_id_for(GenreType, hidden.pk)]}},
+        variables={
+            "id": book_id,
+            "d": {"genres": [global_id_for(library_schema.GenreType, hidden.pk)]},
+        },
     )
     hidden_result = hidden_response.json()["data"]["updateBookGenresViaSerializer"]
     assert hidden_result["node"] is None
@@ -13224,8 +13175,6 @@ def test_serializer_update_substituted_instance_is_rejected_without_writes_over_
     policy's pass-through gate for this live request; the two ``refresh_from_db``
     assertions - the part that proves no row moved - are unaffected by the gate.
     """
-    from apps.library.schema import BookType
-
     shelf = _seed_shelf()
     addressed = models.Book.objects.create(title="AddressedRow", shelf=shelf)
     victim = models.Book.objects.create(title="VictimRow", shelf=shelf)
@@ -13234,7 +13183,10 @@ def test_serializer_update_substituted_instance_is_rejected_without_writes_over_
         "mutation($id: ID!, $d: BookSerializerPartialInput!) { "
         "updateBookSubstitutingInstance(id: $id, data: $d) { "
         "node { title } errors { field messages } } }",
-        variables={"id": global_id_for(BookType, addressed.pk), "d": {"title": "Hijacked"}},
+        variables={
+            "id": global_id_for(library_schema.BookType, addressed.pk),
+            "d": {"title": "Hijacked"},
+        },
     )
     assert response.status_code == 200
     payload = response.json()
@@ -13317,14 +13269,12 @@ def test_serializer_to_field_relation_create_stores_the_target_key_over_http(
     captured name, so a correct write succeeds and a null or omitted relation stays null,
     whether the field is declared under the relation's own name or renamed onto it.
     """
-    from apps.library.schema import GenreType
-
     shape = _PROFILE_CREATE_SPELLINGS[spelling]
     genre = models.Genre.objects.create(name="ToFieldFiction")
     patron = models.Patron.objects.create(name="ToFieldCreatePatron")
     data: dict[str, object] = {"patronId": patron.pk}
     if value == "genre":
-        data[shape.input_key] = global_id_for(GenreType, genre.pk)
+        data[shape.input_key] = global_id_for(library_schema.GenreType, genre.pk)
     elif value == "null":
         data[shape.input_key] = None
 
@@ -13358,22 +13308,20 @@ def test_serializer_to_field_relation_update_stores_the_target_key_over_http(
     it, and an omitted relation (``partial=True``) keeps it; each is attested against the
     database column in the key's own domain (the genre name, never the genre id).
     """
-    from apps.library.schema import GenreType, PatronProfileType
-
     old = models.Genre.objects.create(name="ToFieldOld")
     new = models.Genre.objects.create(name="ToFieldNew")
     patron = models.Patron.objects.create(name="ToFieldUpdatePatron")
     models.PatronProfile.objects.create(patron=patron, favorite_genre=old)
     data: dict[str, object] = {"address_2": "Suite 2"}
     if value == "genre":
-        data["favoriteGenreId"] = global_id_for(GenreType, new.pk)
+        data["favoriteGenreId"] = global_id_for(library_schema.GenreType, new.pk)
     elif value == "null":
         data["favoriteGenreId"] = None
 
     response = _post_graphql(
         "mutation($id: ID!, $d: PatronProfileDetailsSerializerPartialInput!) { "
         f"updatePatronProfileViaSerializer(id: $id, data: $d) {{ {_PROFILE_SELECTION} }} }}",
-        variables={"id": global_id_for(PatronProfileType, patron.pk), "d": data},
+        variables={"id": global_id_for(library_schema.PatronProfileType, patron.pk), "d": data},
     )
     assert response.status_code == 200
     payload = response.json()
@@ -13400,8 +13348,6 @@ def test_serializer_to_field_relation_replaced_by_custom_create_is_rejected_over
     the attestation reads the column through the field's source and compares it with the
     name captured at validation.
     """
-    from apps.library.schema import GenreType
-
     shape = _PROFILE_REPLACING_SPELLINGS[spelling]
 
     swapped_in = models.Genre.objects.create(name="ToFieldPlaceholder")
@@ -13414,7 +13360,10 @@ def test_serializer_to_field_relation_replaced_by_custom_create_is_rejected_over
         f"mutation($d: {shape.input_type}!) {{ "
         f"{shape.mutation}(data: $d) {{ {_PROFILE_SELECTION} }} }}",
         variables={
-            "d": {"patronId": patron.pk, shape.input_key: global_id_for(GenreType, chosen.pk)},
+            "d": {
+                "patronId": patron.pk,
+                shape.input_key: global_id_for(library_schema.GenreType, chosen.pk),
+            },
         },
     )
     assert response.status_code == 200
@@ -13437,8 +13386,6 @@ def test_serializer_to_field_relation_key_repointed_by_validator_is_rejected_ove
     relation-intent walk compares the genre's name with the one captured when the field
     validated and refuses the write: no profile is written and no genre is renamed.
     """
-    from apps.library.schema import GenreType
-
     other = models.Genre.objects.create(name="ToFieldRepointTarget")
     chosen = models.Genre.objects.create(name="ToFieldRepointChosen")
     patron = models.Patron.objects.create(name="ToFieldRepointedPatron")
@@ -13447,7 +13394,10 @@ def test_serializer_to_field_relation_key_repointed_by_validator_is_rejected_ove
         "mutation($d: GenreRepointingPatronProfileSerializerInput!) { "
         f"createPatronProfileRepointingGenre(data: $d) {{ {_PROFILE_SELECTION} }} }}",
         variables={
-            "d": {"patronId": patron.pk, "favoriteGenreId": global_id_for(GenreType, chosen.pk)},
+            "d": {
+                "patronId": patron.pk,
+                "favoriteGenreId": global_id_for(library_schema.GenreType, chosen.pk),
+            },
         },
     )
     assert response.status_code == 200
@@ -13498,8 +13448,6 @@ def test_model_to_field_relation_update_stores_the_target_key_over_http(
     the chosen genre's id (writing the id would link that genre), an explicit null
     clears it and an omitted relation keeps it.
     """
-    from apps.library.schema import GenreType, PatronProfileType
-
     old = models.Genre.objects.create(name="ToFieldOld")
     new = models.Genre.objects.create(name="ToFieldNew")
     if value == "genre_beside_one_named_like_its_id":
@@ -13508,13 +13456,13 @@ def test_model_to_field_relation_update_stores_the_target_key_over_http(
     models.PatronProfile.objects.create(patron=patron, favorite_genre=old)
     data: dict[str, object] = {"address_2": "Suite 3"}
     if value in ("genre", "genre_beside_one_named_like_its_id"):
-        data["favoriteGenreId"] = global_id_for(GenreType, new.pk)
+        data["favoriteGenreId"] = global_id_for(library_schema.GenreType, new.pk)
     elif value == "null":
         data["favoriteGenreId"] = None
 
     response = _post_graphql(
         _MODEL_PROFILE_UPDATE,
-        variables={"id": global_id_for(PatronProfileType, patron.pk), "d": data},
+        variables={"id": global_id_for(library_schema.PatronProfileType, patron.pk), "d": data},
     )
     assert response.status_code == 200
     payload = response.json()
@@ -13555,8 +13503,6 @@ def test_form_to_field_relation_update_keeps_an_omitted_genre_over_http(value: s
     or, when the stored name is another genre's id, link that genre. An unset genre stays
     unset, a supplied genre replaces the name and an explicit null clears it.
     """
-    from apps.library.schema import GenreType, PatronProfileType
-
     other = models.Genre.objects.create(name="ToFieldOther")
     old_name = str(other.pk) if value == "omitted_named_like_another_genres_id" else "ToFieldOld"
     old = models.Genre.objects.create(name=old_name)
@@ -13568,14 +13514,14 @@ def test_form_to_field_relation_update_keeps_an_omitted_genre_over_http(value: s
     )
     data: dict[str, object] = {"address_2": "Suite 4"}
     if value == "genre":
-        data["favoriteGenreId"] = global_id_for(GenreType, new.pk)
+        data["favoriteGenreId"] = global_id_for(library_schema.GenreType, new.pk)
     elif value == "null":
         data["favoriteGenreId"] = None
     expected = {"omitted_unset": None, "genre": new.name, "null": None}.get(value, old.name)
 
     response = _post_graphql(
         _FORM_PROFILE_UPDATE,
-        variables={"id": global_id_for(PatronProfileType, patron.pk), "d": data},
+        variables={"id": global_id_for(library_schema.PatronProfileType, patron.pk), "d": data},
     )
     assert response.status_code == 200
     payload = response.json()
@@ -13592,11 +13538,9 @@ def test_form_to_field_relation_update_keeps_an_omitted_genre_over_http(value: s
 @pytest.mark.django_db
 def test_model_to_field_relation_update_rejects_a_missing_genre_over_http() -> None:
     """A genre id no row answers is the uniform relation error; the stored name is kept."""
-    from apps.library.schema import GenreType, PatronProfileType
-
     old = models.Genre.objects.create(name="ToFieldKept")
     gone = models.Genre.objects.create(name="ToFieldGone")
-    gone_id = global_id_for(GenreType, gone.pk)
+    gone_id = global_id_for(library_schema.GenreType, gone.pk)
     gone.delete()
     patron = models.Patron.objects.create(name="ToFieldMissingPatron")
     models.PatronProfile.objects.create(patron=patron, favorite_genre=old)
@@ -13604,7 +13548,7 @@ def test_model_to_field_relation_update_rejects_a_missing_genre_over_http() -> N
     response = _post_graphql(
         _MODEL_PROFILE_UPDATE,
         variables={
-            "id": global_id_for(PatronProfileType, patron.pk),
+            "id": global_id_for(library_schema.PatronProfileType, patron.pk),
             "d": {"favoriteGenreId": gone_id},
         },
     )
@@ -14240,12 +14184,6 @@ def _hooked_holder_schema(
     child's base queryset, so whatever ``.only()`` / ``.defer()`` /
     ``prefetch_related`` it adds meets the plan's projection in one writer.
     """
-    from django_strawberry_framework import (
-        DjangoListField,
-        DjangoOptimizerExtension,
-        finalize_django_types,
-    )
-    from django_strawberry_framework.registry import registry
 
     class HolderHookedGenreType(DjangoType):
         @classmethod
@@ -14337,8 +14275,6 @@ def _post_hooked_holder(
     build: Callable[[], strawberry.Schema],
 ) -> tuple[JSONObject, list[str]]:
     """POST ``document`` to the holder schema ``build`` returns; return the payload and its SQL."""
-    from django_strawberry_framework.registry import registry
-
     registry.clear()
     try:
         schema = build()
@@ -14362,8 +14298,6 @@ async def test_library_root_hook_projection_loads_the_selection_on_async(method:
     error-free page is the proof that the selection's columns loaded with the
     hook's.
     """
-    from django_strawberry_framework.registry import registry
-
     await models.Genre.objects.acreate(name="Speculative")
     await models.Genre.objects.acreate(name="Mystery")
     registry.clear()
@@ -14611,13 +14545,6 @@ def _unplanned_relation_holder_schema() -> strawberry.Schema:
     reads ``book_id`` off the loan row. Neither has a planned fetch, and both
     keep their link column in the parent's projection.
     """
-    from django_strawberry_framework import (
-        DjangoListField,
-        DjangoOptimizerExtension,
-        OptimizerHint,
-        finalize_django_types,
-    )
-    from django_strawberry_framework.registry import registry
 
     class HolderSkipProfileType(DjangoType):
         class Meta:
@@ -14731,8 +14658,6 @@ def test_library_unplanned_relations_keep_their_link_columns(
     deferred column. The roots carry no order, so the related leaves compare
     as a sorted list.
     """
-    from django_strawberry_framework.registry import registry
-
     _seed_favoring_profiles()
     registry.clear()
     try:
@@ -14757,8 +14682,6 @@ async def test_library_skip_non_pk_link_resolves_on_async() -> None:
     The relation's per-genre access reads ``Genre.name`` on the event loop; a
     deferred ``name`` would load there and raise ``SynchronousOnlyOperation``.
     """
-    from django_strawberry_framework.registry import registry
-
     await sync_to_async(_seed_favoring_profiles)()
     registry.clear()
     try:
@@ -15517,8 +15440,6 @@ def test_serializer_list_field_nullable_child_round_trips_null_element_over_http
 @pytest.mark.django_db
 def test_relay_node_read_of_a_book_on_a_blank_shelf_reads_blank_over_http() -> None:
     """A Relay ``node`` refetch serializes the blank shelf it reaches as ``BLANK``."""
-    from apps.library.schema import BookType
-
     branch = models.Branch.objects.create(name="NodeConditionBranch", city="Boston")
     shelf = models.Shelf.objects.create(code="N-blank", branch=branch)
     book = models.Book.objects.create(title="Node Blank", shelf=shelf)
@@ -15529,7 +15450,7 @@ def test_relay_node_read_of_a_book_on_a_blank_shelf_reads_blank_over_http() -> N
         }
         """,
         {"node": {"title": "Node Blank", "shelf": {"code": "N-blank", "condition": "BLANK"}}},
-        variables={"id": global_id_for(BookType, book.pk)},
+        variables={"id": global_id_for(library_schema.BookType, book.pk)},
     )
 
 

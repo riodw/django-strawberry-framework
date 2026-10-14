@@ -55,10 +55,12 @@ hidden row must read as not-found with no existence leak, and that is pinned at
 ``test_products_api.py::test_update_item_anonymous_on_hidden_private_row_is_not_found_before_any_auth_signal``.
 """
 
+import asyncio
 import contextlib
 import datetime
 import os
 import re
+import threading
 import uuid
 from collections.abc import Callable, Generator, Iterator
 from types import SimpleNamespace
@@ -81,11 +83,12 @@ from apps.library.models import (
 from apps.products import services
 from apps.products.models import Category, Entry, Item, Property
 from apps.scalars.models import ScalarSpecimen
+from asgiref.sync import sync_to_async
 from django.contrib.auth.models import User
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection as db_connection
 from django.db import models
-from django.db.models import Manager
+from django.db.models import Manager, sql
 from django.db.models.expressions import Combinable
 from django.http import HttpRequest
 from graphql import GraphQLError
@@ -1438,7 +1441,6 @@ def test_unsealable_hook_query_class_fails_closed_with_cascade_prose() -> None:
     fails closed with the ``untrusted`` defect, routed through the per-edge
     renderer so the prose stays path-rich.
     """
-    from django.db.models import sql
 
     class _ForeignQuery(sql.Query):
         pass
@@ -1687,7 +1689,6 @@ def test_unsealable_root_query_class_fails_closed_with_cascade_prose() -> None:
     queryset. The boundary's ``untrusted`` defect is the cascade's to explain:
     the consumer passed this object to ``apply_cascade_permissions``.
     """
-    from django.db.models import sql
 
     class _ForeignRootQuery(sql.Query):
         pass
@@ -1980,7 +1981,6 @@ async def test_aapply_runs_walk_off_event_loop() -> None:
     worker (asgiref ``copy_context``) does not leak back into the awaiting task -
     ``_cascade_state.get()`` stays ``None`` in the async caller after the await.
     """
-    from asgiref.sync import sync_to_async
 
     @sync_to_async
     def _setup() -> type[DjangoType]:
@@ -2006,7 +2006,6 @@ async def test_aapply_runs_walk_off_event_loop() -> None:
 
 async def test_aapply_async_target_hook_still_raises() -> None:
     """An ``async def`` target hook raises SyncMisuseError from the async variant too (Decision 10)."""
-    from asgiref.sync import sync_to_async
 
     async def _async_hook(
         _cls: type[DjangoType],
@@ -2137,8 +2136,6 @@ def test_two_overlapping_threads_isolate_traversal_state() -> None:
     ``ContextVar`` gives each thread its own traversal state and the token
     resets fire independently.
     """
-    import threading
-
     barrier = threading.Barrier(2, timeout=10)
 
     def _parking_hook(
@@ -2191,9 +2188,6 @@ async def test_aapply_gather_restores_task_contexts() -> None:
     serialize on one worker thread - the pin here is task-context restoration
     (neither awaiting task observes traversal state afterward), not parallelism.
     """
-    import asyncio
-
-    from asgiref.sync import sync_to_async
 
     @sync_to_async
     def _setup() -> type[DjangoType]:

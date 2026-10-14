@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, NoReturn
 
 import pytest
 import strawberry
+from apps.glossary.models import GlossaryCategory, GlossaryTerm
 from apps.library.models import (
     Book,
     Branch,
@@ -29,9 +30,10 @@ from apps.products.models import Category, Item
 from django.db.models import QuerySet
 from typing_extensions import override
 
-from django_strawberry_framework import DjangoType, finalize_django_types
+from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
 from django_strawberry_framework.optimizer.field_meta import FieldMeta, _target_pk_name
+from django_strawberry_framework.optimizer.walker import _resolve_field_map, plan_optimizations
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils.relations import has_composite_pk
 from tests._idioms import pickle_roundtrip
@@ -688,7 +690,6 @@ def test_walker_plan_never_projects_non_column_relation_names() -> None:
     reads the attname verbatim), producing dead entries Django drops at
     compile time. A forward FK keeps its real connector column.
     """
-    from django_strawberry_framework.optimizer.walker import plan_optimizations
 
     def sel(name: str, children: Iterable[SimpleNamespace] = ()) -> SimpleNamespace:
         return SimpleNamespace(name=name, selections=list(children), arguments=None, alias=None)
@@ -710,10 +711,6 @@ def test_walker_plan_never_projects_non_column_relation_names() -> None:
 @pytest.mark.usefixtures("django_assert_num_queries")
 def test_walker_produces_same_plan_with_cached_map() -> None:
     """B7: the walker's plan is identical whether it uses the cached map or _meta."""
-    import strawberry
-
-    from django_strawberry_framework import DjangoOptimizerExtension, finalize_django_types
-
     services.seed_data(1)
 
     class CategoryType(DjangoType):
@@ -733,8 +730,6 @@ def test_walker_produces_same_plan_with_cached_map() -> None:
         @strawberry.field(graphql_type=list[ItemType])
         def all_items(self) -> QuerySet[Item]:
             return Item.objects.all()
-
-    from types import SimpleNamespace
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -782,8 +777,6 @@ def test_from_django_field_mti_parent_link_is_forward_single_and_non_null() -> N
 
 def test_resolve_field_map_unregistered_stamps_field_meta_under_raw_name() -> None:
     """Unregistered fallback is ``dict[str, FieldMeta]`` keyed by raw ``f.name``."""
-    from django_strawberry_framework.optimizer.walker import _resolve_field_map
-
     type_cls, definition, field_map = _resolve_field_map(Item)
     assert type_cls is None
     assert definition is None
@@ -1029,9 +1022,6 @@ def test_from_django_field_stamps_m2m_through_source_targets(
     Auto-created and pk-targeted custom through tables target the source pk, so
     they stamp nothing and their projections stay unchanged.
     """
-    from apps.glossary.models import GlossaryCategory, GlossaryTerm
-    from apps.library.models import Book, Genre
-
     model = {
         "LnkParent": LnkParent,
         "LnkTag": LnkTag,

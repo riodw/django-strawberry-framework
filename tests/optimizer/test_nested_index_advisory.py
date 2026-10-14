@@ -55,6 +55,7 @@ from collections.abc import Iterator
 from types import SimpleNamespace
 
 import pytest
+import strawberry
 from apps.glossary.models import GlossaryTerm
 from apps.library.models import Book, Branch, Genre, Shelf, TaggedItem
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
@@ -74,8 +75,15 @@ from django.db.models.functions import Lower
 from django.db.models.options import Options
 from django.db.models.sql.query import Query
 from django.test import override_settings
-from strawberry import Schema
+from strawberry import Schema, relay
 
+from django_strawberry_framework import (
+    DjangoOptimizerExtension,
+    DjangoType,
+    finalize_django_types,
+    strawberry_config,
+)
+from django_strawberry_framework.connection import _connection_type_cache
 from django_strawberry_framework.optimizer import logger as optimizer_logger
 from django_strawberry_framework.optimizer import nested_planner
 from django_strawberry_framework.optimizer.join_taxonomy import (
@@ -98,6 +106,7 @@ from django_strawberry_framework.optimizer.nested_planner import (
     clear_index_advisory_dedup,
 )
 from django_strawberry_framework.optimizer.plans import OptimizationPlan
+from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils.imports import import_attr_if_importable
 
 from ._link_models import LnkParent, LnkTag
@@ -641,7 +650,8 @@ class TestEveryBackendSupportsIndexColumnOrdering:
     ) -> None:
         """One incapable alias makes a DESC term unproven even when the default supports it."""
         monkeypatch.setattr(
-            "django.db.connections",
+            nested_planner,
+            "connections",
             _FakeConnections(
                 {
                     "default": _fake_backend(supports_ordering=True),
@@ -654,7 +664,8 @@ class TestEveryBackendSupportsIndexColumnOrdering:
     def test_all_aliases_supporting_is_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When every configured alias supports ordering, the DESC term is trusted."""
         monkeypatch.setattr(
-            "django.db.connections",
+            nested_planner,
+            "connections",
             _FakeConnections(
                 {
                     "default": _fake_backend(supports_ordering=True),
@@ -666,7 +677,7 @@ class TestEveryBackendSupportsIndexColumnOrdering:
 
     def test_empty_configuration_is_unproven(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """No configured databases -> nothing proves support -> ``False`` (unknown)."""
-        monkeypatch.setattr("django.db.connections", _FakeConnections({}))
+        monkeypatch.setattr(nested_planner, "connections", _FakeConnections({}))
         assert nested_planner._every_backend_supports_index_column_ordering() is False
 
     def test_enumeration_failure_is_fail_soft_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -676,7 +687,7 @@ class TestEveryBackendSupportsIndexColumnOrdering:
             def __iter__(self) -> Iterator[str]:
                 raise RuntimeError("connections unavailable at plan time")
 
-        monkeypatch.setattr("django.db.connections", _Boom())
+        monkeypatch.setattr(nested_planner, "connections", _Boom())
         assert nested_planner._every_backend_supports_index_column_ordering() is False
 
 
@@ -1220,8 +1231,6 @@ class TestAdviseCompositeIndex:
         grow memory without limit; eviction only lets a long-cold advisory
         re-warn, never a wrong one.
         """
-        from django_strawberry_framework.optimizer import nested_planner
-
         monkeypatch.setattr(nested_planner, "_MAX_INDEX_ADVISORY_KEYS", 2)
         emitted = nested_planner._index_advisory_already_emitted
         a = ("tests.A", ("p_id",), (("x", False),))
@@ -1485,9 +1494,6 @@ class TestAdvisoryDeferredUntilWindowAccepted:
 
     @staticmethod
     def _reset_type_caches() -> None:
-        from django_strawberry_framework.connection import _connection_type_cache
-        from django_strawberry_framework.registry import registry
-
         registry.clear()
         _connection_type_cache.clear()
         clear_index_advisory_dedup()
@@ -1507,17 +1513,6 @@ class TestAdvisoryDeferredUntilWindowAccepted:
     @staticmethod
     def _shelf_books_schema(strategy: StrategySelection) -> Schema:
         """A ``shelves { booksConnection }`` schema running ``strategy``."""
-        import strawberry
-        from apps.library.models import Book, Shelf
-        from strawberry import relay
-
-        from django_strawberry_framework import (
-            DjangoOptimizerExtension,
-            DjangoType,
-            finalize_django_types,
-            strawberry_config,
-        )
-        from django_strawberry_framework.registry import registry
 
         class BookNode(DjangoType):
             class Meta:
@@ -1553,8 +1548,6 @@ class TestAdvisoryDeferredUntilWindowAccepted:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """A strategy that refuses every window advises no index; windowed advises one."""
-        from apps.library.models import Book, Branch, Shelf
-
         shelf = Shelf.objects.create(code="A", branch=Branch.objects.create(name="c"))
         for index in range(3):
             Book.objects.create(title=f"t{index}", shelf=shelf)

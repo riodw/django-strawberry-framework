@@ -118,6 +118,10 @@ from django_strawberry_framework.mutations.resolvers import (
     save_or_field_errors,
 )
 from django_strawberry_framework.mutations.sets import backing_model_of
+from django_strawberry_framework.utils.errors import (
+    build_error_key_map,
+    validation_error_to_field_errors,
+)
 from django_strawberry_framework.utils.querysets import sync_pipeline_recourse
 from django_strawberry_framework.utils.relations import is_single_column_foreign_key
 from django_strawberry_framework.utils.write_transaction import pipeline_write_phase
@@ -528,11 +532,6 @@ def _form_errors_to_field_errors(
     form spec's ``target_name`` IS the form field name); a form field the input
     does not expose keeps its form field name. No parallel mapper.
     """
-    from django_strawberry_framework.utils.errors import (
-        build_error_key_map,
-        validation_error_to_field_errors,
-    )
-
     return validation_error_to_field_errors(
         ValidationError(form.errors.as_data()),
         build_error_key_map(mutation_cls._input_field_specs),

@@ -26,11 +26,13 @@ import pytest
 from apps.glossary import models as glossary_models
 from apps.kanban import factories as kf
 from apps.kanban import models, services
+from apps.kanban.filters import MilestoneFilter
 from django.conf import settings
 from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
+from graphql import GraphQLError
 from graphql_client import assert_graphql_data as _assert_graphql_data
 from graphql_client import assert_graphql_success as _graphql_data
 from graphql_client import post_graphql
@@ -268,8 +270,6 @@ def test_flat_composite_milestone_filter_fires_target_permission_gate(
     nested ``milestone: { key: ... }`` form.
     """
     _seed_board()
-    from apps.kanban.filters import MilestoneFilter
-    from graphql import GraphQLError
 
     def deny_key(_self: MilestoneFilter, _request: object) -> NoReturn:
         raise GraphQLError("milestone key denied")

@@ -64,7 +64,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
 import pytest
+from django.conf import settings
 
+import django_strawberry_framework
 from scripts import prove_failability
 
 if TYPE_CHECKING:
@@ -2781,9 +2783,6 @@ def test_the_probe_records_package_file_database_names_and_crash_lines(
         COUNT_ROW: "/ws/tests/test_x.py:9: assert 6 == 1",
         "tests/test_y.py": "ImportError: x",
     }
-    from django.conf import settings
-
-    import django_strawberry_framework
 
     (record,) = provenance
     assert record.role == "controller"

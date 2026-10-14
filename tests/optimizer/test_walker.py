@@ -7,37 +7,84 @@ elision SQL is ``examples/fakeshop/test_query/test_scalars_api.py``, and nested
 windows are ``examples/fakeshop/test_query/test_single_parent_fastpath_api.py``.
 """
 
+import base64
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, NoReturn, Protocol, TypeVar, runtime_checkable
 
 import pytest
 import strawberry
-from apps.library.models import Book
+from apps.kanban.models import Card, Decision
+from apps.library.models import (
+    Annotation,
+    Book,
+    Branch,
+    Edition,
+    Genre,
+    Patron,
+    PatronProfile,
+    Printing,
+    Publisher,
+    Shelf,
+    TaggedItem,
+)
 from apps.products.models import Category, Entry, Item
 from apps.products.services import seed_data
-from django.db.models import Field, ForeignObjectRel, Model, Prefetch, QuerySet
+from django.contrib.contenttypes.models import ContentType
+from django.db.models import F, Field, ForeignObjectRel, Model, OrderBy, Prefetch, QuerySet
 from graphql import GraphQLResolveInfo, OperationType
+from strategy_schemas import make_django_type
+from strawberry import relay
 from strawberry.relay.utils import to_base64
 from strawberry.schema.config import StrawberryConfig
 from strawberry.schema.name_converter import HasGraphQLName, NameConverter
 from strawberry.types.nodes import SelectedField, Selection
 from typing_extensions import override
 
-from django_strawberry_framework import DjangoType, OptimizerHint
+from django_strawberry_framework import DjangoType, OptimizerHint, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
+from django_strawberry_framework.keyset import (
+    cursor_columns_for,
+    encode_keyset_cursor,
+    order_fingerprint,
+)
+from django_strawberry_framework.optimizer import logger
+from django_strawberry_framework.optimizer import walker as walker_mod
+from django_strawberry_framework.optimizer._context import (
+    begin_execution_frame,
+    end_execution_frame,
+)
 from django_strawberry_framework.optimizer.extension import mutation_payload_child_selections
 from django_strawberry_framework.optimizer.field_meta import FieldMeta
 from django_strawberry_framework.optimizer.join_taxonomy import classify_relation_join
+from django_strawberry_framework.optimizer.lateral_fetch import (
+    LATERAL_STRATEGY,
+    LateralQuerySet,
+)
 from django_strawberry_framework.optimizer.nested_fetch import (
     NestedConnectionRequest,
+    resolve_strategy,
     unwindowable_child_queryset_reason,
 )
-from django_strawberry_framework.optimizer.plans import OptimizationPlan
+from django_strawberry_framework.optimizer.nested_planner import (
+    _coerce_pagination_int,
+    _divergent_key_windows,
+    _record_accounted_keys,
+)
+from django_strawberry_framework.optimizer.plans import (
+    WINDOW_ROW_NUMBER,
+    WINDOW_ROW_NUMBER_REVERSED,
+    WINDOW_TOTAL_COUNT,
+    OptimizationPlan,
+    diff_plan_for_queryset,
+)
 from django_strawberry_framework.optimizer.walker import (
+    _aliased_arguments_diverge,
     _apply_hint,
     _build_child_queryset,
     _build_connection_child_queryset,
+    _concrete_order_columns,
+    _enable_only_for_operation,
     _ensure_connector_only_fields,
     _field_by_graphql_name,
     _graphql_names_by_python_name,
@@ -45,21 +92,27 @@ from django_strawberry_framework.optimizer.walker import (
     _is_fragment,
     _merge_aliased_selections,
     _merge_runtime_prefixes,
+    _plan_connection_relation,
     _prefetch_hint_for_path,
     _record_prefetch_path_keys,
     _record_select_path_keys,
+    _relay_max_results_from_info,
     _resolve_selection_target,
+    _response_key_arguments_conflict,
     _selected_scalar_names,
     _should_include,
     plan_optimizations,
 )
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
+from django_strawberry_framework.types.finalizer import _record_relation_connection
 from django_strawberry_framework.utils._queryset_private import (
     queryset_db,
     queryset_prefetch_lookups,
 )
+from django_strawberry_framework.utils.connections import ConnectionWindowBounds
 from django_strawberry_framework.utils.querysets import _COMBINED_WHAT
+from tests._definition import make_definition
 from tests._info import make_info
 
 from ._link_models import LnkPairChild, LnkParent, LnkSlugChild
@@ -340,10 +393,6 @@ def test_plan_relay_id_projects_real_pk_attname_when_not_id(
     definition field map to drop the ``"id"`` key while keeping
     ``"name"`` as the stand-in pk projection.
     """
-    from strawberry import relay
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-
     registry.clear()
     try:
 
@@ -381,11 +430,6 @@ def test_plan_relay_id_projects_attname_when_pk_is_relation() -> None:
     close. The walker must scan the ``FieldMeta`` values by both
     ``name`` and ``attname``.
     """
-    from apps.library.models import Patron, PatronProfile
-    from strawberry import relay
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-
     registry.clear()
     try:
 
@@ -517,10 +561,6 @@ def test_plan_projects_digit_boundary_field_under_real_django_name() -> None:
     exists to prevent. The walker now resolves the selection name forward against
     the real field names and projects / plans the REAL Django name.
     """
-    from apps.library.models import Edition, Publisher
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-
     registry.clear()
     try:
 
@@ -572,11 +612,6 @@ def test_plan_uses_exact_graphql_names_for_explicitly_named_fields() -> None:
     ``postal_code`` under two names that differ only by casing convention, so a
     case-normalized match would collapse both selections onto one column.
     """
-    import strawberry
-    from apps.library.models import PatronProfile
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-
     registry.clear()
     try:
 
@@ -642,9 +677,6 @@ def _declare_edition_node() -> tuple[type[Model], type[DjangoType]]:
     ``isbn_10``; both publish as ``isbn13`` / ``isbn10``, which ``snake_case``
     cannot reverse, so every selection of them takes the forward-name path.
     """
-    from apps.library.models import Edition
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
 
     class EditionNode(DjangoType):
         class Meta:
@@ -665,8 +697,6 @@ def test_forward_name_maps_build_once_per_type_and_converter(
     The second plan under one converter builds nothing; another converter
     builds its own table once; ``registry.clear()`` drops every table.
     """
-    from django_strawberry_framework.optimizer import walker as walker_mod
-
     registry.clear()
     try:
         edition, edition_node = _declare_edition_node()
@@ -711,7 +741,6 @@ def test_forward_name_maps_answer_per_schema_converter() -> None:
     planned first on the same type, keeps resolving ``isbn13`` and not
     ``bookNumber``.
     """
-    from strawberry.schema.name_converter import NameConverter
 
     class BookNumberConverter(NameConverter):
         @override
@@ -750,11 +779,6 @@ def test_forward_name_maps_wait_for_finalization() -> None:
     resolves nothing. After finalization the same selection resolves to its
     column: nothing the early plan saw outlives it.
     """
-    import strawberry
-    from apps.library.models import PatronProfile
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-
     registry.clear()
     try:
 
@@ -1017,8 +1041,6 @@ def test_merge_aliased_selections_preserves_per_response_key_arguments() -> None
     divergent pagination/sidecar arguments stay detectable
     (``_aliased_arguments_diverge``).
     """
-    from django_strawberry_framework.optimizer.walker import _aliased_arguments_diverge
-
     sel_a = SimpleNamespace(
         name="items",
         alias="first",
@@ -1057,8 +1079,6 @@ def test_aliased_arguments_diverge_false_without_per_key_map() -> None:
     ``_optimizer_response_key_arguments``, so divergence detection returns
     ``False`` rather than raising (spec-033 Decision 6).
     """
-    from django_strawberry_framework.optimizer.walker import _aliased_arguments_diverge
-
     assert _aliased_arguments_diverge(SimpleNamespace()) is False
 
 
@@ -1242,9 +1262,6 @@ def _printing_edition_key_only_plan() -> OptimizationPlan:
     named something other than ``id`` and carries a ``<word>_<digit>`` boundary,
     so one selection answers both halves of the elision contract.
     """
-    from apps.library.models import Edition, Printing
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
 
     class EditionType(DjangoType):
         class Meta:
@@ -1306,8 +1323,6 @@ def test_plan_does_not_elide_fk_to_non_pk_to_field() -> None:
     NAME, so its column holds no genre key and the join it needs to answer
     ``{ id }`` cannot be skipped.
     """
-    from apps.library.models import PatronProfile
-
     plan = plan_optimizations(
         [_sel("favoriteGenre", selections=[_sel("id")])],
         PatronProfile,
@@ -1329,11 +1344,6 @@ def test_plan_does_not_elide_when_target_type_has_custom_id_resolver() -> None:
     column does not carry the house code, so an ``{ id }``-only child selection
     keeps its join.
     """
-    from apps.library.models import Edition, Publisher
-    from strawberry import relay
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-
     registry.clear()
     try:
 
@@ -1368,7 +1378,6 @@ def test_plan_does_not_elide_when_target_type_has_custom_id_resolver() -> None:
 
 def test_plan_uses_definition_custom_id_resolver_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     """B2: custom id resolver checks route through target definition metadata."""
-    from apps.library.models import Edition, Publisher
 
     class PublisherType:
         @classmethod
@@ -1410,7 +1419,6 @@ def test_has_custom_id_resolver_fallback_matches_definition_path() -> None:
     Strawberry Relay default does not (the pre-fix raw ``__dict__`` fallback
     wrongly flagged the latter).
     """
-    from strawberry import relay
 
     @_as_definitionless_django_type
     class PlainCustomTarget:
@@ -2229,7 +2237,6 @@ def test_ensure_connector_only_fields_adds_m2m_target_pk() -> None:
     # ``_ensure_connector_only_fields`` runs during walker construction,
     # before ``plan_optimizations`` finalises the plan into tuples.
     # Build a fresh mutable plan to mirror the walker-internal call site.
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     plan = OptimizationPlan(only_fields=["name"])
     parent_field = FieldMeta.from_django_field(Book._meta.get_field("genres"))
@@ -2243,8 +2250,6 @@ def test_ensure_connector_only_fields_logs_when_connector_unknown(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Connector injection logs when a relation lacks connector metadata."""
-    from django_strawberry_framework.optimizer.walker import logger
-
     plan = plan_optimizations([_sel("name")], Category)
     parent_field = FieldMeta(name="generic", is_relation=True, one_to_many=True)
 
@@ -2521,10 +2526,6 @@ def test_ensure_connector_only_fields_adds_reverse_o2o_connector() -> None:
     attribute reintroduces a lazy load (matching the reverse-FK branch
     behavior in ``_ensure_connector_only_fields``).
     """
-    from apps.library.models import Patron
-
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
-
     plan = OptimizationPlan(only_fields=["id"])
     parent_field = FieldMeta.from_django_field(Patron._meta.get_field("card"))
     _ensure_connector_only_fields(plan, parent_field)
@@ -2540,10 +2541,6 @@ def test_ensure_connector_only_fields_adds_generic_content_type() -> None:
     ``prefetch_attach_columns``; list-prefetch / node-selection child plans share
     ``_ensure_connector_only_fields`` and must not omit the morph half.
     """
-    from apps.library.models import Branch, TaggedItem
-
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
-
     plan = OptimizationPlan(only_fields=["tag"])
     parent_field = FieldMeta.from_django_field(Branch._meta.get_field("tags"))
     _ensure_connector_only_fields(plan, parent_field)
@@ -2820,10 +2817,6 @@ def _connection_relay_types() -> dict[str, tuple[type[Model], type[DjangoType]]]
     and reverse-FK (``Shelf.books``) graph so synthesized ``<field>_connection``
     siblings exist and the partition derivation is exercised against real fields.
     """
-    from apps.library.models import Book, Genre, Shelf
-    from strawberry import relay
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
 
     class BookType(DjangoType):
         class Meta:
@@ -2860,10 +2853,6 @@ def _ordered_connection_types() -> dict[str, tuple[type[Model], type[DjangoType]
     column on a real table instead of a test-only model. Planning builds the
     queryset lazily and never executes it, so no rows are needed.
     """
-    from apps.kanban.models import Card, Decision
-    from strawberry import relay
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
 
     class DecisionType(DjangoType):
         class Meta:
@@ -2955,11 +2944,6 @@ def test_concrete_order_columns_resolves_expression_relspan_and_attname_entries(
     attname, not a field NAME) is accepted directly (spec-033 Decision 4
     scalar-only projection).
     """
-    from apps.library.models import Book
-    from django.db.models import F, OrderBy
-
-    from django_strawberry_framework.optimizer.walker import _concrete_order_columns
-
     columns = _concrete_order_columns(
         [OrderBy(F("title")), "shelf__code", "shelf_id"],
         Book,
@@ -2973,10 +2957,6 @@ def test_plan_connection_relation_unknown_field_is_noop() -> None:
     Defensive guard: ``field_map.get`` returns ``None``, so no window prefetch is
     planned and no resolver key recorded - the selection falls back per-parent.
     """
-    from apps.library.models import Genre
-
-    from django_strawberry_framework.optimizer.walker import _plan_connection_relation
-
     plan = OptimizationPlan()
     _plan_connection_relation(
         _conn_sel("booksConnection", node_selections=[_sel("id")], arguments={"first": 2}),
@@ -2996,10 +2976,6 @@ def test_plan_connection_relation_unknown_field_is_noop() -> None:
 
 def test_plan_connection_relation_field_without_related_model_is_noop() -> None:
     """A relation field whose ``related_model`` is ``None`` is left unplanned (defensive)."""
-    from apps.library.models import Genre
-
-    from django_strawberry_framework.optimizer.walker import _plan_connection_relation
-
     plan = OptimizationPlan()
     _plan_connection_relation(
         _conn_sel("booksConnection", node_selections=[_sel("id")], arguments={"first": 2}),
@@ -3025,8 +3001,6 @@ def test_plan_connection_relation_non_windowable_partition_is_noop() -> None:
     single-valued kind as not windowable; the planner leaves the selection
     unplanned (spec-033 Decision 6).
     """
-    from django_strawberry_framework.optimizer.walker import _plan_connection_relation
-
     registry.clear()
     try:
         plan = OptimizationPlan()
@@ -3062,16 +3036,6 @@ def test_non_windowable_relation_still_records_a_malformed_pagination_identity(
     Both record the relation's identity, so strictness leaves the pipeline's
     own cursor error to the field.
     """
-    from strawberry import relay
-
-    from django_strawberry_framework import finalize_django_types
-    from django_strawberry_framework.keyset import (
-        cursor_columns_for,
-        encode_keyset_cursor,
-        order_fingerprint,
-    )
-    from django_strawberry_framework.optimizer.walker import _plan_connection_relation
-
     registry.clear()
     try:
         meta: dict[str, object] = {"model": Category, "fields": ("id", "name")}
@@ -3111,8 +3075,6 @@ def test_non_windowable_relation_still_records_a_malformed_pagination_identity(
 @pytest.mark.parametrize("divergent", [False, True], ids=["shared", "divergent"])
 def test_record_accounted_keys_with_no_keys_records_nothing(*, divergent: bool) -> None:
     """An empty key list records no identity, even under the shared-window scheme."""
-    from django_strawberry_framework.optimizer.nested_planner import _record_accounted_keys
-
     plan = OptimizationPlan()
     _record_accounted_keys(
         plan,
@@ -3142,11 +3104,6 @@ def test_relation_connections_slot_recorded() -> None:
 
 def test_relation_connections_slot_records_nothing_for_suppressed_shapes() -> None:
     """A ``"list"``-narrowed relation records no slot entry (suppressed shape)."""
-    from apps.library.models import Book, Genre
-    from strawberry import relay
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-
     registry.clear()
     try:
 
@@ -3181,11 +3138,6 @@ def test_record_relation_connection_is_idempotent() -> None:
     branch share this writer; an idempotent dict assignment means the rerun
     records the same mapping the first attach did (spec-033 Decision 3).
     """
-    from apps.library.models import Genre
-
-    from django_strawberry_framework.types.finalizer import _record_relation_connection
-    from tests._definition import make_definition
-
     definition = make_definition(Genre)
     assert definition.relation_connections is None
     _record_relation_connection(definition, "books_connection", "books")
@@ -3206,11 +3158,6 @@ def test_relation_connections_slot_recorded_on_partial_finalize_rerun(
     re-run takes the ``_SYNTHESIZED_RELATION_CONNECTION_MARKER`` early-``continue``
     branch, which must re-record the slot (spec-033 Decision 3 re-entrancy path).
     """
-    from apps.library.models import Book, Genre
-    from strawberry import relay
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-
     registry.clear()
     try:
 
@@ -3265,11 +3212,6 @@ def test_nested_connection_planned_as_windowed_prefetch() -> None:
     (spec-033 Decision 4) plans the row-number window WITHOUT
     ``_dst_total_count`` - the common cheap-page shape.
     """
-    from django_strawberry_framework.optimizer.plans import (
-        WINDOW_ROW_NUMBER,
-        WINDOW_TOTAL_COUNT,
-    )
-
     registry.clear()
     try:
         types = _connection_relay_types()
@@ -3318,12 +3260,6 @@ def test_plan_projects_digit_boundary_relation_connection_as_windowed_prefetch()
     query (a per-parent N+1). The walker now forward-matches the synthesized slot
     key and plans the batched window.
     """
-    from apps.library.models import Printing, Publisher
-    from strawberry import relay
-    from strawberry.schema.name_converter import NameConverter
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-
     registry.clear()
     try:
 
@@ -3423,8 +3359,6 @@ def test_nested_connection_total_count_planned_only_when_observable(
     with no ``after`` keeps ``offset == 0`` so the shape itself never forces the
     count.
     """
-    from django_strawberry_framework.optimizer.plans import WINDOW_TOTAL_COUNT
-
     registry.clear()
     try:
         types = _connection_relay_types()
@@ -3463,8 +3397,6 @@ def test_nested_connection_first_page_has_next_uses_probe_not_count() -> None:
     ``_dst_total_count`` annotation, and the forward row-number bound is
     ``limit + 1`` (``<= 4`` for ``first: 3``), not the page's ``<= 3``.
     """
-    from django_strawberry_framework.optimizer.plans import WINDOW_TOTAL_COUNT
-
     registry.clear()
     try:
         types = _connection_relay_types()
@@ -3499,8 +3431,6 @@ def test_nested_connection_first_page_total_count_keeps_count_and_skips_probe() 
     the page bound is the plain ``limit`` (``<= 3`` for ``first: 3``), never the
     ``limit + 1`` sentinel bound - even with ``hasNextPage`` also selected.
     """
-    from django_strawberry_framework.optimizer.plans import WINDOW_TOTAL_COUNT
-
     registry.clear()
     try:
         types = _connection_relay_types()
@@ -3539,10 +3469,6 @@ def test_nested_connection_offset_window_count_free_unless_total_selected() -> N
     annotation; selecting ``totalCount`` resolves it to ``COUNTED`` and keeps the
     annotation.
     """
-    from strawberry.relay.utils import to_base64
-
-    from django_strawberry_framework.optimizer.plans import WINDOW_TOTAL_COUNT
-
     after_offset_1 = to_base64("arrayconnection", "1")
 
     registry.clear()
@@ -3603,7 +3529,6 @@ def test_window_slice_from_first_after_literals() -> None:
         types = _connection_relay_types()
         genre_model, genre_type = types["Genre"]
         # after cursor for offset 1 -> start 2; first 3 -> upper bound 5.
-        from strawberry.relay.utils import to_base64
 
         after = to_base64("arrayconnection", "1")
         plan = plan_optimizations(
@@ -3642,8 +3567,6 @@ def test_window_slice_coerces_int_literal_strings() -> None:
     ``SliceMetadata.from_arguments`` reaches its own ``isinstance`` gate (the
     shipped malformed-value behavior) rather than the walker pre-judging it.
     """
-    from django_strawberry_framework.optimizer.nested_planner import _coerce_pagination_int
-
     assert _coerce_pagination_int("2") == 2
     assert _coerce_pagination_int(2) == 2
     assert _coerce_pagination_int(None) is None
@@ -3663,10 +3586,6 @@ def test_relay_max_results_from_optimizer_info_shapes() -> None:
     Without it ``SliceMetadata.from_arguments(max_results=None)`` would
     dereference ``info.schema.config`` and raise ``AttributeError`` in production.
     """
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.optimizer.walker import _relay_max_results_from_info
-
     # Production shape: a bare GraphQLSchema with the Strawberry schema filed on it.
     assert _relay_max_results_from_info(_fake_info(relay_max_results=7)) == 7
     # Resolve-time shape: ``schema.config`` directly on the Strawberry ``Schema``.
@@ -3731,8 +3650,6 @@ def test_window_last_only_uses_reversed_row_number() -> None:
     ``_dst_row_number_reversed__lte`` filter the window would over-fetch every
     child row per parent (spec-033 Decision 4 reversed-row-number branch).
     """
-    from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER_REVERSED
-
     registry.clear()
     try:
         types = _connection_relay_types()
@@ -3803,8 +3720,6 @@ def test_m2m_shared_child_partitions_per_parent(direction: str) -> None:
     partition; the two ``partition_expr`` equalities record the derivation
     itself.
     """
-    from apps.library.models import Book, Branch, Genre, Shelf
-
     # Reverse M2M (Genre.books) partitions through the child's forward M2M field.
     assert classify_relation_join(Genre._meta.get_field("books")).partition_expr == "genres"
     # Forward M2M (Book.genres) partitions by the reverse query name.
@@ -4065,8 +3980,6 @@ def test_malformed_slice_arguments_emit_no_window_but_record_resolver_key(
     which stay fully unplanned so strictness CAN flag them. The debug log names
     the real response key, never the shared-window ``None`` payload key.
     """
-    from django_strawberry_framework.optimizer import logger
-
     registry.clear()
     try:
         caplog.set_level("DEBUG", logger=logger.name)
@@ -4137,11 +4050,6 @@ def test_fallback_not_planned_sidecar_input(sidecar: dict[str, object]) -> None:
 
 def test_divergent_key_windows_shared_payload_uses_none_key() -> None:
     """The shared-window scheme feeds ``{None: arguments}``; unmerged sels have no per-key map."""
-    import base64
-
-    from django_strawberry_framework.optimizer.nested_planner import _divergent_key_windows
-    from django_strawberry_framework.utils.connections import ConnectionWindowBounds
-
     info = _fake_info()
 
     planned, malformed, fallbacks = _divergent_key_windows({None: {"first": 2}}, info)
@@ -4188,8 +4096,6 @@ def test_shared_window_sidecar_logs_response_keys_not_none(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Shared-window sidecar fallback logs the real response keys, never ``None``."""
-    from django_strawberry_framework.optimizer import logger
-
     registry.clear()
     try:
         caplog.set_level("DEBUG", logger=logger.name)
@@ -4336,8 +4242,6 @@ def test_divergent_mixed_sidecar_plans_only_the_plain_key(
     per-key scheme must not let one alias's refusal drag its siblings per-parent.
     The debug diagnostic names only the dropped response key.
     """
-    from django_strawberry_framework.optimizer import logger
-
     registry.clear()
     try:
         caplog.set_level("DEBUG", logger=logger.name)
@@ -4423,8 +4327,6 @@ def test_divergent_unwindowable_key_falls_back_alone() -> None:
     pipeline resolves correctly, so that key stays fully unplanned (no
     identity - strictness-visible) without dragging the plain sibling down.
     """
-    import base64
-
     registry.clear()
     try:
         types = _connection_relay_types()
@@ -4467,8 +4369,6 @@ def test_divergent_union_observer_keeps_count_on_every_window() -> None:
     probe/count mutual-exclusion holds per window (enforced by the
     ``NestedConnectionRequest`` seam).
     """
-    from django_strawberry_framework.optimizer.plans import WINDOW_TOTAL_COUNT
-
     registry.clear()
     try:
         types = _connection_relay_types()
@@ -4518,11 +4418,6 @@ def test_merge_flags_same_key_conflicting_arguments() -> None:
     the literal-vs-variable vocabulary split (``"2"`` vs ``2``) - must NOT
     conflict.
     """
-    from django_strawberry_framework.optimizer.walker import (
-        _merge_aliased_selections,
-        _response_key_arguments_conflict,
-    )
-
     conflicted = _merge_aliased_selections(
         [
             _sel("loansConnection", arguments={"first": 1}),
@@ -4713,11 +4608,6 @@ def test_divergent_all_keys_fallback_stays_unplanned() -> None:
 
 def test_fallback_not_planned_skip_hint() -> None:
     """An ``OptimizerHint.SKIP`` on the relation suppresses window planning."""
-    from apps.library.models import Book, Genre
-    from strawberry import relay
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-
     registry.clear()
     try:
 
@@ -4763,12 +4653,6 @@ def test_skip_hint_with_sidecar_does_not_log_sidecar(caplog: pytest.LogCaptureFi
     log. Plan output is identical to the pre-fold outer sidecar gate; only
     the diagnostic differs (spec-053 D1).
     """
-    from apps.library.models import Book, Genre
-    from strawberry import relay
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-    from django_strawberry_framework.optimizer import logger
-
     registry.clear()
     try:
         caplog.set_level("DEBUG", logger=logger.name)
@@ -4852,8 +4736,6 @@ def test_alias_merge_total_count_observer_keeps_count_and_skips_probe() -> None:
     the merged selection, so one alias observing the count is conservative for
     all. Proven by the count annotation surviving on the single planned window.
     """
-    from django_strawberry_framework.optimizer.plans import WINDOW_TOTAL_COUNT
-
     registry.clear()
     try:
         types = _connection_relay_types()
@@ -4917,10 +4799,6 @@ def test_planned_resolver_keys_include_connection_field() -> None:
 
 def test_both_shape_connection_to_attr_coexists_with_list_and_consumer_prefetch() -> None:
     """The list sibling, the connection window, and a consumer accessor prefetch coexist."""
-    from apps.library.models import Genre
-
-    from django_strawberry_framework.optimizer.plans import diff_plan_for_queryset
-
     registry.clear()
     try:
         types = _connection_relay_types()
@@ -4964,11 +4842,6 @@ def test_both_shape_connection_to_attr_coexists_with_list_and_consumer_prefetch(
 
 def test_visibility_target_window_flips_cacheable_false() -> None:
     """A windowed target overriding ``get_queryset`` flips ``plan.cacheable`` False."""
-    from apps.library.models import Book, Genre
-    from strawberry import relay
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-
     registry.clear()
     try:
 
@@ -5013,11 +4886,6 @@ def test_visibility_target_window_flips_cacheable_false() -> None:
 
 def test_distinct_child_queryset_left_unplanned_for_correct_total_count() -> None:
     """A ``.distinct()``-ing target ``get_queryset`` leaves the relation unplanned."""
-    from apps.library.models import Book, Genre
-    from strawberry import relay
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-
     registry.clear()
     try:
 
@@ -5077,10 +4945,6 @@ def _genre_books_connection_with_nested_relation_types(
     ``.distinct()``-ing ``get_queryset`` (the DISTINCT fallback); otherwise the
     caller supplies a malformed cursor for the malformed-slice fallback.
     """
-    from apps.library.models import Book, Genre, Shelf
-    from strawberry import relay
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
 
     class ShelfType(DjangoType):
         class Meta:
@@ -5188,11 +5052,6 @@ def test_secondary_type_relation_shapes_nested_recognition() -> None:
     routes through the primary) does not window-plan it - it falls back
     per-parent (spec-033 Decision 3 primary-type contract).
     """
-    from apps.library.models import Book, Genre
-    from strawberry import relay
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-
     registry.clear()
     try:
 
@@ -5246,11 +5105,6 @@ def test_secondary_type_relation_shapes_nested_recognition() -> None:
 
 def test_window_subquery_wrap_preserves_only_mask_and_child_select_related() -> None:
     """Window annotations compose with a child ``.only()`` and a child ``select_related``."""
-    from apps.library.models import Book, Genre, Shelf
-    from strawberry import relay
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-
     registry.clear()
     try:
 
@@ -5291,7 +5145,6 @@ def test_window_subquery_wrap_preserves_only_mask_and_child_select_related() -> 
         assert child_qs is not None
         assert "shelf" in str(child_qs.query.select_related)
         # Window annotations are still present alongside the only() mask.
-        from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER
 
         assert WINDOW_ROW_NUMBER in child_qs.query.annotations
     finally:
@@ -5496,7 +5349,6 @@ def test_mutation_scalar_only_connection_window_no_only() -> None:
         assert prefetch.queryset is not None
         assert prefetch.queryset.query.deferred_loading == (frozenset(), True)
         # The window itself is still planned (annotation present, prefetch kept).
-        from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER
 
         assert WINDOW_ROW_NUMBER in prefetch.queryset.query.annotations
     finally:
@@ -5520,10 +5372,6 @@ def test_connection_parent_link_columns_follow_the_projection_gate(
     keeps no ``only_fields`` (spec-035 Decision 4 / Edge cases
     #"every projection writer checks the gate").
     """
-    from strategy_schemas import make_django_type
-
-    from django_strawberry_framework import finalize_django_types
-
     registry.clear()
     try:
         make_django_type("LnkSlugChildType", LnkSlugChild, ("id", "name"))
@@ -5597,8 +5445,6 @@ def test_enable_only_defaults_enabled_without_info() -> None:
     by default (spec-035 Decision 4 / Edge cases #"defaults to enabled"). Also
     drives the ``_enable_only_for_operation`` three-arm truth table directly.
     """
-    from django_strawberry_framework.optimizer.walker import _enable_only_for_operation
-
     # No info -> enabled.
     plan = plan_optimizations([_sel("name")], Category, info=None)
     assert plan.only_fields == ("name",)
@@ -5679,10 +5525,6 @@ def _shelf_types_with_consumer_books(
     ``strawberry.field(resolver=...)`` corner); ``meta_extra`` extends its
     ``Meta`` (the ``optimizer_hints`` opt-in).
     """
-    import strawberry
-    from apps.library.models import Book, Shelf
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
 
     class BookType(DjangoType):
         class Meta:
@@ -5740,8 +5582,6 @@ def test_consumer_assigned_relation_left_fully_unplanned() -> None:
 
 def test_consumer_assigned_relation_with_hint_plans_per_the_hint() -> None:
     """An explicit ``OptimizerHint`` is the documented opt-in for delegating resolvers."""
-    from django_strawberry_framework import OptimizerHint
-
     registry.clear()
     try:
         shelf_model, shelf_type = _shelf_types_with_consumer_books(
@@ -5774,9 +5614,6 @@ def test_default_relations_still_plan_grandchildren_under_resolvers() -> None:
     """
     registry.clear()
     try:
-        from apps.library.models import Book, Genre, Shelf
-
-        from django_strawberry_framework import DjangoType, finalize_django_types
 
         class ShelfType(DjangoType):
             class Meta:
@@ -5847,10 +5684,6 @@ def test_refusing_nested_fetch_strategy_leaves_selection_unplanned() -> None:
     after refusal, so even a callback that mutates every plan field behaves
     exactly like the other refusal arms.
     """
-    from django_strawberry_framework.optimizer._context import (
-        begin_execution_frame,
-        end_execution_frame,
-    )
 
     def decline_after_mutation(_request: NestedConnectionRequest, plan: OptimizationPlan) -> bool:
         _mutate_every_plan_field(plan, "leaked")
@@ -5888,10 +5721,6 @@ def test_refusing_nested_fetch_strategy_leaves_selection_unplanned() -> None:
 
 def test_accepting_nested_fetch_strategy_merges_candidate_exactly_once() -> None:
     """An accepted dirty candidate commits every field with duplicate collapse."""
-    from django_strawberry_framework.optimizer._context import (
-        begin_execution_frame,
-        end_execution_frame,
-    )
 
     def accept_after_mutation(_request: NestedConnectionRequest, plan: OptimizationPlan) -> bool:
         _mutate_every_plan_field(plan, "accepted")
@@ -5931,13 +5760,6 @@ def test_accepting_nested_fetch_strategy_merges_candidate_exactly_once() -> None
 
 def test_raising_nested_fetch_strategy_leaves_parent_byte_identical() -> None:
     """A strategy exception propagates before the walker commits any candidate."""
-    from apps.library.models import Genre
-
-    from django_strawberry_framework.optimizer._context import (
-        begin_execution_frame,
-        end_execution_frame,
-    )
-    from django_strawberry_framework.optimizer.walker import _plan_connection_relation
 
     def raise_after_mutation(
         _request: NestedConnectionRequest,
@@ -5997,11 +5819,6 @@ def test_connection_custom_get_queryset_builds_base_child_queryset_once() -> Non
     duplicate permission work and allow a non-idempotent hook to pass the safety
     gate with one queryset but plan a different one.
     """
-    from apps.library.models import Book, Genre
-    from strawberry import relay
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-
     calls = 0
     registry.clear()
     try:
@@ -6057,11 +5874,6 @@ def test_connection_default_manager_unsafe_queryset_is_left_unplanned() -> None:
     fall back fully unplanned rather than relying on strategy-specific late
     guards.
     """
-    from apps.library.models import Annotation, Patron, PatronProfile
-    from strawberry import relay
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-
     registry.clear()
     try:
 
@@ -6118,16 +5930,6 @@ def test_lateral_strategy_plans_a_lateral_queryset_through_the_walker() -> None:
     lateral backend attaches its spec-carrying queryset and the plan records
     the resolver identities exactly as the windowed default would.
     """
-    from django_strawberry_framework.optimizer._context import (
-        begin_execution_frame,
-        end_execution_frame,
-    )
-    from django_strawberry_framework.optimizer.lateral_fetch import (
-        LATERAL_STRATEGY,
-        LateralQuerySet,
-    )
-    from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER
-
     registry.clear()
     frame = begin_execution_frame({}, nested=False, strategy=LATERAL_STRATEGY)
     try:
@@ -6200,16 +6002,6 @@ def test_unsafe_child_queryset_left_unplanned_under_both_strategies(
     fully-unplanned fallback - no prefetch, no resolver keys, strictness
     sees the per-parent access - identically under both built-in strategies.
     """
-    from apps.library.models import Book, Genre
-    from strawberry import relay
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-    from django_strawberry_framework.optimizer._context import (
-        begin_execution_frame,
-        end_execution_frame,
-    )
-    from django_strawberry_framework.optimizer.nested_fetch import resolve_strategy
-
     registry.clear()
     frame = begin_execution_frame({}, nested=False, strategy=resolve_strategy(strategy_name))
     try:
@@ -6264,16 +6056,6 @@ def test_combined_child_queryset_is_planned_as_its_primary_key_set(strategy_name
     combinator cannot, so the nested connection is planned under both built-in
     strategies instead of being left to the per-parent fallback.
     """
-    from apps.library.models import Book, Genre
-    from strawberry import relay
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
-    from django_strawberry_framework.optimizer._context import (
-        begin_execution_frame,
-        end_execution_frame,
-    )
-    from django_strawberry_framework.optimizer.nested_fetch import resolve_strategy
-
     registry.clear()
     frame = begin_execution_frame({}, nested=False, strategy=resolve_strategy(strategy_name))
     try:
@@ -6365,8 +6147,6 @@ def test_consumer_assigned_relation_may_hint_prefetch_with_to_attr() -> None:
     reads the attribute - the generated-resolver cache contract is not in
     play. The hint plans verbatim, ``to_attr`` intact.
     """
-    from apps.library.models import Book
-
     registry.clear()
     explicit = Prefetch(
         "books",
@@ -6399,10 +6179,6 @@ def _generic_connection_types() -> dict[str, tuple[type[Model], type[DjangoType]
     acceptance tests in
     ``examples/fakeshop/apps/library/tests/test_generic_connection.py`` drive).
     """
-    from apps.library.models import Branch, TaggedItem
-    from strawberry import relay
-
-    from django_strawberry_framework import DjangoType, finalize_django_types
 
     class TaggedItemNode(DjangoType):
         class Meta:
@@ -6437,8 +6213,6 @@ async def test_generic_connection_planning_does_no_sync_db_io_under_async() -> N
     needs ``DJANGO_ALLOW_ASYNC_UNSAFE``, which would also mask the plan-time
     lookup - so the planner is driven directly here (package tier).
     """
-    from django.contrib.contenttypes.models import ContentType
-
     registry.clear()
     try:
         types = _generic_connection_types()

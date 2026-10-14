@@ -35,6 +35,10 @@ from __future__ import annotations
 import importlib
 import sys
 
+from django.urls import clear_url_caches
+
+from django_strawberry_framework.registry import registry
+
 # Dependency-safe reload order: glossary precedes kanban because
 # ``kanban.schema``'s ``CardGlossaryTermType.term`` is a FK to
 # ``glossary.GlossaryTerm`` and finalize rejects the kanban registration unless
@@ -68,8 +72,6 @@ def _reload_or_import(module_name: str) -> None:
 
 def reload_project_schema_shell() -> None:
     """Rebuild the aggregate schema and URLconf around registered app types."""
-    from django.urls import clear_url_caches
-
     _reload_or_import("config.schema")
     _reload_or_import("config.urls")
     clear_url_caches()
@@ -87,8 +89,6 @@ def reload_all_project_schemas() -> None:
     it directly into the test bodies, so there is no ``import conftest`` boundary
     in the test modules.
     """
-    from django_strawberry_framework.registry import registry
-
     registry.clear()
     for module_name in _PROJECT_APP_SCHEMA_MODULES:
         _reload_or_import(module_name)

@@ -82,9 +82,10 @@ from apps.library import models as library_models
 from apps.products import models
 from apps.products.services import create_users, seed_data
 from asgiref.sync import sync_to_async
+from config import schema as config_schema
 from cross_web import DjangoHTTPRequestAdapter
 from django.conf import settings
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Permission, User
 from django.core.files.uploadhandler import MemoryFileUploadHandler
 from django.core.handlers.asgi import ASGIHandler
 from django.http import HttpRequest, HttpResponseBase, HttpResponseForbidden
@@ -225,10 +226,8 @@ def _with_a_middleware_that_sets_the_encoding() -> override_settings:
 
 def _ide_off_view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
     """The package view with the IDE and GET queries both turned off (row 7)."""
-    from config.schema import schema
-
     view = DjangoGraphQLView.as_view(
-        schema=schema,
+        schema=config_schema.schema,
         graphql_ide=None,
         allow_queries_via_get=False,
     )
@@ -248,11 +247,9 @@ def _production_profile_view(
     recipe over the real fakeshop ``Query`` / ``Mutation`` surface, rebuilt per
     request like every other probe so it tracks the per-test schema reload.
     """
-    from config.schema import Mutation, Query
-
     schema = DjangoSchema(
-        query=Query,
-        mutation=Mutation,
+        query=config_schema.Query,
+        mutation=config_schema.Mutation,
         config=strawberry_config(),
         # A FACTORY, not an instance: Strawberry deprecates extension instances in
         # ``extensions=`` (one instance would be shared across every request), and
@@ -273,9 +270,7 @@ async def _async_graphql_view(
     **kwargs: object,
 ) -> HttpResponseBase:
     """The async twin, mounted so Django dispatches it on the event loop."""
-    from config.schema import schema
-
-    view = AsyncDjangoGraphQLView.as_view(schema=schema)
+    view = AsyncDjangoGraphQLView.as_view(schema=config_schema.schema)
     return await view(request, *args, **kwargs)
 
 
@@ -408,10 +403,9 @@ def _capped_view(
 
     @_carrying_the_packages_csrf_mark(view_class)
     def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
-        from config.schema import schema
 
         built = view_class.as_view(
-            schema=schema,
+            schema=config_schema.schema,
             max_request_body_bytes=limit,
             multipart_uploads_enabled=uploads,
         )
@@ -434,10 +428,8 @@ async def _async_capped_multipart_view(
     the package view with ``multipart_uploads_enabled=True``), so this is the one
     mount the async half needs.
     """
-    from config.schema import schema
-
     view = AsyncDjangoGraphQLView.as_view(
-        schema=schema,
+        schema=config_schema.schema,
         max_request_body_bytes=_ROOMY_CAP,
         multipart_uploads_enabled=True,
     )
@@ -456,9 +448,10 @@ async def _async_cap_misconfigured_view(
     ``_async_graphql_view`` is: the ``await`` is the difference, and the
     misconfiguration has to be refused on the event loop too.
     """
-    from config.schema import schema
-
-    view = AsyncDjangoGraphQLView.as_view(schema=schema, max_request_body_bytes=_INVALID_CAP)
+    view = AsyncDjangoGraphQLView.as_view(
+        schema=config_schema.schema,
+        max_request_body_bytes=_INVALID_CAP,
+    )
     return await view(request, *args, **kwargs)
 
 
@@ -473,9 +466,10 @@ async def _async_cap_tiny_view(
     ``_async_graphql_view`` is: the ``await`` is the difference, and one mount
     needs it.
     """
-    from config.schema import schema
-
-    view = AsyncDjangoGraphQLView.as_view(schema=schema, max_request_body_bytes=_TINY_CAP)
+    view = AsyncDjangoGraphQLView.as_view(
+        schema=config_schema.schema,
+        max_request_body_bytes=_TINY_CAP,
+    )
     return await view(request, *args, **kwargs)
 
 
@@ -491,10 +485,8 @@ async def _async_cap_tiny_multipart_view(
     be refused before Django's parser on the event loop too, and the under-cap
     control has to reach the schema, which needs uploads enabled.
     """
-    from config.schema import schema
-
     view = AsyncDjangoGraphQLView.as_view(
-        schema=schema,
+        schema=config_schema.schema,
         max_request_body_bytes=_TINY_CAP,
         multipart_uploads_enabled=True,
     )
@@ -516,9 +508,7 @@ def _upstream_graphql_view(
     package view (its own request adapter and its own ``parse_json``) rather than
     to a patch that was still quietly installed.
     """
-    from config.schema import schema
-
-    view = UpstreamGraphQLView.as_view(schema=schema)
+    view = UpstreamGraphQLView.as_view(schema=config_schema.schema)
     return view(request, *args, **kwargs)
 
 
@@ -619,8 +609,6 @@ def _user_who_can_add_categories() -> User:
     to grant the permission explicitly - the same way ``test_products_api.py``
     does - or it fails on authorization rather than on its own subject.
     """
-    from django.contrib.auth.models import Permission
-
     create_users(1)
     user = User.objects.get(username="view_category_1")
     user.user_permissions.add(

@@ -1183,10 +1183,6 @@ def test_masking_leaves_the_original_result_holding_its_originals() -> None:
 
 def test_error_policy_extension_on_operation_exploding_execution_context() -> None:
     """Execution context with exploding result setter is safely ignored during exception handling."""
-    from django_strawberry_framework.extensions.error_policy import (
-        DjangoErrorPolicyExtension,
-    )
-
     ext = DjangoErrorPolicyExtension()
 
     call_count = 0

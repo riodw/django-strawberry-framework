@@ -7,11 +7,20 @@ Async field colour on the wire lives in
 
 import functools
 import typing
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import strawberry
 from asgiref.sync import markcoroutinefunction
+from graphql import (
+    GraphQLList,
+    GraphQLNonNull,
+    GraphQLNullableType,
+    GraphQLScalarType,
+    GraphQLString,
+)
+from strawberry.types.base import StrawberryList
 from typing_extensions import Self, override
 
 import django_strawberry_framework.utils.typing as typing_module
@@ -28,6 +37,7 @@ from django_strawberry_framework.utils.typing import (
     unwrap_non_null,
     unwrap_return_type,
 )
+from tests._info import make_info
 
 
 def test_typing_exports_all() -> None:
@@ -162,7 +172,6 @@ def test_unwrap_container_type_peels_containers_but_not_a_leaf_with_of_type() ->
     contract: an ``Edge`` subclass that happens to carry an
     ``of_type`` attribute must be returned as the leaf, not peeled into.
     """
-    from strawberry.types.base import StrawberryList
 
     class Edge:
         of_type = "not a wrapper"
@@ -173,8 +182,6 @@ def test_unwrap_container_type_peels_containers_but_not_a_leaf_with_of_type() ->
 
 def test_unwrap_container_type_raises_on_cyclic_container_stack() -> None:
     """A cyclic container chain hits the Power-of-Ten bound and fails loud."""
-    from strawberry.types.base import StrawberryList
-
     cyclic = StrawberryList(of_type=str)
     cyclic.of_type = cyclic  # never bottoms out
 
@@ -308,8 +315,6 @@ def test_is_marked_coroutine_function_reads_the_marker(value: object, *, expecte
 
 def test_strawberry_schema_from_info_and_schema() -> None:
     """Private ``_strawberry_schema`` digs stay on the shared typing helpers."""
-    from types import SimpleNamespace
-
     inner = object()
     assert strawberry_schema_from_schema(SimpleNamespace(_strawberry_schema=inner)) is inner
     assert strawberry_schema_from_schema(inner) is inner
@@ -329,10 +334,6 @@ def test_strawberry_schema_from_info_reads_both_info_flavors() -> None:
     carries the Strawberry one as ``_strawberry_schema``. An info with no schema reads
     as ``None``.
     """
-    from types import SimpleNamespace
-
-    from tests._info import make_info
-
     info = make_info()
     schema = info.schema
     assert isinstance(schema, strawberry.Schema)
@@ -343,8 +344,6 @@ def test_strawberry_schema_from_info_reads_both_info_flavors() -> None:
 
 def test_schema_config_from_info_prefers_wrapped_then_direct() -> None:
     """Plan-time ``_strawberry_schema.config`` wins over bare ``schema.config``."""
-    from types import SimpleNamespace
-
     wrapped = SimpleNamespace(
         schema=SimpleNamespace(
             _strawberry_schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=7)),
@@ -371,8 +370,6 @@ def test_schema_config_from_info_explicit_none_wrapped_falls_back_to_direct() ->
     the wrapped dig yields ``None`` and ``schema_config_from_info`` must still
     reach the bare ``schema.config`` fallback rather than short-circuiting.
     """
-    from types import SimpleNamespace
-
     info = SimpleNamespace(
         schema=SimpleNamespace(
             _strawberry_schema=None,
@@ -407,7 +404,6 @@ def test_unwrap_graphql_type_accepts_exact_wrapper_depth() -> None:
 
 def test_unwrap_container_type_accepts_exact_wrapper_depth() -> None:
     """The configured depth is inclusive for Strawberry containers too."""
-    from strawberry.types.base import StrawberryList
 
     class Inner:
         pass
@@ -421,8 +417,6 @@ def test_unwrap_container_type_accepts_exact_wrapper_depth() -> None:
 
 def test_unwrap_return_type_preserves_none_inner_type() -> None:
     """An ``of_type`` wrapper may carry ``None`` while being resolved."""
-    from types import SimpleNamespace
-
     assert unwrap_return_type(SimpleNamespace(of_type=None)) is None
 
 
@@ -525,8 +519,6 @@ def test_unwrap_non_null_peels_only_non_null_layers() -> None:
     why the resource policy's list-vs-connection classification could not use it
     and grew raw ``while isinstance`` loops instead.
     """
-    from graphql import GraphQLList, GraphQLNonNull, GraphQLScalarType, GraphQLString
-
     # graphql-core's ``GraphQLNamedType.__new__`` widens every built-in scalar to its base.
     assert isinstance(GraphQLString, GraphQLScalarType)
     inner = GraphQLList(GraphQLNonNull(GraphQLString))
@@ -543,7 +535,6 @@ def test_unwrap_non_null_raises_on_a_cyclic_non_null_chain() -> None:
     this replaced looked safe. A hand-built or corrupted wrapper is the case the
     bound exists for, and an unbounded loop on one hangs rather than failing.
     """
-    from graphql import GraphQLNonNull, GraphQLNullableType
 
     class _CyclicNonNull(GraphQLNonNull[GraphQLNullableType]):
         # basedpyright: GraphQLNonNull's constructor refuses a non-null wrapped type, so the

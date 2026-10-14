@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator
 from functools import partial
+from types import SimpleNamespace
 from typing import TypeVar
 
 import pytest
@@ -57,16 +58,26 @@ from django_strawberry_framework.filters.base import (
     RelationPkMultipleFilter,
     _accepted_globalid_type_names,
     _bound_field_name,
+    _coerce_int_in_members,
     _decode_and_validate_global_id,
     _filter_schema,
+    _marked_pk_field_name,
     _relation_uses_non_pk_to_field,
     _target_definition_for,
     membership_in_filter_class,
     relation_identity_column,
     resolve_globalid_target_definition,
 )
+from django_strawberry_framework.filters.factories import FilterArgumentsFactory
+from django_strawberry_framework.orders import OrderSet
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
+from tests.filters.fixtures.filtersets import (
+    BranchFilter,
+    BranchFilterByPath,
+    BranchFilterByString,
+    ShelfFilter,
+)
 
 _FilterT = TypeVar("_FilterT", bound=Filter)
 
@@ -591,8 +602,6 @@ def test_relation_uses_non_pk_to_field_false_for_generic_foreign_key() -> None:
 
 def test_relation_uses_non_pk_to_field_false_for_unreadable_relation_flags() -> None:
     """A descriptor whose relation flags are not booleans is not flagged (no raise)."""
-    from types import SimpleNamespace
-
     assert _relation_uses_non_pk_to_field(SimpleNamespace(many_to_many="yes")) is False
 
 
@@ -726,14 +735,12 @@ def test_lazy_related_class_mixin_resolves_absolute_path() -> None:
         "tests.filters.fixtures.filtersets.ShelfFilter",
         None,
     )
-    from tests.filters.fixtures.filtersets import ShelfFilter
 
     assert resolved is ShelfFilter
 
 
 def test_lazy_related_class_mixin_falls_back_to_bound_module() -> None:
     mixin = LazyRelatedClassMixin()
-    from tests.filters.fixtures.filtersets import BranchFilter, ShelfFilter
 
     resolved = mixin.resolve_lazy_class("ShelfFilter", BranchFilter)
     assert resolved is ShelfFilter
@@ -765,8 +772,6 @@ def test_lazy_related_class_mixin_raises_when_unresolved_string_has_no_bound_cla
 
 
 def test_related_filter_accepts_class_argument() -> None:
-    from tests.filters.fixtures.filtersets import ShelfFilter
-
     f = RelatedFilter(ShelfFilter)
     assert f._filterset is ShelfFilter
 
@@ -784,8 +789,6 @@ def test_related_filter_accepts_unqualified_name_argument() -> None:
 def test_related_filter_bind_filterset_sets_bound_filterset() -> None:
     f = RelatedFilter("ShelfFilter")
 
-    from tests.filters.fixtures.filtersets import BranchFilter, ShelfFilter
-
     f.bind_filterset(ShelfFilter)
     assert f.bound_filterset is ShelfFilter
     f.bind_filterset(BranchFilter)
@@ -794,22 +797,16 @@ def test_related_filter_bind_filterset_sets_bound_filterset() -> None:
 
 
 def test_related_filter_filterset_property_resolves_lazy_string() -> None:
-    from tests.filters.fixtures.filtersets import BranchFilterByString, ShelfFilter
-
     rel = BranchFilterByString.related_filters["shelves"]
     assert rel.filterset is ShelfFilter
 
 
 def test_related_filter_filterset_property_resolves_absolute_path() -> None:
-    from tests.filters.fixtures.filtersets import BranchFilterByPath, ShelfFilter
-
     rel = BranchFilterByPath.related_filters["shelves"]
     assert rel.filterset is ShelfFilter
 
 
 def test_related_filter_get_queryset_auto_derives_from_target_model() -> None:
-    from tests.filters.fixtures.filtersets import BranchFilter
-
     rel = BranchFilter.related_filters["shelves"]
     qs = rel.get_queryset(request=None)
     assert qs is not None
@@ -817,8 +814,6 @@ def test_related_filter_get_queryset_auto_derives_from_target_model() -> None:
 
 
 def test_related_filter_get_queryset_honors_explicit_queryset() -> None:
-    from tests.filters.fixtures.filtersets import ShelfFilter
-
     explicit_qs = models.Shelf.objects.filter(code="topic-A")
     f = RelatedFilter(ShelfFilter, queryset=explicit_qs)
     # Constructor records the explicit-queryset ledger entry.
@@ -845,8 +840,6 @@ def test_related_filter_rejects_lookups_kwarg() -> None:
 
 def test_related_filter_filterset_setter_substitutes_target() -> None:
     """The `filterset` setter swaps the resolved target class in place."""
-    from tests.filters.fixtures.filtersets import BranchFilter, ShelfFilter
-
     rel = RelatedFilter("ShelfFilter")
     # Setter stores the substituted class on `_filterset`.
     rel.filterset = BranchFilter
@@ -1385,13 +1378,6 @@ def test_integer_range_filter_malformed_values_pass_through() -> None:
 
 def test_filters_base_edge_cases() -> None:
     """Edge cases for _coerce_int_in_members and the relation-pk marker helpers."""
-    from django_strawberry_framework.filters.base import (
-        _GLOBALID_RELATION_PK_ATTR,
-        _coerce_int_in_members,
-        _marked_pk_field_name,
-        _relation_uses_non_pk_to_field,
-    )
-
     # Line 376: model_field is None
     assert _coerce_int_in_members(None, [1, "foo", 3]) == [1, "foo", 3]
 
@@ -1478,7 +1464,6 @@ def test_related_filter_gate_rejects_cross_family_orderset_target() -> None:
     The gate rejects it; otherwise it would be enqueued into the FILTER BFS, walking the order
     family's fields through the filter input builder.
     """
-    from django_strawberry_framework.orders import OrderSet
 
     class AnyOrderset(OrderSet):
         class Meta:
@@ -1564,7 +1549,6 @@ def test_related_filter_gate_rejects_mistyped_target_at_bfs_enqueue() -> None:
     ``getattr(related, 'filterset')`` raises the typed error rather than detonating inside
     ``set_input_type_name``.
     """
-    from django_strawberry_framework.filters.factories import FilterArgumentsFactory
 
     class Parent(FilterSet):
         # basedpyright: the non-FilterSet target is the hostile input under test; RelatedFilter
@@ -1585,7 +1569,6 @@ def test_related_filter_gate_passes_none_placeholder_through_bfs_enqueue() -> No
 
     The build succeeds with the related branch omitted.
     """
-    from django_strawberry_framework.filters.factories import FilterArgumentsFactory
 
     class Parent(FilterSet):
         shelves = RelatedFilter(None, field_name="shelves")
@@ -1762,8 +1745,6 @@ def test_relation_identity_column_follows_a_relation_valued_primary_key() -> Non
 
 def test_relation_identity_column_is_none_without_a_resolved_relation() -> None:
     """A plain column, and a relation with no resolved target model, have no identity column."""
-    from types import SimpleNamespace
-
     assert relation_identity_column(models.Book._meta.get_field("title")) is None
     assert relation_identity_column(SimpleNamespace(is_relation=True, related_model=None)) is None
 

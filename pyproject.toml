@@ -241,7 +241,6 @@ ignore = [
     "EM101",  # string literal in the exception constructor: exception-message style only
     "EM102",  # f-string in the exception constructor: ditto
     "FIX002", # TODO markers are the `TODO(spec-NNN slice N)` anchor convention
-    "PLC0415", # local imports break import cycles
     "SLF001", # private member access: the package shares underscore names across modules
     "TD003",  # TODO issue link: the anchor names a spec, not an issue
     "TRY003", # long message passed to the exception constructor
@@ -286,6 +285,10 @@ multiline-quotes = "double"
 # Siblings import relatively (`from .x import y`); anything above the current package is absolute
 # (`from django_strawberry_framework.x import y`), which TID252 enforces.
 ban-relative-imports = "parents"
+# The example project's top-level modules resolve only once `examples/fakeshop` is on `sys.path`, and
+# `apps` / `config` only after `django.setup()`; scripts arrange both at run time, and the package
+# must never reach them. TID253 keeps every such import call-time (PLC0415 exempts exactly these).
+banned-module-level-imports = ["apps", "config", "schema_reload", "strategy_schemas"]
 
 [tool.ruff.lint.flake8-type-checking]
 # TC001-TC003 move an import used only in annotations under TYPE_CHECKING and quote the annotation
@@ -352,6 +355,7 @@ classmethod-decorators = ["django.utils.decorators.classonlymethod"]
     "TC002",
     "TC003",
     "PLR2004", # assertions compare against literal expected values
+    "TID253", # pytest-django sets up Django and the fakeshop `pythonpath` before collection
 ]
 "examples/**/*.py" = [
     "D106",   # as in tests/
@@ -365,6 +369,7 @@ classmethod-decorators = ["django.utils.decorators.classonlymethod"]
     "TC002",  # as in tests/
     "TC003",  # as in tests/
     "PLR2004", # as in tests/
+    "TID253", # the example project imports its own modules
 ]
 # A test function's name is its summary; the contract docstring most tests carry is not required.
 "tests/**/test_*.py" = ["D102", "D103"]
@@ -386,6 +391,7 @@ classmethod-decorators = ["django.utils.decorators.classonlymethod"]
 # UP031: GraphQL query text is all braces; `%s` keeps it readable where `str.format` / f-strings
 # double them.
 "examples/fakeshop/test_query/**/*.py" = ["INP001", "UP031"]
+"conftest.py" = ["TID253"] # as in tests/
 
 [tool.ruff.lint.pycodestyle]
 # The formatter wraps code at line-length (99); E501 only flags lines past 110

@@ -124,6 +124,7 @@ from typing import NoReturn, TypeAlias
 import pytest
 import strawberry
 from apps.library import models as library_models
+from apps.library import schema as library_schema
 from apps.library.filters_genre import GenreFilter
 from apps.library.orders_genre import GenreOrder
 from apps.products.services import seed_data
@@ -801,11 +802,10 @@ def _async_genre_connection_schema() -> DjangoSchema:
     # classes this field's synthesized signature forward-references have
     # been materialized by ``finalize_django_types``.
     importlib.import_module("config.schema")
-    from apps.library.schema import GenreType
 
     @strawberry.type
     class Query:
-        genres = DjangoConnectionField(GenreType, resolver=_async_genres_resolver)
+        genres = DjangoConnectionField(library_schema.GenreType, resolver=_async_genres_resolver)
 
     return DjangoSchema(query=Query, config=strawberry_config())
 
@@ -1659,21 +1659,41 @@ def _cursor_schema() -> DjangoSchema:
     database, so both mounts serve them.
     """
     importlib.import_module("config.schema")
-    from apps.library.schema import GenreType
 
     @strawberry.type
     class Query:
-        list_genres = DjangoConnectionField(GenreType, resolver=_list_genres)
-        tuple_genres = DjangoConnectionField(GenreType, resolver=_tuple_genres)
-        generator_genres = DjangoConnectionField(GenreType, resolver=_generator_genres)
-        async_list_genres = DjangoConnectionField(GenreType, resolver=_async_list_genres)
-        async_tuple_genres = DjangoConnectionField(GenreType, resolver=_async_tuple_genres)
-        async_queryset_genres = DjangoConnectionField(GenreType, resolver=_async_queryset_genres)
-        key_error_genres = DjangoConnectionField(GenreType, resolver=_key_error_genres)
-        value_error_genres = DjangoConnectionField(GenreType, resolver=_value_error_genres)
-        tenant_scoped_genres = DjangoConnectionField(GenreType, resolver=_tenant_scoped_genres)
+        list_genres = DjangoConnectionField(library_schema.GenreType, resolver=_list_genres)
+        tuple_genres = DjangoConnectionField(library_schema.GenreType, resolver=_tuple_genres)
+        generator_genres = DjangoConnectionField(
+            library_schema.GenreType,
+            resolver=_generator_genres,
+        )
+        async_list_genres = DjangoConnectionField(
+            library_schema.GenreType,
+            resolver=_async_list_genres,
+        )
+        async_tuple_genres = DjangoConnectionField(
+            library_schema.GenreType,
+            resolver=_async_tuple_genres,
+        )
+        async_queryset_genres = DjangoConnectionField(
+            library_schema.GenreType,
+            resolver=_async_queryset_genres,
+        )
+        key_error_genres = DjangoConnectionField(
+            library_schema.GenreType,
+            resolver=_key_error_genres,
+        )
+        value_error_genres = DjangoConnectionField(
+            library_schema.GenreType,
+            resolver=_value_error_genres,
+        )
+        tenant_scoped_genres = DjangoConnectionField(
+            library_schema.GenreType,
+            resolver=_tenant_scoped_genres,
+        )
         unusable_id_book_genres = DjangoConnectionField(
-            GenreType,
+            library_schema.GenreType,
             resolver=_unusable_id_book_genres,
         )
 
@@ -2160,12 +2180,14 @@ def _unbounded_cap_schema() -> DjangoSchema:
     and ends on ``SliceMetadata``'s sentinel with no cursor at all.
     """
     importlib.import_module("config.schema")
-    from apps.library.schema import GenreType
 
     @strawberry.type
     class Query:
-        genres = DjangoConnectionField(GenreType)
-        generator_genres = DjangoConnectionField(GenreType, resolver=_generator_genres)
+        genres = DjangoConnectionField(library_schema.GenreType)
+        generator_genres = DjangoConnectionField(
+            library_schema.GenreType,
+            resolver=_generator_genres,
+        )
 
     return DjangoSchema(
         query=Query,

@@ -79,6 +79,7 @@ from django_strawberry_framework.forms.sets import (
     _form_shape_build_cache,
     clear_form_shape_build_cache,
     iter_form_mutations,
+    register_form_mutation,
 )
 from django_strawberry_framework.mutations.inputs import CREATE
 from django_strawberry_framework.mutations.inputs import (
@@ -783,8 +784,6 @@ def test_plain_form_registration_is_idempotent() -> None:
     class Submit(DjangoFormMutation):
         class Meta:
             form_class = form_cls
-
-    from django_strawberry_framework.forms.sets import register_form_mutation
 
     register_form_mutation(Submit)
     assert _form_mutation_registry.count(Submit) == 1

@@ -374,12 +374,19 @@ from typing_extensions import override
 
 from . import logger
 from .exceptions import ConfigurationError, describe_value
+from .extensions.error_policy import (
+    is_maskable_result,
+    mask_execution_result,
+    masking_is_active,
+    schema_error_policy,
+)
 from .utils._narrowing import is_class
 from .utils.sessions import (
     actor_lease,
     connection_was_authenticated,
     note_authenticated_actor,
     scope_key,
+    session_store_class,
 )
 
 if TYPE_CHECKING:
@@ -1536,13 +1543,6 @@ async def _stop_aware_results(
     reaches here, because ``BaseSchema.subscribe`` and ``BaseSchema.stream`` are
     declared to return one.
     """
-    from .extensions.error_policy import (
-        is_maskable_result,
-        mask_execution_result,
-        masking_is_active,
-        schema_error_policy,
-    )
-
     policy = schema_error_policy(schema)
     try:
         while not consumer._revocation.revoked:
@@ -1763,9 +1763,7 @@ async def _refreshed_actor(scope: Mapping[str, object]) -> object:
     live store the Channels session middleware re-reads at send time. The
     connection's scope contributes only ``session_key``, an attribute read.
     """
-    from channels.auth import get_user
-
-    from .utils.sessions import session_store_class
+    from channels.auth import get_user  # noqa: PLC0415 - channels is optional
 
     # ``AuthMiddlewareStack``'s ``SessionMiddleware`` stores the engine's lazy
     # ``SessionStore`` under ``"session"`` (channels-stubs: ``_ChannelScope.session``).
@@ -2318,7 +2316,7 @@ class DjangoWebSocketHostValidator:
             # above its own soft-dependency guard, and by the time any handshake
             # arrives ``routers.py`` has already imported this very module
             # (``AllowedHostsOriginValidator`` lives in it) to build the router.
-            from channels.security.websocket import WebsocketDenier
+            from channels.security.websocket import WebsocketDenier  # noqa: PLC0415 - channels is optional
 
             # basedpyright: channels-stubs types every channels application's scope as its private
             # ``_ChannelScope``, which asgiref's ``WebSocketScope`` does not satisfy.

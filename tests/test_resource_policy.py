@@ -43,6 +43,7 @@ where they matter. What is left here is the surface a request cannot express:
 
 from __future__ import annotations
 
+import array
 import asyncio
 import contextlib
 import contextvars
@@ -58,6 +59,7 @@ from collections.abc import (
     Iterator,
     Mapping,
 )
+from itertools import islice
 from types import MappingProxyType, SimpleNamespace
 from typing import NewType, NoReturn, SupportsIndex, TypeVar, overload
 
@@ -76,6 +78,7 @@ from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.types import ExecutionResult, Info
 from typing_extensions import override
 
+import django_strawberry_framework.resource_policy as rp
 from django_strawberry_framework import DjangoSchema, Upload, strawberry_config
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.extensions.resource_policy import (
@@ -84,6 +87,7 @@ from django_strawberry_framework.extensions.resource_policy import (
     _STRUCTURAL_DELIMITER_PAIRS,
     AdmissionGuard,
     DjangoResourcePolicyExtension,
+    _field_definition,
     charge_document,
     scan_document_text,
 )
@@ -94,7 +98,9 @@ from django_strawberry_framework.resource_policy import (
     MAX_RESOURCE_BOUND,
     ResourceLimitExceeded,
     ResourcePolicy,
+    _BudgetScope,
     _cleanup_rejected_async_iterable,
+    _RequestBudget,
     _windowed_rows,
     _windowed_rows_async,
     admission_rejection,
@@ -112,6 +118,7 @@ from django_strawberry_framework.resource_policy import (
     validate_trusted_flag,
 )
 from django_strawberry_framework.schema import _consumer_extension_entries
+from django_strawberry_framework.utils.operation_lease import OperationLease
 from django_strawberry_framework.utils.querysets import materialized_rows, normalized_row_source
 from tests._django_private import has_apply_rel_filters
 from tests._execution import make_execution_context
@@ -1024,8 +1031,6 @@ async def test_the_armed_budget_reaches_a_sync_to_async_worker_thread() -> None:
     into that thread, so the seam there enforces the operation's own policy
     rather than falling back to a context the resolver can write.
     """
-    from asgiref.sync import sync_to_async
-
     context: dict[str, object] = {}
     info = SimpleNamespace(context=context)
     with _armed(context, ResourcePolicy(max_list_rows=7)):
@@ -1959,7 +1964,6 @@ def test_bounded_rows_unsliceable_iterable_exact_consumption(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
 ) -> None:
     """Counters around __iter__/__next__ and patched islice seam verify exact consumption."""
-    from itertools import islice
 
     class CountedUnsliceable:
         def __init__(self, count: int) -> None:
@@ -2108,8 +2112,6 @@ def test_bounded_rows_shared_policy_seams_spy(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
 ) -> None:
     """Spy on check_deadline and effective_bound at bounded_rows seam."""
-    import django_strawberry_framework.resource_policy as rp
-
     check_deadline_calls = 0
     effective_bound_calls = 0
 
@@ -4160,8 +4162,6 @@ def test_charge_document_accepts_none_variables() -> None:
 
 def test_field_definition_with_none_parent_type() -> None:
     """_field_definition safely handles None parent_type when schema query_type is None."""
-    from django_strawberry_framework.extensions.resource_policy import _field_definition
-
     schema = GraphQLSchema()
     assert schema.query_type is None
     assert _field_definition(schema, None, "__schema") is None
@@ -4173,8 +4173,6 @@ def test_memoryview_multibyte_buffer_charged_by_nbytes() -> None:
     Live sibling: ``test_a_scalar_larger_than_the_byte_bound_is_rejected`` (a
     JSON string). A JSON body cannot carry a multi-byte ``memoryview``.
     """
-    import array
-
     arr = array.array("i", range(10))  # 10 32-bit ints = 40 bytes
     mv = memoryview(arr)
     assert len(mv) == 10
@@ -4297,11 +4295,6 @@ def test_disarming_with_a_token_from_another_variable_is_not_swallowed() -> None
     wide enough to cover both would turn the second into a silent no-op and
     leave the real budget armed for the rest of the process.
     """
-    import contextvars
-
-    from django_strawberry_framework.resource_policy import _BudgetScope, _RequestBudget
-    from django_strawberry_framework.utils.operation_lease import OperationLease
-
     context: dict[str, object] = {}
     scope = begin_resource_budget(context, ResourcePolicy(max_list_rows=2))
     try:

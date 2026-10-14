@@ -42,12 +42,13 @@ from types import MappingProxyType
 import pytest
 from apps.products.models import Category, Item
 from apps.products.services import create_users, seed_data
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Permission, User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.http import HttpRequest
 from django.http.response import HttpResponseBase
 from django.test import override_settings
 from django.urls import include, path, resolve
+from PIL import Image
 from strawberry import relay
 from typing_extensions import override
 
@@ -124,8 +125,6 @@ _IMAGE_HEIGHT = 9
 
 
 def _png_bytes() -> bytes:
-    from PIL import Image
-
     buffer = io.BytesIO()
     Image.new("RGB", (_IMAGE_WIDTH, _IMAGE_HEIGHT)).save(buffer, format="PNG")
     return buffer.getvalue()
@@ -215,7 +214,6 @@ def permitted_writer() -> tuple[User, str]:
     """
     create_users(1)
     seed_data(1)
-    from django.contrib.auth.models import Permission
 
     user = User.objects.get(username="view_item_1")
     user.user_permissions.add(
@@ -302,7 +300,6 @@ def test_sync_login_bracket_logs_out_when_the_block_raises() -> None:
     """
     create_users(1)
     seed_data(1)
-    from django.contrib.auth.models import Permission
 
     user = User.objects.get(username="view_item_1")
     user.user_permissions.add(

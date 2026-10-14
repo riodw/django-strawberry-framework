@@ -1732,7 +1732,7 @@ def _has_custom_id_resolver(
     # Lazy import: ``types.definition`` pulls in ``optimizer.field_meta`` at
     # module load, so importing it at the top of the walker risks an
     # import-time cycle through the optimizer package init.
-    from django_strawberry_framework.types.definition import origin_has_custom_id_resolver
+    from django_strawberry_framework.types.definition import origin_has_custom_id_resolver  # noqa: PLC0415 - import cycle
 
     return origin_has_custom_id_resolver(target_type, target_pk_name)
 

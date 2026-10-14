@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING, Literal, TypeAlias
 
 import pytest
 import strawberry
+from apps.library.models import Genre, MembershipCard, Patron, PatronProfile
+from apps.products import schema as products_schema
 from apps.products import services
 from apps.products.models import Category, Item
 from asgiref.sync import sync_to_async
@@ -82,11 +84,9 @@ def test_unoptimized_relation_hides_private_child_over_http() -> None:
     assert item is not None
     Item.objects.filter(pk=item.pk).update(is_private=True)
 
-    from apps.products.schema import CategoryType
-
     @strawberry.type
     class Query:
-        @strawberry.field(graphql_type=list[CategoryType])
+        @strawberry.field(graphql_type=list[products_schema.CategoryType])
         def categories(self) -> QuerySet[Category]:
             return Category.objects.filter(pk=category.pk)
 
@@ -114,11 +114,9 @@ def _build_async_visibility_schema() -> strawberry.Schema:
     assert item is not None
     Item.objects.filter(pk=item.pk).update(is_private=True)
 
-    from apps.products.schema import CategoryType
-
     @strawberry.type
     class Query:
-        @strawberry.field(graphql_type=list[CategoryType])
+        @strawberry.field(graphql_type=list[products_schema.CategoryType])
         async def categories(self) -> list[Category]:
             return await sync_to_async(list)(
                 Category.objects.filter(pk=category.pk),
@@ -195,11 +193,9 @@ def test_consumer_prefetch_cache_is_rescoped_with_the_optimizer_installed() -> N
     assert item is not None
     Item.objects.filter(pk=item.pk).update(is_private=True)
 
-    from apps.products.schema import CategoryType
-
     @strawberry.type
     class Query:
-        @strawberry.field(graphql_type=list[CategoryType])
+        @strawberry.field(graphql_type=list[products_schema.CategoryType])
         def categories(self) -> list[Category]:
             return list(Category.objects.filter(pk=category.pk).prefetch_related("items"))
 
@@ -229,11 +225,9 @@ def test_forward_fk_target_visibility_holds_with_the_optimizer_installed() -> No
     assert item is not None
     Category.objects.filter(pk=item.category_id).update(is_private=True)
 
-    from apps.products.schema import ItemType
-
     @strawberry.type
     class Query:
-        @strawberry.field(graphql_type=list[ItemType])
+        @strawberry.field(graphql_type=list[products_schema.ItemType])
         def items(self) -> list[Item]:
             return list(Item.objects.filter(pk=item.pk))
 
@@ -263,11 +257,9 @@ def _build_async_forward_fk_schema() -> strawberry.Schema:
     assert item is not None
     Category.objects.filter(pk=item.category_id).update(is_private=True)
 
-    from apps.products.schema import ItemType
-
     @strawberry.type
     class Query:
-        @strawberry.field(graphql_type=list[ItemType])
+        @strawberry.field(graphql_type=list[products_schema.ItemType])
         async def items(self) -> list[Item]:
             return await sync_to_async(list)(
                 Item.objects.filter(pk=item.pk).select_related("category"),
@@ -331,11 +323,10 @@ def _strictness_armed_loaded_fk_schema(item_pk: int) -> strawberry.Schema:
     execution that carries the optimizer's sentinels. The resolver owns the
     permission decision on it.
     """
-    from apps.products.schema import ItemType
 
     @strawberry.type
     class Query:
-        @strawberry.field(graphql_type=list[ItemType])
+        @strawberry.field(graphql_type=list[products_schema.ItemType])
         def items(self) -> list[Item]:
             return list(Item.objects.filter(pk=item_pk).select_related("category"))
 
@@ -418,7 +409,6 @@ def _strictness_armed_nullable_fk_schema() -> strawberry.Schema:
     ``GenreType``, which declares no hook, and adding one there would change
     every genre traversal in the library suite. Rung 3 holder.
     """
-    from apps.library.models import Genre, PatronProfile
 
     def hide_marked(
         _cls: type[DjangoType],
@@ -466,8 +456,6 @@ def test_a_nullable_joined_forward_fk_collapses_to_null_only_for_the_hidden_targ
     non-null failure - and both verdicts sit in one payload, which is what
     stops "hides everything" from satisfying the claim.
     """
-    from apps.library.models import Genre, Patron, PatronProfile
-
     hidden_genre = Genre.objects.create(name="HIDDEN-Noir")
     open_genre = Genre.objects.create(name="OPEN-Verse")
     PatronProfile.objects.create(
@@ -513,11 +501,9 @@ def _nested_connection_item_queries(parent_count: int) -> list[str]:
     )
     assert len(parent_pks) == parent_count
 
-    from apps.products.schema import CategoryType
-
     @strawberry.type
     class Query:
-        @strawberry.field(graphql_type=list[CategoryType])
+        @strawberry.field(graphql_type=list[products_schema.CategoryType])
         def categories(self) -> list[Category]:
             return list(Category.objects.filter(pk__in=parent_pks).order_by("pk"))
 
@@ -562,11 +548,9 @@ def _nested_connection_item_queries_with_optimizer_on_a_list(
     )
     assert len(parent_pks) == parent_count
 
-    from apps.products.schema import CategoryType
-
     @strawberry.type
     class Query:
-        @strawberry.field(graphql_type=list[CategoryType])
+        @strawberry.field(graphql_type=list[products_schema.CategoryType])
         def categories(self) -> list[Category]:
             return list(Category.objects.filter(pk__in=parent_pks).order_by("pk"))
 
@@ -626,11 +610,9 @@ def _list_relation_item_queries(parent_count: int) -> list[str]:
     )
     assert len(parent_pks) == parent_count
 
-    from apps.products.schema import CategoryType
-
     @strawberry.type
     class Query:
-        @strawberry.field(graphql_type=list[CategoryType])
+        @strawberry.field(graphql_type=list[products_schema.CategoryType])
         def categories(self) -> QuerySet[Category]:
             return Category.objects.filter(pk__in=parent_pks).order_by("pk")
 
@@ -672,10 +654,6 @@ def _holder_patron_card_schema(
     picks what ``patrons`` hands back: an unevaluated ``QuerySet`` the optimizer
     can plan, or a materialized list it cannot.
     """
-    from apps.library.models import MembershipCard, Patron
-
-    from django_strawberry_framework import DjangoType
-
     registry.clear()
 
     class HolderCardType(DjangoType):
@@ -734,8 +712,6 @@ def test_reverse_one_to_one_custom_visibility_matches_with_and_without_optimizer
     exactly two card statements, the descriptor load and the hook's re-check:
     four at two patrons, and a third statement per patron fails the row.
     """
-    from apps.library.models import MembershipCard, Patron
-
     hidden = Patron.objects.create(name="Hidden Holder")
     MembershipCard.objects.create(patron=hidden, barcode="HIDDEN-1")
     visible = Patron.objects.create(name="Visible Holder")
@@ -769,16 +745,12 @@ def test_reverse_one_to_one_custom_visibility_matches_with_and_without_optimizer
 @pytest.mark.asyncio
 async def test_async_reverse_one_to_one_custom_visibility_over_http() -> None:
     """Async reverse-O2O re-checks the card hook and nulls a hidden barcode."""
-    from apps.library.models import MembershipCard, Patron
-
     await sync_to_async(Patron.objects.create)(name="Hidden Patron")
     hidden = await sync_to_async(Patron.objects.get)(name="Hidden Patron")
     await sync_to_async(MembershipCard.objects.create)(patron=hidden, barcode="HIDDEN-99")
     await sync_to_async(Patron.objects.create)(name="Visible Patron")
     visible = await sync_to_async(Patron.objects.get)(name="Visible Patron")
     await sync_to_async(MembershipCard.objects.create)(patron=visible, barcode="OPEN-99")
-
-    from django_strawberry_framework import DjangoType
 
     registry.clear()
 
@@ -854,7 +826,6 @@ def test_relay_id_only_connection_page_costs_one_query_and_emits_decodable_ids()
     """
     services.create_users(1)
     services.seed_data(1)
-    from apps.products.schema import CategoryType
 
     client = Client()
     client.force_login(get_user_model().objects.get(username="staff_1"))
@@ -868,7 +839,9 @@ def test_relay_id_only_connection_page_costs_one_query_and_emits_decodable_ids()
         )
 
     emitted = [edge["node"]["id"] for edge in data["allCategories"]["edges"]]
-    assert emitted == [global_id_for(CategoryType, row.pk) for row in expected_rows]
+    assert emitted == [
+        global_id_for(products_schema.CategoryType, row.pk) for row in expected_rows
+    ]
     decoded = [relay.GlobalID.from_id(node_id) for node_id in emitted]
     assert [global_id.type_name for global_id in decoded] == ["products.category"] * 5
     assert [global_id.node_id for global_id in decoded] == [str(row.pk) for row in expected_rows]
@@ -888,11 +861,10 @@ def test_relay_id_and_name_selection_is_clean_under_strictness_raise_over_http()
     fetch. Payload names are derived from the ORM, not memorized.
     """
     services.seed_data(1)
-    from apps.products.schema import CategoryType
 
     @strawberry.type
     class Query:
-        @strawberry.field(graphql_type=list[CategoryType])
+        @strawberry.field(graphql_type=list[products_schema.CategoryType])
         def categories(self) -> QuerySet[Category]:
             return Category.objects.order_by("pk")
 

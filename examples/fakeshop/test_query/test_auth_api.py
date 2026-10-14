@@ -27,14 +27,16 @@ from typing import TYPE_CHECKING
 
 import pytest
 import strawberry
+from apps.accounts import schema as accounts_schema
 from apps.products.services import TEST_USER_PASSWORD, create_users
 from asgiref.sync import sync_to_async
+from config import schema as config_schema
 from django.conf import settings
 from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY
 from django.contrib.auth import signals as auth_signals
 from django.contrib.auth.models import Group, User
 from django.contrib.sessions.models import Session
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import QuerySet
 from django.http import HttpRequest
 from django.http.response import HttpResponseBase
@@ -575,8 +577,6 @@ class DictFormPasswordValidator:
     """A password validator that fails with Django's dict-form ``ValidationError``."""
 
     def validate(self, _password: str, _user: User | None = None) -> None:
-        from django.core.exceptions import ValidationError
-
         raise ValidationError({"password": ["Password policy violated."]})
 
 
@@ -952,9 +952,8 @@ _CURRENT: dict[str, object | None] = {"schema": None}
 
 
 async def _async_shipped_graphql_view(request: HttpRequest) -> HttpResponseBase:
-    from config.schema import schema
 
-    return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
+    return await AsyncDjangoGraphQLView.as_view(schema=config_schema.schema)(request)
 
 
 def _holder_graphql_view(request: HttpRequest) -> HttpResponseBase:
@@ -1048,17 +1047,16 @@ def test_me_without_authentication_middleware_is_null_not_a_crash() -> None:
 def test_login_and_me_skip_user_type_visibility(monkeypatch: pytest.MonkeyPatch) -> None:
     """``login`` / ``me`` return the session actor even when ``UserType.get_queryset`` hides everyone."""
     create_users(1)
-    from apps.accounts.schema import UserType
 
     def _hide_everyone(
-        _cls: type[UserType],
+        _cls: type[accounts_schema.UserType],
         queryset: QuerySet[User],
         _info: strawberry.Info[object, object],
         **_kwargs: object,
     ) -> QuerySet[User]:
         return queryset.none()
 
-    monkeypatch.setattr(UserType, "get_queryset", classmethod(_hide_everyone))
+    monkeypatch.setattr(accounts_schema.UserType, "get_queryset", classmethod(_hide_everyone))
     client = Client()
     payload = _login(client, "staff_1", TEST_USER_PASSWORD)
     assert payload["errors"] == []

@@ -22,6 +22,7 @@ from collections.abc import Callable
 
 import pytest
 import strawberry
+from apps.products import schema as products_schema
 from apps.products import services
 from apps.products.models import Category, Entry, Item
 from asgiref.sync import sync_to_async
@@ -85,15 +86,14 @@ def _hide_one_items_category() -> tuple[Item, Entry]:
 
 def _joined_schema(item_pk: int, entry_pk: int) -> strawberry.Schema:
     """Holder whose QuerySet roots JOIN the relations the optimizer plans as prefetches."""
-    from apps.products.schema import EntryType, ItemType
 
     @strawberry.type
     class Query:
-        @strawberry.field(graphql_type=list[ItemType])
+        @strawberry.field(graphql_type=list[products_schema.ItemType])
         def items(self) -> QuerySet[Item]:
             return Item.objects.filter(pk=item_pk).select_related("category")
 
-        @strawberry.field(graphql_type=list[ItemType])
+        @strawberry.field(graphql_type=list[products_schema.ItemType])
         def items_wildcard(self) -> QuerySet[Item]:
             # The wildcard query state is set directly: that state, not the call
             # spelling Django now deprecates, is what a consumer queryset can carry.
@@ -101,7 +101,7 @@ def _joined_schema(item_pk: int, entry_pk: int) -> strawberry.Schema:
             queryset.query.select_related = True
             return queryset
 
-        @strawberry.field(graphql_type=list[EntryType])
+        @strawberry.field(graphql_type=list[products_schema.EntryType])
         def entries(self) -> QuerySet[Entry]:
             return Entry.objects.filter(pk=entry_pk).select_related("item__category")
 

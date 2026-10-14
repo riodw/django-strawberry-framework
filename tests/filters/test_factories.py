@@ -16,7 +16,7 @@ import pytest
 import strawberry
 from apps.library import models as library_models
 from apps.products.models import Category
-from django_filters import NumberFilter
+from django_filters import CharFilter, NumberFilter
 from strawberry.types.base import get_object_definition
 
 from django_strawberry_framework import DjangoType
@@ -32,6 +32,7 @@ from django_strawberry_framework.filters.inputs import _field_specs
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.relay import apply_interfaces
 from tests._idioms import definition_raises
+from tests.filters.fixtures.filtersets import SelfReferentialBranchFilter
 
 
 @pytest.fixture(autouse=True)
@@ -82,7 +83,6 @@ def test_filter_arguments_factory_bfs_handles_cycle() -> None:
     # `SelfReferentialBranchFilter` whose `RelatedFilter("SelfReferentialBranchFilter")`
     # resolves back to itself (a degenerate A -> A cycle covers the same
     # `seen`-set short-circuit branch as A -> B -> A).
-    from tests.filters.fixtures.filtersets import SelfReferentialBranchFilter
 
     factory = FilterArgumentsFactory(SelfReferentialBranchFilter)
     _ = factory.arguments  # must not recurse forever
@@ -192,7 +192,6 @@ def test_filter_arguments_factory_rejects_flattened_field_collision() -> None:
     single ``branchName`` field (the collision is invisible); with it the build
     raises an actionable ``ConfigurationError`` naming both offending members.
     """
-    from django_filters import CharFilter
 
     class ShelfFlattenCollide(FilterSet):
         # Declared filter literally named ``branch_name``.
@@ -220,7 +219,6 @@ def test_filter_arguments_factory_rejects_flattened_field_collision() -> None:
 @pytest.mark.django_db
 def test_filter_arguments_factory_rejects_graphql_name_collision() -> None:
     """Distinct python attrs that camel-case alike must not share one GraphQL field."""
-    from django_filters import CharFilter
 
     class ShelfGraphqlCollide(FilterSet):
         foo_bar = CharFilter(field_name="code", lookup_expr="exact")

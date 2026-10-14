@@ -25,6 +25,7 @@ captures the scalar-only field list used in those updated tests.
 
 import datetime
 import functools
+import inspect
 import itertools
 import sys
 import types
@@ -36,6 +37,7 @@ import pytest_django
 import strawberry
 from apps.library.models import Patron
 from apps.products.models import Category, Entry, Item, Property
+from apps.scalars.models import MediaSpecimen
 from django.db import models
 from django.db.models.expressions import Combinable
 from django.utils.functional import Promise
@@ -45,13 +47,18 @@ from strawberry.types import get_object_definition
 from strawberry.types.auto import StrawberryAuto
 from typing_extensions import override
 
+import django_strawberry_framework.types.base as base_mod
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.filters import FilterSet
 from django_strawberry_framework.optimizer.hints import OptimizerHint
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import converters
 from django_strawberry_framework.types.base import (
+    ALLOWED_META_KEYS,
+    DEFERRED_META_KEYS,
     _detect_custom_get_queryset,
+    _select_fields,
     _validate_connection,
     _validate_cursor_field,
     _validate_filterset_class,
@@ -70,6 +77,10 @@ from django_strawberry_framework.types.converters import (
     resolved_relation_annotation,
 )
 from django_strawberry_framework.types.relations import PendingRelationAnnotation
+from django_strawberry_framework.types.relay import (
+    _resolve_globalid_strategy,
+    _validated_globalid_setting,
+)
 from tests._idioms import definition_raises, is_object_dict
 from tests.optimizer import _link_models
 
@@ -467,16 +478,12 @@ def test_definition_fields_class_slot_is_reserved_but_unpopulated() -> None:
 
 def test_meta_filterset_class_is_promoted_to_allowed_meta_keys() -> None:
     """``Meta.filterset_class`` ships per spec-027 Decision 7 (promotion gate)."""
-    from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
-
     assert "filterset_class" in ALLOWED_META_KEYS
     assert "filterset_class" not in DEFERRED_META_KEYS
 
 
 def test_meta_orderset_class_is_promoted_to_allowed_meta_keys() -> None:
     """``Meta.orderset_class`` ships in spec-028 (Decision-7 promotion gate)."""
-    from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
-
     assert "orderset_class" in ALLOWED_META_KEYS
     assert "orderset_class" not in DEFERRED_META_KEYS
 
@@ -605,8 +612,6 @@ def test_meta_relation_shapes_in_allowed_meta_keys() -> None:
     Mirrors ``test_interfaces_is_shipped_not_deferred`` below: a net-new
     ``ALLOWED_META_KEYS`` entry, NOT a ``DEFERRED_META_KEYS`` promotion.
     """
-    from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
-
     assert "relation_shapes" in ALLOWED_META_KEYS
     assert "relation_shapes" not in DEFERRED_META_KEYS
 
@@ -805,8 +810,6 @@ def test_interfaces_is_shipped_not_deferred() -> None:
     shape-validation message rather than a deferred-key message. The
     ``_validate_interfaces`` spec-015 Decision 4 validator is the full shipped contract.
     """
-    from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
-
     assert "interfaces" in ALLOWED_META_KEYS
     assert "interfaces" not in DEFERRED_META_KEYS
 
@@ -820,8 +823,6 @@ def test_select_fields_signature_accepts_validated_specs() -> None:
     validated specs directly. Calling with both specs ``None`` returns every
     Django field; passing a fields tuple narrows the result.
     """
-    from django_strawberry_framework.types.base import _select_fields
-
     all_selected = _select_fields(Category, None, None)
     assert {f.name for f in all_selected} >= set(CATEGORY_SCALAR_FIELDS)
 
@@ -852,10 +853,6 @@ def test_filterset_and_orderset_meta_validators_ride_validate_set_sidecar() -> N
     and ``must be {article} {Name} subclass`` wording live once in the
     shared helper.
     """
-    import inspect
-
-    import django_strawberry_framework.types.base as base_mod
-
     for fn in (base_mod._validate_filterset_class, base_mod._validate_orderset_class):
         assert "_validate_set_sidecar" in fn.__code__.co_names
     src_filter = inspect.getsource(base_mod._validate_filterset_class)
@@ -868,7 +865,6 @@ def test_filterset_and_orderset_meta_validators_ride_validate_set_sidecar() -> N
 
 def test_meta_filterset_class_accepts_filterset_subclass() -> None:
     """A real ``FilterSet`` subclass is accepted and stored on the definition."""
-    from django_strawberry_framework.filters import FilterSet
 
     class CategoryFilter(FilterSet):
         class Meta:
@@ -891,16 +887,12 @@ def test_meta_connection_in_allowed_meta_keys() -> None:
     Net-new ALLOWED, NOT a DEFERRED_META_KEYS promotion (spec-030 Decision 8;
     mirrors the filterset/orderset precedent).
     """
-    from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
-
     assert "connection" in ALLOWED_META_KEYS
     assert "connection" not in DEFERRED_META_KEYS
 
 
 def test_meta_connection_non_dict_raises() -> None:
     """``Meta.connection`` must be a dict; a non-dict value raises ``ConfigurationError``."""
-    from strawberry import relay
-
     with pytest.raises(ConfigurationError, match="must be a dict"):
 
         @definition_raises
@@ -914,8 +906,6 @@ def test_meta_connection_non_dict_raises() -> None:
 
 def test_meta_connection_unknown_subkey_raises() -> None:
     """An unrecognized ``Meta.connection`` sub-key raises (typo guard)."""
-    from strawberry import relay
-
     with pytest.raises(ConfigurationError, match="unknown sub-keys"):
 
         @definition_raises
@@ -929,8 +919,6 @@ def test_meta_connection_unknown_subkey_raises() -> None:
 
 def test_meta_connection_non_bool_total_count_raises() -> None:
     """``Meta.connection['total_count']`` must be a bool; a non-bool raises."""
-    from strawberry import relay
-
     with pytest.raises(ConfigurationError, match="must be a bool"):
 
         @definition_raises
@@ -965,7 +953,6 @@ def test_meta_connection_accepts_direct_relay_node_inheritance() -> None:
     ``DjangoConnectionField`` field guard. One consistent definition of
     "Relay-shaped" across both surfaces.
     """
-    from strawberry import relay
 
     class DirectCountNode(DjangoType, relay.Node):
         class Meta:
@@ -981,7 +968,6 @@ def test_meta_connection_accepts_direct_relay_node_inheritance() -> None:
 
 def test_meta_connection_stored_on_definition() -> None:
     """The normalized ``Meta.connection`` value lands on ``definition.connection``."""
-    from strawberry import relay
 
     class CategoryType(DjangoType):
         class Meta:
@@ -996,8 +982,6 @@ def test_meta_connection_stored_on_definition() -> None:
 
 def test_meta_connection_is_snapshotted_on_definition() -> None:
     """Mutating the consumer's config dict cannot rewrite registered type metadata."""
-    from strawberry import relay
-
     connection = {"total_count": True}
 
     meta_cls = type(
@@ -1020,7 +1004,6 @@ def test_meta_connection_is_snapshotted_on_definition() -> None:
 
 def test_meta_connection_absent_leaves_definition_none() -> None:
     """A type without ``Meta.connection`` leaves ``definition.connection`` at its ``None`` default."""
-    from strawberry import relay
 
     class CategoryType(DjangoType):
         class Meta:
@@ -1043,16 +1026,12 @@ def test_meta_globalid_strategy_in_allowed_meta_keys() -> None:
     Net-new ALLOWED, NOT a ``DEFERRED_META_KEYS`` promotion (spec-031 Decision 6;
     mirrors the connection / filterset / orderset precedent).
     """
-    from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
-
     assert "globalid_strategy" in ALLOWED_META_KEYS
     assert "globalid_strategy" not in DEFERRED_META_KEYS
 
 
 def test_meta_globalid_strategy_unknown_string_raises() -> None:
     """A typo'd strategy string raises ``ConfigurationError`` (typo guard)."""
-    from strawberry import relay
-
     with pytest.raises(ConfigurationError, match="unknown strategy"):
 
         @definition_raises
@@ -1078,8 +1057,6 @@ def test_meta_globalid_strategy_non_relay_type_raises() -> None:
 
 def test_meta_globalid_strategy_wrong_type_raises() -> None:
     """A non-string, non-callable value (e.g. ``42``) raises ``ConfigurationError``."""
-    from strawberry import relay
-
     with pytest.raises(ConfigurationError, match="must be one of"):
 
         @definition_raises
@@ -1093,7 +1070,6 @@ def test_meta_globalid_strategy_wrong_type_raises() -> None:
 
 def test_meta_globalid_strategy_callable_accepted_and_stored() -> None:
     """A well-formed sync three-arg encoder validates and is stored on the definition."""
-    from strawberry import relay
 
     def encode(_type_cls: type[DjangoType], _model: type[models.Model], _root: object) -> str:
         return "custom"
@@ -1111,7 +1087,6 @@ def test_meta_globalid_strategy_callable_accepted_and_stored() -> None:
 
 def test_meta_globalid_strategy_callable_wrong_arity_raises() -> None:
     """A wrong-arity encoder is rejected at type creation (the ``inspect.signature`` check)."""
-    from strawberry import relay
 
     def encode(_type_cls: type[DjangoType], _model: type[models.Model]) -> str:
         return "custom"
@@ -1135,7 +1110,6 @@ def test_meta_globalid_strategy_callable_old_four_arg_signature_rejected() -> No
     loud at type creation naming the new ``(type_cls, model, root)`` shape rather
     than raising an opaque ``TypeError`` at the first encode.
     """
-    from strawberry import relay
 
     def encode(
         _type_cls: type[DjangoType],
@@ -1158,7 +1132,6 @@ def test_meta_globalid_strategy_callable_old_four_arg_signature_rejected() -> No
 
 def test_meta_globalid_strategy_async_callable_raises() -> None:
     """An ``async def`` encoder is rejected at type creation (the sync-ness check)."""
-    from strawberry import relay
 
     async def encode(
         _type_cls: type[DjangoType],
@@ -1186,7 +1159,6 @@ def test_meta_globalid_strategy_async_callable_object_raises() -> None:
     validation and only blow up at first encode (a coroutine return + an unawaited
     -coroutine warning) instead of failing loud at type creation.
     """
-    from strawberry import relay
 
     class Encoder:
         async def __call__(
@@ -1217,7 +1189,6 @@ def test_meta_globalid_strategy_partial_wrapped_async_callable_raises() -> None:
     ``partial.func`` before the sync-ness check, so it fails loud at type creation
     instead of leaking a coroutine at the first encode.
     """
-    from strawberry import relay
 
     class Encoder:
         async def __call__(
@@ -1241,7 +1212,6 @@ def test_meta_globalid_strategy_partial_wrapped_async_callable_raises() -> None:
 
 def test_meta_globalid_strategy_stored_on_definition() -> None:
     """The normalized string strategy lands on ``definition.globalid_strategy``."""
-    from strawberry import relay
 
     class CategoryType(DjangoType):
         class Meta:
@@ -1256,7 +1226,6 @@ def test_meta_globalid_strategy_stored_on_definition() -> None:
 
 def test_meta_globalid_strategy_absent_leaves_definition_none() -> None:
     """A Relay-Node type without the key leaves the raw slot at its ``None`` default."""
-    from strawberry import relay
 
     class CategoryType(DjangoType):
         class Meta:
@@ -1277,12 +1246,6 @@ def test_resolve_globalid_strategy_precedence(settings: pytest_django.Settings) 
     names ``RELAY_GLOBALID_STRATEGY`` (the setting framing, distinct from the
     type-named ``Meta`` framing).
     """
-    from strawberry import relay
-
-    from django_strawberry_framework.types.relay import (
-        _resolve_globalid_strategy,
-        _validated_globalid_setting,
-    )
 
     class MetaWinsType(DjangoType):
         class Meta:
@@ -2106,8 +2069,6 @@ def _make_override_type(
 
 def test_nullable_overrides_in_allowed_meta_keys() -> None:
     """Both override keys are net-new ALLOWED keys, NOT deferred (Decision 6)."""
-    from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
-
     assert "nullable_overrides" in ALLOWED_META_KEYS
     assert "required_overrides" in ALLOWED_META_KEYS
     assert "nullable_overrides" not in DEFERRED_META_KEYS
@@ -2202,8 +2163,6 @@ def test_override_relation_field_raises() -> None:
 
 def test_override_relay_suppressed_pk_raises() -> None:
     """Naming the Relay-Node-suppressed pk in an override set raises (Decision 8 rule e)."""
-    from strawberry import relay
-
     with pytest.raises(ConfigurationError, match="Relay-Node-suppressed pk"):
 
         @definition_raises
@@ -2263,8 +2222,6 @@ def test_override_redundant_is_no_op() -> None:
 
 def _make_file_override_model() -> type[models.Model]:
     """Return ``scalars.MediaSpecimen``, whose ``attachment`` is a required ``FileField``."""
-    from apps.scalars.models import MediaSpecimen
-
     return MediaSpecimen
 
 
@@ -2411,8 +2368,6 @@ def test_meta_nullable_overrides_on_a_file_column_is_a_no_op() -> None:
 
 def _make_path_optin_model() -> type[models.Model]:
     """Return ``scalars.MediaSpecimen``: a file column, an image column, and a text ``label``."""
-    from apps.scalars.models import MediaSpecimen
-
     return MediaSpecimen
 
 
@@ -2444,8 +2399,6 @@ def _make_path_optin_type(
 
 def test_filesystem_path_fields_is_a_net_new_allowed_meta_key() -> None:
     """``Meta.filesystem_path_fields`` is ALLOWED and not a deferred-key promotion."""
-    from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
-
     assert "filesystem_path_fields" in ALLOWED_META_KEYS
     assert "filesystem_path_fields" not in DEFERRED_META_KEYS
 
@@ -2615,15 +2568,12 @@ def test_meta_cursor_field_in_allowed_meta_keys() -> None:
     Net-new ALLOWED, NOT a DEFERRED_META_KEYS promotion - the feature ships in
     the same change that adds the key (the ``Meta.connection`` precedent).
     """
-    from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
-
     assert "cursor_field" in ALLOWED_META_KEYS
     assert "cursor_field" not in DEFERRED_META_KEYS
 
 
 def test_meta_cursor_field_valid_declaration_lands_on_definition() -> None:
     """A valid ``cursor_field`` normalizes to a tuple on the definition."""
-    from strawberry import relay
 
     class CategoryType(DjangoType):
         class Meta:
@@ -2637,8 +2587,6 @@ def test_meta_cursor_field_valid_declaration_lands_on_definition() -> None:
 
 def test_meta_cursor_field_rejects_non_sequence_shapes() -> None:
     """A string / empty / non-string-entry ``cursor_field`` raises the shape error."""
-    from strawberry import relay
-
     for bad_value in ("name", (), ("name", 3)):
         with pytest.raises(ConfigurationError, match="non-empty non-string sequence"):
 
@@ -2655,8 +2603,6 @@ def test_meta_cursor_field_rejects_non_sequence_shapes() -> None:
 
 def test_meta_cursor_field_rejects_malformed_and_traversing_entries() -> None:
     """A bare ``-``, a ``__`` traversal, and a duplicate column all raise."""
-    from strawberry import relay
-
     for bad_value, match in (
         (("-", "id"), "not a valid order string"),
         (("--name", "id"), "not a valid order string"),
@@ -2690,7 +2636,6 @@ def test_meta_cursor_field_requires_relay_node_shape() -> None:
 
 def test_meta_cursor_field_finalization_validates_columns() -> None:
     """Finalization rejects a shape-valid ``cursor_field`` whose terminal is not unique."""
-    from strawberry import relay
 
     class CategoryType(DjangoType):
         class Meta:
@@ -2708,8 +2653,6 @@ def test_meta_cursor_field_finalization_validates_columns() -> None:
 
 
 def test_has_custom_get_queryset_with_subclasscheck_without_mro() -> None:
-    from django_strawberry_framework.types.base import _detect_custom_get_queryset
-
     class FakeMeta(type):
         @override
         def __subclasscheck__(cls, subclass: type) -> bool:

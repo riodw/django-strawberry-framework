@@ -110,6 +110,7 @@ from django_strawberry_framework.exceptions import (
     _safe_arg_repr,
     _safe_type_name,
 )
+from django_strawberry_framework.registry import registry
 
 from ._narrowing import (
     is_class,
@@ -128,6 +129,7 @@ from ._queryset_private import (
     set_queryset_prefetch_lookups,
     set_queryset_sticky_filter,
 )
+from .relations import leading_relation_hops
 from .typing import MISSING_ATTRIBUTE
 from .write_transaction import (
     current_write_pipeline,
@@ -4747,8 +4749,6 @@ def related_visibility_queryset(
     written once (spec-039). An ``async def get_queryset`` met here raises
     ``SyncMisuseError`` (inherited from ``apply_type_visibility_sync``).
     """
-    from django_strawberry_framework.registry import registry
-
     related_type = registry.get(related_model)
     if related_type is None:
         return None
@@ -4799,8 +4799,6 @@ def relation_target_type(
     type, and one reaching the child model answers with ``root``. Any other
     model answers with ``registry.get``'s type; ``None`` when it has none.
     """
-    from django_strawberry_framework.registry import registry
-
     if (
         root is not None
         and model_for(root)._meta.concrete_model is related_model._meta.concrete_model
@@ -4840,8 +4838,6 @@ def relation_path_visibility_types(
     One entry per relation hop ``utils/relations.py::leading_relation_hops``
     reads, in path order, each for the model that hop's join reaches.
     """
-    from .relations import leading_relation_hops
-
     return tuple(
         relation_visibility_type(hop.target_model, root=root)
         for hop in leading_relation_hops(model, relation_path)

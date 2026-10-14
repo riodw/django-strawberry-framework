@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib
 import inspect
 import itertools
 import json
@@ -32,11 +33,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, NoReturn, Protocol, runtime_checkable
 
+import channels.auth
 import pytest
 import strawberry
 from apps.products.services import TEST_USER_PASSWORD, create_users
+from channels.auth import AuthMiddlewareStack
 from channels.db import database_sync_to_async
-from channels.routing import ProtocolTypeRouter
+from channels.routing import ProtocolTypeRouter, URLRouter
+from channels.security.websocket import AllowedHostsOriginValidator
 from channels.testing import HttpCommunicator, WebsocketCommunicator
 from django.conf import settings
 from django.contrib import auth
@@ -60,8 +64,10 @@ from django.db import models as djmodels
 from django.dispatch import Signal
 from django.http import HttpRequest, HttpResponse
 from django.test import RequestFactory, override_settings
+from django.urls import re_path
 from django.utils.functional import SimpleLazyObject
 from strawberry import relay
+from strawberry.channels import GraphQLHTTPConsumer, GraphQLWSConsumer
 from strawberry.types import ExecutionResult
 from strawberry.types.base import has_object_definition
 from strawberry.types.field import StrawberryField
@@ -83,6 +89,8 @@ from django_strawberry_framework.auth import mutations as auth_mutations
 from django_strawberry_framework.auth.mutations import (
     _auth_declarations,
     _declared_auth_surface,
+    _register_decode_step,
+    _register_write_step,
     _sync_bridged_async_body,
     bind_auth_mutations,
     derive_register_fields,
@@ -90,7 +98,12 @@ from django_strawberry_framework.auth.mutations import (
 )
 from django_strawberry_framework.auth.sessions import _SCOPE_LOCK_KEY
 from django_strawberry_framework.exceptions import ConfigurationError
-from django_strawberry_framework.mutations.inputs import _materialized_names
+from django_strawberry_framework.mutations import resolvers as mutation_resolvers
+from django_strawberry_framework.mutations.inputs import (
+    EXCLUDED,
+    _materialized_names,
+    mutation_input_field_specs,
+)
 from django_strawberry_framework.mutations.resolvers import StepFailure, _model_decode_step
 from django_strawberry_framework.mutations.sets import _mutation_registry
 from django_strawberry_framework.optimizer import DjangoOptimizerExtension
@@ -827,7 +840,6 @@ def test_register_only_surface_keyed_bind_emits_no_login_logout_payloads() -> No
     assert "RegisterPayload" in _materialized_names
     assert "LoginPayload" not in _materialized_names
     assert "LogoutPayload" not in _materialized_names
-    from django_strawberry_framework.mutations.inputs import EXCLUDED
 
     rider = _declared_auth_surface("register")
     assert rider is not None
@@ -1424,7 +1436,6 @@ def test_derive_register_fields_rejects_a_non_string_username_field() -> None:
 
 def test_exclusion_seam_captures_password_and_preserves_the_provided_marker() -> None:
     """The spec-040 D6 seam: value captured, marker preserved, attr never constructed."""
-    from django_strawberry_framework.mutations.inputs import EXCLUDED, mutation_input_field_specs
 
     @strawberry.input
     class ProbeRegisterInput:
@@ -1466,7 +1477,6 @@ def test_exclusion_seam_captures_password_and_preserves_the_provided_marker() ->
 
 def test_model_decode_step_without_exclusion_keeps_the_historical_three_tuple() -> None:
     """The default no-exclusion call is byte-compatible with the model flavor."""
-    from django_strawberry_framework.mutations.inputs import mutation_input_field_specs
 
     @strawberry.input
     class ProbeInput:
@@ -1504,8 +1514,6 @@ def _register_rider() -> type[DjangoMutation]:
 
 def test_register_with_explicit_none_password_returns_null_field_error() -> None:
     """An explicit null password on register is rejected with field-keyed null error."""
-    from django_strawberry_framework.auth.mutations import _register_decode_step
-
     rider = _register_rider()
 
     @strawberry.input
@@ -1525,8 +1533,6 @@ def test_register_with_explicit_none_password_returns_null_field_error() -> None
 
 def test_register_write_step_none_password_defense_in_depth() -> None:
     """_register_write_step safely rejects None password without crashing validate_password."""
-    from django_strawberry_framework.auth.mutations import _register_write_step
-
     user = User(username="testuser")
     decoded: _RegisterDecoded = (
         user,
@@ -1544,8 +1550,6 @@ def test_register_write_step_none_password_defense_in_depth() -> None:
 
 def test_register_decode_step_with_unset_password_returns_none_password() -> None:
     """_register_decode_step returns None when password is omitted/UNSET instead of raising KeyError."""
-    from django_strawberry_framework.auth.mutations import _register_decode_step
-
     rider = _register_rider()
 
     @strawberry.input
@@ -1591,8 +1595,6 @@ def test_register_decode_step_with_unset_password_returns_none_password() -> Non
 )
 def test_register_write_step_non_str_password_defense_in_depth(bad_password: object) -> None:
     """_register_write_step safely rejects non-string password with an invalid field error."""
-    from django_strawberry_framework.auth.mutations import _register_write_step
-
     user = User(username="testuser")
     decoded: _RegisterDecoded = (
         user,
@@ -1830,7 +1832,6 @@ def test_login_payload_construction_failure_is_execution_error_session_untouched
 ) -> None:
     """Row 5 (the one justified mock): a payload build after authenticate never mutates the session."""
     create_users(1)
-    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
 
     schema = _login_logout_schema()
 
@@ -2000,12 +2001,6 @@ def _channels_router(schema: strawberry.Schema) -> ProtocolTypeRouter:
     ``Transport.CHANNELS_HTTP`` arm serves any consumer who mounts Strawberry's
     ``GraphQLHTTPConsumer`` themselves, which is precisely the shape composed here.
     """
-    from channels.auth import AuthMiddlewareStack
-    from channels.routing import URLRouter
-    from channels.security.websocket import AllowedHostsOriginValidator
-    from django.urls import re_path
-    from strawberry.channels import GraphQLHTTPConsumer, GraphQLWSConsumer
-
     graphql_path = r"^graphql/?$"
     return ProtocolTypeRouter(
         {
@@ -2076,8 +2071,6 @@ def _cookie_key(cookie: str | None) -> str:
 
 
 def _open_store(key: str | None = None) -> SessionBase:
-    import importlib
-
     return importlib.import_module(settings.SESSION_ENGINE).SessionStore(key)
 
 
@@ -2434,8 +2427,6 @@ def _session_row_exists(key: str | None) -> bool:
 
 def _logout_payload_cls() -> type:
     """Build the login/logout schema and return the bound ``LogoutPayload`` class."""
-    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
-
     _login_logout_schema()
     return mutation_resolvers.payload_cls_for(_declared_holder("logout"))
 
@@ -2556,8 +2547,6 @@ async def test_the_logout_teardown_holds_both_locks_in_the_documented_order(
     ends must find a connection that was authenticated even when the teardown
     failed part way.
     """
-    import channels.auth
-
     await _acreate_users(1)
     payload_cls = await database_sync_to_async(_logout_payload_cls)()
     user = await get_user_model().objects.aget(username="staff_1")
@@ -2973,7 +2962,6 @@ async def test_logout_racing_a_websocket_login_on_one_scope_cannot_revive_it() -
     """
     await _acreate_users(1)
     _login_logout_schema()
-    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
 
     logout_payload_cls = await database_sync_to_async(mutation_resolvers.payload_cls_for)(
         _declared_holder("logout"),

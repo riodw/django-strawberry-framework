@@ -36,12 +36,14 @@ from strawberry import relay
 from strawberry.relay.exceptions import NodeIDAnnotationError
 from strawberry.types.base import StrawberryObjectDefinition
 
+from django_strawberry_framework.conf import relay_globalid_strategy_setting
 from django_strawberry_framework.exceptions import (
     ConfigurationError,
     _safe_arg_repr,
     _safe_class_name,
     _safe_type_name,
 )
+from django_strawberry_framework.registry import registry
 from django_strawberry_framework.resource_policy import check_deadline
 from django_strawberry_framework.utils.execution_mode import async_execution
 
@@ -367,7 +369,7 @@ def _node_value_or_none(cls: type[_RelayDjangoType], node_id: object) -> object:
     """
     # In-function import: ``relay.py`` imports this module at module top, so a
     # module-top import back would close the load cycle.
-    from django_strawberry_framework.relay import _coerce_pk_or_none
+    from django_strawberry_framework.relay import _coerce_pk_or_none  # noqa: PLC0415 - import cycle
 
     return _coerce_pk_or_none(cls, _coerce_node_id(node_id))
 
@@ -461,15 +463,13 @@ def _validated_globalid_setting() -> GlobalIDStrategy | None:
     used and the per-type Relay-shape gate - which already ran at type creation -
     is skipped.
     """
-    # In-function imports: ``base.py`` imports ``install_is_type_of`` from this
+    # In-function import: ``base.py`` imports ``install_is_type_of`` from this
     # module at module top, so a module-top ``relay.py -> base.py`` import would
     # close the load cycle. This runs only at finalization - well after module
     # load - so the local import resolves cheaply. Same cycle-dodge justification
     # ``base.py`` documents for its ``FilterSet`` / ``OrderSet`` in-function
-    # imports. Do NOT hoist either import to module top.
-    from django_strawberry_framework.conf import relay_globalid_strategy_setting
-
-    from .base import _validate_globalid_strategy
+    # imports. Do NOT hoist to module top.
+    from .base import _validate_globalid_strategy  # noqa: PLC0415
 
     setting = relay_globalid_strategy_setting()
     if setting is None:
@@ -506,7 +506,7 @@ def _resolve_globalid_strategy(
     Called at finalization (``install_globalid_typename_resolver``)
     for a type the Relay-shape gate already accepted.
     """
-    from .base import DEFAULT_GLOBALID_STRATEGY
+    from .base import DEFAULT_GLOBALID_STRATEGY  # noqa: PLC0415 - import cycle
 
     strategy = definition.globalid_strategy
     if strategy is not None:
@@ -644,8 +644,6 @@ _published_node_names: WeakKeyDictionary[Schema, dict[type, str]] = WeakKeyDicti
 
 def _registered_node_definition(origin: object) -> DjangoTypeDefinition | None:
     """Return the registry definition of a Relay-Node ``DjangoType`` ``origin``, else ``None``."""
-    from django_strawberry_framework.registry import registry
-
     definition = registry.get_definition(origin)
     if definition is None or not implements_relay_node(definition.origin):
         return None
@@ -722,8 +720,6 @@ def node_definition_for_published_name(schema: Schema, name: str) -> DjangoTypeD
             publishes under another name.
 
     """
-    from django_strawberry_framework.registry import registry
-
     published = schema.get_type_by_name(name)
     if published is None:
         definition = registry.definition_for_graphql_name(name)
@@ -998,7 +994,7 @@ def decode_global_id(
     # must not import ``registry`` at module top - the same cycle-dodge
     # ``_resolve_globalid_strategy`` above documents for its ``conf`` / ``base``
     # imports. Decode runs well after module load, so the local import is cheap.
-    from django_strawberry_framework.registry import registry
+    from django_strawberry_framework.registry import registry  # noqa: PLC0415 - import cycle
 
     if not isinstance(gid, (relay.GlobalID, str)):
         raise ConfigurationError(

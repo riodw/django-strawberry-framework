@@ -522,7 +522,7 @@ class TypeRegistry:
         # ``TYPE_CHECKING`` definition import follow the same in-function /
         # type-only convention. ``definition_for_graphql_name`` is a decode-time
         # call, well after module load, so the local import resolves cheaply.
-        from .types.relay import implements_relay_node
+        from .types.relay import implements_relay_node  # noqa: PLC0415 - import cycle
 
         matches = [
             definition

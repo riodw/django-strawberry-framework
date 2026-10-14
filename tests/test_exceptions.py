@@ -32,6 +32,7 @@ import strawberry
 from strawberry.types import ExecutionResult
 from typing_extensions import override
 
+import django_strawberry_framework.exceptions as exc_mod
 from django_strawberry_framework.exceptions import (
     ConfigurationError,
     DjangoStrawberryFrameworkError,
@@ -541,7 +542,6 @@ def test_safe_type_name_survives_base_str_slot_raising_base_exception(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A name that blows up in the base ``str`` slot is skipped, not propagated."""
-    import django_strawberry_framework.exceptions as exc_mod
 
     class _MockStrMeta(type):
         @override

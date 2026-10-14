@@ -1979,8 +1979,8 @@ def _synthesized_signature(
     # These helpers are only needed when building a field's synthesized
     # signature, so a function-local import keeps the top-level package import
     # lazy while preserving the generated ``filter:`` / ``orderBy:`` arguments.
-    from .filters import filter_input_type
-    from .orders import order_input_type
+    from .filters import filter_input_type  # noqa: PLC0415 - keeps orders/filters out of the root graph
+    from .orders import order_input_type  # noqa: PLC0415 - keeps orders/filters out of the root graph
 
     # ``root`` and ``info`` are Strawberry reserved parameter names: the engine
     # binds the source value to ``root`` and the resolver ``Info`` to ``info``

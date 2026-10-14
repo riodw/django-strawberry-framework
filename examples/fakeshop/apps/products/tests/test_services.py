@@ -5,6 +5,7 @@ from collections.abc import Callable, Iterator
 from types import ModuleType
 from unittest.mock import patch
 
+import faker.providers.bank as bank_module
 import pytest
 from django.contrib.auth.models import User
 from django.db import IntegrityError
@@ -73,7 +74,6 @@ def test_discover_providers_handles_module_without_provider_class() -> None:
     fake = Faker()
 
     # Use a real provider but stub away its ``Provider`` attribute mid-discovery to hit the branch.
-    import faker.providers.bank as bank_module
 
     original = bank_module.Provider
     try:

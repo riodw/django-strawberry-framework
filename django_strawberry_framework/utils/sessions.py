@@ -100,6 +100,15 @@ import contextlib
 import dataclasses
 from typing import TYPE_CHECKING, TypeVar, cast
 
+from django.conf import settings
+from django.utils.module_loading import import_string
+
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    _safe_type_name,
+    describe_value,
+)
+
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
@@ -185,8 +194,6 @@ def scope_singleton(
       something else owns the key, and quietly overwriting it would trade a
       loud configuration error for two systems sharing one slot.
     """
-    from django_strawberry_framework.exceptions import ConfigurationError, _safe_type_name
-
     try:
         value = scope.get(key)
     except BaseException as exc:
@@ -222,11 +229,6 @@ def session_store_class() -> type[SessionBase]:
     ``ConfigurationError`` with an arbitrary consumer exception while the import
     path or the rejection message is being assembled.
     """
-    from django.conf import settings
-    from django.utils.module_loading import import_string
-
-    from django_strawberry_framework.exceptions import ConfigurationError, describe_value
-
     try:
         engine: object = settings.SESSION_ENGINE
     except (

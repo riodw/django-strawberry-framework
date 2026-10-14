@@ -28,12 +28,14 @@ from django_strawberry_framework import DjangoType, conf, finalize_django_types,
 from django_strawberry_framework.exceptions import ConfigurationError, _safe_class_name
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import base as types_base
+from django_strawberry_framework.types import relay as types_relay
 from django_strawberry_framework.types.base import (
     _build_annotations,
     _validate_interfaces,
 )
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
 from django_strawberry_framework.types.relay import (
+    SyncMisuseError,
     _published_node_name_table,
     _resolve_id_attr_default,
     _resolve_id_default,
@@ -986,8 +988,6 @@ def test_sync_misuse_raises_sync_misuse_error_subclass() -> None:
     subclass directly (``except SyncMisuseError``) without depending
     on the substring-of-message check.
     """
-    from django_strawberry_framework.types.relay import SyncMisuseError
-
     assert issubclass(SyncMisuseError, ConfigurationError)
     assert issubclass(SyncMisuseError, RuntimeError)
 
@@ -2662,7 +2662,8 @@ def test_setting_read_and_validated_once_per_finalize(
 ) -> None:
     """N defaulted types -> exactly ONE setting read AND ONE validation per finalize.
 
-    Counting monkeypatches on BOTH ``conf.relay_globalid_strategy_setting`` and
+    Counting monkeypatches on BOTH ``relay_globalid_strategy_setting`` (as
+    ``types/relay.py`` binds it) and
     ``types/base.py::_validate_globalid_strategy`` (the two collaborators of
     ``_validated_globalid_setting``), installed AFTER the type bodies run so only
     the finalization pass is measured. The prior read-per-defaulted-type design
@@ -2699,7 +2700,7 @@ def test_setting_read_and_validated_once_per_finalize(
         validate_calls += 1
         return real_validate(*args, **kwargs)
 
-    monkeypatch.setattr(conf, "relay_globalid_strategy_setting", _counting_read)
+    monkeypatch.setattr(types_relay, "relay_globalid_strategy_setting", _counting_read)
     monkeypatch.setattr(types_base, "_validate_globalid_strategy", _counting_validate)
 
     finalize_django_types()
@@ -2731,7 +2732,7 @@ def test_no_request_time_setting_read(
     def _boom() -> NoReturn:
         raise AssertionError("relay_globalid_strategy_setting must not run post-finalize")
 
-    monkeypatch.setattr(conf, "relay_globalid_strategy_setting", _boom)
+    monkeypatch.setattr(types_relay, "relay_globalid_strategy_setting", _boom)
     # Emission (default ``model``) still works without touching the reader.
     assert _emitted_typename(CategoryNode) == "products.category"
 

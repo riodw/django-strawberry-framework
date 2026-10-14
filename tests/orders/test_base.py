@@ -16,14 +16,23 @@ document. Consumer ``orderBy`` walks live in
 
 from __future__ import annotations
 
+import inspect
 from functools import partial
 
 import pytest
+from apps.library.models import Shelf
 from apps.products.models import Category
 
+import django_strawberry_framework.types.base as base_mod
 from django_strawberry_framework import sets_mixins
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.filters import FilterSet
 from django_strawberry_framework.orders import OrderSet, RelatedOrder
+from django_strawberry_framework.types.base import (
+    ALLOWED_META_KEYS,
+    DEFERRED_META_KEYS,
+    _validate_orderset_class,
+)
 
 
 class AOrder(OrderSet):
@@ -118,28 +127,21 @@ def test_related_order_imports_lazy_mixin_from_sets_mixins_not_filters_base() ->
 
 def test_meta_orderset_class_is_in_allowed_meta_keys() -> None:
     """``"orderset_class"`` is now in ``ALLOWED_META_KEYS`` (spec-028)."""
-    from django_strawberry_framework.types.base import ALLOWED_META_KEYS
-
     assert "orderset_class" in ALLOWED_META_KEYS
 
 
 def test_meta_orderset_class_is_not_in_deferred_meta_keys() -> None:
     """``"orderset_class"`` has been promoted out of ``DEFERRED_META_KEYS``."""
-    from django_strawberry_framework.types.base import DEFERRED_META_KEYS
-
     assert "orderset_class" not in DEFERRED_META_KEYS
 
 
 def test_validate_orderset_class_returns_none_for_missing_value() -> None:
     """The validator short-circuits to ``None`` when ``Meta.orderset_class`` is absent."""
-    from django_strawberry_framework.types.base import _validate_orderset_class
-
     assert _validate_orderset_class(Category, None) is None
 
 
 def test_validate_orderset_class_accepts_order_set_subclass() -> None:
     """The validator returns the class unchanged when it's an ``OrderSet`` subclass."""
-    from django_strawberry_framework.types.base import _validate_orderset_class
 
     class MyOrder(OrderSet):
         pass
@@ -149,8 +151,6 @@ def test_validate_orderset_class_accepts_order_set_subclass() -> None:
 
 def test_validate_orderset_class_rejects_non_order_set() -> None:
     """The validator raises ``ConfigurationError`` for non-``OrderSet`` types."""
-    from django_strawberry_framework.exceptions import ConfigurationError
-    from django_strawberry_framework.types.base import _validate_orderset_class
 
     class NotAnOrderSet:
         pass
@@ -165,10 +165,6 @@ def test_validate_orderset_class_rejects_non_order_set() -> None:
 
 def test_validate_orderset_class_uses_local_import() -> None:
     """The ``OrderSet`` import lives inside the function body (spec-028)."""
-    import inspect
-
-    import django_strawberry_framework.types.base as base_mod
-
     # Module-top namespace must NOT expose ``OrderSet`` -- the validator
     # imports it locally to dodge the ``types -> orders -> types``
     # module-load cycle.
@@ -273,12 +269,9 @@ def test_related_order_rejects_filterset_target() -> None:
     objects' missing ``orderset`` attribute) instead of rejecting the
     cross-family mis-wiring at first resolution.
     """
-    from django_strawberry_framework.filters import FilterSet
 
     class ShelfFilter(FilterSet):
         class Meta:
-            from apps.library.models import Shelf
-
             model = Shelf
             fields = ["code"]
 

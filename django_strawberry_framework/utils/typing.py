@@ -32,6 +32,8 @@ from typing import TYPE_CHECKING, Any, Final, TypeGuard, TypeVar, cast, get_args
 
 from asgiref.sync import iscoroutinefunction
 from graphql import GraphQLList, GraphQLNonNull
+from strawberry.schema import Schema
+from strawberry.types.base import StrawberryContainer
 from typing_extensions import Never
 
 if TYPE_CHECKING:
@@ -53,7 +55,6 @@ if TYPE_CHECKING:
         GraphQLUnionType,
     )
     from strawberry import Info
-    from strawberry.schema import Schema
     from strawberry.schema.config import StrawberryConfig
     from strawberry.types.base import StrawberryType
     from typing_extensions import TypeIs
@@ -153,8 +154,6 @@ def strawberry_schema_from_info(info: object) -> "Schema | None":
     the resolver-info path. Caller treats ``None`` as "no schema available,
     nothing to look up."
     """
-    from strawberry.schema import Schema
-
     schema = getattr(info, "schema", None)
     # A Strawberry ``Info`` already names the Strawberry ``Schema``.
     if isinstance(schema, Schema):
@@ -394,8 +393,6 @@ def unwrap_container_type(strawberry_type: _T) -> "_T | StrawberryType | type[ob
     importable without pulling Strawberry's type machinery at import time
     (matching the module's stdlib-only header).
     """
-    from strawberry.types.base import StrawberryContainer
-
     peeled: _T | StrawberryType | type[object] = strawberry_type
     for _ in range(MAX_TYPE_WRAPPER_DEPTH + 1):
         if not isinstance(peeled, StrawberryContainer):

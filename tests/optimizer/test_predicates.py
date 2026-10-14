@@ -10,7 +10,7 @@ and
 """
 
 import pytest
-from apps.library.models import Book, Branch, Genre, Loan, Shelf
+from apps.library.models import Book, Branch, Genre, Loan, Shelf, TaggedItem
 from django.db import connection, router
 from django.db.models import CompositePrimaryKey, Model, Q, QuerySet, Value
 from django.db.models.lookups import Lookup
@@ -275,7 +275,5 @@ def test_related_rows_exist_correlates_both_directions_of_a_multi_column_link() 
 
 def test_related_rows_exist_rejects_a_segment_without_link_columns() -> None:
     """A ``GenericForeignKey`` names no link columns, so nothing could correlate it: it raises."""
-    from apps.library.models import TaggedItem
-
     with pytest.raises(ConfigurationError, match="segment 'content_object' is not a relation"):
         related_rows_exist(TaggedItem, "content_object", Branch.objects.all(), using="default")

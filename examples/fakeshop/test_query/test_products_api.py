@@ -48,10 +48,11 @@ from apps.products.serializers import (
 )
 from apps.products.services import create_users, delete_data, seed_cascade_split, seed_data
 from asgiref.sync import sync_to_async
+from config import schema as config_schema
 from django.conf import settings
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Permission, User
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import connection
+from django.db import connection, transaction
 from django.db.models import QuerySet
 from django.http import HttpRequest
 from django.http.response import HttpResponseBase
@@ -109,8 +110,6 @@ def _login_with_perm(username: str, *codenames: str) -> Client:
     short-circuit and never test the codename path. The user is re-fetched from the
     DB after the grant so the per-request permission cache is not stale.
     """
-    from django.contrib.auth.models import Permission
-
     user = User.objects.get(username=username)
     for codename in codenames:
         perm = Permission.objects.get(codename=codename, content_type__app_label="products")
@@ -337,7 +336,6 @@ def test_update_item_with_new_upload_replaces_attachment(tmp_path: Path) -> None
     seed_data(1)
     item = models.Item.objects.order_by("pk").first()
     assert item is not None
-    from django.contrib.auth.models import Permission
 
     user = User.objects.get(username="staff_1")
     user.user_permissions.add(
@@ -940,7 +938,6 @@ def test_create_item_login_bracket_via_test_client() -> None:
     """
     create_users(1)
     seed_data(1)
-    from django.contrib.auth.models import Permission
 
     category = models.Category.objects.earliest("pk")
     variables = {
@@ -2585,8 +2582,6 @@ def test_products_categories_items_name_leaf_never_matches_through_a_private_ite
     reads ``ItemType.get_queryset``. Staff see the private item and its public
     category; anonymous gets what staff get with the private item deleted.
     """
-    from django.db import transaction
-
     seed_data(1)
     category = models.Category.objects.filter(is_private=False).earliest("pk")
     models.Item.objects.create(name="zz-private-leaf", category=category, is_private=True)
@@ -4542,7 +4537,6 @@ def test_create_item_with_file_via_form_multipart_upload_over_http(tmp_path: Pat
     create_users(1)
     seed_data(1)
     category = models.Category.objects.earliest("pk")
-    from django.contrib.auth.models import Permission
 
     user = User.objects.get(username="view_item_1")
     user.user_permissions.add(
@@ -4945,9 +4939,8 @@ def test_update_item_via_form_malformed_id_is_field_error_no_coercion_crash(bad_
 
 
 async def _async_shipped_graphql_view(request: HttpRequest) -> HttpResponseBase:
-    from config.schema import schema
 
-    return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
+    return await AsyncDjangoGraphQLView.as_view(schema=config_schema.schema)(request)
 
 
 urlpatterns = [path("graphql-async/", _async_shipped_graphql_view)]
@@ -4978,8 +4971,6 @@ async def test_create_item_over_graphql_async() -> None:
     await sync_to_async(seed_data)(1)
 
     def _user_and_category() -> tuple[User, models.Category]:
-        from django.contrib.auth.models import Permission
-
         user = User.objects.get(username="view_item_1")
         perm = Permission.objects.get(codename="add_item", content_type__app_label="products")
         user.user_permissions.add(perm)
@@ -5015,8 +5006,6 @@ async def test_create_item_via_form_over_graphql_async() -> None:
     await sync_to_async(seed_data)(1)
 
     def _user_and_category() -> tuple[User, models.Category]:
-        from django.contrib.auth.models import Permission
-
         user = User.objects.get(username="view_item_1")
         perm = Permission.objects.get(codename="add_item", content_type__app_label="products")
         user.user_permissions.add(perm)
@@ -5052,8 +5041,6 @@ async def test_create_item_via_serializer_over_graphql_async() -> None:
     await sync_to_async(seed_data)(1)
 
     def _user_and_category() -> tuple[User, models.Category]:
-        from django.contrib.auth.models import Permission
-
         user = User.objects.get(username="view_item_1")
         perm = Permission.objects.get(codename="add_item", content_type__app_label="products")
         user.user_permissions.add(perm)
@@ -5578,7 +5565,6 @@ def test_create_item_via_serializer_multipart_upload_to_attachment(tmp_path: Pat
     create_users(1)
     seed_data(1)
     category = models.Category.objects.earliest("pk")
-    from django.contrib.auth.models import Permission
 
     user = User.objects.get(username="view_item_1")
     user.user_permissions.add(

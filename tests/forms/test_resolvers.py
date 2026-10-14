@@ -45,6 +45,7 @@ from apps.library import models as library_models
 from apps.products import models as product_models
 from apps.scalars import models as scalars_models
 from django import forms
+from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection, models
 from django.test.utils import CaptureQueriesContext
@@ -64,6 +65,12 @@ from django_strawberry_framework import (
     finalize_django_types,
 )
 from django_strawberry_framework.forms import resolvers as form_resolvers
+from django_strawberry_framework.forms.resolvers import (
+    _decode_form_relation_multi,
+    _is_empty_form_value,
+    _reconstruct_partial_data,
+    _to_form_key_value,
+)
 from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing.relay import global_id_for
@@ -1712,10 +1719,6 @@ def test_partial_update_reconstruct_with_dangling_fk_target() -> None:
 def test_to_form_key_value_handles_serializable_value_exceptions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from django.core.exceptions import FieldDoesNotExist
-
-    from django_strawberry_framework.forms.resolvers import _to_form_key_value
-
     field = forms.ModelChoiceField(
         queryset=library_models.Genre.objects.all(),
         to_field_name="invalid_attr",
@@ -1733,8 +1736,6 @@ def test_to_form_key_value_handles_serializable_value_exceptions(
 
 
 def test_is_empty_form_value_handles_unhashable_and_typeerror() -> None:
-    from django_strawberry_framework.forms.resolvers import _is_empty_form_value
-
     class FakeField:
         empty_values = {None, ""}
 
@@ -1753,8 +1754,6 @@ def test_is_empty_form_value_handles_unhashable_and_typeerror() -> None:
 
 
 def test_decode_form_relation_multi_rejects_non_collection_sequences() -> None:
-    from django_strawberry_framework.forms.resolvers import _decode_form_relation_multi
-
     for bad in (
         "123",
         b"bytes",
@@ -1864,10 +1863,6 @@ def test_decode_form_relation_multi_materializes_before_any_visibility_query() -
 
 
 def test_reconstruct_partial_data_m2m_does_not_exist(monkeypatch: pytest.MonkeyPatch) -> None:
-    from django.core.exceptions import ObjectDoesNotExist
-
-    from django_strawberry_framework.forms.resolvers import _reconstruct_partial_data
-
     def _dangling(_self: library_models.Book) -> object:
         raise ObjectDoesNotExist("dangling")
 

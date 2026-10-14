@@ -93,12 +93,14 @@ from typing_extensions import override
 import django_strawberry_framework
 from django_strawberry_framework import _cross_web_patches as cross_web_patches
 from django_strawberry_framework import _strawberry_patches as patches
+from django_strawberry_framework import views as views_module
 from django_strawberry_framework._boundary_ordering import (
     _BOUNDARY_ENFORCED,
     _BOUNDARY_MARKER,
     _BOUNDARY_METHOD,
     _BOUNDARY_MOUNT,
     _BOUNDARY_PREPARED_VIEW,
+    _CSRF_ORDERING_EXEMPTION,
 )
 from django_strawberry_framework._request_body import (
     _CORRUPTED_PROBE_LOG_MESSAGE,
@@ -405,8 +407,6 @@ def test_module_exports_exactly_the_two_view_classes_and_stays_off_the_package_r
     ``django_strawberry_framework.views``, and neither the module name nor either
     class appears on the root ``__all__``.
     """
-    from django_strawberry_framework import views as views_module
-
     assert views_module.__all__ == ("AsyncDjangoGraphQLView", "DjangoGraphQLView")
     root_surface = django_strawberry_framework.__all__
     assert "views" not in root_surface
@@ -762,8 +762,6 @@ def test_the_body_boundary_mixin_stays_private_and_sits_first_in_both_base_lists
     same names. Being first is also what lets a consumer subclass override any
     part.
     """
-    from django_strawberry_framework import views as views_module
-
     mixin = views_module._RequestBodyBoundaryMixin
 
     assert DjangoGraphQLView.__bases__ == (mixin, GraphQLView)
@@ -2386,8 +2384,6 @@ def test_both_package_views_resolve_parse_json_to_the_one_shared_mixin_method() 
     fails the moment such a class appears, and also pins that the mixin *delegates*
     to upstream rather than replacing it.
     """
-    from django_strawberry_framework import views as views_module
-
     mixin = views_module._RequestBodyBoundaryMixin
 
     for view_class in (DjangoGraphQLView, AsyncDjangoGraphQLView):
@@ -2770,9 +2766,6 @@ def test_the_view_callback_of_both_views_carries_the_csrf_exempt_mark(
     the presence of the wrapper that could have dropped it - along with the
     ``as_view`` bookkeeping ``functools.wraps`` carries through.
     """
-    from django_strawberry_framework import views as views_module
-    from django_strawberry_framework._boundary_ordering import _CSRF_ORDERING_EXEMPTION
-
     with mock.patch.object(
         views_module,
         "_boundary_view",
@@ -2804,8 +2797,6 @@ def test_each_csrf_continuation_matches_the_transport_it_protects() -> None:
     callback alone, and one on the inner function would turn the re-entry into the
     bypass it must never be.
     """
-    from django_strawberry_framework import views as views_module
-
     assert is_marked_coroutine_function(views_module._async_run_after_csrf_check)
     assert is_marked_coroutine_function(views_module._csrf_protected_async_run)
     assert is_marked_coroutine_function(views_module._csrf_protected_run) is False
@@ -3711,7 +3702,6 @@ async def test_the_async_chain_resets_the_ordering_mark_around_the_downstream_ca
     ``process_view`` writes turns it false. Then true again afterwards, including
     when the chain raised, which is the reset.
     """
-    from django_strawberry_framework._boundary_ordering import _CSRF_ORDERING_EXEMPTION
 
     async def downstream(request: HttpRequest) -> NoReturn:
         assert bool(_CSRF_ORDERING_EXEMPTION) is True
@@ -3997,8 +3987,6 @@ def test_the_probed_boundary_method_is_the_one_the_package_views_define() -> Non
     states the property that identity buys - a genuine mount passes recognition by
     construction, at both transports.
     """
-    from django_strawberry_framework import views as views_module
-
     mixin = views_module._RequestBodyBoundaryMixin
 
     assert getattr(mixin, _BOUNDARY_METHOD) is mixin._enforce_request_boundary

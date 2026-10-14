@@ -48,6 +48,7 @@ from __future__ import annotations
 import dataclasses
 import itertools
 import re
+import sys
 from collections.abc import Callable, Iterable, Iterator
 from typing import TYPE_CHECKING
 
@@ -73,6 +74,7 @@ from strawberry.types.field import StrawberryField
 import django_strawberry_framework
 from django_strawberry_framework import DjangoType, strawberry_config
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.forms import inputs as form_inputs
 from django_strawberry_framework.mutations import FieldError as FieldErrorFromPackage
 from django_strawberry_framework.mutations.inputs import (
     CREATE,
@@ -99,7 +101,17 @@ from django_strawberry_framework.mutations.inputs import (
     require_queryset_related_model,
 )
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.rest_framework import (
+    serializer_converter as ser_converter,
+)
 from django_strawberry_framework.scalars import Upload
+from django_strawberry_framework.types.converters import convert_scalar
+from django_strawberry_framework.utils.inputs import (
+    FILE,
+    RELATION_MULTI,
+    RELATION_SINGLE,
+    SCALAR,
+)
 from tests._idioms import module_binding
 from tests.optimizer import _link_models
 
@@ -429,11 +441,6 @@ def test_annotate_queryset_relation_packages_id_type_and_related_model() -> None
 
 def test_form_and_serializer_column_less_relation_share_queryset_annotation() -> None:
     """Form and serializer column-less relation helpers import the same owner."""
-    from django_strawberry_framework.forms import inputs as form_inputs
-    from django_strawberry_framework.rest_framework import (
-        serializer_converter as ser_converter,
-    )
-
     assert module_binding(form_inputs, "annotate_queryset_relation") is annotate_queryset_relation
     assert (
         module_binding(ser_converter, "annotate_queryset_relation") is annotate_queryset_relation
@@ -447,8 +454,6 @@ def test_form_and_serializer_column_less_relation_share_queryset_annotation() ->
 
 def test_model_column_input_annotation_maps_file_and_scalar_columns() -> None:
     """A non-relation column types as ``Upload`` when it is a file, else ``convert_scalar``."""
-    from django_strawberry_framework.types.converters import convert_scalar
-
     python_attr, graphql_name, annotation = model_column_input_annotation(
         _concrete_field(MediaSpecimen, "attachment"),
         "MediaSpecimenInput",
@@ -471,13 +476,6 @@ def test_model_column_input_annotation_maps_file_and_scalar_columns() -> None:
 
 def test_model_column_write_kind_classifies_relation_file_and_scalar() -> None:
     """A backing column is relation / file / scalar by the one shared classifier."""
-    from django_strawberry_framework.utils.inputs import (
-        FILE,
-        RELATION_MULTI,
-        RELATION_SINGLE,
-        SCALAR,
-    )
-
     book = library_models.Book
     assert model_column_write_kind(book._meta.get_field("title")) == SCALAR
     assert model_column_write_kind(MediaSpecimen._meta.get_field("attachment")) == FILE
@@ -487,8 +485,6 @@ def test_model_column_write_kind_classifies_relation_file_and_scalar() -> None:
 
 def test_model_column_write_annotation_maps_file_and_scalar() -> None:
     """Annotation-only mapping is Upload for a file column, else convert_scalar."""
-    from django_strawberry_framework.types.converters import convert_scalar
-
     attachment = MediaSpecimen._meta.get_field("attachment")
     assert (
         model_column_write_annotation(
@@ -508,11 +504,6 @@ def test_model_column_write_annotation_maps_file_and_scalar() -> None:
 
 def test_form_and_serializer_column_kind_share_model_column_owner() -> None:
     """Form reverse-map kind and serializer column resolve import the same owners."""
-    from django_strawberry_framework.forms import inputs as form_inputs
-    from django_strawberry_framework.rest_framework import (
-        serializer_converter as ser_converter,
-    )
-
     assert module_binding(form_inputs, "model_column_write_kind") is model_column_write_kind
     assert module_binding(ser_converter, "model_column_write_kind") is model_column_write_kind
     assert (
@@ -1036,7 +1027,6 @@ def test_identical_shape_dedupes_via_ledger() -> None:
     materialize_mutation_input_class("ItemInput", cls)
     # Idempotent re-materialize of the SAME (name, cls) pair: no raise.
     materialize_mutation_input_class("ItemInput", cls)
-    import sys
 
     assert sys.modules[INPUTS_MODULE_PATH].ItemInput is cls
 
@@ -1490,8 +1480,6 @@ def test_generated_input_over_a_foreign_object_model_binds_its_carriers() -> Non
     The relation contributes no ``parent_id`` attr, so the bind-time reverse map
     resolves every generated attr to a concrete column.
     """
-    from django_strawberry_framework.utils.inputs import SCALAR
-
     child_type = type(
         "LnkPairChildType",
         (DjangoType,),
@@ -1517,8 +1505,6 @@ def test_generated_input_over_a_foreign_object_model_binds_its_carriers() -> Non
 
 def test_mutation_input_field_specs_covers_generated_input() -> None:
     """Specs cover every generated input attr; FK target_name is ``<field>_id``."""
-    from django_strawberry_framework.utils.inputs import RELATION_SINGLE, SCALAR
-
     input_cls = build_mutation_input(
         product_models.Item,
         operation_kind=CREATE,
@@ -1550,7 +1536,6 @@ def test_mutation_input_field_specs_rejects_non_column_attr() -> None:
 
 def test_mutation_input_field_specs_rejects_generic_foreign_key_attr() -> None:
     """A virtual relation (GFK) is not a concrete column, even if ``get_field`` finds it."""
-    from apps.library import models as library_models
 
     @strawberry.input
     class Rogue:
@@ -1563,9 +1548,6 @@ def test_mutation_input_field_specs_rejects_generic_foreign_key_attr() -> None:
 
 def test_mutation_input_field_specs_classifies_m2m() -> None:
     """Forward M2M is ``RELATION_MULTI`` keyed by the field name, not ``<name>_id``."""
-    from apps.library import models as library_models
-
-    from django_strawberry_framework.utils.inputs import RELATION_MULTI
 
     @strawberry.input
     class Probe:

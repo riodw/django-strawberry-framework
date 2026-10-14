@@ -11,7 +11,7 @@ requests.
 """
 
 from collections.abc import Callable, Iterator
-from typing import TypeAlias
+from typing import NewType, TypeAlias
 
 import pytest
 import strawberry
@@ -143,8 +143,6 @@ def install_hashable_scalar_cache_schema(
     _reload_project_schema_for_acceptance_tests: None,
 ) -> Iterator[DjangoOptimizerExtension]:
     """Install a live schema whose custom scalar returns hostile hashable values."""
-    from typing import NewType
-
     registry.clear()
 
     class CacheCategoryType(DjangoType):
@@ -222,8 +220,6 @@ def install_unhashable_set_scalar_cache_schema(
     _reload_project_schema_for_acceptance_tests: None,
 ) -> Iterator[DjangoOptimizerExtension]:
     """Install a live schema whose custom scalar parser returns a ``set``."""
-    from typing import NewType
-
     registry.clear()
 
     class SetCacheCategoryType(DjangoType):

@@ -17,12 +17,19 @@ import pytest
 import strawberry
 from apps.products.models import Category
 from apps.scalars.models import NullableScalarSpecimen
+from django.db import connection
 from django.db.models import Model
+from django.test.utils import CaptureQueriesContext
 from strawberry import relay
 from typing_extensions import override
 
+from django_strawberry_framework.forms import resolvers as form_resolvers
+from django_strawberry_framework.mutations import resolvers as mutation_resolvers
 from django_strawberry_framework.mutations.inputs import FieldError
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.rest_framework import resolvers as serializer_resolvers
+from django_strawberry_framework.types.base import DjangoType
+from django_strawberry_framework.types.finalizer import finalize_django_types
 from django_strawberry_framework.utils.errors import field_error
 from django_strawberry_framework.utils.inputs import (
     FILE,
@@ -148,9 +155,6 @@ def test_decode_visible_relation_ids_rejects_uncoercible_member_without_a_visibi
     None
 ):
     """A string member fails the type check before any ``pk__in``; GraphQL ``[Int!]`` never delivers it."""
-    from django.db import connection
-    from django.test.utils import CaptureQueriesContext
-
     first = Category.objects.create(name="BatchA")
     recourse = "Use a synchronous visibility hook."
 
@@ -627,10 +631,6 @@ def test_decode_field_handlers_split_files_from_data() -> None:
 
 def test_form_and_serializer_decode_walks_share_field_handlers() -> None:
     """Form, serializer, and model decode walks import the same store-into-dest compose."""
-    from django_strawberry_framework.forms import resolvers as form_resolvers
-    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
-    from django_strawberry_framework.rest_framework import resolvers as serializer_resolvers
-
     assert module_binding(form_resolvers, "decode_field_handlers") is decode_field_handlers
     assert module_binding(serializer_resolvers, "decode_field_handlers") is decode_field_handlers
     assert module_binding(serializer_resolvers, "decoded_into") is decoded_into
@@ -832,11 +832,6 @@ def test_decode_visible_relation_ids_accepts_global_id_members_with_one_query() 
     off ``info``); a wrong-model GlobalID and a malformed pk token are the uniform
     field-keyed error.
     """
-    from django.db import connection
-    from django.test.utils import CaptureQueriesContext
-
-    from django_strawberry_framework.types.base import DjangoType
-    from django_strawberry_framework.types.finalizer import finalize_django_types
 
     class GidBatchPinType(DjangoType):
         class Meta:
@@ -887,9 +882,6 @@ def test_decode_visible_relation_ids_accepts_duplicate_pks_with_one_query() -> N
     ``[a, b, a]`` rather than a set; a len-compare in ``pks_all_present`` would
     still unique-attach.
     """
-    from django.db import connection
-    from django.test.utils import CaptureQueriesContext
-
     first = Category.objects.create(name="DupA")
     second = Category.objects.create(name="DupB")
     with CaptureQueriesContext(connection) as ctx:
@@ -913,9 +905,6 @@ def test_decode_visible_relation_ids_answers_the_key_a_non_pk_relation_stores() 
     in the same one visibility query; a visible row whose key is ``NULL`` cannot be
     linked by it and is the uniform field-keyed relation error.
     """
-    from django.db import connection
-    from django.test.utils import CaptureQueriesContext
-
     keyed = NullableScalarSpecimen.objects.create(label="Keyed")
     other = NullableScalarSpecimen.objects.create(label="Other")
     unkeyed = NullableScalarSpecimen.objects.create(label=None)
@@ -950,9 +939,6 @@ def test_decode_visible_relation_ids_materializes_generators_once_and_clears_emp
     generator yielding nothing is a valid M2M clear that returns ``[]``
     WITHOUT touching the DB.
     """
-    from django.db import connection
-    from django.test.utils import CaptureQueriesContext
-
     created = [Category.objects.create(name=f"Gen{i}") for i in range(2)]
     consumed: list[int] = []
 

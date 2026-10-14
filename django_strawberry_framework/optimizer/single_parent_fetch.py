@@ -52,6 +52,7 @@ from typing import TYPE_CHECKING, ClassVar, cast
 from django.db.models import QuerySet
 from typing_extensions import override
 
+from django_strawberry_framework.conf import single_parent_fast_path_setting
 from django_strawberry_framework.utils.connections import window_range_plan
 
 from . import logger
@@ -242,9 +243,7 @@ def _fetch_single_parent_rows(queryset: SingleParentWindowQuerySet) -> list[mode
     spec = queryset._dst_single_parent_spec
     if spec is None:
         return None
-    # Lazy import: ``conf`` is heavy and unrelated to the plan-time path, and the
-    # flag is read at FETCH time so ``override_settings`` is observed live.
-    from django_strawberry_framework.conf import single_parent_fast_path_setting
+    # The flag is read at FETCH time so ``override_settings`` is observed live.
 
     if not single_parent_fast_path_setting():
         return None

@@ -55,7 +55,7 @@ def _order_set_class() -> type[OrderSet]:
     -- the same cycle-keeping contract as
     ``types/base.py::_validate_orderset_class``'s local import.
     """
-    from .sets import OrderSet
+    from .sets import OrderSet  # noqa: PLC0415 - import cycle
 
     return OrderSet
 

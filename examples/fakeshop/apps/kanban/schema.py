@@ -28,6 +28,7 @@ from django_strawberry_framework import (
     OptimizerHint,
 )
 from django_strawberry_framework.filters import FilterInput
+from django_strawberry_framework.forms.resolvers import resolve_form_async, resolve_form_sync
 from django_strawberry_framework.mutations.resolvers import payload_cls_for
 from django_strawberry_framework.orders import OrderInput
 from django_strawberry_framework.utils.errors import field_error, validation_error_to_field_errors
@@ -1090,8 +1091,6 @@ class _ServiceErrorMixin(DjangoFormMutation):
     @classmethod
     @override
     def resolve_sync(cls, info: Info[object, object], *, data: object) -> object:
-        from django_strawberry_framework.forms.resolvers import resolve_form_sync
-
         try:
             return resolve_form_sync(cls, info, data=data)
         except (services.KanbanServiceError, ValidationError) as exc:
@@ -1100,8 +1099,6 @@ class _ServiceErrorMixin(DjangoFormMutation):
     @classmethod
     @override
     async def resolve_async(cls, info: Info[object, object], *, data: object) -> object:
-        from django_strawberry_framework.forms.resolvers import resolve_form_async
-
         try:
             return await resolve_form_async(cls, info, data=data)
         except (services.KanbanServiceError, ValidationError) as exc:

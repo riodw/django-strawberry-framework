@@ -5,16 +5,20 @@ Traversal on the wire is ``examples/fakeshop/test_query/test_library_api.py``.
 """
 
 import sys
+import typing
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import FrozenInstanceError, dataclass
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, NoReturn
 
 import pytest
 from apps.kanban.models import Decision
 from apps.library.models import Book, Branch, Genre, Loan, MembershipCard, Patron, TaggedItem
+from apps.library.models import Branch as _Branch
+from apps.library.models import Shelf as _Shelf
 from django.apps import AppConfig
 from django.apps.registry import Apps
+from django.contrib.admin.utils import lookup_spawns_duplicates
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist
@@ -33,7 +37,9 @@ from django_strawberry_framework.utils.relations import (
     ClassifiedPath,
     RelationKind,
     RelationPathHop,
+    _classify_path_cached,
     _is_traversable_relation,
+    _lenient_traverses_to_many,
     _path_traverses_to_many_cached,
     _resolve_segment_field,
     carrier_backed_link,
@@ -197,8 +203,6 @@ def test_relation_kind_none_valued_generic_slots_fall_back_to_many() -> None:
 
 def test_relation_kind_generic_is_in_literal() -> None:
     """The ``RelationKind`` alias enumerates ``"generic"``."""
-    import typing
-
     assert "generic" in typing.get_args(RelationKind)
 
 
@@ -220,8 +224,6 @@ def test_relation_kind_reverse_many_to_one_is_in_literal() -> None:
     ``relation_kind`` returns this value for a reverse foreign key, so the
     alias that types its return must list it.
     """
-    import typing
-
     assert "reverse_many_to_one" in typing.get_args(RelationKind)
 
 
@@ -363,8 +365,6 @@ def test_classify_path_forward_fk_chain_is_row_preserving() -> None:
     assert [hop.segment for hop in plan.hops] == ["shelf", "branch"]
     assert [hop.kind for hop in plan.hops] == ["forward_single", "forward_single"]
     assert [hop.many_side for hop in plan.hops] == [False, False]
-    from apps.library.models import Branch as _Branch
-    from apps.library.models import Shelf as _Shelf
 
     assert [hop.target_model for hop in plan.hops] == [_Shelf, _Branch]
     assert plan.terminal is _Branch._meta.get_field("name")
@@ -374,8 +374,6 @@ def test_classify_path_forward_fk_chain_is_row_preserving() -> None:
 
 def test_classify_path_accepts_pk_alias_mid_and_tail() -> None:
     """``pk`` resolves to the model's pk field as a scalar terminal after a FK hop."""
-    from apps.library.models import Shelf as _Shelf
-
     plan = classify_path(Book, "shelf__pk")
 
     assert [hop.segment for hop in plan.hops] == ["shelf"]
@@ -443,8 +441,6 @@ def test_classify_path_generic_relation_is_many_side() -> None:
 def test_classify_path_reverse_o2o_is_row_preserving() -> None:
     """A reverse O2O is single-valued: reverse_one_to_one, no many boundary."""
     plan = classify_path(Patron, "card__barcode")
-
-    from apps.library.models import MembershipCard
 
     (hop,) = plan.hops
     assert hop.segment == "card"
@@ -711,8 +707,6 @@ def test_path_resolution_error_is_configuration_family() -> None:
 
 def test_relation_path_hop_and_classified_path_are_frozen() -> None:
     """The plan records are immutable frozen dataclasses."""
-    from dataclasses import FrozenInstanceError
-
     hop = RelationPathHop(segment="s", kind="many", target_model=Book, many_side=True)
     with pytest.raises(FrozenInstanceError):
         # basedpyright: a write to the frozen dataclass is the rejected operation under test
@@ -748,8 +742,6 @@ def test_classify_path_first_many_matches_django_oracle(model: type[Model], path
     ``lookup_spawns_duplicates`` is imported in the TEST ONLY - it must never
     appear in production code.
     """
-    from django.contrib.admin.utils import lookup_spawns_duplicates
-
     spawns = classify_path(model, path).first_many_index is not None
     assert spawns == lookup_spawns_duplicates(model._meta, path)
 
@@ -1001,8 +993,6 @@ def test_lenient_fallback_all_to_one_relation_terminal_returns_false() -> None:
     public function never falls back), leaving this exit exercised by a direct
     call on the private helper.
     """
-    from django_strawberry_framework.utils.relations import _lenient_traverses_to_many
-
     assert _lenient_traverses_to_many(Book, "shelf__branch") is False
 
 
@@ -1021,8 +1011,6 @@ def test_path_traverses_to_many_is_cached() -> None:
 
 def test_classify_path_cached_wrapper_shares_bounded_cache() -> None:
     """``_classify_path_cached`` caches the frozen plan keyed on model + path."""
-    from django_strawberry_framework.utils.relations import _classify_path_cached
-
     _classify_path_cached.cache_clear()
     try:
         first = _classify_path_cached(Book, "genres__name")
@@ -1369,8 +1357,6 @@ def test_path_traverses_to_many_cache_clear_reaches_the_classification_cache(
     classification after a metadata change under the same ``(model, path)``
     key, even though the clear had been called.
     """
-    from django_strawberry_framework.utils.relations import _classify_path_cached
-
     _classify_path_cached.cache_clear()
     relations_module._path_traverses_to_many_cache_clear()
     try:

@@ -18,21 +18,42 @@ import uuid
 from collections.abc import Callable, Iterable, Iterator, Sized
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Literal, NoReturn, Protocol, runtime_checkable
+from unittest.mock import Mock
 
 import django
 import pytest
+import strawberry
+from apps.library.models import Patron
 from apps.products import services
 from apps.products.models import Category, Item
+from apps.scalars.models import ScalarSpecimen
+from asgiref.sync import sync_to_async
 from django.db import connection as db_connection
+from django.db import models, router
 from django.db.models import Model, QuerySet
 from django.db.models.expressions import Combinable
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
+from graphql import OperationType
 from strawberry.types import Info
 from typing_extensions import override
 
-from django_strawberry_framework import DjangoSchema, DjangoType, finalize_django_types
+import django_strawberry_framework.types.resolvers as resolvers_mod
+import django_strawberry_framework.types.resolvers as resolvers_module
+from django_strawberry_framework import (
+    DjangoSchema,
+    DjangoType,
+    finalize_django_types,
+    strawberry_config,
+)
+from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
 from django_strawberry_framework.optimizer._context import (
     DST_OPTIMIZER_FK_ID_ELISIONS,
+    DST_OPTIMIZER_PLANNED,
+    DST_OPTIMIZER_STRICTNESS,
+    begin_execution_frame,
+    end_execution_frame,
+    publish_scoped_relations,
 )
 from django_strawberry_framework.optimizer._context import (
     begin_execution_frame as _begin_execution_frame,
@@ -43,9 +64,19 @@ from django_strawberry_framework.optimizer._context import (
 from django_strawberry_framework.optimizer._context import (
     publish_scoped_relations as _publish_scoped_relations,
 )
-from django_strawberry_framework.optimizer.plans import resolver_key
+from django_strawberry_framework.optimizer.field_meta import FieldMeta
+from django_strawberry_framework.optimizer.plans import resolver_key, runtime_path_from_info
 from django_strawberry_framework.registry import registry
-from django_strawberry_framework.types.resolvers import _make_relation_resolver
+from django_strawberry_framework.types.resolvers import (
+    _FK_ELISION_UNSAFE,
+    _attach_file_resolvers,
+    _attach_relation_resolvers,
+    _build_fk_id_stub,
+    _check_n1,
+    _fk_attname_is_deferred,
+    _make_relation_resolver,
+    _visible_related_object,
+)
 from tests._info import make_info, response_path, unread_info
 
 if TYPE_CHECKING:
@@ -126,12 +157,6 @@ def test_make_relation_resolver_forward_is_named_resolve_field() -> None:
 
 def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation() -> None:
     """Forward resolver returns a target stub from ``<field>_id`` when elided."""
-    from types import SimpleNamespace
-
-    from django.db import router
-
-    from django_strawberry_framework.types.resolvers import _make_relation_resolver
-
     ItemType = _parent_type(Item)
 
     class Root:
@@ -239,10 +264,6 @@ def test_fk_id_elision_stub_is_scoped_when_the_relation_was_not_planned() -> Non
 
 def test_b2_forward_fk_id_elision_uses_registered_field_meta_attname() -> None:
     """Resolver FK-id elision reads attname from registered FieldMeta."""
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.types.resolvers import _make_relation_resolver
-
     # The real ``Item`` type registers its own ``FieldMeta`` for ``category``.
     ItemType = _parent_type(Item, fields=("id", "category"))
     field = SimpleNamespace(name="category", attname="wrong_id")
@@ -269,10 +290,6 @@ def test_b2_forward_fk_id_elision_uses_registered_field_meta_attname() -> None:
 
 def test_b2_forward_fk_id_elision_returns_none_for_null_fk() -> None:
     """Nullable FK ids still resolve to ``None`` instead of a stub."""
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.types.resolvers import _make_relation_resolver
-
     ItemType = _parent_type(Item, "ItemType")
 
     field = Item._meta.get_field("category")
@@ -290,11 +307,6 @@ def test_b2_forward_fk_id_elision_returns_none_for_null_fk() -> None:
 
 def test_b2_fk_id_stub_returns_none_without_related_model() -> None:
     """Direct unit: incomplete metadata cannot build an FK-id stub."""
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.optimizer.field_meta import FieldMeta
-    from django_strawberry_framework.types.resolvers import _build_fk_id_stub
-
     field_meta = FieldMeta(
         name="category",
         is_relation=True,
@@ -307,10 +319,6 @@ def test_b2_fk_id_stub_returns_none_without_related_model() -> None:
 
 def test_b2_forward_fk_id_elision_does_not_leak_across_parent_types() -> None:
     """Elision for one parent type does not affect another type."""
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.types.resolvers import _make_relation_resolver
-
     ItemType = _parent_type(Item, "ItemType")
 
     OtherType = _parent_type(Category, "OtherType")
@@ -331,10 +339,6 @@ def test_b2_forward_fk_id_elision_does_not_leak_across_parent_types() -> None:
 
 def test_b2_forward_fk_id_elision_ignores_bare_field_name_key() -> None:
     """Elision requires the full branch-sensitive resolver key."""
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.types.resolvers import _make_relation_resolver
-
     ItemType = _parent_type(Item, "ItemType")
 
     sentinel = object()
@@ -352,11 +356,6 @@ def test_b2_forward_fk_id_elision_ignores_bare_field_name_key() -> None:
 
 def test_check_n1_ignores_bare_field_name_key() -> None:
     """Planned relations require the full branch-sensitive resolver key."""
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.exceptions import OptimizerError
-    from django_strawberry_framework.types.resolvers import _check_n1
-
     ItemType = _parent_type(Item, "ItemType")
 
     fake_info = SimpleNamespace(
@@ -371,10 +370,6 @@ def test_check_n1_ignores_bare_field_name_key() -> None:
 
 def test_check_n1_returns_when_relation_is_already_loaded() -> None:
     """Unplanned-but-cached relations do not warn or raise."""
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.types.resolvers import _check_n1
-
     ItemType = _parent_type(Item, "ItemType")
 
     fake_info = SimpleNamespace(
@@ -393,10 +388,6 @@ def test_check_n1_returns_when_relation_is_already_loaded() -> None:
 
 def test_check_n1_warns_for_unplanned_lazy_load(caplog: pytest.LogCaptureFixture) -> None:
     """Warn strictness logs an unplanned lazy-load relation."""
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.types.resolvers import _check_n1
-
     ItemType = _parent_type(Item, "ItemType")
 
     fake_info = SimpleNamespace(
@@ -412,10 +403,6 @@ def test_check_n1_warns_for_unplanned_lazy_load(caplog: pytest.LogCaptureFixture
 
 def test_check_n1_planned_absent_is_silent() -> None:
     """No planned sentinel on context -> optimizer is not engaged."""
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.types.resolvers import _check_n1
-
     ItemType = _parent_type(Item, "ItemType")
 
     fake_info = SimpleNamespace(context={}, path=response_path("allItems", 0, "category"))
@@ -432,10 +419,6 @@ def test_check_n1_planned_absent_is_silent() -> None:
 
 def test_check_n1_planned_hit_is_silent() -> None:
     """Planned key present -> resolver is a no-op regardless of strictness."""
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.types.resolvers import _check_n1
-
     ItemType = _parent_type(Item, "ItemType")
 
     key = resolver_key(ItemType, "category", ("allItems", "category"))
@@ -454,10 +437,6 @@ def test_check_n1_planned_hit_is_silent() -> None:
 
 def test_check_n1_default_strictness_off_is_silent_on_lazy_load() -> None:
     """Strictness defaults to ``off`` and an unplanned lazy load is silent."""
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.types.resolvers import _check_n1
-
     ItemType = _parent_type(Item, "ItemType")
 
     fake_info = SimpleNamespace(
@@ -475,11 +454,6 @@ def test_check_n1_default_strictness_off_is_silent_on_lazy_load() -> None:
 
 def test_check_n1_raise_strictness_raises_on_lazy_load() -> None:
     """Strictness=raise + unplanned + lazy -> OptimizerError."""
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.exceptions import OptimizerError
-    from django_strawberry_framework.types.resolvers import _check_n1
-
     ItemType = _parent_type(Item, "ItemType")
 
     fake_info = SimpleNamespace(
@@ -506,11 +480,6 @@ def test_check_n1_many_side_kind_treats_consumer_set_attribute_as_lazy(
     not populate Django's prefetch cache, so the many-side resolver
     must still treat the access as lazy. Pinned via strictness=raise.
     """
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.exceptions import OptimizerError
-    from django_strawberry_framework.types.resolvers import _check_n1
-
     CategoryType = _parent_type(Category, "CategoryType")
 
     fake_info = SimpleNamespace(
@@ -527,10 +496,6 @@ def test_check_n1_many_side_kind_treats_consumer_set_attribute_as_lazy(
 
 def test_check_n1_many_kind_respects_prefetched_objects_cache() -> None:
     """Many-side recognises ``_prefetched_objects_cache`` as the only valid cache."""
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.types.resolvers import _check_n1
-
     CategoryType = _parent_type(Category, "CategoryType")
 
     fake_info = SimpleNamespace(
@@ -553,11 +518,6 @@ def test_check_n1_probes_prefetch_cache_under_cache_name() -> None:
     recognized as cached; the field-name fallback (test-double direct
     callers) would mislabel the same root as lazy and raise.
     """
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.exceptions import OptimizerError
-    from django_strawberry_framework.types.resolvers import _check_n1
-
     PlainAuthorType = _parent_type(Category, "PlainAuthorType")
 
     fake_info = SimpleNamespace(
@@ -593,10 +553,6 @@ def test_runtime_path_from_info_strips_list_indexes_and_keeps_aliases() -> None:
     selection of its own; the live sibling for planned vs unplanned relations is
     ``examples/fakeshop/test_query/test_products_visibility_api.py``.
     """
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.optimizer.plans import runtime_path_from_info
-
     info = SimpleNamespace(path=response_path("allItems", 0, "cat"))
     assert runtime_path_from_info(info) == ("allItems", "cat")
 
@@ -610,9 +566,6 @@ def test_o1_make_relation_resolver_reverse_one_to_one_returns_none_on_doesnotexi
     keeps the swallow-to-None branch a request cannot name without a missing
     reverse accessor.
     """
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.types.resolvers import _make_relation_resolver
 
     class FakeDoesNotExist(Exception):  # noqa: N818  (mirrors Django's Model.DoesNotExist naming)
         pass
@@ -655,8 +608,6 @@ def _forward_category_resolver(
     parent_type: type[DjangoType],
 ) -> Callable[[object, Info[object, object]], object]:
     """Build the generated forward resolver for ``Item.category`` under ``parent_type``."""
-    from django_strawberry_framework.types.resolvers import _make_relation_resolver
-
     return _make_relation_resolver(
         Item._meta.get_field("category"),
         parent_type=parent_type,
@@ -702,8 +653,6 @@ def test_forward_resolver_planned_path_contains_unsaved_instance_does_not_exist(
     resolve through the planned branch past ``_check_n1``; the descriptor
     read there carries the same containment as the fast path.
     """
-    from django_strawberry_framework.optimizer._context import DST_OPTIMIZER_FK_ID_ELISIONS
-
     item_type = _parent_type(Item)
     resolver = _forward_category_resolver(item_type)
     armed = {resolver_key(item_type, "category", ("elsewhere", "category"))}
@@ -718,8 +667,6 @@ def test_forward_resolver_planned_path_contains_unsaved_instance_does_not_exist(
 @pytest.mark.asyncio
 async def test_forward_resolver_async_planned_path_contains_unsaved_instance() -> None:
     """Async planned-path parity of the unsaved-instance containment."""
-    from django_strawberry_framework.optimizer._context import DST_OPTIMIZER_FK_ID_ELISIONS
-
     item_type = _parent_type(Item)
     resolver = _forward_category_resolver(item_type)
     armed = {resolver_key(item_type, "category", ("elsewhere", "category"))}
@@ -743,7 +690,6 @@ def test_o1_reverse_one_to_one_propagates_plain_attribute_error() -> None:
     and swallowing it would turn a programming error into a silent ``null``.
     It propagates instead.
     """
-    from django_strawberry_framework.types.resolvers import _make_relation_resolver
 
     class FakeDoesNotExist(Exception):  # noqa: N818  (mirrors Django's Model.DoesNotExist naming)
         pass
@@ -778,10 +724,6 @@ def test_reverse_one_to_one_real_model_missing_row_contained() -> None:
     ``MembershipCard.DoesNotExist`` from the descriptor without a query; the
     generated resolver contains it into ``None``.
     """
-    from apps.library.models import Patron
-
-    from django_strawberry_framework.types.resolvers import _make_relation_resolver
-
     resolver = _make_relation_resolver(
         Patron._meta.get_field("card"),
         parent_type=_parent_type(Patron),
@@ -793,10 +735,6 @@ def test_reverse_one_to_one_real_model_missing_row_contained() -> None:
 @pytest.mark.asyncio
 async def test_reverse_one_to_one_async_contains_missing_row() -> None:
     """Async parity of the real-model reverse OneToOne containment."""
-    from apps.library.models import Patron
-
-    from django_strawberry_framework.types.resolvers import _make_relation_resolver
-
     resolver = _make_relation_resolver(
         Patron._meta.get_field("card"),
         parent_type=_parent_type(Patron),
@@ -819,7 +757,6 @@ def test_forward_resolver_nullable_dangling_fk_resolves_to_none() -> None:
     ``examples/fakeshop/test_query/test_scalars_api.py``
     (``test_nullable_self_fk_dangling_parent_resolves_to_null_over_http``).
     """
-    from apps.scalars.models import ScalarSpecimen
 
     def create_specimen(label: str, *, parent: ScalarSpecimen | None = None) -> ScalarSpecimen:
         return ScalarSpecimen.objects.create(
@@ -921,12 +858,6 @@ def test_fk_id_elision_stub_sets_state_db_via_router_db_for_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Decision 3 axis 1 - stub's ``_state.db`` is set via ``router.db_for_read``."""
-    from unittest.mock import Mock
-
-    import django_strawberry_framework.types.resolvers as resolvers_module
-    from django_strawberry_framework.optimizer.field_meta import FieldMeta
-    from django_strawberry_framework.types.resolvers import _build_fk_id_stub
-
     mock_router = Mock()
     mock_router.db_for_read.return_value = "default"
     monkeypatch.setattr(resolvers_module, "router", mock_router)
@@ -952,12 +883,6 @@ def test_fk_id_elision_router_call_passes_parent_row_as_instance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Decision 3 axis 1 - ``router.db_for_read`` receives ``instance=<parent_row>`` with ``_state``."""
-    from unittest.mock import Mock
-
-    import django_strawberry_framework.types.resolvers as resolvers_module
-    from django_strawberry_framework.optimizer.field_meta import FieldMeta
-    from django_strawberry_framework.types.resolvers import _build_fk_id_stub
-
     mock_router = Mock()
     mock_router.db_for_read.return_value = "default"
     monkeypatch.setattr(resolvers_module, "router", mock_router)
@@ -982,13 +907,6 @@ def test_fk_id_elision_router_call_passes_none_instance_when_parent_lacks_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Decision 3 axis 1 - router.db_for_read receives ``instance=None`` when parent lacks ``_state``."""
-    from types import SimpleNamespace
-    from unittest.mock import Mock
-
-    import django_strawberry_framework.types.resolvers as resolvers_module
-    from django_strawberry_framework.optimizer.field_meta import FieldMeta
-    from django_strawberry_framework.types.resolvers import _build_fk_id_stub
-
     mock_router = Mock()
     mock_router.db_for_read.return_value = "default"
     monkeypatch.setattr(resolvers_module, "router", mock_router)
@@ -1017,13 +935,6 @@ def test_fk_id_elision_returns_none_for_null_fk_and_does_not_call_router(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Decision 3 axis 1 - null FK takes the early-return branch BEFORE the router is consulted."""
-    from types import SimpleNamespace
-    from unittest.mock import Mock
-
-    import django_strawberry_framework.types.resolvers as resolvers_module
-    from django_strawberry_framework.optimizer.field_meta import FieldMeta
-    from django_strawberry_framework.types.resolvers import _build_fk_id_stub
-
     mock_router = Mock()
     mock_router.db_for_read.return_value = "default"
     monkeypatch.setattr(resolvers_module, "router", mock_router)
@@ -1049,15 +960,6 @@ def test_fk_id_elision_returns_none_for_null_fk_and_does_not_call_router(
 
 def test_strictness_check_is_connection_agnostic_under_non_default_alias() -> None:
     """Decision 3 axis 4 - strictness mode raises ``OptimizerError`` regardless of ``_state.db``."""
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.exceptions import OptimizerError
-    from django_strawberry_framework.optimizer._context import (
-        DST_OPTIMIZER_PLANNED,
-        DST_OPTIMIZER_STRICTNESS,
-    )
-    from django_strawberry_framework.types.resolvers import _check_n1
-
     _ParentType = _parent_type(Item, "_ParentType")
 
     # ``_state.db = "shard_b"`` proves the non-default alias is accepted
@@ -1098,9 +1000,6 @@ def test_fk_id_elision_enabled_under_mutation() -> None:
     consumer-``.only()``-that-includes-the-FK case), which is exactly why the
     Decision 5 guard is operation-independent.
     """
-    from django_strawberry_framework.optimizer._context import DST_OPTIMIZER_FK_ID_ELISIONS
-    from django_strawberry_framework.types.resolvers import _make_relation_resolver
-
     ItemType = _parent_type(Item, "ItemType")
 
     field = Item._meta.get_field("category")
@@ -1142,18 +1041,6 @@ def test_fk_id_elision_falls_back_when_consumer_only_defers_fk(
     that operation and both fall back the same way, per spec-035 Decision 5 / Edge
     cases #"can defer the FK column under".
     """
-    from types import SimpleNamespace
-
-    from graphql import OperationType
-
-    from django_strawberry_framework.exceptions import OptimizerError
-    from django_strawberry_framework.optimizer._context import (
-        DST_OPTIMIZER_FK_ID_ELISIONS,
-        DST_OPTIMIZER_PLANNED,
-        DST_OPTIMIZER_STRICTNESS,
-    )
-    from django_strawberry_framework.types.resolvers import _make_relation_resolver
-
     ItemType = _parent_type(Item, "ItemType")
 
     field = Item._meta.get_field("category")
@@ -1220,11 +1107,6 @@ def test_fk_id_stub_returns_unsafe_sentinel_when_attname_deferred() -> None:
     ``attname`` yields ``_FK_ELISION_UNSAFE`` and the deferred column is never read
     (spec-035 Decision 5).
     """
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.optimizer.field_meta import FieldMeta
-    from django_strawberry_framework.types.resolvers import _FK_ELISION_UNSAFE, _build_fk_id_stub
-
     field_meta = FieldMeta(
         name="category",
         is_relation=True,
@@ -1263,16 +1145,6 @@ def test_fk_id_elision_falls_back_on_real_deferred_only_instance(
     logged + normal resolve), never a silent per-row read of the deferred FK
     column.
     """
-    from apps.products import services
-
-    from django_strawberry_framework.exceptions import OptimizerError
-    from django_strawberry_framework.optimizer._context import (
-        DST_OPTIMIZER_FK_ID_ELISIONS,
-        DST_OPTIMIZER_PLANNED,
-        DST_OPTIMIZER_STRICTNESS,
-    )
-    from django_strawberry_framework.types.resolvers import _make_relation_resolver
-
     services.seed_data(1)
 
     ItemType = _parent_type(Item, "ItemType")
@@ -1317,14 +1189,6 @@ def test_fk_id_elision_falls_back_on_real_deferred_only_instance(
 
 
 def test_fk_attname_is_deferred_and_stub_exceptions() -> None:
-    from django_strawberry_framework.optimizer.field_meta import FieldMeta
-    from django_strawberry_framework.types.resolvers import (
-        _FK_ELISION_UNSAFE,
-        _build_fk_id_stub,
-        _fk_attname_is_deferred,
-        _visible_related_object,
-    )
-
     class BrokenDeferred:
         def get_deferred_fields(self) -> NoReturn:
             raise RuntimeError("hostile get_deferred_fields")
@@ -1367,18 +1231,6 @@ def test_fk_attname_is_deferred_and_stub_exceptions() -> None:
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_async_resolvers_optimizer_scoped_and_visibility() -> None:
-    import inspect
-
-    import django_strawberry_framework.types.resolvers as resolvers_mod
-    from django_strawberry_framework.optimizer._context import (
-        begin_execution_frame,
-        end_execution_frame,
-        publish_scoped_relations,
-    )
-    from django_strawberry_framework.optimizer.plans import resolver_key
-    from django_strawberry_framework.types.base import DjangoType
-    from django_strawberry_framework.types.resolvers import _make_relation_resolver
-
     class CustomCategoryType(DjangoType):
         class Meta:
             model = Category
@@ -1402,8 +1254,6 @@ async def test_async_resolvers_optimizer_scoped_and_visibility() -> None:
             return queryset.filter(name__startswith="Visible")
 
     assert registry.get(Item) is CustomItemType
-
-    from django_strawberry_framework.types.finalizer import finalize_django_types
 
     finalize_django_types()
     frame = begin_execution_frame({}, nested=False)
@@ -1592,16 +1442,6 @@ async def test_async_resolvers_optimizer_scoped_and_visibility() -> None:
 
 @pytest.mark.django_db
 def test_sync_forward_and_many_resolver_visibility() -> None:
-    from django_strawberry_framework.optimizer._context import (
-        begin_execution_frame,
-        end_execution_frame,
-        publish_scoped_relations,
-    )
-    from django_strawberry_framework.optimizer.plans import resolver_key
-    from django_strawberry_framework.types.base import DjangoType
-    from django_strawberry_framework.types.finalizer import finalize_django_types
-    from django_strawberry_framework.types.resolvers import _make_relation_resolver
-
     class CustomCategoryType(DjangoType):
         class Meta:
             model = Category
@@ -1712,9 +1552,6 @@ def test_an_unsealable_prefetch_cache_is_refused_under_the_accessor_it_was_read_
     The consumer wrote no collection resolver here; the queryset is the one
     Django cached under the relation's accessor, so that is what the error names.
     """
-    from django.db import models
-
-    from django_strawberry_framework.exceptions import ConfigurationError
 
     class _ProjectQuerySet(models.QuerySet[Item]):
         """A project's own queryset class."""
@@ -1738,12 +1575,6 @@ def test_an_unsealable_prefetch_cache_is_refused_under_the_accessor_it_was_read_
 
 
 def test_resolver_helpers_edge_cases() -> None:
-    from django_strawberry_framework.types.resolvers import (
-        _attach_file_resolvers,
-        _attach_relation_resolvers,
-        _check_n1,
-    )
-
     # Line 313: kind == "connection_to_attr"
     info = SimpleNamespace(path=SimpleNamespace(key="items", prev=None), context={})
     root_with_attr = SimpleNamespace(prefetched_page=["item1"])
@@ -1814,7 +1645,6 @@ def _declare_mti_tag_models() -> tuple[type[Model], type[Model], type[Model]]:
     ``_mti_tag_tables`` creates and drops; the suite's ``_restore_app_registry``
     unregisters the classes after each test.
     """
-    from django.db import models
 
     class MtiTag(models.Model):
         name: "models.TextField[str | Combinable, str]" = models.TextField()
@@ -1911,10 +1741,6 @@ def _mti_tag_schema(
     run_async: bool,
 ) -> DjangoSchema:
     """Build a ``DjangoSchema`` whose ``shops`` root returns the walked-down children."""
-    import strawberry
-    from asgiref.sync import sync_to_async
-
-    from django_strawberry_framework import strawberry_config
 
     class MtiTagType(DjangoType):
         class Meta:
@@ -1979,8 +1805,6 @@ async def test_async_many_side_served_from_an_mti_ancestor_prefetch(
     rows are re-read through the visibility boundary, as a consumer prefetch is.
     On Django below 6.1 the manager queries instead, which yields the same rows.
     """
-    from asgiref.sync import sync_to_async
-
     tag_model, place_model, shop_model = _declare_mti_tag_models()
     models_in_order = (tag_model, place_model, shop_model)
     await sync_to_async(_create_mti_tag_tables)(*models_in_order)
@@ -2018,8 +1842,6 @@ def test_sync_many_side_served_from_an_mti_ancestor_prefetch_costs_no_query() ->
     Four statements: the places, their ``tags`` prefetch, and one walk down to
     each of the two shops. A per-child ``tags`` read would add two more.
     """
-    from django.test.utils import CaptureQueriesContext
-
     tag_model, place_model, shop_model = _declare_mti_tag_models()
     models_in_order = (tag_model, place_model, shop_model)
     _create_mti_tag_tables(*models_in_order)

@@ -43,7 +43,9 @@ from typing import TYPE_CHECKING, Any, NoReturn
 import pytest
 import strawberry
 from apps.library import models as library_models
+from apps.library.models import Book, Branch, Genre, TaggedItem
 from apps.products import models as product_models
+from apps.products.models import Category
 from apps.scalars import models as scalar_models
 from django import forms
 from django.core.exceptions import FieldDoesNotExist
@@ -67,6 +69,7 @@ from django_strawberry_framework.forms.inputs import (
     CREATE_SHAPED_KINDS,
     FORM,
     INPUTS_MODULE_PATH,
+    _form_basis_content_identity,
     _model_column_for,
     build_form_input_class,
     build_form_inputs,
@@ -81,6 +84,9 @@ from django_strawberry_framework.forms.inputs import (
 )
 from django_strawberry_framework.mutations.inputs import CREATE, PARTIAL
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.scalars import Upload, strawberry_config
+from django_strawberry_framework.types import converters
+from django_strawberry_framework.types.converters import convert_choices_to_enum
 from django_strawberry_framework.utils.inputs import InputFieldSpec
 
 if TYPE_CHECKING:
@@ -129,7 +135,6 @@ def _inner_type(field: StrawberryField) -> object:
 
 def _make_relay_target() -> tuple[type[library_models.Genre], type[DjangoType]]:
     """Register a Relay-Node ``DjangoType`` over ``library.Genre`` and return both."""
-    from apps.library.models import Genre
 
     class GenreNode(DjangoType, relay.Node):
         class Meta:
@@ -141,7 +146,6 @@ def _make_relay_target() -> tuple[type[library_models.Genre], type[DjangoType]]:
 
 def _make_non_relay_target() -> tuple[type[library_models.Branch], type[DjangoType]]:
     """Register a non-Relay ``DjangoType`` over ``library.Branch`` (raw int pk) and return both."""
-    from apps.library.models import Branch
 
     class BranchPlainType(DjangoType):
         class Meta:
@@ -631,7 +635,6 @@ def test_model_multiple_choice_field_to_non_relay_target_is_list_of_raw_pk() -> 
 
 def test_file_field_maps_to_upload() -> None:
     """A plain ``Form`` ``FileField`` maps to ``Upload`` with kind ``file``."""
-    from django_strawberry_framework.scalars import Upload
 
     class AvatarForm(forms.Form):
         avatar = forms.FileField()
@@ -655,10 +658,6 @@ def test_choices_modelform_field_resolves_to_read_side_enum() -> None:
     ``convert_choices_to_enum`` (the symmetric wire contract), not a parallel
     form-field table (spec-038 Decision 7 - the shared-table drift guard).
     """
-    from apps.library.models import Book
-    from django.db import models
-
-    from django_strawberry_framework.types.converters import convert_choices_to_enum
 
     class BookType(DjangoType):
         class Meta:
@@ -758,8 +757,6 @@ def test_choice_field_narrower_than_column_publishes_admitted_values(
     generated ``<Input><Field>Enum`` of exactly those two, members and values the column's,
     on both the create and the partial input; the read enum is left untouched.
     """
-    from django_strawberry_framework.types.converters import convert_choices_to_enum
-
     column = library_models.Book._meta.get_field("circulation_status")
     assert isinstance(column, models.Field)
     read_enum = convert_choices_to_enum(column, "BookType")
@@ -799,8 +796,6 @@ def test_choice_field_admitting_every_column_value_keeps_read_enum(
     class-level set (choices assigned per request in ``__init__``) are not known at build,
     so the column's read enum is published and the bound form refuses at request time.
     """
-    from django_strawberry_framework.types.converters import convert_choices_to_enum
-
     column = library_models.Book._meta.get_field("circulation_status")
     assert isinstance(column, models.Field)
     read_enum = convert_choices_to_enum(column, "BookType")
@@ -1018,8 +1013,6 @@ def test_array_choice_column_narrows_its_elements(
     ``list[<Input><Field>Enum]`` of the admitted values; a superset, and a single-value
     ``ChoiceField`` over the array, keep the column's ``list`` of the element's read enum.
     """
-    from django_strawberry_framework.types import converters
-
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
     column = _TaggedBook._meta.get_field("tags")
     assert isinstance(column, _FakeArrayField)
@@ -1473,8 +1466,6 @@ def test_extra_field_shadowing_reverse_relation_stays_scalar() -> None:
     ``relation_single`` for a declared ``CharField`` extra. ``_model_column_for``
     must ignore ``ForeignObjectRel`` so the extra routes through ``convert_form_field``.
     """
-    from apps.products.models import Category
-
     rev = Category._meta.get_field("items")
     assert rev.is_relation
     assert not rev.concrete
@@ -1505,7 +1496,6 @@ def test_extra_field_shadowing_generic_foreign_key_stays_scalar() -> None:
     ``_model_column_for`` must return ``None`` so an extra form field with the same name
     routes through ``convert_form_field`` rather than crashing on missing ``related_model``.
     """
-    from apps.library.models import TaggedItem
 
     class TaggedItemForm(forms.ModelForm[TaggedItem]):
         content_object = forms.CharField()
@@ -1534,7 +1524,6 @@ def test_extra_field_shadowing_generic_relation_stays_scalar() -> None:
     ``_model_column_for`` must return ``None`` so an extra form field with the same name
     routes through ``convert_form_field`` as a scalar rather than misclassifying as a single relation.
     """
-    from apps.library.models import Branch
 
     class BranchForm(forms.ModelForm[Branch]):
         tags = forms.CharField()
@@ -1558,7 +1547,6 @@ def test_extra_field_shadowing_generic_relation_stays_scalar() -> None:
 
 def test_guard_partial_required_column_less_fields_catches_dropped_gfk_extra() -> None:
     """guard_partial_required_column_less_fields catches dropped required GFK-shadowing extra fields."""
-    from apps.library.models import TaggedItem
 
     class TaggedItemForm(forms.ModelForm[TaggedItem]):
         content_object = forms.CharField(required=True)
@@ -1599,8 +1587,6 @@ def test_digit_boundary_form_fields_survive_distinct_in_sdl() -> None:
     @strawberry.type
     class Query:
         probe: int = strawberry.field(resolver=_probe)
-
-    from django_strawberry_framework.scalars import strawberry_config
 
     schema = strawberry.Schema(query=Query, config=strawberry_config())
     sdl = schema.as_str()
@@ -1779,12 +1765,6 @@ def test_model_column_for_typed_on_non_field_does_not_exist_get_field() -> None:
 
 
 def test_resolve_target_column_reverse_m2m_and_non_concrete_fallback() -> None:
-    from types import SimpleNamespace
-
-    from django.core.exceptions import FieldDoesNotExist
-
-    from django_strawberry_framework.forms.inputs import _model_column_for
-
     class FakeReverseM2M:
         is_relation = True
         many_to_many = True
@@ -1825,9 +1805,6 @@ def test_form_basis_content_identity_reraises_the_basis_typed_reject_verbatim() 
     # basedpyright: the corrupt base_fields value is the hostile input under test; django-stubs
     # types the slot as a field mapping
     _ClobberedBasesForm.base_fields = 42  # pyright: ignore[reportAttributeAccessIssue]
-
-    from django_strawberry_framework.exceptions import ConfigurationError
-    from django_strawberry_framework.forms.inputs import _form_basis_content_identity
 
     with pytest.raises(ConfigurationError) as excinfo:
         _form_basis_content_identity(_ClobberedBasesForm, None)
@@ -1872,9 +1849,6 @@ def test_form_basis_content_identity_types_a_raw_requiredness_read_failure() -> 
 
     class _PlainHostForm(forms.Form):
         name = forms.CharField()
-
-    from django_strawberry_framework.exceptions import ConfigurationError
-    from django_strawberry_framework.forms.inputs import _form_basis_content_identity
 
     field = _HostileRequiredField()
     _HostileRequiredField.armed = True

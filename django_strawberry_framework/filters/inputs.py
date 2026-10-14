@@ -27,6 +27,7 @@ from types import GenericAlias, MappingProxyType
 from typing import TYPE_CHECKING, Annotated, cast
 
 import strawberry
+from django import forms
 from django.db import models
 from django_filters import (
     ChoiceFilter,
@@ -47,6 +48,7 @@ from django_strawberry_framework.exceptions import (
     _safe_type_name,
 )
 from django_strawberry_framework.registry import register_subsystem_clear
+from django_strawberry_framework.types.converters import scalar_for_field
 from django_strawberry_framework.utils._narrowing import is_list_or_tuple
 from django_strawberry_framework.utils.converters import MRO_CONTINUE, convert_with_mro
 from django_strawberry_framework.utils.input_values import is_inactive_value, iter_input_items
@@ -305,8 +307,6 @@ def _scalar_from_form_field(form_field: object) -> OptionalWidenable:
     inspection of ``django.forms``; ``CharField`` is the catch-all (it's
     what every text-shaped filter falls through to).
     """
-    from django import forms
-
     if isinstance(form_field, forms.NullBooleanField):
         return bool
     if isinstance(form_field, forms.BooleanField):
@@ -356,7 +356,6 @@ def _scalar_from_model_field(model_field: ModelField | None) -> OptionalWidenabl
     """
     if model_field is None:
         return str
-    from django_strawberry_framework.types.converters import scalar_for_field
 
     # A ``SCALAR_MAP`` value is a registered runtime annotation (a class or ``NewType``).
     # basedpyright: ``TypeForm`` also admits forms with no runtime ``__or__`` (a string forward
@@ -442,7 +441,7 @@ def _choice_enum_from_filter(
     "side-effect on a filter during input-class construction" trap.
     """
     # Local import to avoid a top-level cycle through ``types.converters``.
-    from django_strawberry_framework.types.converters import convert_choices_to_enum
+    from django_strawberry_framework.types.converters import convert_choices_to_enum  # noqa: PLC0415 - import cycle
 
     if model_field is None or not getattr(model_field, "choices", None):
         raise ConfigurationError(
@@ -1036,7 +1035,7 @@ class FilterLookupTable:
 
 def _is_expanded_declared_filter(filter_instance: Filter) -> bool:
     """Whether ``filter_instance`` is a ``RelatedFilter`` expansion of a declared child filter."""
-    from .sets import filter_generation_provenance
+    from .sets import filter_generation_provenance  # noqa: PLC0415 - import cycle
 
     record = filter_generation_provenance(filter_instance)
     return record is not None and record.origin == "declared" and bool(record.expanded_from)

@@ -11,17 +11,75 @@ import subprocess
 import sys
 import textwrap
 
+import pytest
+
 import django_strawberry_framework
 from django_strawberry_framework import (
+    DjangoErrorPolicyExtension,
     DjangoFileType,
+    DjangoFormMutation,
     DjangoImageType,
+    DjangoModelFormMutation,
+    DjangoModelPermission,
+    DjangoMutation,
+    DjangoMutationField,
+    DjangoOptimizerExtension,
+    DjangoResourcePolicyExtension,
+    DjangoType,
+    FieldError,
+    ListArgumentError,
+    PaginationArgumentError,
+    SyncMisuseError,
     Upload,
     __version__,
+    finalize_django_types,
     logger,
+)
+from django_strawberry_framework.extensions import (
+    DjangoErrorPolicyExtension as ExtErrorPolicy,
+)
+from django_strawberry_framework.extensions import (
+    DjangoResourcePolicyExtension as ExtResourcePolicy,
+)
+from django_strawberry_framework.forms import (
+    DjangoFormMutation as FormsDjangoFormMutation,
+)
+from django_strawberry_framework.forms import (
+    DjangoModelFormMutation as FormsDjangoModelFormMutation,
+)
+from django_strawberry_framework.list_field import (
+    ListArgumentError as ListListArgumentError,
+)
+from django_strawberry_framework.mutations import (
+    DjangoModelPermission as MutationsDjangoModelPermission,
+)
+from django_strawberry_framework.mutations import (
+    DjangoMutation as MutationsDjangoMutation,
+)
+from django_strawberry_framework.mutations import (
+    DjangoMutationField as MutationsDjangoMutationField,
+)
+from django_strawberry_framework.mutations import (
+    FieldError as MutationsFieldError,
+)
+from django_strawberry_framework.optimizer import (
+    DjangoOptimizerExtension as OptDjangoOptimizerExtension,
 )
 from django_strawberry_framework.optimizer import logger as optimizer_logger
 from django_strawberry_framework.scalars import Upload as ScalarsUpload
+from django_strawberry_framework.types import (
+    DjangoType as TypesDjangoType,
+)
+from django_strawberry_framework.types import (
+    SyncMisuseError as TypesSyncMisuseError,
+)
 from django_strawberry_framework.types import converters
+from django_strawberry_framework.types import (
+    finalize_django_types as types_finalize_django_types,
+)
+from django_strawberry_framework.utils.connections import (
+    PaginationArgumentError as ConnectionsPaginationArgumentError,
+)
 
 
 def test_version() -> None:
@@ -133,7 +191,7 @@ def test_file_upload_exports_resolve_to_their_source_definitions() -> None:
 
 def test_dynamic_drf_soft_exports_via_getattr() -> None:
     """Verify DRF soft exports resolve dynamically through package __getattr__."""
-    from django_strawberry_framework import (
+    from django_strawberry_framework import (  # noqa: PLC0415 - the import is the getattr probe
         NestedSerializerConfig,
         SerializerFieldConversion,
         SerializerHookContext,
@@ -160,8 +218,6 @@ def test_dynamic_getattr_non_memoization() -> None:
 
 def test_dynamic_getattr_unknown_attribute_error() -> None:
     """Verify unknown attribute access on package root raises AttributeError."""
-    import pytest
-
     with pytest.raises(AttributeError, match="has no attribute 'unregistered_symbol_xyz'"):
         _ = django_strawberry_framework.unregistered_symbol_xyz
 
@@ -181,65 +237,6 @@ def test_star_import_preserves_namespace_hygiene() -> None:
 
 def test_reexported_types_resolve_to_canonical_subpackage_definitions() -> None:
     """Verify all re-exported symbols on root resolve by identity to their defining modules."""
-    from django_strawberry_framework import (
-        DjangoErrorPolicyExtension,
-        DjangoFormMutation,
-        DjangoModelFormMutation,
-        DjangoModelPermission,
-        DjangoMutation,
-        DjangoMutationField,
-        DjangoOptimizerExtension,
-        DjangoResourcePolicyExtension,
-        DjangoType,
-        FieldError,
-        ListArgumentError,
-        PaginationArgumentError,
-        SyncMisuseError,
-        finalize_django_types,
-    )
-    from django_strawberry_framework.extensions import (
-        DjangoErrorPolicyExtension as ExtErrorPolicy,
-    )
-    from django_strawberry_framework.extensions import (
-        DjangoResourcePolicyExtension as ExtResourcePolicy,
-    )
-    from django_strawberry_framework.forms import (
-        DjangoFormMutation as FormsDjangoFormMutation,
-    )
-    from django_strawberry_framework.forms import (
-        DjangoModelFormMutation as FormsDjangoModelFormMutation,
-    )
-    from django_strawberry_framework.list_field import (
-        ListArgumentError as ListListArgumentError,
-    )
-    from django_strawberry_framework.mutations import (
-        DjangoModelPermission as MutationsDjangoModelPermission,
-    )
-    from django_strawberry_framework.mutations import (
-        DjangoMutation as MutationsDjangoMutation,
-    )
-    from django_strawberry_framework.mutations import (
-        DjangoMutationField as MutationsDjangoMutationField,
-    )
-    from django_strawberry_framework.mutations import (
-        FieldError as MutationsFieldError,
-    )
-    from django_strawberry_framework.optimizer import (
-        DjangoOptimizerExtension as OptDjangoOptimizerExtension,
-    )
-    from django_strawberry_framework.types import (
-        DjangoType as TypesDjangoType,
-    )
-    from django_strawberry_framework.types import (
-        SyncMisuseError as TypesSyncMisuseError,
-    )
-    from django_strawberry_framework.types import (
-        finalize_django_types as types_finalize_django_types,
-    )
-    from django_strawberry_framework.utils.connections import (
-        PaginationArgumentError as ConnectionsPaginationArgumentError,
-    )
-
     assert DjangoType is TypesDjangoType
     assert SyncMisuseError is TypesSyncMisuseError
     assert finalize_django_types is types_finalize_django_types
@@ -258,9 +255,6 @@ def test_reexported_types_resolve_to_canonical_subpackage_definitions() -> None:
 
 def test_orders_submodule_not_imported_at_package_root() -> None:
     """Verify importing django_strawberry_framework alone does not import orders submodule."""
-    import subprocess
-    import sys
-
     cmd = [
         sys.executable,
         "-c",

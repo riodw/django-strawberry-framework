@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING
 import pytest
 import strawberry
 from apps.library import models
+from apps.library import schema as library_schema
 from django.conf import settings
 from django.db import connection
 from django.db.models import F, Model, OrderBy, Prefetch, Q, QuerySet, Value
@@ -89,11 +90,9 @@ def _library_schema(
     extensions: list[type[SchemaExtension] | Callable[[], SchemaExtension]],
 ) -> DjangoSchema:
     """The library app's own ``Query`` and ``Mutation``, carrying ``extensions`` only."""
-    from apps.library.schema import Mutation, Query
-
     return DjangoSchema(
-        query=Query,
-        mutation=Mutation,
+        query=library_schema.Query,
+        mutation=library_schema.Mutation,
         config=strawberry_config(),
         extensions=extensions,
     )
@@ -263,7 +262,6 @@ def _install(
     body: Callable[[QuerySet[Model], strawberry.Info[object, object]], QuerySet[Model, object]],
 ) -> None:
     """Make ``type_name``'s ``get_queryset`` return ``body(queryset, info)``."""
-    from apps.library import schema as library_schema
 
     def _hook(
         cls: type[DjangoType],
@@ -787,10 +785,10 @@ def test_nodes_refetch_only_combined_rows(
     optimizer: bool,
 ) -> None:
     """``nodes(ids:)`` over every book returns the combined hook's books and ``null`` elsewhere."""
-    from apps.library.schema import BookType
-
     books = _seed_books()
-    ids = ", ".join(f'"{global_id_for(BookType, books[word].pk)}"' for word in _WORDS)
+    ids = ", ".join(
+        f'"{global_id_for(library_schema.BookType, books[word].pk)}"' for word in _WORDS
+    )
 
     data = _both_hooks(
         monkeypatch,
@@ -816,8 +814,6 @@ def test_node_refetches_a_combined_row_and_hides_an_excluded_one(
     optimizer: bool,
 ) -> None:
     """``node(id:)`` resolves a book the combined hook keeps and ``null`` for one it excludes."""
-    from apps.library.schema import BookType
-
     books = _seed_books()
     kept = next(word for word in _WORDS if word in _VISIBLE[shape])
     excluded = next(word for word in _WORDS if word not in _VISIBLE[shape])
@@ -826,7 +822,10 @@ def test_node_refetches_a_combined_row_and_hides_an_excluded_one(
       kept: node(id: "%s") { ... on BookType { title } }
       excluded: node(id: "%s") { ... on BookType { title } }
     }
-    """ % (global_id_for(BookType, books[kept].pk), global_id_for(BookType, books[excluded].pk))
+    """ % (
+        global_id_for(library_schema.BookType, books[kept].pk),
+        global_id_for(library_schema.BookType, books[excluded].pk),
+    )
 
     data = _both_hooks(monkeypatch, "BookType", shape, "title", query, optimizer=optimizer)
 
@@ -936,10 +935,9 @@ def test_cascade_narrows_a_combined_root(
             info: strawberry.Info[object, object],
             chosen: Callable[[QuerySet[Model], str], QuerySet[Model]] = chosen,
         ) -> QuerySet[Model]:
-            from apps.library.schema import CirculationDeskType
 
             return apply_cascade_permissions(
-                CirculationDeskType,
+                library_schema.CirculationDeskType,
                 chosen(queryset, "name"),
                 info,
                 fields=["branch", "shelf"],
@@ -995,8 +993,6 @@ def test_mutation_locates_and_updates_only_a_combined_row(
     A kept book is updated and returned; an excluded one is answered exactly as the
     uncombined hook answers it and keeps its title.
     """
-    from apps.library.schema import BookType
-
     books = _seed_books()
     kept = next(word for word in _WORDS if word in _VISIBLE[shape])
     excluded = next(word for word in _WORDS if word not in _VISIBLE[shape])
@@ -1005,13 +1001,16 @@ def test_mutation_locates_and_updates_only_a_combined_row(
     updated = _data(
         _UPDATE_BOOK,
         optimizer=optimizer,
-        variables={"id": global_id_for(BookType, books[kept].pk), "data": {"title": "Renamed"}},
+        variables={
+            "id": global_id_for(library_schema.BookType, books[kept].pk),
+            "data": {"title": "Renamed"},
+        },
     )
     refused = _post(
         _UPDATE_BOOK,
         optimizer=optimizer,
         variables={
-            "id": global_id_for(BookType, books[excluded].pk),
+            "id": global_id_for(library_schema.BookType, books[excluded].pk),
             "data": {"title": "Renamed"},
         },
     )
@@ -1035,8 +1034,6 @@ def test_mutation_payload_resolves_its_relation_through_the_combined_hook(
     optimizer: bool,
 ) -> None:
     """The payload's ``node { shelf }`` resolves through the combined ``ShelfType`` hook."""
-    from apps.library.schema import BookType
-
     branch = models.Branch.objects.create(name="Central", city="Boston")
     code = next(word for word in _WORDS if word in _VISIBLE[shape])
     shelf = models.Shelf.objects.create(code=code, topic="Fiction", branch=branch)
@@ -1051,7 +1048,7 @@ def test_mutation_payload_resolves_its_relation_through_the_combined_hook(
             _UPDATE_BOOK,
             optimizer=optimizer,
             variables={
-                "id": global_id_for(BookType, book.pk),
+                "id": global_id_for(library_schema.BookType, book.pk),
                 "data": {"title": f"Kindred {combined}"},
             },
         )["updateBookViaCustomInput"]

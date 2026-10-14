@@ -7,11 +7,11 @@ A rule family is selected whole. Every stable code is on except the off-by-desig
 block is empty. A site the rule is wrong about carries a `# noqa: CODE - reason`; a whole folder the rule is wrong
 about gets a per-file ignore with its reason in `pyproject.toml`.
 
-Progress: 38 done, 0 to do. Stable rules: 815, every one named in the config: 805 on, 10 in `ignore` (off by
-design). The 139 preview-only rules stay off with `preview`. `# noqa` comments: 324 lines in 98 files.
+Progress: 39 done, 0 to do. Stable rules: 815, every one named in the config: 806 on, 9 in `ignore` (off by
+design). The 139 preview-only rules stay off with `preview`. `# noqa` comments: 388 lines in 109 files.
 
 Counts below were measured on ruff 0.17.0 at ee9c8161 (items 1-27), 8ca6a481 (items 28-35) and the tree after
-e42952a5 (items 36-37), fa4182a9 (item 31) and ee1a2367 (item 38). "Root" is `conftest.py`, `line_count.py` and `docs/dry/export_dry_review.py`.
+e42952a5 (items 36-37), fa4182a9 (item 31), ee1a2367 (item 38) and 1cf08608 (item 39). "Root" is `conftest.py`, `line_count.py` and `docs/dry/export_dry_review.py`.
 
 ## Done: rules on
 
@@ -131,6 +131,17 @@ e42952a5 (items 36-37), fa4182a9 (item 31) and ee1a2367 (item 38). "Root" is `co
   arities); tests/, examples/ and scripts/ keep the per-file ignore. `TID252`: 937 parent-relative imports made
   absolute (`ban-relative-imports = "parents"` stated; siblings stay relative); 4 source-text test assertions
   follow. `debug_toolbar.py` drops 2 `E402` with its typing-only imports
+- [x] 39. `PLC0415` on (2074 hits). Hoisted to module top wherever the import's timing did not matter, checked by
+  importing every package module in a fresh interpreter (the import fingerprint and the
+  `import django_strawberry_framework` module set unchanged) and by the suite; tests that patched a source module
+  now patch the binding the consumer holds. Example tests read reloaded schema classes off the module object
+  (`library_schema.BookType`; `schema_reload` reloads in place) instead of a call-time `from ... import BookType`.
+  `banned-module-level-imports` (`TID253`) names the fakeshop top-level modules (`apps`, `config`, `schema_reload`,
+  `strategy_schemas`): scripts import them only after `bootstrap_fakeshop_django`, which exempts those 26 sites
+  from `PLC0415`, and the package can never import the example project; tests/ and examples/ per-file-ignore
+  `TID253`. 59 sites stay local with `# noqa: PLC0415 - reason`: package 49 (21 import cycles, 9 finalizer subsystem
+  binds, 8 Channels and 1 DRF soft dependency, 4 `orders` / `filters` kept out of the root import graph, 4 patch
+  modules loaded in `ready()`, 2 lazily-resolved names), tests 7, scripts 2, root 1
 
 ## Still ignored in tests/ and examples/
 
@@ -157,7 +168,6 @@ scripts/ keeps `PERF` (16 sites), `S603` / `S607` (40) and `PLR2004` (25).
 
 Off by design (not planned):
 
-- `PLC0415` (2081, import outside top level): import cycles are broken by local imports
 - `SLF001` (2559, private member access): the package shares underscore names across its modules
   (`reportPrivateUsage` is off for the same reason)
 - `EM101`, `EM102`, `TRY003` (3097): exception-message style only
@@ -176,10 +186,11 @@ content, so the formatter owns `.py` only. No file carries a file-level `# ruff:
 
 ## Config ignores
 
-Global `ignore`: the off-by-design block only (10): `CPY001`, `D203`, `D213`, `EM101`, `EM102`, `FIX002`, `PLC0415`,
-`SLF001`, `TD003`, `TRY003`. Rule settings: `logger-objects` (the
+Global `ignore`: the off-by-design block only (9): `CPY001`, `D203`, `D213`, `EM101`, `EM102`, `FIX002`, `SLF001`,
+`TD003`, `TRY003`. Rule settings: `logger-objects` (the
 package logger, for `BLE001` / `LOG`), `flake8-annotations.allow-star-arg-any`, `flake8-import-conventions.aliases`
-(ruff's map minus `datetime = dt`), `flake8-tidy-imports.ban-relative-imports = "parents"`, `flake8-type-checking`
+(ruff's map minus `datetime = dt`), `flake8-tidy-imports.ban-relative-imports = "parents"` and
+`banned-module-level-imports` (the fakeshop top-level modules, item 39), `flake8-type-checking`
 (`quote-annotations`, `runtime-evaluated-decorators`, `runtime-evaluated-base-classes`, `exempt-modules`),
 `pep8-naming.classmethod-decorators` (Django's `classonlymethod`), and the
 `mccabe` / `pylint` complexity ratchets of item 36.
@@ -188,8 +199,9 @@ Per-file ignores:
 
 | Glob | Codes |
 | --- | --- |
-| `tests/**/*.py` | `D106`, `D401`, `N806`, `RUF012`, `S101`, `DJ008`, `SLOT000`, `SLOT001`, `S106`, `S107`, `S603`, `S607`, `TC001`-`TC003`, `PLR2004` |
-| `examples/**/*.py` | `D106`, `D401`, `RUF012`, `S101`, `SLOT000`, `S105`, `S106`, `TC001`-`TC003`, `PLR2004` |
+| `tests/**/*.py` | `D106`, `D401`, `N806`, `RUF012`, `S101`, `DJ008`, `SLOT000`, `SLOT001`, `S106`, `S107`, `S603`, `S607`, `TC001`-`TC003`, `PLR2004`, `TID253` |
+| `examples/**/*.py` | `D106`, `D401`, `RUF012`, `S101`, `SLOT000`, `S105`, `S106`, `TC001`-`TC003`, `PLR2004`, `TID253` |
+| `conftest.py` | `TID253` |
 | `tests/**/test_*.py`, `examples/**/test_*.py` | `D102`, `D103` |
 | `examples/**/migrations/*.py` | `D` |
 | `scripts/**/*.py` | `PERF`, `T201`, `INP001`, `S603`, `S607`, `PLR2004` |
@@ -239,11 +251,12 @@ pipeline.
 
 ## `# noqa` breakdown
 
-Lines carrying `# noqa`: 324 (none bare) in 98 files: package 195, tests 66, examples 56, scripts 4, root 3.
+Lines carrying `# noqa`: 388 (none bare) in 109 files: package 244, tests 76, examples 56, scripts 8, root 4.
 
 | Code | Hits | Package | Tests | Examples | Scripts / root | Why |
 | --- | --- | --- | --- | --- | --- | --- |
 | `BLE001` | 112 | 109 | 1 | 1 | 1 | deliberate containment whose fallback or flavor a shared helper cannot carry |
+| `PLC0415` | 59 | 49 | 7 | 0 | 3 | an import cycle, an optional dependency, a subsystem bound only when imported, or a name resolved lazily (item 39) |
 | `A002` | 55 | 9 | 0 | 46 | 0 | a `filter` / `id` parameter that is the GraphQL argument name or a public keyword |
 | `ANN401` | 21 | 21 | 0 | 0 | 0 | an `Any` the package does not own, each with a basedpyright reason |
 | `PLC0414` | 11 | 11 | 0 | 0 | 0 | explicit re-exports basedpyright needs |
@@ -264,15 +277,15 @@ Lines carrying `# noqa`: 324 (none bare) in 98 files: package 195, tests 66, exa
 | File | Lines |
 | --- | --- |
 | `examples/fakeshop/apps/kanban/schema.py` | 23 |
+| `django_strawberry_framework/types/finalizer.py` | 18 |
 | `django_strawberry_framework/utils/relations.py` | 14 |
 | `django_strawberry_framework/exceptions.py` | 12 |
-| `django_strawberry_framework/utils/errors.py` | 11 |
+| `django_strawberry_framework/utils/errors.py` | 12 |
 | `examples/fakeshop/apps/glossary/schema.py` | 10 |
+| `tests/types/test_definition_order.py` | 10 |
+| `django_strawberry_framework/auth/mutations.py` | 10 |
 | `django_strawberry_framework/utils/querysets.py` | 9 |
-| `tests/types/test_definition_order.py` | 9 |
-| `django_strawberry_framework/mutations/sets.py` | 8 |
 | `django_strawberry_framework/testing/client.py` | 8 |
-| `examples/fakeshop/apps/library/schema.py` | 8 |
 
 ## Waiting on You
 

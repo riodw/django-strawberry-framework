@@ -34,6 +34,7 @@ from django_strawberry_framework import (
     DjangoListField,
     DjangoOptimizerExtension,
     DjangoType,
+    OptimizerHint,
     finalize_django_types,
     strawberry_config,
 )
@@ -378,8 +379,6 @@ def _pair_parent_schema(*, optimizer: bool, route: str) -> strawberry.Schema:
     forces a ``Prefetch``; ``"hint"`` assigns a resolver and opts back into
     planning with ``OptimizerHint.prefetch_related()``.
     """
-    from django_strawberry_framework import OptimizerHint
-
     registry.clear()
     _connection_type_cache.clear()
     parent_namespace: dict[str, object] = {

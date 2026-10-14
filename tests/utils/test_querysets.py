@@ -16,6 +16,7 @@ Visibility-boundary decision references below resolve to
 import asyncio
 import datetime
 import enum
+import threading
 import uuid
 import zoneinfo
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterable, Iterator
@@ -23,6 +24,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, NoReturn, TypeVar
 
+import django.db.models.query as django_query
 import pytest
 import pytest_django
 from apps.library.models import (
@@ -39,26 +41,43 @@ from apps.library.models import (
 from apps.products.models import Category, Entry, Item, Property
 from apps.products.services import seed_data
 from apps.scalars.models import NullableScalarSpecimen
+from django.apps import apps
 from django.apps.registry import Apps
-from django.contrib.auth.models import AnonymousUser
+from django.contrib.admin.models import LogEntry
+from django.contrib.auth.models import AnonymousUser, Group, Permission, User
+from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models, router
 from django.db.backends.base.base import BaseDatabaseWrapper
-from django.db.models import F, FilteredRelation, ForeignObjectRel, Prefetch, Q
+from django.db.models import (
+    F,
+    FilteredRelation,
+    ForeignObjectRel,
+    Prefetch,
+    Q,
+    Subquery,
+    Value,
+    sql,
+)
 from django.db.models.expressions import RawSQL
-from django.db.models.functions import Coalesce, Trunc, Upper
+from django.db.models.functions import Coalesce, Concat, Trunc, Upper
 from django.db.models.lookups import In, Lookup
 from django.db.models.sql import Query as SqlQuery
+from django.db.models.sql import query as sql_query_module
 from django.db.models.sql.compiler import SQLCompiler
 from django.db.models.sql.datastructures import BaseTable, Join
 from django.db.models.sql.where import ExtraWhere, WhereNode
+from django.http import HttpRequest
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
+from django.utils.safestring import SafeString
 from typing_extensions import Self, override
 
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.mutations import resolvers as mutation_resolvers
+from django_strawberry_framework.orders import Ordering, OrderSet
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.utils import querysets as querysets_module
 from django_strawberry_framework.utils._narrowing import is_exact_dict
 from django_strawberry_framework.utils._queryset_private import (
     queryset_db,
@@ -84,6 +103,7 @@ from django_strawberry_framework.utils.querysets import (
     _PREFETCH_CHILD_POLICY,
     _RAW_LIST_SOURCE_POLICY,
     _RETAINED_TYPES,
+    PROHIBITED_FILTER_KWARGS,
     SyncMisuseError,
     _bake_deferred_filter_or_defect,
     _base_table_defect,
@@ -432,8 +452,6 @@ def test_run_in_one_sync_boundary_is_single_sourced_from_utils() -> None:
 
 async def test_run_in_one_sync_boundary_runs_callable_off_event_loop() -> None:
     """The primitive executes ``fn`` on a worker thread, not the event-loop thread."""
-    import threading
-
     captured: dict[str, int] = {}
 
     def _body() -> str:
@@ -883,7 +901,6 @@ def test_foreign_query_class_result_fails_closed() -> None:
     (its SQL-assembly behavior is unknown), so it fails closed with the
     ``untrusted`` defect - "cannot be sealed".
     """
-    from django.db.models import sql
 
     class _ForeignQuery(sql.Query):
         pass
@@ -1005,8 +1022,6 @@ def test_pending_deferred_filter_over_foreign_query_never_dispatches() -> None:
     resolution dispatches ``self._query.add_q(...)``, so a hostile ``add_q`` would
     execute consumer code during validation if the type gate did not precede it.
     """
-    from django.db.models import sql
-
     dispatched: list[Q] = []
 
     class _AddQSpy(sql.Query):
@@ -1060,8 +1075,6 @@ def test_deferred_filter_never_dispatches_instance_shadowed_add_q() -> None:
     ``sql.Query.add_q(query, ...)`` unbound, whose own call tree dispatches ``self.*`` --
     so the query must be proven shadow-free first. The shadow spy must never fire.
     """
-    from django.db.models import sql
-
     dispatched: list[Q] = []
 
     def _spy_add_q(q: Q) -> None:  # must never run
@@ -1417,7 +1430,6 @@ def test_manager_result_alias_drift_fails_closed_sync() -> None:
 
 def test_hostile_foreign_query_type_name_cannot_escape_typed_defect() -> None:
     """A foreign query metaclass cannot replace the typed boundary error with a raw one."""
-    from django.db.models import sql
 
     class _ExplodingMeta(type):
         @override
@@ -1661,7 +1673,6 @@ def test_hostile_prefetch_queryset_is_neutralized_to_plain() -> None:
     the subclass identity of both the inner queryset AND the ``Prefetch`` wrapper
     is dropped - so the hostile ``_fetch_all`` is never dispatched.
     """
-    from django.db.models import Prefetch
 
     class _HostileItemQS(models.QuerySet[Item]):
         @override
@@ -1687,8 +1698,6 @@ def test_hostile_prefetch_synthetic_row_never_materializes() -> None:
     synthetic hidden row) is never dispatched because the sealed child is a plain
     ``QuerySet``.
     """
-    from django.db.models import Prefetch
-
     category = Category.objects.create(name="c-real")
     Item.objects.create(name="item-real", category=category)
 
@@ -1715,8 +1724,6 @@ def test_string_and_default_prefetch_lookups_pass_through() -> None:
     string lookup (Django builds the related queryset itself) and a
     ``Prefetch(queryset=None)`` carry no consumer code, so they pass through.
     """
-    from django.db.models import Prefetch
-
     source = Category.objects.all().prefetch_related("items", Prefetch("items"))
     sealed = apply_type_visibility_sync(_identity_hook_type(), source, info=None)
     string_lookup, default_prefetch = queryset_prefetch_lookups(sealed)
@@ -1732,8 +1739,6 @@ def test_prefetch_with_non_queryset_queryset_fails_closed() -> None:
     ``_iterable_class``; a plain object slips construction, so the seal must
     reject a non-queryset child rather than trust it.
     """
-    from django.db.models import Prefetch
-
     # basedpyright: the non-queryset prefetch child is the hostile input under test; django-stubs
     # types Prefetch's queryset as a QuerySet
     source = Category.objects.all().prefetch_related(Prefetch("items", queryset=object()))  # pyright: ignore[reportArgumentType]
@@ -1748,7 +1753,6 @@ def test_prefetch_with_foreign_inner_query_fails_closed() -> None:
     seal, so an unsealable child fails the whole seal closed (never silently
     dropped, which would evaluate a default child and hide the tampering).
     """
-    from django.db.models import Prefetch, sql
 
     class _ForeignQuery(sql.Query):
         pass
@@ -1769,7 +1773,6 @@ def test_combined_query_foreign_branch_subclass_fails_closed() -> None:
     branch's consumer-overridable SQL synthesis. The branch walk applies the same
     exact-type check to every branch, matching the outer discipline.
     """
-    from django.db.models import sql
 
     class _HostileBranch(sql.Query):
         pass
@@ -1985,8 +1988,6 @@ def test_prefetch_non_str_lookup_fails_closed() -> None:
 
 def test_prefetch_non_str_path_fails_closed() -> None:
     """A ``Prefetch`` whose ``prefetch_through`` is not an exact str fails closed."""
-    from django.db.models import Prefetch
-
     pf = Prefetch("items")
     pf.__dict__["prefetch_through"] = object()
     _, defect = _sealed_prefetch_related_lookups((pf,), "X", None, Category)
@@ -1995,8 +1996,6 @@ def test_prefetch_non_str_path_fails_closed() -> None:
 
 def test_prefetch_non_str_to_attr_fails_closed() -> None:
     """A ``Prefetch`` whose ``to_attr`` is not an exact str / None fails closed."""
-    from django.db.models import Prefetch
-
     pf = Prefetch("items")
     pf.__dict__["to_attr"] = object()
     _, defect = _sealed_prefetch_related_lookups((pf,), "X", None, Category)
@@ -2005,8 +2004,6 @@ def test_prefetch_non_str_to_attr_fails_closed() -> None:
 
 def test_prefetch_unrouted_child_inherits_outer_alias() -> None:
     """An unrouted prefetch child inherits the OUTER effective alias."""
-    from django.db.models import Prefetch
-
     sealed, defect = _sealed_prefetch_related_lookups(
         (Prefetch("items", queryset=Item.objects.all()),),
         "X",
@@ -2022,8 +2019,6 @@ def test_prefetch_unrouted_child_inherits_outer_alias() -> None:
 
 def test_prefetch_cross_alias_child_fails_closed() -> None:
     """A prefetch child pinned to a DIFFERENT alias than the outer fails closed."""
-    from django.db.models import Prefetch
-
     _, defect = _sealed_prefetch_related_lookups(
         (Prefetch("items", queryset=Item.objects.using("other")),),
         "X",
@@ -2045,8 +2040,6 @@ def test_sliced_prefetch_child_seals_successfully() -> None:
     rows, and the rebuilt child is a fresh plain ``QuerySet`` whose slice marks are
     preserved.
     """
-    from django.db.models import Prefetch
-
     sealed, defect = _sealed_prefetch_related_lookups(
         (Prefetch("items", queryset=Item.objects.all()[:5]),),
         "X",
@@ -2069,7 +2062,6 @@ def test_prefetch_child_defect_detail_appears_in_message() -> None:
     with the ``untrusted`` defect; that inner code + detail is carried into the
     outer message so the failure is diagnosable rather than a generic string.
     """
-    from django.db.models import Prefetch, sql
 
     class _ForeignInnerQuery(sql.Query):
         pass
@@ -2236,8 +2228,6 @@ def test_shadowed_leaf_as_sql_never_dispatches() -> None:
     of ``as_sql`` on an otherwise-genuine ``Value`` / lookup would be dispatched at
     compile time. The recursive leaf walk shadow-checks every node.
     """
-    from django.db.models import Value
-
     fired: list[str] = []
 
     def _spy_as_sql(
@@ -2657,7 +2647,6 @@ def test_consumer_expression_nested_in_genuine_func_fails_closed() -> None:
     its operands, so a consumer expression in operand position reached compile. The
     recursive operand walk (``get_source_expressions``) rejects it.
     """
-    from django.db.models.functions import Upper
 
     class _NestedHostile(models.Func):
         @override
@@ -2704,7 +2693,6 @@ def test_hostile_subquery_inner_query_fails_closed() -> None:
     walk reaches it and requires it to be a genuine Django type -- a consumer
     ``Query`` subclass whose SQL synthesis the compiler would dispatch is rejected.
     """
-    from django.db.models import Subquery, sql
 
     class _HostileInner(sql.Query):
         pass
@@ -2765,8 +2753,6 @@ def test_deferred_filter_hostile_resolve_expression_never_dispatches() -> None:
     argument is proven genuine-Django BEFORE the bake, so the hostile
     ``resolve_expression`` never runs.
     """
-    from django.db.models import Value
-
     fired: list[str] = []
 
     class _HostileValue:
@@ -2897,8 +2883,6 @@ def test_poisoned_base_table_cache_fails_closed_on_real_first_alias() -> None:
     while the clone compiles the real first alias (``Item``). Deriving the base table
     from ``next(iter(alias_map))`` inspects exactly what the cache-free clone will.
     """
-    from django.db.models.sql.datastructures import BaseTable
-
     hostile = Item.objects.filter(name="x")
     str(hostile.query)
     hostile.query.get_initial_alias()
@@ -2950,8 +2934,6 @@ def test_is_inert_value_uses_exact_types_not_isinstance() -> None:
     through to the genuine-Django walk and fails closed. Exact builtins and
     ``datetime`` / ``Decimal`` stay inert.
     """
-    import datetime
-    from decimal import Decimal
 
     class _EvilStr(str):
         def resolve_expression(
@@ -2960,8 +2942,6 @@ def test_is_inert_value_uses_exact_types_not_isinstance() -> None:
             *_args: object,
             **_kwargs: object,
         ) -> models.Value:
-            from django.db.models import Value
-
             return Value(1)
 
     assert _is_inert_value(_EvilStr("x")) is False
@@ -2990,7 +2970,6 @@ def test_deferred_str_subclass_expression_never_dispatches() -> None:
             **_kwargs: object,
         ) -> models.Value:
             fired.append("resolve_expression")
-            from django.db.models import Value
 
             return Value(1)
 
@@ -3011,7 +2990,6 @@ def test_deferred_model_instance_with_instance_resolve_expression_fails_closed()
     ``resolve_expression`` is therefore rejected, where a class-level one is caught by the
     earlier expression branch.
     """
-    from django.db.models import Value
 
     def _value_one(_query: object, *_args: object, **_kwargs: object) -> Value:
         return Value(1)
@@ -3053,8 +3031,6 @@ def test_dynamic_as_vendor_shadow_never_dispatches() -> None:
     so an ``as_sqlite`` shadow Django never defined on the class would still be dispatched.
     ``_shadow_defect`` rejects every instance key beginning ``as_``.
     """
-    from django.db.models import Value
-
     fired: list[str] = []
 
     def _spy_as_sqlite(
@@ -3083,7 +3059,6 @@ def test_func_arg_joiner_metadata_non_string_fails_closed() -> None:
     ``arg_joiner`` would dispatch that object's ``join`` at compile time, so the metadata
     walk requires each SQL-template attribute to be exactly ``str``.
     """
-    from django.db.models.functions import Concat
 
     class _EvilJoiner:
         def join(self, _parts: object) -> str:  # must never run
@@ -3387,7 +3362,6 @@ def test_extra_where_non_sequence_params_fails_closed() -> None:
 
 def test_raw_sql_executable_parameter_fails_closed_before_clone() -> None:
     """A ``RawSQL`` parameter cannot defer consumer dispatch to backend adaptation."""
-    from django.db.models.expressions import RawSQL
 
     class _HostileParameter:
         pass
@@ -3400,8 +3374,6 @@ def test_raw_sql_executable_parameter_fails_closed_before_clone() -> None:
 
 def _filtered_relation_join() -> tuple[models.QuerySet[Category], str, BaseTable | Join]:
     """Return a genuine ``Join`` carrying a resolved ``filtered_relation`` (compiled)."""
-    from django.db.models import FilteredRelation, Q
-
     frq = Category.objects.annotate(
         vi=FilteredRelation("items", condition=Q(items__name="keep")),
     ).filter(vi__name="keep")
@@ -3834,8 +3806,6 @@ def test_slotted_genuine_django_node_fails_closed() -> None:
     Its instances are slotted, so the instance-state reads must fail it closed instead of
     raising a raw ``AttributeError`` past the typed contract.
     """
-    from django.utils.safestring import SafeString
-
     source = Category.objects.filter(is_private=False)
     str(source.query)
     # basedpyright: the SafeString annotation payload is the hostile input under test; django-stubs
@@ -3848,8 +3818,6 @@ def test_slotted_genuine_django_node_fails_closed() -> None:
 
 def _explain_info(format_name: str, options: dict[str, object]) -> object:
     """Build Django's ``ExplainInfo``, read from ``django.db.models.sql.query`` where it lives."""
-    from django.db.models.sql import query as sql_query_module
-
     explain_info_cls = module_binding(sql_query_module, "ExplainInfo")
     assert callable(explain_info_cls)
     return explain_info_cls(format_name, options)
@@ -3889,8 +3857,6 @@ def test_slotted_django_str_subclass_in_an_unenumerated_slot_is_normalized() -> 
     interpreter's own, exactly as it would a consumer ``str`` subclass, so the seal keeps
     the query runnable instead of failing a legitimate value closed.
     """
-    from django.utils.safestring import SafeString
-
     source = Category.objects.filter(is_private=False)
     str(source.query)
     source.query.select_for_update_of = (SafeString("self"),)
@@ -3916,8 +3882,6 @@ def test_reconstruction_never_grows_the_retained_type_set_with_a_planted_type() 
     in a process, which is growth attributable to the schema and not to any planted value.
     Snapshotting after it leaves the assertion measuring only what the planted value adds.
     """
-    from django.utils.safestring import SafeString
-
     _seal_or_defect(Category.objects.filter(is_private=False), Category, None)
     before = frozenset(_RETAINED_TYPES)
     for planted in (_explain_info("text", {"analyze": True}), SafeString("self")):
@@ -4758,7 +4722,6 @@ def test_query_ast_having_tree_defect_fails_closed() -> None:
 
 def test_query_genuineness_foreign_embedded_query_fails_closed() -> None:
     """A foreign embedded query type fails ``_query_genuineness_defect`` closed."""
-    from django.db.models import sql
 
     class _Foreign(sql.Query):
         pass
@@ -4799,7 +4762,6 @@ def test_query_genuineness_container_defect_fails_closed() -> None:
 
 def test_query_genuineness_combined_branch_defect_fails_closed() -> None:
     """A hostile ``combined_queries`` branch fails ``_query_genuineness_defect`` closed."""
-    from django.db.models import sql
 
     class _Foreign(sql.Query):
         pass
@@ -4866,8 +4828,6 @@ def test_deferred_value_arbitrary_object_fails_closed() -> None:
 
 def test_bake_deferred_non_dict_kwargs_fails_closed() -> None:
     """A deferred filter whose kwargs is not a dict fails closed."""
-    from django.db.models import sql
-
     rebuilt = sql.Query.clone(Item.objects.all().query)
     assert _bake_deferred_filter_or_defect(rebuilt, (False, (), ["bad"]), "QuerySet") == (
         "untrusted",
@@ -4877,8 +4837,6 @@ def test_bake_deferred_non_dict_kwargs_fails_closed() -> None:
 
 def test_bake_deferred_non_sequence_args_fails_closed() -> None:
     """A deferred filter whose args is neither tuple nor list fails closed."""
-    from django.db.models import sql
-
     rebuilt = sql.Query.clone(Item.objects.all().query)
     assert _bake_deferred_filter_or_defect(
         rebuilt,
@@ -4889,10 +4847,6 @@ def test_bake_deferred_non_sequence_args_fails_closed() -> None:
 
 def test_bake_deferred_prohibited_kwargs_fails_closed() -> None:
     """A deferred filter carrying a prohibited ``_connector`` / ``_negated`` kwarg fails closed."""
-    from django.db.models import sql
-
-    from django_strawberry_framework.utils.querysets import PROHIBITED_FILTER_KWARGS
-
     prohibited = next(iter(PROHIBITED_FILTER_KWARGS))
     rebuilt = sql.Query.clone(Item.objects.all().query)
     assert _bake_deferred_filter_or_defect(
@@ -4911,10 +4865,6 @@ def test_prohibited_filter_kwargs_matches_django_when_available() -> None:
     Django versions that DO expose the constant this pins the fallback literal
     against upstream drift; on the 5.2.x floor it pins the expected value.
     """
-    import django.db.models.query as django_query
-
-    from django_strawberry_framework.utils import querysets as querysets_module
-
     upstream = getattr(django_query, "PROHIBITED_FILTER_KWARGS", None)
     if upstream is not None:
         assert upstream == querysets_module.PROHIBITED_FILTER_KWARGS
@@ -4923,8 +4873,6 @@ def test_prohibited_filter_kwargs_matches_django_when_available() -> None:
 
 def test_bake_deferred_hostile_arg_fails_closed() -> None:
     """A hostile positional deferred-filter arg fails closed before the bake."""
-    from django.db.models import sql
-
     rebuilt = sql.Query.clone(Item.objects.all().query)
     assert _bake_deferred_filter_or_defect(
         rebuilt,
@@ -4935,8 +4883,6 @@ def test_bake_deferred_hostile_arg_fails_closed() -> None:
 
 def test_bake_deferred_non_string_kwarg_key_fails_closed() -> None:
     """A deferred filter with a non-string kwarg key fails closed."""
-    from django.db.models import sql
-
     rebuilt = sql.Query.clone(Item.objects.all().query)
     assert _bake_deferred_filter_or_defect(rebuilt, (False, (), {1: "v"}), "QuerySet") == (
         "untrusted",
@@ -5187,8 +5133,6 @@ def test_prefetch_child_over_unrelated_model_fails_closed() -> None:
     Property rows from ``products_property`` (Django ticket #37267) -- foreign-table
     rows no Item visibility hook ever ran on.
     """
-    from apps.products.services import seed_data
-
     seed_data(2)
     qs = Category.objects.prefetch_related(Prefetch("items", queryset=Property.objects.all()))
     defect = _seal_or_defect(qs, Category, None)[1]
@@ -5203,8 +5147,6 @@ def test_prefetch_child_over_unrelated_model_fails_closed() -> None:
 @pytest.mark.django_db
 def test_prefetch_child_over_relation_target_seals_and_fetches_model_rows() -> None:
     """A prefetch child over the lookup's own relation target still seals and fetches."""
-    from apps.products.services import seed_data
-
     seed_data(2)
     qs = Category.objects.prefetch_related(Prefetch("items", queryset=Item.objects.all()))
     sealed, defect = _seal_or_defect(qs, Category, None)
@@ -5279,8 +5221,6 @@ class _ProxyTargetHolder(models.Model):
 
 
 def test_proxy_target_fixtures_leave_category_relations_unchanged() -> None:
-    from django.apps import apps
-
     assert _ProxyTargetHolder not in apps.get_models()
     assert _ProxyTargetCategory not in apps.get_models()
     assert all(
@@ -5489,9 +5429,6 @@ def test_prefetch_child_default_accessor_wrong_model_fails_closed() -> None:
     ``ContentType.permission_set`` with admin ``LogEntry`` rows -- the same
     #37267 leak, one spelling over.
     """
-    from django.contrib.admin.models import LogEntry
-    from django.contrib.contenttypes.models import ContentType
-
     qs = ContentType.objects.prefetch_related(
         Prefetch("permission_set", queryset=LogEntry.objects.all()),
     )
@@ -5507,9 +5444,6 @@ def test_prefetch_child_default_accessor_wrong_model_fails_closed() -> None:
 @pytest.mark.django_db
 def test_prefetch_child_default_accessor_correct_model_seals() -> None:
     """The correct-model child over a default accessor still seals (no over-block)."""
-    from django.contrib.auth.models import Permission
-    from django.contrib.contenttypes.models import ContentType
-
     qs = ContentType.objects.prefetch_related(
         Prefetch("permission_set", queryset=Permission.objects.all()),
     )
@@ -5525,10 +5459,6 @@ def test_prefetch_relation_target_default_accessors_resolve() -> None:
     reverse), a multi-segment path THROUGH an accessor, and the reverse
     ``OneToOne`` accessor (the bare child model name, no ``_set``).
     """
-    from django.contrib.admin.models import LogEntry
-    from django.contrib.auth.models import Group, Permission, User
-    from django.contrib.contenttypes.models import ContentType
-
     # Relations declared WITHOUT a related_name, reached by the default
     # ``<model>_set`` accessor (the spelling ``get_field`` alone cannot see).
     assert _prefetch_relation_target_or_none(ContentType, "permission_set") is Permission
@@ -5560,8 +5490,6 @@ def test_prefetch_relation_target_resolves_every_installed_default_accessor() ->
     guard cannot resolve would fail OPEN exactly where the #37267 leak is
     reachable, so the accessor map must cover them all.
     """
-    from django.apps import apps
-
     unresolved: list[tuple[str, str, str]] = []
     for model in apps.get_models():
         for field in model._meta.get_fields():
@@ -6246,9 +6174,6 @@ def test_validate_post_orderset_result_refuses_a_combined_result_ordered_through
     result fails closed instead of being served in an order the rewrite cannot
     reproduce.
     """
-    from django.http import HttpRequest
-
-    from django_strawberry_framework.orders import Ordering, OrderSet
 
     def _hide_secret(
         _cls: type[DjangoType],

@@ -81,6 +81,7 @@ from django.db.models import Prefetch, QuerySet
 from django.db.models.query import ModelIterable
 from typing_extensions import override
 
+from django_strawberry_framework.conf import nested_connection_strategy_setting
 from django_strawberry_framework.exceptions import (
     ConfigurationError,
     _safe_arg_repr,
@@ -208,7 +209,7 @@ class RecognizedFetchQuerySet(QuerySet[models.Model, models.Model]):
         # Lazy: ``lateral_fetch`` imports this module, so the signature helper
         # cannot be reached at module scope - the same cycle the strategies
         # break the same way.
-        from .lateral_fetch import window_predicate_signature
+        from .lateral_fetch import window_predicate_signature  # noqa: PLC0415 - import cycle
 
         clone = chain_queryset(queryset)
         clone.__class__ = cls
@@ -395,7 +396,7 @@ class WindowedPrefetchStrategy:
         """Window the child queryset and carry it as a ``to_attr`` Prefetch."""
         # Lazy import: single_parent_fetch imports lateral_fetch which imports
         # this module (the same cycle the auto strategy breaks lazily).
-        from .single_parent_fetch import SingleParentWindowQuerySet, single_parent_spec
+        from .single_parent_fetch import SingleParentWindowQuerySet, single_parent_spec  # noqa: PLC0415 - import cycle
 
         spec = single_parent_spec(request)
         if spec is None:
@@ -429,7 +430,7 @@ class AutoNestedConnectionStrategy:
         """Attach a fetch-time vendor-aware, lateral-capable windowed prefetch."""
         # Lazy to break the intentional cycle: lateral_fetch imports this
         # module's request and window-floor primitives.
-        from .lateral_fetch import LATERAL_STRATEGY
+        from .lateral_fetch import LATERAL_STRATEGY  # noqa: PLC0415 - import cycle
 
         return LATERAL_STRATEGY.plan(request, plan)
 
@@ -442,7 +443,7 @@ AUTO_STRATEGY = AutoNestedConnectionStrategy()
 @cache
 def _builtin_strategies() -> Mapping[str, NestedConnectionStrategy]:
     """Build the immutable built-in registry after breaking the import cycle."""
-    from .lateral_fetch import LATERAL_STRATEGY
+    from .lateral_fetch import LATERAL_STRATEGY  # noqa: PLC0415 - import cycle
 
     return MappingProxyType({"windowed": WINDOWED_STRATEGY, "lateral": LATERAL_STRATEGY})
 
@@ -467,8 +468,6 @@ def resolve_strategy(value: object) -> NestedConnectionStrategy:
     ``ConfigurationError`` with an arbitrary exception.
     """
     if value is None:
-        from django_strawberry_framework.conf import nested_connection_strategy_setting
-
         value = nested_connection_strategy_setting()
     if isinstance(value, str):
         # The base ``str`` slot bypasses a subclass's ``__eq__`` override (the

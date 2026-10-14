@@ -15,6 +15,7 @@ import types
 from typing import NoReturn
 
 import pytest
+from django.conf import settings as django_settings
 from django.contrib.sessions.backends.db import SessionStore as DBSessionStore
 from django.contrib.sessions.backends.signed_cookies import (
     SessionStore as SignedCookieSessionStore,
@@ -78,13 +79,12 @@ def test_session_store_class_reports_an_unreadable_setting_as_configuration_erro
     must name the setting rather than let the descriptor's own exception escape
     through the session boundary.
     """
-    from django.conf import settings as django_settings
 
     class _RaisingSettings:
         def __getattr__(self, name: str) -> object:
             raise KeyError(name)
 
-    monkeypatch.setattr("django.conf.settings", _RaisingSettings())
+    monkeypatch.setattr("django_strawberry_framework.utils.sessions.settings", _RaisingSettings())
     with pytest.raises(ConfigurationError, match="SESSION_ENGINE could not be read"):
         session_store_class()
 

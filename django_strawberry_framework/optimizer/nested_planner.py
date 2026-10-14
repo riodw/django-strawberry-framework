@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, FieldError
-from django.db import models
+from django.db import connections, models
 from django.db.models.sql.query import Query
 from graphql import GraphQLError
 from strawberry import relay
@@ -162,8 +162,6 @@ def _every_backend_supports_index_column_ordering() -> bool:
     index UNKNOWN rather than making a coverage claim it cannot prove.
     """
     try:
-        from django.db import connections
-
         aliases = list(connections)
         return bool(aliases) and all(
             connections[alias].features.supports_index_column_ordering for alias in aliases

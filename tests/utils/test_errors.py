@@ -19,6 +19,7 @@ from apps.library import models as library_models
 from apps.products import models as product_models
 from django.core.exceptions import ValidationError
 from django.db.models import Model
+from django.utils.translation import gettext_lazy as _
 from typing_extensions import Self, override
 
 from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY, FieldError
@@ -337,8 +338,6 @@ def test_validation_error_mapper_handles_leaf_with_message_collection_when_messa
 
 def test_field_error_handles_lazy_translation_proxy_without_character_iteration() -> None:
     """Verify Django lazy translation proxies (Promise) are treated as atomic strings."""
-    from django.utils.translation import gettext_lazy as _
-
     lazy_msg = _("This field is required.")
     lazy_code = _("required")
     error = field_error("title", lazy_msg, codes=lazy_code)
@@ -350,8 +349,6 @@ def test_field_error_handles_lazy_translation_proxy_without_character_iteration(
 
 def test_validation_error_mapper_handles_lazy_translation_objects() -> None:
     """Verify ValidationError containing lazy translations formats cleanly into FieldError."""
-    from django.utils.translation import gettext_lazy as _
-
     lazy_msg = _("Invalid choice selected.")
     ve_dict = ValidationError({"status": [lazy_msg]})
     errors = validation_error_to_field_errors(ve_dict)

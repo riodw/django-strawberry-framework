@@ -27,12 +27,17 @@ These stay package-side because they assert what a live query cannot:
 """
 
 import base64
+from dataclasses import replace
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
 from apps.library.models import Book, Issue, Patron, Periodical
 from apps.scalars.models import ScalarSpecimen
+from django.conf import settings as django_settings
 from django.db.models import Field, Model, Prefetch, QuerySet
+from django.db.models.lookups import Lookup
+from django.db.models.sql.where import WhereNode
 from graphql import GraphQLError
 from strawberry.relay.utils import from_base64, to_base64
 from strawberry.schema.config import StrawberryConfig
@@ -63,6 +68,24 @@ from django_strawberry_framework.keyset import (
     split_order_ref,
     validate_cursor_field_columns,
 )
+from django_strawberry_framework.optimizer.join_taxonomy import classify_relation_join
+from django_strawberry_framework.optimizer.lateral_fetch import (
+    LATERAL_STRATEGY,
+    LateralQuerySet,
+    _is_window_qual,
+    _keyset_seek_quals_match,
+    _recognize_lateral_fetch,
+    build_lateral_sql,
+)
+from django_strawberry_framework.optimizer.nested_fetch import NestedConnectionRequest
+from django_strawberry_framework.optimizer.plans import (
+    WINDOW_KEYSET_SEEK_COUNT,
+    WINDOW_ROW_NUMBER,
+    WINDOW_ROW_NUMBER_ABS,
+    WINDOW_TOTAL_COUNT,
+    OptimizationPlan,
+    apply_window_pagination,
+)
 from django_strawberry_framework.utils.connections import (
     FetchMode,
     PaginationArgumentError,
@@ -78,7 +101,6 @@ if TYPE_CHECKING:
     from django.utils.tree import _NodeChildren
 
     from django_strawberry_framework.optimizer.lateral_fetch import LateralWindowSpec
-    from django_strawberry_framework.optimizer.nested_fetch import NestedConnectionRequest
     from django_strawberry_framework.utils.typing import ConcreteField
 
 ISSUE_ORDER = ("-number", "id")
@@ -212,8 +234,6 @@ def test_decrypt_cursor_payload_rejects_non_ascii_token() -> None:
 
 
 def test_decrypt_cursor_payload_rejects_non_json_plaintext() -> None:
-    from django.conf import settings as django_settings
-
     invalid_json = base64.urlsafe_b64encode(
         _cursor_aessiv(django_settings.SECRET_KEY).encrypt(
             b"not-json",
@@ -344,8 +364,6 @@ def test_decode_rejects_unparsable_value_shape() -> None:
 @pytest.mark.django_db
 def test_decode_without_secret_key_fallbacks_attribute(monkeypatch: pytest.MonkeyPatch) -> None:
     """When SECRET_KEY_FALLBACKS attribute is absent on settings, decryption still works."""
-    from django.conf import settings as django_settings
-
     periodical = Periodical.objects.create(name="P")
     issue = Issue.objects.create(periodical=periodical, number=1, title="one")
     cursor = _mint(issue)
@@ -616,14 +634,6 @@ def test_window_range_plan_without_keyset_is_unchanged() -> None:
 @pytest.mark.django_db
 def test_apply_window_pagination_counted_keyset_serves_pre_seek_counts() -> None:
     """The counted seek window: page-relative rn, PRE-seek totals, abs-first markers."""
-    from django_strawberry_framework.optimizer.plans import (
-        WINDOW_KEYSET_SEEK_COUNT,
-        WINDOW_ROW_NUMBER,
-        WINDOW_ROW_NUMBER_ABS,
-        WINDOW_TOTAL_COUNT,
-        apply_window_pagination,
-    )
-
     populated = Periodical.objects.create(name="populated")
     drained = Periodical.objects.create(name="drained")
     issues = [
@@ -674,8 +684,6 @@ def test_apply_window_pagination_counted_keyset_serves_pre_seek_counts() -> None
 
 @pytest.mark.django_db
 def test_apply_window_pagination_count_free_keyset_seeks_in_base_where() -> None:
-    from django_strawberry_framework.optimizer.plans import apply_window_pagination
-
     seek = KeysetSeek(columns=_issue_columns(), cursor=KeysetCursor(values=(2, 1)))
     windowed = apply_window_pagination(
         Issue.objects.all(),
@@ -696,8 +704,6 @@ def test_apply_window_pagination_count_free_keyset_seeks_in_base_where() -> None
 
 
 def test_apply_window_pagination_rejects_reversed_keyset_seek() -> None:
-    from django_strawberry_framework.optimizer.plans import apply_window_pagination
-
     seek = KeysetSeek(columns=_issue_columns(), cursor=KeysetCursor(values=(2, 1)))
     with pytest.raises(OptimizerError, match="cannot be reversed"):
         apply_window_pagination(
@@ -721,9 +727,6 @@ def _issue_lateral_request(
     with_total_count: bool = False,
     next_page_probe: bool = False,
 ) -> "NestedConnectionRequest":
-    from django_strawberry_framework.optimizer.join_taxonomy import classify_relation_join
-    from django_strawberry_framework.optimizer.nested_fetch import NestedConnectionRequest
-
     field = Periodical._meta.get_field("issues")
     return NestedConnectionRequest(
         django_field=field,
@@ -744,9 +747,6 @@ def _issue_lateral_request(
 
 
 def _plan_lateral(request: "NestedConnectionRequest") -> QuerySet[Model]:
-    from django_strawberry_framework.optimizer.lateral_fetch import LATERAL_STRATEGY
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
-
     plan = OptimizationPlan()
     assert LATERAL_STRATEGY.plan(request, plan)
     entry = plan.prefetch_related[0]
@@ -758,8 +758,6 @@ def _plan_lateral(request: "NestedConnectionRequest") -> QuerySet[Model]:
 
 def _lateral_spec(queryset: QuerySet[Model]) -> "LateralWindowSpec":
     """Return the spec a lateral plan carries, asserting the plan stayed lateral."""
-    from django_strawberry_framework.optimizer.lateral_fetch import LateralQuerySet
-
     assert isinstance(queryset, LateralQuerySet)
     spec = queryset._dst_lateral_spec
     assert spec is not None
@@ -780,11 +778,6 @@ def _issue_seek(
 
 
 def test_lateral_count_free_keyset_renders_in_branch_seek() -> None:
-    from django_strawberry_framework.optimizer.lateral_fetch import (
-        LateralQuerySet,
-        build_lateral_sql,
-    )
-
     seek = _issue_seek()
     lateral_queryset = _plan_lateral(_issue_lateral_request(seek, next_page_probe=True))
     assert isinstance(lateral_queryset, LateralQuerySet)
@@ -811,8 +804,6 @@ def test_lateral_count_free_keyset_renders_in_branch_seek() -> None:
 
 
 def test_lateral_keyset_prepares_values_through_model_fields() -> None:
-    from django_strawberry_framework.optimizer.lateral_fetch import build_lateral_sql
-
     spec = _lateral_spec(
         _plan_lateral(_issue_lateral_request(_issue_seek(), next_page_probe=True)),
     )
@@ -840,10 +831,6 @@ def test_lateral_keyset_prepares_values_through_model_fields() -> None:
 
 
 def test_lateral_uniform_keyset_renders_row_value_seek() -> None:
-    from dataclasses import replace
-
-    from django_strawberry_framework.optimizer.lateral_fetch import build_lateral_sql
-
     seek = _issue_seek(order=("number", "id"))
     request = replace(_issue_lateral_request(seek), order_by=("number", "id"))
     spec = _lateral_spec(_plan_lateral(request))
@@ -858,10 +845,6 @@ def test_lateral_uniform_keyset_renders_row_value_seek() -> None:
 
 
 def test_lateral_single_column_keyset_renders_scalar_seek() -> None:
-    from dataclasses import replace
-
-    from django_strawberry_framework.optimizer.lateral_fetch import build_lateral_sql
-
     seek = _issue_seek(values=(5,), order=("pk",))
     request = replace(_issue_lateral_request(seek), order_by=("pk",))
     spec = _lateral_spec(_plan_lateral(request))
@@ -871,15 +854,11 @@ def test_lateral_single_column_keyset_renders_scalar_seek() -> None:
 
 
 def test_lateral_counted_keyset_downgrades_to_windowed() -> None:
-    from django_strawberry_framework.optimizer.lateral_fetch import LateralQuerySet
-
     windowed = _plan_lateral(_issue_lateral_request(_issue_seek(), with_total_count=True))
     assert not isinstance(windowed, LateralQuerySet)
 
 
 def test_lateral_seek_arity_mismatch_downgrades_to_windowed() -> None:
-    from django_strawberry_framework.optimizer.lateral_fetch import LateralQuerySet
-
     # One seek value, two order columns: the deterministic order grew a tail
     # the cursor does not carry.
     seek = KeysetSeek(
@@ -891,11 +870,6 @@ def test_lateral_seek_arity_mismatch_downgrades_to_windowed() -> None:
 
 
 def test_lateral_fetch_recognizes_planned_seek_residue() -> None:
-    from django_strawberry_framework.optimizer.lateral_fetch import (
-        LateralQuerySet,
-        _recognize_lateral_fetch,
-    )
-
     lateral_queryset = _plan_lateral(_issue_lateral_request(_issue_seek(), next_page_probe=True))
     spec = _lateral_spec(lateral_queryset)
     filtered = lateral_queryset.filter(periodical__in=[1, 2])
@@ -906,11 +880,6 @@ def test_lateral_fetch_recognizes_planned_seek_residue() -> None:
 
 
 def test_lateral_fetch_rejects_foreign_filters_and_missing_seek() -> None:
-    from django_strawberry_framework.optimizer.lateral_fetch import (
-        LateralQuerySet,
-        _recognize_lateral_fetch,
-    )
-
     lateral_queryset = _plan_lateral(_issue_lateral_request(_issue_seek(), next_page_probe=True))
     spec = _lateral_spec(lateral_queryset)
     # A consumer filter beside the seek: never swallowed as the seek.
@@ -934,17 +903,6 @@ def _as_seek_nodes(*nodes: object) -> "_NodeChildren":
 
 def test_lateral_seek_quals_match_rejects_shape_drift() -> None:
     """The structural matcher's mismatch arms, driven directly."""
-    from dataclasses import replace
-    from types import SimpleNamespace
-
-    from django.db.models.lookups import Lookup
-    from django.db.models.sql.where import WhereNode
-
-    from django_strawberry_framework.optimizer.lateral_fetch import (
-        _is_window_qual,
-        _keyset_seek_quals_match,
-    )
-
     lateral_queryset = _plan_lateral(_issue_lateral_request(_issue_seek(), next_page_probe=True))
     spec = _lateral_spec(lateral_queryset)
     seek_nodes = [

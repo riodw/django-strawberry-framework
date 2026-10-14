@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 import django_stubs_ext
+from django.core.exceptions import ImproperlyConfigured
 
 # Makes the Django classes the stubs declare generic (``ModelAdmin``, ``ModelForm``,
 # ``Field``, ...) subscriptable at runtime, so example code can write the type
@@ -34,8 +35,6 @@ DEBUG = True
 def _require_development_settings(*, debug: bool) -> None:
     """Refuse to load as anything but the development fixture this module is."""
     if not debug:
-        from django.core.exceptions import ImproperlyConfigured
-
         raise ImproperlyConfigured(
             "examples/fakeshop is a development fixture and must never be deployed: "
             "it ships a checked-in SECRET_KEY, GraphiQL, the debug toolbar, and "

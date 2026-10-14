@@ -44,12 +44,15 @@ not live. Live bind/write siblings:
 from __future__ import annotations
 
 import re
+import sys
 from collections.abc import Callable, Iterator, Mapping
 from typing import TYPE_CHECKING, NoReturn
 
 import pytest
 import strawberry
+import strawberry as _sb
 from apps.library import models as library_models
+from apps.library.models import Book
 from apps.products import models as product_models
 from django.db import models
 from rest_framework import serializers
@@ -61,6 +64,7 @@ from typing_extensions import override
 import django_strawberry_framework
 from django_strawberry_framework import (
     DjangoModelPermission,
+    DjangoMutation,
     DjangoMutationField,
     DjangoType,
     SerializerMutation,
@@ -71,9 +75,10 @@ from django_strawberry_framework.forms.sets import iter_form_mutations
 from django_strawberry_framework.mutations.inputs import (
     _materialized_names as mutation_materialized_names,
 )
-from django_strawberry_framework.mutations.sets import iter_mutations
+from django_strawberry_framework.mutations.sets import _ALLOWED_MUTATION_META_KEYS, iter_mutations
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.rest_framework.accessors import base_fields, bound_fields
+from django_strawberry_framework.rest_framework.hook_context import SerializerHookContext
 from django_strawberry_framework.rest_framework.inputs import (
     SERIALIZER_INPUTS_MODULE_PATH,
     NestedSerializerConfig,
@@ -82,9 +87,13 @@ from django_strawberry_framework.rest_framework.inputs import (
     _materialized_names as serializer_materialized_names,
 )
 from django_strawberry_framework.rest_framework.sets import (
+    SerializerMutation as SerializerMutationFromSets,
+)
+from django_strawberry_framework.rest_framework.sets import (
     _validate_schema_field_map,
     _validate_serializer_nested_fields,
 )
+from django_strawberry_framework.types import base as types_base
 from tests._idioms import ModelSerializerBase, definition_raises
 from tests._info import unread_info
 
@@ -93,7 +102,6 @@ if TYPE_CHECKING:
 
     from django.db.models.expressions import Combinable
 
-    from django_strawberry_framework.rest_framework.hook_context import SerializerHookContext
     from django_strawberry_framework.rest_framework.serializer_converter import DRFField
 
     _M = TypeVar("_M", bound=models.Model)
@@ -162,10 +170,6 @@ def _declare_products_primaries() -> tuple[type[DjangoType], type[DjangoType]]:
 
 def test_serializer_mutation_resolves_through_root_getattr() -> None:
     """``SerializerMutation`` resolves by name through the root ``__getattr__`` (DRF present)."""
-    from django_strawberry_framework.rest_framework.sets import (
-        SerializerMutation as SerializerMutationFromSets,
-    )
-
     assert django_strawberry_framework.SerializerMutation is SerializerMutationFromSets
 
 
@@ -456,8 +460,6 @@ def test_bind_materializes_serializer_input_into_rest_framework_namespace() -> N
     ``mutations.inputs`` (the ``DjangoMutation`` payload path, with a ``node`` /
     ``result`` slot). The reverse-map ``_input_field_specs`` is stashed for the decode.
     """
-    import sys
-
     _declare_products_primaries()
     serializer_cls = _item_serializer()
 
@@ -647,7 +649,6 @@ def test_declared_choice_allow_blank_over_strict_choice_column_fails_finalize() 
     Its input enum would offer ``BLANK`` while the column's read enum has no member for the
     stored ``""``, so the input build refuses it and ``finalize_django_types`` raises.
     """
-    from apps.library.models import Book
 
     class BookT(DjangoType):
         class Meta:
@@ -688,7 +689,6 @@ def test_multiple_choice_over_single_value_choice_column_fails_finalize() -> Non
     DRF validates a list and ``save()`` stores it as one value (``"['available']"``), which
     the column's read enum has no member for, so the input build refuses the field.
     """
-    from apps.library.models import Book
 
     class BookT(DjangoType):
         class Meta:
@@ -845,8 +845,6 @@ def test_declared_choice_value_the_column_does_not_list_fails_finalize(
     The refusal states the column fact: no read enum need exist (a grouped column, or a flat one
     every type reads as ``str`` or not at all).
     """
-    from apps.library.models import Book
-
     model, status_field = (make_model(), "status") if make_model else (Book, "circulation_status")
     _declare_primary(model, status_field=status_field, exposes_status=exposes_status)
     meta = type("Meta", (), {"model": model, "fields": (status_field,)})
@@ -1732,9 +1730,6 @@ def test_subclass_redefining_serializer_validates_against_child_serializer() -> 
 
 def test_model_flavor_base_unregressed() -> None:
     """A model-flavor ``DjangoMutation`` still validates + binds; the allowed-key set is unchanged."""
-    from django_strawberry_framework import DjangoMutation
-    from django_strawberry_framework.mutations.sets import _ALLOWED_MUTATION_META_KEYS
-
     # The model allowed-key set gained only the shared ``select_for_update``
     # (0.0.14 concurrency hardening); no serializer-only keys leaked in.
     assert (
@@ -1769,8 +1764,6 @@ def test_model_flavor_base_unregressed() -> None:
 
 def test_deferred_and_allowed_meta_keys_unchanged() -> None:
     """``types/base.py``'s ``DEFERRED_META_KEYS`` / ``ALLOWED_META_KEYS`` are untouched (Decision 6)."""
-    from django_strawberry_framework.types import base as types_base
-
     # A serializer-mutation Meta is its OWN validation namespace; the DjangoType
     # Meta sets are not extended by this slice.
     assert "serializer_class" not in types_base.ALLOWED_META_KEYS
@@ -2323,10 +2316,6 @@ def test_nested_fields_stored_on_snapshot_and_builds() -> None:
     assert snapshot.nested_fields is not None
     assert set(snapshot.nested_fields) == {"items"}
 
-    import strawberry as _sb
-
-    from django_strawberry_framework import DjangoMutationField
-
     @_sb.type
     class Query:
         @_sb.field
@@ -2415,9 +2404,6 @@ def test_read_only_nested_serializer_narrowed_away_does_not_break_class_creation
     OUTPUT serializer (whose ``get_fields()`` raises if read) that is narrowed away is never
     descended into - class creation AND the phase-2.5 bind both succeed.
     """
-    import strawberry as _sb
-
-    from django_strawberry_framework import DjangoMutationField
 
     class RaisingChild(serializers.Serializer[object]):
         @override
@@ -2806,8 +2792,6 @@ def test_validate_nested_fields_child_serializer_errors() -> None:
 
 def test_default_serializer_mutation_instance_hook_methods() -> None:
     """Verify default instance hook methods on SerializerMutation."""
-    from django_strawberry_framework.rest_framework.hook_context import SerializerHookContext
-
     serializer_cls = _item_serializer()
 
     class CreateItem(SerializerMutation):

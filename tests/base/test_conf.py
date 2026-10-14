@@ -16,21 +16,34 @@ have no live pin. Constructor precedence lives in
 ``tests/test_error_policy.py`` and ``tests/test_resource_policy.py``.
 """
 
-from collections.abc import Iterable, Iterator
+import builtins
+from collections.abc import Iterable, Iterator, Mapping
 from types import MappingProxyType
 from typing import NoReturn
+from unittest import mock
 
 import pytest
 import pytest_django
+from django.conf import settings as django_settings
+from django.test.signals import setting_changed
 from typing_extensions import override
 
 from django_strawberry_framework import conf
 from django_strawberry_framework.conf import (
+    _DISPATCH_UID,
     Settings,
+    error_policy_setting,
+    hide_flat_filters_setting,
+    max_request_body_bytes_setting,
+    nested_connection_strategy_setting,
+    relay_globalid_strategy_setting,
     reload_settings,
+    resource_policy_setting,
+    single_parent_fast_path_setting,
     testing_endpoint_setting,
     upstream_patches_enabled,
 )
+from django_strawberry_framework.conf import settings as bound_settings
 from django_strawberry_framework.exceptions import ConfigurationError
 
 _PATCH_DEPENDENCIES = sorted(conf.UPSTREAM_PATCH_DEPENDENCIES)
@@ -120,8 +133,6 @@ def test_reload_settings_updates_already_imported_reference(
     recommended import pattern breaks under ``override_settings`` /
     ``pytest-django``'s ``settings`` fixture.
     """
-    from django_strawberry_framework.conf import settings as bound_settings
-
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"FILTER_KEY": "first"}
     assert bound_settings.FILTER_KEY == "first"
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"FILTER_KEY": "second"}
@@ -173,10 +184,6 @@ def test_settings_reload_rejects_non_mapping_value() -> None:
 
 def test_setting_changed_receiver_uses_dispatch_uid() -> None:
     """Re-connecting with the same dispatch_uid must be a no-op."""
-    from django.test.signals import setting_changed
-
-    from django_strawberry_framework.conf import _DISPATCH_UID, reload_settings
-
     before = len(setting_changed.receivers)
     setting_changed.connect(reload_settings, dispatch_uid=_DISPATCH_UID)
     after = len(setting_changed.receivers)
@@ -374,8 +381,6 @@ def test_testing_endpoint_setting_carries_pytest_collection_guard() -> None:
 
 def test_single_parent_fast_path_setting_defaults_true_when_absent() -> None:
     """The runtime single-parent fast path is ON by default (key/settings absent)."""
-    from django_strawberry_framework.conf import single_parent_fast_path_setting
-
     assert single_parent_fast_path_setting() is True
 
 
@@ -388,8 +393,6 @@ def test_single_parent_fast_path_setting_reads_explicit_values_live(
     an ``override_settings`` / live reassignment must be observed immediately
     rather than being baked into a plan cache.
     """
-    from django_strawberry_framework.conf import single_parent_fast_path_setting
-
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"SINGLE_PARENT_FAST_PATH": False}
     assert single_parent_fast_path_setting() is False
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"SINGLE_PARENT_FAST_PATH": True}
@@ -407,8 +410,6 @@ def test_single_parent_fast_path_setting_is_an_unvalidated_toggle(
     ``if not single_parent_fast_path_setting()``, so a non-bool value is returned
     verbatim and interpreted by truthiness rather than raising.
     """
-    from django_strawberry_framework.conf import single_parent_fast_path_setting
-
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"SINGLE_PARENT_FAST_PATH": 0}
     assert single_parent_fast_path_setting() == 0  # falsy -> disables, no raise.
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"SINGLE_PARENT_FAST_PATH": "yes"}
@@ -433,17 +434,6 @@ def test_delattr_clears_stale_cache_and_restores_defaults(
     added without a row here leaves the sweep silently stale.
     Django-backed live sync rebuilds from the absent key as empty settings.
     """
-    from django_strawberry_framework.conf import (
-        error_policy_setting,
-        hide_flat_filters_setting,
-        max_request_body_bytes_setting,
-        nested_connection_strategy_setting,
-        relay_globalid_strategy_setting,
-        resource_policy_setting,
-        single_parent_fast_path_setting,
-        testing_endpoint_setting,
-    )
-
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {
         "FILTER_KEY": "x",
         "APPLY_UPSTREAM_PATCHES": False,
@@ -487,17 +477,6 @@ def test_setting_reader_helpers_default_and_override_values(
     settings: pytest_django.Settings,
 ) -> None:
     """Direct unit test for each thin reader helper in conf.py."""
-    from django_strawberry_framework.conf import (
-        error_policy_setting,
-        hide_flat_filters_setting,
-        max_request_body_bytes_setting,
-        nested_connection_strategy_setting,
-        relay_globalid_strategy_setting,
-        resource_policy_setting,
-        single_parent_fast_path_setting,
-        testing_endpoint_setting,
-    )
-
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {}
     assert nested_connection_strategy_setting() == "windowed"
     assert single_parent_fast_path_setting() is True
@@ -539,9 +518,6 @@ def test_django_backed_resync_fails_loud_after_silent_bad_replacement(
     django-backed read must raise ``ConfigurationError`` rather than keep
     serving the prior good mapping.
     """
-    from django.conf import settings as django_settings
-    from django.test.signals import setting_changed
-
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"FILTER_KEY": "good"}
     assert conf.settings.FILTER_KEY == "good"
 
@@ -601,7 +577,6 @@ def test_normalize_hostile_isinstance_raises_configurationerror() -> None:
 
 def test_normalize_hostile_iter_raises_configurationerror() -> None:
     """``dict(value)`` raising must be contained as ``ConfigurationError``."""
-    from collections.abc import Mapping
 
     class HostileIter(Mapping[str, object]):
         @override
@@ -622,7 +597,6 @@ def test_normalize_hostile_iter_raises_configurationerror() -> None:
 
 def test_normalize_hostile_iter_raising_configurationerror_propagates() -> None:
     """A ``ConfigurationError`` from ``dict(value)`` must propagate without wrapping."""
-    from collections.abc import Mapping
 
     class HostileConfigError(Mapping[str, object]):
         @override
@@ -678,7 +652,6 @@ def test_settings_getattr_hostile_lookup_becomes_configurationerror() -> None:
 
 def test_upstream_patches_enabled_liar_bool_is_not_bool() -> None:
     """``__class__``-spoofing liar that passes ``isinstance(..., bool)`` must not disable patches."""
-    from collections.abc import Mapping
 
     class LiarMapping(Mapping[str, object]):
         @property
@@ -706,7 +679,6 @@ def test_upstream_patches_enabled_liar_bool_is_not_bool() -> None:
     assert isinstance(liar, bool)  # spoof works
     assert type(liar) is not bool
     s = Settings({"APPLY_UPSTREAM_PATCHES": liar})
-    from unittest import mock
 
     with mock.patch.object(conf, "settings", s):
         # Empty liar mapping -> defensive copy is {} -> defaults to True (not disabled)
@@ -744,7 +716,6 @@ def test_upstream_patches_enabled_hostile_isinstance_becomes_configurationerror(
             raise RuntimeError("hostile __class__ boom")
 
     s = Settings({"APPLY_UPSTREAM_PATCHES": Boom()})
-    from unittest import mock
 
     with (
         mock.patch.object(conf, "settings", s),
@@ -755,7 +726,6 @@ def test_upstream_patches_enabled_hostile_isinstance_becomes_configurationerror(
 
 def test_upstream_patches_enabled_hostile_iter_becomes_configurationerror() -> None:
     """``dict(configured)`` raising during mapping copy must be contained."""
-    from collections.abc import Mapping
 
     class HostileIter(Mapping[str, object]):
         @override
@@ -771,7 +741,6 @@ def test_upstream_patches_enabled_hostile_iter_becomes_configurationerror() -> N
             return 1
 
     s = Settings({"APPLY_UPSTREAM_PATCHES": HostileIter()})
-    from unittest import mock
 
     with (
         mock.patch.object(conf, "settings", s),
@@ -798,7 +767,6 @@ def test_upstream_patches_enabled_hostile_key_isinstance_becomes_configurationer
             super().__init__({hostile_key: True})
 
     s = Settings({"APPLY_UPSTREAM_PATCHES": HostileMapping()})
-    from unittest import mock
 
     with (
         mock.patch.object(conf, "settings", s),
@@ -811,10 +779,7 @@ def test_upstream_patches_enabled_hostile_iteration_generic_becomes_configuratio
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Any unexpected exception during mapping validation must be contained."""
-    import builtins
-
     s = Settings({"APPLY_UPSTREAM_PATCHES": {"django": True}})
-    from unittest import mock
 
     real_set = builtins.set
 
@@ -881,7 +846,6 @@ def test_upstream_patches_enabled_hostile_metaclass_value_contained() -> None:
         pass
 
     s = Settings({"APPLY_UPSTREAM_PATCHES": Evil()})
-    from unittest import mock
 
     with (
         mock.patch.object(conf, "settings", s),
@@ -905,7 +869,6 @@ def test_upstream_patches_enabled_hostile_metaclass_mapping_value_contained() ->
         pass
 
     s = Settings({"APPLY_UPSTREAM_PATCHES": {"django": Evil()}})
-    from unittest import mock
 
     with (
         mock.patch.object(conf, "settings", s),

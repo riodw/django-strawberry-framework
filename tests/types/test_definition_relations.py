@@ -28,7 +28,7 @@ from types import SimpleNamespace
 from typing import NoReturn
 
 import pytest
-from apps.library.models import Book, Genre, Loan, Shelf
+from apps.library.models import Book, Genre, Loan, MembershipCard, Patron, Shelf, TaggedItem
 from strawberry import relay
 from typing_extensions import override
 
@@ -119,7 +119,6 @@ def test_related_target_for_resolves_one_to_one_relation() -> None:
     test so the lookup's behavior on single-valued reverse relations is
     pinned alongside the FK / M2M variants above.
     """
-    from apps.library.models import MembershipCard, Patron
 
     class PatronType(DjangoType):
         class Meta:
@@ -532,7 +531,6 @@ def test_related_target_for_resolves_to_primary_when_two_types_share_target_mode
 
 def test_related_target_for_returns_none_for_generic_foreign_key() -> None:
     """A ``GenericForeignKey`` is a relation with no ``related_model`` -> ``None``."""
-    from apps.library.models import TaggedItem
 
     class TaggedItemType(DjangoType):
         class Meta:

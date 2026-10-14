@@ -7,6 +7,7 @@ from django.contrib.auth import get_user_model
 from django.core.management import CommandError, call_command
 from pytest_django import Settings
 
+from apps.products.management.commands import seed_shards as seed_shards_module
 from apps.products.models import Category, Item
 from apps.products.services import create_users, seed_data
 
@@ -191,7 +192,6 @@ def test_seed_shards_command_runs_when_shard_alias_present(
 
     # Patch SHARD_ALIASES so we only operate against ``default`` - pytest's transactional DB
     # only reaches ``default`` and we don't want to mutate production-style files.
-    from apps.products.management.commands import seed_shards as seed_shards_module
 
     monkeypatch.setattr(seed_shards_module, "SHARD_ALIASES", ("default",))
 

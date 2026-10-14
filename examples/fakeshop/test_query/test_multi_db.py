@@ -61,6 +61,18 @@ from collections.abc import Callable, Iterator
 from typing import TypeGuard
 
 import pytest
+import strawberry.relay as relay_module
+from apps.library import filters as library_filters
+from apps.library import schema as library_schema
+from apps.library.orders import BranchOrder
+from apps.library.orders_genre import GenreOrder
+from apps.products import models as product_models
+from apps.products.services import create_users
+from config import schema as config_schema
+from django.contrib.auth.models import Permission, User
+from django.db import connection as default_connection
+
+from django_strawberry_framework.filters import FilterInput
 
 if os.environ.get("FAKESHOP_SHARDED") != "1":
     pytest.skip(
@@ -152,8 +164,6 @@ def _build_list_field_routing_mismatch_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[None]:
     """Build a schema with Branch list field whose OrderSet maliciously routes shard_b to default."""
-    from apps.library.orders import BranchOrder
-    from apps.library.schema import BranchType
 
     def _malicious_apply_sync(
         _cls: type[BranchOrder],
@@ -171,8 +181,8 @@ def _build_list_field_routing_mismatch_schema(
 
     @strawberry.type
     class _RoutingQuery:
-        branches_shard_b: list[BranchType] = DjangoListField(
-            BranchType,
+        branches_shard_b: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
             resolver=_shard_b_branches,
         )
 
@@ -224,8 +234,6 @@ def _build_connection_routing_mismatch_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[None]:
     """Build a schema with a Genre CONNECTION whose OrderSet re-routes shard_b to default."""
-    from apps.library.orders_genre import GenreOrder
-    from apps.library.schema import GenreType
 
     def _malicious_apply_sync(
         _cls: type[GenreOrder],
@@ -243,8 +251,8 @@ def _build_connection_routing_mismatch_schema(
 
     @strawberry.type
     class _ConnectionRoutingQuery:
-        genres_shard_b: DjangoConnection[GenreType] = DjangoConnectionField(
-            GenreType,
+        genres_shard_b: DjangoConnection[library_schema.GenreType] = DjangoConnectionField(
+            library_schema.GenreType,
             resolver=_shard_b_genres,
         )
 
@@ -301,8 +309,6 @@ def _build_list_field_hints_mismatch_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[None]:
     """Build a schema with Branch list field whose OrderSet changes routing hints with db=None."""
-    from apps.library.orders import BranchOrder
-    from apps.library.schema import BranchType
 
     def _malicious_hints_apply_sync(
         _cls: type[BranchOrder],
@@ -326,8 +332,8 @@ def _build_list_field_hints_mismatch_schema(
 
     @strawberry.type
     class _RoutingHintsQuery:
-        branches_hints: list[BranchType] = DjangoListField(
-            BranchType,
+        branches_hints: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
             resolver=_hints_resolver,
         )
 
@@ -378,8 +384,6 @@ def _build_list_field_in_place_routing_mutation_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[None]:
     """Branch list field whose OrderSet rewrites the RECEIVED queryset's routing in place."""
-    from apps.library.orders import BranchOrder
-    from apps.library.schema import BranchType
 
     def _in_place_apply_sync(
         _cls: type[BranchOrder],
@@ -405,8 +409,8 @@ def _build_list_field_in_place_routing_mutation_schema(
 
     @strawberry.type
     class _InPlaceRoutingQuery:
-        branches_shard_b: list[BranchType] = DjangoListField(
-            BranchType,
+        branches_shard_b: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
             resolver=_shard_b_tenant_resolver,
         )
 
@@ -499,9 +503,6 @@ def identity_token_swap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[dict[str, bool]]:
     """Unrouted Branch list field whose hints carry the identity token; the override swaps it."""
-    from apps.library.orders import BranchOrder
-    from apps.library.schema import BranchType
-
     swap = {"active": False}
 
     def _token_swapping_apply_sync(
@@ -524,7 +525,10 @@ def identity_token_swap(
 
     @strawberry.type
     class _TenantQuery:
-        branches_tenant: list[BranchType] = DjangoListField(BranchType, resolver=_tenant_resolver)
+        branches_tenant: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=_tenant_resolver,
+        )
 
     _current["schema"] = DjangoSchema(query=_TenantQuery, config=strawberry_config())
     yield swap
@@ -630,9 +634,6 @@ def mutable_hint_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[dict[str, str]]:
     """Unrouted Branch list field whose tenant hint is a dict the override mutates in place."""
-    from apps.library.orders import BranchOrder
-    from apps.library.schema import BranchType
-
     token = {"alias": "shard_b"}
 
     def _hint_mutating_apply_sync(
@@ -656,7 +657,10 @@ def mutable_hint_token(
 
     @strawberry.type
     class _MutableHintQuery:
-        branches_tenant: list[BranchType] = DjangoListField(BranchType, resolver=_tenant_resolver)
+        branches_tenant: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=_tenant_resolver,
+        )
 
     _current["schema"] = DjangoSchema(query=_MutableHintQuery, config=strawberry_config())
     yield token
@@ -723,16 +727,16 @@ def test_post_orderset_mutable_hint_cannot_reroute_the_completed_read(
 @pytest.fixture
 def _build_test_schema(_reload_project_schema_for_acceptance_tests: None) -> Iterator[None]:
     """Build the per-test schema against the freshly-reloaded ``BookType``."""
-    # IMPORTANT: import ``BookType`` HERE (inside the fixture body), not at
-    # module top - module-level imports of ``apps.library.schema.BookType``
-    # would hold stale class objects after each autouse reload cycle
-    # (per the shared ``test_query/conftest.py::_reload_project_schema_for_acceptance_tests``
-    # invariant). The dependency ensures the import runs after that reload.
-    from apps.library.schema import BookType  # freshly-reloaded class
 
+    # IMPORTANT: read ``BookType`` off the module HERE (inside the fixture body).
+    # A module-level ``from apps.library.schema import BookType`` would hold a
+    # stale class object after each autouse reload cycle (per the shared
+    # ``test_query/conftest.py::_reload_project_schema_for_acceptance_tests``
+    # invariant); the reload is in place, so the module binding stays current.
+    # The dependency ensures the read runs after that reload.
     @strawberry.type
     class _MultiDbTestQuery:
-        @strawberry.field(graphql_type=list[BookType])
+        @strawberry.field(graphql_type=list[library_schema.BookType])
         def books_on_shard_b(self) -> QuerySet[models.Book]:
             return models.Book.objects.using("shard_b").select_related(
                 "shelf__branch",
@@ -765,11 +769,10 @@ def _build_debug_test_schema(_reload_project_schema_for_acceptance_tests: None) 
     still constructs one fresh instance per operation, which is the property the
     class entry was chosen for.
     """
-    from apps.library.schema import BookType  # freshly-reloaded class
 
     @strawberry.type
     class _MultiDbDebugTestQuery:
-        @strawberry.field(graphql_type=list[BookType])
+        @strawberry.field(graphql_type=list[library_schema.BookType])
         def books_on_shard_b(self) -> QuerySet[models.Book]:
             return models.Book.objects.using("shard_b").select_related(
                 "shelf__branch",
@@ -797,17 +800,13 @@ def _build_loan_filter_test_schema(
     ``book__loans__patron__email`` leaf compiles to restriction subqueries, one per
     declared hop) over a queryset pinned to ``shard_b``, so every hop's subquery must
     run on that alias. ``LoanFilter`` / ``LoanType``
-    are imported inside the fixture body (like ``BookType`` above) so the freshly
-    reloaded classes are used after the autouse registry clear.
+    are read off their modules inside the fixture body (like ``BookType`` above) so
+    the freshly reloaded classes are used after the autouse registry clear.
     """
-    from apps.library import filters as library_filters
-    from apps.library.schema import LoanType
-
-    from django_strawberry_framework.filters import FilterInput
 
     @strawberry.type
     class _LoanFilterShardQuery:
-        @strawberry.field(graphql_type=list[LoanType])
+        @strawberry.field(graphql_type=list[library_schema.LoanType])
         def loans_on_shard_b(
             self,
             info: Info[object, object],
@@ -1011,9 +1010,6 @@ def test_row_preserving_relational_leaf_predicate_executes_on_shard_b_alias() ->
     row-preserved (both shared-book loans, each once), and the captured ``shard_b``
     statement carries the ``library_book`` hop with no ``DISTINCT``.
     """
-    from django.db import connection as default_connection
-    from django.test.utils import CaptureQueriesContext
-
     pks = _seed_loan_relation_graph_on_shard_b()
 
     client = TestClient()
@@ -1105,9 +1101,7 @@ class _ProductsWriteToShardBRouter:
 @pytest.fixture
 def _project_schema(_reload_project_schema_for_acceptance_tests: None) -> Iterator[None]:
     """Serve the freshly-reloaded PROJECT schema (the real write surface)."""
-    from config.schema import schema as project_schema
-
-    _current["schema"] = project_schema
+    _current["schema"] = config_schema.schema
     yield
     _current["schema"] = None
 
@@ -1119,8 +1113,6 @@ def _seed_same_pk_item_pair(pk_base: int) -> None:
     step slip to the read alias would still find A row, so only differing
     per-alias field values can prove which alias each step really used.
     """
-    from apps.products import models as product_models
-
     for alias in ("default", "shard_b"):
         category = product_models.Category.objects.using(alias).create(
             pk=pk_base,
@@ -1134,9 +1126,6 @@ def _seed_same_pk_item_pair(pk_base: int) -> None:
 
 
 def _login_products_writer(*codenames: str) -> Client:
-    from apps.products.services import create_users
-    from django.contrib.auth.models import Permission, User
-
     create_users(1)
     user = User.objects.get(username="staff_1")
     for codename in codenames:
@@ -1159,8 +1148,6 @@ mutation($id: ID!, $d: ItemPartialInput!) {
 
 
 def _item_gid(pk: int) -> str:
-    import strawberry.relay as relay_module
-
     return str(relay_module.GlobalID(type_name="products.item", node_id=str(pk)))
 
 
@@ -1175,8 +1162,6 @@ def test_mutation_write_pins_locate_write_and_refetch_to_the_write_alias() -> No
     response's ``category`` relation also proves the relation ride-along: it
     renders the SHARD_B category's name.
     """
-    from apps.products import models as product_models
-
     _seed_same_pk_item_pair(90001)
     client = _login_products_writer("change_item", "view_category")
 
@@ -1214,8 +1199,6 @@ def test_custom_nodeid_mutation_resolves_real_pk_on_write_alias() -> None:
     router sends fresh reads to ``default``; resolving the NodeID through the
     default manager would produce an in-band not-found error before the locate.
     """
-    from apps.products import models as product_models
-
     registry.clear()
     category_pk = 92021
     product_models.Category.objects.using("default").create(
@@ -1311,8 +1294,6 @@ def test_mutation_validation_envelope_rolls_back_on_the_write_alias() -> None:
     ``set_rollback`` must discard any partial work on the WRITE alias, leaving
     both twins untouched on both aliases.
     """
-    from apps.products import models as product_models
-
     _seed_same_pk_item_pair(90011)
     sibling = product_models.Item.objects.using("shard_b").create(
         name="pin-sibling",
@@ -1413,8 +1394,6 @@ mutation($id: ID!, $d: BookGenresSerializerPartialInput!) {
 
 
 def _library_gid(type_name: str, pk: int) -> str:
-    import strawberry.relay as relay_module
-
     return str(relay_module.GlobalID(type_name=type_name, node_id=str(pk)))
 
 

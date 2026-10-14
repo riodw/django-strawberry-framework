@@ -825,7 +825,7 @@ def test_export_surface_is_the_testing_root_not_the_package_root() -> None:
         getattr(django_strawberry_framework, root_name)
     with pytest.raises(ImportError):
         # basedpyright: the import statement is the probe; it raises, so the name is never bound
-        from django_strawberry_framework import (
+        from django_strawberry_framework import (  # noqa: PLC0415
             TestClient,  # noqa: F401  # pyright: ignore[reportUnusedImport]
         )
 

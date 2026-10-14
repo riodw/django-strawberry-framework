@@ -7,6 +7,7 @@ request-observable. Cache-key and window behavior through a real document is
 
 import copy
 from collections.abc import Iterable
+from dataclasses import fields
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
@@ -20,7 +21,13 @@ from graphql.language.ast import (
     OperationDefinitionNode,
 )
 from strawberry import Info
+from strawberry.schema.name_converter import NameConverter
+from strawberry.types.nodes import FragmentSpread, InlineFragment, SelectedField
 
+from django_strawberry_framework.optimizer._context import (
+    begin_execution_frame,
+    end_execution_frame,
+)
 from django_strawberry_framework.optimizer.selections import (
     _CONNECTION_FIELD_PYTHON_NAMES,
     DEFAULT_CONNECTION_FIELD_NAMES,
@@ -401,12 +408,6 @@ def test_ast_to_converted_selections_memoized_per_execution() -> None:
     wrapper list of the same nodes still hits. Outside a lifecycle the memo is
     disabled and every call converts fresh (unchanged direct-caller behavior).
     """
-    from django_strawberry_framework.optimizer._context import (
-        begin_execution_frame,
-        end_execution_frame,
-    )
-    from django_strawberry_framework.optimizer.selections import ast_to_converted_selections
-
     doc = parse("{ items { name } books { title } }")
     field_nodes = _ast_selections(_operation(doc).selection_set.selections)
     info = make_info()._raw_info
@@ -577,8 +578,6 @@ def _info_with_converter(converter: object) -> SimpleNamespace:
 
 def test_connection_field_names_default_converter_is_camel_case() -> None:
     """Strawberry's default converter yields the historical camelCase vocabulary."""
-    from strawberry.schema.name_converter import NameConverter
-
     names = connection_field_names(_info_with_converter(NameConverter()))
     assert names == DEFAULT_CONNECTION_FIELD_NAMES
     assert (names.page_info, names.total_count, names.has_next_page) == (
@@ -596,8 +595,6 @@ def test_connection_field_names_follow_auto_camel_case_disabled() -> None:
     ``FetchMode.NONE`` - ``hasNextPage`` resolved ``False`` on a page that had a
     next page, and ``totalCount`` raised for an attribute the resolver never set.
     """
-    from strawberry.schema.name_converter import NameConverter
-
     names = connection_field_names(_info_with_converter(NameConverter(auto_camel_case=False)))
     assert (names.edges, names.node) == ("edges", "node")
     assert (names.page_info, names.total_count, names.has_next_page) == (
@@ -635,8 +632,6 @@ def test_connection_field_names_fall_back_without_a_reachable_converter() -> Non
 
 def test_connection_field_python_names_matches_dataclass_fields() -> None:
     """``_CONNECTION_FIELD_PYTHON_NAMES`` exactly matches the field attributes of ``ConnectionFieldNames``."""
-    from dataclasses import fields
-
     expected = tuple(f.name for f in fields(ConnectionFieldNames))
     assert expected == _CONNECTION_FIELD_PYTHON_NAMES
     assert _CONNECTION_FIELD_PYTHON_NAMES == (
@@ -650,8 +645,6 @@ def test_connection_field_python_names_matches_dataclass_fields() -> None:
 
 def test_connection_predicates_consume_the_resolved_names() -> None:
     """Each selection walk matches the supplied vocabulary, not a camelCase literal."""
-    from strawberry.schema.name_converter import NameConverter
-
     snake = connection_field_names(_info_with_converter(NameConverter(auto_camel_case=False)))
     connection = _field(
         "conn",
@@ -673,8 +666,6 @@ def test_connection_predicates_consume_the_resolved_names() -> None:
 
 def test_ast_to_converted_selections_converts_anonymous_and_named_fragments() -> None:
     """``ast_to_converted_selections`` converts field nodes, named/anonymous fragments, and spreads."""
-    from strawberry.types.nodes import FragmentSpread, InlineFragment, SelectedField
-
     doc = parse(
         "query Q($incl: Boolean!) { "
         "  item(id: 1) @include(if: $incl) { name } "
@@ -732,8 +723,6 @@ def test_ast_to_converted_selections_converts_anonymous_and_named_fragments() ->
 
 def test_prime_selected_fields_lifecycle() -> None:
     """``prime_selected_fields`` populates ``info.__dict__['selected_fields']`` idempotently."""
-    from strawberry.types.nodes import SelectedField
-
     # 1. No _raw_info -> no-op
     bare_info = SimpleNamespace()
     prime_selected_fields(_as_strawberry_info(bare_info))

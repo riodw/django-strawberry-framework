@@ -47,6 +47,13 @@ from django.apps import apps
 from django.db.backends.sqlite3 import base as sqlite_base
 from django.db.models import Model
 
+from django_strawberry_framework.connection import _connection_type_cache
+from django_strawberry_framework.registry import registry
+from django_strawberry_framework.resource_policy import (
+    begin_resource_budget,
+    end_resource_budget,
+)
+
 if TYPE_CHECKING:
     from django_strawberry_framework import ResourcePolicy
     from django_strawberry_framework.resource_policy import _BudgetScope
@@ -96,9 +103,6 @@ def isolate_global_registry() -> Iterator[None]:
     before the module mark, so a fixture that must see the cleared registry takes
     it as an explicit argument or is requested by an argument instead.
     """
-    from django_strawberry_framework.connection import _connection_type_cache
-    from django_strawberry_framework.registry import registry
-
     registry.clear()
     _connection_type_cache.clear()
     yield
@@ -134,11 +138,6 @@ def arm_resource_budget() -> "Iterator[Callable[[object, ResourcePolicy], None]]
     budget armed through ``arm`` is ended at teardown, so no armed budget
     outlives the test that armed it.
     """
-    from django_strawberry_framework.resource_policy import (
-        begin_resource_budget,
-        end_resource_budget,
-    )
-
     scopes: list[_BudgetScope] = []
 
     def arm(context: object, policy: "ResourcePolicy") -> None:

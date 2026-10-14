@@ -37,6 +37,9 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, cast
 
+from django.apps import apps
+from django.conf import settings
+from django.db import router
 from django.db.models.constants import LOOKUP_SEP
 from django.http import HttpRequest
 
@@ -307,8 +310,6 @@ def request_from_info(info: object, *, family_label: str) -> object:
 
 def _safe_get_model(app_label: str, model_name: str) -> type[models.Model] | None:
     """Return the named model, or ``None`` when the app / model is not installed."""
-    from django.apps import apps
-
     try:
         return apps.get_model(app_label, model_name)
     except (
@@ -336,9 +337,6 @@ def resolve_auth_aliases() -> frozenset[str]:
     does its real work on the auth alias directly, which fills the same
     per-user cache as a side effect, so later ``has_perm`` reads stay cache-only.
     """
-    from django.conf import settings
-    from django.db import router
-
     # ``AUTH_USER_MODEL`` is ``"app_label.ModelName"``; resolving it through the
     # same ``_safe_get_model`` as the other auth models keeps ONE code path (an
     # uninstalled / misconfigured model is skipped, never an error).

@@ -17,13 +17,21 @@ from typing_extensions import override
 
 from django_strawberry_framework import strawberry_config
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.filters import inputs as filter_inputs
+from django_strawberry_framework.filters import sets as filter_sets
+from django_strawberry_framework.mutations import sets as mutation_sets
 from django_strawberry_framework.orders import OrderSet
+from django_strawberry_framework.orders import inputs as order_inputs
+from django_strawberry_framework.orders import sets as order_sets
+from django_strawberry_framework.rest_framework import inputs as ser_inputs
 from django_strawberry_framework.sets_mixins import ClassBasedTypeNameMixin
 from django_strawberry_framework.utils.canonical import base_container_values
 from django_strawberry_framework.utils.inputs import (
     FILTERSET_FIELDS_ALIAS,
+    GeneratedInputArgumentsFactory,
     GeneratedInputFieldSpec,
     InputFieldSpec,
+    _safe_import,
     _sorted_meta_values,
     build_strawberry_input_class,
     canonicalize_set_meta_fields,
@@ -31,6 +39,7 @@ from django_strawberry_framework.utils.inputs import (
     get_or_store_shape_build,
     graphql_camel_name,
     iter_input_field_collisions,
+    iter_provided_input_fields,
     iter_set_subclasses,
     make_input_namespace,
     make_set_input_namespace,
@@ -38,6 +47,8 @@ from django_strawberry_framework.utils.inputs import (
     materialize_generated_input_class,
     name_set_input_type_name,
     normalize_field_name_sequence,
+    optional_field_kwargs,
+    optional_input_field,
     pascalize_token,
     promote_set_meta_fields,
     read_set_meta_fields,
@@ -194,9 +205,6 @@ def test_filter_and_order_families_share_one_substrate() -> None:
     family-local copy of the builder / field-spec / camel-name / subclass
     iterator, these identity assertions fail.
     """
-    from django_strawberry_framework.filters import inputs as filter_inputs
-    from django_strawberry_framework.orders import inputs as order_inputs
-
     assert filter_inputs.FieldSpec is GeneratedInputFieldSpec
     assert order_inputs.FieldSpec is GeneratedInputFieldSpec
     assert filter_inputs.build_input_class is build_strawberry_input_class
@@ -287,8 +295,6 @@ def test_safe_import_returns_none_for_unimportable_module() -> None:
     the same way the family ``clear_*_input_namespace`` tolerance tests simulate
     an unreachable submodule.
     """
-    from django_strawberry_framework.utils.inputs import _safe_import
-
     fake_name = "django_strawberry_framework._nonexistent_substrate_probe"
     with blocked_modules(fake_name):
         assert _safe_import(fake_name, "anything") is None
@@ -302,8 +308,6 @@ def test_safe_import_returns_none_for_missing_attribute_on_importable_module() -
     lifecycle callers treat a module without the looked-up symbol as "nothing to
     clear", not as a bug.
     """
-    from django_strawberry_framework.utils.inputs import _safe_import
-
     assert _safe_import("django_strawberry_framework.utils.inputs", "_not_a_real_attr") is None
 
 
@@ -439,9 +443,6 @@ def test_make_set_input_namespace_returns_heavy_ledger_field_specs_materialize_c
 
 def test_filter_and_order_input_namespaces_ride_make_set_input_namespace() -> None:
     """Both set families unpack the same factory closures and naming helper."""
-    from django_strawberry_framework.filters import inputs as filter_inputs
-    from django_strawberry_framework.orders import inputs as order_inputs
-
     assert filter_inputs._input_type_name_for is set_input_type_name
     assert order_inputs._input_type_name_for is set_input_type_name
     assert filter_inputs._materialize_input.__code__ is order_inputs._materialize_input.__code__
@@ -574,9 +575,6 @@ def test_resolve_set_meta_fields_none_source_and_no_alias_family() -> None:
 
 def test_set_metaclasses_share_the_fields_alias_owner() -> None:
     """Both set families promote and read ``Meta.fields`` through one rule."""
-    from django_strawberry_framework.filters import sets as filter_sets
-    from django_strawberry_framework.orders import sets as order_sets
-
     assert module_binding(filter_sets, "FILTERSET_FIELDS_ALIAS") is FILTERSET_FIELDS_ALIAS
     assert module_binding(filter_sets, "promote_set_meta_fields") is promote_set_meta_fields
     assert module_binding(order_sets, "promote_set_meta_fields") is promote_set_meta_fields
@@ -647,9 +645,6 @@ def test_get_or_store_shape_build_stores_on_miss_and_reuses_on_hit() -> None:
 
 def test_write_flavor_shape_caches_share_get_or_store_owner() -> None:
     """Model bind, form cached_build_input, and serializer dedupe import one get-or-store."""
-    from django_strawberry_framework.mutations import sets as mutation_sets
-    from django_strawberry_framework.rest_framework import inputs as ser_inputs
-
     assert module_binding(mutation_sets, "get_or_store_shape_build") is get_or_store_shape_build
     assert module_binding(ser_inputs, "get_or_store_shape_build") is get_or_store_shape_build
 
@@ -772,8 +767,6 @@ def test_input_collision_walker_reports_shared_write_sources() -> None:
 
 def test_optional_field_kwargs_defaults_none_and_aliases_only_on_divergence() -> None:
     """The A4 helper carries aliases; the builder pins package-default names."""
-    from django_strawberry_framework.utils.inputs import optional_field_kwargs
-
     assert optional_field_kwargs("exact", "exact") == {"default": None}
     assert optional_field_kwargs("category_name", "categoryName") == {
         "default": None,
@@ -784,8 +777,6 @@ def test_optional_field_kwargs_defaults_none_and_aliases_only_on_divergence() ->
 
 def test_optional_input_field_widens_and_aliases_per_flags() -> None:
     """The A10 helper widens optional fields and carries only divergent aliases."""
-    from django_strawberry_framework.utils.inputs import optional_input_field
-
     annotation, kwargs = optional_input_field(
         int,
         python_attr="category_id",
@@ -807,8 +798,6 @@ def test_optional_input_field_widens_and_aliases_per_flags() -> None:
 
 def test_iter_provided_input_fields_handles_none_and_non_inputs() -> None:
     """iter_provided_input_fields yields nothing on None or non-Strawberry inputs."""
-    from django_strawberry_framework.utils.inputs import iter_provided_input_fields
-
     assert list(iter_provided_input_fields(None)) == []
     assert list(iter_provided_input_fields({})) == []
     assert list(iter_provided_input_fields(42)) == []
@@ -816,7 +805,6 @@ def test_iter_provided_input_fields_handles_none_and_non_inputs() -> None:
 
 def test_generated_input_arguments_factory_tolerates_none_or_missing_related_attr() -> None:
     """GeneratedInputArgumentsFactory does not crash when related_attr is None or missing."""
-    from django_strawberry_framework.utils.inputs import GeneratedInputArgumentsFactory
 
     class _ProbeFactory(GeneratedInputArgumentsFactory[ClassBasedTypeNameMixin]):
         _factory_label = "ProbeFactory"

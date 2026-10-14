@@ -50,6 +50,7 @@ test_library_branches_via_djangolistfield_optimized_nested_selection``.
 import asyncio
 import contextlib
 import copy
+import dataclasses
 import datetime
 import gc
 import inspect
@@ -70,13 +71,21 @@ from django.db.models import QuerySet, Value
 from django.db.models.functions import Lower, Now, Random, RowNumber
 from django.db.models.sql.compiler import SQLCompiler
 from django.test import RequestFactory
-from graphql import GraphQLError
+from graphql import (
+    GraphQLArgument,
+    GraphQLError,
+    GraphQLField,
+    GraphQLInt,
+    GraphQLObjectType,
+    GraphQLScalarType,
+)
 from strawberry.schema_directive import Location as _DirectiveLocation
 from strawberry.schema_directive import schema_directive as _schema_directive
 from strawberry.types import Info
 from strawberry.types.arguments import StrawberryArgument
 from typing_extensions import Self, override
 
+import django_strawberry_framework.resource_policy as rp
 from django_strawberry_framework import (
     DjangoListField,
     DjangoOptimizerExtension,
@@ -91,26 +100,48 @@ from django_strawberry_framework.exceptions import (
     DjangoStrawberryFrameworkError,
 )
 from django_strawberry_framework.list_field import (
+    _build_non_queryset_rejection_error,
+    _execute_queryset_pipeline_sync,
     _field_label,
+    _handle_non_queryset_rejections_async,
+    _has_deterministic_ordering,
+    _is_deterministic_order_term,
+    _is_model_default_ordering_active,
     _ListArguments,
     _model_from_definition,
     _normalize_list_arguments,
+    _order_normalization_scope,
     _orderset_class_from_definition,
+    _published_wire_name,
     _resolve_argument_wire_name,
     _resolver_root_and_info,
     _synthesized_list_signature,
     _validate_djangotype_target,
 )
-from django_strawberry_framework.orders import OrderSet
+from django_strawberry_framework.orders import (
+    OrderSet,
+    _helper_referenced_ordersets,
+    order_input_type,
+)
+from django_strawberry_framework.orders.sets import _ORDER_NORMALIZATION_CAPTURE
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.resource_policy import (
     ResourcePolicy,
+    _windowed_rows,
 )
 from django_strawberry_framework.types.relay import SyncMisuseError
 from django_strawberry_framework.utils._queryset_private import (
     set_queryset_hints,
 )
-from django_strawberry_framework.utils.querysets import require_orderset_class
+from django_strawberry_framework.utils.querysets import (
+    _routing_hints_equal,
+    _safe_routing_repr,
+    _snapshot_routing_intent,
+    _validate_post_orderset_result,
+    require_orderset_class,
+    unwrap_async_queryset_adapter,
+    wrap_async_queryset_adapter,
+)
 from tests._idioms import pickle_roundtrip
 from tests._info import make_info
 
@@ -755,7 +786,6 @@ def test_normalize_list_arguments_names_offset_before_limit_on_direct_call_non_i
 @pytest.mark.django_db(transaction=True)
 async def test_async_iterable_early_cleanup_hostile_aclose_lookup_notes() -> None:
     """Hostile aclose lookup during rejected async iterable cleanup attaches to error notes."""
-    from django_strawberry_framework.orders import OrderSet
 
     class CategoryOrder(OrderSet):
         class Meta:
@@ -815,11 +845,6 @@ async def test_async_completion_adapter_semantics() -> None:
     transaction pytest-django opens on the main thread: a plain ``django_db``
     would commit the seeded rows and leave them for every later test.
     """
-    from django_strawberry_framework.utils.querysets import (
-        unwrap_async_queryset_adapter,
-        wrap_async_queryset_adapter,
-    )
-
     await sync_to_async(services.seed_data)(1)
 
     assert wrap_async_queryset_adapter("not_a_qs") == "not_a_qs"
@@ -876,7 +901,6 @@ def test_list_field_signature_without_orderset() -> None:
 
 def test_list_field_signature_with_orderset() -> None:
     """Target with Meta.orderset_class adds order_by parameter registered in orphan ledger."""
-    from django_strawberry_framework.orders import OrderSet, order_input_type
 
     class ItemOrder(OrderSet):
         class Meta:
@@ -898,8 +922,6 @@ def test_list_field_signature_with_orderset() -> None:
     assert sig.parameters["order_by"].kind == inspect.Parameter.KEYWORD_ONLY
     assert sig.parameters["order_by"].default is None
     assert sig.parameters["order_by"].annotation == ann["order_by"]
-
-    from django_strawberry_framework.orders import _helper_referenced_ordersets
 
     order_input_type(ItemOrder)
     assert ItemOrder in _helper_referenced_ordersets
@@ -933,8 +955,6 @@ def test_the_capture_scope_stays_closed_for_shapes_the_offset_guard_cannot_use(s
     ``require_orderset_class``'s rejection without a scope having been opened
     for a handoff that can never happen.
     """
-    from django_strawberry_framework.list_field import _order_normalization_scope
-    from django_strawberry_framework.orders.sets import _ORDER_NORMALIZATION_CAPTURE
 
     class SomeOrder(OrderSet):
         pass
@@ -969,8 +989,6 @@ def test_the_capture_scope_stays_closed_for_shapes_the_offset_guard_cannot_use(s
 
 def test_the_capture_scope_opens_for_a_positive_offset_with_an_orderset() -> None:
     """The one shape the offset guard consumes does open a capture scope, then resets."""
-    from django_strawberry_framework.list_field import _order_normalization_scope
-    from django_strawberry_framework.orders.sets import _ORDER_NORMALIZATION_CAPTURE
 
     class SomeOrder(OrderSet):
         pass
@@ -1003,8 +1021,6 @@ def test_list_field_reads_the_target_definition_once_and_dispatches_through_it()
     from one object, so a later answer cannot move the field to another table or
     quietly change which ordering ran.
     """
-    from django_strawberry_framework.orders import OrderSet
-
     reads: list[str] = []
     state: dict[str, object] = {"armed": False, "decoy": None}
 
@@ -1107,8 +1123,6 @@ def test_a_consumer_resolver_list_field_also_reads_the_definition_only_at_constr
     and each of those must run on the construction-time read rather than asking
     the target again mid-request.
     """
-    from django_strawberry_framework.orders import OrderSet
-
     reads: list[str] = []
     state: dict[str, object] = {"armed": False, "decoy": None}
 
@@ -1452,16 +1466,6 @@ def test_list_field_direct_call_schema_name_fallback_and_definition_lookup(
 
 def test_published_wire_name_rejects_malformed_schema_metadata() -> None:
     """Executable-schema metadata that cannot name the argument is a configuration error."""
-    from graphql import (
-        GraphQLArgument,
-        GraphQLField,
-        GraphQLInt,
-        GraphQLObjectType,
-        GraphQLScalarType,
-    )
-
-    from django_strawberry_framework.list_field import _published_wire_name
-
     # graphql-core's ``GraphQLNamedType.__new__`` widens every built-in scalar to its base.
     assert isinstance(GraphQLInt, GraphQLScalarType)
 
@@ -1544,8 +1548,6 @@ def test_list_field_record_independence(
     )
     assert rec_order_empty.order_by_supplied is True
     assert rec_order_empty.order_by == []
-
-    from django_strawberry_framework.list_field import _build_non_queryset_rejection_error
 
     rejection = _build_non_queryset_rejection_error(rec_order_empty, info)
     assert isinstance(rejection, ListArgumentError)
@@ -1639,7 +1641,6 @@ def test_argument_definition_metadata_reads_fail_closed() -> None:
 
 async def test_list_field_rejected_async_iterator_cleanup_and_notes() -> None:
     """Rejected async-only iterator witnesses 0 anext calls, 1 aclose call, and notes on cleanup error."""
-    from django_strawberry_framework.list_field import _handle_non_queryset_rejections_async
 
     class InstrumentedAsyncSource:
         def __init__(self, *, fail_close: bool = False) -> None:
@@ -1697,11 +1698,6 @@ async def test_list_field_rejected_async_iterator_cleanup_and_notes() -> None:
 
 def test_list_field_optimizer_adapter_unwrap_rewrap_and_early_returns() -> None:
     """DjangoOptimizerExtension._optimize unwrap/rewrap identity, marks, and early return paths."""
-    from django_strawberry_framework.utils.querysets import (
-        unwrap_async_queryset_adapter,
-        wrap_async_queryset_adapter,
-    )
-
     ext = DjangoOptimizerExtension()
 
     # 1. Non-adapted queryset stays non-adapted
@@ -1746,8 +1742,6 @@ def test_list_field_deadline_check_position(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
 ) -> None:
     """check_deadline is invoked in pre-fetch position for argument-bearing requests."""
-    import django_strawberry_framework.resource_policy as rp
-
     check_calls = 0
     orig_check = rp.check_deadline
 
@@ -1775,7 +1769,6 @@ def test_list_field_deadline_check_position(
             fields = ("id", "name")
 
     check_calls = 0
-    from django_strawberry_framework.list_field import _execute_queryset_pipeline_sync
 
     monkeypatch.setattr(Item._meta, "ordering", ("name",))
     res = _execute_queryset_pipeline_sync(
@@ -1800,10 +1793,6 @@ def test_list_field_seal_axis_subclass_and_routing_intent() -> None:
     on both public overrides (the live malformed-result matrices), so it is not
     duplicated here.
     """
-    from django_strawberry_framework.utils.querysets import (
-        _snapshot_routing_intent,
-        _validate_post_orderset_result,
-    )
 
     class CustomQuerySetSubclass(models.QuerySet[Item]):
         pass
@@ -1874,8 +1863,6 @@ def test_list_field_declined_sync_cleanup_generator_suspended(
         any_argument_supplied=True,
     )
 
-    from django_strawberry_framework.resource_policy import _windowed_rows
-
     res = _windowed_rows(g, info, offset=args_record.offset, requested_limit=args_record.limit)
     assert res == [2, 3, 4]
     assert finally_ran is False
@@ -1907,8 +1894,6 @@ def test_order_term_classifier_rejects_a_non_expression_term() -> None:
     has to fail closed on a term matching neither arm rather than fall through
     to a verdict.
     """
-    from django_strawberry_framework.list_field import _is_deterministic_order_term
-
     assert _is_deterministic_order_term(Category.objects.all().query, 42) is False
 
 
@@ -1921,8 +1906,6 @@ def test_order_term_classifier_refuses_a_relation_ordering_cycle(
     pair, so the classifier has no order to certify and must stop at the repeat
     rather than follow the relation forever.
     """
-    from django_strawberry_framework.list_field import _is_model_default_ordering_active
-
     monkeypatch.setattr(library_models.Shelf._meta, "ordering", ("branch",))
     monkeypatch.setattr(library_models.Branch._meta, "ordering", ("shelves",))
 
@@ -1937,8 +1920,6 @@ def test_order_term_classifier_refuses_a_piece_that_is_not_a_field(
     Only a path resolving to a field all the way down says what the rows are
     ordered by, so an unresolvable piece is refused instead of certified.
     """
-    from django_strawberry_framework.list_field import _is_model_default_ordering_active
-
     monkeypatch.setattr(library_models.Shelf._meta, "ordering", ("code__lower",))
 
     assert _is_model_default_ordering_active(library_models.Shelf.objects.all()) is False
@@ -1952,8 +1933,6 @@ def test_order_term_classifier_reads_a_reverse_relation_target_ordering(
     The name in front of the ordering is a relation either way, and the order the
     rows come back in is the related model's.
     """
-    from django_strawberry_framework.list_field import _is_model_default_ordering_active
-
     monkeypatch.setattr(library_models.Branch._meta, "ordering", ("shelves",))
 
     monkeypatch.setattr(library_models.Shelf._meta, "ordering", (Random(),))
@@ -1971,8 +1950,6 @@ def test_order_term_classifier_follows_a_chain_of_relation_defaults(
     ``Book`` orders by its shelf, the shelf by its branch, and the branch at
     random: the statement the database runs is the random one.
     """
-    from django_strawberry_framework.list_field import _is_model_default_ordering_active
-
     monkeypatch.setattr(library_models.Book._meta, "ordering", ("shelf",))
     monkeypatch.setattr(library_models.Shelf._meta, "ordering", ("branch",))
 
@@ -1989,8 +1966,6 @@ def test_order_reference_classifier_reads_the_annotation_a_reference_names() -> 
     ``Query.resolve_ref`` looks the whole name up as an annotation first, so a
     reference naming a random one carries that randomness and is refused.
     """
-    from django_strawberry_framework.list_field import _has_deterministic_ordering
-
     queryset = Category.objects.annotate(rnd=Random()).order_by(models.F("rnd"))
 
     assert _has_deterministic_ordering(queryset) is False
@@ -2006,8 +1981,6 @@ def test_order_reference_classifier_keeps_an_expanded_reference_a_column_order(
     outer query resolves to the foreign key column - so the branch's own random
     default is never what the rows come back in.
     """
-    from django_strawberry_framework.list_field import _is_model_default_ordering_active
-
     monkeypatch.setattr(library_models.Book._meta, "ordering", ("shelf",))
     monkeypatch.setattr(library_models.Shelf._meta, "ordering", (models.F("branch"),))
     monkeypatch.setattr(library_models.Branch._meta, "ordering", (Random(),))
@@ -2097,8 +2070,6 @@ def test_order_term_classifier_admits_only_named_forms(term: object, *, expected
     the way the compiler decides it, so a ``str`` carrying that method is read as
     the expression it resolves to and never as the field path it spells.
     """
-    from django_strawberry_framework.list_field import _is_deterministic_order_term
-
     query = library_models.Shelf.objects.all().query
 
     assert _is_deterministic_order_term(query, term) is expected
@@ -2112,8 +2083,6 @@ def test_order_predicate_classifier_refuses_an_unresolvable_reference(
     The comparison still reaches the statement, so a head this package cannot
     resolve is refused rather than certified on the strength of its literal.
     """
-    from django_strawberry_framework.list_field import _is_model_default_ordering_active
-
     monkeypatch.setattr(
         library_models.Shelf._meta,
         "ordering",
@@ -2141,8 +2110,6 @@ def test_order_predicate_classifier_reads_the_annotation_under_a_transform_chain
     literal is readable, while a database function called at statement time is
     not.
     """
-    from django_strawberry_framework.list_field import _is_model_default_ordering_active
-
     monkeypatch.setattr(
         library_models.Shelf._meta,
         "ordering",
@@ -2167,8 +2134,6 @@ def test_is_model_default_ordering_active_rejects_a_grouped_queryset(
     extra-order, random, reverse, and empty-queryset verdicts are the live
     offset-guard matrix.
     """
-    from django_strawberry_framework.list_field import _is_model_default_ordering_active
-
     monkeypatch.setattr(Category._meta, "ordering", ("name",))
     qs = Category.objects.all()
     assert _is_model_default_ordering_active(qs) is True
@@ -2202,12 +2167,6 @@ def test_list_field_constructor_validation_precedence() -> None:
 
 def test_list_field_post_orderset_validator_zero_consumer_dispatch() -> None:
     """_validate_post_orderset_result extracts routing intent without consumer dispatch."""
-    from django_strawberry_framework.utils.querysets import (
-        _routing_hints_equal,
-        _safe_routing_repr,
-        _snapshot_routing_intent,
-        _validate_post_orderset_result,
-    )
 
     class CatDispatchType(DjangoType):
         class Meta:
@@ -2261,8 +2220,6 @@ def test_list_field_post_orderset_validator_zero_consumer_dispatch() -> None:
 
 def test_list_arguments_immutability() -> None:
     """_ListArguments is an immutable frozen dataclass."""
-    import dataclasses
-
     args = _ListArguments(
         offset=0,
         limit=10,
@@ -2287,8 +2244,6 @@ def test_is_model_default_ordering_active_exact_bool_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """_is_model_default_ordering_active requires exact boolean True identity."""
-    from django_strawberry_framework.list_field import _is_model_default_ordering_active
-
     monkeypatch.setattr(Category._meta, "ordering", ("name",))
     queryset = Category.objects.all()
     # A merely truthy value no queryset pipeline produces: planted past the typed attribute.
@@ -2378,9 +2333,6 @@ def test_djangolistfield_resets_the_capture_scope_when_the_seal_rejects() -> Non
     ``finally``, so the failing request cannot poison the next resolution on the
     same task, and the consumer context is never written.
     """
-    from django_strawberry_framework.orders import OrderSet
-    from django_strawberry_framework.orders.sets import _ORDER_NORMALIZATION_CAPTURE
-
     services.seed_data(1)
 
     class EvaluatedReturningOrder(OrderSet):
@@ -2436,7 +2388,6 @@ async def test_list_field_rejected_async_iterator_is_closed_when_building_the_re
     exit: the primary error becomes whatever the error builder raised, and the
     cleanup utility attaches its notes to that instead.
     """
-    from django_strawberry_framework.list_field import _handle_non_queryset_rejections_async
 
     class InstrumentedAsyncSource:
         def __init__(self, *, fail_close: bool = False) -> None:

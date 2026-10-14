@@ -25,6 +25,7 @@ completion with synchronous children, and an async-iterable list whose child
 fields are awaitable).
 """
 
+import asyncio
 import inspect
 from collections.abc import AsyncIterator, Awaitable
 from unittest import mock
@@ -98,8 +99,6 @@ def test_captured_upstream_still_returns_a_residual_awaitable() -> None:
         assert inspect.isawaitable(residual)
         assert inspect.iscoroutine(residual)
         residual.close()
-
-    import asyncio
 
     asyncio.run(inspect_residual())
 

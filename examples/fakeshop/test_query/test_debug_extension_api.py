@@ -44,6 +44,7 @@ from typing import TypeAlias
 
 import pytest
 import strawberry
+from apps.products import schema as products_schema
 from apps.products.models import Category, Item
 from apps.products.services import create_users, seed_data
 from django.conf import settings
@@ -58,7 +59,12 @@ from strawberry import relay
 from strawberry.django.views import GraphQLView
 from strawberry.extensions import SchemaExtension
 
-from django_strawberry_framework import DjangoOptimizerExtension, DjangoSchema
+from django_strawberry_framework import (
+    DjangoOptimizerExtension,
+    DjangoSchema,
+    finalize_django_types,
+    strawberry_config,
+)
 from django_strawberry_framework.extensions import DjangoDebugExtension
 from django_strawberry_framework.testing import Response, TestClient
 
@@ -155,13 +161,9 @@ def install_probe_schema(
     shipped products field cannot provide (a resolver raise, a non-null
     completion error, and an over-cap exception message).
     """
-    from apps.products.schema import Mutation as ProductsMutation
-    from apps.products.schema import Query as ProductsQuery
-
-    from django_strawberry_framework import finalize_django_types, strawberry_config
 
     @strawberry.type
-    class Query(ProductsQuery):
+    class Query(products_schema.Query):
         @strawberry.field
         def boom(self) -> int:
             raise ZeroDivisionError("division by zero")
@@ -190,7 +192,7 @@ def install_probe_schema(
             raise ValueError("x" * (_EXCEPTION_MESSAGE_CAP * 2))
 
     @strawberry.type
-    class Mutation(ProductsMutation):
+    class Mutation(products_schema.Mutation):
         """The products write surface, unchanged."""
 
     def _install(extensions: Sequence[_ExtensionEntry]) -> None:

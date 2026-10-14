@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING
 import pytest
 from apps.products.services import create_users
 from asgiref.sync import sync_to_async
+from config import schema as config_schema
 from django.contrib.auth.models import Permission, User
 from django.db import connection
 from django.http import HttpRequest
@@ -410,9 +411,8 @@ def test_serial_top_level_mutations_keep_independent_transactions() -> None:
 
 
 async def _async_shipped_graphql_view(request: HttpRequest) -> HttpResponseBase:
-    from config.schema import schema
 
-    return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
+    return await AsyncDjangoGraphQLView.as_view(schema=config_schema.schema)(request)
 
 
 urlpatterns = [path("graphql-async/", _async_shipped_graphql_view)]

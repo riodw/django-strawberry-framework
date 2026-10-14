@@ -15,22 +15,39 @@ injectivity -- construction and private helpers a request cannot name.
 
 from __future__ import annotations
 
+import datetime
+import decimal
 import gc
+import re
 import typing
+import uuid
 import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import Enum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol, TypeAlias, get_args, get_origin, runtime_checkable
 
+import django_filters
 import pytest
 import strawberry
 from apps.library import models as library_models
 from apps.products.models import Category, Item
+from apps.scalars import models as scalar_models
+from django import forms
 from django.db import models
 from django.db.models import QuerySet
-from django_filters import BaseInFilter, BooleanFilter, CharFilter, ChoiceFilter, Filter
+from django_filters import (
+    BaseInFilter,
+    BaseRangeFilter,
+    BooleanFilter,
+    CharFilter,
+    ChoiceFilter,
+    Filter,
+    NumberFilter,
+)
 from django_filters import RangeFilter as DjangoRangeFilter
+from django_filters.filters import BaseInFilter as DjangoBaseInFilter
 from strawberry import relay
 from typing_extensions import override
 
@@ -48,6 +65,7 @@ from django_strawberry_framework.filters import (
     _helper_referenced_filtersets,
     filter_input_type,
 )
+from django_strawberry_framework.filters import inputs as inputs_mod
 from django_strawberry_framework.filters.base import RelationPkFilter, RelationPkMultipleFilter
 from django_strawberry_framework.filters.factories import FilterArgumentsFactory
 from django_strawberry_framework.filters.inputs import (
@@ -80,12 +98,15 @@ from django_strawberry_framework.filters.inputs import (
     materialize_input_class,
     normalize_input_value,
 )
+from django_strawberry_framework.filters.sets import filter_generation_provenance
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.sets_mixins import ClassBasedTypeNameMixin
 from django_strawberry_framework.types.finalizer import finalize_django_types
 from django_strawberry_framework.types.relay import apply_interfaces
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
 from tests._idioms import is_object_list
 from tests._soft_dependency import blocked_modules
+from tests.filters.fixtures.filtersets import ShelfFilter
 
 if TYPE_CHECKING:
     from django.db.models.expressions import Combinable
@@ -229,8 +250,6 @@ def test_build_logic_fields_tracks_logic_operators() -> None:
 
 def test_logic_operator_descriptors_and_mappings() -> None:
     """Descriptors encapsulate python attr, wire name, sequence cardinality, and Q compose."""
-    from types import MappingProxyType
-
     assert LOGIC_OPERATORS == (LOGIC_OP_AND, LOGIC_OP_OR, LOGIC_OP_NOT)
     assert LOGIC_OPERATORS_BY_WIRE == {"and": LOGIC_OP_AND, "or": LOGIC_OP_OR, "not": LOGIC_OP_NOT}
     assert LOGIC_OPERATORS_BY_PYTHON_ATTR == {
@@ -1024,7 +1043,6 @@ def test_normalize_input_value_rejects_dict_on_expanded_range_csv() -> None:
     its ``RangeField`` patch. A dict into the CSV branch must fail loud,
     never normalize its keys into the membership list.
     """
-    from django_filters import BaseRangeFilter, NumberFilter
 
     class IntRange(BaseRangeFilter, NumberFilter):
         pass
@@ -1044,8 +1062,6 @@ def test_normalize_input_value_unset_returns_none() -> None:
     benefits, including the operator-bag inner loop and the
     ``_q_for_branch`` recursion.
     """
-    import strawberry
-
     for f in (GlobalIDFilter(), GlobalIDMultipleChoiceFilter()):
         assert normalize_input_value(f, strawberry.UNSET) is None
 
@@ -1264,7 +1280,6 @@ def test_type_name_for_raises_for_no_word_character_field_path(bad: str) -> None
     loudly instead of producing a generic ``f"{cls.__name__}InputType"``
     that silently collides with the root input type's own name.
     """
-    from django_strawberry_framework.sets_mixins import ClassBasedTypeNameMixin
 
     class _Probe(ClassBasedTypeNameMixin):
         pass
@@ -1297,12 +1312,6 @@ def test_scalar_from_form_field_maps_each_recognized_shape() -> None:
     matched before the ``IntegerField`` catch - otherwise a float/decimal
     filter mis-maps to ``int``.
     """
-    import datetime
-    import decimal
-    import uuid
-
-    from django import forms
-
     assert _scalar_from_form_field(forms.NullBooleanField()) is bool
     assert _scalar_from_form_field(forms.BooleanField()) is bool
     assert _scalar_from_form_field(forms.IntegerField()) is int
@@ -1327,10 +1336,6 @@ def test_scalar_from_model_field_none_falls_back_to_str() -> None:
 
 
 def test_scalar_from_model_field_maps_each_recognized_shape() -> None:
-    import datetime
-    import decimal
-    import uuid
-
     assert _scalar_from_model_field(models.BooleanField()) is bool
     assert _scalar_from_model_field(models.IntegerField()) is int
     assert _scalar_from_model_field(models.FloatField()) is float
@@ -1366,8 +1371,6 @@ def test_filter_convert_and_normalize_ride_shared_kind_table() -> None:
     drift hazard). Both now zip ``_FILTER_INPUT_KIND_TYPES`` into
     ``convert_with_mro`` prechecks; ``object`` is last (the original ``else``).
     """
-    from django_strawberry_framework.filters import inputs as inputs_mod
-
     for fn in (inputs_mod.convert_filter_to_input_annotation, inputs_mod.normalize_input_value):
         assert "convert_with_mro" in fn.__code__.co_names
         assert "_filter_input_prechecks" in fn.__code__.co_names
@@ -1422,10 +1425,6 @@ def test_filter_overrides_model_choice_keys_keep_their_class_and_type_from_the_t
     which keeps them out of the optimizer's candidate rows. The input is the category
     pk: one ``Int`` for ``exact``, a list for ``in``.
     """
-    import django_filters
-    from django_filters.filters import BaseInFilter as DjangoBaseInFilter
-
-    from django_strawberry_framework.filters.sets import filter_generation_provenance
 
     def _category_queryset_extra(_field: object) -> dict[str, object]:
         return {"queryset": Category.objects.all()}
@@ -1470,9 +1469,6 @@ def test_declared_model_choice_filter_follows_a_relation_valued_primary_key() ->
     ``PatronProfile``'s primary key is its ``patron`` one-to-one, so the value the form
     cleans is ``Patron.id``: an ``Int``. A declared filter stays ``origin="declared"``.
     """
-    import django_filters
-
-    from django_strawberry_framework.filters.sets import filter_generation_provenance
 
     class AnnotationFilter(FilterSet):
         profile = django_filters.ModelChoiceFilter(
@@ -1498,7 +1494,6 @@ def test_model_choice_filter_with_no_column_source_names_the_filterset_and_the_f
     arrives and ``field_name`` (``owner``) is no relation on ``Item``. The message names
     the FilterSet, the filter and both fixes, never ``SCALAR_MAP`` / ``Meta.exclude``.
     """
-    import django_filters
 
     def _request_categories(_request: object) -> QuerySet[Category]:
         return Category.objects.all()
@@ -1601,7 +1596,6 @@ def test_convert_filter_to_input_annotation_derives_enum_for_choice_fields_on_li
 
 def test_element_annotation_fallback_branches_when_model_field_is_none() -> None:
     """`_element_annotation` checks form field when model_field is None, fallback to str."""
-    from django import forms
 
     class IntTypedFilter(TypedFilter):
         field_class = forms.IntegerField
@@ -1622,7 +1616,6 @@ def test_element_annotation_fallback_branches_when_model_field_is_none() -> None
 
 def test_materialize_input_class_registers_in_module_globals() -> None:
     """`materialize_input_class` registers input classes into the module namespace."""
-    from django_strawberry_framework.filters import inputs as inputs_mod
 
     class ScratchCustomInput:
         pass
@@ -1776,9 +1769,6 @@ def test_range_input_type_name_is_scoped_per_filterset() -> None:
     qualified by the owning filterset so the two are distinct and both survive in
     the schema.
     """
-    import re
-
-    from apps.scalars import models as scalar_models
 
     class ScalarPriceFilter(FilterSet):
         price = RangeFilter(field_name="price")
@@ -1837,7 +1827,6 @@ def test_range_input_type_name_is_scoped_per_filterset() -> None:
 @pytest.mark.django_db
 def test_direct_range_conversion_does_not_poison_owned_input_build() -> None:
     """An earlier unowned conversion cannot defeat owner-qualified generation."""
-    from apps.scalars import models as scalar_models
 
     class OwnedPriceFilter(FilterSet):
         price = RangeFilter(field_name="price")
@@ -1898,8 +1887,6 @@ def test_model_field_for_filter_returns_none_without_model() -> None:
 
 def test_model_field_for_filter_returns_none_without_field_name() -> None:
     """A filter with no ``field_name`` yields ``None`` even on a real model."""
-    from tests.filters.fixtures.filtersets import ShelfFilter
-
     f = GlobalIDFilter()
     f.field_name = ""
     assert _model_field_for_filter(ShelfFilter, f) is None
@@ -1911,18 +1898,12 @@ def test_model_field_for_filter_returns_none_for_unknown_field_name() -> None:
     Path resolution is ``django_filters.utils.get_model_field`` (shared with
     ``filters/base.py`` / ``filters/sets.py``); an unknown hop returns ``None``.
     """
-    from tests.filters.fixtures.filtersets import ShelfFilter
-
     f = GlobalIDFilter(field_name="nonexistent_field")
     assert _model_field_for_filter(ShelfFilter, f) is None
 
 
 def test_model_field_for_filter_walks_related_path() -> None:
     """A ``__``-separated ``field_name`` resolves to the terminal model field."""
-    from apps.library import models as library_models
-
-    from tests.filters.fixtures.filtersets import ShelfFilter
-
     f = GlobalIDFilter(field_name="branch__name")
     field = _model_field_for_filter(ShelfFilter, f)
     assert field is library_models.Branch._meta.get_field("name")
@@ -1967,7 +1948,6 @@ def test_build_input_fields_keeps_digit_boundary_operator_bags_distinct() -> Non
     the wire. Top-level field attrs stay distinct via ``graphql_camel_name``;
     the type-name stem must preserve the same digit boundary.
     """
-    import re
 
     class DigitBoundaryFilter(FilterSet):
         field_2 = CharFilter(field_name="name", lookup_expr="exact")
@@ -2015,7 +1995,6 @@ def test_build_input_fields_keeps_digit_boundary_operator_bags_distinct() -> Non
 @pytest.mark.django_db
 def test_range_input_type_name_preserves_digit_boundary_in_field_name() -> None:
     """Range sub-input names keep ``price_2`` distinct from ``price2``."""
-    from apps.scalars import models as scalar_models
 
     class PriceDigitFilter(FilterSet):
         price_2 = RangeFilter(field_name="price_2")
@@ -2052,7 +2031,6 @@ def test_build_input_fields_keeps_underscore_edge_operator_bags_distinct() -> No
     type and one member's lookups vanished from the schema. The stem now
     preserves the edge runs (the Pascal dual of ``graphql_camel_name``).
     """
-    import re
 
     class UnderscoreEdgeFilter(FilterSet):
         price = CharFilter(field_name="name", lookup_expr="exact")

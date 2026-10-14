@@ -77,6 +77,8 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
+import tomli
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
@@ -404,8 +406,6 @@ def _basedpyright_python_version(document: object) -> str:
 
 def checked_python_version() -> str:
     """Return ``[tool.basedpyright] pythonVersion``, the Python the package checkers read."""
-    import tomli
-
     # ``tomli.loads`` returns ``dict[str, Any]``; this alias hands the walk an ``object``.
     toml_loads: Callable[[str], dict[str, object]] = tomli.loads
     pyproject = REPO_ROOT / "pyproject.toml"

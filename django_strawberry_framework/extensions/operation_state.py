@@ -470,7 +470,7 @@ def _binds_operation_state(execution_context: object) -> bool:
     the context is an engine object on the supported path and an arbitrary
     consumer object on every other.
     """
-    from django_strawberry_framework.schema import DjangoSchema
+    from django_strawberry_framework.schema import DjangoSchema  # noqa: PLC0415 - import cycle
 
     try:
         schema = getattr(execution_context, "schema", None)

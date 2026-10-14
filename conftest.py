@@ -43,6 +43,9 @@ import threading
 from typing import TYPE_CHECKING, Protocol, TypeVar
 
 import pytest
+from django.core.exceptions import ImproperlyConfigured
+from django.db import connection
+from django.test import SimpleTestCase
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
@@ -94,10 +97,8 @@ def _open_tracked(
 
 def _install_postgres_connection_tracking() -> None:
     """Wrap the Postgres backend's connection factory with stray tracking."""
-    from django.core.exceptions import ImproperlyConfigured
-
     try:
-        from django.db.backends.postgresql import base as postgres_base
+        from django.db.backends.postgresql import base as postgres_base  # noqa: PLC0415 - psycopg is optional
     except ImportError:
         return
     except ImproperlyConfigured as error:
@@ -209,8 +210,6 @@ def _refuse_nontransactional_async_db_tests(items: list[pytest.Item]) -> None:
     through ``async_to_sync``, which keeps its ORM calls on the thread holding the test's
     transaction.
     """
-    from django.test import SimpleTestCase
-
     offenders: list[str] = []
     for item in items:
         function: object = getattr(item, "obj", None)
@@ -240,8 +239,6 @@ def _skip_pg_tests_off_postgres(items: list[pytest.Item]) -> None:
     reading it opens no database connection, so this is safe at collection
     time under pytest-django (Django is already set up by then).
     """
-    from django.db import connection
-
     if connection.vendor == "postgresql":
         return
     skip_pg = pytest.mark.skip(reason="requires the Postgres tier (FAKESHOP_PG_DSN)")

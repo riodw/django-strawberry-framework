@@ -39,6 +39,11 @@ from strawberry import relay
 from typing_extensions import override
 
 from django_strawberry_framework import DjangoType, finalize_django_types
+from django_strawberry_framework.connection import (
+    DjangoConnection,
+    _CachedConnectionType,
+    _connection_type_cache,
+)
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import (
     TypeRegistry,
@@ -1860,11 +1865,6 @@ def test_unregister_evicts_connection_type_cache_entry(fresh_registry: TypeRegis
     Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
     LIFO order, retry, or ImportError guards. No live sibling.
     """
-    from django_strawberry_framework.connection import (
-        DjangoConnection,
-        _CachedConnectionType,
-        _connection_type_cache,
-    )
 
     @_as_django_type
     class ItemType:

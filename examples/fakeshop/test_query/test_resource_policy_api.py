@@ -71,6 +71,7 @@ degenerate inputs.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 import warnings
@@ -87,6 +88,7 @@ from apps.products import models as products_models
 from apps.products import schema as products_schema
 from apps.products.services import TEST_USER_PASSWORD, create_users, seed_data
 from asgiref.sync import sync_to_async
+from config import schema as config_schema
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
@@ -143,11 +145,9 @@ def _probe_schema(overrides: tuple[tuple[str, int], ...]) -> DjangoSchema:
     subject is the budget, and leaving the optimizer out keeps the query counts a
     rejection row asserts about attributable to the rejection alone.
     """
-    from config.schema import Mutation, Query
-
     return DjangoSchema(
-        query=Query,
-        mutation=Mutation,
+        query=config_schema.Query,
+        mutation=config_schema.Mutation,
         config=strawberry_config(),
         resource_policy=dict(overrides),
     )
@@ -163,12 +163,10 @@ def _optimized_probe_schema(overrides: tuple[tuple[str, float], ...]) -> DjangoS
     the resolver head apart from one on the lazy-load path alone. The optimizer
     is a singleton behind a factory, the one spelling the repo permits.
     """
-    from config.schema import Mutation, Query
-
     optimizer = DjangoOptimizerExtension()
     return DjangoSchema(
-        query=Query,
-        mutation=Mutation,
+        query=config_schema.Query,
+        mutation=config_schema.Mutation,
         config=strawberry_config(),
         resource_policy=dict(overrides),
         extensions=[lambda: optimizer],
@@ -4320,8 +4318,6 @@ def test_sync_and_async_transports_share_one_typed_error_code() -> None:
 
 def _await_response(coroutine: Coroutine[object, object, Response]) -> Response:
     """Run one ``AsyncTestClient.query`` coroutine to completion on a fresh event loop."""
-    import asyncio
-
     return asyncio.run(_resolve(coroutine))
 
 

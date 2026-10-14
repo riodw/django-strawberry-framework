@@ -21,21 +21,28 @@ import strawberry
 from apps.products import models as product_models
 from django import forms
 from strawberry import relay
+from strawberry.schema_directive import Location, schema_directive
 from typing_extensions import override
 
 from django_strawberry_framework import (
     DjangoFormMutation,
+    DjangoModelFormMutation,
     DjangoMutation,
     DjangoMutationField,
     DjangoSchema,
     DjangoType,
+    SerializerMutation,
     finalize_django_types,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
-from django_strawberry_framework.forms.sets import DjangoFormMutationMetaclass
+from django_strawberry_framework.forms.sets import DjangoFormMutationMetaclass, iter_form_mutations
+from django_strawberry_framework.mutations import resolvers as mutation_resolvers
 from django_strawberry_framework.mutations.inputs import INPUTS_MODULE_PATH
-from django_strawberry_framework.mutations.sets import DjangoMutationMetaclass
+from django_strawberry_framework.mutations.sets import DjangoMutationMetaclass, iter_mutations
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.rest_framework import resolvers as serializer_resolvers
+from django_strawberry_framework.rest_framework.inputs import SERIALIZER_INPUTS_MODULE_PATH
+from tests._idioms import ModelSerializerBase
 
 
 @pytest.fixture(autouse=True)
@@ -201,11 +208,6 @@ def test_abstract_base_target_raises_at_construction() -> None:
 
 def test_inherited_meta_target_rejected_at_construction() -> None:
     """An inherited snapshot cannot make an unregistered child a concrete mutation."""
-    from django import forms
-
-    from django_strawberry_framework import DjangoFormMutation
-    from django_strawberry_framework.forms.sets import iter_form_mutations
-    from django_strawberry_framework.mutations.sets import iter_mutations
 
     class CreateItem(DjangoMutation):
         class Meta:
@@ -370,9 +372,6 @@ def test_generalized_target_accepts_modelform_and_plain_form_family() -> None:
     ``DjangoMutation`` subclass) AND a plain ``DjangoFormMutation`` (NOT a
     ``DjangoMutation`` subclass) both construct without raising.
     """
-    from django import forms
-
-    from django_strawberry_framework import DjangoFormMutation, DjangoModelFormMutation
 
     class ItemModelForm(forms.ModelForm[product_models.Item]):
         class Meta:
@@ -426,7 +425,6 @@ def test_model_flavor_dispatch_unchanged() -> None:
     assert _field_arg_map(schema, "updateItem") == {"id": "ID!", "data": "ItemPartialInput!"}
     assert _field_arg_map(schema, "deleteItem") == {"id": "ID!"}
     # The model seam default routes to the model resolver pipeline.
-    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
 
     assert CreateItem.resolve_sync.__func__ is DjangoMutation.resolve_sync.__func__
     assert mutation_resolvers.resolve_mutation_sync is not None
@@ -447,9 +445,6 @@ def test_django_mutation_field_generalizes_to_serializer_mutation() -> None:
     `SerializerMutation` is imported BY NAME from the package root (NOT via the root
     `__all__` / star import, which stays DRF-free while DRF is soft).
     """
-    from django_strawberry_framework import SerializerMutation
-    from tests._idioms import ModelSerializerBase
-
     _declare_item_primaries()
 
     class ItemSerializer(ModelSerializerBase[product_models.Item]):
@@ -472,7 +467,6 @@ def test_django_mutation_field_generalizes_to_serializer_mutation() -> None:
 
     # The serializer `data:` input materializes in `rest_framework.inputs` (NOT
     # `mutations.inputs`); the generated create argument is the serializer input.
-    from django_strawberry_framework.rest_framework.inputs import SERIALIZER_INPUTS_MODULE_PATH
 
     serializer_inputs_module = sys.modules[SERIALIZER_INPUTS_MODULE_PATH]
     assert hasattr(serializer_inputs_module, "ItemSerializerInput")
@@ -480,7 +474,6 @@ def test_django_mutation_field_generalizes_to_serializer_mutation() -> None:
 
     # The serializer seam routes to the serializer resolver pipeline (NOT the model
     # default), and the resolver module exposes the entry the seam delegates to.
-    from django_strawberry_framework.rest_framework import resolvers as serializer_resolvers
 
     assert (
         CreateItemViaSerializer.resolve_sync.__func__ is SerializerMutation.resolve_sync.__func__
@@ -578,7 +571,6 @@ def test_valid_directives_reach_the_built_field() -> None:
     field's SDL - the containment rejects hostile shapes without swallowing the
     supported one.
     """
-    from strawberry.schema_directive import Location, schema_directive
 
     @schema_directive(locations=[Location.FIELD_DEFINITION], name="tagged")
     class Tagged:

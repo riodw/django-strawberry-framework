@@ -43,6 +43,7 @@ from django_strawberry_framework.scalars import (
     _safe_scalar_map_key_label,
     _serialize_bigint,
 )
+from django_strawberry_framework.scalars import Upload as UploadFromScalars
 
 # ---------------------------------------------------------------------------
 # Strict serializer - hostile subclasses and non-int Python objects
@@ -201,8 +202,6 @@ def test_bigint_is_importable_from_top_level() -> None:
     undocumented internal Strawberry path; schema-execution tests catch
     deeper regressions with stronger signal.
     """
-    from django_strawberry_framework import BigInt
-
     assert BigInt is not None
 
 
@@ -544,8 +543,6 @@ def test_upload_is_strawberry_builtin_re_export_not_a_wrapper() -> None:
 
 def test_upload_is_importable_from_top_level_scalars_module() -> None:
     """``Upload`` is importable from ``django_strawberry_framework.scalars``."""
-    from django_strawberry_framework.scalars import Upload as UploadFromScalars
-
     assert UploadFromScalars is strawberry.file_uploads.scalars.Upload
 
 

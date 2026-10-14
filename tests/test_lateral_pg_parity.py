@@ -29,17 +29,25 @@ and scripted-cursor execution (``tests/optimizer/test_lateral_fetch.py``).
 Everything here is ``@pytest.mark.pg``.
 """
 
+import base64
+import datetime
+import threading
+import uuid
 from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Protocol, TypeVar, runtime_checkable
 
 import pytest
 import strawberry
-from apps.library.models import Book, Branch, Genre, Loan, Patron, Shelf
+from apps.library.models import Book, Branch, Genre, Issue, Loan, Patron, Periodical, Shelf
+from apps.scalars.models import ScalarSpecimen
 from django.db import connection as db_connection
-from django.db.models import Model, QuerySet
+from django.db import connections as django_connections
+from django.db import models
+from django.db.models import Model, Prefetch, QuerySet
 from django.db.models.expressions import Combinable
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from graphql_client import JSONObject
 from strategy_schemas import build_strategy_schema, make_django_type
 from strawberry.relay.utils import to_base64
@@ -51,6 +59,21 @@ from django_strawberry_framework import (
     finalize_django_types,
     strawberry_config,
 )
+from django_strawberry_framework.keyset import (
+    KeysetCursor,
+    KeysetSeek,
+    cursor_columns_for,
+    encode_keyset_cursor,
+    order_fingerprint,
+)
+from django_strawberry_framework.optimizer.join_taxonomy import classify_relation_join
+from django_strawberry_framework.optimizer.lateral_fetch import (
+    LATERAL_STRATEGY,
+    LateralQuerySet,
+    build_lateral_sql,
+)
+from django_strawberry_framework.optimizer.nested_fetch import NestedConnectionRequest
+from django_strawberry_framework.optimizer.plans import OptimizationPlan
 from tests._idioms import is_object_dict, is_object_list, run_capturing
 
 pytestmark = [
@@ -488,10 +511,7 @@ def test_stray_executor_thread_connections_are_tracked_for_session_close() -> No
     ``close_all()``. The Postgres backend wrapper must register it so the
     session-teardown fixture can close it before the test database drops.
     """
-    import threading
-
-    from django.db import connections as django_connections
-    from django.db.backends.postgresql import base as postgres_base
+    from django.db.backends.postgresql import base as postgres_base  # noqa: PLC0415 - psycopg is optional
 
     # The root conftest's Postgres wrapper plants the registry on the backend module at run
     # time; the module declares no such attribute, so it is read out of the module namespace.
@@ -821,8 +841,6 @@ def _keyset_schemas(
     exercises the redundant-bound OR-expansion; a uniform ``("number", "id")``
     exercises the native row-value comparison.
     """
-    from apps.library.models import Issue, Periodical
-
     make_django_type(
         "KeysetIssueType",
         Issue,
@@ -835,8 +853,6 @@ def _keyset_schemas(
         ("id", "name", "issues"),
         meta_extra={"relation_shapes": {"issues": "connection"}},
     )
-
-    import strawberry
 
     Query = strawberry.type(
         type(
@@ -854,8 +870,6 @@ def _keyset_schemas(
 
 
 def _seed_periodicals() -> Sequence[Model]:
-    from apps.library.models import Issue, Periodical
-
     populated = Periodical.objects.create(name="populated")
     sparse = Periodical.objects.create(name="sparse")
     Periodical.objects.create(name="empty")
@@ -869,14 +883,6 @@ def _seed_periodicals() -> Sequence[Model]:
 
 
 def _mint_issue_cursor(issue: object, cursor_field: tuple[str, ...] = ("-number", "id")) -> str:
-    from apps.library.models import Issue
-
-    from django_strawberry_framework.keyset import (
-        cursor_columns_for,
-        encode_keyset_cursor,
-        order_fingerprint,
-    )
-
     return encode_keyset_cursor(
         cursor_columns_for(Issue, cursor_field),
         issue,
@@ -979,7 +985,6 @@ def test_keyset_first_page_full_shape_parity() -> None:
         for edge in connection_data["edges"]:
             # Keyset first pages mint VALUE cursors (the dstcursor prefix),
             # never positional offsets.
-            import base64
 
             decoded = base64.b64decode(edge["cursor"]).decode()
             assert decoded.startswith("dstcursor:")
@@ -1020,18 +1025,6 @@ def test_keyset_json_seek_uses_field_adapter_on_postgres(
     This direct internal carrier still pins the raw SQL adapter boundary so a
     future custom field with structured prepared values cannot bypass Django.
     """
-    import datetime
-    import uuid
-
-    from apps.scalars.models import ScalarSpecimen
-    from django.db.models import Prefetch
-    from django.utils import timezone
-
-    from django_strawberry_framework.keyset import KeysetCursor, KeysetSeek, cursor_columns_for
-    from django_strawberry_framework.optimizer.join_taxonomy import classify_relation_join
-    from django_strawberry_framework.optimizer.lateral_fetch import LATERAL_STRATEGY
-    from django_strawberry_framework.optimizer.nested_fetch import NestedConnectionRequest
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     def create_specimen(
         label: str,
@@ -1102,12 +1095,6 @@ def test_lateral_custom_through_joins_the_foreign_key_target_column() -> None:
     ``django_strawberry_framework/optimizer/lateral_fetch.py::_build_lateral_spec``
     on the pg tier.
     """
-    from django.db import models
-
-    from django_strawberry_framework.optimizer.join_taxonomy import classify_relation_join
-    from django_strawberry_framework.optimizer.lateral_fetch import LATERAL_STRATEGY
-    from django_strawberry_framework.optimizer.nested_fetch import NestedConnectionRequest
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     class NaturalChild(models.Model):
         code: "models.TextField[str | Combinable, str]" = models.TextField(unique=True)
@@ -1208,20 +1195,11 @@ def test_keyset_lateral_seek_is_an_index_seek() -> None:
     small-table seq-scan preference cannot mask index-usability; the pin is
     "the seek CAN use the index", not a cost-model assertion.
     """
-    from apps.library.models import Issue
-
-    from django_strawberry_framework.keyset import KeysetCursor, KeysetSeek, cursor_columns_for
-    from django_strawberry_framework.optimizer.join_taxonomy import classify_relation_join
-    from django_strawberry_framework.optimizer.lateral_fetch import build_lateral_sql
-    from django_strawberry_framework.optimizer.nested_fetch import NestedConnectionRequest
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
-
     issues = _seed_periodicals()
     seek = KeysetSeek(
         columns=cursor_columns_for(Issue, ("number", "id")),
         cursor=KeysetCursor(values=(2, issues[1].pk)),
     )
-    from apps.library.models import Periodical
 
     field = Periodical._meta.get_field("issues")
     request = NestedConnectionRequest(
@@ -1241,12 +1219,6 @@ def test_keyset_lateral_seek_is_an_index_seek() -> None:
         lookup="issues",
     )
     plan = OptimizationPlan()
-    from django.db.models import Prefetch
-
-    from django_strawberry_framework.optimizer.lateral_fetch import (
-        LATERAL_STRATEGY,
-        LateralQuerySet,
-    )
 
     assert LATERAL_STRATEGY.plan(request, plan)
     planned_prefetch = plan.prefetch_related[0]

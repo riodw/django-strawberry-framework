@@ -16,23 +16,46 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
-from apps.library.models import Book, Genre, LendingDesk, Shelf
+from apps.library.models import Book, Branch, Genre, LendingDesk, Shelf
+from apps.scalars.models import ScalarSpecimen
 from django.db import connections, models
-from django.db.models import F, Prefetch, Value
+from django.db.models import F, Prefetch, Q, QuerySet, Value
 from django.db.models.options import Options
 from typing_extensions import Self
 
 from django_strawberry_framework.exceptions import OptimizerError
+from django_strawberry_framework.keyset import (
+    KeysetCursor,
+    KeysetSeek,
+    cursor_columns_for,
+)
+from django_strawberry_framework.optimizer import lateral_fetch
+from django_strawberry_framework.optimizer.join_taxonomy import (
+    LateralJoinShape,
+    classify_relation_join,
+)
 from django_strawberry_framework.optimizer.lateral_fetch import (
+    LATERAL_CHILD_ALIAS,
+    LATERAL_PARENT_ALIAS,
+    LATERAL_PARENT_COLUMN,
+    LATERAL_SQL_STEM,
+    LATERAL_THROUGH_ALIAS,
+    LATERAL_WINDOW_ALIAS,
     LateralPrefetchStrategy,
     LateralQuerySet,
     LateralWindowSpec,
+    _apply_lateral_converters,
     _build_lateral_spec,
+    _deduplicate_parent_ids,
     _fetch_lateral_rows,
     _is_window_qual,
     _normalize_window_node,
+    _order_columns,
+    _parent_in_values,
+    _plain_single_table_where,
     _recognize_lateral_fetch,
     _RecognizedLateralFetch,
+    _select_columns,
     build_lateral_sql,
     window_predicate_signature,
 )
@@ -44,6 +67,7 @@ from django_strawberry_framework.optimizer.plans import (
     WINDOW_ROW_NUMBER,
     WINDOW_TOTAL_COUNT,
     OptimizationPlan,
+    apply_window_pagination,
 )
 from django_strawberry_framework.utils._narrowing import is_list
 from django_strawberry_framework.utils._queryset_private import (
@@ -286,12 +310,6 @@ def test_spec_refuses_visibility_where_on_m2m_through() -> None:
 
 def test_spec_refuses_visibility_where_with_a_keyset_seek() -> None:
     """A keyset shape carrying a filter downgrades (the matchers do not combine)."""
-    from django_strawberry_framework.keyset import (
-        KeysetCursor,
-        KeysetSeek,
-        cursor_columns_for,
-    )
-
     seek = KeysetSeek(
         columns=cursor_columns_for(Book, ("title", "id")),
         cursor=KeysetCursor(values=("m", 1)),
@@ -313,8 +331,6 @@ def test_plain_single_table_where_rejects_relation_and_expression_quals() -> Non
     expression right-hand side (a ``Subquery``/queryset rhs, single-alias but
     inexpressible against the unaliased branch) both fail closed.
     """
-    from django_strawberry_framework.optimizer.lateral_fetch import _plain_single_table_where
-
     assert _plain_single_table_where(
         Book.objects.exclude(circulation_status="repair").query.where,
         "library_book",
@@ -389,8 +405,6 @@ def test_order_columns_reject_unresolvable_names() -> None:
     ordering), so they are pinned on the helper rather than through the
     strategy - the windowed fallback could not ``order_by`` them either.
     """
-    from django_strawberry_framework.optimizer.lateral_fetch import _order_columns
-
     assert _order_columns(("no_such_field",), _meta(Book)) is None
     assert _order_columns(("?",), _meta(Book)) is None
     assert _order_columns(("",), _meta(Book)) is None
@@ -405,8 +419,6 @@ def test_order_columns_reject_an_empty_order() -> None:
     shape, so the downgrade keeps the request planned instead of crashing the
     lateral SQL at fetch time.
     """
-    from django_strawberry_framework.optimizer.lateral_fetch import _order_columns
-
     assert _order_columns((), _meta(Book)) is None
     plan = OptimizationPlan()
     assert LateralPrefetchStrategy().plan(_shelf_books_request(order_by=()), plan) is True
@@ -440,8 +452,6 @@ def test_spec_downgrades_for_multi_table_inherited_order_column() -> None:
     away from the child table the lateral branch reads; the child-local
     ``window_count`` beside it maps onto the child's own columns.
     """
-    from django_strawberry_framework.optimizer.lateral_fetch import _order_columns
-
     assert _order_columns(("window_count", "pk"), _meta(LendingDesk)) == (
         ("window_count", False),
         ("venue_ptr_id", False),
@@ -461,8 +471,6 @@ def test_spec_downgrades_for_selected_multi_table_parent_column() -> None:
     refusal is the projection's: ``.only("name", "window_count")`` selects the
     inherited ``name``, which lives on the ``Venue`` parent table.
     """
-    from django_strawberry_framework.optimizer.lateral_fetch import _select_columns
-
     child_queryset = LendingDesk.objects.only("name", "window_count")
     assert _select_columns(child_queryset, _meta(LendingDesk)) is None
     request = _shelf_books_request(
@@ -730,8 +738,6 @@ def test_fetch_returns_none_off_postgres(monkeypatch: pytest.MonkeyPatch) -> Non
     Scripted (rather than read off the real connection) so the pin holds on
     BOTH tiers - on the pg tier the real vendor IS postgresql.
     """
-    from django_strawberry_framework.optimizer import lateral_fetch
-
     queryset = _prefetch_filtered(_shelf_books_request(), "shelf", [Shelf(pk=1)])
     facade = _PostgresFacade(rows=[])
     facade.vendor = "sqlite"
@@ -906,8 +912,6 @@ def _window_body(
     next_page_probe: bool = False,
 ) -> models.QuerySet[Book]:
     """A bare count-free windowed ``Book`` queryset for window-signature shape unit tests."""
-    from django_strawberry_framework.optimizer.plans import apply_window_pagination
-
     return apply_window_pagination(
         Book.objects.only("id", "title", "shelf_id"),
         partition_by="shelf_id",
@@ -1038,8 +1042,6 @@ def test_extract_returns_none_without_a_parent_filter() -> None:
 
 def test_extract_returns_none_for_an_ored_parent_filter() -> None:
     """A parent filter nested under OR is neither a window qual nor extractable."""
-    from django.db.models import Q
-
     queryset = _planned_lateral_queryset(_shelf_books_request(limit=None))
     queryset = queryset.filter(Q(shelf__in=[1]) | Q(title="x"))
     assert _recognize_lateral_fetch(queryset, _lateral_spec(queryset)) is None
@@ -1063,8 +1065,6 @@ def test_parent_in_values_guards_target_and_rhs_shapes() -> None:
     C1: ``_parent_in_values`` takes the target ``column``/``table`` as keyword
     arguments, not a whole spec.
     """
-    from django_strawberry_framework.optimizer.lateral_fetch import _parent_in_values
-
     no_target = SimpleNamespace(lookup_name="in", lhs=None, rhs=[1])
     assert _parent_in_values(no_target, column="shelf_id", table="library_book") is None
     unresolved_rhs = SimpleNamespace(
@@ -1158,8 +1158,6 @@ class _PostgresFacade:
 
 def test_lateral_execution_instantiates_window_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     """The full lateral fetch: extraction, SQL, params, and row instantiation."""
-    from django_strawberry_framework.optimizer import lateral_fetch
-
     queryset = _prefetch_filtered(_shelf_books_request(), "shelf", [Shelf(pk=1), Shelf(pk=2)])
     facade = _PostgresFacade(
         rows=[
@@ -1220,8 +1218,6 @@ def test_lateral_execution_splices_the_visibility_predicate(
     splices ``AND (...)`` into the lateral branch, with its bind value in the
     params between the parent ids and the in-branch ``LIMIT``.
     """
-    from django_strawberry_framework.optimizer import lateral_fetch
-
     queryset = _prefetch_filtered(
         _shelf_books_visibility_request(with_total_count=False),
         "shelf",
@@ -1238,8 +1234,6 @@ def test_lateral_execution_splices_the_visibility_predicate(
 
 def test_lateral_execution_sets_m2m_prefetch_values(monkeypatch: pytest.MonkeyPatch) -> None:
     """M2M rows carry the ``_prefetch_related_val_*`` parent id Django attaches by."""
-    from django_strawberry_framework.optimizer import lateral_fetch
-
     queryset = _prefetch_filtered(
         _request(Genre, "books", with_total_count=False),
         "genres",
@@ -1267,8 +1261,6 @@ def test_lateral_execution_sets_m2m_prefetch_values(monkeypatch: pytest.MonkeyPa
 
 def test_lateral_execution_deduplicates_parent_ids(monkeypatch: pytest.MonkeyPatch) -> None:
     """Repeated parent ids execute one lateral branch instead of duplicating child rows."""
-    from django_strawberry_framework.optimizer import lateral_fetch
-
     queryset = _prefetch_filtered(
         _shelf_books_request(),
         "shelf",
@@ -1283,8 +1275,6 @@ def test_lateral_execution_deduplicates_parent_ids(monkeypatch: pytest.MonkeyPat
 
 def test_parent_id_deduplication_handles_hashable_and_unhashable_values() -> None:
     """Hashable values de-duplicate; unhashable values retain their input order."""
-    from django_strawberry_framework.optimizer.lateral_fetch import _deduplicate_parent_ids
-
     assert _deduplicate_parent_ids(
         [
             1,
@@ -1305,10 +1295,6 @@ def test_parent_id_deduplication_handles_hashable_and_unhashable_values() -> Non
 
 def test_lateral_raw_rows_run_through_django_field_converters() -> None:
     """Raw JSON text is converted exactly as ORM-compiled model rows are."""
-    from apps.scalars.models import ScalarSpecimen
-
-    from django_strawberry_framework.optimizer.lateral_fetch import _apply_lateral_converters
-
     spec = _built_spec(_shelf_books_request())
     payload_field = ScalarSpecimen._meta.get_field("payload")
     spec = dataclasses.replace(
@@ -1344,8 +1330,6 @@ def test_lateral_execution_serves_zero_parents_without_sql(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An empty parent list returns an empty page without executing anything."""
-    from django_strawberry_framework.optimizer import lateral_fetch
-
     queryset = _prefetch_filtered(_shelf_books_request(), "shelf", [])
     facade = _PostgresFacade(rows=[])
     monkeypatch.setattr(lateral_fetch, "connections", {"default": facade})
@@ -1357,8 +1341,6 @@ def test_fetch_returns_none_when_extraction_fails_on_postgres(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Unextractable state on a real-vendor connection still falls back."""
-    from django_strawberry_framework.optimizer import lateral_fetch
-
     # The bare planned queryset carries no parent filter -> extraction None.
     queryset = _planned_lateral_queryset(_shelf_books_request())
     facade = _PostgresFacade(rows=[])
@@ -1369,8 +1351,6 @@ def test_fetch_returns_none_when_extraction_fails_on_postgres(
 
 def test_fetch_returns_none_for_values_iteration(monkeypatch: pytest.MonkeyPatch) -> None:
     """``values_list()`` changes row shape - never intercepted."""
-    from django_strawberry_framework.optimizer import lateral_fetch
-
     queryset = _prefetch_filtered(_shelf_books_request(), "shelf", [Shelf(pk=1)])
     facade = _PostgresFacade(rows=[])
     monkeypatch.setattr(lateral_fetch, "connections", {"default": facade})
@@ -1383,8 +1363,6 @@ def test_fetch_vendor_follows_the_queryset_alias_not_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A routed non-Postgres alias windows even when ``default`` is Postgres."""
-    from django_strawberry_framework.optimizer import lateral_fetch
-
     queryset = _prefetch_filtered(
         _shelf_books_request(),
         "shelf",
@@ -1417,8 +1395,6 @@ def test_auto_fallback_executes_the_windowed_body_end_to_end() -> None:
     worst case of any fetch-time surprise (here: the SQLite vendor) is
     windowed SQL, not an unbounded child fetch or wrong ``hasNextPage`` input.
     """
-    from apps.library.models import Branch
-
     branch = Branch.objects.create(name="central")
     shelf_a = Shelf.objects.create(code="a", branch=branch)
     shelf_b = Shelf.objects.create(code="b", branch=branch)
@@ -1451,7 +1427,6 @@ def test_spec_downgrades_for_custom_queryset_subclasses() -> None:
     downgrade preserves the subclass AND its clone-carried state through the
     window annotations.
     """
-    from django.db.models import QuerySet
 
     class _StatefulQuerySet(QuerySet[Book]):
         marker: str | None = None
@@ -1483,13 +1458,6 @@ def test_spec_downgrades_for_custom_queryset_subclasses() -> None:
 
 def test_spec_refuses_unsupported_lateral_join_shape() -> None:
     """An unsupported join shape cannot build a LateralWindowSpec."""
-    import dataclasses
-
-    from django_strawberry_framework.optimizer.join_taxonomy import (
-        LateralJoinShape,
-        classify_relation_join,
-    )
-
     req = _shelf_books_request()
     unsupported_join = dataclasses.replace(
         classify_relation_join(Book._meta.get_field("shelf")),
@@ -1501,12 +1469,6 @@ def test_spec_refuses_unsupported_lateral_join_shape() -> None:
 
 def test_keyset_seek_quals_match_single_and_multi_column() -> None:
     """Test full keyset seek flow recognition for 1-column, 2-column, and 3-column plans."""
-    from django_strawberry_framework.keyset import (
-        KeysetCursor,
-        KeysetSeek,
-        cursor_columns_for,
-    )
-
     # 1-column seek
     seek1 = KeysetSeek(
         columns=cursor_columns_for(Book, ("id",)),
@@ -1589,15 +1551,12 @@ def test_keyset_seek_quals_match_single_and_multi_column() -> None:
         columns=cursor_columns_for(Book, ("circulation_status", "title", "id")),
         cursor=KeysetCursor(values=("available", "Different", 99)),
     )
-    import dataclasses
 
     spec_mutated = dataclasses.replace(spec3, keyset_seek=different_seek)
     assert _recognize_lateral_fetch(prefetched3, spec_mutated) is None
 
 
 def test_build_window_spec_unsupported_shape_returns_none() -> None:
-    from django_strawberry_framework.optimizer.lateral_fetch import _build_lateral_spec
-
     req = _shelf_books_request()
     bad_join = dataclasses.replace(req.join, lateral_shape="UNSUPPORTED_SHAPE")
     req_bad = dataclasses.replace(req, join=bad_join)
@@ -1606,15 +1565,6 @@ def test_build_window_spec_unsupported_shape_returns_none() -> None:
 
 def test_lateral_sql_namespace_derivation() -> None:
     """All lateral SQL aliases and column names derive from the single LATERAL_SQL_STEM."""
-    from django_strawberry_framework.optimizer.lateral_fetch import (
-        LATERAL_CHILD_ALIAS,
-        LATERAL_PARENT_ALIAS,
-        LATERAL_PARENT_COLUMN,
-        LATERAL_SQL_STEM,
-        LATERAL_THROUGH_ALIAS,
-        LATERAL_WINDOW_ALIAS,
-    )
-
     assert f"{LATERAL_SQL_STEM}_parents" == LATERAL_PARENT_ALIAS
     assert f"{LATERAL_SQL_STEM}_parent_id" == LATERAL_PARENT_COLUMN
     assert f"{LATERAL_SQL_STEM}_window" == LATERAL_WINDOW_ALIAS

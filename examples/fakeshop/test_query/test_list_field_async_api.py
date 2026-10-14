@@ -41,6 +41,7 @@ from django.urls import clear_url_caches, path
 from django.utils.functional import cached_property
 from graphql_client import JSONObject
 from strawberry.django.context import StrawberryDjangoContext
+from strawberry.schema.name_converter import NameConverter
 from strawberry.types.arguments import StrawberryArgument
 from typing_extensions import override
 
@@ -2238,7 +2239,6 @@ async def test_async_rejection_reports_the_published_name_without_extra_converte
     again, so a rejected request costs exactly as many converter calls as a
     successful one.
     """
-    from strawberry.schema.name_converter import NameConverter
 
     class _CountingConverter(NameConverter):
         calls = 0

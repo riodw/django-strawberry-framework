@@ -40,9 +40,16 @@ is duplicated here** - those are owned by the live suite.
 from __future__ import annotations
 
 import dataclasses
+import datetime
+import decimal
 import inspect
 import re
+import sys
+import threading
+import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import FrozenInstanceError
 from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, ClassVar, NoReturn, Protocol, cast, runtime_checkable
 
@@ -52,10 +59,15 @@ import strawberry
 from apps.library import models as library_models
 from apps.products import models as product_models
 from apps.products.services import seed_data
+from asgiref.sync import sync_to_async
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import IntegrityError
+from django.core.files import File
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import IntegrityError, connections
 from django.db.models import Model, QuerySet
+from django.db.models.signals import post_save, pre_save
+from django.db.utils import OperationalError
 from django.http import HttpRequest
 from rest_framework import serializers
 from rest_framework.exceptions import ErrorDetail
@@ -74,7 +86,7 @@ from django_strawberry_framework import (
     finalize_django_types,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
-from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY
+from django_strawberry_framework.mutations.inputs import CREATE, NON_FIELD_ERROR_KEY, PARTIAL
 from django_strawberry_framework.mutations.resolvers import StepFailure
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.rest_framework import resolvers as serializer_resolvers
@@ -90,12 +102,17 @@ from django_strawberry_framework.rest_framework.hook_context import (
     SerializerHookContext,
     UploadMetadata,
 )
+from django_strawberry_framework.rest_framework.inputs import (
+    build_serializer_input_class,
+    resolve_injected_field_specs,
+)
 from django_strawberry_framework.rest_framework.serializer_converter import (
     NESTED_MULTI,
     NESTED_SINGLE,
     SCALAR,
 )
 from django_strawberry_framework.testing.relay import global_id_for
+from django_strawberry_framework.types import relay as relay_module
 from django_strawberry_framework.utils._narrowing import is_class, is_list, is_mapping, is_tuple
 from django_strawberry_framework.utils._queryset_private import (
     queryset_db,
@@ -109,7 +126,11 @@ from django_strawberry_framework.utils.inputs import (
 )
 from django_strawberry_framework.utils.querysets import SyncMisuseError
 from django_strawberry_framework.utils.write_transaction import (
+    authorization_phase,
     managed_write_transaction,
+    pipeline_alias_guard,
+    require_write_pipeline,
+    snapshot_target_state,
     write_pipeline,
 )
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
@@ -256,8 +277,6 @@ def test_flattener_recursively_rekeys_nested_child_fields() -> None:
     (``alt_branches`` -> ``altBranches``) is re-keyed inside the nested path, not left as the
     serializer name - so nested DRF validation errors match the framework decode-error paths.
     """
-    from django_strawberry_framework.utils.inputs import InputFieldSpec
-
     child_specs = (
         InputFieldSpec(input_attr="code", graphql_name="code", target_name="code", kind=SCALAR),
         InputFieldSpec(
@@ -285,8 +304,6 @@ def test_flattener_recursively_rekeys_nested_child_fields() -> None:
 
 def test_flattener_nested_non_field_bucket_keeps_all_sentinel_with_recursive_map() -> None:
     """A nested non-field bucket normalizes to ``<path>.__all__`` even with the recursive map."""
-    from django_strawberry_framework.utils.inputs import InputFieldSpec
-
     child_specs = (
         InputFieldSpec(input_attr="code", graphql_name="code", target_name="code", kind=SCALAR),
     )
@@ -1215,8 +1232,6 @@ def test_resolvers_source_has_no_live_strategy_reads_grep_guard() -> None:
     finalization), never a per-request settings re-read / re-validation on the query
     path.
     """
-    import inspect
-
     source = inspect.getsource(serializer_resolvers)
     assert "conf.settings" not in source
     assert "_resolve_globalid_strategy" not in source
@@ -1244,8 +1259,6 @@ def test_relation_decode_consumes_recorded_strategy_after_strategy_resolver_fail
     finalize_django_types()
     category = product_models.Category.objects.create(name="StrategyCat")
     gid = relay.GlobalID.from_id(global_id_for(CategoryT, category.pk))
-
-    from django_strawberry_framework.types import relay as relay_module
 
     def _boom(*_args: object, **_kwargs: object) -> NoReturn:
         raise AssertionError("_resolve_globalid_strategy must not run on the query path")
@@ -1366,8 +1379,6 @@ async def test_async_entry_rejects_data_rewriting_hook_too() -> None:
     DjangoSchema(query=Query, mutation=Mutation)
     del CategoryT, ItemT
 
-    from asgiref.sync import sync_to_async
-
     category = await sync_to_async(product_models.Category.objects.create)(name="AsyncRewriteCat")
     gid = relay.GlobalID(type_name="products.category", node_id=str(category.pk))
 
@@ -1402,8 +1413,6 @@ async def test_async_entry_rejects_data_rewriting_hook_too() -> None:
 
 def test_flattener_preserves_error_detail_codes_and_path() -> None:
     """A DRF ``ErrorDetail.code`` -> ``codes``; the dotted key -> structured ``path`` segments (#4 / #13)."""
-    from rest_framework.exceptions import ErrorDetail
-
     errors = {
         "name": [ErrorDetail("This field is required.", code="required")],
         "items": [{"qty": [ErrorDetail("Not valid.", code="invalid")]}],
@@ -1416,8 +1425,6 @@ def test_flattener_preserves_error_detail_codes_and_path() -> None:
 
 def test_flattener_root_non_field_error_has_empty_path() -> None:
     """A ROOT non-field error is ``field="__all__"`` with an EMPTY ``path`` (the documented rule, #13)."""
-    from rest_framework.exceptions import ErrorDetail
-
     drf_key = serializer_resolvers._DRF_NON_FIELD_KEY
     errors = {drf_key: [ErrorDetail("Model-wide problem.", code="invalid")]}
     (fe,) = serializer_resolvers.serializer_errors_to_field_errors(errors, {})
@@ -1428,8 +1435,6 @@ def test_flattener_root_non_field_error_has_empty_path() -> None:
 
 def test_flattener_nested_non_field_error_keeps_all_sentinel_segment() -> None:
     """A NESTED non-field error keeps the ``"__all__"`` sentinel as its final path segment (#13)."""
-    from rest_framework.exceptions import ErrorDetail
-
     drf_key = serializer_resolvers._DRF_NON_FIELD_KEY
     errors = {"items": [{drf_key: [ErrorDetail("Cross-field.", code="invalid")]}]}
     (fe,) = serializer_resolvers.serializer_errors_to_field_errors(errors, {})
@@ -1446,8 +1451,6 @@ def test_flattener_plain_string_leaf_has_no_codes() -> None:
 
 def test_flattener_bare_error_detail_preserves_code() -> None:
     """A bare DRF ``ErrorDetail`` leaf still preserves its single code (#4)."""
-    from rest_framework.exceptions import ErrorDetail
-
     flat = serializer_resolvers.serializer_errors_to_field_errors(
         {"name": ErrorDetail("Invalid.", code="invalid")},
         {},
@@ -1739,8 +1742,6 @@ def test_agreement_guard_wraps_an_unresolvable_runtime_field() -> None:
 
 def test_agreement_guard_passes_when_schema_and_runtime_agree() -> None:
     """The happy path: matching scalar + relation specs pass (no raise) (#1)."""
-    from django_strawberry_framework.utils.inputs import InputFieldSpec
-
     fake = type(
         "OkMut",
         (),
@@ -1772,7 +1773,6 @@ def test_agreement_guard_passes_when_schema_and_runtime_agree() -> None:
 
 def test_agreement_guard_rejects_scalar_annotation_drift() -> None:
     """A scalar schema annotation that changes at runtime fails before validation."""
-    from django_strawberry_framework.utils.inputs import InputFieldSpec
 
     class RuntimeSer(serializers.Serializer[object]):
         code = serializers.IntegerField()
@@ -1808,7 +1808,6 @@ def test_agreement_guard_rejects_scalar_annotation_drift() -> None:
 
 def test_agreement_guard_rejects_injected_scalar_annotation_drift() -> None:
     """Injected fields use the same runtime scalar contract as generated inputs."""
-    from django_strawberry_framework.utils.inputs import InputFieldSpec
 
     class RuntimeSer(serializers.Serializer[object]):
         stamp = serializers.IntegerField()
@@ -1948,7 +1947,6 @@ def test_hook_mapping_wraps_a_mapping_that_cannot_be_materialized(
     The boundary catches ``BaseException``, so a hook mapping raising from outside
     the ``Exception`` hierarchy still cannot escape the pipeline as itself.
     """
-    from collections.abc import Mapping
 
     class BrokenMapping(Mapping[str, object]):
         @override
@@ -1991,8 +1989,6 @@ def _topic_shelf_serializer_class() -> type[ModelSerializerBase[library_models.S
 
 def _injected_topic_mut(specs: list[InputFieldSpec] | None = None) -> type[object]:
     """A fake mutation declaring ``injected_fields=("topic",)`` + its stashed schema-time spec."""
-    from django_strawberry_framework.utils.inputs import InputFieldSpec
-
     topic_spec = InputFieldSpec(
         input_attr="topic",
         graphql_name="topic",
@@ -2046,8 +2042,6 @@ def test_injected_serializer_choice_field_agrees_on_update_operation() -> None:
     create-side provisional would record ``<Ser>Input<Status>Enum`` while the runtime guard
     re-derives ``<Ser>PartialInput<Status>Enum``).
     """
-    from django_strawberry_framework.mutations.inputs import CREATE, PARTIAL
-    from django_strawberry_framework.rest_framework.inputs import resolve_injected_field_specs
 
     class StatusShelfSer(ModelSerializerBase[library_models.Shelf]):
         status = serializers.ChoiceField(
@@ -2253,7 +2247,6 @@ def test_relation_queryset_scope_pins_unregistered_raw_pk_relation_without_visib
     lookup must still run inside the transaction on the write alias (the hardening pass), so
     the author's queryset is alias-pinned rather than left untouched.
     """
-    from django_strawberry_framework.utils.inputs import InputFieldSpec
 
     class BranchSer(serializers.Serializer[object]):
         branch: _PkRelation[library_models.Branch] = serializers.PrimaryKeyRelatedField(
@@ -2293,7 +2286,6 @@ def test_relation_queryset_scope_pins_unregistered_raw_pk_relation_without_visib
 
 def test_relation_queryset_scope_locks_when_pipeline_locks() -> None:
     """When the pipeline locks, the scoped relation queryset is a base-manager FOR UPDATE query."""
-    from django_strawberry_framework.utils.inputs import InputFieldSpec
 
     class BranchSer(serializers.Serializer[object]):
         branch: _PkRelation[library_models.Branch] = serializers.PrimaryKeyRelatedField(
@@ -2338,7 +2330,6 @@ def test_relation_queryset_scope_covers_injected_relation_specs() -> None:
     visibility half is asserted by MEMBERSHIP (a row the registered primary type hides must
     be absent from the scoped queryset), not just by queryset flags.
     """
-    from django_strawberry_framework.utils.inputs import InputFieldSpec
 
     class BranchT(DjangoType):
         class Meta:
@@ -2407,7 +2398,6 @@ def test_relation_queryset_scope_covers_injected_relation_specs() -> None:
 
 def test_relation_queryset_scope_cross_alias_author_queryset_fails_closed() -> None:
     """An author queryset EXPLICITLY routed to a different alias fails before validation."""
-    from django_strawberry_framework.utils.inputs import InputFieldSpec
 
     class BranchSer(serializers.Serializer[object]):
         branch: _PkRelation[library_models.Branch] = serializers.PrimaryKeyRelatedField(
@@ -2444,7 +2434,6 @@ def test_relation_queryset_scope_cross_alias_author_queryset_fails_closed() -> N
 
 def test_relation_queryset_scope_handles_many_related_field() -> None:
     """Many relation fields scope their child relation queryset through target visibility (#3)."""
-    from django_strawberry_framework.utils.inputs import InputFieldSpec
 
     class BranchT(DjangoType):
         class Meta:
@@ -2504,11 +2493,6 @@ def test_relation_queryset_scope_is_isolated_between_concurrent_serializer_insta
     interleave, pinning that ``_scope_relation_querysets_to_visibility`` mutates only those
     instance-local copies and never the shared declarations or a sibling request's fields.
     """
-    import threading
-    from concurrent.futures import ThreadPoolExecutor
-
-    from django_strawberry_framework.utils.inputs import InputFieldSpec
-
     scopes_met = threading.Barrier(2)
 
     class BranchT(DjangoType):
@@ -3268,7 +3252,6 @@ def test_merged_kwargs_deep_data_passthrough_never_recurses() -> None:
     The old deep ``!=`` comparison of two independently cloned structures re-introduced
     the ``RecursionError`` the iterative clone had removed; the identity check is O(1).
     """
-    import sys
 
     def hook(
         _self: SerializerMutation,
@@ -3306,8 +3289,6 @@ def test_frozen_hook_view_survives_json_depth_beyond_the_recursion_limit() -> No
     A client-parseable deeply-nested JSON value must never crash the pipeline (an
     availability hole a recursive walk had).
     """
-    import sys
-
     depth = sys.getrecursionlimit() + 200
     deep: list[object] = []
     cursor = deep
@@ -3348,8 +3329,6 @@ def test_frozen_hook_view_rejects_cycles_preserves_sharing_and_freezes_uploads()
     iterative freeze would loop forever (an availability hole). A merely SHARED dict is
     legitimate and must not be misdiagnosed as a cycle.
     """
-    from django.core.files.uploadedfile import SimpleUploadedFile
-
     cyclic: dict[str, object] = {"k": "v"}
     cyclic["self"] = cyclic
     with pytest.raises(ConfigurationError, match="CYCLIC container"):
@@ -3392,11 +3371,6 @@ def test_frozen_hook_view_freezes_the_full_value_algebra_and_fails_closed_on_opa
     ``provided_data``. They are now rendered immutable; a leaf with no immutable rendering fails
     closed instead of being aliased under a false promise of immutability.
     """
-    import datetime
-    import decimal
-    import uuid
-    from types import MappingProxyType
-
     # A tuple carrying a mutable dict member: the tuple becomes a tuple, the dict a proxy.
     view = serializer_resolvers._frozen_hook_view({"pair": ("x", {"n": 1})})
     frozen_pair = view["pair"]
@@ -3749,10 +3723,6 @@ def test_write_witness_blocks_cross_alias_pre_save() -> None:
     so the query never runs. Same-alias writes pass; other threads are untouched (each
     request installs its own thread-scoped witness).
     """
-    import threading
-
-    from django.db.models.signals import pre_save
-
     fake = type("WitnessMut", (), {})
     with serializer_resolvers._write_witness(
         _as_serializer_mutation(fake),
@@ -3774,7 +3744,6 @@ def test_write_witness_blocks_cross_alias_pre_save() -> None:
 
         # A DIFFERENT thread's cross-alias save is not this request's to police - and its
         # writes are not recorded on this request's witness either.
-        from django.db.models.signals import post_save
 
         errors: list[BaseException] = []
 
@@ -3811,10 +3780,6 @@ def test_pipeline_alias_guard_rejects_every_statement_on_non_pinned_alias() -> N
     phases raises on EVERY statement issued on a non-pinned alias - reads included - and
     is removed once the guarded phase exits.
     """
-    from django.db import connections
-
-    from django_strawberry_framework.utils.write_transaction import pipeline_alias_guard
-
     extra = dict(connections.databases["default"])
     extra["NAME"] = ":memory:"
     connections.databases["mirror_alias"] = extra
@@ -3852,14 +3817,6 @@ def test_pipeline_alias_guard_auth_alias_access_is_scoped_to_the_authorization_p
     the scoping is what matters - before the phase opens and after it closes the same auth
     alias is back to reject-everything, so decode / hooks / validation cannot reach it.
     """
-    from django.db import connections
-
-    from django_strawberry_framework.utils.write_transaction import (
-        pipeline_alias_guard,
-        require_write_pipeline,
-        write_pipeline,
-    )
-
     extra = dict(connections.databases["default"])
     extra["NAME"] = ":memory:"
     connections.databases["auth_mirror"] = extra
@@ -3917,14 +3874,6 @@ def test_authorization_phase_enforces_db_read_only_on_non_pinned_auth_aliases(
     barrier is backed by the DB's own read-only enforcement. Reads still pass; once the phase
     ends the connection is restored to writable.
     """
-    from django.db import connections
-    from django.db.utils import OperationalError
-
-    from django_strawberry_framework.utils.write_transaction import (
-        authorization_phase,
-        write_pipeline,
-    )
-
     extra = dict(connections.databases["default"])
     extra["NAME"] = ":memory:"
     connections.databases["auth_barrier"] = extra
@@ -3962,12 +3911,6 @@ def test_authorization_phase_enforces_db_read_only_on_non_pinned_auth_aliases(
 
 def test_pipeline_alias_guard_blocks_cross_alias_pre_save_and_ignores_other_threads() -> None:
     """The guard's ``pre_save`` receiver: cross-alias saves fail early, same-alias and other threads pass."""
-    import threading
-
-    from django.db.models.signals import pre_save
-
-    from django_strawberry_framework.utils.write_transaction import pipeline_alias_guard
-
     with pipeline_alias_guard("GuardMut", "default"):
         with pytest.raises(ConfigurationError, match="attempted to save"):
             pre_save.send(
@@ -4500,7 +4443,6 @@ def test_relation_queryset_scope_composes_with_author_queryset() -> None:
     contract; visibility is an ADDITIONAL constraint. A visible-but-author-DISALLOWED row must
     still be rejected (the earlier reassignment erased the author's queryset and admitted it).
     """
-    from django_strawberry_framework.utils.inputs import InputFieldSpec
 
     class BranchT(DjangoType):
         class Meta:
@@ -4587,10 +4529,6 @@ def test_relation_queryset_scope_composes_with_author_queryset() -> None:
 
 def _nested_single_input_and_specs() -> tuple[type[object], list[InputFieldSpec]]:
     """Build a single-nested input (``detail`` -> ``{code}``) + its top reverse-map specs."""
-    from django_strawberry_framework.rest_framework.inputs import (
-        NestedSerializerConfig,
-        build_serializer_input_class,
-    )
 
     class Child(serializers.Serializer[object]):
         code = serializers.CharField()
@@ -4705,8 +4643,6 @@ def test_nested_agreement_single_spec_over_many_runtime_raises() -> None:
 
 def test_nested_agreement_recurses_into_child_specs() -> None:
     """A nested field's child spec is held to the SAME agreement contract (recursion)."""
-    from django_strawberry_framework.utils.inputs import InputFieldSpec
-
     ghost_child = (
         InputFieldSpec(
             input_attr="ghost",
@@ -4726,7 +4662,6 @@ def test_nested_agreement_recurses_into_child_specs() -> None:
 
 def test_agreement_scalar_field_that_became_nested_serializer_raises() -> None:
     """A schema SCALAR field that is a nested serializer at runtime fails loud (the kind moved)."""
-    from django_strawberry_framework.utils.inputs import InputFieldSpec
 
     class Child(serializers.Serializer[object]):
         x = serializers.CharField()
@@ -5308,10 +5243,6 @@ def test_save_failure_after_partial_writes_rolls_back_to_the_savepoint() -> None
 @pytest.mark.django_db
 def test_hook_mutating_the_located_target_is_rejected_before_save() -> None:
     """In-memory drift of the located row between locate and save fails closed."""
-    from django_strawberry_framework.utils.write_transaction import (
-        require_write_pipeline,
-        snapshot_target_state,
-    )
 
     class DriftSerializer(ModelSerializerBase[product_models.Item]):
         class Meta:
@@ -5386,8 +5317,6 @@ def test_save_kwargs_naming_a_model_field_is_rejected() -> None:
 
 def test_flattener_survives_error_depth_beyond_the_recursion_limit() -> None:
     """The flattener is ITERATIVE: a deeper-than-recursion-limit error tree must not crash."""
-    import sys
-
     depth = sys.getrecursionlimit() + 200
     errors: dict[str, object] = {"leaf": ["boom"]}
     for _ in range(depth):
@@ -5637,8 +5566,6 @@ def test_nested_relation_nulled_after_validation_is_rejected() -> None:
 
 def test_upload_metadata_tolerates_a_sizeless_file() -> None:
     """A file object whose ``size`` read raises reports ``size=None`` (never an exception)."""
-    from django.core.files import File
-
     metadata = serializer_resolvers._upload_metadata(File(None, name="ghost.bin"))
     assert isinstance(metadata, UploadMetadata)
     assert metadata.name == "ghost.bin"
@@ -5788,7 +5715,6 @@ def test_decode_nested_multi_non_iterable_returns_field_error() -> None:
 
 def test_upload_metadata_tolerates_raising_name_and_content_type() -> None:
     """A file object whose ``name`` or ``content_type`` properties raise yields ``None``."""
-    from django.core.files import File
 
     class BrokenFile(File[bytes]):
         # basedpyright: File.__init__ assigns ``self.name``, which this read-only raising
@@ -5995,19 +5921,6 @@ def test_decode_input_object_handles_none_and_invalid_dataclass() -> None:
 @pytest.mark.django_db
 def test_decode_nested_multi_tolerates_none_item_in_list() -> None:
     """_decode_nested correctly passes None list items to DRF validation instead of raising AttributeError."""
-    from apps.library import models as library_models
-    from strawberry import relay
-
-    from django_strawberry_framework import (
-        DjangoMutationField,
-        DjangoSchema,
-        DjangoType,
-        NestedSerializerConfig,
-        SerializerMutation,
-        finalize_django_types,
-    )
-    from django_strawberry_framework.registry import registry
-
     registry.clear()
     try:
 
@@ -6090,8 +6003,6 @@ def test_decode_nested_multi_tolerates_none_item_in_list() -> None:
 
 def test_hook_context_and_upload_metadata_invariants() -> None:
     """``SerializerHookContext`` and ``UploadMetadata`` are frozen, slotted, and immutable."""
-    from dataclasses import FrozenInstanceError
-
     ctx = SerializerHookContext(
         operation="update",
         write_alias="default",
@@ -6141,7 +6052,6 @@ def test_hook_context_and_upload_metadata_invariants() -> None:
 
 def test_decode_nested_multi_decodes_items_and_handles_item_error() -> None:
     """_decode_nested decodes items under NESTED_MULTI and short-circuits on child error."""
-    import strawberry
 
     @strawberry.input
     class ChildInput:

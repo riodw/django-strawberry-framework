@@ -54,6 +54,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
+from django.db import transaction
+
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Sequence
 
@@ -1006,7 +1008,6 @@ def fetch_planned_paths() -> list[PlannedPath]:
     """
     configure_django()
     from apps.kanban.models import TrackedPath
-    from django.db import transaction
 
     queryset = (
         TrackedPath.objects.exclude(state="current")

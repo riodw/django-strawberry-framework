@@ -70,6 +70,7 @@ import pytest
 import strawberry
 from apps.products import models as product_models
 from apps.products.services import create_users, seed_data
+from config import schema as config_schema
 from django.conf import settings
 from django.contrib.auth.models import Permission, User
 from django.http import HttpRequest
@@ -146,10 +147,9 @@ def _probe_query_type() -> type:
     rather than on the policy; nullable fields let each error stay attributed to
     its own ``path``.
     """
-    from config.schema import Query
 
     @strawberry.type
-    class ProbeQuery(Query):
+    class ProbeQuery(config_schema.Query):
         """The fakeshop query surface plus resolvers that fail or mutate on demand."""
 
         @strawberry.field
@@ -214,11 +214,9 @@ def _probe_schema(**schema_kwargs: Unpack[_ProbeSchemaOptions]) -> DjangoSchema:
     ``config.schema`` before every test, so a cached schema would hold types from
     a previous test's registry.
     """
-    from config.schema import Mutation
-
     return DjangoSchema(
         query=_probe_query_type(),
-        mutation=Mutation,
+        mutation=config_schema.Mutation,
         config=strawberry_config(),
         **schema_kwargs,
     )

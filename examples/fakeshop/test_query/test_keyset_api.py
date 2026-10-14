@@ -51,11 +51,15 @@ because the payload is authenticated-encrypted opaque bytes (the codec contract)
 """
 
 import base64
+import datetime
+import uuid
 from collections.abc import Callable, Mapping
 
 import pytest
 import strawberry
 from apps.library import models
+from apps.library import schema as library_schema
+from apps.scalars.models import ScalarSpecimen
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib.auth.models import User
@@ -106,11 +110,10 @@ urlpatterns = [path("graphql-test/", _holder_view), path("graphql-async/", _asyn
 
 
 def _issue_holder_schema(resolver: Callable[..., object]) -> strawberry.Schema:
-    from apps.library.schema import IssueType
 
     @strawberry.type
     class Query:
-        issues = DjangoConnectionField(IssueType, resolver=resolver)
+        issues = DjangoConnectionField(library_schema.IssueType, resolver=resolver)
 
     return strawberry.Schema(query=Query, config=strawberry_config())
 
@@ -2004,7 +2007,6 @@ _ASYNC_SPECIMENS_FIELD = """
 
 def _twin_children_schema(*, optimizer: bool = True) -> strawberry.Schema:
     """Holder schema whose two root fields each window a ``children`` relation."""
-    from apps.scalars.models import ScalarSpecimen
 
     def shifts_newest_first(
         _cls: type[DjangoType],
@@ -2075,11 +2077,6 @@ def _twin_children_schema(*, optimizer: bool = True) -> strawberry.Schema:
 
 def _seed_twin_children() -> None:
     """One desk with shifts s1, s2, s3 and one specimen with children c-b, c-c, c-a (pk order)."""
-    import datetime
-    import uuid
-
-    from apps.scalars.models import ScalarSpecimen
-
     branch = models.Branch.objects.create(name="Twin Branch")
     shelf = models.Shelf.objects.create(code="T-1", branch=branch)
     desk = models.CirculationDesk.objects.create(name="Twin Desk", branch=branch, shelf=shelf)

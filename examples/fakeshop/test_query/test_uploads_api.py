@@ -42,6 +42,7 @@ from django.core.files.storage import FileSystemStorage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from graphql_client import JSONObject
+from PIL import Image
 from strawberry import relay
 
 from django_strawberry_framework.testing import TestClient
@@ -64,8 +65,6 @@ _ERROR_POLICY_PASS_THROUGH = {
 
 
 def _png_bytes() -> bytes:
-    from PIL import Image
-
     buffer = io.BytesIO()
     Image.new("RGB", (_IMAGE_WIDTH, _IMAGE_HEIGHT)).save(buffer, format="PNG")
     return buffer.getvalue()

@@ -53,7 +53,9 @@ from collections.abc import Callable
 import pytest
 import strawberry
 from apps.library import models
+from apps.library import schema as library_schema
 from asgiref.sync import sync_to_async
+from config import schema as config_schema
 from django.http import HttpRequest
 from django.http.response import HttpResponseBase
 from django.test import override_settings
@@ -134,11 +136,10 @@ async def test_async_forward_fk_lazy_loads_over_http() -> None:
     await sync_to_async(_seed_loan_graph)()
 
     def _build() -> strawberry.Schema:
-        from apps.library.schema import LoanType
 
         @strawberry.type
         class Query:
-            @strawberry.field(graphql_type=list[LoanType])
+            @strawberry.field(graphql_type=list[library_schema.LoanType])
             async def loans(self) -> list[models.Loan]:
                 return await sync_to_async(list)(models.Loan.objects.order_by("note"))
 
@@ -167,11 +168,10 @@ async def test_async_many_side_lazy_loads_over_http() -> None:
     await sync_to_async(_seed_loan_graph)()
 
     def _build() -> strawberry.Schema:
-        from apps.library.schema import PatronType
 
         @strawberry.type
         class Query:
-            @strawberry.field(graphql_type=list[PatronType])
+            @strawberry.field(graphql_type=list[library_schema.PatronType])
             async def patrons(self) -> list[models.Patron]:
                 return await sync_to_async(list)(models.Patron.objects.order_by("name"))
 
@@ -200,11 +200,10 @@ async def test_async_reverse_one_to_one_lazy_loads_over_http() -> None:
     await sync_to_async(_seed_card_graph)()
 
     def _build() -> strawberry.Schema:
-        from apps.library.schema import PatronType
 
         @strawberry.type
         class Query:
-            @strawberry.field(graphql_type=list[PatronType])
+            @strawberry.field(graphql_type=list[library_schema.PatronType])
             async def patrons(self) -> list[models.Patron]:
                 return await sync_to_async(list)(models.Patron.objects.order_by("pk"))
 
@@ -271,9 +270,8 @@ async def test_async_planned_many_side_prefetches_resolve_over_http() -> None:
     await sync_to_async(_seed_sponsor_graph)()
 
     def _build() -> DjangoSchema:
-        from config.schema import schema
 
-        return schema
+        return config_schema.schema
 
     schema = await sync_to_async(_build)()
     payload = await _post_async(
@@ -304,11 +302,10 @@ async def test_async_consumer_prefetched_many_side_resolves_over_http() -> None:
     await sync_to_async(_seed_sponsor_graph)()
 
     def _build() -> strawberry.Schema:
-        from apps.library.schema import VenueSponsorType, VenueType
 
         @strawberry.type
         class Query:
-            @strawberry.field(graphql_type=list[VenueType])
+            @strawberry.field(graphql_type=list[library_schema.VenueType])
             async def venues(self) -> list[models.Venue]:
                 return await sync_to_async(list)(
                     models.Venue.objects.prefetch_related(
@@ -317,7 +314,7 @@ async def test_async_consumer_prefetched_many_side_resolves_over_http() -> None:
                     ).order_by("name"),
                 )
 
-            @strawberry.field(graphql_type=list[VenueSponsorType])
+            @strawberry.field(graphql_type=list[library_schema.VenueSponsorType])
             async def sponsors(self) -> list[models.VenueSponsor]:
                 return await sync_to_async(list)(
                     models.VenueSponsor.objects.prefetch_related("venues").order_by("name"),
@@ -359,17 +356,15 @@ def _seed_withdrawn_badge_and_sponsor() -> bool:
 
 
 def _composed_schema() -> strawberry.Schema:
-    from config.schema import schema
 
-    return schema
+    return config_schema.schema
 
 
 def _unoptimized_venue_schema() -> strawberry.Schema:
-    from apps.library.schema import VenueType
 
     @strawberry.type
     class Query:
-        @strawberry.field(graphql_type=list[VenueType])
+        @strawberry.field(graphql_type=list[library_schema.VenueType])
         async def all_library_venues(self) -> list[models.Venue]:
             return await sync_to_async(list)(models.Venue.objects.order_by("name"))
 

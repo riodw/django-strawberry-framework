@@ -23,6 +23,7 @@ nested ``pageInfo``, and shipped SDL field presence live in
 """
 
 import inspect
+from types import SimpleNamespace, new_class
 from typing import cast, get_args
 
 import pytest
@@ -30,18 +31,23 @@ import pytest_django
 import strawberry
 from apps.library.models import Book, Branch, Genre, Loan, RepairTicket, Shelf, Venue
 from apps.products.models import Category, Item, Property
+from asgiref.sync import sync_to_async
 from django.db import connection as db_connection
 from django.db import models as djmodels
 from django.db.models import ForeignObjectRel
 from django.db.models.expressions import Combinable
+from django.db.models.functions import Lower
 from django.http import HttpRequest
+from django.test.utils import CaptureQueriesContext
 from strategy_schemas import make_django_type
 from strawberry import relay
+from strawberry.relay.utils import from_base64, to_base64
 from strawberry.types import ExecutionResult
 from strawberry.types.field import StrawberryField
 from typing_extensions import override
 
 from django_strawberry_framework import (
+    DjangoConnectionField,
     DjangoListField,
     DjangoOptimizerExtension,
     DjangoType,
@@ -53,12 +59,22 @@ from django_strawberry_framework.connection import (
     DjangoConnection,
     _connection_type_cache,
     _connection_type_for,
+    _consume_window,
+    _resolve_from_window,
+    _WindowedConnectionRows,
 )
-from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
 from django_strawberry_framework.filters import FilterSet, filter_input_type
+from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER, resolver_key
 from django_strawberry_framework.orders import OrderSet
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.finalizer import _register_relation_connection_teardown
+from django_strawberry_framework.types.resolvers import _check_n1
+from django_strawberry_framework.utils.connections import (
+    PaginationArgumentError,
+    UnwindowableConnection,
+)
+from tests._definition import make_definition
 from tests._idioms import declare_django_type
 from tests._info import make_info
 
@@ -538,8 +554,6 @@ def test_relation_connection_teardown_restores_owned_annotations_in_place() -> N
         __annotations__ = annotations
         items_connection = field_obj
 
-    from tests._definition import make_definition
-
     definition = make_definition(
         Category,
         origin=CategoryType,
@@ -585,8 +599,6 @@ def test_relation_connection_teardown_inverts_a_replaced_annotations_dict() -> N
         __annotations__ = replaced
         items_connection = field_obj
 
-    from tests._definition import make_definition
-
     definition = make_definition(
         Category,
         origin=CategoryType,
@@ -625,8 +637,6 @@ def test_relation_connection_teardown_keeps_a_present_relation_annotation() -> N
     class CategoryType:
         __annotations__ = replaced
         items_connection = field_obj
-
-    from tests._definition import make_definition
 
     definition = make_definition(
         Category,
@@ -1001,8 +1011,6 @@ def test_divergent_alias_per_key_window_preferred_over_shared() -> None:
     annotated rows under each proves the routing order (a desync here would
     silently serve another alias's window).
     """
-    from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER
-
     _seed_library_books(["a", "b", "c"])
     _make_type("BookType", Book, ("id", "title"))
     genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
@@ -1232,7 +1240,6 @@ def _genres_expression_ordered_schema(
     (``plans.py::_reverse_order_by``). ``auto_camel_case`` doubles this fixture as
     the non-default-``NameConverter`` schema for the count-observer pins.
     """
-    from django.db.models.functions import Lower
 
     class BookType(DjangoType):
         class Meta:
@@ -1406,7 +1413,6 @@ def test_fast_path_non_pk_ordering_applies_explicit_deterministic_order_by() -> 
     deterministic order ``django_strawberry_framework/connection.py::DjangoConnectionField``
     appends.
     """
-    from django.test.utils import CaptureQueriesContext
 
     class OConnTag(djmodels.Model):
         name: "djmodels.TextField[str | Combinable, str]" = djmodels.TextField()
@@ -1800,8 +1806,6 @@ async def test_async_fast_path_last_zero_serves_the_first_zero_page(
     ``totalCount`` and ``first: 0``'s ``pageInfo`` (a next page exists), the
     same payload ``first: 0`` returns on the same schema.
     """
-    from asgiref.sync import sync_to_async
-
     # The optimizer extension runs the parent (genre) prefetch with sync ORM on
     # the event-loop thread; unblock Django's async-safety guard for it.
     monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
@@ -1843,7 +1847,6 @@ def test_fast_path_last_zero_serves_the_first_zero_page() -> None:
         "pageInfo { hasNextPage hasPreviousPage startCursor endCursor } }"
     )
     query = f"{{ objs {{ booksConnection(last: 0) {page} }} }}"
-    from django.test.utils import CaptureQueriesContext
 
     schema = _genres_list_schema(optimizer=True, book_total_count=True)
     with CaptureQueriesContext(db_connection) as captured:
@@ -2043,7 +2046,6 @@ def test_outer_total_count_predicate_ignores_nested_total_count() -> None:
         meta_extra={"connection": {"total_count": True}},
     )
     finalize_django_types()
-    from django_strawberry_framework import DjangoConnectionField
 
     conn_type = _connection_type_for(genre_type, genre_type.__django_strawberry_definition__)
     query_cls = strawberry.type(
@@ -2099,8 +2101,6 @@ def test_strictness_raise_unplanned_nested_connection() -> None:
     stem, the relation field name ``books`` the walker keyed the would-be plan
     under), exactly as a plain list relation's strictness flag reads.
     """
-    from django_strawberry_framework.exceptions import OptimizerError
-
     _seed_library_books(["apple", "banana", "avocado"])
     schema = _genres_filterable_book_schema(strictness="raise")
     result = schema.execute_sync(
@@ -2125,8 +2125,6 @@ def test_strictness_raise_malformed_cursor_surfaces_pagination_error_not_optimiz
     preempts the real error with a spurious ``OptimizerError("Unplanned N+1")``.
     The user should see the cursor error, not an optimizer defect.
     """
-    from django_strawberry_framework.exceptions import OptimizerError
-
     _seed_library_books(["a", "b", "c"])
     schema = _genres_list_schema(optimizer=True, strictness="raise")
     result = schema.execute_sync(
@@ -2227,8 +2225,6 @@ def test_nested_fallback_does_not_clobber_fk_id_elisions() -> None:
     resolves with no spurious strictness flag on the FK-id resolver and no extra
     per-row query for the elided FK.
     """
-    from django_strawberry_framework.exceptions import OptimizerError
-
     branch = Branch.objects.create(name="central")
     shelf = Shelf.objects.create(code="A1", branch=branch)
     genre = Genre.objects.create(name="fiction")
@@ -2389,11 +2385,6 @@ def test_strictness_silent_when_planned() -> None:
     (generated ``books_connection`` name, or the target type) would miss the
     planned set and spuriously fire - this asserts the match directly.
     """
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.exceptions import OptimizerError
-    from django_strawberry_framework.optimizer.plans import resolver_key
-    from django_strawberry_framework.types.resolvers import _check_n1
 
     class GenreType(DjangoType):
         class Meta:
@@ -2464,7 +2455,6 @@ def test_fast_path_count_less_window_serves_cheap_page(
         "{ objs { booksConnection(first: 2) { "
         "edges { cursor node { title } } pageInfo { hasPreviousPage startCursor } } } }"
     )
-    from django.test.utils import CaptureQueriesContext
 
     with django_assert_num_queries(2), CaptureQueriesContext(db_connection) as captured:
         result = _exec(schema, query)
@@ -2495,11 +2485,6 @@ def test_count_less_window_with_count_observer_falls_back_defensively() -> None:
     guard still fires here; checked before any edge is built, so a stub ``cls``
     proves the early return.
     """
-    from django_strawberry_framework.connection import (
-        _resolve_from_window,
-        _WindowedConnectionRows,
-    )
-
     inert_info = make_info()
 
     # Plain forward page, ``totalCount`` requested, count annotation absent: the
@@ -2690,11 +2675,6 @@ def test_consume_window_unservable_window_runs_the_sync_fallback() -> None:
     (here: a count-less window under an observed ``totalCount``) recovers the
     carried per-parent queryset and runs the shipped sync pipeline.
     """
-    from django_strawberry_framework.connection import (
-        _consume_window,
-        _WindowedConnectionRows,
-    )
-
     connection_cls = _windowed_book_connection_class(total_count=True)
     window = _WindowedConnectionRows(
         rows=_COUNT_LESS_WINDOW_ROWS,
@@ -2723,11 +2703,6 @@ async def test_consume_window_unservable_window_runs_the_async_fallback() -> Non
 
     That is the awaitable arm of ``_consume_fallback``.
     """
-    from django_strawberry_framework.connection import (
-        _consume_window,
-        _WindowedConnectionRows,
-    )
-
     connection_cls = _windowed_book_connection_class(total_count=True)
     window = _WindowedConnectionRows(
         rows=_COUNT_LESS_WINDOW_ROWS,
@@ -2760,14 +2735,6 @@ def test_consume_window_offset_unwindowable_shape_propagates() -> None:
     refused window is real pagination drift and must surface, not silently
     degrade to the fallback and serve a differently-paginated page.
     """
-    from strawberry.relay.utils import to_base64
-
-    from django_strawberry_framework.connection import (
-        _consume_window,
-        _WindowedConnectionRows,
-    )
-    from django_strawberry_framework.utils.connections import UnwindowableConnection
-
     connection_cls = _windowed_book_connection_class()
     window = _WindowedConnectionRows(rows=[], fallback=Book.objects.none)
     with pytest.raises(UnwindowableConnection):
@@ -2796,8 +2763,6 @@ def _consumer_edge_book_connection_class() -> type[DjangoConnection[DjangoType]]
     No public path hands a window to a consumer connection (the planner windows
     only generated connections), so the window consumer is driven directly.
     """
-    from types import new_class
-
     book_type = make_django_type("BookType", Book, ("id", "title"))
     # ``make_django_type`` declares a Relay-Node-shaped type, so it is the
     # ``relay.Node`` the edge is generic over.
@@ -2824,13 +2789,6 @@ def _consumer_edge_book_connection_class() -> type[DjangoConnection[DjangoType]]
 
 def _consume_consumer_prefix_window(cursor_prefix: str) -> object:
     """Consume a window on the consumer-prefix connection from an ``after`` cursor at index 0."""
-    from strawberry.relay.utils import to_base64
-
-    from django_strawberry_framework.connection import (
-        _consume_window,
-        _WindowedConnectionRows,
-    )
-
     return _consume_window(
         _consumer_edge_book_connection_class(),
         _WindowedConnectionRows(
@@ -2850,8 +2808,6 @@ def _consume_consumer_prefix_window(cursor_prefix: str) -> object:
 @pytest.mark.django_db
 def test_consume_window_serves_the_connections_own_prefix_cursor() -> None:
     """A window is bounded by a cursor under the connection's own edge prefix and mints under it."""
-    from strawberry.relay.utils import from_base64
-
     conn = _consume_consumer_prefix_window(_CONSUMER_CURSOR_PREFIX)
     assert isinstance(conn, DjangoConnection)
     edges = cast("list[relay.Edge[relay.Node]]", conn.edges)
@@ -2868,8 +2824,6 @@ def test_consume_window_refuses_a_stock_cursor_under_a_consumer_prefix() -> None
     It is not a cursor this connection issued, so the window derivation refuses
     it under the connection's own edge prefix.
     """
-    from django_strawberry_framework.utils.connections import PaginationArgumentError
-
     with pytest.raises(
         PaginationArgumentError,
         match=r"^Argument 'after' contains a non-existing value\.$",

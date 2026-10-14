@@ -1487,7 +1487,7 @@ def test_filterset_class_resolves_across_module_boundary() -> None:
     for stem in ("tests.types.fixtures.shelf_module", "tests.types.fixtures.branch_module"):
         sys.modules.pop(stem, None)
 
-    from tests.types.fixtures import branch_module, shelf_module
+    from tests.types.fixtures import branch_module, shelf_module  # noqa: PLC0415 - fresh execution
 
     finalize_django_types()
 

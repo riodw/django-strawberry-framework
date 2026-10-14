@@ -33,6 +33,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 from apps.products.services import seed_data
+from debug_toolbar import middleware as dt_middleware
+from debug_toolbar.toolbar import DebugToolbar
 from django.conf import settings
 from django.http import HttpRequest, HttpResponse
 from django.http.response import HttpResponseBase
@@ -164,9 +166,6 @@ def _debug_toolbar_cache_state() -> Generator[None]:
     Restore puts back the SAVED values (not ``None``), so a neighboring test gets
     back exactly the state it had.
     """
-    from debug_toolbar import middleware as dt_middleware
-    from debug_toolbar.toolbar import DebugToolbar
-
     # basedpyright: django-debug-toolbar annotates show_toolbar_func_or_path as returning a
     # bare ``Callable``, so its ``@cache`` wrapper is partially Unknown
     dt_middleware.show_toolbar_func_or_path.cache_clear()  # pyright: ignore[reportUnknownMemberType]

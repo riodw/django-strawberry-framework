@@ -27,6 +27,13 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, TypedDict, cast
 
+import django
+from django.conf import settings as django_settings
+from django.db import connections
+from django.db.backends.signals import connection_created
+from django.db.models import Count
+from django.test import Client
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Container, Mapping, Sequence
 
@@ -419,7 +426,6 @@ def board_row_counts() -> dict[str, dict[int, int]]:
     list is top-level and therefore unbounded, so it is not counted here at all.
     """
     from apps.kanban import models
-    from django.db.models import Count
 
     counts: dict[str, dict[int, int]] = {}
     for payload_key, accessor in CARD_NESTED_LISTS.items():
@@ -528,8 +534,6 @@ def _is_open(wrapper: _RawConnectionOwner) -> bool:
 
 def _install_sqlite_busy_timeout() -> None:
     """Apply ``PRAGMA busy_timeout`` to current and future SQLite connections."""
-    from django.db import connections
-    from django.db.backends.signals import connection_created
 
     def _apply(connection: BaseDatabaseWrapper) -> None:
         if connection.vendor != "sqlite":
@@ -556,8 +560,6 @@ def _widen_render_row_bound() -> None:
     the shipped ``config/settings.py`` keeps the package default, so the example
     app's served behavior and the tests that pin the 100-row cap are untouched.
     """
-    from django.conf import settings as django_settings
-
     configured = dict(getattr(django_settings, "DJANGO_STRAWBERRY_FRAMEWORK", {}) or {})
     resource_policy = dict(configured.get("RESOURCE_POLICY", {}) or {})
     resource_policy["max_list_rows"] = KANBAN_RENDER_MAX_LIST_ROWS
@@ -580,8 +582,6 @@ def configure_django() -> None:
     """
     sys.path.insert(0, str(FAKESHOP_ROOT))
     _ = os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
-
-    import django
 
     django.setup()
     _widen_render_row_bound()
@@ -621,8 +621,6 @@ def _response_json(response: _JSONResponse) -> object:
 
 def fetch_graphql_data(query: str, *, required_lists: tuple[str, ...]) -> dict[str, object]:
     """Fetch a GraphQL payload as decoded JSON and validate required top-level list fields."""
-    from django.test import Client
-
     response = Client(HTTP_HOST="localhost").post(
         "/graphql/",
         data={"query": query},

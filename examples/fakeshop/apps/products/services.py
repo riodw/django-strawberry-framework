@@ -45,14 +45,14 @@ import random
 from collections.abc import Callable
 from decimal import Decimal
 from functools import cache
-from typing import TYPE_CHECKING
 
+import faker.providers as fp
+from django.contrib.auth.models import Permission, User
+from faker import Faker
+from faker.providers import BaseProvider
 from typing_extensions import TypedDict
 
 from apps.products.models import Category, Entry, Item, Property
-
-if TYPE_CHECKING:
-    from faker import Faker
 
 
 def _is_safe_generator(fake: Faker, method_name: str) -> bool:
@@ -86,9 +86,6 @@ def discover_providers(fake: Faker) -> dict[str, list[str]]:
     Each method is probed at runtime to confirm it returns a usable scalar value.
     Nothing is hardcoded - the result is entirely driven by introspecting Faker.
     """
-    import faker.providers as fp
-    from faker.providers import BaseProvider
-
     base_methods = set(dir(BaseProvider))
 
     providers: dict[str, list[str]] = {}
@@ -165,8 +162,6 @@ PRIVACY_STREAM_SEED = 20260827
 @cache
 def _seed_provider_methods() -> tuple[tuple[str, tuple[str, ...]], ...]:
     """Discover the process-stable provider shape used by repeated seed calls."""
-    from faker import Faker
-
     probe = Faker()
     probe.seed_instance(0)
     return tuple(
@@ -208,8 +203,6 @@ def seed_data(count: int, db_alias: str = "default") -> dict[str, int]:
         A summary dict with counts of newly created rows.
 
     """
-    from faker import Faker
-
     fake = Faker()
     privacy = random.Random(PRIVACY_STREAM_SEED)  # noqa: S311 - a seeded demo-data stream, not a secret
 
@@ -328,8 +321,6 @@ def create_users(count: int = 1, db_alias: str = "default") -> dict[str, int]:
     """
     # ``config.settings`` keeps Django's default ``AUTH_USER_MODEL``, so the concrete
     # ``auth.User`` is the configured model and its ``UserManager`` owns ``create_user``.
-    from django.contrib.auth.models import Permission, User
-    from faker import Faker
 
     user_manager = User.objects.db_manager(db_alias)
     perm_manager = Permission.objects.db_manager(db_alias)
@@ -399,8 +390,6 @@ def delete_users(target: int | str) -> dict[str, int]:
 
     Returns a summary dict with counts of deleted users.
     """
-    from django.contrib.auth.models import User
-
     result: dict[str, int] = {"users": 0}
 
     if target == "all":

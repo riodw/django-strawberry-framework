@@ -24,6 +24,11 @@ import pytest
 from apps.library.models import Book, Branch, Genre, Shelf
 from django.db.models import Model, Prefetch, QuerySet, Value
 
+from django_strawberry_framework.keyset import (
+    KeysetCursor,
+    KeysetSeek,
+    cursor_columns_for,
+)
 from django_strawberry_framework.optimizer.nested_fetch import (
     NestedConnectionRequest,
     WindowedPrefetchStrategy,
@@ -122,12 +127,6 @@ def test_spec_rejects_a_keyset_seek() -> None:
     is pinned by
     ``examples/fakeshop/test_query/test_single_parent_fastpath_api.py::test_single_parent_keyset_seek_page_keeps_window_over_http``.
     """
-    from django_strawberry_framework.keyset import (
-        KeysetCursor,
-        KeysetSeek,
-        cursor_columns_for,
-    )
-
     seek = KeysetSeek(
         columns=cursor_columns_for(Book, ("title", "id")),
         cursor=KeysetCursor(values=("m", 1)),

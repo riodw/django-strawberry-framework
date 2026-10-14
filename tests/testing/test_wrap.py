@@ -18,6 +18,7 @@ from unittest import mock
 import pytest
 from django.db import connections
 from django.db.backends.utils import CursorWrapper
+from django.test.testcases import TransactionTestCase
 from typing_extensions import override
 
 from django_strawberry_framework import _django_patches
@@ -139,8 +140,6 @@ def test_safe_wrap_connection_method_pairs_with_unwrap_time_patch_for_defense_in
     package's patched teardown method. The wrapper is unwrapped
     exactly as upstream would do - proving the two halves compose.
     """
-    from django.test.testcases import TransactionTestCase
-
     connection = connections["default"]
     original_cursor = connection.cursor
 

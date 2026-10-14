@@ -40,6 +40,7 @@ One shape per planner rule, each read off the wire and off the SQL the request e
 
 import pytest
 from apps.library import models
+from apps.library import schema as library_schema
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from graphql_client import assert_graphql_success
@@ -119,8 +120,6 @@ def test_patron_profile_relay_id_is_built_from_the_relation_primary_key_column()
     The page is one statement against ``library_patronprofile``: reading the id
     off the related row would cost a lazy ``library_patron`` load per edge.
     """
-    from apps.library.schema import PatronProfileType
-
     first, second = _seed_two_patron_profiles()
 
     with CaptureQueriesContext(connection) as captured:
@@ -130,8 +129,8 @@ def test_patron_profile_relay_id_is_built_from_the_relation_primary_key_column()
 
     edges = data["allLibraryPatronProfilesConnection"]["edges"]
     assert [edge["node"]["id"] for edge in edges] == [
-        global_id_for(PatronProfileType, first.patron_id),
-        global_id_for(PatronProfileType, second.patron_id),
+        global_id_for(library_schema.PatronProfileType, first.patron_id),
+        global_id_for(library_schema.PatronProfileType, second.patron_id),
     ], edges
     profile_sql = _sql_from_table(captured, "library_patronprofile")
     assert len(profile_sql) == 1, profile_sql
@@ -265,8 +264,6 @@ def test_patron_profile_favorite_genre_id_still_reads_the_genre_table() -> None:
     stored column carries the genre's NAME, not its primary key; the id a client
     receives is built from the genre's own key and the genre row has to be read.
     """
-    from apps.library.schema import GenreType
-
     _seed_two_patron_profiles()
     genre = models.Genre.objects.get(name="Speculative")
 
@@ -283,7 +280,7 @@ def test_patron_profile_favorite_genre_id_still_reads_the_genre_table() -> None:
 
     edges = data["allLibraryPatronProfilesConnection"]["edges"]
     assert [edge["node"]["favoriteGenre"] for edge in edges] == [
-        {"id": global_id_for(GenreType, genre.pk)},
+        {"id": global_id_for(library_schema.GenreType, genre.pk)},
         None,
     ], edges
     assert _sql_touching(captured, "library_genre") != [], captured.captured_queries
@@ -298,17 +295,15 @@ def test_edition_publisher_id_still_reads_the_publisher_table_for_its_node_id() 
     carry: the relation keeps its read of ``library_publisher``, and the id
     decodes to the house code rather than to the publisher's primary key.
     """
-    from apps.library.schema import PublisherType
-
     first, _second = _seed_publishing_graph()
 
     with CaptureQueriesContext(connection) as captured:
         data = assert_graphql_success("{ allLibraryEditions { publisher { id } } }")
 
     ids = [row["publisher"]["id"] for row in data["allLibraryEditions"]]
-    assert ids[0] == global_id_for(PublisherType, first.house_code), ids
+    assert ids[0] == global_id_for(library_schema.PublisherType, first.house_code), ids
     target_type, node_id = decode_global_id(ids[0])
-    assert target_type is PublisherType, target_type
+    assert target_type is library_schema.PublisherType, target_type
     assert node_id == first.house_code, node_id
     assert node_id != str(first.pk), node_id
     assert _sql_touching(captured, "library_publisher") != [], captured.captured_queries

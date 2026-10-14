@@ -24,7 +24,7 @@ import pytest
 import strawberry
 from django.contrib.auth.models import User
 from django.contrib.sessions.middleware import SessionMiddleware
-from django.http import HttpResponse
+from django.http import HttpRequest, HttpResponse
 from django.test import RequestFactory
 from django.utils.functional import SimpleLazyObject
 from strawberry import relay
@@ -268,7 +268,6 @@ def test_hostile_user_descriptor_raising_collapses_to_anonymous_null() -> None:
     ``DatabaseError`` from a ``SimpleLazyObject`` that hits the DB) is left to
     propagate.
     """
-    from django.http import HttpRequest
 
     class HostileRequest(HttpRequest):
         @property

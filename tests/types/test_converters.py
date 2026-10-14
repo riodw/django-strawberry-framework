@@ -45,19 +45,25 @@ from typing import TYPE_CHECKING, NoReturn, TypedDict, get_args
 
 import pytest
 import strawberry
+from apps.library.models import Periodical
+from apps.products.models import Category, Item
 from apps.scalars.models import MediaSpecimen, NullableScalarSpecimen, ScalarSpecimen
-from django.db import models
+from django.db import connection, models
 from django.db.models.expressions import Combinable
 from strawberry.types import get_object_definition
 from typing_extensions import Never, override
 
 from django_strawberry_framework import (
     BigInt,
+    DjangoMutation,
+    DjangoMutationField,
+    DjangoSchema,
     DjangoType,
     finalize_django_types,
     strawberry_config,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.filters.inputs import _scalar_from_model_field
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import converters
 from django_strawberry_framework.types.converters import (
@@ -869,9 +875,6 @@ def test_nullable_empty_label_choice_column_writes_null_as_null() -> None:
     The unmanaged owner's table is created for this test only (SQLite's schema editor needs the
     transaction-less test), so the create mutation runs the real decode, ``full_clean`` and save.
     """
-    from django.db import connection
-
-    from django_strawberry_framework import DjangoMutation, DjangoMutationField, DjangoSchema
 
     class EmptyLabelWriteOwner(models.Model):
         status: "models.TextField[str | Combinable | None, str | None]" = models.TextField(  # noqa: DJ001 - NULL is the fixture input
@@ -1517,8 +1520,6 @@ class _FakeHStoreField(models.Field[object, object]):
 
 def test_big_auto_field_still_maps_to_int() -> None:
     """``BigAutoField`` stays mapped to ``Int`` (no current-day recourse for 2**31)."""
-    from apps.library.models import Periodical
-
     # The library app's ``default_auto_field`` gives every model a BigAutoField pk.
     assert isinstance(Periodical._meta.pk, models.BigAutoField)
 
@@ -2356,7 +2357,6 @@ def test_consumer_authored_relation_annotation_override_survives_always_defer() 
     relation synthesis for consumer-authored fields even though the
     auto-synthesized path is now always-defer.
     """
-    from apps.products.models import Category, Item
 
     class AdminItemType(DjangoType):
         class Meta:
@@ -2390,7 +2390,6 @@ def test_consumer_authored_relation_annotation_override_survives_always_defer() 
 
 def test_consumer_assigned_strawberry_field_relation_survives_always_defer() -> None:
     """Consumer-assigned ``strawberry.field`` on a multi-type relation survives always-defer."""
-    from apps.products.models import Category, Item
 
     class AdminItemType(DjangoType):
         class Meta:
@@ -2436,7 +2435,6 @@ def test_consumer_assigned_strawberry_field_relation_survives_always_defer() -> 
 
 def test_relation_resolves_to_primary_type_when_target_model_has_multiple() -> None:
     """A relation to a multi-type model resolves to the primary."""
-    from apps.products.models import Category, Item
 
     class ItemType(DjangoType):
         class Meta:
@@ -2483,7 +2481,6 @@ def test_relation_resolves_to_primary_when_secondary_registered_before_source_be
     moment ``CategoryType`` ran ``__init_subclass__``) and never pick
     up the primary that registered later.
     """
-    from apps.products.models import Category, Item
 
     # 1. Secondary registers first (no primary flag).
     class AdminItemType(DjangoType):
@@ -2526,7 +2523,6 @@ def test_relation_resolves_to_primary_when_secondary_registered_before_source_be
 
 def test_relation_resolves_when_target_model_has_one_type_no_primary() -> None:
     """Backward-compat: a single registered type with no primary still resolves."""
-    from apps.products.models import Category, Item
 
     class ItemType(DjangoType):
         class Meta:
@@ -2544,7 +2540,6 @@ def test_relation_resolves_when_target_model_has_one_type_no_primary() -> None:
 
 def test_relation_target_with_multiple_no_primary_surfaces_audit_error_at_finalize() -> None:
     """The ambiguity audit fires before unresolved-target when target is multi-type-no-primary."""
-    from apps.products.models import Category, Item
 
     class ItemType(DjangoType):
         class Meta:
@@ -2831,8 +2826,6 @@ def test_file_columns_stay_scalar_on_the_filter_input_path() -> None:
     input and no ``DjangoFileType`` / ``DjangoImageType`` output object ever
     reaches a GraphQL input. ``SCALAR_MAP``'s file/image rows stay ``str``.
     """
-    from django_strawberry_framework.filters.inputs import _scalar_from_model_field
-
     attachment = MediaSpecimen._meta.get_field("attachment")
     image = MediaSpecimen._meta.get_field("image")
 

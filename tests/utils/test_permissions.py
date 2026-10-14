@@ -12,10 +12,12 @@ from typing import NoReturn
 import pytest
 import pytest_django
 import strawberry
+from django.contrib.auth import get_user_model
 from django.db.models import Model
 from django.http import HttpRequest
 from typing_extensions import override
 
+import django_strawberry_framework.utils.permissions as perm
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.sets_mixins import ActiveInputPermissionMixin
 from django_strawberry_framework.utils.permissions import (
@@ -25,6 +27,7 @@ from django_strawberry_framework.utils.permissions import (
     _fire_flat_relation_path_gates,
     _related_declarations,
     _request_from_context,
+    _safe_get_model,
     active_permission_targets,
     active_related_branches,
     auth_aliases_for_permission_classes,
@@ -32,6 +35,7 @@ from django_strawberry_framework.utils.permissions import (
     invoke_permission_method,
     iter_input_items,
     request_from_info,
+    resolve_auth_aliases,
     run_active_input_permission_checks,
     walk_declared_relation_path,
 )
@@ -1332,8 +1336,6 @@ def test_run_active_input_permission_checks_falls_back_to_default_traversal_dept
 @pytest.mark.django_db
 def test_resolve_auth_aliases_returns_the_default_alias_by_default() -> None:
     """With no divergent router, every auth model reads ``default``."""
-    from django_strawberry_framework.utils.permissions import resolve_auth_aliases
-
     assert resolve_auth_aliases() == frozenset({"default"})
 
 
@@ -1342,10 +1344,6 @@ def test_resolve_auth_aliases_tracks_a_divergent_router_read_answer(
     settings: pytest_django.Settings,
 ) -> None:
     """The auth alias follows the router's read answer for the auth models."""
-    from django.contrib.auth import get_user_model
-
-    from django_strawberry_framework.utils.permissions import resolve_auth_aliases
-
     auth_app_label = get_user_model()._meta.app_label
 
     class _AuthToShardRouter:
@@ -1365,8 +1363,6 @@ def test_resolve_auth_aliases_tracks_a_divergent_router_read_answer(
 
 def test_resolve_auth_aliases_skips_uninstalled_models() -> None:
     """A model the deployment does not install is skipped, never an error."""
-    from django_strawberry_framework.utils.permissions import _safe_get_model
-
     assert _safe_get_model("nonexistent_app", "Nope") is None
     # basedpyright: the None app label and model name are the hostile input under test;
     # _safe_get_model types both parameters as str
@@ -1375,10 +1371,6 @@ def test_resolve_auth_aliases_skips_uninstalled_models() -> None:
 
 def test_channels_request_in_object_context_is_adapted_to_channels_request_adapter() -> None:
     """Channels request stored at context.request resolves to a ChannelsRequestAdapter."""
-    from django_strawberry_framework.utils.permissions import (
-        ChannelsRequestAdapter,
-        request_from_info,
-    )
 
     class _FakeConsumer:
         def __init__(self, scope: object) -> None:
@@ -1404,10 +1396,6 @@ def test_channels_request_in_object_context_is_adapted_to_channels_request_adapt
 
 def test_bare_channels_consumer_in_object_context_is_adapted() -> None:
     """A bare Channels WebSocket consumer context resolves to a ChannelsRequestAdapter."""
-    from django_strawberry_framework.utils.permissions import (
-        ChannelsRequestAdapter,
-        request_from_info,
-    )
 
     class _FakeWSConsumer:
         def __init__(self, scope: object) -> None:
@@ -1428,7 +1416,6 @@ def test_bare_channels_consumer_in_object_context_is_adapted() -> None:
 
 def test_run_active_input_permission_checks_safely_handles_missing_target_attr() -> None:
     """If a related object lacks target_attr, child recursion is safely skipped without AttributeError."""
-    from django_strawberry_framework.utils.permissions import run_active_input_permission_checks
 
     class _DuckRelatedObj:
         # Does not define 'filterset' or 'target_attr'
@@ -1478,12 +1465,6 @@ def test_run_active_input_permission_checks_safely_handles_missing_target_attr()
 
 def test_channels_request_adapter_idempotent_wrapping() -> None:
     """Wrapping an existing ChannelsRequestAdapter returns the adapter directly."""
-    from django_strawberry_framework.utils.permissions import (
-        ChannelsRequestAdapter,
-        _channels_request_adapter,
-        _request_from_context,
-    )
-
     scope = {"user": "ada", "type": "websocket"}
     adapter = ChannelsRequestAdapter(HttpRequest(), scope)
 
@@ -1497,8 +1478,6 @@ def test_channels_request_adapter_idempotent_wrapping() -> None:
 
 def test_permissions_all_exports_are_complete() -> None:
     """Every symbol in permissions.__all__ exists and resolve_auth_aliases is exported."""
-    import django_strawberry_framework.utils.permissions as perm
-
     assert "resolve_auth_aliases" in perm.__all__
     for symbol in perm.__all__:
         assert hasattr(perm, symbol), f"Symbol {symbol!r} in __all__ but not in permissions module"

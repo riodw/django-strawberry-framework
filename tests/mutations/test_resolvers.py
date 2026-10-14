@@ -28,6 +28,7 @@ from collections.abc import Callable, Iterator
 from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, TypeVar
 from unittest import mock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import strawberry
@@ -35,8 +36,10 @@ from apps.library import models as library_models
 from apps.products import models as product_models
 from apps.scalars import models as scalars_models
 from asgiref.sync import sync_to_async
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import IntegrityError, connection, transaction
 from django.db.models import Model, QuerySet
 from django.utils import timezone
 from graphql_client import JSONObject
@@ -53,13 +56,25 @@ from django_strawberry_framework import (
     DjangoType,
     finalize_django_types,
 )
+from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.forms.resolvers import resolve_form_sync
 from django_strawberry_framework.mutations import resolvers
-from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY
+from django_strawberry_framework.mutations import resolvers as mutation_resolvers
+from django_strawberry_framework.mutations.inputs import (
+    NON_FIELD_ERROR_KEY,
+    _relation_field_index,
+    mutation_input_field_specs,
+)
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.rest_framework.resolvers import resolve_serializer_sync
 from django_strawberry_framework.testing.relay import global_id_for
 from django_strawberry_framework.utils.errors import validation_error_to_field_errors
 from django_strawberry_framework.utils.querysets import SyncMisuseError
-from django_strawberry_framework.utils.write_transaction import managed_write_transaction
+from django_strawberry_framework.utils.write_transaction import (
+    managed_write_transaction,
+    open_write_pipeline,
+    require_write_pipeline,
+)
 from tests._info import make_info, unread_info
 from tests.optimizer import _link_models
 
@@ -1200,8 +1215,6 @@ def test_partial_update_validates_scalar_field_named_id_suffix() -> None:
     as unprovided, excluded from ``full_clean``, and the invalid value slipped to
     the DB as a mis-labeled ``IntegrityError`` / ``"__all__"`` envelope).
     """
-    from django.contrib.contenttypes.models import ContentType
-
     schema, TaggedItemT = _build_tagged_item_schema()
     ct = ContentType.objects.get_for_model(library_models.Branch)
     branch = library_models.Branch.objects.create(name="RegressionBranch")
@@ -1240,7 +1253,6 @@ def test_provided_attr_names_keeps_scalar_id_suffix_field() -> None:
     ``content_type``, while ``object_id`` (a scalar) stays ``object_id`` - never
     mangled to ``object``.
     """
-    from django_strawberry_framework.mutations.inputs import mutation_input_field_specs
 
     @strawberry.input
     class Probe:
@@ -1266,8 +1278,6 @@ def test_relation_field_index_excludes_generic_foreign_key() -> None:
     later compare a decoded model against ``related_model=None``). The real
     ``content_type`` FK is still indexed.
     """
-    from django_strawberry_framework.mutations.inputs import _relation_field_index
-
     fk_by_attr, _m2m_by_name = _relation_field_index(library_models.TaggedItem)
     assert "content_object_id" not in fk_by_attr
     assert "content_type_id" in fk_by_attr
@@ -1315,8 +1325,6 @@ def test_validation_error_to_field_errors_non_dict_uses_all_key() -> None:
 
 def test_validation_error_to_field_errors_preserves_django_codes_and_path() -> None:
     """A Django ``ValidationError``'s ``.code``s -> ``codes``; field name -> ``path``."""
-    from django.core.exceptions import ValidationError as DjangoValidationError
-
     exc = DjangoValidationError(
         {"name": [DjangoValidationError("This field is required.", code="required")]},
     )
@@ -1328,10 +1336,6 @@ def test_validation_error_to_field_errors_preserves_django_codes_and_path() -> N
 
 def test_validation_error_to_field_errors_non_dict_root_has_empty_path() -> None:
     """A non-dict (model-wide) Django ``ValidationError`` keys ``"__all__"`` with an EMPTY path (#13)."""
-    from django.core.exceptions import ValidationError as DjangoValidationError
-
-    from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY
-
     (fe,) = validation_error_to_field_errors(
         DjangoValidationError("Whole-object problem.", code="invalid"),
     )
@@ -1355,10 +1359,6 @@ def test_locate_instance_locks_through_base_manager_subquery_by_default() -> Non
     ``pk__in=<visible pks>``. The located row still respects visibility (a row
     outside the subquery is not found).
     """
-    from django.db import transaction
-
-    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
-
     _schema_and_types = _build_item_schema()
     ItemT = _schema_and_types[1][1]
     cat = product_models.Category.objects.create(name=_category_name())
@@ -1422,10 +1422,6 @@ def _write_located(instance: Model | None, _decoded: object) -> Model | None:
 
 def test_locate_instance_opt_out_skips_the_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     """``select_for_update=False`` locates through the (pinned) visibility queryset, unlocked."""
-    from unittest.mock import MagicMock
-
-    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
-
     sentinel = object()
     visible_qs = MagicMock(name="visible_qs")
     visible_qs._db = None
@@ -1466,10 +1462,6 @@ def test_write_pipeline_opens_atomic_on_managed_write_alias(
     SAME alias, or a multi-db router write commits on the routed alias while
     the rollback stays on ``default``.
     """
-    from unittest.mock import MagicMock, patch
-
-    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
-    from django_strawberry_framework.utils.write_transaction import managed_write_transaction
 
     class ItemType(DjangoType):
         class Meta:
@@ -1535,10 +1527,6 @@ def _pipeline_harness(
     authorize: Callable[..., object] | None = None,
 ) -> tuple[mock.MagicMock, ModuleType]:
     """Scaffold ``run_write_pipeline_sync`` with mocked locate/authorize/refetch (snapshot tests)."""
-    from unittest.mock import MagicMock
-
-    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
-
     mutation_cls = MagicMock()
     mutation_cls.__name__ = "SnapshotMutation"
     mutation_cls._mutation_meta.operation = operation
@@ -1576,12 +1564,6 @@ def test_pipeline_snapshots_authorized_pk_before_permission_hook(
     poison the snapshot the saved-result validation compares against: the write step
     returning the (mutated) instance fails the flavor-independent backstop.
     """
-    from types import SimpleNamespace
-    from unittest.mock import patch
-
-    from django_strawberry_framework.exceptions import ConfigurationError
-    from django_strawberry_framework.utils.write_transaction import managed_write_transaction
-
     located = SimpleNamespace(
         pk=7,
         get_deferred_fields=set,
@@ -1613,10 +1595,6 @@ def test_pipeline_pk_drift_diagnostic_survives_hostile_repr(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A pk forged by a hook cannot replace the typed drift error while formatting it."""
-    from unittest.mock import patch
-
-    from django_strawberry_framework.exceptions import ConfigurationError
-    from django_strawberry_framework.utils.write_transaction import managed_write_transaction
 
     class _HostilePk:
         @override
@@ -1654,14 +1632,6 @@ def test_pipeline_publishes_authorized_pk_on_write_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The post-locate snapshot is published on the write-pipeline context for the flavors."""
-    from types import SimpleNamespace
-    from unittest.mock import patch
-
-    from django_strawberry_framework.utils.write_transaction import (
-        managed_write_transaction,
-        require_write_pipeline,
-    )
-
     located = SimpleNamespace(
         pk=7,
         get_deferred_fields=set,
@@ -1695,12 +1665,6 @@ def test_delete_pipeline_rejects_pk_drift_during_authorization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A delete permission hook re-pointing ``instance.pk`` fails closed before any delete."""
-    from types import SimpleNamespace
-    from unittest.mock import patch
-
-    from django_strawberry_framework.exceptions import ConfigurationError
-    from django_strawberry_framework.utils.write_transaction import managed_write_transaction
-
     located = SimpleNamespace(
         pk=7,
         get_deferred_fields=set,
@@ -1730,11 +1694,6 @@ def test_delete_pipeline_pk_drift_diagnostic_survives_hostile_repr(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A delete-path pk forged by a hook cannot replace the typed drift error while formatting."""
-    from types import SimpleNamespace
-    from unittest.mock import patch
-
-    from django_strawberry_framework.exceptions import ConfigurationError
-    from django_strawberry_framework.utils.write_transaction import managed_write_transaction
 
     class _HostilePk:
         @override
@@ -1768,8 +1727,6 @@ def test_delete_pipeline_pk_drift_diagnostic_survives_hostile_repr(
 
 def test_delete_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.MonkeyPatch) -> None:
     """Delete supplies a snapshot ``tail_step``; locate/auth/atomic live in the skeleton."""
-    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
-
     seen: dict[str, object] = {}
 
     def fake_pipeline(
@@ -1814,9 +1771,6 @@ def test_delete_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.MonkeyP
 
 def test_write_flavors_share_resolver_entry_factory() -> None:
     """Model, form, and serializer sync entries all come from ``make_resolver_entries``."""
-    from django_strawberry_framework.forms.resolvers import resolve_form_sync
-    from django_strawberry_framework.rest_framework.resolvers import resolve_serializer_sync
-
     assert inspect.isfunction(resolvers.resolve_mutation_sync)
     assert inspect.isfunction(resolve_form_sync)
     assert inspect.isfunction(resolve_serializer_sync)
@@ -1828,14 +1782,6 @@ def test_write_flavors_share_resolver_entry_factory() -> None:
 @pytest.mark.django_db
 def test_assign_m2m_integrity_error_contained_in_envelope() -> None:
     """IntegrityError during M2M assignment is returned as the constraint FieldError envelope."""
-    from unittest.mock import patch
-
-    from django.db import IntegrityError
-
-    from django_strawberry_framework.utils.write_transaction import (
-        managed_write_transaction,
-        open_write_pipeline,
-    )
 
     class CategoryType(DjangoType, relay.Node):
         class Meta:
@@ -1870,10 +1816,6 @@ def test_assign_m2m_integrity_error_contained_in_envelope() -> None:
 @pytest.mark.django_db
 def test_delete_integrity_error_contained_in_envelope() -> None:
     """IntegrityError during instance.delete() is returned as the constraint FieldError envelope."""
-    from unittest.mock import patch
-
-    from django.db import IntegrityError
-
     cat = product_models.Category.objects.create(name=_category_name())
 
     with patch.object(
@@ -1968,8 +1910,6 @@ def test_all_fields_mutation_writes_a_foreign_object_through_its_carriers(
     ``pb`` only when both carriers are written; the update moves the row to
     ``pc`` and the payload's generated ``parent`` follows it.
     """
-    from django.db import connection
-
     child_model = getattr(_link_models, child_name)
     schema, child_type = _build_link_child_schema(child_model)
     payload = "node { id name parent { label } } errors { field messages }"
@@ -2133,8 +2073,6 @@ def test_to_field_relation_input_stores_the_key_of_the_visible_row_it_names(
     uniform relation error that writes nothing (no row created, ``b1`` keeps ``pb``'s
     slug).
     """
-    from django.db import connection
-
     with _link_models.link_fixture_tables(connection):
         parents = {p.label: p for p in _link_models.LnkParent.objects.all()}
         _link_models.LnkParent.objects.filter(pk=parents["pc"].pk).update(
@@ -2183,8 +2121,6 @@ def test_to_field_through_m2m_input_sets_the_key_its_through_rows_store() -> Non
     names tags by id, and the replace-set written is their codes, which ``.set()``
     reads a non-instance member as.
     """
-    from django.db import connection
-
     update = (
         "mutation($id: ID!, $d: LnkParentTagsPartialInput!) "
         "{ updateParentTags(id: $id, data: $d) { node { id } errors { field messages } } }"

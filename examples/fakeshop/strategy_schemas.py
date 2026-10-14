@@ -8,21 +8,24 @@ uses), so the two-strategy schema construction the pg parity suite
 a change to how a strategy is mounted on an extension then touches one
 builder, not a test copy and a bench copy.
 
-Imports are function-local: the module must be importable before
-``django.setup()`` (the bench bootstraps Django itself after importing).
+Nothing it imports needs ``django.setup()``: the bench bootstraps Django itself
+after importing.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import strawberry
+from strawberry import relay
+
+from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, strawberry_config
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    import strawberry
     from django.db import models
 
-    from django_strawberry_framework import DjangoType
     from django_strawberry_framework.optimizer.nested_fetch import StrategySelection
 
 
@@ -42,12 +45,8 @@ def make_django_type(
     flag, a ``get_queryset`` hook) express themselves through ``meta_extra``
     / ``namespace_extra`` instead of re-spelling the core.
     """
-    from django_strawberry_framework import DjangoType
-
     meta_attrs: dict[str, object] = {"model": model, "fields": fields}
     if node:
-        from strawberry import relay
-
         meta_attrs["interfaces"] = (relay.Node,)
     if meta_extra:
         meta_attrs.update(meta_extra)
@@ -72,10 +71,6 @@ def build_strategy_schema(
     instance-bound plan cache survives); ``None`` builds the OPTIMIZER-OFF
     schema (the per-parent fallback pipeline the benchmark uses as its floor).
     """
-    import strawberry
-
-    from django_strawberry_framework import DjangoOptimizerExtension, strawberry_config
-
     extensions = []
     if strategy is not None:
         optimizer = DjangoOptimizerExtension(nested_connection_strategy=strategy)

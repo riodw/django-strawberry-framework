@@ -9,10 +9,11 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, NoReturn
 
 import pytest
-from apps.library.models import Book, Branch, Genre, TaggedItem
+from apps.library.models import Book, Branch, Genre, Patron, TaggedItem
 from apps.products.models import Category, Item
 from django.db.models import Field, ForeignKey
 
+from django_strawberry_framework.optimizer.field_meta import FieldMeta
 from django_strawberry_framework.optimizer.join_taxonomy import (
     WINDOWABLE_RELATION_KINDS,
     LateralJoinShape,
@@ -116,8 +117,6 @@ def test_forward_single_classifies_unsupported() -> None:
 
 def test_reverse_one_to_one_classifies_direct_fk() -> None:
     """Reverse O2O: windowable DIRECT_FK with scalar cardinality (analog B, scalar)."""
-    from apps.library.models import Patron
-
     field = Patron._meta.get_field("card")
     descriptor = classify_relation_join(field)
     assert descriptor.kind == "reverse_one_to_one"
@@ -431,8 +430,6 @@ def test_field_meta_classifies_through_its_precomputed_carriers() -> None:
 
     It carries no link field, so ``parent_link_field`` stays ``None``.
     """
-    from django_strawberry_framework.optimizer.field_meta import FieldMeta
-
     meta = FieldMeta.from_django_field(LnkParent._meta.get_field("pair_children"))
     descriptor = classify_relation_join(meta)
     assert descriptor.prefetch_attach_columns == ("p_tenant", "p_code")

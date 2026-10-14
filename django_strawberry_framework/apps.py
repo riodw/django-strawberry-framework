@@ -45,10 +45,10 @@ class DjangoStrawberryFrameworkConfig(AppConfig):
         and self-healing, so a repeated ``ready()`` (some Django test
         runners fire it more than once) is safe.
         """
-        from django_strawberry_framework._cross_web_patches import apply as apply_cross_web
-        from django_strawberry_framework._django_patches import apply as apply_django
-        from django_strawberry_framework._graphql_core_patches import apply as apply_graphql_core
-        from django_strawberry_framework._strawberry_patches import apply as apply_strawberry
+        from django_strawberry_framework._cross_web_patches import apply as apply_cross_web  # noqa: PLC0415 - patches load once Django is configured
+        from django_strawberry_framework._django_patches import apply as apply_django  # noqa: PLC0415 - patches load once Django is configured
+        from django_strawberry_framework._graphql_core_patches import apply as apply_graphql_core  # noqa: PLC0415 - patches load once Django is configured
+        from django_strawberry_framework._strawberry_patches import apply as apply_strawberry  # noqa: PLC0415 - patches load once Django is configured
 
         apply_django()
         apply_strawberry()

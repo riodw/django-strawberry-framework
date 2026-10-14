@@ -12,7 +12,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from apps.kanban import factories as kf
-from apps.kanban import models
+from apps.kanban import models, services
 
 _VERSION_NUMBERS = {"alpha": "0.0.1", "beta": "0.1.0"}
 
@@ -129,8 +129,6 @@ def test_dependency_reference_surfaces_as_dependency_card_and_back() -> None:
 
 @pytest.mark.django_db
 def test_add_dependency_service_creates_dependency_reference() -> None:
-    from apps.kanban import services
-
     target = _make_card(number=1, title="Target", status="done")
     source = _make_card(number=2, title="Source")
     kf.make_card_reference_kind("dependency")

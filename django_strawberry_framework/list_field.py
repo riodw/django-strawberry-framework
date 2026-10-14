@@ -605,7 +605,7 @@ def _synthesized_list_signature(
     annotations: dict[str, object] = {"info": Info, "offset": int | None, "limit": int | None}
 
     if orderset_class is not None:
-        from .orders import order_input_type
+        from .orders import order_input_type  # noqa: PLC0415 - keeps orders/filters out of the root graph
 
         order_ann = GenericAlias(list, (order_input_type(orderset_class),)) | None
         params.append(
@@ -1468,7 +1468,7 @@ def _order_normalization_scope(
         and args_record.offset > 0
     ):
         # Deferred: ``orders`` stays out of the package-root import graph.
-        from .orders.sets import capture_applied_order_normalization
+        from .orders.sets import capture_applied_order_normalization  # noqa: PLC0415 - keeps orders/filters out of the root graph
 
         return capture_applied_order_normalization()
     return contextlib.nullcontext()

@@ -33,13 +33,22 @@ import subprocess
 import sys
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol, get_args
+
+import django
+from django.conf import settings
+from django.core.management import call_command
+from django.db import connection, connections
+from django.test.utils import CaptureQueriesContext
+
+import django_strawberry_framework
+from django_strawberry_framework.optimizer.extension import clear_document_key_cache
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Mapping, Sequence
 
-    from django.test.utils import CaptureQueriesContext
     from typing_extensions import TypeIs
 
     from django_strawberry_framework.optimizer.extension import DjangoOptimizerExtension
@@ -234,8 +243,6 @@ def instrument_ids(script: Path | None, root: Path = REPO_ROOT) -> dict[str, str
 
 
 def _distribution_version(name: str) -> str:
-    from importlib.metadata import PackageNotFoundError, version
-
     try:
         return version(name)
     except PackageNotFoundError:
@@ -322,8 +329,6 @@ def bootstrap_fakeshop_django(mode: BootstrapMode) -> BenchProvenance:
         )
 
     if mode == "sqlite-memory":
-        from django.conf import settings
-
         databases = _attr(settings, "DATABASES")
         if not _is_json_object(databases):
             msg = "settings.DATABASES must be a mapping of aliases to database settings"
@@ -333,13 +338,8 @@ def bootstrap_fakeshop_django(mode: BootstrapMode) -> BenchProvenance:
                 "ENGINE": "django.db.backends.sqlite3",
                 "NAME": memory_db_name(alias),
             }
-    import django
 
     django.setup()
-
-    from django.db import connection, connections
-
-    import django_strawberry_framework
 
     if mode == "pg" and connection.vendor != "postgresql":
         sys.exit(f"Expected a postgresql connection, got {connection.vendor!r}.")
@@ -368,8 +368,6 @@ def bootstrap_fakeshop_django(mode: BootstrapMode) -> BenchProvenance:
             msg = f"sqlite-memory mode resolved alias {alias!r} to NAME {name}, not in-memory"
             raise RuntimeError(msg)
 
-    from django.core.management import call_command
-
     _ = call_command("migrate", run_syncdb=True, verbosity=0)
     return provenance
 
@@ -392,9 +390,6 @@ def capture_queries(alias: str = "default") -> Generator[CaptureQueriesContext, 
         ``ctx.captured_queries`` the ``{"sql", "time"}`` entries.
 
     """
-    from django.db import connections
-    from django.test.utils import CaptureQueriesContext
-
     connection = connections[alias]
     connection.queries_log.clear()
     with CaptureQueriesContext(connection) as ctx:
@@ -408,8 +403,6 @@ def reset_plan_cache(optimizer: DjangoOptimizerExtension) -> None:
     ``clear_document_key_cache`` empties the module-level memo every extension
     shares, without which a "cold" request still skips printing its document.
     """
-    from django_strawberry_framework.optimizer.extension import clear_document_key_cache
-
     optimizer.cache_clear()
     clear_document_key_cache()
 

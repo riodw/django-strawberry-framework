@@ -10,9 +10,14 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from apps.kanban.models import Card, Status
+from apps.library.models import Book, Issue, ReadingList, ReadingListEntry
 from apps.products.models import Category, Entry, Item, Property
+from apps.scalars.models import NullableScalarSpecimen
 from django.db.models import F, FilteredRelation, Model, OrderBy, Prefetch, Q, QuerySet
+from django.db.models.functions import Lower
 
+from django_strawberry_framework.connection import _ends_in_unique_column
 from django_strawberry_framework.exceptions import OptimizerError
 from django_strawberry_framework.keyset import (
     CursorState,
@@ -25,10 +30,16 @@ from django_strawberry_framework.optimizer.plans import (
     WINDOW_ROW_NUMBER_REVERSED,
     WINDOW_TOTAL_COUNT,
     OptimizationPlan,
+    _consumer_projection,
     _flatten_select_related,
+    _IndexedList,
     _projection_aliases,
     _reverse_order_by,
     _select_path_missing_connectors,
+    _select_path_traversable,
+    append_prefetch_unique,
+    append_unique,
+    append_unique_many,
     apply_projection,
     apply_window_pagination,
     deterministic_order,
@@ -41,6 +52,7 @@ from django_strawberry_framework.optimizer.plans import (
     merged_projection,
     normalize_order_direction,
     order_entry_has_explicit_nulls,
+    prune_unsupportable_select_related,
     resolver_key,
     runtime_path_from_path,
 )
@@ -153,7 +165,6 @@ class TestOptimizationPlanApply:
     def test_apply_select_related(self) -> None:
         plan = OptimizationPlan(select_related=["category"])
         # Use a model that has a FK - Item.category.
-        from apps.products.models import Item
 
         qs = Item.objects.all()
         result = plan.apply(qs)
@@ -328,16 +339,12 @@ class TestPlanHelperRelocations:
     """``append_unique`` / ``append_unique_many`` / ``append_prefetch_unique`` live with the plan shape."""
 
     def test_append_unique_skips_existing_value(self) -> None:
-        from django_strawberry_framework.optimizer.plans import append_unique
-
         values: list[str] = ["a"]
         append_unique(values, "a")
         append_unique(values, "b")
         assert values == ["a", "b"]
 
     def test_append_unique_many_iterates_tuple(self) -> None:
-        from django_strawberry_framework.optimizer.plans import append_unique_many
-
         values: list[str] = []
         append_unique_many(
             values,
@@ -346,8 +353,6 @@ class TestPlanHelperRelocations:
         assert values == ["a", "b"]
 
     def test_append_prefetch_unique_dedupes_by_lookup_path(self) -> None:
-        from django_strawberry_framework.optimizer.plans import append_prefetch_unique
-
         first = Prefetch("items", queryset=Item.objects.all())
         second = Prefetch("items", queryset=Item.objects.filter(pk__gt=0))
         values: list[str | Prefetch[str]] = []
@@ -363,8 +368,6 @@ class TestPlanHelperRelocations:
         the last path segment with ``to_attr``, so the ``_lookup_path`` dedupe
         keys them apart - both survive (and a true duplicate still dedupes).
         """
-        from django_strawberry_framework.optimizer.plans import append_prefetch_unique
-
         first = Prefetch("items", queryset=Item.objects.all(), to_attr="_dst_items$a_connection")
         second = Prefetch("items", queryset=Item.objects.all(), to_attr="_dst_items$b_connection")
         duplicate = Prefetch(
@@ -379,8 +382,6 @@ class TestPlanHelperRelocations:
         assert values == [first, second]
 
     def test_plan_default_lists_use_indexed_append_unique(self) -> None:
-        from django_strawberry_framework.optimizer.plans import _IndexedList, append_unique
-
         plan = OptimizationPlan()
         assert isinstance(plan.only_fields, _IndexedList)
 
@@ -391,11 +392,6 @@ class TestPlanHelperRelocations:
         assert plan.only_fields == ["name", "id"]
 
     def test_plan_default_prefetch_list_indexes_by_lookup_path(self) -> None:
-        from django_strawberry_framework.optimizer.plans import (
-            _IndexedList,
-            append_prefetch_unique,
-        )
-
         first = Prefetch("items", queryset=Item.objects.all())
         second = Prefetch("items", queryset=Item.objects.filter(pk__gt=0))
         plan = OptimizationPlan()
@@ -411,14 +407,10 @@ class TestIndexedList:
     """Direct coverage of ``_IndexedList`` mutators and the unhashable fallback."""
 
     def test_constructor_dedupes_initial_values(self) -> None:
-        from django_strawberry_framework.optimizer.plans import _IndexedList
-
         indexed = _IndexedList(["a", "b", "a"])
         assert indexed == ["a", "b"]
 
     def test_append_and_extend_keep_index_for_later_append_unique(self) -> None:
-        from django_strawberry_framework.optimizer.plans import _IndexedList
-
         indexed: _IndexedList[str] = _IndexedList()
         indexed.append("a")
         indexed.extend(["b", "c"])
@@ -429,8 +421,6 @@ class TestIndexedList:
         assert indexed == ["a", "b", "c"]
 
     def test_append_unique_falls_back_to_membership_for_unhashable_values(self) -> None:
-        from django_strawberry_framework.optimizer.plans import _IndexedList
-
         indexed: _IndexedList[list[str]] = _IndexedList()
         unhashable = ["nested"]
         # Unhashable key: the ``_seen`` probe raises ``TypeError`` and the
@@ -1038,14 +1028,10 @@ class TestOrderEntryHasExplicitNulls:
         assert order_entry_has_explicit_nulls("-title") is False
 
     def test_plain_orderby_is_not_explicit(self) -> None:
-        from django.db.models import F
-
         assert order_entry_has_explicit_nulls(F("title").asc()) is False
         assert order_entry_has_explicit_nulls(F("title").desc()) is False
 
     def test_nulls_first_or_last_is_explicit(self) -> None:
-        from django.db.models import F
-
         assert order_entry_has_explicit_nulls(F("title").asc(nulls_first=True)) is True
         assert order_entry_has_explicit_nulls(F("title").desc(nulls_last=True)) is True
 
@@ -1066,15 +1052,11 @@ class TestDeterministicOrderHoistParity:
 
     def test_ends_in_unique_column_expression_refs(self) -> None:
         """``F`` expression terminals read the wrapped column name."""
-        from django.db.models import F
-
         assert ends_in_unique_column((F("name").asc(),), Category) is True  # unique
         assert ends_in_unique_column((F("name").asc(),), Item) is False  # non-unique
 
     def test_ends_in_unique_column_bare_f_expression(self) -> None:
         """Bare ``F`` expression terminals read the wrapped column name directly."""
-        from django.db.models import F
-
         assert ends_in_unique_column((F("name"),), Category) is True  # unique
         assert ends_in_unique_column((F("name"),), Item) is False  # non-unique
         assert ends_in_unique_column((F("id"),), Item) is True  # unique pk
@@ -1082,8 +1064,6 @@ class TestDeterministicOrderHoistParity:
 
     def test_ends_in_unique_column_unnameable_terminal(self) -> None:
         """A transform terminal (no readable column name) is treated as non-unique."""
-        from django.db.models.functions import Lower
-
         assert ends_in_unique_column((Lower("name"),), Category) is False
 
     def test_ends_in_unique_column_nullable_unique_is_not_total_order(self) -> None:
@@ -1093,8 +1073,6 @@ class TestDeterministicOrderHoistParity:
         are nondeterministic - the pk must still be appended. ``NullableScalarSpecimen.label``
         is ``unique=True, null=True``: unique but not a total order.
         """
-        from apps.scalars.models import NullableScalarSpecimen
-
         assert ends_in_unique_column(("label",), NullableScalarSpecimen) is False
         # So the pk is appended as the terminal tiebreaker.
         assert deterministic_order(("label",), NullableScalarSpecimen) == ("label", "id")
@@ -1111,8 +1089,6 @@ class TestDeterministicOrderHoistParity:
 
     def test_deterministic_order_matches_connection_reexport(self) -> None:
         """``connection.py`` re-exports the same ``ends_in_unique_column`` (one source)."""
-        from django_strawberry_framework.connection import _ends_in_unique_column
-
         assert _ends_in_unique_column is ends_in_unique_column
 
     def test_ends_in_unique_column_defensive_for_non_model(self) -> None:
@@ -1150,8 +1126,6 @@ class TestEffectiveConnectionOrder:
         is appended; ``Card.number`` is unique-terminal, so it is returned
         unchanged.
         """
-        from apps.kanban.models import Card, Status
-
         assert effective_connection_order(None, Status.objects.all().query, Status) == (
             "order",
             "id",
@@ -1168,8 +1142,6 @@ class TestEffectiveConnectionOrder:
         Django accepts ``None`` and reads the option by truthiness, so it is no
         default order rather than an iterable to unpack.
         """
-        from apps.library.models import ReadingList, ReadingListEntry
-
         assert ReadingListEntry._meta.ordering is None
         query = ReadingListEntry.objects.all().query
         assert effective_connection_order(None, query, ReadingListEntry) == ("id",)
@@ -1185,8 +1157,6 @@ class TestEffectiveConnectionOrder:
         cleared, so a connection over that source pages under the pk tiebreaker,
         not the model order the consumer removed.
         """
-        from apps.kanban.models import Status
-
         query = Status.objects.order_by().query
         assert query.default_ordering is False
         assert effective_connection_order(None, query, Status) == ("id",)
@@ -1222,9 +1192,6 @@ class TestNormalizeOrderDirection:
 
     def test_meta_ordering_is_materialized_then_reversed(self) -> None:
         """A bare ``.reverse()`` reverses the model's ``Meta.ordering`` made total."""
-        from apps.kanban.models import Status
-        from apps.library.models import ReadingList
-
         assert normalize_order_direction(
             Status.objects.reverse(),
             None,
@@ -1264,8 +1231,6 @@ class TestNormalizeOrderDirection:
 
 def _issue_cursor_state() -> CursorState:
     """The declared ``("-number", "id")`` vocabulary over the library ``Issue`` model."""
-    from apps.library.models import Issue
-
     state = declared_cursor_state_for_definition(
         make_definition(Issue, cursor_field=("-number", "id")),
     )
@@ -1331,8 +1296,6 @@ class TestReverseOrderBy:
 
     def test_flips_orderby_descending(self) -> None:
         """``OrderBy`` expressions flip ``.descending`` without re-running the compiler."""
-        from django.db.models import F
-
         reversed_order = _reverse_order_by([F("name").asc()])
         assert isinstance(reversed_order[0], OrderBy)
         assert reversed_order[0].descending is True
@@ -1344,8 +1307,6 @@ class TestReverseOrderBy:
         a consumer ``OrderSet`` with explicit NULLS positioning produces a reversed
         window matching the resolve-time ``.reverse()`` pipeline.
         """
-        from django.db.models import F
-
         nulls_first = _reverse_order_by([F("name").asc(nulls_first=True)])[0]
         assert isinstance(nulls_first, OrderBy)
         assert nulls_first.descending is True
@@ -1379,9 +1340,6 @@ class TestReverseOrderBy:
         page then filtered ``rn_reversed <= N`` over a forward numbering and
         returned the partition's FIRST rows.
         """
-        from django.db.models import F
-        from django.db.models.functions import Lower
-
         reversed_f = _reverse_order_by([F("name")])[0]
         assert isinstance(reversed_f, OrderBy)
         assert reversed_f.descending is True
@@ -1428,10 +1386,6 @@ class TestPruneUnsupportableSelectRelated:
         queryset: QuerySet[Model],
     ) -> tuple[OptimizationPlan, QuerySet[Model]]:
         """The extension's full B8 pipeline: prune, then diff, then apply."""
-        from django_strawberry_framework.optimizer.plans import (
-            prune_unsupportable_select_related,
-        )
-
         pruned = prune_unsupportable_select_related(plan, queryset)
         delta, queryset = diff_plan_for_queryset(pruned, queryset)
         return pruned, delta.apply(queryset)
@@ -1484,8 +1438,6 @@ class TestPruneUnsupportableSelectRelated:
         assert 'JOIN "products_category"' in str(applied.query)
 
     def test_dotted_projection_keeps_root_and_drops_deeper_path(self) -> None:
-        from apps.library.models import Book
-
         plan = OptimizationPlan(
             select_related=["shelf", "shelf__branch"],
             planned_resolver_keys=["shelf-key", "branch-key"],
@@ -1504,8 +1456,6 @@ class TestPruneUnsupportableSelectRelated:
         assert 'JOIN "library_branch"' not in compiled
 
     def test_projected_plan_undefers_the_connector_the_consumer_deferred(self) -> None:
-        from apps.library.models import Book
-
         plan = OptimizationPlan(
             select_related=["shelf", "shelf__branch"],
             only_fields=["title", "shelf_id", "shelf__code"],
@@ -1522,8 +1472,6 @@ class TestPruneUnsupportableSelectRelated:
         assert 'JOIN "library_branch"' in compiled
 
     def test_consumer_defer_drops_path_keys(self) -> None:
-        from apps.library.models import Book
-
         plan = OptimizationPlan(
             select_related=["shelf", "shelf__branch"],
             planned_resolver_keys=["shelf-key", "branch-key"],
@@ -1538,8 +1486,6 @@ class TestPruneUnsupportableSelectRelated:
         assert 'JOIN "library_shelf"' not in str(applied.query)
 
     def test_defer_of_an_unrelated_column_prunes_nothing(self) -> None:
-        from apps.library.models import Book
-
         plan = OptimizationPlan(
             select_related=["shelf"],
             select_path_resolver_keys={"shelf": ("shelf-key",)},
@@ -1552,7 +1498,6 @@ class TestPruneUnsupportableSelectRelated:
     def test_unresolvable_path_is_dropped_conservatively(self) -> None:
         # A path the model cannot resolve (planner drift, exotic doubles)
         # drops rather than gambles on a FieldError at compile time.
-        from apps.library.models import Book
 
         plan = OptimizationPlan(select_related=["mystery"]).finalize()
         pruned, _ = self._reconcile(plan, Book.objects.only("title"))
@@ -1563,15 +1508,10 @@ class TestPruneUnsupportableSelectRelated:
             select_related=["category"],
             planned_resolver_keys=["category-key"],
         ).finalize()
-        from django_strawberry_framework.optimizer.plans import (
-            prune_unsupportable_select_related,
-        )
 
         assert prune_unsupportable_select_related(plan, Item.objects.all()) is plan
 
     def test_prune_removes_unsupported_from_select_path_resolver_keys(self) -> None:
-        from apps.library.models import Book
-
         plan = OptimizationPlan(
             select_related=["shelf", "shelf__branch"],
             planned_resolver_keys=["shelf-key", "branch-key"],
@@ -1580,9 +1520,6 @@ class TestPruneUnsupportableSelectRelated:
                 "shelf__branch": ("branch-key",),
             },
         ).finalize()
-        from django_strawberry_framework.optimizer.plans import (
-            prune_unsupportable_select_related,
-        )
 
         pruned = prune_unsupportable_select_related(
             plan,
@@ -1601,13 +1538,6 @@ def test_consumer_projection_and_traversal_defensive_shapes() -> None:
     untraversable. None of these shapes is producible by a real consumer
     queryset, so the tails are pinned directly in one sweep.
     """
-    from apps.library.models import Book
-
-    from django_strawberry_framework.optimizer.plans import (
-        _consumer_projection,
-        _select_path_traversable,
-    )
-
     assert _consumer_projection(SimpleNamespace()) is None
     malformed = SimpleNamespace(query=SimpleNamespace(deferred_loading=("only-one",)))
     assert _consumer_projection(malformed) is None
@@ -1690,8 +1620,6 @@ def test_merged_projection_defer_mode_matches_every_spelling_of_a_read_column(
     spellings no fakeshop row carries: the attname, a dotted read under the
     deferred relation, and a dotted ``.defer()`` entry.
     """
-    from apps.library.models import Book
-
     assert merged_projection(Book.objects.defer(*deferred), names) == (remaining, True)
 
 

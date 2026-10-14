@@ -201,6 +201,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, TypedDict, cast
 
+import tomli
 from typing_extensions import NotRequired, override
 
 try:
@@ -1101,8 +1102,6 @@ def floor_pins(pyproject: Path) -> dict[str, str]:
     each package's ``>=`` bound in ``[project].dependencies`` is the exact
     point the floor run installs, the same points that section states.
     """
-    import tomli
-
     try:
         requires_python, dependencies = _project_declarations(
             tomli.loads,

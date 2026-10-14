@@ -10,8 +10,9 @@ from typing import NoReturn
 
 import pytest
 import pytest_django
-from apps.library.models import Genre
+from apps.library.models import Book, Genre
 from django.db.models import Prefetch
+from django.db.models.query import ModelIterable
 from typing_extensions import override
 
 from django_strawberry_framework import DjangoOptimizerExtension
@@ -21,6 +22,7 @@ from django_strawberry_framework.optimizer._context import (
     end_execution_frame,
 )
 from django_strawberry_framework.optimizer.hints import OptimizerHint
+from django_strawberry_framework.optimizer.lateral_fetch import LATERAL_STRATEGY
 from django_strawberry_framework.optimizer.nested_fetch import (
     AUTO_STRATEGY,
     WINDOWED_STRATEGY,
@@ -29,6 +31,7 @@ from django_strawberry_framework.optimizer.nested_fetch import (
     _builtin_strategies,
     active_strategy,
     resolve_strategy,
+    unwindowable_child_queryset_reason,
 )
 from django_strawberry_framework.optimizer.nested_planner import NestedConnectionPlanResult
 from django_strawberry_framework.optimizer.plans import (
@@ -218,8 +221,6 @@ def test_resolve_strategy_raising_plan_attribute_is_not_a_strategy() -> None:
 
 def test_resolve_strategy_lateral_loads_the_lateral_backend() -> None:
     """``"lateral"`` lazily registers and returns the Postgres backend singleton."""
-    from django_strawberry_framework.optimizer.lateral_fetch import LATERAL_STRATEGY
-
     assert resolve_strategy("lateral") is LATERAL_STRATEGY
     assert resolve_strategy("lateral") is LATERAL_STRATEGY  # registry, not re-import
 
@@ -336,13 +337,6 @@ def test_unwindowable_child_queryset_reason_matrix() -> None:
     Each unsafe consumer-hook shape maps to a stable reason; a plain
     queryset (with or without projection/ordering) maps to ``None``.
     """
-    from apps.library.models import Book
-    from django.db.models.query import ModelIterable
-
-    from django_strawberry_framework.optimizer.nested_fetch import (
-        unwindowable_child_queryset_reason,
-    )
-
     assert unwindowable_child_queryset_reason(Book.objects.all()[:10]) == "sliced"
     assert (
         unwindowable_child_queryset_reason(Book.objects.select_for_update()) == "select_for_update"

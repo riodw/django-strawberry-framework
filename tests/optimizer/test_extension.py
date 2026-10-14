@@ -24,22 +24,27 @@ import warnings
 import weakref
 from collections import OrderedDict
 from collections.abc import Iterable, Iterator, Mapping
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, NoReturn, TypeGuard
 
 import pytest
 import pytest_django
 import strawberry
+from apps.library.models import Issue, MembershipCard, Patron
 from apps.products import services
 from apps.products.models import Category, Entry, Item, Property
+from asgiref.sync import sync_to_async
 from django.db import connection
-from django.db.models import Manager, Model, QuerySet
+from django.db.models import Manager, Model, Prefetch, QuerySet
+from django.http import HttpRequest, QueryDict
 from django.test.utils import CaptureQueriesContext
 from graphql import (
     DefinitionNode,
     DocumentNode,
     FragmentDefinitionNode,
     GraphQLField,
+    GraphQLList,
+    GraphQLNonNull,
     GraphQLObjectType,
     GraphQLResolveInfo,
     GraphQLScalarType,
@@ -47,12 +52,16 @@ from graphql import (
     GraphQLString,
     OperationDefinitionNode,
     OperationType,
+    parse,
 )
 from strawberry import relay
 from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.types import ExecutionResult
+from strawberry.types.nodes import SelectedField
 from typing_extensions import override
 
+import django_strawberry_framework.optimizer._context as ctx_mod
+import django_strawberry_framework.optimizer.extension as extension_module
 from django_strawberry_framework import (
     DjangoListField,
     DjangoOptimizerExtension,
@@ -62,22 +71,68 @@ from django_strawberry_framework import (
     finalize_django_types,
     strawberry_config,
 )
+from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.filters import FilterSet
+from django_strawberry_framework.keyset import declared_cursor_state_for_definition
 from django_strawberry_framework.optimizer import logger as optimizer_logger
+from django_strawberry_framework.optimizer._context import (
+    DST_OPTIMIZER_FK_ID_ELISIONS,
+    DST_OPTIMIZER_KEYS,
+    DST_OPTIMIZER_LOOKUP_PATHS,
+    DST_OPTIMIZER_PLAN,
+    DST_OPTIMIZER_PLANNED,
+    DST_OPTIMIZER_STRICTNESS,
+    active_optimizer,
+    active_strictness,
+    begin_execution_frame,
+    cache_key_parts_memo,
+    clear_optimizer_context,
+    converted_selections_memo,
+    end_execution_frame,
+    execution_plan_memo,
+    get_context_value,
+    optimizer_value,
+    publish_scoped_relations,
+    publish_window_cursor_states,
+    relation_is_optimizer_scoped,
+    stash_for_optimizer,
+    stash_on_context,
+    window_cursor_state,
+)
 from django_strawberry_framework.optimizer._context import (
     active_optimizer as _active_optimizer,
 )
 from django_strawberry_framework.optimizer.extension import (
+    _collect_cache_relevant_var_names,
+    _collect_cache_var_families,
+    _collect_schema_reachable_types,
+    _hashable_variable_value,
     _named_children,
     _node_children_with_runtime_prefix,
     _resolve_model_from_return_type,
+    _stash_on_context,
+    _walk_cache_relevant_vars,
+    apply_connection_optimization,
     clear_document_key_cache,
 )
 from django_strawberry_framework.optimizer.field_meta import FieldMeta
+from django_strawberry_framework.optimizer.hints import hint_is_skip
+from django_strawberry_framework.optimizer.plans import OptimizationPlan
+from django_strawberry_framework.permissions import apply_cascade_permissions
 from django_strawberry_framework.registry import iter_subsystem_clears, registry
+from django_strawberry_framework.types.resolvers import (
+    _will_lazy_load_many,
+    _will_lazy_load_single,
+)
 from django_strawberry_framework.utils._queryset_private import (
     queryset_prefetch_lookups,
 )
-from django_strawberry_framework.utils.querysets import _AsyncQuerySetRows
+from django_strawberry_framework.utils.querysets import (
+    _AsyncQuerySetRows,
+    unwrap_async_queryset_adapter,
+    wrap_async_queryset_adapter,
+)
+from tests._definition import make_definition
 from tests._idioms import definition_raises
 from tests._info import make_info, response_path
 
@@ -520,9 +575,6 @@ def test_evaluated_root_queryset_does_not_record_a_plan_cache_miss() -> None:
     shipped eager-eval field cannot host: ``category { name }`` is served from
     the JOIN the resolver already applied, in one query, with no plan miss.
     """
-    from django.db import connection
-    from django.test.utils import CaptureQueriesContext
-
     services.seed_data(2)
 
     class CategoryType(DjangoType):
@@ -604,10 +656,6 @@ def test_resolve_async_passes_through_evaluated_queryset(monkeypatch: pytest.Mon
     short-circuits BEFORE return-type resolution / plan build - if the guard
     failed to fire, the tripwire would raise.
     """
-    import asyncio
-
-    from django_strawberry_framework.optimizer import extension as extension_module
-
     services.seed_data(1)
     ext = DjangoOptimizerExtension()
 
@@ -642,7 +690,6 @@ def test_resolve_async_passes_through_evaluated_queryset(monkeypatch: pytest.Mon
 
 def test_resolve_model_from_return_type_unwraps_nested_wrappers() -> None:
     """Recursive unwrap through NonNull(List(NonNull(ObjectType))) -> (origin, Django model)."""
-    from graphql import GraphQLList, GraphQLNonNull
 
     class CategoryType(DjangoType):
         class Meta:
@@ -787,8 +834,6 @@ def test_resolve_passes_through_non_root_resolvers() -> None:
 
 def test_resolve_handles_async_root_resolver() -> None:
     """An async root resolver's coroutine is awaited before optimization."""
-    import asyncio
-
     ext = DjangoOptimizerExtension()
 
     class CategoryType(DjangoType):
@@ -864,9 +909,6 @@ def test_optimize_returns_original_queryset_for_empty_plan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """If the walker produces an empty plan, _optimize returns the original queryset."""
-    import django_strawberry_framework.optimizer.extension as extension_module
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
-
     services.seed_data(1)
 
     class CategoryType(DjangoType):
@@ -1168,9 +1210,6 @@ def test_mutation_real_execution_suppresses_only_keeps_select_related() -> None:
 
 def test_cache_eviction_removes_old_entries(monkeypatch: pytest.MonkeyPatch) -> None:
     """B1: the plan cache evicts least-recently-used entries when full."""
-    import django_strawberry_framework.optimizer.extension as extension_module
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
-
     ext = DjangoOptimizerExtension()
     monkeypatch.setattr(extension_module, "_MAX_PLAN_CACHE_SIZE", 4)
 
@@ -1211,10 +1250,6 @@ def test_doc_key_cache_evicts_when_full(monkeypatch: pytest.MonkeyPatch) -> None
     distinct documents cannot grow it without limit: inserting past a shrunk
     max evicts the least-recently-used entry while the newest survive.
     """
-    from graphql import parse
-
-    import django_strawberry_framework.optimizer.extension as extension_module
-
     monkeypatch.setattr(extension_module, "_MAX_DOC_KEY_CACHE_SIZE", 2)
     monkeypatch.setattr(extension_module, "_doc_key_cache", _DocKeyCache())
 
@@ -1273,10 +1308,6 @@ def test_cache_clear_makes_the_next_request_build_its_plan_again() -> None:
 
 def test_registry_clear_empties_the_document_key_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     """The document-key memo is registered with ``registry.clear()`` and empties on it."""
-    from graphql import parse
-
-    import django_strawberry_framework.optimizer.extension as extension_module
-
     monkeypatch.setattr(extension_module, "_doc_key_cache", _DocKeyCache())
     extension_module._doc_cache_entry(_operation(parse("query Q { field }")), {})
     assert len(extension_module._doc_key_cache) == 1
@@ -1320,9 +1351,6 @@ def test_get_or_build_plan_reuses_uncacheable_plan_within_execution(
     collapsing N per-parent walks to one. The intra-execution reuse is NOT counted
     as a cross-request cache hit (``cache_info`` reports the instance cache only).
     """
-    import django_strawberry_framework.optimizer.extension as extension_module
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
-
     builds = {"count": 0}
 
     def _fake_plan_optimizations(*_args: object, **_kwargs: object) -> OptimizationPlan:
@@ -1430,8 +1458,6 @@ def test_cache_separates_operation_names_in_same_document() -> None:
 
 def test_build_cache_key_is_stable_when_source_location_missing() -> None:
     """B1: cache key still works when the operation has no source body."""
-    from graphql import parse
-
     document = "{ allCategories { name } }"
     operation = _operation(parse(document, no_location=True))
     info = make_info(document=document)._raw_info._replace(operation=operation)
@@ -1444,10 +1470,6 @@ def test_build_cache_key_is_stable_when_source_location_missing() -> None:
 
 def test_directive_var_family_with_skip() -> None:
     """B1: the directive family finds vars in @skip directives."""
-    from graphql import parse
-
-    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
-
     doc = parse("query Q($show: Boolean!) { items @skip(if: $show) { name } }")
     names = _collect_cache_var_families(doc.definitions[0], {})[0]
     assert names == frozenset({"show"})
@@ -1455,10 +1477,6 @@ def test_directive_var_family_with_skip() -> None:
 
 def test_directive_var_family_with_include() -> None:
     """B1: the directive family finds vars in @include directives."""
-    from graphql import parse
-
-    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
-
     doc = parse("query Q($v: Boolean!) { items @include(if: $v) { name } }")
     names = _collect_cache_var_families(doc.definitions[0], {})[0]
     assert names == frozenset({"v"})
@@ -1466,10 +1484,6 @@ def test_directive_var_family_with_include() -> None:
 
 def test_directive_var_family_ignores_non_directive_vars() -> None:
     """B1: variables in field arguments (not directives) are not collected."""
-    from graphql import parse
-
-    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
-
     doc = parse("query Q($limit: Int!) { items(limit: $limit) { name } }")
     names = _collect_cache_var_families(doc.definitions[0], {})[0]
     assert names == frozenset()
@@ -1477,10 +1491,6 @@ def test_directive_var_family_ignores_non_directive_vars() -> None:
 
 def test_walk_cache_relevant_vars_ignores_non_directive_objects() -> None:
     """B1: directive collection skips defensive non-DirectiveNode entries."""
-    from graphql import parse
-
-    from django_strawberry_framework.optimizer.extension import _walk_cache_relevant_vars
-
     operation = parse("query Q($v: Boolean!) { items @skip(if: $v) { name } }").definitions[0]
     assert isinstance(operation, OperationDefinitionNode)
     field = operation.selection_set.selections[0]
@@ -1496,10 +1506,6 @@ def test_walk_cache_relevant_vars_ignores_non_directive_objects() -> None:
 
 def test_walk_cache_relevant_vars_visits_each_fragment_once_across_sibling_spreads() -> None:
     """Sibling spreads of the same fragment do not re-walk the fragment subtree."""
-    from graphql import parse
-
-    from django_strawberry_framework.optimizer.extension import _walk_cache_relevant_vars
-
     doc = parse(
         "query Q($v: Boolean!) { "
         "a: items { ...F } "
@@ -1522,10 +1528,6 @@ def test_walk_cache_relevant_vars_visits_each_fragment_once_across_sibling_sprea
 
 def test_walk_cache_relevant_vars_handles_unresolved_fragment_name() -> None:
     """A spread referencing an unknown fragment name is skipped silently."""
-    from graphql import parse
-
-    from django_strawberry_framework.optimizer.extension import _walk_cache_relevant_vars
-
     doc = parse("query Q { items { ...Missing } }")
     operation = doc.definitions[0]
     directive_names: set[str] = set()
@@ -1538,10 +1540,6 @@ def test_walk_cache_relevant_vars_handles_unresolved_fragment_name() -> None:
 
 def test_directive_var_family_ignores_other_directives() -> None:
     """B1: only @skip and @include directives split the plan cache."""
-    from graphql import parse
-
-    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
-
     doc = parse("query Q($v: Boolean!) { items @custom(if: $v) { name } }")
     names = _collect_cache_var_families(doc.definitions[0], {})[0]
     assert names == frozenset()
@@ -1549,10 +1547,6 @@ def test_directive_var_family_ignores_other_directives() -> None:
 
 def test_directive_var_family_nested_fragments() -> None:
     """B1: vars in directives on nested fields are collected."""
-    from graphql import parse
-
-    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
-
     doc = parse(
         "query Q($a: Boolean!, $b: Boolean!) { "
         "items { name @skip(if: $a) entries @include(if: $b) { value } } }",
@@ -1563,10 +1557,6 @@ def test_directive_var_family_nested_fragments() -> None:
 
 def test_directive_var_family_no_directives() -> None:
     """B1: a query with no directives yields an empty directive family."""
-    from graphql import parse
-
-    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
-
     doc = parse("{ items { name } }")
     names = _collect_cache_var_families(doc.definitions[0], {})[0]
     assert names == frozenset()
@@ -1686,10 +1676,6 @@ def test_fragment_spread_at_two_depths_collects_nested_pagination_variable() -> 
     serving the wrong windowed prefetch (Decision 7: "under-collection would serve
     wrong data"). Both spread orders must collect ``$n``.
     """
-    from graphql import parse
-
-    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
-
     frag = "fragment F on Thing { booksConnection(first: $n) { edges { node { title } } } }"
     root_first = parse(
         "query Q($n: Int!) { ...F parents { edges { node { ...F } } } } " + frag,
@@ -1712,10 +1698,6 @@ def test_pagination_var_collection_is_syntactic_superset() -> None:
     resolver that is not a synthesized connection. Over-collection costs cheap
     duplicate cache entries; under-collection would serve wrong data.
     """
-    from graphql import parse
-
-    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
-
     doc = parse("{ parents { someField(first: $n) { value } } }")
     names = _collect_cache_var_families(doc.definitions[0], {})[1]
     assert names == frozenset({"n"})
@@ -1723,10 +1705,6 @@ def test_pagination_var_collection_is_syntactic_superset() -> None:
 
 def test_nested_pagination_var_family_excludes_root_field() -> None:
     """Root-field pagination variables are excluded from the collected name set."""
-    from graphql import parse
-
-    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
-
     doc = parse("query Q($n: Int!) { rootConn(first: $n) { edges { node { name } } } }")
     names = _collect_cache_var_families(doc.definitions[0], {})[1]
     assert names == frozenset()
@@ -1734,10 +1712,6 @@ def test_nested_pagination_var_family_excludes_root_field() -> None:
 
 def test_nested_pagination_var_family_all_arg_names() -> None:
     """All four pagination arg names collect; a non-pagination arg (``limit``) does not."""
-    from graphql import parse
-
-    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
-
     doc = parse(
         "query Q($f: Int, $l: Int, $b: String, $a: String, $lim: Int) { "
         "parents { conn(first: $f, last: $l, before: $b, after: $a, limit: $lim) "
@@ -1760,10 +1734,6 @@ def test_nested_pagination_var_family_ignores_inline_literals() -> None:
     Inline literals already key the cache via the printed AST; the collector
     only tracks variable references (mirroring the directive collector).
     """
-    from graphql import parse
-
-    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
-
     doc = parse("{ parents { booksConnection(first: 3) { edges { node { title } } } } }")
     names = _collect_cache_var_families(doc.definitions[0], {})[1]
     assert names == frozenset()
@@ -1771,8 +1741,6 @@ def test_nested_pagination_var_family_ignores_inline_literals() -> None:
 
 def test_hashable_variable_value_builds_typed_structural_identity() -> None:
     """Runtime values become hashable identities without cross-shape collisions."""
-    from django_strawberry_framework.optimizer.extension import _hashable_variable_value
-
     assert _hashable_variable_value(5) == _hashable_variable_value(5)
     assert _hashable_variable_value(1) != _hashable_variable_value(True)  # noqa: FBT003 - the bool is the value under test
     assert _hashable_variable_value([1, 2]) != _hashable_variable_value((1, 2))
@@ -1785,7 +1753,6 @@ def test_hashable_variable_value_builds_typed_structural_identity() -> None:
 
 def test_hashable_variable_value_safely_degrades_for_opaque_and_cyclic_values() -> None:
     """Unknown custom-scalar values avoid both crashes and unsafe cache hits."""
-    from django_strawberry_framework.optimizer.extension import _hashable_variable_value
 
     class Opaque:
         # Defining ``__eq__`` without ``__hash__`` makes the class unhashable (that is the
@@ -1815,7 +1782,6 @@ def test_hashable_custom_scalar_equality_cannot_abort_cache_key_lookup() -> None
     This row is the freezer unit: opaque identities compare unequal without
     running consumer ``__eq__``.
     """
-    from django_strawberry_framework.optimizer.extension import _hashable_variable_value
 
     class EqualityBomb:
         @override
@@ -1853,8 +1819,6 @@ def test_library_owned_scalars_share_one_cache_identity_across_requests() -> Non
     ``logs(after: $timestamp)`` would otherwise never hit the plan cache and
     would evict live plans from the bounded LRU on every request.
     """
-    from django_strawberry_framework.optimizer.extension import _hashable_variable_value
-
     equal_pairs = (
         (None, None),
         (True, True),
@@ -1904,7 +1868,6 @@ def test_freezer_lets_cancellation_propagate_rather_than_caching_it() -> None:
     are not cache outcomes -- swallowing one would convert an interrupted request
     into a silent cache miss.
     """
-    from django_strawberry_framework.optimizer.extension import _hashable_variable_value
 
     class CancellingMeta(type):
         @override
@@ -1932,7 +1895,6 @@ def test_freezer_lets_cancellation_propagate_rather_than_caching_it() -> None:
 
 def test_hashable_variable_value_safely_degrades_for_hostile_custom_values() -> None:
     """Hostile custom-scalar values cannot abort plan-cache key construction."""
-    from django_strawberry_framework.optimizer.extension import _hashable_variable_value
 
     class ExplodingHash:
         @override
@@ -2140,8 +2102,6 @@ def test_cache_key_variable_name_collection_memoized_for_nested_fallbacks(
     cross-request document LRU has been emptied, so the per-execution memo is
     pinned on its own rather than through the document cache standing in for it.
     """
-    import django_strawberry_framework.optimizer.extension as extension_module
-
     calls = {"count": 0}
     real = extension_module._collect_cache_relevant_var_names
 
@@ -2201,10 +2161,6 @@ def test_collect_cache_relevant_var_names_unifies_both_families_through_fragment
     field) both reach the cache key from one walk; the root field ``parents``
     contributes neither.
     """
-    from graphql import parse
-
-    from django_strawberry_framework.optimizer.extension import _collect_cache_relevant_var_names
-
     doc = parse(
         "query Q($skip: Boolean!, $n: Int!) { parents { ...F } } "
         "fragment F on Parent { booksConnection(first: $n) @skip(if: $skip) "
@@ -2342,9 +2298,6 @@ def test_plan_cache_eviction_survives_concurrent_drain(
     plan. The drain lands on each pop position of the sweep in turn, so every
     interleaving is pinned, not just the first.
     """
-    import django_strawberry_framework.optimizer.extension as extension_module
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
-
     monkeypatch.setattr(extension_module, "_MAX_PLAN_CACHE_SIZE", 16)
 
     def _info_for(root_field: str) -> GraphQLResolveInfo:
@@ -2581,16 +2534,12 @@ def test_strictness_includes_fk_id_elision_in_planned_paths(
 
 def test_will_lazy_load_false_when_cached() -> None:
     """B3: pin the __dict__ compatibility seam used by synthetic test doubles."""
-    from django_strawberry_framework.types.resolvers import _will_lazy_load_single
-
     root = SimpleNamespace(category="cached_value")
     assert _will_lazy_load_single(root, "category") is False
 
 
 def test_will_lazy_load_false_when_in_fields_cache() -> None:
     """B3: _will_lazy_load_single returns False when a relation is in _state.fields_cache."""
-    from django_strawberry_framework.types.resolvers import _will_lazy_load_single
-
     root = SimpleNamespace(_state=SimpleNamespace(fields_cache={"card": "cached"}))
     assert _will_lazy_load_single(root, "card") is False
 
@@ -2598,8 +2547,6 @@ def test_will_lazy_load_false_when_in_fields_cache() -> None:
 @pytest.mark.django_db
 def test_will_lazy_load_false_for_real_forward_fk_in_fields_cache() -> None:
     """B3: real forward FKs cache in _state.fields_cache, not __dict__."""
-    from django_strawberry_framework.types.resolvers import _will_lazy_load_single
-
     services.seed_data(1)
     item = Item.objects.select_related("category").first()
 
@@ -2612,10 +2559,6 @@ def test_will_lazy_load_false_for_real_forward_fk_in_fields_cache() -> None:
 @pytest.mark.django_db
 def test_will_lazy_load_false_for_real_reverse_one_to_one_in_fields_cache() -> None:
     """B3: real reverse OneToOne relations also cache in _state.fields_cache."""
-    from apps.library.models import MembershipCard, Patron
-
-    from django_strawberry_framework.types.resolvers import _will_lazy_load_single
-
     patron = Patron.objects.create(name="Ada")
     MembershipCard.objects.create(patron=patron, barcode="1234")
     cached_patron = Patron.objects.select_related("card").get(pk=patron.pk)
@@ -2627,16 +2570,12 @@ def test_will_lazy_load_false_for_real_reverse_one_to_one_in_fields_cache() -> N
 
 def test_will_lazy_load_true_when_not_cached() -> None:
     """B3: _will_lazy_load_single returns True when the relation is not cached."""
-    from django_strawberry_framework.types.resolvers import _will_lazy_load_single
-
     root = SimpleNamespace()
     assert _will_lazy_load_single(root, "category") is True
 
 
 def test_will_lazy_load_false_when_prefetched() -> None:
     """B3: _will_lazy_load_many returns False when relation is in _prefetched_objects_cache."""
-    from django_strawberry_framework.types.resolvers import _will_lazy_load_many
-
     root = SimpleNamespace()
     root._prefetched_objects_cache = {
         "items": [1, 2, 3],
@@ -2686,8 +2625,6 @@ def test_strictness_raise_accepts_unplanned_cached_forward_fk() -> None:
 @pytest.mark.django_db
 def test_strictness_raise_accepts_unplanned_cached_reverse_one_to_one() -> None:
     """B3: strictness='raise' accepts an unplanned reverse OneToOne already loaded."""
-    from apps.library.models import MembershipCard, Patron
-
     patron = Patron.objects.create(name="Ada")
     MembershipCard.objects.create(patron=patron, barcode="1234")
 
@@ -2866,10 +2803,6 @@ def test_optimizer_nested_prefetch_with_custom_get_queryset_marks_uncacheable() 
 
 def test_directive_var_family_in_named_fragment() -> None:
     """B1: the directive family follows named fragment spreads."""
-    from graphql import parse
-
-    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
-
     doc = parse(
         "query Q($show: Boolean!) { allItems { ...ItemBits } } "
         "fragment ItemBits on ItemType { category @include(if: $show) { name } }",
@@ -2882,10 +2815,6 @@ def test_directive_var_family_in_named_fragment() -> None:
 
 def test_directive_var_family_includes_fragment_spread_directives() -> None:
     """B1: directives on a ``...Spread`` itself feed the cache key, not just the body."""
-    from graphql import parse
-
-    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
-
     doc = parse(
         "query Q($show: Boolean!) { allItems { ...ItemBits @include(if: $show) } } "
         "fragment ItemBits on ItemType { category { name } }",
@@ -2918,8 +2847,6 @@ def test_cache_key_includes_fragment_spread_directive_variable_value() -> None:
 
 def test_collect_schema_reachable_types_returns_empty_without_graphql_schema() -> None:
     """B6: schemas without a graphql-core schema expose no reachable types."""
-    from django_strawberry_framework.optimizer.extension import _collect_schema_reachable_types
-
     assert _collect_schema_reachable_types(SimpleNamespace()) == set()
 
 
@@ -2927,7 +2854,6 @@ def test_check_schema_skips_unreachable_and_missing_field_map(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """B6: check_schema skips orphan types and types without optimizer metadata."""
-    import django_strawberry_framework.optimizer.extension as extension_module
 
     class ReachableWithoutFieldMap:
         pass
@@ -2989,7 +2915,6 @@ def test_check_schema_descends_into_union_types() -> None:
     Without that, ``check_schema`` silently skips missing-target warnings
     for any relation that lives on a union-member type.
     """
-    from django_strawberry_framework.optimizer.extension import _collect_schema_reachable_types
 
     class CategoryType(DjangoType):
         class Meta:
@@ -3037,9 +2962,6 @@ def test_check_schema_descends_into_interface_implementations() -> None:
     -target warnings for any relation that lives on an interface
     implementer.
     """
-    from strawberry import relay
-
-    from django_strawberry_framework.optimizer.extension import _collect_schema_reachable_types
 
     class CategoryNode(DjangoType):
         class Meta:
@@ -3109,7 +3031,6 @@ def test_check_schema_no_warnings_when_all_covered() -> None:
 
 def test_check_schema_skip_hint_suppresses_warning() -> None:
     """B6: relations with OptimizerHint.SKIP are not flagged."""
-    from django_strawberry_framework import OptimizerHint
 
     # Register CategoryType so the ItemType.category PendingRelation resolves at finalize time.
     class CategoryType(DjangoType):
@@ -3167,9 +3088,6 @@ def test_check_schema_hidden_fields_not_flagged() -> None:
 
 def test_optimizer_hints_unknown_field_raises() -> None:
     """B4: unknown field name in optimizer_hints raises ConfigurationError."""
-    from django_strawberry_framework import OptimizerHint
-    from django_strawberry_framework.exceptions import ConfigurationError
-
     with pytest.raises(ConfigurationError, match="optimizer_hints names unknown fields"):
 
         @definition_raises
@@ -3182,8 +3100,6 @@ def test_optimizer_hints_unknown_field_raises() -> None:
 
 def test_optimizer_hints_non_hint_value_raises() -> None:
     """B4: non-OptimizerHint value in optimizer_hints raises ConfigurationError."""
-    from django_strawberry_framework.exceptions import ConfigurationError
-
     with pytest.raises(ConfigurationError, match="OptimizerHint instances"):
 
         @definition_raises
@@ -3196,8 +3112,6 @@ def test_optimizer_hints_non_hint_value_raises() -> None:
 
 def test_optimizer_hint_importable_from_top_level() -> None:
     """B4: OptimizerHint is importable from the top-level package."""
-    from django_strawberry_framework import OptimizerHint
-
     assert OptimizerHint.SKIP is not None
     assert OptimizerHint.select_related() is not None
 
@@ -3294,8 +3208,6 @@ def test_plan_stashed_with_prefetch_related() -> None:
 
 def test_publish_plan_to_context_reuses_finalized_metadata() -> None:
     """B5: context publish reuses finalized frozensets instead of rebuilding them."""
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
-
     ext = DjangoOptimizerExtension(strictness="raise")
     plan = OptimizationPlan(
         select_related=["category"],
@@ -3319,8 +3231,6 @@ def test_publish_plan_to_context_rebuilds_metadata_for_unfinalized_plan() -> Non
     defensive fallback: when ``finalized_*`` is ``None`` it recomputes the
     frozensets from the live directive lists rather than stashing ``None``.
     """
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
-
     ext = DjangoOptimizerExtension(strictness="raise")
     plan = OptimizationPlan(
         select_related=["category"],
@@ -3375,10 +3285,7 @@ def test_node_children_with_runtime_prefix_skips_excluded_and_clones_fragments()
 
 def test_plan_stashed_on_dict_context() -> None:
     """B5: when context is a plain dict, plan is stashed via __setitem__."""
-    from django_strawberry_framework.optimizer.extension import _stash_on_context
-
     ctx: dict[str, object] = {}
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     plan = OptimizationPlan(select_related=["category"])
     _stash_on_context(ctx, "dst_optimizer_plan", plan)
@@ -3387,8 +3294,6 @@ def test_plan_stashed_on_dict_context() -> None:
 
 def test_stash_on_dict_subclass_writes_mapping_before_attributes() -> None:
     """rev-optimizer__context: dict-like contexts must use the mapping branch."""
-    from django_strawberry_framework.optimizer._context import get_context_value, stash_on_context
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     class AttributeBackedDict(dict[str, object]):
         attributes: dict[str, object]
@@ -3412,8 +3317,6 @@ def test_stash_on_dict_subclass_writes_mapping_before_attributes() -> None:
 
 def test_stash_on_non_dict_mapping_reads_correctly() -> None:
     """get_context_value retrieves stashes from non-dict mappings via item access fallback."""
-    from django_strawberry_framework.optimizer._context import get_context_value, stash_on_context
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     class NonDictMapping:
         __slots__ = ("_data",)
@@ -3448,7 +3351,6 @@ def test_get_context_value_swallows_attribute_error_from_getitem() -> None:
     ``KeyError`` / ``TypeError`` so the resolver chain sees ``default`` rather
     than a leaking ``AttributeError`` from deep inside item lookup.
     """
-    from django_strawberry_framework.optimizer._context import get_context_value
 
     class BridgedItemAccess:
         """Mimics ``StrawberryDjangoContext.__getitem__`` shape."""
@@ -3463,9 +3365,6 @@ def test_get_context_value_swallows_attribute_error_from_getitem() -> None:
 
 def test_stash_on_none_context_is_silent() -> None:
     """B5: when context is None (Strawberry default), stash is silently skipped."""
-    from django_strawberry_framework.optimizer.extension import _stash_on_context
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
-
     plan = OptimizationPlan()
     # Should not raise.
     _stash_on_context(None, "dst_optimizer_plan", plan)
@@ -3473,10 +3372,7 @@ def test_stash_on_none_context_is_silent() -> None:
 
 def test_plan_stashed_on_object_context_unit() -> None:
     """B5: when context is an object, plan is stashed via setattr."""
-    from django_strawberry_framework.optimizer.extension import _stash_on_context
-
     ctx = SimpleNamespace()
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     plan = OptimizationPlan(prefetch_related=["items"])
     _stash_on_context(ctx, "dst_optimizer_plan", plan)
@@ -3492,11 +3388,6 @@ def test_stash_on_read_only_mapping_is_silent() -> None:
     so the optimizer's introspection-stash failure never crashes the
     request.
     """
-    from types import MappingProxyType
-
-    from django_strawberry_framework.optimizer.extension import _stash_on_context
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
-
     ctx = MappingProxyType[str, object]({})
     plan = OptimizationPlan(prefetch_related=["items"])
     # Should not raise.
@@ -3511,8 +3402,6 @@ def test_stash_falls_back_to_setitem_on_typeerror() -> None:
     writes, so a subclass with hostile attribute assignment still stores
     the optimizer plan where ``get_context_value`` will read it.
     """
-    from django_strawberry_framework.optimizer.extension import _stash_on_context
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     class TypeErrorOnSetattr(dict[str, object]):
         @override
@@ -3538,8 +3427,6 @@ def test_stash_on_immutable_dict_subclass_is_silent() -> None:
     skipped, contradicting the docstring contract ("Frozen contexts ...
     raise on assignment; those stashes are silently skipped").
     """
-    from django_strawberry_framework.optimizer._context import stash_on_context
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     class ImmutableDictSubclass(dict[str, object]):
         @override
@@ -3560,7 +3447,6 @@ def test_stash_does_not_swallow_unexpected_exceptions_from_setitem() -> None:
     exception from ``__setitem__`` must surface the error rather than
     silently losing the optimizer stash.
     """
-    from django_strawberry_framework.optimizer._context import stash_on_context
 
     class GuardedMapping(dict[str, object]):
         @override
@@ -3578,17 +3464,6 @@ def test_stash_does_not_swallow_unexpected_exceptions_from_setitem() -> None:
 
 def test_clear_optimizer_context_removes_all_keys_from_object_and_dict() -> None:
     """Start-of-execution clear drops every DST_OPTIMIZER_* key on object and dict contexts."""
-    from django_strawberry_framework.optimizer._context import (
-        DST_OPTIMIZER_FK_ID_ELISIONS,
-        DST_OPTIMIZER_LOOKUP_PATHS,
-        DST_OPTIMIZER_PLAN,
-        DST_OPTIMIZER_PLANNED,
-        DST_OPTIMIZER_STRICTNESS,
-        clear_optimizer_context,
-        get_context_value,
-        stash_on_context,
-    )
-
     empty: dict[str, object] = {}
     for ctx in (SimpleNamespace(), empty):
         stash_on_context(ctx, DST_OPTIMIZER_PLAN, object())
@@ -3606,12 +3481,6 @@ def test_clear_optimizer_context_removes_all_keys_from_object_and_dict() -> None
 
 def test_clear_optimizer_context_clears_slots_mapping_via_item_delete() -> None:
     """``__slots__`` mapping stash (setattr fails -> ``__setitem__``) clears via ``del``."""
-    from django_strawberry_framework.optimizer._context import (
-        DST_OPTIMIZER_PLAN,
-        clear_optimizer_context,
-        get_context_value,
-        stash_on_context,
-    )
 
     class SlotsMapping:
         __slots__ = ("_data",)
@@ -3639,10 +3508,6 @@ def test_clear_optimizer_context_clears_slots_mapping_via_item_delete() -> None:
 
 def test_clear_optimizer_context_none_and_frozen_are_noops() -> None:
     """``None`` and frozen mappings skip clear without raising."""
-    from types import MappingProxyType
-
-    from django_strawberry_framework.optimizer._context import clear_optimizer_context
-
     clear_optimizer_context(None)
     clear_optimizer_context(MappingProxyType({"dst_optimizer_plan": object()}))
 
@@ -3655,10 +3520,6 @@ def test_clear_optimizer_context_locked_querydict_is_noop() -> None:
     ``AttributeError`` uncaught. The guarded mapping-delete tail must swallow
     it - matching how ``stash_on_context`` tolerates the same object on write.
     """
-    from django.http import QueryDict
-
-    from django_strawberry_framework.optimizer._context import clear_optimizer_context
-
     locked = QueryDict("dst_optimizer_plan=x")  # immutable by default
     assert not locked._mutable
     clear_optimizer_context(locked)  # must not raise
@@ -3667,8 +3528,6 @@ def test_clear_optimizer_context_locked_querydict_is_noop() -> None:
 
 def test_optimizer_context_all_exports() -> None:
     """All public constants and functions in ``optimizer/_context.py`` are listed in ``__all__``."""
-    import django_strawberry_framework.optimizer._context as ctx_mod
-
     expected = {
         "DST_OPTIMIZER_FK_ID_ELISIONS",
         "DST_OPTIMIZER_KEYS",
@@ -3704,13 +3563,6 @@ def test_publish_scoped_relations_handles_empty_and_generator_keys_when_active_a
     None
 ):
     """``publish_scoped_relations`` records nothing for empty keys and consumes generators."""
-    from django_strawberry_framework.optimizer._context import (
-        begin_execution_frame,
-        end_execution_frame,
-        publish_scoped_relations,
-        relation_is_optimizer_scoped,
-    )
-
     # Inactive: no frame to record into
     publish_scoped_relations(set())
     publish_scoped_relations([])
@@ -3733,17 +3585,6 @@ def test_publish_scoped_relations_handles_empty_and_generator_keys_when_active_a
 
 def test_window_cursor_states_publish_read_and_clear_with_the_frame() -> None:
     """The frame carries each window's vocabulary by resolver key, for this execution only."""
-    from apps.library.models import Issue
-
-    from django_strawberry_framework.keyset import declared_cursor_state_for_definition
-    from django_strawberry_framework.optimizer._context import (
-        begin_execution_frame,
-        end_execution_frame,
-        publish_window_cursor_states,
-        window_cursor_state,
-    )
-    from tests._definition import make_definition
-
     declared = declared_cursor_state_for_definition(make_definition(Issue, cursor_field=("id",)))
     other = declared_cursor_state_for_definition(make_definition(Issue, cursor_field=("-id",)))
     assert declared is not None
@@ -3769,13 +3610,6 @@ def test_window_cursor_states_publish_read_and_clear_with_the_frame() -> None:
 
 def test_relation_is_optimizer_scoped_unhashable_fail_closed() -> None:
     """``relation_is_optimizer_scoped`` fails closed (returns False) for unhashable objects."""
-    from django_strawberry_framework.optimizer._context import (
-        begin_execution_frame,
-        end_execution_frame,
-        publish_scoped_relations,
-        relation_is_optimizer_scoped,
-    )
-
     # Inactive: returns False for unhashable shapes
     # basedpyright: the unhashable key is the hostile input under test;
     # relation_is_optimizer_scoped types the parameter as str
@@ -3797,14 +3631,6 @@ def test_relation_is_optimizer_scoped_unhashable_fail_closed() -> None:
 
 def test_strictness_and_scoped_relations_reentrant_isolation() -> None:
     """Re-entrant nested executions isolate strictness and scoped relations and restore cleanly."""
-    from django_strawberry_framework.optimizer._context import (
-        active_strictness,
-        begin_execution_frame,
-        end_execution_frame,
-        publish_scoped_relations,
-        relation_is_optimizer_scoped,
-    )
-
     outer = begin_execution_frame({}, nested=False, strictness="raise")
     try:
         publish_scoped_relations(["outer@Type"])
@@ -3935,11 +3761,6 @@ def test_an_optimizer_that_settled_no_configuration_reads_the_zero_argument_shap
 
 def _published_optimizer_keys(context: object) -> dict[str, object]:
     """Every optimizer stash currently readable off a request context object."""
-    from django_strawberry_framework.optimizer._context import (
-        DST_OPTIMIZER_KEYS,
-        get_context_value,
-    )
-
     return {key: get_context_value(context, key) for key in DST_OPTIMIZER_KEYS}
 
 
@@ -3960,11 +3781,6 @@ def test_a_nested_operation_does_not_take_the_outer_operations_optimizer_state()
     outer forward resolver would take the id-stub path and ``category.name``
     would come back empty.
     """
-    from django_strawberry_framework.optimizer._context import (
-        DST_OPTIMIZER_PLAN,
-        get_context_value,
-    )
-
     services.seed_data(1)
 
     class CategoryType(DjangoType):
@@ -4060,11 +3876,6 @@ def test_an_operation_started_from_a_consumer_teardown_leaves_the_request_its_pl
     lifetime, so the answer is the same whichever side of the optimizer the
     consumer entry is installed on.
     """
-    from django_strawberry_framework.optimizer._context import (
-        DST_OPTIMIZER_PLAN,
-        get_context_value,
-    )
-
     services.seed_data(1)
 
     class CategoryType(DjangoType):
@@ -4308,8 +4119,6 @@ def test_optimizer_downgrades_select_related_for_custom_get_queryset() -> None:
     This row keeps the plan slots (empty ``select_related``, one ``Prefetch``,
     uncacheable).
     """
-    from django.db.models import Prefetch
-
     services.seed_data(1)
     calls: list[object] = []
 
@@ -4506,8 +4315,6 @@ def test_b8_consumer_select_related_does_not_mutate_cached_plan() -> None:
 @pytest.mark.django_db
 def test_b8_consumer_prefetch_object_suppresses_optimizer_entry() -> None:
     """B8: a consumer ``Prefetch("items", queryset=Item.objects.all())`` keeps its slot."""
-    from django.db.models import Prefetch
-
     services.seed_data(1)
 
     class ItemType(DjangoType):
@@ -4574,8 +4381,6 @@ def test_b8_consumer_prefetch_object_suppresses_optimizer_entry() -> None:
 @pytest.mark.django_db
 def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch() -> None:
     """B8: a consumer's plain ``"items"`` string is replaced by the optimizer's nested ``Prefetch``."""
-    from django.db.models import Prefetch
-
     services.seed_data(1)
 
     class EntryType(DjangoType):
@@ -4692,8 +4497,6 @@ def test_singleton_factory_extensions_form_emits_no_deprecation_warning() -> Non
 
 def test_hint_is_skip_handles_sentinel_record_and_unknown_shapes() -> None:
     """``hint_is_skip`` returns the documented bool for every supported shape."""
-    from django_strawberry_framework.optimizer.hints import OptimizerHint, hint_is_skip
-
     assert hint_is_skip(None) is False
     assert hint_is_skip(OptimizerHint.SKIP) is True
     assert hint_is_skip(OptimizerHint(skip=True)) is True
@@ -4907,7 +4710,6 @@ def test_model_for_type_reverse_lookup_works_for_secondary_type() -> None:
     composition surfaces both legs of the pair: ``origin`` is the
     secondary, ``model`` is the underlying Django model.
     """
-    from graphql import GraphQLList, GraphQLNonNull
 
     class ItemType(DjangoType):
         class Meta:
@@ -5016,13 +4818,6 @@ def test_apply_connection_optimization_uses_active_optimizer_cache() -> None:
     so connection-field plans hit the SAME instance-bound cache the middleware
     uses (rather than a throwaway cache-less extension).
     """
-    from django_strawberry_framework.optimizer._context import (
-        active_optimizer as _active_optimizer,
-    )
-    from django_strawberry_framework.optimizer.extension import (
-        apply_connection_optimization,
-    )
-
     services.seed_data(1)
 
     class CategoryType(DjangoType):
@@ -5071,8 +4866,6 @@ def test_publish_plan_to_context_unions_parent_and_nested_sentinel_sets() -> Non
     after the nested connection returns. ``DST_OPTIMIZER_PLAN`` stays last-wins
     introspection (not unioned).
     """
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
-
     ext = DjangoOptimizerExtension(strictness="warn")
     parent_plan = OptimizationPlan(
         select_related=["category"],
@@ -5105,8 +4898,6 @@ def test_publish_plan_to_context_unions_parent_and_nested_sentinel_sets() -> Non
 
 def test_publish_plan_to_context_union_tolerates_non_set_existing_stash() -> None:
     """``_stash_union`` overwrites a non-set existing stash defensively (no crash)."""
-    from django_strawberry_framework.optimizer._context import get_context_value
-
     ctx = SimpleNamespace()
     # Pre-seed a non-set value under the planned key (defensive shape).
     DjangoOptimizerExtension._stash_union(ctx, "dst_optimizer_planned", frozenset({"a"}))
@@ -5138,14 +4929,6 @@ def test_nested_connection_fallback_publish_unions_parent_planned_set_end_to_end
     shared context (otherwise a planned sibling would spuriously strictness-flag
     after the nested connection returned).
     """
-    from django.http import HttpRequest
-
-    from django_strawberry_framework.filters import FilterSet
-    from django_strawberry_framework.optimizer._context import (
-        DST_OPTIMIZER_PLANNED,
-        get_context_value,
-    )
-
     services.seed_data(1)
 
     class ItemFilter(FilterSet):
@@ -5236,10 +5019,6 @@ def test_cascading_target_downgrades_join_to_prefetch() -> None:
     (b) narrows by a user-derived predicate, so the child SQL carries the live
     user's value - a non-distinguishing ``Prefetch``-only assertion cannot pass.
     """
-    from django.db.models import Prefetch
-
-    from django_strawberry_framework.permissions import apply_cascade_permissions
-
     seen_users: list[object] = []
 
     class CategoryType(DjangoType):
@@ -5327,8 +5106,6 @@ def test_plan_with_cascading_hook_uncacheable() -> None:
     unaffected for non-cascading types). Separate extension instances keep the two
     counter streams independently observable.
     """
-    from django_strawberry_framework.permissions import apply_cascade_permissions
-
     public_cat = Category.objects.create(name="public_cat", is_private=False)
     Item.objects.create(name="pub_item", category=public_cat)
 
@@ -5551,8 +5328,6 @@ def test_b8_consumer_wins_prefetch_nested_keys_stay_strictness_visible() -> None
     strictness sentinels. Publishing the pre-diff plan left ``entries`` marked
     planned while every item row lazy-loaded it.
     """
-    from django.db.models import Prefetch
-
     services.seed_data(1)
 
     class EntryType(DjangoType):
@@ -5619,8 +5394,6 @@ def test_b8_consumer_wins_prefetch_preserves_nested_fk_id_elision() -> None:
     ``strictness="raise"`` (the pre-fix code stripped nested elision keys with
     the dropped Prefetch, falsely flagging the elided relation).
     """
-    from django.db.models import Prefetch
-
     services.seed_data(1)
 
     class CategoryType(DjangoType):
@@ -5780,8 +5553,6 @@ async def test_strictness_flags_an_unplanned_relation_before_the_async_sync_gate
     probe reads only the instance cache (never the database), so an armed guard
     reaches the relation first and names it.
     """
-    from asgiref.sync import sync_to_async
-
     await sync_to_async(services.seed_data)(1)
 
     class ItemType(DjangoType):
@@ -5824,8 +5595,6 @@ def test_optimizer_unadapted_non_queryset_passthrough() -> None:
     Wire cost of a list-returning root with the optimizer installed is
     ``examples/fakeshop/test_query/test_products_visibility_api.py::test_nested_connection_still_costs_one_query_per_parent_when_the_optimizer_gets_a_list``.
     """
-    from django_strawberry_framework.utils.querysets import unwrap_async_queryset_adapter
-
     ext = DjangoOptimizerExtension()
     non_qs_result = ext._optimize([1, 2, 3], _as_partial_resolve_info(SimpleNamespace()))
     assert non_qs_result == [1, 2, 3]
@@ -5834,11 +5603,6 @@ def test_optimizer_unadapted_non_queryset_passthrough() -> None:
 
 def test_optimizer_preserves_async_adapter_evaluated_cache() -> None:
     """Evaluated queryset with adapter returns re-wrapped adapter."""
-    from django_strawberry_framework.utils.querysets import (
-        unwrap_async_queryset_adapter,
-        wrap_async_queryset_adapter,
-    )
-
     ext = DjangoOptimizerExtension()
     qs_eval = Category.objects.all()
     qs_eval._result_cache = []
@@ -5852,11 +5616,6 @@ def test_optimizer_preserves_async_adapter_evaluated_cache() -> None:
 
 def test_optimizer_preserves_async_adapter_unresolved_type() -> None:
     """Unresolved return type with adapter returns re-wrapped adapter."""
-    from django_strawberry_framework.utils.querysets import (
-        unwrap_async_queryset_adapter,
-        wrap_async_queryset_adapter,
-    )
-
     ext = DjangoOptimizerExtension()
     qs_unresolved = Category.objects.all()
     adapted_unresolved = wrap_async_queryset_adapter(qs_unresolved)
@@ -5871,11 +5630,6 @@ def test_optimizer_preserves_async_adapter_unresolved_type() -> None:
 
 def test_optimizer_preserves_async_adapter_optimized_tail() -> None:
     """Optimized tail with adapter returns re-wrapped adapter."""
-    from django_strawberry_framework.utils.querysets import (
-        unwrap_async_queryset_adapter,
-        wrap_async_queryset_adapter,
-    )
-
     ext = DjangoOptimizerExtension()
 
     class CategoryType(DjangoType):
@@ -5913,16 +5667,6 @@ class _FrameSentinel:
 
 def _read_optimizer_state_in_a_copied_context(copied: contextvars.Context) -> dict[str, object]:
     """Everything a task that copied an execution's context could read back."""
-    from django_strawberry_framework.optimizer._context import (
-        active_optimizer,
-        active_strictness,
-        cache_key_parts_memo,
-        converted_selections_memo,
-        execution_plan_memo,
-        optimizer_value,
-        relation_is_optimizer_scoped,
-    )
-
     read: dict[str, object] = {}
 
     def _read() -> None:
@@ -5949,19 +5693,6 @@ def test_an_execution_frame_a_task_copied_answers_nothing_once_the_execution_end
     so the copy answers exactly as a context with no optimizer running does, and
     every sentinel the frame held is collectable.
     """
-    from strawberry.types.nodes import SelectedField
-
-    from django_strawberry_framework.optimizer._context import (
-        begin_execution_frame,
-        cache_key_parts_memo,
-        converted_selections_memo,
-        end_execution_frame,
-        execution_plan_memo,
-        publish_scoped_relations,
-        stash_for_optimizer,
-    )
-    from django_strawberry_framework.optimizer.plans import OptimizationPlan
-
     extension = DjangoOptimizerExtension()
     # Real memo entries of each memo's declared type; the weak-referenceable part of each is
     # what the references below watch (a tuple or a list is not itself weak-referenceable).
@@ -6041,11 +5772,6 @@ def test_an_operation_in_a_context_that_outlived_a_request_publishes_as_its_own(
     has already returned - and what it read back would be the earlier
     operation's stashes rather than its own.
     """
-    from django_strawberry_framework.optimizer._context import (
-        DST_OPTIMIZER_PLAN,
-        optimizer_value,
-    )
-
     services.seed_data(1)
 
     class CategoryType(DjangoType):

@@ -134,6 +134,7 @@ from types import CoroutineType, ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Any, NoReturn, Protocol, TypeAlias, TypeGuard
 from urllib.parse import urlparse
 
+import channels.auth
 import pytest
 import strawberry
 from asgiref.typing import (
@@ -145,12 +146,19 @@ from asgiref.typing import (
 from channels.auth import AuthMiddleware
 from channels.consumer import AsyncConsumer
 from channels.db import database_sync_to_async
+from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.security.websocket import AllowedHostsOriginValidator, OriginValidator
 from channels.sessions import CookieMiddleware, SessionMiddleware
 from channels.testing import HttpCommunicator, WebsocketCommunicator
 from django.conf import settings
-from django.contrib.auth import logout
+from django.contrib.auth import (
+    BACKEND_SESSION_KEY,
+    HASH_SESSION_KEY,
+    SESSION_KEY,
+    get_user_model,
+    logout,
+)
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import AbstractUser, AnonymousUser, UserManager
 from django.contrib.sessions.backends.base import SessionBase
@@ -161,7 +169,14 @@ from django.test import AsyncClient, RequestFactory, override_settings
 from django.urls import URLPattern, path
 from graphql import GraphQLError
 from graphql_client import JSONObject
+from strawberry.channels import GraphQLWSConsumer
+from strawberry.channels.handlers.ws_handler import ChannelsWebSocketAdapter
 from strawberry.extensions import SchemaExtension
+from strawberry.schema import BaseSchema
+from strawberry.subscriptions.protocols.graphql_transport_ws import (
+    handlers as transport_ws_handlers,
+)
+from strawberry.subscriptions.protocols.graphql_ws import handlers as legacy_ws_handlers
 from strawberry.types import ExecutionResult
 from strawberry.types.execution import ExecutionResult as StrawberryExecutionResult
 from typing_extensions import override
@@ -169,8 +184,12 @@ from typing_extensions import override
 import django_strawberry_framework
 import django_strawberry_framework.consumers as consumers_module
 import django_strawberry_framework.routers as routers_module
+from django_strawberry_framework import DjangoSchema, finalize_django_types
+from django_strawberry_framework.auth import logout_mutation
+from django_strawberry_framework.auth.sessions import _SCOPE_LOCK_KEY
 from django_strawberry_framework.error_policy import DEFAULT_ERROR_POLICY
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils import sessions as session_store_module
 from django_strawberry_framework.utils.permissions import ChannelsRequestAdapter, request_from_info
 from tests._idioms import is_object_dict, is_object_list, run_capturing, websocket_scope
@@ -178,9 +197,7 @@ from tests._soft_dependency import blocked_modules, evicted_modules, simulated_a
 
 if TYPE_CHECKING:
     from channels.consumer import _ChannelScope
-    from strawberry.channels import GraphQLWSConsumer
 
-    from django_strawberry_framework import DjangoSchema
     from django_strawberry_framework.consumers import RevalidatingGraphQLWSConsumer, _GatedSocket
 
 # The hint floors are deliberately RE-TYPED literals, matching
@@ -591,7 +608,8 @@ urlpatterns = [path(_LOGOUT_PROBE_PATH, _logout_probe)]
 
 
 def _router_class() -> type[routers_module.DjangoGraphQLProtocolRouter]:
-    from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter
+    # Each call re-resolves the lazy module ``__getattr__`` name; the cache tests depend on it.
+    from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter  # noqa: PLC0415
 
     return DjangoGraphQLProtocolRouter
 
@@ -963,14 +981,6 @@ def _make_user_and_session(
     same ``session.save()``, same cookie spelling. The session key is returned
     too, because the revocation rows revoke the row out of band.
     """
-    from django.conf import settings
-    from django.contrib.auth import (
-        BACKEND_SESSION_KEY,
-        HASH_SESSION_KEY,
-        SESSION_KEY,
-        get_user_model,
-    )
-
     users = get_user_model().objects
     assert isinstance(users, UserManager)
     user = users.create_user(username=username, password=password)
@@ -991,8 +1001,6 @@ def _flush_the_session(_user: AbstractBaseUser, session_key: str) -> None:
     both of the spec's "revoke" and "flush" shapes - the stored record is gone,
     and ``channels.auth.get_user`` then finds no ``_auth_user_id``.
     """
-    from django.conf import settings
-
     importlib.import_module(settings.SESSION_ENGINE).SessionStore(session_key).flush()
 
 
@@ -1005,8 +1013,6 @@ def _session_row_still_exists(session_key: str) -> bool:
     itself completed. Asked through the engine's own ``exists`` rather than the
     ``Session`` model, so the question stays true for any server-side engine.
     """
-    from django.conf import settings
-
     return importlib.import_module(settings.SESSION_ENGINE).SessionStore().exists(session_key)
 
 
@@ -1056,16 +1062,14 @@ def _poison_the_session_store(monkeypatch: pytest.MonkeyPatch) -> None:
     exception would surface as a denied operation, so "the operation succeeded"
     is only possible if the read never happened.
 
-    The target is ``utils/sessions.py``, the resolver's home: it lives outside the
-    eagerly-importing ``auth`` package;
-    ``consumers.py::_refreshed_actor`` imports the name from there per call, so
-    patching the module attribute is what the coroutine reads.
+    The target is ``consumers.py``'s module-level ``session_store_class`` binding,
+    which is what ``consumers.py::_refreshed_actor`` calls.
     """
 
     def _raise() -> NoReturn:
         raise RuntimeError("poisoned session store")
 
-    monkeypatch.setattr(session_store_module, "session_store_class", _raise)
+    monkeypatch.setattr(consumers_module, "session_store_class", _raise)
 
 
 def _package_logger_records(caplog: pytest.LogCaptureFixture) -> list[LogRecord]:
@@ -1227,8 +1231,6 @@ def _instrument_consumer_close(monkeypatch: pytest.MonkeyPatch) -> _CloseProbe:
     silent no-op under a real server and a second output message under
     ``channels.testing``, and neither tells the caller anything.
     """
-    from channels.generic.websocket import AsyncWebsocketConsumer
-
     probe = _CloseProbe()
     native = AsyncWebsocketConsumer.close
 
@@ -1308,8 +1310,6 @@ def _record_the_transport(monkeypatch: pytest.MonkeyPatch) -> _TransportLog:
     ``_instrument_consumer_close``'s narrower seam is the right one whenever the
     subject is the close alone.
     """
-    from channels.consumer import AsyncConsumer
-
     log = _TransportLog()
     native = AsyncConsumer.send
 
@@ -1421,9 +1421,6 @@ def _record_outbound_gate(monkeypatch: pytest.MonkeyPatch) -> _OutboundGateProbe
         message: dict[str, object],
         send: Callable[[dict[str, object]], Awaitable[None]],
     ) -> None:
-        from strawberry.channels import GraphQLWSConsumer
-        from strawberry.channels.handlers.ws_handler import ChannelsWebSocketAdapter
-
         assert isinstance(websocket, ChannelsWebSocketAdapter)
         consumer = websocket.ws_consumer
         assert isinstance(consumer, GraphQLWSConsumer)
@@ -1894,8 +1891,6 @@ def _graphql_ws_consumer() -> "type[GraphQLWSConsumer[None, None]]":
     call keeps ``issubclass`` comparisons in these rows against the same class
     object the cached router closure holds, whatever ran before.
     """
-    from strawberry.channels import GraphQLWSConsumer
-
     return GraphQLWSConsumer
 
 
@@ -4075,8 +4070,6 @@ async def test_a_failing_auth_backend_load_also_fails_closed(
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
-    import channels.auth
-
     _user, cookie, _session_key = await _make_user_and_session("backend_failure_probe")
     router = _router()
 
@@ -4413,8 +4406,6 @@ def _masking_schema(**schema_kwargs: Any) -> "DjangoSchema":  # pyright: ignore[
     at construction, which is what both rows configure. Declares no
     ``DjangoType``, so the package registry is untouched.
     """
-    from django_strawberry_framework import DjangoSchema
-
     return DjangoSchema(query=Query, subscription=Subscription, **schema_kwargs)
 
 
@@ -5887,11 +5878,6 @@ def _upstream_handler_sources() -> list[str]:
     Read off disk rather than described here, so the transparency row below judges
     the INSTALLED upstream rather than a remembered one.
     """
-    from strawberry.subscriptions.protocols.graphql_transport_ws import (
-        handlers as transport_ws_handlers,
-    )
-    from strawberry.subscriptions.protocols.graphql_ws import handlers as legacy_ws_handlers
-
     return [
         Path(inspect.getfile(module)).read_text()
         for module in (transport_ws_handlers, legacy_ws_handlers)
@@ -5914,8 +5900,6 @@ def _wrapped_schema_reads() -> frozenset[str]:
 
 def _public_schema_names() -> frozenset[str]:
     """The public names ``BaseSchema`` declares, the contract a handler reads from."""
-    from strawberry.schema import BaseSchema
-
     return frozenset(name for name in vars(BaseSchema) if not name.startswith("_"))
 
 
@@ -6073,8 +6057,6 @@ def _build_logout_schema() -> "DjangoSchema":
     and nothing else. ``Subscription`` comes along because the rows that matter
     are about an operation admitted BEFORE the logout and still running after it.
     """
-    from django_strawberry_framework import DjangoSchema, finalize_django_types
-    from django_strawberry_framework.auth import logout_mutation
 
     @strawberry.type
     class Mutation:
@@ -6087,8 +6069,6 @@ def _build_logout_schema() -> "DjangoSchema":
 @pytest.fixture
 def logout_schema() -> "Iterator[DjangoSchema]":
     """Yield the logout-carrying schema, clearing the package registry either side."""
-    from django_strawberry_framework.registry import registry
-
     registry.clear()
     try:
         yield _build_logout_schema()
@@ -6286,8 +6266,6 @@ async def test_a_same_socket_logout_cannot_complete_across_a_parked_protected_se
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
-    from django_strawberry_framework.auth.sessions import _SCOPE_LOCK_KEY
-
     _user, cookie, session_key = await _make_user_and_session("parked_send_probe")
     controller = _controller("parked-send")
     gate = _record_outbound_gate(monkeypatch)
@@ -6377,8 +6355,6 @@ async def test_a_transition_in_flight_denies_both_checkpoints_inside_a_positive_
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
-    import channels.auth
-
     _user, cookie, session_key = await _make_user_and_session("transition_window_probe")
     running = _controller("transition-running")
     blocked = _controller("transition-blocked")

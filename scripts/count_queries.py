@@ -72,12 +72,13 @@ from _bench_common import (
 from graphql import GraphQLError, OperationDefinitionNode, parse
 from typing_extensions import NotRequired
 
+from django_strawberry_framework import DjangoSchema, strawberry_config
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
     from typing_extensions import TypeIs
 
-    from django_strawberry_framework import DjangoSchema
 
 BATCHED = "batched"
 SCALES = "scales with cardinality"
@@ -312,7 +313,6 @@ def _schema(*, optimizer: bool) -> DjangoSchema:
 
     if optimizer:
         return fakeshop_schema.schema
-    from django_strawberry_framework import DjangoSchema, strawberry_config
 
     return DjangoSchema(
         query=fakeshop_schema.Query,

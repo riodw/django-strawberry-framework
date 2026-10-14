@@ -12,11 +12,16 @@ from typing_extensions import override
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError, _safe_class_name
+from django_strawberry_framework.filters import FilterSet
+from django_strawberry_framework.orders import OrderSet
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import finalizer as finalizer_module
 from django_strawberry_framework.types.finalizer import (
     _annotation_names,
     _audit_model_label_routing,
+    _field_surface_names,
+    _format_owner_model_mismatch_error,
+    _format_owner_orderset_model_mismatch_error,
     _safe_field_label,
     _safe_qualified_class_name,
     _safe_str,
@@ -395,18 +400,12 @@ def test_incomplete_registry_registration_is_typed_at_finalize() -> None:
 
 def test_owner_model_mismatch_formatters_ride_shared_template() -> None:
     """FilterSet and OrderSet first-bind model-mismatch messages share one template."""
-    from django_strawberry_framework.types.finalizer import (
-        _format_owner_model_mismatch_error,
-        _format_owner_orderset_model_mismatch_error,
-    )
-
     for fn in (_format_owner_model_mismatch_error, _format_owner_orderset_model_mismatch_error):
         assert "_format_owner_set_model_mismatch_error" in fn.__code__.co_names
 
 
 def test_field_surface_names_ignores_field_without_python_or_graphql_name() -> None:
     """An inherited strawberry field with no python or graphql name is skipped."""
-    from django_strawberry_framework.types.finalizer import _field_surface_names
 
     class _FakeField:
         python_name = None
@@ -430,7 +429,6 @@ def test_field_surface_names_ignores_field_without_python_or_graphql_name() -> N
 
 def test_filterset_multi_owner_model_mismatch_raises_on_secondary_owner() -> None:
     """A secondary owner with an incompatible model is rejected during FilterSet binding."""
-    from django_strawberry_framework.filters import FilterSet
 
     class GenreFilterSet(FilterSet):
         class Meta:
@@ -469,7 +467,6 @@ def test_orderset_non_class_meta_model_is_typed_at_finalize() -> None:
     guard must raise the family model-mismatch ``ConfigurationError`` naming
     the declared value instead of leaking ``issubclass()``'s raw ``TypeError``.
     """
-    from django_strawberry_framework.orders import OrderSet
 
     class GenreOrderSet(OrderSet):
         class Meta:
@@ -495,7 +492,6 @@ def test_orderset_non_class_meta_model_is_typed_at_finalize() -> None:
 
 def test_orderset_multi_owner_model_mismatch_raises_on_secondary_owner() -> None:
     """A secondary owner with an incompatible model is rejected during OrderSet binding."""
-    from django_strawberry_framework.orders import OrderSet
 
     class GenreOrderSet(OrderSet):
         class Meta:

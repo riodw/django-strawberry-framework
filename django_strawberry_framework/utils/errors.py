@@ -180,7 +180,7 @@ def field_error(path: str, messages: object, *, codes: object = None) -> FieldEr
     ``ErrorDetail.code``s / Django ``ValidationError.code``s (or a framework code); ``None``
     yields ``[]``.
     """
-    from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY, FieldError
+    from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY, FieldError  # noqa: PLC0415 - import cycle
 
     normalized_path = _safe_text(path, fallback="")
     key = normalized_path or NON_FIELD_ERROR_KEY

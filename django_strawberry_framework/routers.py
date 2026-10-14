@@ -46,6 +46,8 @@ import re
 import threading
 from typing import TYPE_CHECKING
 
+from django.urls import re_path
+
 from .consumers import (
     _DEFAULT_REVALIDATION_WINDOW,
     DjangoWebSocketHostValidator,
@@ -404,17 +406,15 @@ def _build_router_class_uncached() -> type[ProtocolTypeRouter]:
     _ = require_channels()
 
     try:
-        from channels.auth import AuthMiddlewareStack
-        from channels.routing import ProtocolTypeRouter, URLRouter
-        from channels.security.websocket import AllowedHostsOriginValidator
+        from channels.auth import AuthMiddlewareStack  # noqa: PLC0415 - channels is optional
+        from channels.routing import ProtocolTypeRouter, URLRouter  # noqa: PLC0415 - channels is optional
+        from channels.security.websocket import AllowedHostsOriginValidator  # noqa: PLC0415 - channels is optional
     except ImportError as exc:
         raise ImportError(_CHANNELS_BROKEN_HINT) from exc
     try:
-        from strawberry.channels import GraphQLWSConsumer
+        from strawberry.channels import GraphQLWSConsumer  # noqa: PLC0415 - channels is optional
     except ImportError as exc:
         raise ImportError(_STRAWBERRY_CHANNELS_BROKEN_HINT) from exc
-
-    from django.urls import re_path
 
     # Built once, inside the same guarded builder, so the package consumer class
     # is cached with ``_router_class`` and dies with it: a module-level cache in

@@ -30,6 +30,7 @@ registration refusal.
 
 from __future__ import annotations
 
+import importlib
 import re
 import sys
 from collections.abc import Iterator
@@ -39,6 +40,7 @@ import pytest
 import strawberry
 from apps.library import models as library_models
 from apps.products import models as product_models
+from django import forms
 from django.db.models import Model
 from strawberry import relay
 from strawberry.types.base import StrawberryObjectDefinition, get_object_definition
@@ -52,20 +54,67 @@ from django_strawberry_framework import (
     finalize_django_types,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.forms.sets import (
+    _ALLOWED_MODELFORM_META_KEYS,
+    _ALLOWED_PLAIN_FORM_META_KEYS,
+    DjangoFormMutation,
+    DjangoFormMutationMetaclass,
+    DjangoModelFormMutation,
+    bind_form_mutations,
+)
 from django_strawberry_framework.mutations import (
     DjangoModelPermission as DjangoModelPermissionFromPackage,
 )
 from django_strawberry_framework.mutations import (
     DjangoMutation as DjangoMutationFromPackage,
 )
-from django_strawberry_framework.mutations.inputs import INPUTS_MODULE_PATH
+from django_strawberry_framework.mutations import resolvers as mutation_resolvers
+from django_strawberry_framework.mutations import sets as mutation_sets
+from django_strawberry_framework.mutations.inputs import (
+    CREATE,
+    INPUTS_MODULE_PATH,
+    PARTIAL,
+    _materialized_names,
+    editable_input_fields,
+    mutation_input_shape,
+)
 from django_strawberry_framework.mutations.sets import (
+    _ALLOWED_MUTATION_META_KEYS,
+    COMMON_WRITE_META_KEYS,
+    MODEL_BACKED_WRITE_META_KEYS,
+    DeclarationRegistry,
+    DjangoMutationMetaclass,
     _mutation_registry,
+    _resolve_primary_type,
     _shape_build_cache,
+    _validate_input_class,
+    _validate_permission_classes,
+    bind_mutation_outputs,
+    bind_mutations,
+    bind_write_declarations,
     clear_mutation_shape_build_cache,
     iter_mutations,
+    make_declaration_registry,
+    make_meta_validating_metaclass,
+    model_backed_permission_and_lock,
+    normalize_meta_field_selection,
+    register_mutation,
+    reject_unknown_meta_keys,
+    require_model_class,
+    require_non_delete_operation,
+    require_subclass,
+    validate_select_for_update,
 )
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.rest_framework.sets import (
+    _ALLOWED_SERIALIZER_META_KEYS,
+    SerializerMutation,
+)
+from django_strawberry_framework.types.base import (
+    ALLOWED_META_KEYS,
+    DEFERRED_META_KEYS,
+)
+from django_strawberry_framework.utils.inputs import RELATION_SINGLE, SCALAR
 from tests._idioms import definition_raises, pickle_roundtrip
 from tests.optimizer import _link_models
 
@@ -628,8 +677,6 @@ def test_registration_is_idempotent() -> None:
             model = product_models.Item
             operation = "create"
 
-    from django_strawberry_framework.mutations.sets import register_mutation
-
     register_mutation(CreateItem)
     assert _mutation_registry.count(CreateItem) == 1
 
@@ -689,8 +736,6 @@ def test_bind_materializes_input_and_payload_globals() -> None:
     shared parked-globals lifecycle), so a prior test's parked ``ItemInput`` would
     make a bare ``hasattr`` pass spuriously.
     """
-    from django_strawberry_framework.mutations.inputs import _materialized_names
-
     _declare_products_primaries()
 
     class CreateItem(DjangoMutation):
@@ -757,8 +802,6 @@ def test_bind_is_retry_idempotent_after_fixable_later_phase_failure(
     Resetting the materialization ledgers in ``finalize_django_types`` before the
     bind sequence makes the rerun clean.
     """
-    from django_strawberry_framework.mutations.inputs import _materialized_names
-
     _declare_products_primaries()
 
     class CreateItem(DjangoMutation):
@@ -798,8 +841,6 @@ def test_bind_merges_consumer_input_class_with_generated_remainder() -> None:
     consumer's ``name`` (with its custom description preserved) AND the generated
     ``category_id`` - under the canonical ``ItemInput`` name, never just ``name``.
     """
-    from django_strawberry_framework.mutations.inputs import _materialized_names
-
     _declare_products_primaries()
 
     @strawberry.input
@@ -825,7 +866,6 @@ def test_bind_merges_consumer_input_class_with_generated_remainder() -> None:
     assert fields["name"].description == "A custom-described name"
     spec_by_attr = {spec.input_attr: spec for spec in CreateItem._input_field_specs or ()}
     assert set(spec_by_attr) == set(fields)
-    from django_strawberry_framework.utils.inputs import RELATION_SINGLE, SCALAR
 
     assert spec_by_attr["name"].kind == SCALAR
     assert spec_by_attr["category_id"].kind == RELATION_SINGLE
@@ -834,8 +874,6 @@ def test_bind_merges_consumer_input_class_with_generated_remainder() -> None:
 
 def test_bind_merges_consumer_partial_input_class_for_update() -> None:
     """A consumer ``partial_input_class`` is likewise merged on the update side."""
-    from django_strawberry_framework.mutations.inputs import _materialized_names
-
     _declare_products_primaries()
 
     @strawberry.input
@@ -920,8 +958,6 @@ def test_bind_accepts_globalid_relation_override_for_relay_target() -> None:
     the id type-check and the Decision-10 visibility contract still ride the merged
     field. The merge honors the consumer's field, and the generator fills the remainder.
     """
-    from django_strawberry_framework.mutations.inputs import _materialized_names
-
     _declare_products_primaries()
 
     @strawberry.input
@@ -1062,8 +1098,6 @@ def test_bind_accepts_m2m_relation_override_as_globalid_list() -> None:
     ``relay.GlobalID`` core AND the one-level ``list`` container (here adding a
     description) is honored, and the generator fills the remainder.
     """
-    from django_strawberry_framework.mutations.inputs import _materialized_names
-
     _declare_book_m2m_primaries()
 
     @strawberry.input
@@ -1261,7 +1295,6 @@ def test_registry_clear_co_clears_mutation_namespace_and_declarations() -> None:
     # Declaration registry emptied via ``clear_mutation_registry``; ledger emptied
     # via ``clear_mutation_input_namespace`` so a fresh finalize re-emits cleanly.
     assert iter_mutations() == ()
-    from django_strawberry_framework.mutations.inputs import _materialized_names
 
     assert _materialized_names == {}
 
@@ -1294,7 +1327,6 @@ def test_bind_resolve_primary_distinguishes_ambiguous_from_zero_type() -> None:
     the unit level. The bind consults ``types_for`` (not just ``registry.get``,
     which returns ``None`` for both cases) to phrase the right message.
     """
-    from django_strawberry_framework.mutations.sets import _resolve_primary_type
 
     class IssueTypeA(DjangoType):
         class Meta:
@@ -1347,11 +1379,6 @@ def test_mutation_meta_key_rejected_on_django_type_meta() -> None:
 
 def test_deferred_and_allowed_meta_keys_unchanged() -> None:
     """The ``DjangoType`` Meta-key sets gained no mutation key (byte-unchanged contract)."""
-    from django_strawberry_framework.types.base import (
-        ALLOWED_META_KEYS,
-        DEFERRED_META_KEYS,
-    )
-
     for mutation_key in (
         "operation",
         "input_class",
@@ -1364,17 +1391,6 @@ def test_deferred_and_allowed_meta_keys_unchanged() -> None:
 
 def test_write_flavor_meta_vocabulary_composition() -> None:
     """All write flavors compose their allowed Meta keys from the mutation foundation vocabulary."""
-    from django_strawberry_framework.forms.sets import (
-        _ALLOWED_MODELFORM_META_KEYS,
-        _ALLOWED_PLAIN_FORM_META_KEYS,
-    )
-    from django_strawberry_framework.mutations.sets import (
-        _ALLOWED_MUTATION_META_KEYS,
-        COMMON_WRITE_META_KEYS,
-        MODEL_BACKED_WRITE_META_KEYS,
-    )
-    from django_strawberry_framework.rest_framework.sets import _ALLOWED_SERIALIZER_META_KEYS
-
     assert frozenset({"fields", "exclude", "permission_classes"}) == COMMON_WRITE_META_KEYS
     assert (
         COMMON_WRITE_META_KEYS | frozenset({"operation", "select_for_update"})
@@ -1495,8 +1511,6 @@ def test_bind_skips_relation_lock_for_non_relay_target() -> None:
 
     finalize_django_types()
 
-    from django_strawberry_framework.mutations.inputs import _materialized_names
-
     merged = _materialized_names["ItemInput"]
     assert CreateItem._input_class is merged
     field_names = {
@@ -1522,8 +1536,6 @@ def test_validate_meta_is_the_relocated_classmethod_seam() -> None:
     as before (a representative case re-pinned), and the seam is a classmethod a
     subclass can override (the form flavor does).
     """
-    from django_strawberry_framework.mutations import sets as mutation_sets
-
     assert not hasattr(mutation_sets, "_validate_mutation_meta")
     assert "_validate_meta" in vars(DjangoMutation)
 
@@ -1546,14 +1558,6 @@ def test_model_flavor_input_seams_produce_today_defaults() -> None:
     input materialized in ``mutations.inputs`` under the canonical ``<Model>Input``
     name - the exact 036 behavior, just reached through the overridable seam.
     """
-    from django_strawberry_framework.mutations.inputs import (
-        CREATE,
-        PARTIAL,
-        _materialized_names,
-        editable_input_fields,
-        mutation_input_shape,
-    )
-
     _declare_products_primaries()
 
     class CreateItem(DjangoMutation):
@@ -1623,7 +1627,6 @@ def test_model_flavor_resolve_seams_delegate_to_resolver_entry_points() -> None:
     """
     assert "resolve_sync" in vars(DjangoMutation)
     assert "resolve_async" in vars(DjangoMutation)
-    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
 
     assert callable(mutation_resolvers.resolve_mutation_sync)
     assert callable(mutation_resolvers.resolve_mutation_async)
@@ -1636,11 +1639,6 @@ def test_make_declaration_registry_dedupes_and_rejects_post_finalize() -> None:
     post-finalize reject; a fresh registry over a disjoint list still dedupes by
     identity and rejects a declaration after finalization.
     """
-    from django_strawberry_framework.mutations.sets import (
-        DeclarationRegistry,
-        make_declaration_registry,
-    )
-
     reg: DeclarationRegistry[type[object]] = make_declaration_registry("ProbeFlavor")
 
     class Probe:
@@ -1675,8 +1673,6 @@ def test_make_meta_validating_metaclass_validates_registers_and_skips_abstract()
     skips a no-``Meta`` base, validates + registers a concrete subclass, and keeps
     ledgers disjoint when two metaclasses close over different registers.
     """
-    from django_strawberry_framework.mutations.sets import make_meta_validating_metaclass
-
     ledger_a: list[type] = []
     ledger_b: list[type] = []
     MetaA = make_meta_validating_metaclass(ledger_a.append, name="MetaA", module=__name__)
@@ -1760,11 +1756,6 @@ def test_public_metaclasses_pin_public_identity_and_pickle() -> None:
     defining module so ``module + __qualname__`` resolves back to the object,
     which is exactly what ``pickle`` requires to round-trip a class by reference.
     """
-    import importlib
-
-    from django_strawberry_framework.forms.sets import DjangoFormMutationMetaclass
-    from django_strawberry_framework.mutations.sets import DjangoMutationMetaclass
-
     cases = [
         (
             DjangoMutationMetaclass,
@@ -1793,7 +1784,6 @@ def test_public_metaclasses_pin_public_identity_and_pickle() -> None:
 
 def test_require_subclass_accepts_expected_and_rejects_with_safe_repr() -> None:
     """The shared Meta type-gate returns the class or raises with ``_safe_arg_repr``."""
-    from django_strawberry_framework.mutations.sets import require_subclass
 
     class Expected:
         pass
@@ -1842,8 +1832,6 @@ def test_require_subclass_accepts_expected_and_rejects_with_safe_repr() -> None:
 
 def test_require_non_delete_operation_accepts_create_update_and_rejects_delete() -> None:
     """The shared create/update lookup is the membership test both model-backed flavors use."""
-    from django_strawberry_framework.mutations.sets import require_non_delete_operation
-
     assert (
         require_non_delete_operation("ProbeBase", "Probe", _meta_class(operation="create"))
         == "create"
@@ -1872,18 +1860,12 @@ def test_require_non_delete_operation_accepts_create_update_and_rejects_delete()
 
 def test_form_and_serializer_type_gates_ride_require_subclass() -> None:
     """Form and serializer ``_validate_meta`` type-gates share ``require_subclass``."""
-    from django_strawberry_framework.forms.sets import DjangoFormMutation, DjangoModelFormMutation
-    from django_strawberry_framework.rest_framework.sets import SerializerMutation
-
     for cls in (DjangoModelFormMutation, DjangoFormMutation, SerializerMutation):
         assert "require_subclass" in cls._validate_meta.__code__.co_names
 
 
 def test_form_and_serializer_operation_checks_ride_require_non_delete_operation() -> None:
     """Model-backed form + serializer share the create/update lookup; plain form does not."""
-    from django_strawberry_framework.forms.sets import DjangoFormMutation, DjangoModelFormMutation
-    from django_strawberry_framework.rest_framework.sets import SerializerMutation
-
     for cls in (DjangoModelFormMutation, SerializerMutation):
         assert "require_non_delete_operation" in cls._validate_meta.__code__.co_names
     assert (
@@ -1893,8 +1875,6 @@ def test_form_and_serializer_operation_checks_ride_require_non_delete_operation(
 
 def test_require_model_class_accepts_model_and_rejects_string_or_instance() -> None:
     """The shared model-class gate returns the model or raises at class-creation wording."""
-    from django_strawberry_framework.mutations.sets import require_model_class
-
     assert (
         require_model_class("Probe", product_models.Item, base_label="ProbeBase")
         is product_models.Item
@@ -1907,8 +1887,6 @@ def test_require_model_class_accepts_model_and_rejects_string_or_instance() -> N
 
 def test_normalize_meta_field_selection_returns_normalized_pair() -> None:
     """The shared fields/exclude pair normalizes both keys with one flavor label."""
-    from django_strawberry_framework.mutations.sets import normalize_meta_field_selection
-
     assert normalize_meta_field_selection(
         _meta_class(fields=["name"], exclude=None),
         flavor="DjangoMutation",
@@ -1922,8 +1900,6 @@ def test_normalize_meta_field_selection_returns_normalized_pair() -> None:
 
 def test_model_backed_permission_and_lock_defaults_and_explicit_opt_out() -> None:
     """Model-backed flavors share the DjangoModelPermission default + FOR UPDATE pair."""
-    from django_strawberry_framework.mutations.sets import model_backed_permission_and_lock
-
     classes, lock = model_backed_permission_and_lock(
         "Probe",
         _meta_class(),
@@ -1943,11 +1919,6 @@ def test_model_backed_permission_and_lock_defaults_and_explicit_opt_out() -> Non
 
 def test_bind_mutation_outputs_stashes_model_less_payload_and_slots() -> None:
     """The shared payload stash writes the three bind-output slots both ledgers fill."""
-    from django import forms
-
-    from django_strawberry_framework.forms.sets import DjangoFormMutation
-    from django_strawberry_framework.mutations.inputs import _materialized_names
-    from django_strawberry_framework.mutations.sets import bind_mutation_outputs
 
     class ProbeForm(forms.Form):
         name = forms.CharField()
@@ -1967,12 +1938,6 @@ def test_bind_mutation_outputs_stashes_model_less_payload_and_slots() -> None:
 
 def test_model_and_plain_form_binds_ride_bind_mutation_outputs() -> None:
     """Both declaration-ledger drains stash payload + slots through one shared drain."""
-    from django_strawberry_framework.forms.sets import bind_form_mutations
-    from django_strawberry_framework.mutations.sets import (
-        bind_mutations,
-        bind_write_declarations,
-    )
-
     # Both public drains delegate to the one shared body ...
     assert "bind_write_declarations" in bind_mutations.__code__.co_names
     assert "bind_write_declarations" in bind_form_mutations.__code__.co_names
@@ -1983,9 +1948,6 @@ def test_model_and_plain_form_binds_ride_bind_mutation_outputs() -> None:
 
 def test_model_and_form_validate_ride_shared_meta_helpers() -> None:
     """Model + ModelForm ride the shared model-class / fields / permission-lock helpers."""
-    from django_strawberry_framework.forms.sets import DjangoFormMutation, DjangoModelFormMutation
-    from django_strawberry_framework.rest_framework.sets import SerializerMutation
-
     model_names = DjangoMutation._validate_meta.__code__.co_names
     assert "require_model_class" in model_names
     assert "normalize_meta_field_selection" in model_names
@@ -2020,8 +1982,6 @@ def test_model_and_form_validate_ride_shared_meta_helpers() -> None:
 )
 def test_reject_unknown_meta_keys_rejects_non_class_meta(invalid_meta: object) -> None:
     """reject_unknown_meta_keys raises ConfigurationError if meta is not a class."""
-    from django_strawberry_framework.mutations.sets import reject_unknown_meta_keys
-
     with pytest.raises(ConfigurationError, match=r"TestMutation\.Meta must be a class; got "):
         reject_unknown_meta_keys("TestMutation", invalid_meta, frozenset())
 
@@ -2043,8 +2003,6 @@ def test_require_non_delete_operation_rejects_unhashable_and_non_string_operatio
     invalid_op: object,
 ) -> None:
     """require_non_delete_operation raises ConfigurationError for unhashable or non-string operations."""
-    from django_strawberry_framework.mutations.sets import require_non_delete_operation
-
     with pytest.raises(
         ConfigurationError,
         match=r"Meta\.operation must be one of \['create', 'update'\]; got ",
@@ -2096,8 +2054,6 @@ class _HostilePermMeta(type):
 
 def test_require_model_class_hostile_repr_safe_containment() -> None:
     """require_model_class with hostile repr raises ConfigurationError cleanly."""
-    from django_strawberry_framework.mutations.sets import require_model_class
-
     hostile = _HostileRepr()
     with pytest.raises(
         ConfigurationError,
@@ -2111,8 +2067,6 @@ def test_require_model_class_hostile_repr_safe_containment() -> None:
 
 def test_validate_select_for_update_hostile_repr_safe_containment() -> None:
     """validate_select_for_update with hostile repr raises ConfigurationError cleanly."""
-    from django_strawberry_framework.mutations.sets import validate_select_for_update
-
     hostile = _HostileRepr()
 
     class BadMeta:
@@ -2130,8 +2084,6 @@ def test_validate_select_for_update_hostile_repr_safe_containment() -> None:
 
 def test_validate_input_class_hostile_repr_safe_containment() -> None:
     """_validate_input_class with hostile repr raises ConfigurationError cleanly."""
-    from django_strawberry_framework.mutations.sets import _validate_input_class
-
     hostile = _HostileRepr()
     with pytest.raises(
         ConfigurationError,
@@ -2152,7 +2104,6 @@ def test_validate_input_class_hostile_repr_safe_containment() -> None:
 
 def test_validate_permission_classes_hostile_metaclass_safe_containment() -> None:
     """_validate_permission_classes with hostile metaclass descriptor raises ConfigurationError cleanly."""
-    from django_strawberry_framework.mutations.sets import _validate_permission_classes
 
     class HostilePerm(metaclass=_HostilePermMeta):
         pass
@@ -2167,8 +2118,6 @@ def test_validate_permission_classes_hostile_metaclass_safe_containment() -> Non
 @pytest.mark.filterwarnings("ignore:non-string key in the __dict__")
 def test_reject_unknown_meta_keys_non_string_dict_keys() -> None:
     """reject_unknown_meta_keys handles non-string keys in vars(meta) cleanly."""
-    from django_strawberry_framework.mutations.sets import reject_unknown_meta_keys
-
     # basedpyright: the non-str namespace key is the hostile input under test; typeshed types the
     # type() namespace as dict[str, Any]
     meta = type("NonStrKeyMeta", (), {123: "foo"})  # pyright: ignore[reportArgumentType]
@@ -2222,11 +2171,6 @@ def test_django_mutation_validate_meta_hostile_values_containment() -> None:
 
 def test_validate_permission_classes_custom_base_label_and_flavor_forwarding() -> None:
     """_validate_permission_classes and model_backed_permission_and_lock format with base_label."""
-    from django_strawberry_framework.mutations.sets import (
-        _validate_permission_classes,
-        model_backed_permission_and_lock,
-    )
-
     with pytest.raises(
         ConfigurationError,
         match=(
@@ -2295,8 +2239,6 @@ def test_require_non_delete_operation_hostile_hash_safe_containment() -> None:
     The shared non-delete reject used by form and serializer flavors also guards
     its frozenset membership test against hash failures.
     """
-    from django_strawberry_framework.mutations.sets import require_non_delete_operation
-
     with pytest.raises(
         ConfigurationError,
         match=r"SerializerMutation BadOpMutation\.Meta\.operation must be one of",
@@ -2342,11 +2284,6 @@ def test_make_declaration_registry_identity_dedup_hostile_eq_safe_containment() 
     ``is`` identity scan replaces the ``not in`` check. This keeps hostile
     __eq__ from escaping as a raw RuntimeError at class registration.
     """
-    from django_strawberry_framework.mutations.sets import (
-        DeclarationRegistry,
-        make_declaration_registry,
-    )
-
     reg: DeclarationRegistry[type[object]] = make_declaration_registry("ProbeRegistry")
 
     class HostileEqMeta(type):

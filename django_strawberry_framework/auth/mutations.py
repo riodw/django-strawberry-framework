@@ -35,6 +35,7 @@ import inspect
 from typing import TYPE_CHECKING, TypeAlias, TypeVar, cast, final
 
 import strawberry
+from asgiref.sync import async_to_sync
 from django.contrib import auth
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
@@ -43,6 +44,7 @@ from django.core.exceptions import ValidationError
 from typing_extensions import override
 
 from django_strawberry_framework.exceptions import ConfigurationError, _safe_arg_repr, _safe_text
+from django_strawberry_framework.mutations import resolvers
 from django_strawberry_framework.mutations.fields import (
     DjangoMutationField,
     _lazy_ref,
@@ -59,6 +61,7 @@ from django_strawberry_framework.mutations.inputs import (
     mutation_input_shape,
     payload_object_slot,
 )
+from django_strawberry_framework.mutations.resolvers import run_write_pipeline_sync
 from django_strawberry_framework.mutations.sets import (
     DjangoMutation,
     _validate_permission_classes,
@@ -71,10 +74,16 @@ from django_strawberry_framework.mutations.sets import (
 from django_strawberry_framework.registry import register_subsystem_clear, registry
 from django_strawberry_framework.resource_policy import check_deadline
 from django_strawberry_framework.utils.directives import validated_field_directives
+from django_strawberry_framework.utils.errors import (
+    FIELD_ERROR_CODE_INVALID,
+    field_error,
+    null_field_error,
+)
 from django_strawberry_framework.utils.execution_mode import async_execution
 from django_strawberry_framework.utils.permissions import request_from_info
 from django_strawberry_framework.utils.querysets import run_in_one_sync_boundary
 from django_strawberry_framework.utils.sessions import actor_transition
+from django_strawberry_framework.utils.write_values import unencodable_text_error
 
 from . import sessions
 
@@ -641,9 +650,6 @@ def _failed_login_payload(payload_cls: type[object], slot: str) -> object:
     wrong-password / unknown-user / inactive-under-``ModelBackend`` / unstorable
     credential collapse to a byte-identical payload (the enumeration guard).
     """
-    from django_strawberry_framework.mutations import resolvers
-    from django_strawberry_framework.utils.errors import field_error
-
     error = field_error("", _INCORRECT_CREDENTIALS_MESSAGE)
     return resolvers.build_payload(payload_cls, slot, None, [error])
 
@@ -684,8 +690,6 @@ def _login_result_payload(payload_cls: type[object], slot: str, user: _User | No
     build the payload here and THEN early-return on the failed case, preserving both
     the failed-login early return and the payload-before-mutation ordering.
     """
-    from django_strawberry_framework.mutations import resolvers
-
     if user is None:
         return _failed_login_payload(payload_cls, slot)
     return resolvers.build_payload(payload_cls, slot, user, [])
@@ -723,9 +727,6 @@ def _login_authenticate(
     sync-only so BOTH the native sync body and the native async body (inside its one
     ``sync_to_async`` boundary) reuse it without duplicating the state machine.
     """
-    from django_strawberry_framework.mutations import resolvers
-    from django_strawberry_framework.utils.write_values import unencodable_text_error
-
     request, transport, session = _transport_prologue(
         info,
         supported=sessions.login_supported,
@@ -814,7 +815,7 @@ async def _channels_http_login_establish(
     auth keys AND deleting the durable rotated/empty row); a cleanup failure chains
     the original failure via ``__context__`` (PEP 3134).
     """
-    from channels.auth import login as channels_login
+    from channels.auth import login as channels_login  # noqa: PLC0415 - channels is optional
 
     async with sessions.scope_session_lock(request):
         # ``scope_session_lock`` rejects a scope that is not a ``MutableMapping``
@@ -869,8 +870,6 @@ def _login_resolve_body(
     # ``ChannelsRequestAdapter`` and ``DJANGO_HTTP`` only for an ``HttpRequest``;
     # ``sessions.login_supported`` already rejected ``CHANNELS_WEBSOCKET``.
     if transport is sessions.Transport.CHANNELS_HTTP:
-        from asgiref.sync import async_to_sync
-
         channels_request = cast("ChannelsRequestAdapter", request)
         async_to_sync(_channels_http_login_establish)(channels_request, session, user)
     else:
@@ -944,8 +943,6 @@ def _logout_prologue(
     called for its rejection side effect; its return is unused because logout's
     durability is the native flush, not a resolver-side save.
     """
-    from django_strawberry_framework.mutations import resolvers
-
     request, transport, _session = _transport_prologue(
         info,
         supported=sessions.logout_supported,
@@ -1053,7 +1050,7 @@ async def _channels_logout(
     revocation event, so the socket is closed at its next protected checkpoint and
     this payload does not reach the client.
     """
-    from channels.auth import logout as channels_logout
+    from channels.auth import logout as channels_logout  # noqa: PLC0415 - channels is optional
 
     async with sessions.scope_session_lock(request):
         ok, payload = _logout_observation(request, payload_cls)
@@ -1094,7 +1091,6 @@ def _logout_resolve_body(holder_cls: _SealedAuthHolderMeta, info: Info[object, o
     # and a Channels transport only for a ``ChannelsRequestAdapter``.
     if transport is sessions.Transport.DJANGO_HTTP:
         return _django_http_logout(cast("HttpRequest", request), payload_cls)
-    from asgiref.sync import async_to_sync
 
     channels_request = cast("ChannelsRequestAdapter", request)
     return async_to_sync(_channels_logout)(channels_request, payload_cls)
@@ -1256,8 +1252,6 @@ def _register_decode_step(
     required input field (``AbstractBaseUser.password`` has no default / blank),
     so a reached decode always captured it.
     """
-    from django_strawberry_framework.mutations import resolvers
-
     # The rider is a model-backed create: its snapshot carries the user model and the
     # bind stashed the decode's reverse maps.
     model = backing_model_of(mutation_cls._mutation_meta)
@@ -1303,14 +1297,6 @@ def _register_write_step(
     through ``mutation_cls``'s specs (``first_name`` -> ``firstName``) -
     ``validate_password`` + ``set_password`` are the ONLY auth-specific steps.
     """
-    from django_strawberry_framework.mutations import resolvers
-    from django_strawberry_framework.utils.errors import (
-        FIELD_ERROR_CODE_INVALID,
-        field_error,
-        null_field_error,
-    )
-    from django_strawberry_framework.utils.write_values import unencodable_text_error
-
     user, m2m_assignments, exclude, raw_password = decoded
     if raw_password is None:
         return resolvers.StepFailure([null_field_error("password")])
@@ -1354,8 +1340,6 @@ def _run_register_pipeline_sync(
     decode / write step pair. Structurally a fourth decode/write STEP PAIR, not a
     fourth plumbing kit.
     """
-    from django_strawberry_framework.mutations.resolvers import run_write_pipeline_sync
-
     return run_write_pipeline_sync(
         mutation_cls,
         info,
@@ -1607,7 +1591,7 @@ def bind_auth_mutations() -> None:
         # Function-local import: ``queries`` imports this module, so the edge back
         # must stay lazy - and the alias namespace only matters when the consumer
         # imported ``current_user`` (which imported ``queries``).
-        from .queries import CURRENT_USER_ALIAS_NAME, materialize_current_user_alias
+        from .queries import CURRENT_USER_ALIAS_NAME, materialize_current_user_alias  # noqa: PLC0415 - import cycle
 
         materialize_current_user_alias(CURRENT_USER_ALIAS_NAME, cast("type[DjangoType]", primary))
     # ``register`` needs no auth-side emit work: the rider is an ordinary

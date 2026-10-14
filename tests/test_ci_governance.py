@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING, TypeAlias
 import pytest
 import yaml
 
+from django_strawberry_framework.utils.imports import CHANNELS_FLOOR, STRAWBERRY_FLOOR
+
 # The repo-wide Python sweep below borrows this repo's existing definition of the
 # first-party source trees rather than re-listing them, so the two cannot drift
 # apart. Its exact scope is the four trees named by ``check_citations``'s
@@ -1003,8 +1005,6 @@ def test_channels_floor_constant_matches_the_pyproject_dependency_row() -> None:
     ``channels[daphne]`` dev-group row in ``pyproject.toml``. Nothing imports a
     TOML dependency row, so a bump on either side is otherwise silent.
     """
-    from django_strawberry_framework.utils.imports import CHANNELS_FLOOR
-
     text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     rows = re.findall(r'"channels\[daphne\]>=([0-9][^"]*)"', text)
     assert rows == [CHANNELS_FLOOR], (rows, CHANNELS_FLOOR)
@@ -1020,8 +1020,6 @@ def test_strawberry_floor_constant_matches_the_pyproject_dependency_row() -> Non
     installing a version the install itself rejects. Parsed exactly like the
     Channels row so the two pins cannot diverge in method.
     """
-    from django_strawberry_framework.utils.imports import STRAWBERRY_FLOOR
-
     text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     rows = re.findall(r'"strawberry-graphql>=([0-9][^"]*)"', text)
     assert rows == [STRAWBERRY_FLOOR], (rows, STRAWBERRY_FLOOR)

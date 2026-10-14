@@ -69,6 +69,7 @@ from django_strawberry_framework.exceptions import (
     _safe_text,
     _safe_type_name,
 )
+from django_strawberry_framework.keyset import validate_cursor_field_references
 from django_strawberry_framework.optimizer.field_meta import FieldMeta
 from django_strawberry_framework.optimizer.hints import OptimizerHint
 from django_strawberry_framework.registry import registry
@@ -215,7 +216,7 @@ def _validate_filterset_class(
         return None
     # In-function import: dodges the `types -> filters -> types` module-load
     # cycle. Do NOT hoist to module top.
-    from django_strawberry_framework.filters.sets import FilterSet
+    from django_strawberry_framework.filters.sets import FilterSet  # noqa: PLC0415 - import cycle
 
     return _validate_set_sidecar(
         model,
@@ -247,7 +248,7 @@ def _validate_orderset_class(
         return None
     # In-function import: dodges the `types -> orders -> types` module-load
     # cycle. Do NOT hoist to module top.
-    from django_strawberry_framework.orders.sets import OrderSet
+    from django_strawberry_framework.orders.sets import OrderSet  # noqa: PLC0415 - import cycle
 
     return _validate_set_sidecar(
         model,
@@ -342,11 +343,6 @@ def _validate_cursor_field(
     """
     if value is None:
         return None
-    # In-function import: ``keyset`` imports only leaf modules today, but the
-    # function-scope import keeps ``types/base.py`` order-independent of it,
-    # matching the filterset / orderset validator idiom above.
-    from django_strawberry_framework.keyset import validate_cursor_field_references
-
     if isinstance(value, str) or not isinstance(value, Sequence):
         raise ConfigurationError(
             f"{model.__name__}.Meta.cursor_field must be a non-empty non-string "

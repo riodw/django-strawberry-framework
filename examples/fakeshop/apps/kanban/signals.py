@@ -31,7 +31,7 @@ from django.db.models.signals import (
 )
 from django.dispatch import receiver
 
-from apps.kanban import models
+from apps.kanban import models, services
 
 DONE_STATUS_KEY = models.DONE_STATUS_KEY
 DONE_CARD_SPEC_ERROR = "Done kanban cards require a linked spec doc."
@@ -468,8 +468,6 @@ def compact_card_order_after_delete(
     **_kwargs: object,
 ) -> None:
     """Delegate delete-compaction to the service layer (the receiver only wires it)."""
-    from apps.kanban import services
-
     services.compact_card_numbers(instance, using=using)
 
 

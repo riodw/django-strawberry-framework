@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import NoReturn
 
 import pytest
+from django.core.exceptions import ValidationError
 from django.core.management import CommandError, call_command
 
 from apps.kanban import factories as kf
@@ -255,8 +256,6 @@ def test_import_card_files_wraps_validation_error_as_command_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A signal-guard ValidationError surfaces as CommandError, not a raw traceback."""
-    from django.core.exceptions import ValidationError
-
     card = kf.make_card(title="Guarded card", target_version=beta_version)
 
     def _raise(*_args: object, **_kwargs: object) -> NoReturn:

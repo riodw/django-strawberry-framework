@@ -16,21 +16,48 @@ The sections below cover ``convert_order_field_to_input_annotation`` /
 
 from __future__ import annotations
 
+import dataclasses
+import subprocess
 import sys
+from collections import OrderedDict
 from collections.abc import Iterator
+from dataclasses import replace
+from pathlib import Path
+from typing import Annotated, ForwardRef, get_args, get_origin
 
 import pytest
+from apps.library.models import Book, Shelf
 from django.db.models import F
 from django.db.models.expressions import OrderBy
+from strawberry import UNSET
 
 from django_strawberry_framework.exceptions import ConfigurationError
-from django_strawberry_framework.orders import Ordering, OrderSet
+from django_strawberry_framework.orders import (
+    Ordering,
+    OrderInput,
+    OrderSet,
+    RelatedOrder,
+    _helper_referenced_ordersets,
+    order_input_type,
+)
+from django_strawberry_framework.orders.factories import OrderArgumentsFactory
 from django_strawberry_framework.orders.inputs import (
     INPUTS_MODULE_PATH,
+    FieldSpec,
+    _build_input_fields,
+    _camel_case,
+    _field_specs,
+    _get_concrete_field_names_for_order,
     _input_type_name_for,
+    _iter_orderset_subclasses,
     _materialized_names,
+    build_input_class,
+    clear_order_input_namespace,
+    convert_order_field_to_input_annotation,
     materialize_input_class,
+    normalize_input_value,
 )
+from django_strawberry_framework.registry import registry
 from tests._definition import make_definition
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
 from tests._soft_dependency import blocked_modules
@@ -200,14 +227,6 @@ def test_materialize_input_class_raises_on_collision() -> None:
 
 def test_convert_order_field_to_input_annotation_returns_ordering_or_none() -> None:
     """``Ordering | None`` regardless of the ``model_field`` argument."""
-    from typing import get_args
-
-    from apps.library.models import Book
-
-    from django_strawberry_framework.orders.inputs import (
-        convert_order_field_to_input_annotation,
-    )
-
     title_field = Book._meta.get_field("title")
     annotation = convert_order_field_to_input_annotation(title_field, None)
     args = set(get_args(annotation))
@@ -226,11 +245,6 @@ def test_convert_order_field_to_input_annotation_returns_ordering_or_none() -> N
 
 def test_normalize_input_value_walks_nested_relatedorder_into_flat_field_paths() -> None:
     """Nested ``RelatedOrder`` input produces ``shelf__code`` flat paths."""
-    from apps.library.models import Book, Shelf
-
-    from django_strawberry_framework.orders import OrderSet, RelatedOrder
-    from django_strawberry_framework.orders.factories import OrderArgumentsFactory
-    from django_strawberry_framework.orders.inputs import normalize_input_value
 
     class ShelfOrder(OrderSet):
         class Meta:
@@ -256,11 +270,6 @@ def test_normalize_input_value_walks_nested_relatedorder_into_flat_field_paths()
 
 def test_normalize_input_value_passes_through_empty_list() -> None:
     """An empty top-level list yields an empty flat list."""
-    from apps.library.models import Book
-
-    from django_strawberry_framework.orders import OrderSet
-    from django_strawberry_framework.orders.factories import OrderArgumentsFactory
-    from django_strawberry_framework.orders.inputs import normalize_input_value
 
     class BookOrderEmpty(OrderSet):
         class Meta:
@@ -273,11 +282,6 @@ def test_normalize_input_value_passes_through_empty_list() -> None:
 
 def test_normalize_input_value_skips_null_direction_leaves() -> None:
     """A leaf with ``direction=None`` is skipped (active-input-only)."""
-    from apps.library.models import Book
-
-    from django_strawberry_framework.orders import OrderSet
-    from django_strawberry_framework.orders.factories import OrderArgumentsFactory
-    from django_strawberry_framework.orders.inputs import normalize_input_value
 
     class BookOrderNull(OrderSet):
         class Meta:
@@ -296,11 +300,6 @@ def test_normalize_input_value_skips_null_direction_leaves() -> None:
 
 def test_normalize_input_value_handles_top_level_list_of_dataclass_elements() -> None:
     """Multi-element top-level lists are flattened in declaration order."""
-    from apps.library.models import Book
-
-    from django_strawberry_framework.orders import OrderSet
-    from django_strawberry_framework.orders.factories import OrderArgumentsFactory
-    from django_strawberry_framework.orders.inputs import normalize_input_value
 
     class BookOrderMulti(OrderSet):
         class Meta:
@@ -318,18 +317,11 @@ def test_normalize_input_value_handles_top_level_list_of_dataclass_elements() ->
 
 def test_normalize_input_value_returns_empty_for_none_input() -> None:
     """``None`` input -> ``[]``."""
-    from django_strawberry_framework.orders import OrderSet
-    from django_strawberry_framework.orders.inputs import normalize_input_value
-
     assert normalize_input_value(OrderSet, None) == []
 
 
 def test_normalize_input_value_builds_field_specs_for_direct_mapping_input() -> None:
     """Direct mapping callers must not silently lose an active order field."""
-    from apps.library.models import Book
-
-    from django_strawberry_framework.orders import Ordering, OrderSet
-    from django_strawberry_framework.orders.inputs import normalize_input_value
 
     class DirectBookOrder(OrderSet):
         class Meta:
@@ -350,11 +342,6 @@ def test_normalize_input_value_raw_dict_matches_dataclass_form() -> None:
     input dataclass. Both forms (including a nested ``RelatedOrder`` branch)
     must produce the same flattened ``(field_path, direction)`` tuples.
     """
-    from apps.library.models import Book, Shelf
-
-    from django_strawberry_framework.orders import OrderSet, RelatedOrder
-    from django_strawberry_framework.orders.factories import OrderArgumentsFactory
-    from django_strawberry_framework.orders.inputs import normalize_input_value
 
     # Distinct class names so the ``OrderArgumentsFactory`` collision registry
     # (not reset between tests in this module) does not clash with the sibling
@@ -395,8 +382,6 @@ def test_normalize_input_value_raw_dict_matches_dataclass_form() -> None:
 
 def test_build_input_class_decorates_with_strawberry_input() -> None:
     """The returned class carries Strawberry's ``__strawberry_definition__``."""
-    from django_strawberry_framework.orders.inputs import build_input_class
-
     cls = build_input_class("FooOrderInputType", [("title", Ordering | None, None)])
     assert hasattr(cls, "__strawberry_definition__")
     # The annotation is preserved.
@@ -406,8 +391,6 @@ def test_build_input_class_decorates_with_strawberry_input() -> None:
 
 def test_build_input_class_handles_python_attr_to_graphql_alias_mapping() -> None:
     """``name=`` is preserved through the decorator so ``shelf_code`` -> ``shelfCode``."""
-    from django_strawberry_framework.orders.inputs import build_input_class
-
     cls = build_input_class(
         "AliasOrderInputType",
         [("shelf_code", Ordering | None, {"name": "shelfCode"})],
@@ -423,14 +406,6 @@ def test_build_input_class_handles_python_attr_to_graphql_alias_mapping() -> Non
 
 def test_field_specs_populated_by_build_input_fields_for_leaf() -> None:
     """Leaf field -> ``FieldSpec(python_attr, graphql_name, django_source_path)``."""
-    from apps.library.models import Book
-
-    from django_strawberry_framework.orders import OrderSet
-    from django_strawberry_framework.orders.inputs import (
-        FieldSpec,
-        _build_input_fields,
-        _field_specs,
-    )
 
     class BookOrderLeafSpec(OrderSet):
         class Meta:
@@ -447,10 +422,6 @@ def test_field_specs_populated_by_build_input_fields_for_leaf() -> None:
 
 def test_field_specs_populated_by_build_input_fields_for_flat_shorthand() -> None:
     """``Meta.fields = ["shelf__code"]`` -> python attr ``shelf_code`` + graphql alias ``shelfCode``."""
-    from apps.library.models import Book
-
-    from django_strawberry_framework.orders import OrderSet
-    from django_strawberry_framework.orders.inputs import _build_input_fields, _field_specs
 
     class BookOrderFlat(OrderSet):
         class Meta:
@@ -466,10 +437,6 @@ def test_field_specs_populated_by_build_input_fields_for_flat_shorthand() -> Non
 
 def test_field_specs_populated_by_build_input_fields_for_relatedorder() -> None:
     """``RelatedOrder`` -> ``FieldSpec.django_source_path`` is the relation name."""
-    from apps.library.models import Book, Shelf
-
-    from django_strawberry_framework.orders import OrderSet, RelatedOrder
-    from django_strawberry_framework.orders.inputs import _build_input_fields, _field_specs
 
     class ShelfOrderRelSpec(OrderSet):
         class Meta:
@@ -496,13 +463,6 @@ def test_field_specs_populated_by_build_input_fields_for_relatedorder() -> None:
 @pytest.fixture
 def _namespace_cleanup() -> Iterator[None]:
     """Strip test-emitted ledger / module-global state + factory caches."""
-    from django_strawberry_framework.orders.factories import OrderArgumentsFactory
-    from django_strawberry_framework.orders.inputs import (
-        INPUTS_MODULE_PATH,
-        _field_specs,
-        _materialized_names,
-    )
-
     names_before = set(_materialized_names.keys())
     yield
     module = sys.modules[INPUTS_MODULE_PATH]
@@ -520,11 +480,6 @@ def _namespace_cleanup() -> Iterator[None]:
 @pytest.mark.usefixtures("_namespace_cleanup")
 def test_clear_order_input_namespace_resets_materialized_names_ledger() -> None:
     """``_materialized_names`` is emptied."""
-    from django_strawberry_framework.orders.inputs import (
-        _materialized_names,
-        clear_order_input_namespace,
-        materialize_input_class,
-    )
 
     class FooBar:
         pass
@@ -538,11 +493,6 @@ def test_clear_order_input_namespace_resets_materialized_names_ledger() -> None:
 @pytest.mark.usefixtures("_namespace_cleanup")
 def test_clear_order_input_namespace_leaves_module_globals_parked() -> None:
     """The materialized class stays on the module dict per spec-028 Decision 9."""
-    from django_strawberry_framework.orders.inputs import (
-        INPUTS_MODULE_PATH,
-        clear_order_input_namespace,
-        materialize_input_class,
-    )
 
     class FooParked:
         pass
@@ -559,8 +509,6 @@ def test_clear_order_input_namespace_leaves_module_globals_parked() -> None:
 @pytest.mark.usefixtures("_namespace_cleanup")
 def test_clear_order_input_namespace_clears_factory_class_level_caches() -> None:
     """``OrderArgumentsFactory`` class-level caches are emptied."""
-    from django_strawberry_framework.orders.factories import OrderArgumentsFactory
-    from django_strawberry_framework.orders.inputs import clear_order_input_namespace
 
     class _FakeOrder(OrderSet):
         pass
@@ -578,12 +526,6 @@ def test_clear_order_input_namespace_clears_factory_class_level_caches() -> None
 @pytest.mark.usefixtures("_namespace_cleanup")
 def test_clear_order_input_namespace_resets_orderset_subclass_binding_state() -> None:
     """Every ``OrderSet`` subclass's phase-2.5 binding slots are reset."""
-    from collections import OrderedDict
-
-    from apps.library.models import Book
-
-    from django_strawberry_framework.orders import OrderSet
-    from django_strawberry_framework.orders.inputs import clear_order_input_namespace
 
     class BindStateOrder(OrderSet):
         pass
@@ -609,9 +551,6 @@ def test_clear_order_input_namespace_resets_orderset_subclass_binding_state() ->
 
 def test_order_input_type_returns_element_annotation_for_orderset_subclass() -> None:
     """``order_input_type(MyOrder)`` returns ``Annotated[ForwardRef("MyOrderInputType"), ...]``."""
-    from typing import ForwardRef, get_args
-
-    from django_strawberry_framework.orders import OrderSet, order_input_type
 
     class HelperOrderA(OrderSet):
         pass
@@ -628,8 +567,6 @@ def test_order_input_type_returns_element_annotation_for_orderset_subclass() -> 
 
 def test_order_input_type_raises_typeerror_for_non_orderset() -> None:
     """Passing a non-``OrderSet`` argument raises ``TypeError``."""
-    from django_strawberry_framework.orders import order_input_type
-
     with pytest.raises(TypeError):
         # basedpyright: the non-OrderSet class is the hostile input under test; order_input_type
         # types the parameter as type[OrderSet]
@@ -638,11 +575,6 @@ def test_order_input_type_raises_typeerror_for_non_orderset() -> None:
 
 def test_order_input_type_records_orderset_into_helper_referenced_set() -> None:
     """The helper writes its argument into ``_helper_referenced_ordersets``."""
-    from django_strawberry_framework.orders import (
-        OrderSet,
-        _helper_referenced_ordersets,
-        order_input_type,
-    )
 
     class HelperOrderB(OrderSet):
         pass
@@ -656,11 +588,6 @@ def test_order_input_type_records_orderset_into_helper_referenced_set() -> None:
 
 def test_order_input_type_is_idempotent_under_repeated_calls() -> None:
     """Calling the helper multiple times keeps the ledger size at one."""
-    from django_strawberry_framework.orders import (
-        OrderSet,
-        _helper_referenced_ordersets,
-        order_input_type,
-    )
 
     class HelperOrderC(OrderSet):
         pass
@@ -683,9 +610,6 @@ def test_order_input_type_is_idempotent_under_repeated_calls() -> None:
 
 def test_order_input_subscript_returns_the_order_input_type_element_annotation() -> None:
     """``OrderInput[MyOrder]`` is the same lazy ``Annotated`` element the call form returns."""
-    from typing import Annotated, ForwardRef, get_args, get_origin
-
-    from django_strawberry_framework.orders import OrderInput, OrderSet, order_input_type
 
     class HelperOrderD(OrderSet):
         pass
@@ -704,12 +628,6 @@ def test_order_input_subscript_returns_the_order_input_type_element_annotation()
 
 def test_order_input_subscript_records_orderset_into_helper_referenced_set() -> None:
     """The subscript feeds the one ledger the finalizer's orphan check reads."""
-    from django_strawberry_framework.orders import (
-        OrderInput,
-        OrderSet,
-        _helper_referenced_ordersets,
-        order_input_type,
-    )
 
     class HelperOrderE(OrderSet):
         pass
@@ -725,12 +643,6 @@ def test_order_input_subscript_records_orderset_into_helper_referenced_set() -> 
 
 def test_order_input_subscript_rejects_non_orderset_naming_the_subscript() -> None:
     """A non-``OrderSet`` raises ``TypeError`` worded with the spelling the consumer wrote."""
-    from django_strawberry_framework.orders import (
-        OrderInput,
-        _helper_referenced_ordersets,
-        order_input_type,
-    )
-
     initial = set(_helper_referenced_ordersets)
     with pytest.raises(TypeError) as excinfo:
         # basedpyright: a non-OrderSet subscript is the bad input this test proves is rejected
@@ -753,15 +665,6 @@ def test_order_input_subscript_rejects_non_orderset_naming_the_subscript() -> No
 
 def test_registry_clear_invokes_clear_order_input_namespace() -> None:
     """``registry.clear()`` co-clears the order-input namespace ledgers."""
-    import subprocess
-
-    from django_strawberry_framework.orders.factories import OrderArgumentsFactory
-    from django_strawberry_framework.orders.inputs import (
-        FieldSpec,
-        _field_specs,
-        materialize_input_class,
-    )
-    from django_strawberry_framework.registry import registry
 
     class _LedgerStub:
         pass
@@ -794,12 +697,6 @@ def test_registry_clear_invokes_clear_order_input_namespace() -> None:
 
 def test_registry_clear_clears_helper_referenced_ordersets() -> None:
     """``registry.clear()`` empties ``_helper_referenced_ordersets`` (separate block)."""
-    from django_strawberry_framework.orders import (
-        OrderSet,
-        _helper_referenced_ordersets,
-        order_input_type,
-    )
-    from django_strawberry_framework.registry import registry
 
     class HelperLedgerOrder(OrderSet):
         pass
@@ -814,9 +711,6 @@ def test_registry_clear_clears_helper_referenced_ordersets() -> None:
 
 def test_registry_clear_works_without_orders_imported() -> None:
     """``registry.clear()`` must not raise when orders package was never imported."""
-    import subprocess
-    from pathlib import Path
-
     fakeshop = Path(__file__).resolve().parents[2] / "examples" / "fakeshop"
     result = subprocess.run(
         [
@@ -855,8 +749,6 @@ def test_camel_case_returns_input_when_split_yields_no_parts() -> None:
     a name that strips to an empty core (``""`` / ``"_"`` / ``"__"``)
     returns ``name`` unchanged.
     """
-    from django_strawberry_framework.orders.inputs import _camel_case
-
     assert _camel_case("") == ""
     assert _camel_case("_") == "_"
     assert _camel_case("__") == "__"
@@ -871,8 +763,6 @@ def test_build_input_class_threads_description_through_strawberry_field() -> Non
     ``strawberry.field(description=...)`` so the GraphQL SDL carries the
     description.
     """
-    from django_strawberry_framework.orders.inputs import build_input_class
-
     cls = build_input_class(
         "DescribedOrderInputType",
         [("foo", Ordering | None, {"description": "the foo direction"})],
@@ -891,7 +781,6 @@ def test_normalize_input_value_returns_empty_for_non_dataclass_non_list_non_none
     orderset class is not consulted for this guard, so any existing
     ``OrderSet`` subclass works.
     """
-    from django_strawberry_framework.orders.inputs import normalize_input_value
 
     class _NormalizeNoDataclassOrder(OrderSet):
         pass
@@ -907,11 +796,6 @@ def test_normalize_input_value_skips_attrs_with_no_field_spec_entry() -> None:
     that has no corresponding ``_field_specs`` entry for the orderset
     class, the walker skips it silently.
     """
-    import dataclasses
-
-    from apps.library.models import Book
-
-    from django_strawberry_framework.orders.inputs import normalize_input_value
 
     class _OrderWithSpecificFields(OrderSet):
         class Meta:
@@ -932,11 +816,6 @@ def test_normalize_input_value_skips_attrs_with_no_field_spec_entry() -> None:
 
 def test_normalize_input_value_builds_field_specs_for_model_free_orderset() -> None:
     """Model-free OrderSet direct callers must lazily build specs and normalize."""
-    from django_strawberry_framework.orders.inputs import (
-        clear_order_input_namespace,
-        normalize_input_value,
-    )
-
     clear_order_input_namespace()
 
     class ModelFreeOrder(OrderSet):
@@ -951,15 +830,6 @@ def test_normalize_input_value_builds_field_specs_for_model_free_orderset() -> N
 
 def test_normalize_input_value_ignores_unset_sentinel_in_mappings_and_lists() -> None:
     """strawberry.UNSET values in dicts, lists, and nested structures are inactive."""
-    from apps.library.models import Book, Shelf
-    from strawberry import UNSET
-
-    from django_strawberry_framework.orders import RelatedOrder
-    from django_strawberry_framework.orders.inputs import (
-        clear_order_input_namespace,
-        normalize_input_value,
-    )
-
     clear_order_input_namespace()
 
     class ChildOrder(OrderSet):
@@ -997,16 +867,6 @@ def test_ensure_field_specs_derives_the_unset_sentinel_from_the_family_declarati
     invisible to warm-up, so specs were never built and the normalizer
     silently discarded the field while its permission gate still fired.
     """
-    from dataclasses import replace
-
-    from apps.library.models import Book
-    from strawberry import UNSET
-
-    from django_strawberry_framework.orders.inputs import (
-        clear_order_input_namespace,
-        normalize_input_value,
-    )
-
     clear_order_input_namespace()
     marker = object()
     fired: list[object] = []
@@ -1046,13 +906,6 @@ def test_ensure_field_specs_derives_the_unset_sentinel_from_the_family_declarati
 
 def test_normalize_input_value_rejects_invalid_direction_type() -> None:
     """Invalid non-Ordering direction values raise ConfigurationError."""
-    from apps.library.models import Book
-
-    from django_strawberry_framework.orders.inputs import (
-        clear_order_input_namespace,
-        normalize_input_value,
-    )
-
     clear_order_input_namespace()
 
     class BookOrder(OrderSet):
@@ -1075,13 +928,6 @@ def test_normalize_input_value_skips_related_branch_when_child_orderset_is_none(
     ``None``, the walker skips the branch silently rather than recursing
     into it.
     """
-    import dataclasses
-
-    from apps.library.models import Book
-
-    from django_strawberry_framework.orders import OrderSet, RelatedOrder
-    from django_strawberry_framework.orders.factories import OrderArgumentsFactory
-    from django_strawberry_framework.orders.inputs import normalize_input_value
 
     class _TargetNoneChildOrder(OrderSet):
         class Meta:
@@ -1130,7 +976,6 @@ def test_iter_orderset_subclasses_dedupes_diamond_inheritance() -> None:
     once via ``C`` -- and the dedup guard collapses both visits to one
     entry in the returned list.
     """
-    from django_strawberry_framework.orders.inputs import _iter_orderset_subclasses
 
     class _DiamondA(OrderSet):
         class Meta:
@@ -1164,8 +1009,6 @@ def test_clear_order_input_namespace_tolerates_unimportable_submodules() -> None
     Mirror of
     ``tests/filters/test_inputs.py::test_clear_filter_input_namespace_tolerates_unimportable_submodules``.
     """
-    from django_strawberry_framework.orders.inputs import clear_order_input_namespace
-
     factories_name = "django_strawberry_framework.orders.factories"
     sets_name = "django_strawberry_framework.orders.sets"
     # A ``None`` entry makes the ``_safe_import`` lookup return ``None``,
@@ -1177,13 +1020,6 @@ def test_clear_order_input_namespace_tolerates_unimportable_submodules() -> None
 
 def test_get_concrete_field_names_for_order_direct() -> None:
     """_get_concrete_field_names_for_order extracts the orderable fields and rejects non-models."""
-    from apps.library.models import Book
-
-    from django_strawberry_framework.exceptions import ConfigurationError
-    from django_strawberry_framework.orders.inputs import (
-        _get_concrete_field_names_for_order,
-    )
-
     names = _get_concrete_field_names_for_order(Book)
     assert "id" in names
     assert "title" in names
@@ -1198,11 +1034,6 @@ def test_get_concrete_field_names_for_order_direct() -> None:
 
 def test_normalize_input_value_handles_3_tier_deep_related_order_chain() -> None:
     """Normalize walks deeply nested (3 tiers) RelatedOrder hierarchies."""
-    from apps.library.models import Book, Shelf
-
-    from django_strawberry_framework.orders import OrderSet, RelatedOrder
-    from django_strawberry_framework.orders.factories import OrderArgumentsFactory
-    from django_strawberry_framework.orders.inputs import normalize_input_value
 
     class Tier3Order(OrderSet):
         class Meta:

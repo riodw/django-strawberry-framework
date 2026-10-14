@@ -168,6 +168,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, NamedTuple
 
+import tomli
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping, Sequence
 
@@ -216,7 +218,6 @@ def line_length() -> int:
         text = pyproject.read_text(encoding="utf-8")
     except OSError as error:
         raise RuntimeError(f"cannot read {pyproject}: {error}") from error
-    import tomli
 
     # ``tomli.loads`` returns ``dict[str, Any]``; this alias hands the walk an ``object``.
     toml_loads: Callable[[str], dict[str, object]] = tomli.loads
@@ -1058,8 +1059,8 @@ def _format_graphql(content: str) -> str | None:
     never mangled). Deterministic, so re-formatting its own output is a no-op
     (fixpoint-safe).
     """
-    try:
-        from graphql import (
+    try:  # graphql-core (~65 ms) loads only when a GraphQL file is checked
+        from graphql import (  # noqa: PLC0415
             ArgumentNode,
             DefinitionNode,
             DirectiveNode,

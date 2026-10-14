@@ -1,5 +1,6 @@
 """Public API of django-strawberry-framework, a DRF-inspired Django integration for Strawberry GraphQL."""
 
+from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 # `auto` is re-exported so consumers can write `from django_strawberry_framework import auto`
@@ -133,9 +134,7 @@ def __getattr__(name: str) -> Any:  # pyright: ignore[reportExplicitAny]  # noqa
     """
     target = _DRF_SOFT_EXPORTS.get(name)
     if target is not None:
-        from importlib import import_module
-
-        from .rest_framework import require_drf
+        from .rest_framework import require_drf  # noqa: PLC0415 - DRF is optional
 
         _ = require_drf()
         submodule, attr = target

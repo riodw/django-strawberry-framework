@@ -6,12 +6,18 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
+from django.core.exceptions import FieldDoesNotExist
+from strawberry import relay
+from strawberry.relay.exceptions import NodeIDAnnotationError
+
 from django_strawberry_framework.exceptions import (
     ConfigurationError,
     _safe_arg_repr,
     _safe_attr,
     _safe_type_name,
 )
+
+from .relay import _resolve_id_default
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -309,12 +315,10 @@ class DjangoTypeDefinition:
             return None
         field_name = str.__str__(field_name)
 
-        # In-function imports: dodge the `definition -> registry -> definition`
+        # In-function import: dodge the `definition -> registry -> definition`
         # module-load cycle (registry imports DjangoTypeDefinition lazily under
         # TYPE_CHECKING). Do NOT hoist to module top.
-        from django.core.exceptions import FieldDoesNotExist
-
-        from django_strawberry_framework.registry import registry
+        from django_strawberry_framework.registry import registry  # noqa: PLC0415
 
         # Memoize the lookup per field name. ``_meta.get_field`` is
         # cheap but not free, and the registry lookup involves two
@@ -425,9 +429,6 @@ def _resolves_id_off_pk(origin: type[object], pk_name: str) -> bool:
     safe; a Relay target with no ``NodeID`` annotation resolves to ``"pk"`` and
     is likewise safe.
     """
-    from strawberry import relay
-    from strawberry.relay.exceptions import NodeIDAnnotationError
-
     try:
         if not issubclass(origin, relay.Node):
             return False
@@ -459,10 +460,6 @@ def _class_has_custom_id_resolver(type_cls: type[object], name: str) -> bool:
 
 def _is_framework_relay_id_resolver(value: object) -> bool:
     """Return whether ``value`` is the framework-installed Relay id resolver."""
-    from strawberry import relay
-
-    from .relay import _resolve_id_default
-
     try:
         resolver_func = getattr(value, "__func__", value)
         node_default = getattr(relay.Node, "resolve_id", None)

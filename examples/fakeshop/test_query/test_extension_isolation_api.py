@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, NoReturn
 
 import pytest
 import strawberry
+from apps.products import schema as products_schema
 from apps.products.services import seed_data
 from asgiref.sync import sync_to_async
 from django.http import HttpRequest
@@ -54,6 +55,7 @@ from django_strawberry_framework import (
     DjangoOptimizerExtension,
     DjangoSchema,
     ResourcePolicy,
+    finalize_django_types,
     strawberry_config,
 )
 from django_strawberry_framework.extensions import (
@@ -424,13 +426,9 @@ def _fresh_view(build: Callable[[], DjangoSchema]) -> Callable[..., HttpResponse
 
 def _nesting_schema() -> DjangoSchema:
     """The shipped optimizer spelling, with a consumer extension beside it."""
-    from apps.products.schema import Query as ProductsQuery
-
-    from django_strawberry_framework import finalize_django_types
-
     finalize_django_types()
     return DjangoSchema(
-        query=ProductsQuery,
+        query=products_schema.Query,
         config=strawberry_config(),
         extensions=[lambda: _OPTIMIZER, lambda: _NESTER],
     )
@@ -494,12 +492,9 @@ def _ladder_schema(factory: Callable[[], object]) -> DjangoSchema:
 
 def _survivor_schema() -> DjangoSchema:
     """The async mount: the project's own types, bounded, with the shipped optimizer."""
-    from apps.products.schema import Query as ProductsQuery
-
-    from django_strawberry_framework import finalize_django_types
 
     @strawberry.type
-    class SurvivorQuery(ProductsQuery):
+    class SurvivorQuery(products_schema.Query):
         @strawberry.field
         async def spawn(self, info: strawberry.Info) -> str:
             """Start a worker holding this operation's context, as a resolver may."""

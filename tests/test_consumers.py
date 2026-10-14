@@ -40,6 +40,7 @@ from django_strawberry_framework.utils.sessions import (
     _ACTOR_STATE_SCOPE_KEY,
     ConnectionActorState,
     connection_actor_state,
+    note_authenticated_actor,
 )
 from tests._idioms import websocket_scope
 
@@ -561,7 +562,6 @@ async def test_send_json_hostile_message_get_fails_closed() -> None:
     with patch.object(cmod, "_refreshed_actor", return_value=None):
         # Also need to make scope have authenticated provenance so it actually tries DB
         adapter.ws_consumer.scope["user"] = Mock(is_authenticated=True)
-        from django_strawberry_framework.utils.sessions import note_authenticated_actor
 
         note_authenticated_actor(adapter.ws_consumer.scope)
 
@@ -586,7 +586,6 @@ async def test_send_json_non_dict_message_does_not_escape(message: object) -> No
     consumer, adapter = _build_consumer_and_adapter()
     with patch.object(cmod, "_refreshed_actor", return_value=None):
         adapter.ws_consumer.scope["user"] = Mock(is_authenticated=True)
-        from django_strawberry_framework.utils.sessions import note_authenticated_actor
 
         note_authenticated_actor(adapter.ws_consumer.scope)
         # basedpyright: the non-mapping frame is the hostile input under test; the adapter
@@ -1213,7 +1212,6 @@ async def test_revalidate_hostile_is_current_cancelled_propagates() -> None:
     handler.view = Mock()
     handler.view.scope = _fresh_scope()
     handler.view.scope["user"] = Mock(is_authenticated=True)
-    from django_strawberry_framework.utils.sessions import note_authenticated_actor
 
     note_authenticated_actor(handler.view.scope)
     handler.view._revocation = cmod._ConnectionRevocation()
@@ -1578,7 +1576,6 @@ async def test_revalidate_is_current_hostile_fails_closed() -> None:
     handler.view = Mock()
     handler.view.scope = _fresh_scope()
     handler.view.scope["user"] = Mock(is_authenticated=True)
-    from django_strawberry_framework.utils.sessions import note_authenticated_actor
 
     note_authenticated_actor(handler.view.scope)
     handler.view._revocation = cmod._ConnectionRevocation()
@@ -1659,7 +1656,6 @@ async def test_send_revalidated_is_current_hostile() -> None:
     consumer = Mock()
     consumer.scope = _fresh_scope()
     consumer.scope["user"] = Mock(is_authenticated=True)
-    from django_strawberry_framework.utils.sessions import note_authenticated_actor
 
     note_authenticated_actor(consumer.scope)
     consumer._revocation = cmod._ConnectionRevocation()
@@ -1679,7 +1675,6 @@ async def test_send_revalidated_send_hostile() -> None:
     consumer = Mock()
     consumer.scope = _fresh_scope()
     consumer.scope["user"] = Mock(is_authenticated=True)
-    from django_strawberry_framework.utils.sessions import note_authenticated_actor
 
     note_authenticated_actor(consumer.scope)
     consumer._revocation = cmod._ConnectionRevocation()
@@ -1779,7 +1774,6 @@ async def test_send_revalidated_send_cancelled() -> None:
     consumer = Mock()
     consumer.scope = _fresh_scope()
     consumer.scope["user"] = Mock(is_authenticated=True)
-    from django_strawberry_framework.utils.sessions import note_authenticated_actor
 
     note_authenticated_actor(consumer.scope)
     consumer._revocation = cmod._ConnectionRevocation()

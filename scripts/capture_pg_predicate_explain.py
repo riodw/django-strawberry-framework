@@ -53,6 +53,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
+import django
+from django.db import connection, transaction
+from django.http import HttpRequest
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Sequence
 
@@ -163,8 +167,6 @@ def _is_row_reader(cursor: object) -> TypeIs[_RowReader]:
 @contextmanager
 def _cursor() -> Generator[_RowReader]:
     """Open a cursor on the default database, typed by the calls this script makes on it."""
-    from django.db import connection
-
     with connection.cursor() as cursor:
         if not _is_row_reader(cursor):
             msg = "the database cursor does not expose the execute and fetch calls"
@@ -275,8 +277,6 @@ def _production_qs(
     ``_apply_flat_leaves``, which routes an eligible leaf walking no declared
     hop and applies a leaf walking declared hops over each hop's visible rows.
     """
-    from django.http import HttpRequest
-
     _ = filterset_cls.get_filters()  # publish the expansion snapshot (as apply_* does).
     filterset = filterset_cls(
         data={leaf: value},
@@ -449,13 +449,10 @@ def _shape_lines(
 def main() -> None:
     """Drive both production paths, run EXPLAIN, and write the artifact file."""
     sys.path.insert(0, str(REPO_ROOT / "scripts"))
-    from _bench_common import bootstrap_fakeshop_django
+    from _bench_common import bootstrap_fakeshop_django  # noqa: PLC0415 - needs the sys.path line above
 
     # sys.path seam + settings + django.setup() + migrate; refuses non-Postgres.
     _ = bootstrap_fakeshop_django("pg")
-
-    import django
-    from django.db import connection, transaction
 
     if connection.vendor != "postgresql":  # defensive: never touch sqlite.
         sys.exit(f"Refusing to run: expected postgresql, got {connection.vendor!r}.")

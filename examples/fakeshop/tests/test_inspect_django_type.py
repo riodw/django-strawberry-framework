@@ -13,6 +13,7 @@ from io import StringIO
 
 import pytest
 from django.core.management import CommandError, call_command
+from schema_reload import reload_all_project_schemas
 
 from django_strawberry_framework.registry import registry
 
@@ -53,8 +54,6 @@ def _reload_inspect_schema() -> None:
     full-reload helper so every contributing app is re-registered before the
     aggregate ``config.schema`` build.
     """
-    from schema_reload import reload_all_project_schemas
-
     reload_all_project_schemas()
 
 
@@ -140,15 +139,15 @@ def test_inspect_with_schema_option(selector: str) -> None:
     import-time side effects. Evict the schema modules from ``sys.modules`` so
     the ``--schema`` import re-executes class registration + finalize.
 
-    The eviction strands a half-registered ``apps.library.schema`` (re-imported by
-    the ``--schema`` load but never reset to a complete project schema) in
-    ``sys.modules``, which can collide at a later same-worker aggregate build ->
-    ``DuplicatedTypeName``. Restore the FULL project schema on teardown via the
-    shared ``schema_reload.reload_all_project_schemas`` discipline so this cold-start
-    simulation leaves the worker clean for the next test.
+    Teardown puts the ORIGINAL module objects back (in ``sys.modules`` and as their
+    parent package's attribute): a module-level ``from apps.library import schema``
+    binding in another test module must keep naming the live module, and the
+    half-registered re-import would otherwise collide at a later same-worker
+    aggregate build -> ``DuplicatedTypeName``. The shared
+    ``schema_reload.reload_all_project_schemas`` discipline then rebuilds the FULL
+    project schema in place, so this cold-start simulation leaves the worker clean.
     """
-    for name in _SCHEMA_MODULES:
-        sys.modules.pop(name, None)
+    saved = {name: sys.modules.pop(name) for name in _SCHEMA_MODULES if name in sys.modules}
     registry.clear()
 
     try:
@@ -162,8 +161,10 @@ def test_inspect_with_schema_option(selector: str) -> None:
         assert "circulation_status" in text
         assert "choice enum" in text
     finally:
-        from schema_reload import reload_all_project_schemas
-
+        sys.modules.update(saved)
+        for name, module in saved.items():
+            parent, _, leaf = name.rpartition(".")
+            setattr(sys.modules[parent], leaf, module)
         reload_all_project_schemas()
 
 

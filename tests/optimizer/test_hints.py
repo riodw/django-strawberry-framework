@@ -5,13 +5,21 @@ SKIP identity, factory classmethods, frozen immutability, and invalid-state
 ``examples/fakeshop/test_query/test_library_api.py::test_library_optimizer_hints_are_observable_over_http``.
 """
 
+import typing
 from typing import NoReturn
 
 import pytest
 from django.db.models import Prefetch
 from typing_extensions import override
 
-from django_strawberry_framework.optimizer.hints import OptimizerHint
+from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.optimizer.hints import OptimizerHint, hint_is_skip
+from django_strawberry_framework.optimizer.nested_fetch import (
+    WINDOWED_STRATEGY,
+    NestedConnectionStrategy,
+    WindowedPrefetchStrategy,
+    resolve_strategy,
+)
 
 
 class TestSkipSentinel:
@@ -90,8 +98,6 @@ class TestPrefetchFactory:
 
     def test_none_rejected(self) -> None:
         """``None`` must not collapse into the empty no-op hint."""
-        from django_strawberry_framework.exceptions import ConfigurationError
-
         with pytest.raises(ConfigurationError, match="Prefetch"):
             # basedpyright: the None prefetch is the hostile input under test; OptimizerHint.prefetch
             # types the parameter as a Prefetch
@@ -132,8 +138,6 @@ class TestStrategyFactory:
 
     def test_none_rejected(self) -> None:
         """``None`` must not collapse into the empty no-op hint."""
-        from django_strawberry_framework.exceptions import ConfigurationError
-
         with pytest.raises(ConfigurationError, match="strategy name"):
             # basedpyright: the None strategy is the hostile input under test; OptimizerHint.strategy
             # types the parameter as StrategySelection
@@ -141,28 +145,20 @@ class TestStrategyFactory:
 
     def test_bad_name_raises_at_construction(self) -> None:
         """A typo'd strategy name fails loud through ``resolve_strategy``."""
-        from django_strawberry_framework.exceptions import ConfigurationError
-
         with pytest.raises(ConfigurationError, match="Unknown nested_connection_strategy"):
             OptimizerHint.strategy("winowed")
         with pytest.raises(ConfigurationError, match="Unknown nested_connection_strategy"):
             OptimizerHint(nested_strategy="not-a-strategy")
 
     def test_strategy_with_skip_raises(self) -> None:
-        from django_strawberry_framework.exceptions import ConfigurationError
-
         with pytest.raises(ConfigurationError, match="nested_strategy"):
             OptimizerHint(skip=True, nested_strategy="windowed")
 
     def test_strategy_with_force_select_raises(self) -> None:
-        from django_strawberry_framework.exceptions import ConfigurationError
-
         with pytest.raises(ConfigurationError, match="nested_strategy"):
             OptimizerHint(force_select=True, nested_strategy="windowed")
 
     def test_strategy_with_prefetch_obj_raises(self) -> None:
-        from django_strawberry_framework.exceptions import ConfigurationError
-
         with pytest.raises(ConfigurationError, match="nested_strategy"):
             OptimizerHint(prefetch_obj=Prefetch("items"), nested_strategy="windowed")
 
@@ -180,8 +176,6 @@ class TestStrategyFactory:
         class NotStrategy(metaclass=HostileType):
             pass
 
-        from django_strawberry_framework.exceptions import ConfigurationError
-
         with pytest.raises(ConfigurationError, match="nested_connection_strategy"):
             # basedpyright: the non-strategy object is the hostile input under test;
             # OptimizerHint.strategy types the parameter as StrategySelection
@@ -189,11 +183,6 @@ class TestStrategyFactory:
 
     def test_strategy_rejects_class_with_clean_name(self) -> None:
         """Passing a strategy class instead of an instance names the class, not 'type'."""
-        from django_strawberry_framework.exceptions import ConfigurationError
-        from django_strawberry_framework.optimizer.nested_fetch import (
-            WindowedPrefetchStrategy,
-        )
-
         with pytest.raises(ConfigurationError, match="WindowedPrefetchStrategy"):
             # basedpyright: the strategy class is the hostile input under test; OptimizerHint.strategy
             # types the parameter as StrategySelection
@@ -210,12 +199,6 @@ class TestStrategyFactory:
         value degrades to the typed ``ConfigurationError`` raised directly -
         no raw exception escapes, and the hint boundary needs no containment.
         """
-        from django_strawberry_framework.exceptions import ConfigurationError
-        from django_strawberry_framework.optimizer.nested_fetch import (
-            WINDOWED_STRATEGY,
-            NestedConnectionStrategy,
-            resolve_strategy,
-        )
 
         class HostileRepr(str):
             @override
@@ -269,7 +252,6 @@ class TestStrategyFactory:
 
     def test_strategy_hostile_rejection_is_raised_directly(self) -> None:
         """The typed rejection needs no containment chain: nothing escapes first."""
-        from django_strawberry_framework.exceptions import ConfigurationError
 
         class HostileHash(str):
             @override
@@ -294,12 +276,6 @@ class TestStrategyFactory:
         the ``TYPE_CHECKING``-only import that resolved for static checkers but
         left the postponed annotation unevaluable at runtime.
         """
-        import typing
-
-        from django_strawberry_framework.optimizer.nested_fetch import (
-            NestedConnectionStrategy,
-        )
-
         resolved = typing.get_type_hints(OptimizerHint)
         assert resolved["nested_strategy"] == (str | NestedConnectionStrategy | None)
         # The factory signature resolves too (no custom globalns workaround).
@@ -353,8 +329,6 @@ class TestInvalidStatesRejected:
 
     def test_non_bool_flags_raise(self) -> None:
         """Truthy and falsy non-booleans must not control dispatch."""
-        from django_strawberry_framework.exceptions import ConfigurationError
-
         for kwargs in ({"force_select": 1}, {"force_prefetch": ""}, {"skip": "false"}):
             with pytest.raises(ConfigurationError, match="bool values"):
                 # basedpyright: each non-bool flag is the hostile input under test; OptimizerHint types
@@ -362,38 +336,26 @@ class TestInvalidStatesRejected:
                 OptimizerHint(**kwargs)  # pyright: ignore[reportArgumentType]
 
     def test_skip_with_force_select_raises(self) -> None:
-        from django_strawberry_framework.exceptions import ConfigurationError
-
         with pytest.raises(ConfigurationError, match="skip=True"):
             OptimizerHint(skip=True, force_select=True)
 
     def test_skip_with_force_prefetch_raises(self) -> None:
-        from django_strawberry_framework.exceptions import ConfigurationError
-
         with pytest.raises(ConfigurationError, match="skip=True"):
             OptimizerHint(skip=True, force_prefetch=True)
 
     def test_skip_with_prefetch_obj_raises(self) -> None:
-        from django_strawberry_framework.exceptions import ConfigurationError
-
         with pytest.raises(ConfigurationError, match="skip=True"):
             OptimizerHint(skip=True, prefetch_obj=Prefetch("items"))
 
     def test_force_select_with_force_prefetch_raises(self) -> None:
-        from django_strawberry_framework.exceptions import ConfigurationError
-
         with pytest.raises(ConfigurationError, match="force_select and force_prefetch"):
             OptimizerHint(force_select=True, force_prefetch=True)
 
     def test_prefetch_obj_with_force_select_raises(self) -> None:
-        from django_strawberry_framework.exceptions import ConfigurationError
-
         with pytest.raises(ConfigurationError, match="prefetch_obj"):
             OptimizerHint(prefetch_obj=Prefetch("items"), force_select=True)
 
     def test_prefetch_obj_with_force_prefetch_raises(self) -> None:
-        from django_strawberry_framework.exceptions import ConfigurationError
-
         with pytest.raises(ConfigurationError, match="prefetch_obj"):
             OptimizerHint(prefetch_obj=Prefetch("items"), force_prefetch=True)
 
@@ -403,8 +365,6 @@ class TestInvalidStatesRejected:
         An ``obj: Any`` factory signature would let strings or other shapes through
         ``__post_init__`` and crash later in the walker, so construction rejects them.
         """
-        from django_strawberry_framework.exceptions import ConfigurationError
-
         with pytest.raises(ConfigurationError, match="Prefetch"):
             # basedpyright: the lookup string is the hostile input under test; OptimizerHint.prefetch
             # types the parameter as a Prefetch
@@ -428,8 +388,6 @@ class TestInvalidStatesRejected:
         class NotPrefetch(metaclass=HostileType):
             pass
 
-        from django_strawberry_framework.exceptions import ConfigurationError
-
         with pytest.raises(ConfigurationError, match="Prefetch"):
             # basedpyright: the non-Prefetch object is the hostile input under test;
             # OptimizerHint.prefetch types the parameter as a Prefetch
@@ -441,8 +399,6 @@ class TestSkipPredicate:
 
     def test_hostile_skip_shapes_return_false(self) -> None:
         """Unexpected hint objects cannot break a never-raise schema audit."""
-        from django_strawberry_framework.optimizer.hints import hint_is_skip
-
         # ``OptimizerHint.__post_init__`` reads ``skip``, so the hostile read arms only once
         # construction is done.
         armed = False

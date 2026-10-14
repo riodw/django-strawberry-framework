@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import subprocess
 import sys
-from collections.abc import Iterator, Mapping
+import weakref
+from collections.abc import Iterator, Mapping, MutableMapping
 from pathlib import Path
 from types import MappingProxyType
 from typing import NoReturn
@@ -34,9 +36,11 @@ from django.test import RequestFactory, override_settings
 from typing_extensions import override
 
 import django_strawberry_framework.auth as auth_pkg
+import django_strawberry_framework.auth.sessions as sessions_mod
 from django_strawberry_framework.auth.sessions import (
     _SCOPE_LOCK_KEY,
     Transport,
+    _require_mutable_scope,
     classify_transport,
     login_supported,
     logout_supported,
@@ -106,7 +110,7 @@ def test_classify_channels_scope_without_channels_raises_the_install_hint() -> N
         attr="sessions",
     ):
         # Re-import under absence so the classification re-runs its lazy guard.
-        from django_strawberry_framework.auth import sessions as reloaded
+        from django_strawberry_framework.auth import sessions as reloaded  # noqa: PLC0415
 
         with pytest.raises(ImportError, match=r"channels>=4\.3\.2") as exc_info:
             reloaded.classify_transport(_adapter({"type": "http"}))
@@ -450,11 +454,6 @@ def test_no_process_global_lock_registry_in_the_sessions_module() -> None:
     mapping under ``_SCOPE_LOCK_KEY`` (proved by
     ``test_scope_lock_is_lazily_created_and_reused_per_scope``).
     """
-    import contextvars
-    import weakref
-
-    from django_strawberry_framework.auth import sessions as sessions_mod
-
     forbidden = (
         dict,
         contextvars.ContextVar,
@@ -556,15 +555,11 @@ def test_require_mutable_scope_hostile_scope_property_is_contained() -> None:
         def scope(self) -> NoReturn:
             raise RuntimeError("bad scope")
 
-    from django_strawberry_framework.auth.sessions import _require_mutable_scope
-
     with pytest.raises(ConfigurationError, match=r"could not read.*Channels request scope"):
         _require_mutable_scope(BadScopeAdapter(object(), {}))
 
 
 async def test_scope_lock_hostile_get_is_contained() -> None:
-    from collections.abc import MutableMapping
-
     class HostileGetMutable(MutableMapping[str, object]):
         def __init__(self, data: Mapping[str, object]) -> None:
             self._d = dict(data)
@@ -654,9 +649,6 @@ def test_classify_hostile_websocket_eq_is_contained() -> None:
 def test_require_mutable_scope_isinstance_raising_is_contained(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import django_strawberry_framework.auth.sessions as sessions_mod
-    from django_strawberry_framework.auth.sessions import _require_mutable_scope
-
     class BadMappingMeta(type):
         @override
         def __instancecheck__(cls, instance: object) -> bool:
@@ -710,8 +702,6 @@ async def test_scope_lock_acquire_raising_is_contained() -> None:
 def test_uses_signed_cookie_sessions_store_resolution_hostile_is_contained(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import django_strawberry_framework.auth.sessions as sessions_mod
-
     def _raise(*_args: object, **_kwargs: object) -> NoReturn:
         raise RuntimeError("hostile store resolve")
 
@@ -723,8 +713,6 @@ def test_uses_signed_cookie_sessions_store_resolution_hostile_is_contained(
 def test_uses_signed_cookie_sessions_store_resolution_configuration_error_propagates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import django_strawberry_framework.auth.sessions as sessions_mod
-
     def _raise_config(*_args: object, **_kwargs: object) -> NoReturn:
         raise ConfigurationError("bad engine")
 
@@ -734,8 +722,6 @@ def test_uses_signed_cookie_sessions_store_resolution_configuration_error_propag
 
 
 async def test_scope_lock_acquire_configuration_error_propagates() -> None:
-    from django_strawberry_framework.exceptions import ConfigurationError
-
     class ConfigErrorLock(asyncio.Lock):
         @override
         async def acquire(self) -> NoReturn:
@@ -782,8 +768,6 @@ def test_classify_hostile_class_property_is_contained() -> None:
 def test_classify_hostile_class_property_on_second_isinstance_is_contained(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import django_strawberry_framework.auth.sessions as sessions_mod
-
     class BadMeta(type):
         @override
         def __instancecheck__(cls, instance: object) -> bool:

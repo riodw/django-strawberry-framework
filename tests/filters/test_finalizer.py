@@ -39,11 +39,18 @@ import pytest
 import strawberry
 from apps.library.models import Book, Branch, Genre, LendingDesk, ProxyBranch, Shelf, Venue
 from django.db.models import Model, QuerySet
+from django.http import HttpRequest
 from django_filters import Filter
 from strawberry import relay
 from typing_extensions import override
 
-from django_strawberry_framework import DjangoType, finalize_django_types
+from django_strawberry_framework import (
+    DjangoConnection,
+    DjangoConnectionField,
+    DjangoType,
+    finalize_django_types,
+    strawberry_config,
+)
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.filters import (
     FilterInput,
@@ -446,13 +453,6 @@ def test_a_filterset_subclass_binds_its_own_owner_apart_from_its_base(
     bound to: through the hiding owner a hidden shelf matches nothing, through
     the plain owner it matches its book.
     """
-    from django.http import HttpRequest
-
-    from django_strawberry_framework import (
-        DjangoConnection,
-        DjangoConnectionField,
-        strawberry_config,
-    )
 
     class ShelfFilter(FilterSet):
         class Meta:

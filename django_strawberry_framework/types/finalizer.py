@@ -65,11 +65,17 @@ from django_strawberry_framework.exceptions import (
     _safe_class_name,
     _safe_type_name,
 )
+from django_strawberry_framework.keyset import validate_cursor_field_columns
 from django_strawberry_framework.optimizer import logger
-from django_strawberry_framework.registry import GLOBALID_SETTING_UNSET, registry
+from django_strawberry_framework.registry import (
+    GLOBALID_SETTING_UNSET,
+    iter_subsystem_clears,
+    registry,
+)
 from django_strawberry_framework.utils.imports import loaded_attr
 from django_strawberry_framework.utils.relations import instance_accessor
 
+from .base import DEFAULT_RELATION_SHAPE
 from .converters import resolved_relation_annotation
 from .relay import (
     _accepts_model_label_decode,
@@ -701,12 +707,10 @@ def _synthesize_relation_connections() -> None:
     # ``_node_fields_declared`` precedent in ``finalize_django_types``). A
     # contract step must never be silently skipped, so deliberately no
     # try/except here.
-    from django_strawberry_framework.connection import (
+    from django_strawberry_framework.connection import (  # noqa: PLC0415 - import cycle
         _build_relation_connection_resolver,
         _connection_type_for,
     )
-
-    from .base import DEFAULT_RELATION_SHAPE
 
     for type_cls, definition in registry.iter_definitions():
         if definition.finalized:
@@ -1055,9 +1059,6 @@ def finalize_django_types() -> None:
             # unique total-order anchor. Runs in this Phase-2.5 window so a
             # violation raises before Phase 3 flips ``finalized`` (pure
             # validation - idempotent under the partial-finalize rerun).
-            # Function-local import mirrors the sibling local-import idiom.
-            from django_strawberry_framework.keyset import validate_cursor_field_columns
-
             validate_cursor_field_columns(
                 _safe_class_name(type_cls),
                 definition.model,
@@ -1074,7 +1075,7 @@ def finalize_django_types() -> None:
     # ``types/``) and PLAIN - unlike ``registry.clear()``'s best-effort
     # teardown blocks, a contract check must never be silently skipped, so
     # there is deliberately no try/except-ImportError here.
-    from django_strawberry_framework.relay import _node_fields_declared
+    from django_strawberry_framework.relay import _node_fields_declared  # noqa: PLC0415 - import cycle
 
     if _node_fields_declared and not any(
         implements_relay_node(type_cls) for type_cls, _ in registry.iter_definitions()
@@ -1130,8 +1131,7 @@ def finalize_django_types() -> None:
     # phase filter selects emitted namespaces and per-pass caches, never declaration
     # registries or full-clear-only state. Optional subsystems remain absent unless
     # their owner was imported, so this does not pull DRF or auth into other schemas.
-    from django_strawberry_framework.mutations.sets import bind_mutations
-    from django_strawberry_framework.registry import iter_subsystem_clears
+    from django_strawberry_framework.mutations.sets import bind_mutations  # noqa: PLC0415 - binds only a subsystem the consumer imported
 
     for clear in iter_subsystem_clears(before_bind=True):
         clear()
@@ -1171,7 +1171,7 @@ def finalize_django_types() -> None:
     # resolves them. Function-local import (cycle-safe, mirroring the
     # ``bind_mutations`` idiom); the bind only matters when the consumer imported
     # the form-mutations subsystem.
-    from django_strawberry_framework.forms.sets import bind_form_mutations
+    from django_strawberry_framework.forms.sets import bind_form_mutations  # noqa: PLC0415 - binds only a subsystem the consumer imported
 
     bind_form_mutations()
     _bind_filtersets()
@@ -2069,9 +2069,9 @@ def _bind_ordersets() -> None:
     # package's module-load order. The phase-2.5 binding only runs when a
     # definition declares ``orderset_class``, which only works when the orders
     # subsystem has been imported by the consumer.
-    from django_strawberry_framework.orders import _helper_referenced_ordersets
-    from django_strawberry_framework.orders.factories import OrderArgumentsFactory
-    from django_strawberry_framework.orders.inputs import materialize_input_class
+    from django_strawberry_framework.orders import _helper_referenced_ordersets  # noqa: PLC0415 - binds only a subsystem the consumer imported
+    from django_strawberry_framework.orders.factories import OrderArgumentsFactory  # noqa: PLC0415 - binds only a subsystem the consumer imported
+    from django_strawberry_framework.orders.inputs import materialize_input_class  # noqa: PLC0415 - binds only a subsystem the consumer imported
 
     _bind_sidecar_sets(
         _SidecarBindingSpec(
@@ -2114,7 +2114,7 @@ def _audit_globalid_filter_strategies(wired: list[type[FilterSet]]) -> None:
     backstop reject in ``_decode_and_validate_global_id`` on the first request
     that hits the input.
     """
-    from django_strawberry_framework.filters.base import (
+    from django_strawberry_framework.filters.base import (  # noqa: PLC0415 - binds only a subsystem the consumer imported
         ENCODE_ONLY_GLOBALID_STRATEGIES,
         GlobalIDFilter,
         GlobalIDMultipleChoiceFilter,
@@ -2215,9 +2215,9 @@ def _bind_filtersets() -> None:
     # package's module-load order. The phase-2.5 binding only runs when a
     # definition declares ``filterset_class``, which only works when the filters
     # subsystem has been imported by the consumer.
-    from django_strawberry_framework.filters import _helper_referenced_filtersets
-    from django_strawberry_framework.filters.factories import FilterArgumentsFactory
-    from django_strawberry_framework.filters.inputs import materialize_input_class
+    from django_strawberry_framework.filters import _helper_referenced_filtersets  # noqa: PLC0415 - binds only a subsystem the consumer imported
+    from django_strawberry_framework.filters.factories import FilterArgumentsFactory  # noqa: PLC0415 - binds only a subsystem the consumer imported
+    from django_strawberry_framework.filters.inputs import materialize_input_class  # noqa: PLC0415 - binds only a subsystem the consumer imported
 
     _bind_sidecar_sets(
         _SidecarBindingSpec(

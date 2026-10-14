@@ -19,23 +19,30 @@ import itertools
 import sqlite3
 import threading
 import time
+import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, NoReturn, SupportsIndex, TypeAlias
+from unittest import mock
 from unittest.mock import patch
 
 import pytest
 import strawberry
+from apps.kanban.models import UUIDModel
 from apps.products import models as product_models
+from apps.scalars.models import ScalarSpecimen
 from asgiref.sync import ThreadSensitiveContext, async_to_sync, sync_to_async
 from asgiref.testing import ApplicationCommunicator as AsgirefApplicationCommunicator
 from channels.db import database_sync_to_async
 from channels.testing import WebsocketCommunicator
+from django import forms
 from django.core.handlers.asgi import ASGIHandler
 from django.db import (
     DatabaseError,
     IntegrityError,
     close_old_connections,
+    connection,
     connections,
     router,
     transaction,
@@ -44,11 +51,13 @@ from django.db.backends.signals import connection_created
 from django.db.backends.sqlite3 import base as sqlite_base
 from django.db.models import Model, QuerySet
 from django.db.models.signals import post_save
+from graphql.execution.execute import ExecutionContext as CoreExecutionContext
 from graphql_client import JSONObject
 from strawberry import relay
 from typing_extensions import Self, override
 
 from django_strawberry_framework import (
+    DjangoModelFormMutation,
     DjangoMutation,
     DjangoMutationField,
     DjangoOptimizerExtension,
@@ -58,21 +67,37 @@ from django_strawberry_framework import (
 )
 from django_strawberry_framework import schema as schema_module
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.mutations import resolvers as mutation_resolvers
+from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY
+from django_strawberry_framework.mutations.permissions import DjangoModelPermission
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.schema import DjangoMutationExecutionContext
 from django_strawberry_framework.utils._queryset_private import (
     queryset_db,
 )
 from django_strawberry_framework.utils.write_transaction import (
+    _SNAPSHOT_NODE_BUDGET,
     _enforce_read_only_barrier,
+    _field_fingerprint,
+    _FieldFingerprint,
+    _FileNameSnapshot,
+    assert_no_target_drift,
     check_instance_write_alias,
     conflict_error,
     forced_update_conflict_errors,
+    is_read_only_sql,
+    managed_write_transaction,
     not_updated_exceptions,
+    open_write_pipeline,
     pin_write_queryset,
+    pipeline_alias_guard,
     pipeline_scoped_queryset,
     pipeline_write_phase,
+    pks_match,
+    reject_substituted_row,
     require_write_pipeline,
     resolve_write_alias,
+    snapshot_target_state,
     write_pipeline,
 )
 from tests._idioms import definition_raises, is_object_dict
@@ -277,9 +302,6 @@ async def test_concurrent_async_windows_each_hold_an_outermost_transaction_of_th
     second opens while the first is still open, and both observe an OUTERMOST
     atomic block (no savepoint) on two different threads.
     """
-    from asgiref.sync import sync_to_async
-    from graphql.execution.execute import ExecutionContext as CoreExecutionContext
-
     _declare_item_types()
     UpdateItem = _declare_update_mutation()
     schema = _mutation_schema(UpdateItem)
@@ -314,11 +336,6 @@ def test_concurrent_async_windows_on_two_event_loops_each_hold_their_own_transac
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Windows on separate event loops open side by side, each outermost on its own thread."""
-    from concurrent.futures import ThreadPoolExecutor
-
-    from asgiref.sync import sync_to_async
-    from graphql.execution.execute import ExecutionContext as CoreExecutionContext
-
     _declare_item_types()
     UpdateItem = _declare_update_mutation()
     schema = _mutation_schema(UpdateItem)
@@ -360,9 +377,6 @@ async def test_async_execution_context_exits_transaction_on_raised_base_exceptio
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A non-GraphQL exception escaping the field still exits the worker transaction."""
-    from asgiref.sync import sync_to_async
-    from graphql.execution.execute import ExecutionContext as CoreExecutionContext
-
     _declare_item_types()
     UpdateItem = _declare_update_mutation()
     schema = _mutation_schema(UpdateItem)
@@ -396,8 +410,6 @@ def test_sync_execution_context_exits_transaction_on_raised_base_exception(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The sync twin: a non-GraphQL exception escaping the field exits the transaction."""
-    from graphql.execution.execute import ExecutionContext as CoreExecutionContext
-
     _declare_item_types()
     UpdateItem = _declare_update_mutation()
     schema = _mutation_schema(UpdateItem)
@@ -645,7 +657,8 @@ class _NoHttpApplication(ASGIHandler):
 
 
 def _window_router(schema: strawberry.Schema) -> DjangoGraphQLProtocolRouter:
-    from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter
+    # The router class is a lazy module ``__getattr__`` name, built on first access.
+    from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter  # noqa: PLC0415
 
     return DjangoGraphQLProtocolRouter(schema, django_application=_NoHttpApplication())
 
@@ -1069,8 +1082,6 @@ def test_execution_errors_reads_both_graphql_core_error_shapes() -> None:
     container at ``collected_errors.errors``. The installed version exercises
     only one shape at runtime, so both are pinned here explicitly.
     """
-    from django_strawberry_framework.schema import DjangoMutationExecutionContext
-
     context = object.__new__(DjangoMutationExecutionContext)
 
     class _Collected:
@@ -1190,8 +1201,6 @@ def test_missing_post_write_refetch_returns_conflict_envelope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A write whose pk re-fetch finds nothing returns ``conflict``, and rolls back."""
-    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
-
     _declare_item_types()
     UpdateItem = _declare_update_mutation()
     schema = _mutation_schema(UpdateItem)
@@ -1409,13 +1418,6 @@ def test_require_write_pipeline_outside_the_pipeline_is_a_wiring_error() -> None
 
 def test_open_write_pipeline_nests_atomic_on_managed_alias() -> None:
     """``open_write_pipeline`` opens ``transaction.atomic(using=<managed alias>)``."""
-    from unittest.mock import patch
-
-    from django_strawberry_framework.utils.write_transaction import (
-        managed_write_transaction,
-        open_write_pipeline,
-    )
-
     captured: dict[str, object] = {}
 
     class _Atomic:
@@ -1607,10 +1609,6 @@ def test_model_flavor_meta_select_for_update_defaults_true_and_rejects_non_bool(
 
 
 def test_modelform_flavor_meta_select_for_update_defaults_true() -> None:
-    from django import forms
-
-    from django_strawberry_framework import DjangoModelFormMutation
-
     class ItemForm(forms.ModelForm[product_models.Item]):
         class Meta:
             model = product_models.Item
@@ -1698,10 +1696,6 @@ def test_check_permission_override_returning_non_bool_is_a_configuration_error()
 
 
 def test_has_perm_returning_non_bool_is_a_configuration_error() -> None:
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.mutations.permissions import DjangoModelPermission
-
     class _WeirdUser:
         is_authenticated = True
 
@@ -1728,10 +1722,6 @@ def test_forced_update_integrity_error_race_maps_to_the_constraint_envelope() ->
     untyped zero-row catch the ordering matters: the constraint race must hit
     the ``IntegrityError`` arm, never the conflict disambiguation.
     """
-    from unittest import mock
-
-    from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY
-
     _declare_item_types()
     UpdateItem = _declare_update_mutation()
     schema = _mutation_schema(UpdateItem)
@@ -1764,8 +1754,6 @@ def test_forced_update_integrity_error_race_maps_to_the_constraint_envelope() ->
 
 def test_is_read_only_sql_uses_a_comment_stripped_allow_list() -> None:
     """Read-only classification is an ALLOW-list over the first comment-stripped token."""
-    from django_strawberry_framework.utils.write_transaction import is_read_only_sql
-
     assert is_read_only_sql("SELECT 1")
     assert is_read_only_sql("(SELECT 1)")
     assert is_read_only_sql("((SELECT 1))")
@@ -1791,7 +1779,6 @@ def test_is_read_only_sql_uses_a_comment_stripped_allow_list() -> None:
 
 def test_is_read_only_sql_uses_base_string_content_for_subclasses() -> None:
     """A string subclass cannot disguise write SQL as an allowed read token."""
-    from django_strawberry_framework.utils.write_transaction import is_read_only_sql
 
     class DisguisedWriteSQL(str):
         @override
@@ -1812,7 +1799,6 @@ def test_is_read_only_sql_fails_closed_on_a_non_string_statement() -> None:
     unreadable statement is unclassifiable, and the only honest verdict for the
     read-only phase is "not provably read-only" (fail closed).
     """
-    from django_strawberry_framework.utils.write_transaction import is_read_only_sql
 
     class _HostileStr:
         @override
@@ -1827,14 +1813,6 @@ def test_is_read_only_sql_fails_closed_on_a_non_string_statement() -> None:
 @pytest.mark.django_db
 def test_pinned_alias_guard_rejects_writes_outside_the_write_phase() -> None:
     """On the PINNED alias, write SQL is rejected in the read-only phase and allowed inside it."""
-    from django.db import connection
-
-    from django_strawberry_framework.utils.write_transaction import (
-        pipeline_alias_guard,
-        pipeline_write_phase,
-        write_pipeline,
-    )
-
     with write_pipeline("default", lock=False), pipeline_alias_guard("GuardMut", "default"):
         # Reads pass in the read-only phase.
         with connection.cursor() as cursor:
@@ -1856,12 +1834,6 @@ def test_pinned_alias_guard_rejects_writes_outside_the_write_phase() -> None:
 
 def test_pks_match_canonicalizes_through_the_pk_field() -> None:
     """The ``pk`` equality goes through the model pk field's ``to_python``, failing closed on garbage."""
-    import uuid
-
-    from apps.kanban.models import UUIDModel
-
-    from django_strawberry_framework.utils.write_transaction import pks_match
-
     uuid_model = UUIDModel
     value = uuid.uuid4()
     # The SAME row under three spellings: UUID object, dashed, un-dashed.
@@ -1877,14 +1849,10 @@ def test_pks_match_canonicalizes_through_the_pk_field() -> None:
 
 
 def test_reject_substituted_row_is_silent_when_pks_match() -> None:
-    from django_strawberry_framework.utils.write_transaction import reject_substituted_row
-
     reject_substituted_row(product_models.Category, 5, "5", message="unused")
 
 
 def test_reject_substituted_row_raises_the_caller_message() -> None:
-    from django_strawberry_framework.utils.write_transaction import reject_substituted_row
-
     with pytest.raises(ConfigurationError, match="never a substituted one"):
         reject_substituted_row(
             product_models.Category,
@@ -1897,13 +1865,6 @@ def test_reject_substituted_row_raises_the_caller_message() -> None:
 @pytest.mark.django_db
 def test_target_state_snapshot_and_drift_rejection() -> None:
     """``assert_no_target_drift`` rejects mutated loaded fields; deferred fields never read as drift."""
-    from django_strawberry_framework.utils.write_transaction import (
-        assert_no_target_drift,
-        require_write_pipeline,
-        snapshot_target_state,
-        write_pipeline,
-    )
-
     category = product_models.Category.objects.create(name="DriftHelperCat")
     item = product_models.Item.objects.create(name="DriftHelperItem", category=category)
 
@@ -1938,16 +1899,6 @@ def test_target_state_snapshot_and_drift_rejection() -> None:
 @pytest.mark.django_db
 def test_snapshot_target_state_fingerprints_mutable_container_values() -> None:
     """A JSONField / ArrayField value is fingerprinted, so in-place mutation reads as drift."""
-    from apps.scalars.models import ScalarSpecimen
-
-    from django_strawberry_framework.utils.write_transaction import (
-        _FieldFingerprint,
-        assert_no_target_drift,
-        require_write_pipeline,
-        snapshot_target_state,
-        write_pipeline,
-    )
-
     instance = ScalarSpecimen(payload={"tier": "gold", "tags": ["a"]})
     payload = instance.payload
     assert is_object_dict(payload)
@@ -1980,14 +1931,6 @@ def test_snapshot_target_state_captures_filefield_name_not_the_mutable_descripto
     SAME object, so a by-reference snapshot would alias it and the identity/``==`` check would
     miss the unauthorized file-column change. Snapshotting the ``name`` catches it.
     """
-    from django_strawberry_framework.utils.write_transaction import (
-        _FileNameSnapshot,
-        assert_no_target_drift,
-        require_write_pipeline,
-        snapshot_target_state,
-        write_pipeline,
-    )
-
     instance = product_models.Item(attachment="orig.png")
 
     snapshot = snapshot_target_state(instance)
@@ -2015,12 +1958,6 @@ def test_assert_no_target_drift_fails_closed_on_a_hostile_eq() -> None:
     into the typed ``ConfigurationError``; a raw escape would break the pipeline's
     exception-containment contract.
     """
-    from django_strawberry_framework.utils.write_transaction import (
-        assert_no_target_drift,
-        require_write_pipeline,
-        snapshot_target_state,
-        write_pipeline,
-    )
 
     class _RaisingEq:
         @override
@@ -2049,13 +1986,6 @@ def test_file_name_snapshot_fails_closed_on_a_hostile_replacement() -> None:
     ``FieldFile`` - and a hostile replacement's equality read detonating must
     answer "drifted" (fail closed), never propagate out of the guard.
     """
-    from django_strawberry_framework.utils.write_transaction import (
-        _FileNameSnapshot,
-        assert_no_target_drift,
-        require_write_pipeline,
-        snapshot_target_state,
-        write_pipeline,
-    )
 
     class _RaisingEq:
         @override
@@ -2082,17 +2012,6 @@ def test_file_name_snapshot_fails_closed_on_a_hostile_replacement() -> None:
 @pytest.mark.django_db
 def test_snapshot_fingerprint_is_iterative_and_budgeted() -> None:
     """A pathologically DEEP field value fingerprints without RecursionError (iterative)."""
-    from apps.scalars.models import ScalarSpecimen
-
-    from django_strawberry_framework.utils.write_transaction import (
-        _SNAPSHOT_NODE_BUDGET,
-        _field_fingerprint,
-        assert_no_target_drift,
-        require_write_pipeline,
-        snapshot_target_state,
-        write_pipeline,
-    )
-
     # Deeper than Python's default recursion limit - copy.deepcopy / recursive
     # comparison would raise RecursionError; the iterative fingerprint does not.
     deep: dict[str, object] = {}
@@ -2119,8 +2038,6 @@ def test_snapshot_fingerprint_is_iterative_and_budgeted() -> None:
 
 def test_field_fingerprint_covers_container_kinds_and_is_deterministic() -> None:
     """The fingerprint handles set / frozenset / bytes / tuple and is order-stable per structure."""
-    from django_strawberry_framework.utils.write_transaction import _field_fingerprint
-
     # Sets/frozensets fingerprint by a deterministic (repr-sorted) member order,
     # so equal sets built in different insertion orders match.
     assert _field_fingerprint({3, 1, 2}) == _field_fingerprint({2, 3, 1})
@@ -2147,7 +2064,6 @@ def test_field_fingerprint_reads_hostile_containers_through_their_base_slots() -
     reads every built-in container through its UNBOUND slot, and a lying
     ``__iter__`` / ``__reversed__`` never runs.
     """
-    from django_strawberry_framework.utils.write_transaction import _field_fingerprint
 
     class _LyingList(list[object]):
         @override
@@ -2182,7 +2098,6 @@ def test_field_fingerprint_orders_by_a_guarded_key_not_a_bare_repr() -> None:
     an unordered container, means two different values can fingerprint the same
     and drift between them goes undetected.
     """
-    from django_strawberry_framework.utils.write_transaction import _field_fingerprint
 
     class _ConstantRepr:
         def __init__(self, value: object) -> None:
@@ -2217,8 +2132,6 @@ def test_field_fingerprint_rejects_a_reference_cycle() -> None:
     budget already bounded the walk, but it reported the wrong reason - an
     active-path guard names the actual defect.
     """
-    from django_strawberry_framework.utils.write_transaction import _field_fingerprint
-
     cyclic: dict[str, object] = {}
     cyclic["self"] = cyclic
     with pytest.raises(ConfigurationError, match="reference cycle"):
@@ -2232,8 +2145,6 @@ def test_field_fingerprint_rejects_a_reference_cycle() -> None:
 
 def test_field_fingerprint_admits_a_repeated_sibling_that_is_not_a_cycle() -> None:
     """The guard tracks the ACTIVE PATH, so a diamond is fine and only a cycle raises."""
-    from django_strawberry_framework.utils.write_transaction import _field_fingerprint
-
     shared = {"a": 1}
     assert _field_fingerprint([shared, shared]) == _field_fingerprint([{"a": 1}, {"a": 1}])
 
@@ -2249,7 +2160,6 @@ def test_field_fingerprint_reads_atom_leaves_through_base_slots() -> None:
     never by the subclass's claimed ``__name__``; content-equal replacements
     stay honest (no false drift).
     """
-    from django_strawberry_framework.utils.write_transaction import _field_fingerprint
 
     def _gold_repr(_self: object) -> str:
         return repr("gold")
@@ -2274,7 +2184,6 @@ def test_field_fingerprint_reads_bytes_through_their_base_buffer() -> None:
     (the constructor dispatches a subclass ``__bytes__``), and it stays
     content-addressed and type-insensitive.
     """
-    from django_strawberry_framework.utils.write_transaction import _field_fingerprint
 
     class _RaisingBytes(bytes):
         # basedpyright: bytes.__bytes__ exists from 3.11; @override fails the 3.10 floor pass
@@ -2300,7 +2209,6 @@ def test_field_fingerprint_distinguishes_opaque_objects_a_constant_repr_cannot_c
     guarded repr - sound because a fingerprint is request-scoped (recomputed
     from the same live objects, never persisted).
     """
-    from django_strawberry_framework.utils.write_transaction import _field_fingerprint
 
     class _ConstantRepr:
         def __init__(self, value: object) -> None:
@@ -2324,8 +2232,6 @@ def test_field_fingerprint_walks_dict_keys_as_nodes() -> None:
     the key as a node routes it through the same base-slot leaf render a value
     gets, including container keys (tuples / frozensets are hashable).
     """
-    from django_strawberry_framework.utils.write_transaction import _field_fingerprint
-
     # Container keys are walked by content, not rendered by ``repr``.
     assert _field_fingerprint({(1, 2): "a"}) != _field_fingerprint({(1, 3): "a"})
     assert _field_fingerprint({(1, 2): "a"}) == _field_fingerprint({(1, 2): "a"})
@@ -2340,8 +2246,6 @@ def test_field_fingerprint_leaf_tokens_stay_type_tagged() -> None:
     bool (an ``int`` subclass) and a float cannot masquerade as one another and
     an explicit ``None`` never reads as the string ``"None"``.
     """
-    from django_strawberry_framework.utils.write_transaction import _field_fingerprint
-
     assert _field_fingerprint([None]) != _field_fingerprint(["None"])
     assert _field_fingerprint([None]) == _field_fingerprint([None])  # stable
     assert _field_fingerprint([True]) != _field_fingerprint([1])

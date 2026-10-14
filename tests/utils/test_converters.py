@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import NoReturn
 
 import pytest
 from django import forms
@@ -36,7 +37,7 @@ class _Child(_Base):
     pass
 
 
-def test_precheck_match_wins_over_registry():
+def test_precheck_match_wins_over_registry() -> None:
     """An ``isinstance`` precheck match returns before the scalar registry walk runs.
 
     ``_Child`` subclasses ``_Base``; a precheck on ``_Base`` must win even though
@@ -53,7 +54,7 @@ def test_precheck_match_wins_over_registry():
     assert result == "precheck-won"
 
 
-def test_prechecks_run_in_order():
+def test_prechecks_run_in_order() -> None:
     """The FIRST matching precheck wins (ordered, not most-specific)."""
     field = _Child()
     result = convert_with_mro(
@@ -65,7 +66,7 @@ def test_prechecks_run_in_order():
     assert result == "first"
 
 
-def test_precheck_returning_mro_continue_continues_to_walk():
+def test_precheck_returning_mro_continue_continues_to_walk() -> None:
     """A precheck handler returning ``MRO_CONTINUE`` lets the skeleton keep walking.
 
     This is the bare-``forms.Field`` exact-type pattern: a precheck that matches by
@@ -84,7 +85,7 @@ def test_precheck_returning_mro_continue_continues_to_walk():
     assert repr(MRO_CONTINUE) == "MRO_CONTINUE"
 
 
-def test_precheck_returning_none_is_a_value():
+def test_precheck_returning_none_is_a_value() -> None:
     """``None`` from a precheck is a successful conversion, not a continue signal.
 
     Filter ``normalize_input_value`` unwraps enum members whose ``.value`` is
@@ -100,7 +101,7 @@ def test_precheck_returning_none_is_a_value():
     assert result is None
 
 
-def test_mro_walk_resolves_most_specific_class():
+def test_mro_walk_resolves_most_specific_class() -> None:
     """The MRO walk resolves the field's OWN class before a registered parent.
 
     ``_Child`` and ``_Base`` are both registered; the walk visits ``_Child`` first
@@ -118,8 +119,11 @@ def test_mro_walk_resolves_most_specific_class():
     assert result == "child-value"
 
 
-def test_mro_walk_resolves_unregistered_subclass_to_parent():
-    """An UNregistered subclass resolves to its registered parent's value (the EmailField-under-CharField shape)."""
+def test_mro_walk_resolves_unregistered_subclass_to_parent() -> None:
+    """An UNregistered subclass resolves to its registered parent's value.
+
+    This is the EmailField-under-CharField shape.
+    """
     field = _Child()
     result = convert_with_mro(
         field,
@@ -130,7 +134,7 @@ def test_mro_walk_resolves_unregistered_subclass_to_parent():
     assert result == "base-value"
 
 
-def test_unhandled_field_raises_via_factory():
+def test_unhandled_field_raises_via_factory() -> None:
     """A field matched by neither path calls ``fallthrough_error_factory`` and raises it.
 
     The load-bearing no-catch-all contract: there is NO base-class fallback that
@@ -140,7 +144,7 @@ def test_unhandled_field_raises_via_factory():
     class _Unrelated:
         pass
 
-    def _factory(field: object):
+    def _factory(field: object) -> ValueError:
         return ValueError(f"unsupported: {type(field).__name__}")
 
     # Keyed by ``type[object]``: the unrelated field and the registry keys share no class.
@@ -154,12 +158,12 @@ def test_unhandled_field_raises_via_factory():
         )
 
 
-def test_mro_walk_bypasses_hostile_field_metaclass_attribute_access():
+def test_mro_walk_bypasses_hostile_field_metaclass_attribute_access() -> None:
     """A hostile ``__getattribute__`` cannot replace typed converter failure."""
 
     class HostileMeta(type):
         @override
-        def __getattribute__(cls, name: str):
+        def __getattribute__(cls, name: str) -> object:
             if name == "__mro__":
                 raise RuntimeError("mro descriptor failed")
             return super().__getattribute__(name)
@@ -183,12 +187,12 @@ def test_mro_walk_bypasses_hostile_field_metaclass_attribute_access():
         ser_converter.convert_serializer_field(hostile_serializer)
 
 
-def test_mro_walk_bypasses_hostile_field_metaclass_hashing():
+def test_mro_walk_bypasses_hostile_field_metaclass_hashing() -> None:
     """A hostile class hash cannot abort the registry walk."""
 
     class HostileMeta(type):
         @override
-        def __hash__(cls):
+        def __hash__(cls) -> NoReturn:
             raise RuntimeError("class hash failed")
 
     class HostileFormField(forms.Field, metaclass=HostileMeta):
@@ -199,7 +203,7 @@ def test_mro_walk_bypasses_hostile_field_metaclass_hashing():
         form_converter.convert_form_field(hostile_form)
 
 
-def test_mro_walk_bypasses_a_hostile_metaclass_mro_property():
+def test_mro_walk_bypasses_a_hostile_metaclass_mro_property() -> None:
     """A metaclass ``__mro__`` PROPERTY cannot raise into the walk.
 
     ``type.__getattribute__`` still honors a data descriptor defined ON the
@@ -213,7 +217,7 @@ def test_mro_walk_bypasses_a_hostile_metaclass_mro_property():
     class RaisingMroMeta(type):
         @property
         @override
-        def __mro__(cls):
+        def __mro__(cls) -> NoReturn:
             raise RuntimeError("hostile __mro__ property")
 
     class HostileFormField(forms.Field, metaclass=RaisingMroMeta):
@@ -235,7 +239,7 @@ def test_mro_walk_bypasses_a_hostile_metaclass_mro_property():
         ser_converter.convert_serializer_field(hostile_serializer)
 
 
-def test_mro_walk_ignores_a_fake_mro_claiming_a_registered_class():
+def test_mro_walk_ignores_a_fake_mro_claiming_a_registered_class() -> None:
     """A lying ``__mro__`` naming a registered class cannot silently convert.
 
     An impostor field whose metaclass property claims CharField's MRO must
@@ -247,7 +251,7 @@ def test_mro_walk_ignores_a_fake_mro_claiming_a_registered_class():
     class FakeMroMeta(type):
         @property
         @override
-        def __mro__(cls):
+        def __mro__(cls) -> tuple[type, ...]:
             return (forms.CharField, object)
 
     class ImpostorFormField(forms.Field, metaclass=FakeMroMeta):
@@ -257,7 +261,7 @@ def test_mro_walk_ignores_a_fake_mro_claiming_a_registered_class():
         form_converter.convert_form_field(object.__new__(ImpostorFormField))
 
 
-def test_registry_walk_scans_a_snapshot_not_a_live_items_view():
+def test_registry_walk_scans_a_snapshot_not_a_live_items_view() -> None:
     """The identity scan runs over a C-level registry snapshot.
 
     Iterating the live registry (``for ... in registry.items()``) fails with
@@ -273,7 +277,7 @@ def test_registry_walk_scans_a_snapshot_not_a_live_items_view():
         """Registry whose ``items()`` fails the way a mutated dict does."""
 
         @override
-        def items(self):
+        def items(self) -> NoReturn:
             raise RuntimeError("dictionary changed size during iteration")
 
     result = convert_with_mro(
@@ -301,7 +305,7 @@ class _FlagField:
     required: bool
 
 
-def test_make_scalar_converter_defaults_to_field_required():
+def test_make_scalar_converter_defaults_to_field_required() -> None:
     """Omitted ``required_of`` reads ``field.required`` (the serializer default)."""
     convert: Callable[[_FlagField], _Conv] = make_scalar_converter(_Conv, str)
     result = convert(_FlagField(required=True))
@@ -311,7 +315,7 @@ def test_make_scalar_converter_defaults_to_field_required():
     assert result.required is True
 
 
-def test_make_scalar_converter_uses_required_of_when_given():
+def test_make_scalar_converter_uses_required_of_when_given() -> None:
     """``required_of`` is the form NullBoolean seam: it wins over ``field.required``."""
     convert: Callable[[_FlagField], _Conv] = make_scalar_converter(
         _Conv,
@@ -324,7 +328,7 @@ def test_make_scalar_converter_uses_required_of_when_given():
     assert result.required is False
 
 
-def test_make_kind_converter_emits_fixed_kind_and_annotation():
+def test_make_kind_converter_emits_fixed_kind_and_annotation() -> None:
     """Kind prechecks (file / multi-choice) share the same closure as scalar rows."""
     convert: Callable[[_FlagField], _Conv] = make_kind_converter(_Conv, FILE)
     result = convert(_FlagField(required=False))
@@ -342,7 +346,7 @@ def test_make_kind_converter_emits_fixed_kind_and_annotation():
     assert listed_result.kind == SCALAR
 
 
-def test_finish_field_conversion_returns_instance_or_invokes_callable():
+def test_finish_field_conversion_returns_instance_or_invokes_callable() -> None:
     """Precheck hits are instances; registry hits are callables that still need ``field``."""
     inst = _Conv(annotation=str, required=True)
     assert finish_field_conversion(inst, object()) is inst
@@ -358,7 +362,7 @@ def test_finish_field_conversion_returns_instance_or_invokes_callable():
     assert called == [sentinel]
 
 
-def test_form_and_serializer_scalar_tables_ride_make_scalar_converter():
+def test_form_and_serializer_scalar_tables_ride_make_scalar_converter() -> None:
     """Both write-flavor CharField rows are ``make_scalar_converter`` closures.
 
     The KEY spaces stay separate (``forms.CharField`` vs
@@ -380,7 +384,7 @@ def test_form_and_serializer_scalar_tables_ride_make_scalar_converter():
     assert form_hit.kind == ser_hit.kind == SCALAR
 
 
-def test_form_and_serializer_file_prechecks_ride_make_kind_converter():
+def test_form_and_serializer_file_prechecks_ride_make_kind_converter() -> None:
     """File-kind prechecks on both flavors are ``make_kind_converter`` closures."""
     shared = make_kind_converter(FieldConversionBase, FILE).__code__
     assert form_converter._CONVERT_FILE.__code__ is shared

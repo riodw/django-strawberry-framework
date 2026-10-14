@@ -53,31 +53,31 @@ from tests._definition import make_definition
 class TestOptimizationPlanIsEmpty:
     """``is_empty`` returns ``True`` only when all plan directives are empty."""
 
-    def test_empty_plan(self):
+    def test_empty_plan(self) -> None:
         plan = OptimizationPlan()
         assert plan.is_empty is True
 
-    def test_non_empty_select_related(self):
+    def test_non_empty_select_related(self) -> None:
         plan = OptimizationPlan(select_related=["category"])
         assert plan.is_empty is False
 
-    def test_non_empty_prefetch_related(self):
+    def test_non_empty_prefetch_related(self) -> None:
         plan = OptimizationPlan(prefetch_related=["items"])
         assert plan.is_empty is False
 
-    def test_non_empty_only_fields(self):
+    def test_non_empty_only_fields(self) -> None:
         plan = OptimizationPlan(only_fields=["name"])
         assert plan.is_empty is False
 
-    def test_non_empty_fk_id_elisions(self):
+    def test_non_empty_fk_id_elisions(self) -> None:
         plan = OptimizationPlan(fk_id_elisions=["ItemType.category@allItems.category"])
         assert plan.is_empty is False
 
-    def test_non_empty_planned_resolver_keys(self):
+    def test_non_empty_planned_resolver_keys(self) -> None:
         plan = OptimizationPlan(planned_resolver_keys=["ItemType.category@allItems.category"])
         assert plan.is_empty is False
 
-    def test_cacheable_flag_does_not_affect_empty_state(self):
+    def test_cacheable_flag_does_not_affect_empty_state(self) -> None:
         plan = OptimizationPlan(cacheable=False)
         assert plan.is_empty is True
 
@@ -85,21 +85,21 @@ class TestOptimizationPlanIsEmpty:
 class TestLookupPaths:
     """``lookup_paths`` flattens Django lookup paths for debugging/B8."""
 
-    def test_flatten_select_related_paths(self):
+    def test_flatten_select_related_paths(self) -> None:
         plan = OptimizationPlan(select_related=["item", "item__category"])
         assert lookup_paths(plan) == {"item", "item__category"}
 
-    def test_flatten_plain_prefetch_string(self):
+    def test_flatten_plain_prefetch_string(self) -> None:
         plan = OptimizationPlan(prefetch_related=["items"])
         assert lookup_paths(plan) == {"items"}
 
-    def test_flatten_nested_prefetch_objects_recursively(self):
+    def test_flatten_nested_prefetch_objects_recursively(self) -> None:
         inner = Prefetch("entries", queryset=Entry.objects.only("value", "item_id"))
         outer = Prefetch("items", queryset=Item.objects.prefetch_related(inner))
         plan = OptimizationPlan(prefetch_related=[outer])
         assert lookup_paths(plan) == {"items", "items__entries"}
 
-    def test_does_not_include_resolver_keys(self):
+    def test_does_not_include_resolver_keys(self) -> None:
         plan = OptimizationPlan(
             select_related=["category"],
             planned_resolver_keys=["ItemType.category@allItems.category"],
@@ -107,14 +107,14 @@ class TestLookupPaths:
         )
         assert lookup_paths(plan) == {"category"}
 
-    def test_ignores_unknown_prefetch_like_entries(self):
+    def test_ignores_unknown_prefetch_like_entries(self) -> None:
         # Deliberately impossible for generated plans; covers defensive flattening.
         # basedpyright: the non-lookup prefetch entry is the hostile input under test;
         # OptimizationPlan types prefetch_related as Sequence[PrefetchLookup]
         plan = OptimizationPlan(prefetch_related=[object()])  # pyright: ignore[reportArgumentType]
         assert lookup_paths(plan) == set()
 
-    def test_uses_finalized_lookup_paths_after_finalize(self):
+    def test_uses_finalized_lookup_paths_after_finalize(self) -> None:
         """After ``finalize()``, ``lookup_paths`` reuses the frozen path set."""
         plan = OptimizationPlan(
             select_related=["category"],
@@ -129,7 +129,7 @@ class TestLookupPaths:
         assert not isinstance(result, frozenset)
 
 
-def test_resolver_key_includes_parent_type_and_runtime_path():
+def test_resolver_key_includes_parent_type_and_runtime_path() -> None:
     class ItemType:
         pass
 
@@ -142,7 +142,7 @@ def test_resolver_key_includes_parent_type_and_runtime_path():
 class TestOptimizationPlanApply:
     """``apply`` mutates a queryset with the collected directives."""
 
-    def test_apply_empty_plan_returns_queryset_unchanged(self):
+    def test_apply_empty_plan_returns_queryset_unchanged(self) -> None:
         plan = OptimizationPlan()
         qs = Category.objects.all()
         result = plan.apply(qs)
@@ -150,7 +150,7 @@ class TestOptimizationPlanApply:
         assert result.query.select_related is False
         assert queryset_prefetch_lookups(result) == ()
 
-    def test_apply_select_related(self):
+    def test_apply_select_related(self) -> None:
         plan = OptimizationPlan(select_related=["category"])
         # Use a model that has a FK - Item.category.
         from apps.products.models import Item
@@ -160,13 +160,13 @@ class TestOptimizationPlanApply:
         assert isinstance(result.query.select_related, dict)
         assert "category" in result.query.select_related
 
-    def test_apply_prefetch_related(self):
+    def test_apply_prefetch_related(self) -> None:
         plan = OptimizationPlan(prefetch_related=["items"])
         qs = Category.objects.all()
         result = plan.apply(qs)
         assert "items" in queryset_prefetch_lookups(result)
 
-    def test_apply_only_fields(self):
+    def test_apply_only_fields(self) -> None:
         plan = OptimizationPlan(only_fields=["name"])
         qs = Category.objects.all()
         result = plan.apply(qs)
@@ -178,7 +178,7 @@ class TestOptimizationPlanApply:
 class TestOptimizationPlanMerge:
     """Construction-time merge operations commit complete accepted plans."""
 
-    def test_full_merge_covers_every_directive_and_metadata_field_once(self):
+    def test_full_merge_covers_every_directive_and_metadata_field_once(self) -> None:
         target = OptimizationPlan(
             select_related=["category"],
             prefetch_related=["items"],
@@ -214,7 +214,7 @@ class TestOptimizationPlanMerge:
         }
         assert target.cacheable is False
 
-    def test_metadata_merge_excludes_child_queryset_directives(self):
+    def test_metadata_merge_excludes_child_queryset_directives(self) -> None:
         target = OptimizationPlan()
         child = OptimizationPlan(
             select_related=["category"],
@@ -236,7 +236,7 @@ class TestOptimizationPlanMerge:
         assert target.planned_resolver_keys == ["child-key"]
         assert target.cacheable is False
 
-    def test_merge_rejects_finalized_source_and_target(self):
+    def test_merge_rejects_finalized_source_and_target(self) -> None:
         with pytest.raises(RuntimeError, match="construction-time"):
             OptimizationPlan().merge_from(OptimizationPlan().finalize())
         with pytest.raises(RuntimeError, match="construction-time"):
@@ -245,7 +245,7 @@ class TestOptimizationPlanMerge:
     def test_merge_inventory_guard_reports_stale_classification(
         self,
         monkeypatch: pytest.MonkeyPatch,
-    ):
+    ) -> None:
         monkeypatch.setattr(
             OptimizationPlan,
             "_FULL_MERGE_FIELDS",
@@ -259,7 +259,7 @@ class TestOptimizationPlanMerge:
 class TestOptimizationPlanFinalize:
     """``finalize`` swaps mutable list fields for tuples so post-handoff mutation raises."""
 
-    def test_finalize_returns_tuples_for_list_fields(self):
+    def test_finalize_returns_tuples_for_list_fields(self) -> None:
         plan = OptimizationPlan(
             select_related=["category"],
             prefetch_related=["items"],
@@ -274,7 +274,7 @@ class TestOptimizationPlanFinalize:
         assert isinstance(finalized.fk_id_elisions, tuple)
         assert isinstance(finalized.planned_resolver_keys, tuple)
 
-    def test_finalize_precomputes_context_metadata_frozensets(self):
+    def test_finalize_precomputes_context_metadata_frozensets(self) -> None:
         inner = Prefetch("entries", queryset=Entry.objects.only("value", "item_id"))
         outer = Prefetch("items", queryset=Item.objects.prefetch_related(inner))
         plan = OptimizationPlan(
@@ -296,13 +296,13 @@ class TestOptimizationPlanFinalize:
             {"category", "items", "items__entries"},
         )
 
-    def test_finalize_preserves_values_and_cacheable_flag(self):
+    def test_finalize_preserves_values_and_cacheable_flag(self) -> None:
         plan = OptimizationPlan(select_related=["a", "b"], cacheable=False)
         finalized = plan.finalize()
         assert finalized.select_related == ("a", "b")
         assert finalized.cacheable is False
 
-    def test_finalize_blocks_post_handoff_append_on_cache_isolation(self):
+    def test_finalize_blocks_post_handoff_append_on_cache_isolation(self) -> None:
         plan = OptimizationPlan(prefetch_related=["items"]).finalize()
         # Tuple has no ``append``; mutation attempts raise AttributeError
         # rather than silently poisoning the plan-cache entry for the
@@ -310,13 +310,13 @@ class TestOptimizationPlanFinalize:
         assert isinstance(plan.prefetch_related, tuple)
         assert not hasattr(plan.prefetch_related, "append")
 
-    def test_finalize_is_idempotent(self):
+    def test_finalize_is_idempotent(self) -> None:
         plan = OptimizationPlan(select_related=["a"]).finalize()
         again = plan.finalize()
         assert again.select_related == ("a",)
         assert isinstance(again.select_related, tuple)
 
-    def test_apply_works_on_finalized_plan(self):
+    def test_apply_works_on_finalized_plan(self) -> None:
         plan = OptimizationPlan(select_related=["category"]).finalize()
         qs = Item.objects.all()
         result = plan.apply(qs)
@@ -327,7 +327,7 @@ class TestOptimizationPlanFinalize:
 class TestPlanHelperRelocations:
     """``append_unique`` / ``append_unique_many`` / ``append_prefetch_unique`` live with the plan shape."""
 
-    def test_append_unique_skips_existing_value(self):
+    def test_append_unique_skips_existing_value(self) -> None:
         from django_strawberry_framework.optimizer.plans import append_unique
 
         values: list[str] = ["a"]
@@ -335,7 +335,7 @@ class TestPlanHelperRelocations:
         append_unique(values, "b")
         assert values == ["a", "b"]
 
-    def test_append_unique_many_iterates_tuple(self):
+    def test_append_unique_many_iterates_tuple(self) -> None:
         from django_strawberry_framework.optimizer.plans import append_unique_many
 
         values: list[str] = []
@@ -345,7 +345,7 @@ class TestPlanHelperRelocations:
         )
         assert values == ["a", "b"]
 
-    def test_append_prefetch_unique_dedupes_by_lookup_path(self):
+    def test_append_prefetch_unique_dedupes_by_lookup_path(self) -> None:
         from django_strawberry_framework.optimizer.plans import append_prefetch_unique
 
         first = Prefetch("items", queryset=Item.objects.all())
@@ -355,7 +355,7 @@ class TestPlanHelperRelocations:
         append_prefetch_unique(values, second)
         assert values == [first]
 
-    def test_append_prefetch_unique_keeps_distinct_to_attrs_on_one_lookup(self):
+    def test_append_prefetch_unique_keeps_distinct_to_attrs_on_one_lookup(self) -> None:
         """Two windows on ONE relation coexist when their ``to_attr``s differ.
 
         The divergent-alias per-key scheme attaches one ``Prefetch``
@@ -378,7 +378,7 @@ class TestPlanHelperRelocations:
         append_prefetch_unique(values, duplicate)
         assert values == [first, second]
 
-    def test_plan_default_lists_use_indexed_append_unique(self):
+    def test_plan_default_lists_use_indexed_append_unique(self) -> None:
         from django_strawberry_framework.optimizer.plans import _IndexedList, append_unique
 
         plan = OptimizationPlan()
@@ -390,7 +390,7 @@ class TestPlanHelperRelocations:
 
         assert plan.only_fields == ["name", "id"]
 
-    def test_plan_default_prefetch_list_indexes_by_lookup_path(self):
+    def test_plan_default_prefetch_list_indexes_by_lookup_path(self) -> None:
         from django_strawberry_framework.optimizer.plans import (
             _IndexedList,
             append_prefetch_unique,
@@ -410,13 +410,13 @@ class TestPlanHelperRelocations:
 class TestIndexedList:
     """Direct coverage of ``_IndexedList`` mutators and the unhashable fallback."""
 
-    def test_constructor_dedupes_initial_values(self):
+    def test_constructor_dedupes_initial_values(self) -> None:
         from django_strawberry_framework.optimizer.plans import _IndexedList
 
         indexed = _IndexedList(["a", "b", "a"])
         assert indexed == ["a", "b"]
 
-    def test_append_and_extend_keep_index_for_later_append_unique(self):
+    def test_append_and_extend_keep_index_for_later_append_unique(self) -> None:
         from django_strawberry_framework.optimizer.plans import _IndexedList
 
         indexed: _IndexedList[str] = _IndexedList()
@@ -428,7 +428,7 @@ class TestIndexedList:
         indexed.append_unique("b")
         assert indexed == ["a", "b", "c"]
 
-    def test_append_unique_falls_back_to_membership_for_unhashable_values(self):
+    def test_append_unique_falls_back_to_membership_for_unhashable_values(self) -> None:
         from django_strawberry_framework.optimizer.plans import _IndexedList
 
         indexed: _IndexedList[list[str]] = _IndexedList()
@@ -444,25 +444,25 @@ class TestIndexedList:
 class TestFlattenSelectRelated:
     """``_flatten_select_related`` normalizes Django's three select_related shapes."""
 
-    def test_false_returns_empty_set(self):
-        assert _flatten_select_related(False) == set()
+    def test_false_returns_empty_set(self) -> None:
+        assert _flatten_select_related(False) == set()  # noqa: FBT003 - the bool is the value under test
 
-    def test_true_returns_empty_set_for_wildcard(self):
+    def test_true_returns_empty_set_for_wildcard(self) -> None:
         # A wildcard ``select_related()`` cannot safely justify
         # dropping explicit optimizer entries because the wildcard only
         # follows non-null FKs.  Treat as no overlap.
-        assert _flatten_select_related(True) == set()
+        assert _flatten_select_related(True) == set()  # noqa: FBT003 - the bool is the value under test
 
-    def test_dict_flattens_to_top_level_paths(self):
+    def test_dict_flattens_to_top_level_paths(self) -> None:
         assert _flatten_select_related({"category": {}}) == {"category"}
 
-    def test_dict_flattens_nested_chains(self):
+    def test_dict_flattens_nested_chains(self) -> None:
         assert _flatten_select_related({"category": {"parent": {}}}) == {
             "category",
             "category__parent",
         }
 
-    def test_none_or_non_dict_returns_empty_set(self):
+    def test_none_or_non_dict_returns_empty_set(self) -> None:
         assert _flatten_select_related(None) == set()
         assert _flatten_select_related("invalid") == set()
         assert _flatten_select_related(123) == set()
@@ -472,14 +472,14 @@ class TestFlattenSelectRelated:
 class TestDiffPlanForQueryset:
     """``diff_plan_for_queryset`` reconciles plan vs. queryset without mutating the plan."""
 
-    def test_returns_same_instances_when_nothing_to_drop(self):
+    def test_returns_same_instances_when_nothing_to_drop(self) -> None:
         plan = OptimizationPlan(select_related=["category"], prefetch_related=["items"])
         qs = Category.objects.all()
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
         assert delta_plan is plan
         assert delta_qs is qs
 
-    def test_drops_select_related_already_on_queryset(self):
+    def test_drops_select_related_already_on_queryset(self) -> None:
         plan = OptimizationPlan(select_related=["category"])
         qs = Item.objects.select_related("category")
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
@@ -489,13 +489,13 @@ class TestDiffPlanForQueryset:
         # Original plan is untouched - the plan cache reuses it across requests.
         assert plan.select_related == ["category"]
 
-    def test_drops_chained_select_related(self):
+    def test_drops_chained_select_related(self) -> None:
         plan = OptimizationPlan(select_related=["item__category"])
         qs = Entry.objects.select_related("item__category")
         delta_plan, _ = diff_plan_for_queryset(plan, qs)
         assert delta_plan.select_related == ()
 
-    def test_wildcard_select_related_does_not_drop_explicit_entries(self):
+    def test_wildcard_select_related_does_not_drop_explicit_entries(self) -> None:
         # A wildcard ``select_related()`` follows only non-null FKs; the
         # optimizer may name nullable FKs explicitly.  Treat the
         # wildcard as no overlap and pass entries through unchanged.  The
@@ -508,27 +508,27 @@ class TestDiffPlanForQueryset:
         assert delta_plan is plan
         assert delta_plan.select_related == ["item", "property"]
 
-    def test_drops_string_prefetch_already_on_queryset(self):
+    def test_drops_string_prefetch_already_on_queryset(self) -> None:
         plan = OptimizationPlan(prefetch_related=["items"])
         qs = Category.objects.prefetch_related("items")
         delta_plan, _ = diff_plan_for_queryset(plan, qs)
         assert delta_plan.prefetch_related == ()
         assert plan.prefetch_related == ["items"]
 
-    def test_consumer_prefetch_object_suppresses_plan_string(self):
+    def test_consumer_prefetch_object_suppresses_plan_string(self) -> None:
         plan = OptimizationPlan(prefetch_related=["items"])
         qs = Category.objects.prefetch_related(Prefetch("items", queryset=Item.objects.all()))
         delta_plan, _ = diff_plan_for_queryset(plan, qs)
         assert delta_plan.prefetch_related == ()
 
-    def test_partial_overlap_keeps_remaining_entries(self):
+    def test_partial_overlap_keeps_remaining_entries(self) -> None:
         plan = OptimizationPlan(select_related=["item", "property"])
         qs = Entry.objects.select_related("item")
         delta_plan, _ = diff_plan_for_queryset(plan, qs)
         assert delta_plan.select_related == ("property",)
         assert plan.select_related == ["item", "property"]
 
-    def test_carries_over_metadata_fields(self):
+    def test_carries_over_metadata_fields(self) -> None:
         plan = OptimizationPlan(
             select_related=["category"],
             only_fields=["name"],
@@ -544,7 +544,7 @@ class TestDiffPlanForQueryset:
         assert delta_plan.finalized_lookup_paths == frozenset()
         assert delta_plan.cacheable is False
 
-    def test_consumer_descendant_string_absorbed_by_optimizer_prefetch(self):
+    def test_consumer_descendant_string_absorbed_by_optimizer_prefetch(self) -> None:
         # The consumer's ``"items__entries"`` carries no info the
         # optimizer's nested ``Prefetch`` lacks.  The plain string is
         # stripped from the queryset and the optimizer entry is kept;
@@ -560,7 +560,7 @@ class TestDiffPlanForQueryset:
         assert delta_qs is not qs
         assert queryset_prefetch_lookups(delta_qs) == ()
 
-    def test_consumer_exact_plus_descendant_strings_both_absorbed(self):
+    def test_consumer_exact_plus_descendant_strings_both_absorbed(self) -> None:
         # The exact-plus-descendant case: ``prefetch_related("items", "items__entries")``
         # combined.  Both plain strings are absorbed by the optimizer's
         # ``Prefetch("items", queryset=...)`` so Django does not see
@@ -575,7 +575,7 @@ class TestDiffPlanForQueryset:
         assert delta_qs is not qs
         assert queryset_prefetch_lookups(delta_qs) == ()
 
-    def test_optimizer_does_not_strip_consumer_descendants_it_does_not_cover(self):
+    def test_optimizer_does_not_strip_consumer_descendants_it_does_not_cover(self) -> None:
         # When the optimizer's own subtree does not cover
         # every consumer descendant on the same subtree, absorbing
         # would silently drop data. Drop the optimizer entry instead;
@@ -590,7 +590,7 @@ class TestDiffPlanForQueryset:
             "items__entries",
         }
 
-    def test_optimizer_can_absorb_consumer_path_only_when_covered(self):
+    def test_optimizer_can_absorb_consumer_path_only_when_covered(self) -> None:
         # Variant: consumer has both a covered descendant and an
         # uncovered descendant. The uncovered one tips the decision -
         # we drop the optimizer to keep the consumer's full subtree.
@@ -602,7 +602,7 @@ class TestDiffPlanForQueryset:
         assert delta_plan.prefetch_related == ()
         assert delta_qs is qs
 
-    def test_consumer_descendant_with_custom_prefetch_drops_optimizer(self):
+    def test_consumer_descendant_with_custom_prefetch_drops_optimizer(self) -> None:
         # When any consumer entry on the subtree is a custom
         # ``Prefetch`` (not just a bare string), we cannot losslessly
         # absorb it; drop the optimizer entry to preserve the
@@ -617,7 +617,7 @@ class TestDiffPlanForQueryset:
         assert delta_qs is qs
         assert queryset_prefetch_lookups(delta_qs) == (consumer_descendant,)
 
-    def test_consumer_plain_string_replaced_by_optimizer_nested_prefetch(self):
+    def test_consumer_plain_string_replaced_by_optimizer_nested_prefetch(self) -> None:
         # The consumer's ``prefetch_related("items")`` plain
         # string vs. optimizer ``Prefetch("items", queryset=...)``
         # carrying nested chains.  The plain string carries no info
@@ -632,7 +632,7 @@ class TestDiffPlanForQueryset:
         assert delta_qs is not qs
         assert queryset_prefetch_lookups(delta_qs) == ()
 
-    def test_upgrade_preserves_other_consumer_prefetches(self):
+    def test_upgrade_preserves_other_consumer_prefetches(self) -> None:
         # When upgrading a single consumer plain string to the
         # optimizer's ``Prefetch``, any unrelated consumer prefetches
         # must survive the queryset rewrite.
@@ -646,7 +646,7 @@ class TestDiffPlanForQueryset:
         assert delta_qs is not qs
         assert queryset_prefetch_lookups(delta_qs) == (unrelated,)
 
-    def test_keeps_only_fields_when_consumer_applied_only_and_apply_unions(self):
+    def test_keeps_only_fields_when_consumer_applied_only_and_apply_unions(self) -> None:
         # Django's ``QuerySet.only(...).only(...)`` replaces (not merges) the
         # deferred-field set, so the diff leaves ``only_fields`` alone and the
         # projection writer spells out the union: the consumer's columns and
@@ -660,7 +660,7 @@ class TestDiffPlanForQueryset:
         assert fields == {"id", "category_id", "name"}
         assert is_deferred is False
 
-    def test_keeps_only_fields_when_consumer_did_not_apply_only(self):
+    def test_keeps_only_fields_when_consumer_did_not_apply_only(self) -> None:
         # Counterpart to the drop case: without a consumer ``.only()``,
         # the optimizer's ``only_fields`` passes through unchanged and
         # ``apply()`` applies it.
@@ -674,7 +674,7 @@ class TestDiffPlanForQueryset:
         assert fields == {"id"}
         assert is_deferred is False
 
-    def test_keeps_only_fields_when_consumer_used_defer(self):
+    def test_keeps_only_fields_when_consumer_used_defer(self) -> None:
         # Django's ``defer(a).only(a, b)`` silently keeps ``a`` deferred, so the
         # projection writer un-defers what the plan reads and keeps the rest of
         # the consumer's ``defer()``: the loaded set is the union of both sides.
@@ -686,7 +686,7 @@ class TestDiffPlanForQueryset:
         assert fields == {"description"}
         assert is_deferred is True
 
-    def test_unions_with_the_consumer_effective_only_when_chained(self):
+    def test_unions_with_the_consumer_effective_only_when_chained(self) -> None:
         # Django's chained ``.only().only()`` collapses to the most recent
         # argument; the union reads that effective set.
         plan = OptimizationPlan(only_fields=["id"])
@@ -695,7 +695,7 @@ class TestDiffPlanForQueryset:
         fields, _ = delta_plan.apply(qs).query.deferred_loading
         assert fields == {"id", "category_id"}
 
-    def test_consumer_prefetch_with_queryset_keeps_consumer_drops_optimizer(self):
+    def test_consumer_prefetch_with_queryset_keeps_consumer_drops_optimizer(self) -> None:
         # When the consumer passes their own ``Prefetch`` with a custom
         # queryset, we cannot losslessly replace it.  Consumer wins,
         # optimizer is dropped (any nested optimizer work is sacrificed
@@ -709,7 +709,7 @@ class TestDiffPlanForQueryset:
         assert delta_qs is qs
         assert queryset_prefetch_lookups(delta_qs) == (consumer_pf,)
 
-    def test_consumer_custom_prefetch_survives_redundant_trailing_string(self):
+    def test_consumer_custom_prefetch_survives_redundant_trailing_string(self) -> None:
         """A duplicate bare lookup never hides the consumer's custom queryset.
 
         Django accepts ``Prefetch("items", queryset=...)`` followed by the
@@ -735,7 +735,7 @@ class TestDiffPlanForQueryset:
         assert queryset_prefetch_lookups(delta_qs) == (consumer_pf, "items")
 
 
-def _linked_path(*keys: str | int):
+def _linked_path(*keys: str | int) -> SimpleNamespace | None:
     """Build a graphql-core-style ``key``/``prev`` linked response path."""
     node = None
     for key in keys:
@@ -746,19 +746,19 @@ def _linked_path(*keys: str | int):
 class TestRuntimePathFromPath:
     """``runtime_path_from_path`` walks ``prev`` under a fixed, fail-loud bound."""
 
-    def test_walks_a_deep_but_finite_path(self):
+    def test_walks_a_deep_but_finite_path(self) -> None:
         """A path of (ceiling - 1) nodes resolves fully - the boundary that just fits."""
         # _linked_path builds root-first; the output is that same root-first order.
         keys = tuple(f"f{i}" for i in range(_MAX_PATH_DEPTH - 1))
         path = _linked_path(*keys)
         assert runtime_path_from_path(path) == keys
 
-    def test_strips_list_indexes(self):
+    def test_strips_list_indexes(self) -> None:
         """Integer (list-index) keys are skipped; string keys/aliases kept."""
         path = _linked_path("allItems", 0, "cat")
         assert runtime_path_from_path(path) == ("allItems", "cat")
 
-    def test_raises_on_cyclic_path(self):
+    def test_raises_on_cyclic_path(self) -> None:
         """A self-referential ``prev`` chain hits the bound and fails loud."""
         node = SimpleNamespace(key="loop", prev=None)
         node.prev = node  # never bottoms out
@@ -777,7 +777,7 @@ class TestApplyWindowPagination:
         reverse: bool = False,
         with_total_count: bool = True,
         next_page_probe: bool = False,
-    ):
+    ) -> QuerySet[Item]:
         return apply_window_pagination(
             Item.objects.all(),
             partition_by="category_id",
@@ -789,7 +789,7 @@ class TestApplyWindowPagination:
             next_page_probe=next_page_probe,
         )
 
-    def test_annotates_row_number_and_total_count(self):
+    def test_annotates_row_number_and_total_count(self) -> None:
         """Both window annotations land under the ``_dst_*`` reserved names."""
         qs = self._windowed(offset=0, limit=3)
         annotations = qs.query.annotations
@@ -799,7 +799,7 @@ class TestApplyWindowPagination:
         assert "ROW_NUMBER()" in sql
         assert "COUNT(" in sql
 
-    def test_ambiguous_shapes_keep_partition_marker_row(self):
+    def test_ambiguous_shapes_keep_partition_marker_row(self) -> None:
         """``offset > 0`` / ``limit == 0`` windows keep each partition's row 1.
 
         The marker-row disambiguation (spec-033 Decision 5):
@@ -826,7 +826,7 @@ class TestApplyWindowPagination:
         assert "> 3" in sql
         assert "= 1" in sql
 
-    def test_unambiguous_shapes_plan_no_marker(self):
+    def test_unambiguous_shapes_plan_no_marker(self) -> None:
         """Plain ``first: N`` (offset 0, positive bound) and reverse windows add no marker."""
         plain = self._windowed(offset=0, limit=3)
         sql = str(plain.query).upper()
@@ -839,7 +839,7 @@ class TestApplyWindowPagination:
         assert WINDOW_ROW_NUMBER_REVERSED.upper() in sql
         assert " OR " not in sql
 
-    def test_with_total_count_false_omits_count_annotation(self):
+    def test_with_total_count_false_omits_count_annotation(self) -> None:
         """``with_total_count=False`` drops the count window, keeping the row filters.
 
         The conditional-count contract (spec-033 Decision 4):
@@ -857,7 +857,7 @@ class TestApplyWindowPagination:
         assert ">" in sql
         assert "<=" in sql
 
-    def test_next_page_probe_overfetches_one_row_without_the_count(self):
+    def test_next_page_probe_overfetches_one_row_without_the_count(self) -> None:
         """``next_page_probe=True`` bounds to ``limit + 1`` and drops the count.
 
         The count-free ``hasNextPage`` render: the plain first page fetches ONE
@@ -875,7 +875,7 @@ class TestApplyWindowPagination:
         assert "<= 3" not in sql  # NOT the plain page bound
         assert " OR " not in sql  # a probe is not a marker shape
 
-    def test_next_page_probe_composes_with_marker_on_the_offset_page(self):
+    def test_next_page_probe_composes_with_marker_on_the_offset_page(self) -> None:
         """The bounded forward offset page overfetches the sentinel AND markers.
 
         ``next_page_probe`` now engages on the offset page too, composing with the
@@ -895,7 +895,7 @@ class TestApplyWindowPagination:
         assert "= 1" in sql  # the marker alternative
         assert " OR " in sql  # marker composes with the probe bound
 
-    def test_next_page_probe_inert_on_the_unbounded_offset_shape(self):
+    def test_next_page_probe_inert_on_the_unbounded_offset_shape(self) -> None:
         """The probe flag stays inert on the unbounded offset page (no finite bound).
 
         An ``after``-offset window with no ``first`` has no upper bound for the
@@ -908,7 +908,7 @@ class TestApplyWindowPagination:
         assert "= 1" in sql  # marker only
         assert "<= " not in sql  # no finite fetch ceiling
 
-    def test_engaged_probe_with_count_is_rejected(self):
+    def test_engaged_probe_with_count_is_rejected(self) -> None:
         """An engaged-probe window that also annotates the count fails loudly.
 
         The probe/count mutual-exclusion contract at the ORM window entry point
@@ -923,7 +923,7 @@ class TestApplyWindowPagination:
             with pytest.raises(OptimizerError, match="mutually exclusive"):
                 self._windowed(offset=offset, limit=3, with_total_count=True, next_page_probe=True)
 
-    def test_with_total_count_false_reverse_branch_still_bounds(self):
+    def test_with_total_count_false_reverse_branch_still_bounds(self) -> None:
         """The reverse (last-only) branch honors ``with_total_count=False`` too."""
         qs = self._windowed(offset=0, limit=2, reverse=True, with_total_count=False)
         annotations = qs.query.annotations
@@ -932,7 +932,7 @@ class TestApplyWindowPagination:
         assert WINDOW_TOTAL_COUNT not in annotations
         assert "<= 2" in str(qs.query).upper()
 
-    def test_applies_order_by_to_queryset_not_just_the_window(self):
+    def test_applies_order_by_to_queryset_not_just_the_window(self) -> None:
         """The deterministic order is applied to the queryset's own ``ORDER BY``.
 
         The SQL window orders the ROW-NUMBER values, but Django hands prefetched
@@ -948,7 +948,7 @@ class TestApplyWindowPagination:
         reverse = self._windowed(offset=0, limit=2, reverse=True)
         assert tuple(reverse.query.order_by) == ("name", "pk")
 
-    def test_forward_window_filters_offset_and_upper_bound(self):
+    def test_forward_window_filters_offset_and_upper_bound(self) -> None:
         """A forward window with offset+limit filters ``__gt`` offset and ``__lte`` offset+limit."""
         qs = self._windowed(offset=2, limit=3)
         where = str(qs.query).upper()
@@ -959,13 +959,13 @@ class TestApplyWindowPagination:
         assert ">" in where
         assert "<=" in where
 
-    def test_no_offset_skips_lower_filter(self):
+    def test_no_offset_skips_lower_filter(self) -> None:
         """``offset == 0`` applies only the upper-bound filter."""
         qs = self._windowed(offset=0, limit=3)
         # The annotations are present; only the upper-bound filter applies.
         assert WINDOW_ROW_NUMBER in qs.query.annotations
 
-    def test_reverse_branch_uses_reversed_row_number(self):
+    def test_reverse_branch_uses_reversed_row_number(self) -> None:
         """The reverse (last-only) branch annotates ``_dst_row_number_reversed`` and bounds it."""
         qs = self._windowed(offset=0, limit=2, reverse=True)
         annotations = qs.query.annotations
@@ -979,7 +979,7 @@ class TestApplyWindowPagination:
         assert WINDOW_ROW_NUMBER_REVERSED.upper() in sql
         assert "<= 2" in sql
 
-    def test_reverse_branch_applies_offset_filter_when_present(self):
+    def test_reverse_branch_applies_offset_filter_when_present(self) -> None:
         """``reverse=True`` with a non-zero ``offset`` still applies the forward gt-filter.
 
         The walker never plans this combination (``after`` + ``last`` raises
@@ -994,7 +994,7 @@ class TestApplyWindowPagination:
         assert WINDOW_ROW_NUMBER_REVERSED.upper() in sql
         assert "<= 3" in sql
 
-    def test_reverse_branch_with_none_limit_adds_no_upper_filter(self):
+    def test_reverse_branch_with_none_limit_adds_no_upper_filter(self) -> None:
         """``reverse=True, limit=None`` annotates the reversed window but adds no bound.
 
         Guards that the limit-vs-``None`` decision lives in the caller
@@ -1006,18 +1006,18 @@ class TestApplyWindowPagination:
         assert WINDOW_ROW_NUMBER_REVERSED in qs.query.annotations
         assert "<=" not in str(qs.query).upper()
 
-    def test_unbounded_limit_skips_upper_filter(self):
+    def test_unbounded_limit_skips_upper_filter(self) -> None:
         """``limit is None`` (no upper bound) annotates but adds no ``__lte`` row filter."""
         qs = self._windowed(offset=1, limit=None)
         # Annotation present; offset filter applies, but no finite upper bound.
         assert WINDOW_ROW_NUMBER in qs.query.annotations
 
-    def test_maxsize_limit_skips_upper_filter(self):
+    def test_maxsize_limit_skips_upper_filter(self) -> None:
         """``sys.maxsize`` (relay's no-limit sentinel) adds no upper-bound filter."""
         qs = self._windowed(offset=0, limit=sys.maxsize)
         assert WINDOW_ROW_NUMBER in qs.query.annotations
 
-    def test_annotations_compose_with_only(self):
+    def test_annotations_compose_with_only(self) -> None:
         """Window annotations survive a ``.only()`` projection (annotations, not columns)."""
         qs = apply_window_pagination(
             Item.objects.only("name", "category_id"),
@@ -1033,17 +1033,17 @@ class TestApplyWindowPagination:
 class TestOrderEntryHasExplicitNulls:
     """``order_entry_has_explicit_nulls`` is the shared OrderBy NULLS vocabulary gate."""
 
-    def test_string_refs_never_carry_nulls(self):
+    def test_string_refs_never_carry_nulls(self) -> None:
         assert order_entry_has_explicit_nulls("title") is False
         assert order_entry_has_explicit_nulls("-title") is False
 
-    def test_plain_orderby_is_not_explicit(self):
+    def test_plain_orderby_is_not_explicit(self) -> None:
         from django.db.models import F
 
         assert order_entry_has_explicit_nulls(F("title").asc()) is False
         assert order_entry_has_explicit_nulls(F("title").desc()) is False
 
-    def test_nulls_first_or_last_is_explicit(self):
+    def test_nulls_first_or_last_is_explicit(self) -> None:
         from django.db.models import F
 
         assert order_entry_has_explicit_nulls(F("title").asc(nulls_first=True)) is True
@@ -1053,7 +1053,7 @@ class TestOrderEntryHasExplicitNulls:
 class TestDeterministicOrderHoistParity:
     """The hoisted order rule answers identically to the previous connection.py code."""
 
-    def test_ends_in_unique_column_string_refs(self):
+    def test_ends_in_unique_column_string_refs(self) -> None:
         """String order refs: pk / attname / unique field are unique; non-unique are not."""
         assert ends_in_unique_column(("id",), Category) is True
         assert ends_in_unique_column(("pk",), Category) is True
@@ -1064,14 +1064,14 @@ class TestDeterministicOrderHoistParity:
         assert ends_in_unique_column(("_dst_order_alias",), Category) is False  # annotation alias
         assert ends_in_unique_column((), Category) is False  # unordered
 
-    def test_ends_in_unique_column_expression_refs(self):
+    def test_ends_in_unique_column_expression_refs(self) -> None:
         """``F`` expression terminals read the wrapped column name."""
         from django.db.models import F
 
         assert ends_in_unique_column((F("name").asc(),), Category) is True  # unique
         assert ends_in_unique_column((F("name").asc(),), Item) is False  # non-unique
 
-    def test_ends_in_unique_column_bare_f_expression(self):
+    def test_ends_in_unique_column_bare_f_expression(self) -> None:
         """Bare ``F`` expression terminals read the wrapped column name directly."""
         from django.db.models import F
 
@@ -1080,13 +1080,13 @@ class TestDeterministicOrderHoistParity:
         assert ends_in_unique_column((F("id"),), Item) is True  # unique pk
         assert deterministic_order((F("id"),), Item) == (F("id"),)
 
-    def test_ends_in_unique_column_unnameable_terminal(self):
+    def test_ends_in_unique_column_unnameable_terminal(self) -> None:
         """A transform terminal (no readable column name) is treated as non-unique."""
         from django.db.models.functions import Lower
 
         assert ends_in_unique_column((Lower("name"),), Category) is False
 
-    def test_ends_in_unique_column_nullable_unique_is_not_total_order(self):
+    def test_ends_in_unique_column_nullable_unique_is_not_total_order(self) -> None:
         """A NULLABLE unique terminal is NOT a total order.
 
         SQL ``UNIQUE`` permits multiple NULLs, so terminal ties among NULL rows
@@ -1102,20 +1102,20 @@ class TestDeterministicOrderHoistParity:
         assert ends_in_unique_column(("name",), Category) is True
         assert deterministic_order(("name",), Category) == ("name",)
 
-    def test_deterministic_order_appends_pk_when_not_unique(self):
+    def test_deterministic_order_appends_pk_when_not_unique(self) -> None:
         """A non-unique terminal gets the pk appended; a unique one is returned unchanged."""
         assert deterministic_order(("name",), Item) == ("name", "id")
         # Already ends in a unique column -> unchanged.
         assert deterministic_order(("name",), Category) == ("name",)
         assert deterministic_order(("id",), Item) == ("id",)
 
-    def test_deterministic_order_matches_connection_reexport(self):
+    def test_deterministic_order_matches_connection_reexport(self) -> None:
         """``connection.py`` re-exports the same ``ends_in_unique_column`` (one source)."""
         from django_strawberry_framework.connection import _ends_in_unique_column
 
         assert _ends_in_unique_column is ends_in_unique_column
 
-    def test_ends_in_unique_column_defensive_for_non_model(self):
+    def test_ends_in_unique_column_defensive_for_non_model(self) -> None:
         """Non-model objects without ``_meta`` safely return False."""
         # basedpyright: each non-model is the hostile input under test; ends_in_unique_column
         # types the parameter as type[Model]
@@ -1133,17 +1133,17 @@ class TestEffectiveConnectionOrder:
     invariant's order leg (spec-033 Decision 4).
     """
 
-    def test_keyset_cursor_field_is_the_default_order_when_no_explicit_won(self):
+    def test_keyset_cursor_field_is_the_default_order_when_no_explicit_won(self) -> None:
         """A declared ``cursor_field`` IS the connection order with no explicit orderBy."""
         query = Item.objects.all().query
         assert effective_connection_order(("-number", "id"), query, Item) == ("-number", "id")
 
-    def test_explicit_orderby_beats_the_declared_cursor_field(self):
+    def test_explicit_orderby_beats_the_declared_cursor_field(self) -> None:
         """An explicit ``orderBy:`` keeps the shipped derivation even for a keyset target."""
         query = Item.objects.order_by("name").query
         assert effective_connection_order(("-number", "id"), query, Item) == ("name", "id")
 
-    def test_falls_back_to_meta_ordering_through_deterministic_order(self):
+    def test_falls_back_to_meta_ordering_through_deterministic_order(self) -> None:
         """No explicit order: model ``Meta.ordering`` is honored, made total if needed.
 
         ``Status`` orders by the non-unique ``order`` column implicitly, so the pk
@@ -1158,11 +1158,11 @@ class TestEffectiveConnectionOrder:
         )
         assert effective_connection_order(None, Card.objects.all().query, Card) == ("number",)
 
-    def test_no_order_source_anywhere_appends_the_pk(self):
+    def test_no_order_source_anywhere_appends_the_pk(self) -> None:
         """An unordered model with no explicit order paginates by the pk alone."""
         assert effective_connection_order(None, Item.objects.all().query, Item) == ("id",)
 
-    def test_ordering_none_is_no_default_order(self):
+    def test_ordering_none_is_no_default_order(self) -> None:
         """``Meta.ordering = None`` clears an abstract parent's order; the pk alone totals it.
 
         Django accepts ``None`` and reads the option by truthiness, so it is no
@@ -1178,7 +1178,7 @@ class TestEffectiveConnectionOrder:
             "id",
         )
 
-    def test_cleared_default_ordering_is_not_reapplied(self):
+    def test_cleared_default_ordering_is_not_reapplied(self) -> None:
         """A bare ``.order_by()`` turns ``Meta.ordering`` off, so the pk alone totals the page.
 
         Django compiles no ``Meta.ordering`` once ``query.default_ordering`` is
@@ -1202,12 +1202,12 @@ class TestNormalizeOrderDirection:
     queryset once the connection's tiebreaker joins it.
     """
 
-    def test_forward_queryset_is_returned_as_is(self):
+    def test_forward_queryset_is_returned_as_is(self) -> None:
         """A queryset under the forward flag is the same object back."""
         queryset = Item.objects.order_by("name")
         assert normalize_order_direction(queryset, None, Item) is queryset
 
-    def test_explicit_order_is_reversed_whole_with_the_flag_reset(self):
+    def test_explicit_order_is_reversed_whole_with_the_flag_reset(self) -> None:
         """``order_by("name").reverse()`` materializes ``-name, -id`` under the forward flag."""
         reversed_queryset = Item.objects.order_by("name").reverse()
         normalized = normalize_order_direction(reversed_queryset, None, Item)
@@ -1220,7 +1220,7 @@ class TestNormalizeOrderDirection:
         assert str(normalized.query) == str(compiled.query)
         assert effective_connection_order(None, normalized.query, Item) == ("-name", "-id")
 
-    def test_meta_ordering_is_materialized_then_reversed(self):
+    def test_meta_ordering_is_materialized_then_reversed(self) -> None:
         """A bare ``.reverse()`` reverses the model's ``Meta.ordering`` made total."""
         from apps.kanban.models import Status
         from apps.library.models import ReadingList
@@ -1236,7 +1236,7 @@ class TestNormalizeOrderDirection:
             ReadingList.objects.order_by("title", "id").reverse().query,
         )
 
-    def test_orderby_expression_swaps_its_nulls_placement(self):
+    def test_orderby_expression_swaps_its_nulls_placement(self) -> None:
         """An ``OrderBy`` reverses through Django's own ``reverse_ordering``, NULLS included."""
         reversed_queryset = Item.objects.order_by(F("name").asc(nulls_first=True)).reverse()
         normalized = normalize_order_direction(reversed_queryset, None, Item)
@@ -1251,7 +1251,7 @@ class TestNormalizeOrderDirection:
         compiled = Item.objects.order_by(F("name").asc(nulls_first=True), "id").reverse()
         assert str(normalized.query) == str(compiled.query)
 
-    def test_no_order_anywhere_reverses_the_cursor_field_else_the_pk(self):
+    def test_no_order_anywhere_reverses_the_cursor_field_else_the_pk(self) -> None:
         """With no order on the queryset or model, the declared cursor order (or pk) flips."""
         assert normalize_order_direction(
             Item.objects.reverse(),
@@ -1277,13 +1277,16 @@ class TestEffectiveCursorState:
     """The one derivation of a keyset page's cursor vocabulary from its effective order."""
 
     @pytest.mark.parametrize("effective", [(), ("-number", "id")], ids=["unordered", "declared"])
-    def test_the_declared_order_is_the_declared_state_itself(self, effective: tuple[str, ...]):
+    def test_the_declared_order_is_the_declared_state_itself(
+        self,
+        effective: tuple[str, ...],
+    ) -> None:
         """The planner reads ``is`` as "decode under the declared vocabulary already done"."""
         state = _issue_cursor_state()
         assert effective_cursor_state(state, effective) == (state, {})
         assert effective_cursor_state(state, effective)[0] is state
 
-    def test_another_order_derives_its_own_columns_fingerprint_and_annotations(self):
+    def test_another_order_derives_its_own_columns_fingerprint_and_annotations(self) -> None:
         state = _issue_cursor_state()
         derived, annotations = effective_cursor_state(state, ("periodical__name", "-id"))
         assert derived.definition is state.definition
@@ -1299,7 +1302,7 @@ class TestEffectiveCursorState:
         assert local_cursor_attnames(state) == ("number", "id")
 
 
-def test_metadata_merge_merges_the_window_vocabularies_by_resolver_key():
+def test_metadata_merge_merges_the_window_vocabularies_by_resolver_key() -> None:
     """Each window keeps its own vocabulary under its own resolver key."""
     state = _issue_cursor_state()
     derived, _annotations = effective_cursor_state(state, ("-id",))
@@ -1321,12 +1324,12 @@ def _nulls_slots(entry: OrderBy) -> tuple[bool | None, bool | None]:
 class TestReverseOrderBy:
     """``_reverse_order_by`` mirrors Django's ``queryset.reverse()`` (spec-033 Decision 4)."""
 
-    def test_flips_string_direction(self):
+    def test_flips_string_direction(self) -> None:
         """String refs toggle the leading ``-``; the pk terminal stays total."""
         assert _reverse_order_by(["name", "id"]) == ["-name", "-id"]
         assert _reverse_order_by(["-name", "id"]) == ["name", "-id"]
 
-    def test_flips_orderby_descending(self):
+    def test_flips_orderby_descending(self) -> None:
         """``OrderBy`` expressions flip ``.descending`` without re-running the compiler."""
         from django.db.models import F
 
@@ -1334,7 +1337,7 @@ class TestReverseOrderBy:
         assert isinstance(reversed_order[0], OrderBy)
         assert reversed_order[0].descending is True
 
-    def test_swaps_explicit_nulls_positioning(self):
+    def test_swaps_explicit_nulls_positioning(self) -> None:
         """Explicit ``nulls_first`` / ``nulls_last`` swap on reversal, like ``.reverse()``.
 
         Django inverts NULLS placement when reversing an ordering; mirror that so
@@ -1357,11 +1360,11 @@ class TestReverseOrderBy:
         assert first_slot is True
         assert last_slot is None
 
-    def test_random_order_passes_through(self):
+    def test_random_order_passes_through(self) -> None:
         """``"?"`` carries no direction: it stays ``"?"`` (``order_by("-?")`` is a FieldError)."""
         assert _reverse_order_by(["?", "id"]) == ["?", "-id"]
 
-    def test_bare_expression_reverses_through_desc(self):
+    def test_bare_expression_reverses_through_desc(self) -> None:
         """A term with no ``.descending`` is IMPLICITLY ascending; its reverse is ``desc()``.
 
         ``deterministic_order`` carries whatever the child queryset or
@@ -1389,7 +1392,7 @@ class TestReverseOrderBy:
         assert reversed_expression.descending is True
         assert reversed_expression.expression == Lower("title")
 
-    def test_unreversible_term_raises_instead_of_serving_the_wrong_end(self):
+    def test_unreversible_term_raises_instead_of_serving_the_wrong_end(self) -> None:
         """A term that is neither an ``OrderBy`` nor ``desc()``-able fails loudly.
 
         There is no correct reversal for such a term, and silently keeping it
@@ -1420,7 +1423,10 @@ class TestPruneUnsupportableSelectRelated:
     """
 
     @staticmethod
-    def _reconcile(plan: OptimizationPlan, queryset: QuerySet[Model]):
+    def _reconcile(
+        plan: OptimizationPlan,
+        queryset: QuerySet[Model],
+    ) -> tuple[OptimizationPlan, QuerySet[Model]]:
         """The extension's full B8 pipeline: prune, then diff, then apply."""
         from django_strawberry_framework.optimizer.plans import (
             prune_unsupportable_select_related,
@@ -1430,7 +1436,7 @@ class TestPruneUnsupportableSelectRelated:
         delta, queryset = diff_plan_for_queryset(pruned, queryset)
         return pruned, delta.apply(queryset)
 
-    def test_projected_plan_keeps_the_path_and_loads_its_connector(self):
+    def test_projected_plan_keeps_the_path_and_loads_its_connector(self) -> None:
         # A plan carrying its own projection is written as the union with the
         # consumer's, connector included, so the JOIN stays and compiles.
         plan = OptimizationPlan(
@@ -1444,7 +1450,7 @@ class TestPruneUnsupportableSelectRelated:
         assert 'JOIN "products_category"' in str(applied.query)
         assert "category-key" in pruned.planned_resolver_keys
 
-    def test_consumer_only_drops_blocked_path_and_its_resolver_keys(self):
+    def test_consumer_only_drops_blocked_path_and_its_resolver_keys(self) -> None:
         # No projection of its own (a non-``QUERY`` operation): the plan would
         # apply ``select_related`` straight over the consumer's ``.only()``.
         plan = OptimizationPlan(
@@ -1466,7 +1472,7 @@ class TestPruneUnsupportableSelectRelated:
         assert plan.finalized_planned_resolver_keys is not None
         assert "category-key" in plan.finalized_planned_resolver_keys
 
-    def test_projection_loading_the_connector_keeps_the_path(self):
+    def test_projection_loading_the_connector_keeps_the_path(self) -> None:
         plan = OptimizationPlan(
             select_related=["category"],
             planned_resolver_keys=["category-key"],
@@ -1477,7 +1483,7 @@ class TestPruneUnsupportableSelectRelated:
         assert pruned is plan  # same object: nothing to prune.
         assert 'JOIN "products_category"' in str(applied.query)
 
-    def test_dotted_projection_keeps_root_and_drops_deeper_path(self):
+    def test_dotted_projection_keeps_root_and_drops_deeper_path(self) -> None:
         from apps.library.models import Book
 
         plan = OptimizationPlan(
@@ -1497,7 +1503,7 @@ class TestPruneUnsupportableSelectRelated:
         assert 'JOIN "library_shelf"' in compiled
         assert 'JOIN "library_branch"' not in compiled
 
-    def test_projected_plan_undefers_the_connector_the_consumer_deferred(self):
+    def test_projected_plan_undefers_the_connector_the_consumer_deferred(self) -> None:
         from apps.library.models import Book
 
         plan = OptimizationPlan(
@@ -1515,7 +1521,7 @@ class TestPruneUnsupportableSelectRelated:
         assert 'JOIN "library_shelf"' in compiled
         assert 'JOIN "library_branch"' in compiled
 
-    def test_consumer_defer_drops_path_keys(self):
+    def test_consumer_defer_drops_path_keys(self) -> None:
         from apps.library.models import Book
 
         plan = OptimizationPlan(
@@ -1531,7 +1537,7 @@ class TestPruneUnsupportableSelectRelated:
         assert pruned.planned_resolver_keys == ()
         assert 'JOIN "library_shelf"' not in str(applied.query)
 
-    def test_defer_of_an_unrelated_column_prunes_nothing(self):
+    def test_defer_of_an_unrelated_column_prunes_nothing(self) -> None:
         from apps.library.models import Book
 
         plan = OptimizationPlan(
@@ -1543,7 +1549,7 @@ class TestPruneUnsupportableSelectRelated:
         assert pruned is plan
         assert 'JOIN "library_shelf"' in str(applied.query)
 
-    def test_unresolvable_path_is_dropped_conservatively(self):
+    def test_unresolvable_path_is_dropped_conservatively(self) -> None:
         # A path the model cannot resolve (planner drift, exotic doubles)
         # drops rather than gambles on a FieldError at compile time.
         from apps.library.models import Book
@@ -1552,7 +1558,7 @@ class TestPruneUnsupportableSelectRelated:
         pruned, _ = self._reconcile(plan, Book.objects.only("title"))
         assert pruned.select_related == ()
 
-    def test_no_consumer_projection_returns_the_same_plan(self):
+    def test_no_consumer_projection_returns_the_same_plan(self) -> None:
         plan = OptimizationPlan(
             select_related=["category"],
             planned_resolver_keys=["category-key"],
@@ -1563,7 +1569,7 @@ class TestPruneUnsupportableSelectRelated:
 
         assert prune_unsupportable_select_related(plan, Item.objects.all()) is plan
 
-    def test_prune_removes_unsupported_from_select_path_resolver_keys(self):
+    def test_prune_removes_unsupported_from_select_path_resolver_keys(self) -> None:
         from apps.library.models import Book
 
         plan = OptimizationPlan(
@@ -1586,7 +1592,7 @@ class TestPruneUnsupportableSelectRelated:
         assert pruned.select_path_resolver_keys == {"shelf": ("shelf-key",)}
 
 
-def test_consumer_projection_and_traversal_defensive_shapes():
+def test_consumer_projection_and_traversal_defensive_shapes() -> None:
     """``_consumer_projection`` / ``_select_path_traversable`` defensive tails.
 
     Non-queryset inputs and malformed ``deferred_loading`` shapes report no
@@ -1632,9 +1638,10 @@ def test_consumer_projection_and_traversal_defensive_shapes():
 def test_select_path_missing_connectors(
     path: str,
     names: set[str],
+    *,
     defer_mode: bool,
     expected: tuple[str, ...] | None,
-):
+) -> None:
     """The ``.only()`` entries a joined path still needs, or ``None`` when no entry can help."""
     assert (
         _select_path_missing_connectors(
@@ -1647,7 +1654,7 @@ def test_select_path_missing_connectors(
     )
 
 
-def test_apply_projection_leaves_a_filtered_relation_join_alone():
+def test_apply_projection_leaves_a_filtered_relation_join_alone() -> None:
     """A ``FilteredRelation`` alias is no deferred field: the ``.only()`` applies as given."""
     queryset = Entry.objects.annotate(
         public_item=FilteredRelation("item", condition=Q(item__is_private=False)),
@@ -1676,7 +1683,7 @@ def test_merged_projection_defer_mode_matches_every_spelling_of_a_read_column(
     deferred: tuple[str, ...],
     names: list[str],
     remaining: list[str],
-):
+) -> None:
     """A consumer ``.defer()`` stops deferring a column the names read under any spelling.
 
     The live rows defer and read one column by its field name; these are the
@@ -1703,6 +1710,6 @@ def test_projection_aliases_resolve_only_what_the_model_names(
     entry: str,
     model: type[Model] | None,
     aliases: set[str],
-):
+) -> None:
     """An entry aliases its name and attname spellings; an unresolvable one only itself."""
     assert _projection_aliases(entry, model) == aliases

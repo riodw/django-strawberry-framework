@@ -13,7 +13,7 @@ from django_strawberry_framework.types.definition import DjangoTypeDefinition
 from tests._definition import make_definition
 
 
-def test_make_definition_reads_back_what_the_test_varied_and_registers_nothing():
+def test_make_definition_reads_back_what_the_test_varied_and_registers_nothing() -> None:
     """Model, origin, name, cursor field and relation connections read back as given."""
     registry.clear()
     definition = make_definition(

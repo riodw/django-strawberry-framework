@@ -32,7 +32,9 @@ Finalize-time bind / orphan / collision have no request. Shipped
 from __future__ import annotations
 
 import sys
+from collections import OrderedDict
 from collections.abc import Iterator
+from typing import NoReturn
 
 import pytest
 import strawberry
@@ -86,7 +88,7 @@ def _isolate_registry() -> Iterator[None]:
 # ---------------------------------------------------------------------------
 
 
-def test_meta_orderset_class_accepts_order_set_subclass():
+def test_meta_orderset_class_accepts_order_set_subclass() -> None:
     """``Meta.orderset_class`` promotes onto the definition."""
 
     class BookOrder(OrderSet):
@@ -103,7 +105,7 @@ def test_meta_orderset_class_accepts_order_set_subclass():
     assert BookType.__django_strawberry_definition__.orderset_class is BookOrder
 
 
-def test_meta_orderset_class_rejects_non_order_set():
+def test_meta_orderset_class_rejects_non_order_set() -> None:
     """A non-``OrderSet`` value at class-creation time raises ``ConfigurationError``."""
 
     class NotAnOrderSet:
@@ -123,7 +125,7 @@ def test_meta_orderset_class_rejects_non_order_set():
     assert "NotAnOrderSet" in msg
 
 
-def test_validate_orderset_class_uses_local_import():
+def test_validate_orderset_class_uses_local_import() -> None:
     """``_validate_orderset_class`` keeps ``OrderSet`` out of ``types.base`` module globals.
 
     Pins the spec-028 contract: the import lives
@@ -147,7 +149,7 @@ def test_validate_orderset_class_uses_local_import():
 # ---------------------------------------------------------------------------
 
 
-def test_phase_2_5_binds_all_owners_before_expansion():
+def test_phase_2_5_binds_all_owners_before_expansion() -> None:
     """Every owner binds before any ``get_fields()`` runs (subpass 1 before subpass 2)."""
 
     class ShelfOrder(OrderSet):
@@ -166,7 +168,7 @@ def test_phase_2_5_binds_all_owners_before_expansion():
     original_get_fields = ShelfOrder.get_fields.__func__
 
     @classmethod
-    def instrumented_get_fields(cls: type[OrderSet]):
+    def instrumented_get_fields(cls: type[OrderSet]) -> OrderedDict[str, RelatedOrder | None]:
         observations.append(cls._owner_definition is not None)
         return original_get_fields(cls)
 
@@ -207,7 +209,7 @@ def test_phase_2_5_binds_all_owners_before_expansion():
 # ---------------------------------------------------------------------------
 
 
-def test_phase_2_5_unresolved_related_order_raises_at_finalize():
+def test_phase_2_5_unresolved_related_order_raises_at_finalize() -> None:
     """``RelatedOrder("NonExistent")`` -> ``ConfigurationError`` with ``ImportError`` cause."""
 
     class BookOrder(OrderSet):
@@ -241,10 +243,10 @@ def test_phase_2_5_unresolved_related_order_raises_at_finalize():
     assert isinstance(exc_info.value.__cause__, ImportError)
 
 
-def test_phase_2_5_non_import_get_fields_failure_rewraps_as_configuration_error():
+def test_phase_2_5_non_import_get_fields_failure_rewraps_as_configuration_error() -> None:
     """Non-``ImportError`` raised during ``get_fields()`` surfaces as ``ConfigurationError``."""
 
-    def _broken_factory():
+    def _broken_factory() -> NoReturn:
         raise ValueError("intentional factory failure")
 
     class BookOrder(OrderSet):
@@ -278,7 +280,7 @@ def test_phase_2_5_non_import_get_fields_failure_rewraps_as_configuration_error(
     assert isinstance(exc_info.value.__cause__, ValueError)
 
 
-def test_phase_2_5_non_order_set_related_target_raises_uniform_error():
+def test_phase_2_5_non_order_set_related_target_raises_uniform_error() -> None:
     """A ``RelatedOrder`` resolving to a non-``OrderSet`` class surfaces typed at finalize.
 
     The target-type gate on ``RelatedOrder.orderset`` raises
@@ -327,7 +329,7 @@ def test_phase_2_5_non_order_set_related_target_raises_uniform_error():
     assert "raised during expansion" not in msg
 
 
-def test_phase_2_5_configuration_error_during_expansion_propagates_by_identity():
+def test_phase_2_5_configuration_error_during_expansion_propagates_by_identity() -> None:
     """A ``ConfigurationError`` from the subpass-2 expansion re-raises unchanged.
 
     The order twin of the filter side's ``finalizer.py`` ``except
@@ -339,7 +341,7 @@ def test_phase_2_5_configuration_error_during_expansion_propagates_by_identity()
     """
     sentinel = ConfigurationError("intentional config failure from related factory")
 
-    def _config_error_factory():
+    def _config_error_factory() -> NoReturn:
         raise sentinel
 
     class BookOrder(OrderSet):
@@ -377,7 +379,7 @@ def test_phase_2_5_configuration_error_during_expansion_propagates_by_identity()
 # ---------------------------------------------------------------------------
 
 
-def test_orphan_order_input_type_reference_raises_at_finalize():
+def test_orphan_order_input_type_reference_raises_at_finalize() -> None:
     """A ``order_input_type(StandaloneOrder)`` without wiring raises."""
 
     class StandaloneOrder(OrderSet):
@@ -410,7 +412,7 @@ def test_orphan_order_input_type_reference_raises_at_finalize():
     assert "orderset_class = StandaloneOrder" in msg
 
 
-def test_phase_2_5_orphan_check_runs_before_materialization():
+def test_phase_2_5_orphan_check_runs_before_materialization() -> None:
     """Orphan failure leaves no partial state in the materialization ledgers."""
 
     class WiredOrder(OrderSet):
@@ -451,7 +453,7 @@ def test_phase_2_5_orphan_check_runs_before_materialization():
     assert wired_input_name not in _materialized_names
 
 
-def test_phase_2_5_orphan_validation_lists_every_orphan_orderset():
+def test_phase_2_5_orphan_validation_lists_every_orphan_orderset() -> None:
     """Two orphans surface in one ``ConfigurationError`` with the multi-orphan lead-in."""
 
     class OrphanA(OrderSet):
@@ -503,7 +505,7 @@ def test_phase_2_5_orphan_validation_lists_every_orphan_orderset():
 # ---------------------------------------------------------------------------
 
 
-def test_phase_2_5_subpass_4_materializes_input_classes_as_module_globals():
+def test_phase_2_5_subpass_4_materializes_input_classes_as_module_globals() -> None:
     """The materialize pass writes ``BookOrderInputType`` to the inputs module globals."""
 
     class BookOrder(OrderSet):
@@ -538,7 +540,7 @@ def test_phase_2_5_subpass_4_materializes_input_classes_as_module_globals():
 # ---------------------------------------------------------------------------
 
 
-def test_phase_2_5_rejects_orderset_wired_to_unrelated_owner_model():
+def test_phase_2_5_rejects_orderset_wired_to_unrelated_owner_model() -> None:
     """Rejects an orderset wired to an unrelated model.
 
     The error message names ALL FOUR entities: owner type, owner model,
@@ -589,7 +591,7 @@ def _resolves_nothing(_field_name: object) -> None:
     """A ``related_target_for`` that resolves no relation."""
 
 
-def test_bind_orderset_owner_idempotent_for_same_definition():
+def test_bind_orderset_owner_idempotent_for_same_definition() -> None:
     """Re-binding the SAME ``(orderset, definition)`` pair is a no-op."""
 
     class ShelfOrder(OrderSet):
@@ -603,7 +605,9 @@ def test_bind_orderset_owner_idempotent_for_same_definition():
     assert ShelfOrder._owner_definition is definition
 
 
-def test_bind_orderset_owner_rejects_diverging_related_targets(monkeypatch: pytest.MonkeyPatch):
+def test_bind_orderset_owner_rejects_diverging_related_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Two owners that resolve a shared ``RelatedOrder`` to different targets raise."""
 
     class ShelfOrder(OrderSet):
@@ -636,10 +640,10 @@ def test_bind_orderset_owner_rejects_diverging_related_targets(monkeypatch: pyte
 
     # Two live owners resolve ``shelf`` through the one registry and so always agree; each
     # owner's lookup is forced to its own target to reach the defensive divergence check.
-    def prev_lookup(_field_name: object):
+    def prev_lookup(_field_name: object) -> tuple[object, object]:
         return (prev_target, shelf_field)
 
-    def new_lookup(_field_name: object):
+    def new_lookup(_field_name: object) -> tuple[object, object]:
         return (new_target, shelf_field)
 
     monkeypatch.setattr(first, "related_target_for", prev_lookup)
@@ -654,7 +658,7 @@ def test_bind_orderset_owner_rejects_diverging_related_targets(monkeypatch: pyte
     assert "NewTargetType" in msg
 
 
-def test_bind_orderset_owner_continues_when_both_targets_unresolved():
+def test_bind_orderset_owner_continues_when_both_targets_unresolved() -> None:
     """A field neither owner can resolve is skipped (both-None continue)."""
 
     class ShelfOrder(OrderSet):
@@ -680,7 +684,7 @@ def test_bind_orderset_owner_continues_when_both_targets_unresolved():
 
 def test_bind_orderset_owner_raises_when_one_owner_resolves_and_other_does_not(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A field resolved by one owner but not the other is a hard mismatch."""
 
     class ShelfOrder(OrderSet):
@@ -707,7 +711,7 @@ def test_bind_orderset_owner_raises_when_one_owner_resolves_and_other_does_not(
     assert "diverging targets" in str(exc_info.value)
 
 
-def test_bind_orderset_owner_does_not_check_axis_1_relay_identity():
+def test_bind_orderset_owner_does_not_check_axis_1_relay_identity() -> None:
     """Per spec-028 Decision 6 the order side does NOT enforce own-PK Relay identity.
 
     Two owners whose Relay-node-ness diverges still share one OrderSet
@@ -775,7 +779,12 @@ def _declare_shared_shelf_order_owners(*, hooked_first: bool) -> list[type[Djang
 
             @classmethod
             @override
-            def get_queryset(cls, queryset: QuerySet[Shelf], info: object, **kwargs: object):
+            def get_queryset(
+                cls,
+                queryset: QuerySet[Shelf],
+                info: object,
+                **kwargs: object,
+            ) -> QuerySet[Shelf]:
                 return queryset.exclude(topic="secret")
 
         return HidingShelfType
@@ -803,7 +812,10 @@ def _declare_shared_shelf_order_owners(*, hooked_first: bool) -> list[type[Djang
 
 
 @pytest.mark.parametrize("hooked_first", [True, False], ids=["hiding-first", "plain-first"])
-def test_phase_2_5_rejects_shared_orderset_when_an_owner_scopes_get_queryset(hooked_first: bool):
+def test_phase_2_5_rejects_shared_orderset_when_an_owner_scopes_get_queryset(
+    *,
+    hooked_first: bool,
+) -> None:
     """One ``OrderSet`` on a hiding and a plain owner is refused in both declaration orders.
 
     ``orderBy: [{shelf: {topic: ...}}]`` reads the ``shelf`` hop through the type
@@ -828,7 +840,7 @@ def test_phase_2_5_rejects_shared_orderset_when_an_owner_scopes_get_queryset(hoo
     assert "Declare separate OrderSet subclasses per owner." in msg
 
 
-def test_phase_2_5_rejects_shared_orderset_whose_owners_share_one_custom_get_queryset():
+def test_phase_2_5_rejects_shared_orderset_whose_owners_share_one_custom_get_queryset() -> None:
     """Two owners inheriting ONE custom ``get_queryset`` are refused: function identity is not visibility.
 
     The hook runs with each owner's own ``cls``, so a ``cls``-parameterized body
@@ -844,7 +856,12 @@ def test_phase_2_5_rejects_shared_orderset_whose_owners_share_one_custom_get_que
         # No ``Meta``: an unregistered base both owners inherit the hook from.
         @classmethod
         @override
-        def get_queryset(cls, queryset: QuerySet[Shelf], info: object, **kwargs: object):
+        def get_queryset(
+            cls,
+            queryset: QuerySet[Shelf],
+            info: object,
+            **kwargs: object,
+        ) -> QuerySet[Shelf]:
             return queryset.exclude(topic="secret")
 
     class PrimaryShelfType(_HidingShelfBase):
@@ -870,7 +887,7 @@ def test_phase_2_5_rejects_shared_orderset_whose_owners_share_one_custom_get_que
     assert "SecondaryShelfType" in msg
 
 
-def test_phase_2_5_accepts_shared_orderset_whose_owners_keep_the_identity_get_queryset():
+def test_phase_2_5_accepts_shared_orderset_whose_owners_keep_the_identity_get_queryset() -> None:
     """Two owners of one model that both keep the default hook hide nothing, so they share a set."""
 
     class ShelfOrder(OrderSet):
@@ -897,7 +914,10 @@ def test_phase_2_5_accepts_shared_orderset_whose_owners_keep_the_identity_get_qu
 
 
 @pytest.mark.parametrize("parent_first", [True, False], ids=["parent-first", "child-first"])
-def test_phase_2_5_rejects_shared_orderset_whose_owners_read_different_tables(parent_first: bool):
+def test_phase_2_5_rejects_shared_orderset_whose_owners_read_different_tables(
+    *,
+    parent_first: bool,
+) -> None:
     """A ``Venue`` owner and a ``LendingDesk`` owner of one ``OrderSet`` are refused in both orders.
 
     A path re-entering the set's table reads the type it is bound to, and
@@ -943,7 +963,10 @@ def test_phase_2_5_rejects_shared_orderset_whose_owners_read_different_tables(pa
 
 
 @pytest.mark.parametrize("proxy_first", [True, False], ids=["proxy-first", "concrete-first"])
-def test_phase_2_5_accepts_shared_orderset_whose_owners_read_one_table(proxy_first: bool):
+def test_phase_2_5_accepts_shared_orderset_whose_owners_read_one_table(
+    *,
+    proxy_first: bool,
+) -> None:
     """A plain ``Branch`` owner and a plain ``ProxyBranch`` owner read one table, so they share a set."""
 
     class BranchOrder(OrderSet):
@@ -985,9 +1008,10 @@ _SUBCLASS_OWNER_CASES = [
 @pytest.mark.django_db
 @pytest.mark.parametrize(("hiding_first", "base_on_hiding"), _SUBCLASS_OWNER_CASES)
 def test_an_orderset_subclass_binds_its_own_owner_apart_from_its_base(
+    *,
     hiding_first: bool,
     base_on_hiding: bool,
-):
+) -> None:
     """``ShelfOrder`` and ``SubShelfOrder(ShelfOrder)`` on two owners each order by their own owner.
 
     The multi-owner refusal's remedy is a separate set subclass per owner, so a
@@ -1023,7 +1047,12 @@ def test_an_orderset_subclass_binds_its_own_owner_apart_from_its_base(
 
             @classmethod
             @override
-            def get_queryset(cls, queryset: QuerySet[Shelf], info: object, **kwargs: object):
+            def get_queryset(
+                cls,
+                queryset: QuerySet[Shelf],
+                info: object,
+                **kwargs: object,
+            ) -> QuerySet[Shelf]:
                 return queryset.exclude(topic="secret")
 
         return HidingShelfType
@@ -1109,7 +1138,7 @@ def test_an_orderset_subclass_binds_its_own_owner_apart_from_its_base(
     assert [row["title"] for row in result.data["viaPlain"]] == ["on-hidden", "on-seen"]
 
 
-def test_bind_orderset_owner_rejects_orderset_model_unrelated_to_owner():
+def test_bind_orderset_owner_rejects_orderset_model_unrelated_to_owner() -> None:
     """A first bind whose orderset ``Meta.model`` is unrelated to the owner raises."""
 
     class ShelfOrder(OrderSet):
@@ -1138,7 +1167,7 @@ def test_bind_orderset_owner_rejects_orderset_model_unrelated_to_owner():
 # ---------------------------------------------------------------------------
 
 
-def test_finalize_django_types_is_idempotent_after_orderset_wiring():
+def test_finalize_django_types_is_idempotent_after_orderset_wiring() -> None:
     """A second ``finalize_django_types()`` call is a no-op."""
 
     class BookOrder(OrderSet):
@@ -1173,7 +1202,7 @@ def test_finalize_django_types_is_idempotent_after_orderset_wiring():
 # ---------------------------------------------------------------------------
 
 
-def test_phase_2_5_runs_under_relay_node_interface():
+def test_phase_2_5_runs_under_relay_node_interface() -> None:
     """Phase 2.5 order binding cooperates with Relay-Node interface injection."""
 
     class BookOrder(OrderSet):

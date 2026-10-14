@@ -82,18 +82,18 @@ CHECKED = (
 
 
 @pytest.mark.parametrize("relative", EXCLUDED)
-def test_per_cycle_artifact_is_excluded(repo: Path, relative: str):
+def test_per_cycle_artifact_is_excluded(repo: Path, relative: str) -> None:
     """Per-cycle artifacts and scratch subtrees under docs/ are excluded by anchored path."""
     assert ctc.is_excluded(_write(repo, relative, "x\n"))
 
 
 @pytest.mark.parametrize("relative", CHECKED)
-def test_standing_doc_and_same_named_source_are_checked(repo: Path, relative: str):
+def test_standing_doc_and_same_named_source_are_checked(repo: Path, relative: str) -> None:
     """Standing docs, tracked docs/ .py and same-named dirs elsewhere stay in the gate."""
     assert not ctc.is_excluded(_write(repo, relative, "x\n"))
 
 
-def test_walk_partitions_checked_and_excluded(repo: Path):
+def test_walk_partitions_checked_and_excluded(repo: Path) -> None:
     """A tree walk processes exactly CHECKED and counts exactly EXCLUDED."""
     for relative in (*EXCLUDED, *CHECKED):
         _write(repo, relative, "x\n")
@@ -107,7 +107,7 @@ def test_walk_partitions_checked_and_excluded(repo: Path):
 def test_named_excluded_file_is_reported_not_checked(
     repo: Path,
     capsys: pytest.CaptureFixture[str],
-):
+) -> None:
     """A per-cycle artifact handed in by name prints the excluded line and is counted."""
     _write(repo, "docs/review/review-0_0_15.md", "no footer\n")
     assert ctc.main(["--check", "docs/review/review-0_0_15.md"]) == 0
@@ -119,7 +119,7 @@ def test_named_excluded_file_is_reported_not_checked(
 def test_summary_counts_checked_excluded_and_violations(
     repo: Path,
     capsys: pytest.CaptureFixture[str],
-):
+) -> None:
     """The summary line is printed on every run and counts each population."""
     _write(repo, "pkg/clean.py", CLEAN_PY)
     _write(repo, "pkg/wide.py", "def f(a, b, c, d):\n    return a\n")
@@ -132,7 +132,7 @@ def test_summary_counts_checked_excluded_and_violations(
     )
 
 
-def test_clean_run_still_prints_summary(repo: Path, capsys: pytest.CaptureFixture[str]):
+def test_clean_run_still_prints_summary(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Negative control: a clean run exits 0 and still states its population."""
     _write(repo, "pkg/clean.py", CLEAN_PY)
     assert ctc.main(["--check", "pkg/clean.py"]) == 0
@@ -157,7 +157,7 @@ def test_path_contributing_nothing_fails(
     setup: str | None,
     argument: str,
     reason: str,
-):
+) -> None:
     """A named path that yields no file is an error under --check, not a silent pass."""
     if setup is not None:
         _write(repo, setup, "x\n")
@@ -168,7 +168,7 @@ def test_path_contributing_nothing_fails(
 
 
 @pytest.mark.usefixtures("repo")
-def test_unsupported_suffix_is_ignored_not_failed(capsys: pytest.CaptureFixture[str]):
+def test_unsupported_suffix_is_ignored_not_failed(capsys: pytest.CaptureFixture[str]) -> None:
     """An existing file no rule covers is reported as ignored and does not fail the run."""
     assert ctc.main(["--check", "pyproject.toml"]) == 0
     captured = capsys.readouterr()
@@ -176,7 +176,7 @@ def test_unsupported_suffix_is_ignored_not_failed(capsys: pytest.CaptureFixture[
     assert "ignored 1;" in _summary(captured.out)
 
 
-def test_json_document_shape(repo: Path, capsys: pytest.CaptureFixture[str]):
+def test_json_document_shape(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """--json prints one document: summary, path lists and uniform per-violation records."""
     _write(repo, "pkg/wide.py", f"def f(a, b, c, d):\n    return 'caf{chr(0xE9)}'\n")
     _write(repo, "docs/guide.md", "# Guide\n")
@@ -231,7 +231,7 @@ def test_json_document_shape(repo: Path, capsys: pytest.CaptureFixture[str]):
     ]
 
 
-def test_diff_prints_fix_without_writing(repo: Path, capsys: pytest.CaptureFixture[str]):
+def test_diff_prints_fix_without_writing(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """--diff shows the rewrite --fix would make and leaves the file byte-identical."""
     path = _write(repo, "docs/guide.md", "# Guide\n")
     before = path.read_bytes()
@@ -244,13 +244,13 @@ def test_diff_prints_fix_without_writing(repo: Path, capsys: pytest.CaptureFixtu
 
 
 @pytest.mark.usefixtures("repo")
-def test_diff_rejects_fix():
+def test_diff_rejects_fix() -> None:
     """--diff writes nothing, so pairing it with --fix is a usage error."""
     with pytest.raises(SystemExit):
         ctc.main(["--fix", "--diff", "."])
 
 
-def test_fix_writes_what_diff_showed(repo: Path, capsys: pytest.CaptureFixture[str]):
+def test_fix_writes_what_diff_showed(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Positive control for --diff: --fix on the same file does write the scaffold."""
     path = _write(repo, "docs/guide.md", "# Guide\n")
     assert ctc.main(["--fix", "docs/guide.md"]) == 0
@@ -268,7 +268,7 @@ def test_fix_writes_what_diff_showed(repo: Path, capsys: pytest.CaptureFixture[s
     ],
 )
 @pytest.mark.usefixtures("repo")
-def test_comma_layout_threshold(source: str, expected: list[tuple[int, str]]):
+def test_comma_layout_threshold(source: str, expected: list[tuple[int, str]]) -> None:
     """A single-line four-parameter def must explode; three parameters stay inline."""
     assert ctc._analyze(source, ctc.threshold_for(Path("pkg/mod.py")))[2] == expected
 
@@ -282,6 +282,6 @@ def test_comma_layout_threshold(source: str, expected: list[tuple[int, str]]):
     ],
 )
 @pytest.mark.usefixtures("repo")
-def test_markdown_scaffold(text: str, missing: str | None):
+def test_markdown_scaffold(text: str, missing: str | None) -> None:
     """The first missing scaffold marker is reported; the canonical footer passes."""
     assert ctc._scaffold_in_canonical_order(text) == missing

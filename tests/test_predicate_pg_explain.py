@@ -53,7 +53,7 @@ def _project_schema() -> None:
     reload_all_project_schemas()
 
 
-def _seed_library():
+def _seed_library() -> None:
     """Loans over books and patrons; every fifth book is in ``repair`` (``BookType`` hides it)."""
     branch = Branch.objects.create(name="pg-explain-central")
     shelf = Shelf.objects.create(code="PGX", branch=branch)
@@ -114,7 +114,7 @@ def _production_qs(
     leaf: str,
     root: QuerySet[Model],
     value: object = _NEEDLE,
-):
+) -> QuerySet[Model]:
     """Return the compiled ``.qs`` of a real fakeshop filter set for ``{leaf: value}``."""
     filterset_cls.get_filters()  # publish the expansion snapshot (as apply_* does).
     return filterset_cls(
@@ -124,7 +124,7 @@ def _production_qs(
     ).qs
 
 
-def _referenced_tables(qs: QuerySet[Model]):
+def _referenced_tables(qs: QuerySet[Model]) -> set[str]:
     """The tables the outer statement reads: aliases the SQL references.
 
     A join Django set up and then trimmed (resolving an ``OuterRef`` on a
@@ -137,7 +137,7 @@ def _referenced_tables(qs: QuerySet[Model]):
     }
 
 
-def _top_actual_rows(qs: QuerySet[Model]):
+def _top_actual_rows(qs: QuerySet[Model]) -> tuple[str, int]:
     """Run ``EXPLAIN (ANALYZE, BUFFERS)`` on ``qs``'s exact statement; return the plan and top rows."""
     compiled_sql, compiled_params = qs.query.get_compiler(using=qs.db).as_sql()
     with db_connection.cursor() as cursor:
@@ -148,7 +148,7 @@ def _top_actual_rows(qs: QuerySet[Model]):
     return plan, int(top_rows.group(1))
 
 
-def test_routed_leaf_is_a_single_distinct_free_exists_on_the_outer_pk():
+def test_routed_leaf_is_a_single_distinct_free_exists_on_the_outer_pk() -> None:
     """The routed leaf compiles to one distinct-free ``EXISTS`` correlated on the outer pk."""
     needle = _seed_specimens()
     qs = _production_qs(ScalarSpecimenFilter, _SPECIMEN_LEAF, ScalarSpecimen.objects.all(), needle)
@@ -161,7 +161,7 @@ def test_routed_leaf_is_a_single_distinct_free_exists_on_the_outer_pk():
     assert '= ("scalars_scalarspecimen"."id")' in sql
 
 
-def test_walked_leaf_is_one_distinct_free_exists_per_declared_hop():
+def test_walked_leaf_is_one_distinct_free_exists_per_declared_hop() -> None:
     """The walked leaf compiles to one ``EXISTS`` per declared hop, correlated on the link columns.
 
     The outer statement reads only ``library_loan``; the outermost hop
@@ -179,7 +179,7 @@ def test_walked_leaf_is_one_distinct_free_exists_per_declared_hop():
 
 
 @pytest.mark.parametrize("shape", ["routed", "walked"])
-def test_explain_analyze_buffers_shows_no_outer_fan_out(shape: str):
+def test_explain_analyze_buffers_shows_no_outer_fan_out(shape: str) -> None:
     """EXPLAIN(ANALYZE, BUFFERS) executes each emitted query with no outer multiplication.
 
     The top plan node's ACTUAL row count equals both the production result count

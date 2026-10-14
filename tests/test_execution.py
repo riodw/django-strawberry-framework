@@ -20,7 +20,7 @@ class _Query:
     hello: str = ""
 
 
-def test_make_execution_context_reads_back_what_the_test_varied():
+def test_make_execution_context_reads_back_what_the_test_varied() -> None:
     """Schema, query, context value and pre-execution errors read back as given."""
     schema = DjangoSchema(query=_Query)
     request = object()
@@ -40,7 +40,7 @@ def test_make_execution_context_reads_back_what_the_test_varied():
     assert context.pre_execution_errors == [error]
 
 
-def test_make_execution_context_defaults_to_an_unparsed_plain_schema_request():
+def test_make_execution_context_defaults_to_an_unparsed_plain_schema_request() -> None:
     """The default context belongs to no ``DjangoSchema`` and has run no stage yet."""
     context = make_execution_context()
 

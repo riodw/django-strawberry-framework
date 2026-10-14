@@ -36,7 +36,7 @@ def alpha_version() -> models.TargetVersion:
 # ---------------------------------------------------------------------------
 
 
-def test_database_alias_rejects_objects_from_different_databases():
+def test_database_alias_rejects_objects_from_different_databases() -> None:
     left = models.Card(number=1)
     left._state.db = "default"
     right = models.Card(number=2)
@@ -46,7 +46,7 @@ def test_database_alias_rejects_objects_from_different_databases():
         services._database_alias(left, right)
 
 
-def test_database_alias_returns_none_for_unsaved_objects():
+def test_database_alias_returns_none_for_unsaved_objects() -> None:
     assert services._database_alias(models.Card(number=1)) is None
 
 
@@ -58,7 +58,7 @@ def test_database_alias_returns_none_for_unsaved_objects():
 @pytest.mark.django_db
 def test_create_card_from_spec_after_places_card_below_reference(
     alpha_version: models.TargetVersion,
-):
+) -> None:
     kf.make_card(number=1, title="Anchor card")
 
     card = services.create_card_from_spec(
@@ -79,7 +79,9 @@ def test_create_card_from_spec_after_places_card_below_reference(
 
 
 @pytest.mark.django_db
-def test_create_card_from_spec_rejects_duplicate_title(alpha_version: models.TargetVersion):
+def test_create_card_from_spec_rejects_duplicate_title(
+    alpha_version: models.TargetVersion,
+) -> None:
     kf.make_card(number=1, title="Existing title")
 
     with pytest.raises(services.KanbanServiceError) as excinfo:
@@ -94,7 +96,7 @@ def test_create_card_from_spec_rejects_duplicate_title(alpha_version: models.Tar
 
 
 @pytest.mark.django_db
-def test_create_card_from_spec_rejects_done_status(alpha_version: models.TargetVersion):
+def test_create_card_from_spec_rejects_done_status(alpha_version: models.TargetVersion) -> None:
     with pytest.raises(services.KanbanServiceError) as excinfo:
         services.create_card_from_spec(
             {
@@ -111,7 +113,7 @@ def test_create_card_from_spec_rejects_done_status(alpha_version: models.TargetV
 @pytest.mark.django_db
 def test_create_card_from_spec_rejects_dependencies_in_sections(
     alpha_version: models.TargetVersion,
-):
+) -> None:
     with pytest.raises(services.KanbanServiceError) as excinfo:
         services.create_card_from_spec(
             {
@@ -130,7 +132,7 @@ def test_create_card_from_spec_rejects_dependencies_in_sections(
 
 
 @pytest.mark.django_db
-def test_sync_tracked_paths_flips_historical_back_to_current_and_current_out():
+def test_sync_tracked_paths_flips_historical_back_to_current_and_current_out() -> None:
     allowlisted = TRACKED_FILE_PATHS[0]
     # A path in the allowlist that is currently marked historical must flip back
     # to current when it reappears in the generated constants.

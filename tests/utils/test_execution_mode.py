@@ -55,7 +55,7 @@ def _schema() -> DjangoSchema:
     return DjangoSchema(query=_Query, error_policy=ErrorPolicy(enabled=False))
 
 
-def test_nothing_is_bound_outside_every_operation():
+def test_nothing_is_bound_outside_every_operation() -> None:
     """The readers answer for no operation where no runner owns one.
 
     Not a default of "sync": a caller outside an operation is not inside an
@@ -65,7 +65,7 @@ def test_nothing_is_bound_outside_every_operation():
     assert current_operation_mode() is None
 
 
-def test_a_synchronous_operation_is_synchronous_all_the_way_down():
+def test_a_synchronous_operation_is_synchronous_all_the_way_down() -> None:
     """``execute_sync`` is the one entry point that declares the synchronous executor."""
     assert _schema().execute_sync("{ readings }").data == {
         "readings": "OperationMode.SYNC|False|False",
@@ -73,7 +73,7 @@ def test_a_synchronous_operation_is_synchronous_all_the_way_down():
 
 
 @pytest.mark.asyncio
-async def test_an_awaited_operation_is_asynchronous_all_the_way_down():
+async def test_an_awaited_operation_is_asynchronous_all_the_way_down() -> None:
     """``execute`` leaves upstream's ``sync`` flag false, and the chain says so."""
     result = await _schema().execute("{ readings }")
 
@@ -81,7 +81,7 @@ async def test_an_awaited_operation_is_asynchronous_all_the_way_down():
 
 
 @pytest.mark.asyncio
-async def test_a_streamed_operation_is_asynchronous_too():
+async def test_a_streamed_operation_is_asynchronous_too() -> None:
     """``stream`` and ``subscribe`` come through the same flag as ``execute``."""
     stream = await _schema().stream("{ readings }")
     frames = [frame async for frame in stream]
@@ -95,7 +95,7 @@ async def test_a_streamed_operation_is_asynchronous_too():
 
 
 @pytest.mark.asyncio
-async def test_a_synchronous_operation_inside_a_running_loop_stays_synchronous():
+async def test_a_synchronous_operation_inside_a_running_loop_stays_synchronous() -> None:
     """The disagreement, read at the seam that owns it.
 
     ``Schema.execute_sync`` is callable while an event loop is running - most
@@ -119,7 +119,7 @@ async def test_a_synchronous_operation_inside_a_running_loop_stays_synchronous()
 
 
 @pytest.mark.asyncio
-async def test_a_plain_strawberry_schema_falls_back_to_the_ambient_loop():
+async def test_a_plain_strawberry_schema_falls_back_to_the_ambient_loop() -> None:
     """Nothing binds a mode there, and nothing pretends one was bound.
 
     A plain ``strawberry.Schema`` never creates the package runner, so both
@@ -134,14 +134,14 @@ async def test_a_plain_strawberry_schema_falls_back_to_the_ambient_loop():
     assert (await plain.execute("{ readings }")).data == {"readings": "None|True|True"}
 
 
-def test_a_plain_strawberry_schema_outside_a_loop_reads_the_loop_it_has():
+def test_a_plain_strawberry_schema_outside_a_loop_reads_the_loop_it_has() -> None:
     """The other half of the fallback: no loop, no mode, and a synchronous answer."""
     plain = strawberry.Schema(query=_Query)
 
     assert plain.execute_sync("{ readings }").data == {"readings": "None|False|False"}
 
 
-def test_the_two_modes_are_distinct_members():
+def test_the_two_modes_are_distinct_members() -> None:
     """The enum is the one definition of execution color both readers derive from."""
     assert OperationMode.SYNC is not OperationMode.ASYNC
     assert {mode.value for mode in OperationMode} == {"sync", "async"}

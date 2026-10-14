@@ -7,7 +7,7 @@ pytestmark = pytest.mark.usefixtures("reload_project_schemas")
 
 
 @pytest.mark.django_db
-def test_index_view_renders_dev_links():
+def test_index_view_renders_dev_links() -> None:
     client = Client()
     response = client.get("/")
     assert response.status_code == 200

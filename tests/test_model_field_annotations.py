@@ -649,12 +649,12 @@ def _runtime_facts(model: type[models.Model], field_name: str) -> Facts | None:
             else Expect(through.__name__, through)
         )
         return Facts(
-            Expect(field_class.__name__, field_class),
-            None,
-            False,
-            "m2m",
-            target,
-            through_expect,
+            field_class=Expect(field_class.__name__, field_class),
+            stub_types=None,
+            null=False,
+            kind="m2m",
+            target=target,
+            through=through_expect,
         )
     kind: Literal["relation", "plain"] = "relation" if field.is_relation else "plain"
     return Facts(
@@ -744,7 +744,14 @@ def _call_facts(call: ast.Call, owner: str, src: ModuleSource) -> Facts:
         through = (
             AUTO_THROUGH if through_node is None else Expect(_target_text(through_node, owner))
         )
-        return Facts(expect, None, False, "m2m", _target_expect(to_node, owner), through)
+        return Facts(
+            field_class=expect,
+            stub_types=None,
+            null=False,
+            kind="m2m",
+            target=_target_expect(to_node, owner),
+            through=through,
+        )
     if class_name in RELATION_CLASS_NAMES:
         if to_node is None:
             raise UndecidableError(ast.unparse(call))

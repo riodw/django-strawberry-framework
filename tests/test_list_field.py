@@ -1,4 +1,6 @@
-"""Package-side DjangoListField tests for construction-time validation, helper mechanics, and internals a live request cannot express.
+"""Package-side DjangoListField tests for construction-time validation, helper mechanics and internals.
+
+These cover the mechanics a live request cannot express.
 
 Specs: ``docs/SPECS/spec-020-list_field-0_0_7.md`` for the field itself and
 ``docs/spec-050-list_field_arguments-0_0_15.md`` for its ``offset`` / ``limit`` /
@@ -54,7 +56,7 @@ import inspect
 import warnings
 from collections.abc import Callable, Generator, Iterator
 from types import SimpleNamespace
-from typing import TypeVar
+from typing import NoReturn, TypeVar
 
 import pytest
 import strawberry
@@ -73,7 +75,7 @@ from strawberry.schema_directive import Location as _DirectiveLocation
 from strawberry.schema_directive import schema_directive as _schema_directive
 from strawberry.types import Info
 from strawberry.types.arguments import StrawberryArgument
-from typing_extensions import override
+from typing_extensions import Self, override
 
 from django_strawberry_framework import (
     DjangoListField,
@@ -173,7 +175,10 @@ def _isolate_global_registry() -> Iterator[None]:
     ],
 )
 def test_djangolistfield_rejects_non_class_argument(non_class: object) -> None:
-    """Non-class arguments trip the first guard (spec #"DjangoListField requires a DjangoType class; got <repr>")."""
+    """Non-class arguments trip the first guard.
+
+    Pins spec #"DjangoListField requires a DjangoType class; got <repr>".
+    """
     with pytest.raises(
         ConfigurationError,
         match=r"DjangoListField requires a DjangoType class; got",
@@ -184,7 +189,10 @@ def test_djangolistfield_rejects_non_class_argument(non_class: object) -> None:
 
 
 def test_djangolistfield_rejects_non_djangotype_class() -> None:
-    """A plain class that doesn't subclass ``DjangoType`` is rejected (spec #"DjangoListField requires a DjangoType subclass; got <name>")."""
+    """A plain class that doesn't subclass ``DjangoType`` is rejected.
+
+    Pins spec #"DjangoListField requires a DjangoType subclass; got <name>".
+    """
 
     class NotADjangoType:
         pass
@@ -200,10 +208,12 @@ def test_djangolistfield_rejects_djangotype_without_definition() -> None:
     """An abstract ``DjangoType`` base without ``Meta`` is rejected.
 
     spec-020 Decision 5 #"is not a registered DjangoType. This usually means".
-    Per ``django_strawberry_framework/types/base.py::DjangoType.__init_subclass__ #"if meta is None:"``, the absence of a ``Meta`` makes
+    Per
+    ``django_strawberry_framework/types/base.py::DjangoType.__init_subclass__ #"if meta is None:"``,
+    the absence of a ``Meta`` makes
     ``__init_subclass__`` return early WITHOUT setting
-    ``__django_strawberry_definition__`` (assigned at
-    ``django_strawberry_framework/types/base.py::DjangoType.__init_subclass__ #"cls.__django_strawberry_definition__ = definition"``), so the
+    ``__django_strawberry_definition__`` (assigned by the
+    ``cls.__django_strawberry_definition__ = definition`` line of the same method), so the
     guard's ``getattr(..., None)`` read finds no definition and the target is
     rejected as not registered.
     """
@@ -224,8 +234,9 @@ def test_djangolistfield_rejects_djangotype_subclass_without_own_meta() -> None:
     Pins the own-class registration invariant at ``list_field.py``'s
     ``definition.origin is target_type`` guard.
     ``__django_strawberry_definition__`` is assigned in
-    ``DjangoType.__init_subclass__`` (``django_strawberry_framework/types/base.py::DjangoType.__init_subclass__ #"cls.__django_strawberry_definition__ = definition"``) and inherited via
-    MRO; a subclass that omits ``Meta`` would otherwise pass the guard via the
+    ``django_strawberry_framework/types/base.py::DjangoType.__init_subclass__`` (the
+    ``cls.__django_strawberry_definition__ = definition`` line) and inherited via MRO;
+    a subclass that omits ``Meta`` would otherwise pass the guard via the
     parent's definition and bind the field to a target whose model, selected
     fields, and ``Meta.primary`` state belong to the parent class.
     """
@@ -246,7 +257,10 @@ def test_djangolistfield_rejects_djangotype_subclass_without_own_meta() -> None:
 
 
 def test_djangolistfield_rejects_non_callable_resolver() -> None:
-    """A non-callable ``resolver=`` is rejected after target-type guards pass (spec #"DjangoListField resolver must be callable")."""
+    """A non-callable ``resolver=`` is rejected after target-type guards pass.
+
+    Pins spec #"DjangoListField resolver must be callable".
+    """
 
     class _T(DjangoType):
         class Meta:
@@ -298,7 +312,7 @@ class _HostileNameMeta(type):
 class _DefinitionTrapMeta(type):
     """A metaclass whose ``__getattr__`` raises a NON-AttributeError for the definition."""
 
-    def __getattr__(cls, name: str):
+    def __getattr__(cls, name: str) -> NoReturn:
         if name == "__django_strawberry_definition__":
             raise RuntimeError("hostile definition read detonated")
         raise AttributeError(name)
@@ -384,7 +398,7 @@ def test_djangolistfield_rejects_bare_string_directives() -> None:
         ConfigurationError,
         match=r"DjangoListField directives must be a sequence of directive instances",
     ):
-        DjangoListField(_DirectiveHolderType(), directives="not-a-directive-list")
+        DjangoListField(_directive_holder_type(), directives="not-a-directive-list")
 
 
 def test_djangolistfield_rejects_bare_bytes_directives() -> None:
@@ -393,7 +407,7 @@ def test_djangolistfield_rejects_bare_bytes_directives() -> None:
         ConfigurationError,
         match=r"DjangoListField directives must be a sequence of directive instances",
     ):
-        DjangoListField(_DirectiveHolderType(), directives=b"\x01\x02")
+        DjangoListField(_directive_holder_type(), directives=b"\x01\x02")
 
 
 def test_djangolistfield_rejects_non_iterable_directives() -> None:
@@ -404,7 +418,7 @@ def test_djangolistfield_rejects_non_iterable_directives() -> None:
     ):
         # basedpyright: the non-iterable directives value is the hostile input under test;
         # DjangoListField types the parameter as Sequence[object]
-        DjangoListField(_DirectiveHolderType(), directives=42)  # pyright: ignore[reportArgumentType]
+        DjangoListField(_directive_holder_type(), directives=42)  # pyright: ignore[reportArgumentType]
 
 
 def test_djangolistfield_rejects_hostile_iterator_directives() -> None:
@@ -413,22 +427,22 @@ def test_djangolistfield_rejects_hostile_iterator_directives() -> None:
         ConfigurationError,
         match=r"DjangoListField directives could not be read",
     ):
-        DjangoListField(_DirectiveHolderType(), directives=_ExplodingDirectives())
+        DjangoListField(_directive_holder_type(), directives=_ExplodingDirectives())
 
 
 def test_djangolistfield_passes_real_directive_instances_through() -> None:
     """Positive control: a real directive instance tuple constructs unchanged."""
-    field = DjangoListField(_DirectiveHolderType(), directives=(_ProbeTag(),))
+    field = DjangoListField(_directive_holder_type(), directives=(_ProbeTag(),))
     assert field is not None
 
 
 def test_djangolistfield_default_directives_omitted_constructs() -> None:
     """Positive control: the () default keeps constructing (no new posture)."""
-    field = DjangoListField(_DirectiveHolderType())
+    field = DjangoListField(_directive_holder_type())
     assert field is not None
 
 
-def _DirectiveHolderType() -> type[DjangoType]:
+def _directive_holder_type() -> type[DjangoType]:
     """A concrete DjangoType the directives rows can bind (guards run first)."""
 
     class DirectiveHolderType(DjangoType):
@@ -446,7 +460,6 @@ async def test_djangolistfield_sync_resolver_returning_future_cancels_it() -> No
     The JSON error cannot show ``Future.cancelled()``. Live sibling:
     ``test_list_field_api.py::test_shipped_branches_sync_http_rejects_an_awaitable_get_queryset``.
     """
-
     await sync_to_async(services.seed_data)(1)
     captured: dict[str, asyncio.Future[object]] = {}
 
@@ -493,7 +506,7 @@ def test_djangolistfield_rejects_a_non_positive_max_rows_at_construction() -> No
         DjangoListField(CategoryType, max_rows=0)
 
 
-def test_list_argument_error_rejects_an_unknown_reason_and_renders_bools():
+def test_list_argument_error_rejects_an_unknown_reason_and_renders_bools() -> None:
     """``ListArgumentError`` is a GraphQLError; unknown reasons fail closed; bools render as ``bool``.
 
     Negative / over-ceiling / order-required / queryset-required envelopes are
@@ -541,7 +554,7 @@ def _no_argument_definition(_name: str) -> None:
 
 def test_resolve_argument_wire_name_never_runs_the_schema_name_converter(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """Neither a valid normalization nor a rejection invokes ``name_converter``.
 
     The converter is consumer code that Strawberry already ran while building
@@ -551,7 +564,7 @@ def test_resolve_argument_wire_name_never_runs_the_schema_name_converter(
     """
 
     class DummyConverter:
-        def __init__(self):
+        def __init__(self) -> None:
             self.calls = 0
 
         def from_argument(self, arg: StrawberryArgument) -> str:
@@ -597,7 +610,7 @@ def test_resolve_argument_wire_name_never_runs_the_schema_name_converter(
 def test_normalize_list_arguments_rejects_int_subclasses_before_their_hooks_can_run(
     argument: str,
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """``offset`` / ``limit`` must be EXACT ints, so no subclass hook reaches the boundary.
 
     GraphQL's own ``Int`` coercion always supplies a plain ``int``, so this is
@@ -612,17 +625,17 @@ def test_normalize_list_arguments_rejects_int_subclasses_before_their_hooks_can_
 
     class HostileInt(int):
         @override
-        def __lt__(self, other: object):
+        def __lt__(self, other: object) -> bool:
             fired.append("__lt__")
             raise RuntimeError("hostile comparison ran")
 
         @override
-        def __gt__(self, other: object):
+        def __gt__(self, other: object) -> bool:
             fired.append("__gt__")
             raise RuntimeError("hostile comparison ran")
 
         @override
-        def __format__(self, spec: str):
+        def __format__(self, spec: str) -> str:
             fired.append("__format__")
             raise RuntimeError("hostile format ran")
 
@@ -646,7 +659,7 @@ def test_normalize_list_arguments_rejects_int_subclasses_before_their_hooks_can_
 
 def test_normalize_list_arguments_renders_an_unprintable_large_int_without_raising(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """A plain ``int`` too large for CPython to stringify still rejects as a typed error.
 
     ``sys.set_int_max_str_digits`` caps integer-to-string conversion, so an
@@ -697,7 +710,7 @@ def test_normalize_list_arguments_rejects_values_graphql_int_never_supplies(
     value: object,
     rendered: str,
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """GraphQL ``Int`` coercion never hands ``_normalize_list_arguments`` a bool, str, or float.
 
     Those shapes are a direct-call contract: the helper must still reject them as
@@ -721,7 +734,7 @@ def test_normalize_list_arguments_rejects_values_graphql_int_never_supplies(
 
 def test_normalize_list_arguments_names_offset_before_limit_on_direct_call_non_integers(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """A direct call that GraphQL ``Int`` cannot assemble still names ``offset`` first."""
     info = make_info(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=100))
@@ -740,7 +753,7 @@ def test_normalize_list_arguments_names_offset_before_limit_on_direct_call_non_i
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_iterable_early_cleanup_hostile_aclose_lookup_notes():
+async def test_async_iterable_early_cleanup_hostile_aclose_lookup_notes() -> None:
     """Hostile aclose lookup during rejected async iterable cleanup attaches to error notes."""
     from django_strawberry_framework.orders import OrderSet
 
@@ -756,21 +769,25 @@ async def test_async_iterable_early_cleanup_hostile_aclose_lookup_notes():
             orderset_class = CategoryOrder
 
     class HostileTracker:
-        def __aiter__(self):
+        def __aiter__(self) -> Self:
             return self
 
-        async def __anext__(self):
+        async def __anext__(self) -> NoReturn:
             raise StopAsyncIteration
 
         @override
-        def __getattribute__(self, name: str):
+        def __getattribute__(self, name: str) -> object:
             if name == "aclose":
                 raise RuntimeError("hostile aclose on tracker")
             return super().__getattribute__(name)
 
     tracker = HostileTracker()
 
-    async def resolver_async_iter(_root: object, _info: object, **_kwargs: object):
+    async def resolver_async_iter(
+        _root: object,
+        _info: object,
+        **_kwargs: object,
+    ) -> HostileTracker:
         return tracker
 
     @strawberry.type
@@ -790,7 +807,7 @@ async def test_async_iterable_early_cleanup_hostile_aclose_lookup_notes():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_completion_adapter_semantics():
+async def test_async_completion_adapter_semantics() -> None:
     """_AsyncQuerySetRows wraps queryset in async context, exposes __aiter__, and rejects __iter__.
 
     ``transaction=True`` because the seed runs through ``sync_to_async`` on
@@ -831,7 +848,7 @@ async def test_async_completion_adapter_semantics():
     assert non_adapter_res is qs
 
 
-def test_list_field_signature_without_orderset():
+def test_list_field_signature_without_orderset() -> None:
     """Target without Meta.orderset_class generates signature with info, offset, limit, and empty return."""
 
     class NoOrderType(DjangoType):
@@ -857,7 +874,7 @@ def test_list_field_signature_without_orderset():
     assert "return" not in ann
 
 
-def test_list_field_signature_with_orderset():
+def test_list_field_signature_with_orderset() -> None:
     """Target with Meta.orderset_class adds order_by parameter registered in orphan ledger."""
     from django_strawberry_framework.orders import OrderSet, order_input_type
 
@@ -900,7 +917,7 @@ def test_list_field_signature_with_orderset():
         "positive_offset_and_order_without_orderset",
     ],
 )
-def test_the_capture_scope_stays_closed_for_shapes_the_offset_guard_cannot_use(shape: str):
+def test_the_capture_scope_stays_closed_for_shapes_the_offset_guard_cannot_use(shape: str) -> None:
     """The normalization handoff is paid for by the one request shape that consumes it.
 
     ``OrderSet._input_has_active_terms`` has exactly one caller - the non-zero
@@ -927,7 +944,7 @@ def test_the_capture_scope_stays_closed_for_shapes_the_offset_guard_cannot_use(s
         offset: int | None = None,
         limit: int | None = None,
         order_by_supplied: bool = False,
-    ):
+    ) -> _ListArguments:
         return _ListArguments(
             offset=offset,
             limit=limit,
@@ -950,7 +967,7 @@ def test_the_capture_scope_stays_closed_for_shapes_the_offset_guard_cannot_use(s
         assert _ORDER_NORMALIZATION_CAPTURE.get() is None
 
 
-def test_the_capture_scope_opens_for_a_positive_offset_with_an_orderset():
+def test_the_capture_scope_opens_for_a_positive_offset_with_an_orderset() -> None:
     """The one shape the offset guard consumes does open a capture scope, then resets."""
     from django_strawberry_framework.list_field import _order_normalization_scope
     from django_strawberry_framework.orders.sets import _ORDER_NORMALIZATION_CAPTURE
@@ -971,7 +988,7 @@ def test_the_capture_scope_opens_for_a_positive_offset_with_an_orderset():
 
 
 @pytest.mark.django_db
-def test_list_field_reads_the_target_definition_once_and_dispatches_through_it():
+def test_list_field_reads_the_target_definition_once_and_dispatches_through_it() -> None:
     """The field's ONE definition read is at construction; nothing re-reads it afterwards.
 
     The counter stays armed across all three phases a stateful target could
@@ -993,7 +1010,7 @@ def test_list_field_reads_the_target_definition_once_and_dispatches_through_it()
 
     class CountingMeta(type):
         @override
-        def __getattribute__(cls, name: str):
+        def __getattribute__(cls, name: str) -> object:
             if state["armed"] and name == "__django_strawberry_definition__":
                 reads.append(name)
                 if state["decoy"] is not None:
@@ -1014,7 +1031,7 @@ def test_list_field_reads_the_target_definition_once_and_dispatches_through_it()
             input_value: object,
             queryset: QuerySet[_M],
             info: object,
-        ):
+        ) -> QuerySet[_M]:
             PublishedOrder.applies += 1
             return super().apply_sync(input_value, queryset, info)
 
@@ -1030,7 +1047,7 @@ def test_list_field_reads_the_target_definition_once_and_dispatches_through_it()
             input_value: object,
             queryset: QuerySet[_M],
             info: object,
-        ):
+        ) -> NoReturn:
             raise AssertionError("the field dispatched through a re-read OrderSet")
 
     class CountedType(DjangoType, metaclass=CountingMeta):
@@ -1082,7 +1099,7 @@ def test_list_field_reads_the_target_definition_once_and_dispatches_through_it()
 
 
 @pytest.mark.django_db
-def test_a_consumer_resolver_list_field_also_reads_the_definition_only_at_construction():
+def test_a_consumer_resolver_list_field_also_reads_the_definition_only_at_construction() -> None:
     """The ``resolver=`` coloring takes the same one read, and no request-time read.
 
     A consumer resolver supplies the source, so the seed is not the field's; what
@@ -1097,7 +1114,7 @@ def test_a_consumer_resolver_list_field_also_reads_the_definition_only_at_constr
 
     class CountingMeta(type):
         @override
-        def __getattribute__(cls, name: str):
+        def __getattribute__(cls, name: str) -> object:
             if state["armed"] and name == "__django_strawberry_definition__":
                 reads.append(name)
                 if state["decoy"] is not None:
@@ -1121,7 +1138,7 @@ def test_a_consumer_resolver_list_field_also_reads_the_definition_only_at_constr
             input_value: object,
             queryset: QuerySet[_M],
             info: object,
-        ):
+        ) -> NoReturn:
             raise AssertionError("the field dispatched through a re-read OrderSet")
 
     class ResolverCountedType(DjangoType, metaclass=CountingMeta):
@@ -1167,7 +1184,9 @@ def test_a_consumer_resolver_list_field_also_reads_the_definition_only_at_constr
 
 
 @pytest.mark.django_db
-def test_an_abstract_model_type_serves_concrete_rows_and_its_default_seed_names_the_model():
+def test_an_abstract_model_type_serves_concrete_rows_and_its_default_seed_names_the_model() -> (
+    None
+):
     """A ``DjangoType`` over an abstract model serves the concrete rows a resolver returns.
 
     The generated default resolver has no table to seed from, so it fails with a
@@ -1203,7 +1222,7 @@ def test_an_abstract_model_type_serves_concrete_rows_and_its_default_seed_names_
 
 
 @pytest.mark.django_db
-def test_the_default_seed_and_both_visibility_seals_use_the_captured_model():
+def test_the_default_seed_and_both_visibility_seals_use_the_captured_model() -> None:
     """The seed queries the captured model's table and the seals validate against it.
 
     A target whose definition later names another model must not be able to move
@@ -1217,7 +1236,7 @@ def test_the_default_seed_and_both_visibility_seals_use_the_captured_model():
 
     class CountingMeta(type):
         @override
-        def __getattribute__(cls, name: str):
+        def __getattribute__(cls, name: str) -> object:
             if state["armed"] and name == "__django_strawberry_definition__":
                 reads.append(name)
                 if state["decoy"] is not None:
@@ -1231,7 +1250,7 @@ def test_the_default_seed_and_both_visibility_seals_use_the_captured_model():
 
         @classmethod
         @override
-        def get_queryset(cls, queryset: QuerySet[_M], info: object):
+        def get_queryset(cls, queryset: QuerySet[_M], info: object) -> QuerySet[_M]:
             seen_models.append(queryset.model)
             # Narrow to the two probe rows, one per table, so the answer names
             # which table the seed and the seals were over.
@@ -1271,14 +1290,14 @@ def test_the_default_seed_and_both_visibility_seals_use_the_captured_model():
 
 
 @pytest.mark.django_db
-def test_list_field_rejects_a_target_whose_definition_hides_its_model():
+def test_list_field_rejects_a_target_whose_definition_hides_its_model() -> None:
     """An unreadable or non-model ``definition.model`` fails at the factory line."""
 
     class ExplodingDefinition:
         origin = None
 
         @property
-        def model(self):
+        def model(self) -> NoReturn:
             raise RuntimeError("model read exploded")
 
     with pytest.raises(ConfigurationError, match="could not read the model from the definition"):
@@ -1302,7 +1321,7 @@ def test_list_field_rejects_a_target_whose_definition_hides_its_model():
         None,
     ],
 )
-def test_a_list_field_trusted_max_rows_opt_in_must_be_exactly_boolean(value: object):
+def test_a_list_field_trusted_max_rows_opt_in_must_be_exactly_boolean(value: object) -> None:
     """A misspelled trusted opt-in fails at the line that wrote the field.
 
     ``trusted_max_rows`` is the one field option whose effect is to let a
@@ -1327,7 +1346,7 @@ def test_a_list_field_trusted_max_rows_opt_in_must_be_exactly_boolean(value: obj
 
 
 @pytest.mark.parametrize("value", [True, False])
-def test_an_exact_boolean_trusted_max_rows_builds_the_field(value: bool):
+def test_an_exact_boolean_trusted_max_rows_builds_the_field(*, value: bool) -> None:
     class ExactFlagType(DjangoType):
         class Meta:
             model = Item
@@ -1339,7 +1358,7 @@ def test_an_exact_boolean_trusted_max_rows_builds_the_field(value: bool):
 
 def test_list_field_direct_call_safe_non_integer_rendering(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """Safe rendering of non-integer values in ListArgumentError message."""
     info = make_info(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
@@ -1356,7 +1375,7 @@ def test_list_field_direct_call_safe_non_integer_rendering(
     assert "Invalid argument 'offset' on test_field" in str(exc_info.value)
 
 
-def test_list_field_error_pickle_round_trip():
+def test_list_field_error_pickle_round_trip() -> None:
     """ListArgumentError preserves constructor args, extensions, and state across pickle."""
     err = ListArgumentError(
         "books",
@@ -1384,7 +1403,7 @@ def test_list_field_error_pickle_round_trip():
 
 def test_list_field_direct_call_schema_name_fallback_and_definition_lookup(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """Direct-call stubs fall back to the default spelling; a definition alone is not a name."""
     info_no_def = SimpleNamespace(schema=None)
     assert _resolve_argument_wire_name(_as_strawberry_info(info_no_def), "offset") == "offset"
@@ -1431,7 +1450,7 @@ def test_list_field_direct_call_schema_name_fallback_and_definition_lookup(
     assert exc_info.value.extensions["argument"] == "offset"
 
 
-def test_published_wire_name_rejects_malformed_schema_metadata():
+def test_published_wire_name_rejects_malformed_schema_metadata() -> None:
     """Executable-schema metadata that cannot name the argument is a configuration error."""
     from graphql import (
         GraphQLArgument,
@@ -1497,7 +1516,7 @@ def test_published_wire_name_rejects_malformed_schema_metadata():
 
 def test_list_field_record_independence(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """_ListArguments fields operate independently without proxy conflation."""
     info = make_info(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
@@ -1533,7 +1552,7 @@ def test_list_field_record_independence(
     assert rejection.reason == "queryset_required"
 
 
-def test_omitted_list_arguments_do_not_resolve_policy(monkeypatch: pytest.MonkeyPatch):
+def test_omitted_list_arguments_do_not_resolve_policy(monkeypatch: pytest.MonkeyPatch) -> None:
     """The no-argument normalization path is allocation-only and policy-free."""
 
     def _policy_must_not_resolve(_info: object) -> None:
@@ -1551,10 +1570,16 @@ def test_omitted_list_arguments_do_not_resolve_policy(monkeypatch: pytest.Monkey
         trusted_max_rows=False,
     )
 
-    assert record == _ListArguments(None, None, None, False, False)
+    assert record == _ListArguments(
+        offset=None,
+        limit=None,
+        order_by=None,
+        order_by_supplied=False,
+        any_argument_supplied=False,
+    )
 
 
-def test_resolver_call_context_accepts_strawberry_shape_and_rejects_unknown_inputs():
+def test_resolver_call_context_accepts_strawberry_shape_and_rejects_unknown_inputs() -> None:
     info = SimpleNamespace(field_name="items")
     root = object()
 
@@ -1572,10 +1597,10 @@ def test_resolver_call_context_accepts_strawberry_shape_and_rejects_unknown_inpu
         _resolver_root_and_info((root,), {})
 
 
-def test_field_and_orderset_metadata_reads_fail_closed():
+def test_field_and_orderset_metadata_reads_fail_closed() -> None:
     class HostileDefinition:
         @property
-        def orderset_class(self):
+        def orderset_class(self) -> NoReturn:
             raise RuntimeError("unreadable sidecar")
 
     class Target:
@@ -1587,13 +1612,13 @@ def test_field_and_orderset_metadata_reads_fail_closed():
     # The sidecar read fails LOUDLY rather than answering None: publishing a
     # schema without ``orderBy`` for a target that declares one would be a
     # silent SDL change at the line that wrote the field.
-    with pytest.raises(ConfigurationError, match="could not read Meta.orderset_class"):
+    with pytest.raises(ConfigurationError, match=r"could not read Meta\.orderset_class"):
         # basedpyright: the definition whose orderset_class read raises is the hostile input under
         # test; _orderset_class_from_definition types the parameter as DjangoTypeDefinition
         _orderset_class_from_definition(Target.__django_strawberry_definition__)  # pyright: ignore[reportArgumentType]
 
 
-def test_argument_definition_metadata_reads_fail_closed():
+def test_argument_definition_metadata_reads_fail_closed() -> None:
     hostile_info = _info_failing_on(
         "get_argument_definition",
         RuntimeError("unreadable argument metadata"),
@@ -1602,7 +1627,7 @@ def test_argument_definition_metadata_reads_fail_closed():
     with pytest.raises(ConfigurationError, match="argument-definition resolver"):
         _resolve_argument_wire_name(hostile_info, "offset")
 
-    def raise_from_lookup(_name: str):
+    def raise_from_lookup(_name: str) -> NoReturn:
         raise RuntimeError("unreadable argument definition")
 
     with pytest.raises(ConfigurationError, match="definition for argument"):
@@ -1612,24 +1637,24 @@ def test_argument_definition_metadata_reads_fail_closed():
         )
 
 
-async def test_list_field_rejected_async_iterator_cleanup_and_notes():
+async def test_list_field_rejected_async_iterator_cleanup_and_notes() -> None:
     """Rejected async-only iterator witnesses 0 anext calls, 1 aclose call, and notes on cleanup error."""
     from django_strawberry_framework.list_field import _handle_non_queryset_rejections_async
 
     class InstrumentedAsyncSource:
-        def __init__(self, fail_close: bool = False):
+        def __init__(self, *, fail_close: bool = False) -> None:
             self.fail_close = fail_close
             self.anext_calls = 0
             self.aclose_calls = 0
 
-        def __aiter__(self):
+        def __aiter__(self) -> Self:
             return self
 
-        async def __anext__(self):
+        async def __anext__(self) -> NoReturn:
             self.anext_calls += 1
             raise StopAsyncIteration
 
-        async def aclose(self):
+        async def aclose(self) -> None:
             self.aclose_calls += 1
             if self.fail_close:
                 raise RuntimeError("aclose error")
@@ -1670,7 +1695,7 @@ async def test_list_field_rejected_async_iterator_cleanup_and_notes():
     assert any("DjangoListField iterator cleanup failed" in str(n) for n in notes)
 
 
-def test_list_field_optimizer_adapter_unwrap_rewrap_and_early_returns():
+def test_list_field_optimizer_adapter_unwrap_rewrap_and_early_returns() -> None:
     """DjangoOptimizerExtension._optimize unwrap/rewrap identity, marks, and early return paths."""
     from django_strawberry_framework.utils.querysets import (
         unwrap_async_queryset_adapter,
@@ -1719,14 +1744,14 @@ def test_list_field_optimizer_adapter_unwrap_rewrap_and_early_returns():
 def test_list_field_deadline_check_position(
     monkeypatch: pytest.MonkeyPatch,
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """check_deadline is invoked in pre-fetch position for argument-bearing requests."""
     import django_strawberry_framework.resource_policy as rp
 
     check_calls = 0
     orig_check = rp.check_deadline
 
-    def spy_check(info: object):
+    def spy_check(info: object) -> None:
         nonlocal check_calls
         check_calls += 1
         return orig_check(info)
@@ -1768,7 +1793,7 @@ def test_list_field_deadline_check_position(
     assert check_calls == 1
 
 
-def test_list_field_seal_axis_subclass_and_routing_intent():
+def test_list_field_seal_axis_subclass_and_routing_intent() -> None:
     """A sealable subclass is normalized to a plain QuerySet, and routing intent is enforced.
 
     The ``untrusted`` verdict this seam can also produce is proved over real HTTP
@@ -1826,7 +1851,7 @@ def test_list_field_seal_axis_subclass_and_routing_intent():
 
 def test_list_field_declined_sync_cleanup_generator_suspended(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """Declined sync cleanup: generator truncated by client window stays suspended and resumable."""
     finally_ran = False
 
@@ -1865,7 +1890,7 @@ def test_list_field_declined_sync_cleanup_generator_suspended(
 _PREDICATE_STAMP = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
 
 
-def _predicate_ordering(lookup: str, threshold: object):
+def _predicate_ordering(lookup: str, threshold: object) -> tuple[models.Case]:
     """A conditional ordering whose predicate compares ``lookup`` against ``threshold``."""
     return (
         models.Case(
@@ -1875,7 +1900,7 @@ def _predicate_ordering(lookup: str, threshold: object):
     )
 
 
-def test_order_term_classifier_rejects_a_non_expression_term():
+def test_order_term_classifier_rejects_a_non_expression_term() -> None:
     """A term that is neither an expression nor a name is not a readable leaf.
 
     GraphQL never supplies an ``int`` as an ordering term; the classifier still
@@ -1887,7 +1912,9 @@ def test_order_term_classifier_rejects_a_non_expression_term():
     assert _is_deterministic_order_term(Category.objects.all().query, 42) is False
 
 
-def test_order_term_classifier_refuses_a_relation_ordering_cycle(monkeypatch: pytest.MonkeyPatch):
+def test_order_term_classifier_refuses_a_relation_ordering_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Two models whose defaults order by each other compile to an error, never to a page.
 
     Django raises ``FieldError("Infinite loop caused by ordering.")`` for such a
@@ -1904,7 +1931,7 @@ def test_order_term_classifier_refuses_a_relation_ordering_cycle(monkeypatch: py
 
 def test_order_term_classifier_refuses_a_piece_that_is_not_a_field(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A path piece Django reads as a transform or a lookup is not a column this package can name.
 
     Only a path resolving to a field all the way down says what the rows are
@@ -1919,7 +1946,7 @@ def test_order_term_classifier_refuses_a_piece_that_is_not_a_field(
 
 def test_order_term_classifier_reads_a_reverse_relation_target_ordering(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A reverse relation expands into its own model's default exactly as a forward one does.
 
     The name in front of the ordering is a relation either way, and the order the
@@ -1938,7 +1965,7 @@ def test_order_term_classifier_reads_a_reverse_relation_target_ordering(
 
 def test_order_term_classifier_follows_a_chain_of_relation_defaults(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Expansion is recursive, so a random default two relations away still decides.
 
     ``Book`` orders by its shelf, the shelf by its branch, and the branch at
@@ -1956,7 +1983,7 @@ def test_order_term_classifier_follows_a_chain_of_relation_defaults(
     assert _is_model_default_ordering_active(library_models.Book.objects.all()) is True
 
 
-def test_order_reference_classifier_reads_the_annotation_a_reference_names():
+def test_order_reference_classifier_reads_the_annotation_a_reference_names() -> None:
     """An ``F`` is resolved through the query's annotations before it is read as a column.
 
     ``Query.resolve_ref`` looks the whole name up as an annotation first, so a
@@ -1971,7 +1998,7 @@ def test_order_reference_classifier_reads_the_annotation_a_reference_names():
 
 def test_order_reference_classifier_keeps_an_expanded_reference_a_column_order(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A reference lifted out of an expanded ordering names a column, not another default.
 
     Only a string term reaches the compiler's relation expansion. A ``Book``
@@ -2008,7 +2035,7 @@ class _SubclassedF(models.F):
     """A subclass of the reference form: an ordinary name over a different resolution."""
 
     @override
-    def resolve_expression(self, *args: object, **kwargs: object):
+    def resolve_expression(self, *args: object, **kwargs: object) -> Random:
         return Random()
 
 
@@ -2017,14 +2044,14 @@ class _SubclassedQ(models.Q):
 
     @override
     # basedpyright: deliberately resolves to foreign SQL, the predicate subclass the guard refuses
-    def resolve_expression(self, *args: object, **kwargs: object):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def resolve_expression(self, *args: object, **kwargs: object) -> Random:  # pyright: ignore[reportIncompatibleMethodOverride]
         return Random()
 
 
 class _ResolvingName(str):
     """A field path that is an expression, because it carries ``resolve_expression``."""
 
-    def resolve_expression(self, *_args: object, **_kwargs: object):
+    def resolve_expression(self, *_args: object, **_kwargs: object) -> Random:
         return Random()
 
 
@@ -2057,7 +2084,7 @@ class _ResolvingName(str):
         "name-that-resolves",
     ],
 )
-def test_order_term_classifier_admits_only_named_forms(term: object, expected: bool):
+def test_order_term_classifier_admits_only_named_forms(term: object, *, expected: bool) -> None:
     """A node is read through because this package names its form, never because it has children.
 
     An expression's sources say nothing about the SQL it wraps them in, and a
@@ -2079,7 +2106,7 @@ def test_order_term_classifier_admits_only_named_forms(term: object, expected: b
 
 def test_order_predicate_classifier_refuses_an_unresolvable_reference(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A predicate naming neither an annotation nor a field is a reference nobody can read.
 
     The comparison still reaches the statement, so a head this package cannot
@@ -2104,8 +2131,9 @@ def test_order_predicate_classifier_refuses_an_unresolvable_reference(
 def test_order_predicate_classifier_reads_the_annotation_under_a_transform_chain(
     monkeypatch: pytest.MonkeyPatch,
     aliased: models.Expression,
+    *,
     expected: bool,
-):
+) -> None:
     """A lookup is a reference plus trailing lookups, and the reference is what decides.
 
     ``stamp__year__gt`` names the annotation ``stamp`` under a ``year`` transform
@@ -2128,7 +2156,7 @@ def test_order_predicate_classifier_reads_the_annotation_under_a_transform_chain
 @pytest.mark.django_db
 def test_is_model_default_ordering_active_rejects_a_grouped_queryset(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Grouping suppresses model default ordering the same way ``QuerySet.ordered`` does.
 
     A grouped source has one live spelling (``test_list_field_api.py``'s row-count
@@ -2148,7 +2176,7 @@ def test_is_model_default_ordering_active_rejects_a_grouped_queryset(
     assert _is_model_default_ordering_active(qs) is False
 
 
-def test_list_field_constructor_validation_precedence():
+def test_list_field_constructor_validation_precedence() -> None:
     """Constructor validates collection bound before target_type or directives."""
     # Negative bound raises collection bound error even if target_type is invalid
     with pytest.raises(
@@ -2172,7 +2200,7 @@ def test_list_field_constructor_validation_precedence():
         DjangoListField(object, max_rows=10)
 
 
-def test_list_field_post_orderset_validator_zero_consumer_dispatch():
+def test_list_field_post_orderset_validator_zero_consumer_dispatch() -> None:
     """_validate_post_orderset_result extracts routing intent without consumer dispatch."""
     from django_strawberry_framework.utils.querysets import (
         _routing_hints_equal,
@@ -2188,11 +2216,11 @@ def test_list_field_post_orderset_validator_zero_consumer_dispatch():
 
     class PoisonAttr:
         @override
-        def __eq__(self, other: object):
+        def __eq__(self, other: object) -> bool:
             raise RuntimeError("PoisonAttr __eq__ called")
 
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("PoisonAttr __repr__ called")
 
         # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
@@ -2216,7 +2244,7 @@ def test_list_field_post_orderset_validator_zero_consumer_dispatch():
     # Rejection of routing changes without calling consumer __getattribute__
     class PoisonGetattributeQS(models.QuerySet[Category]):
         @override
-        def __getattribute__(self, name: str):
+        def __getattribute__(self, name: str) -> object:
             if name in ("_db", "_hints"):
                 raise RuntimeError(f"consumer __getattribute__ called for {name}")
             return super().__getattribute__(name)
@@ -2231,7 +2259,7 @@ def test_list_field_post_orderset_validator_zero_consumer_dispatch():
     assert sealed is not None
 
 
-def test_list_arguments_immutability():
+def test_list_arguments_immutability() -> None:
     """_ListArguments is an immutable frozen dataclass."""
     import dataclasses
 
@@ -2255,7 +2283,9 @@ def test_list_arguments_immutability():
         args.extra_attribute = "disallowed"  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def test_is_model_default_ordering_active_exact_bool_identity(monkeypatch: pytest.MonkeyPatch):
+def test_is_model_default_ordering_active_exact_bool_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """_is_model_default_ordering_active requires exact boolean True identity."""
     from django_strawberry_framework.list_field import _is_model_default_ordering_active
 
@@ -2269,7 +2299,7 @@ def test_is_model_default_ordering_active_exact_bool_identity(monkeypatch: pytes
     assert _is_model_default_ordering_active(queryset) is True
 
 
-def test_list_field_wire_name_resolution_falls_back_without_a_usable_definition():
+def test_list_field_wire_name_resolution_falls_back_without_a_usable_definition() -> None:
     """Every arm that cannot name the wire argument falls back to the default name.
 
     ``_resolve_argument_wire_name`` runs only while building an error, so a
@@ -2293,7 +2323,7 @@ def test_list_field_wire_name_resolution_falls_back_without_a_usable_definition(
     assert _resolve_argument_wire_name(_as_strawberry_info(info_no_schema), "offset") == "offset"
 
 
-def test_list_field_wire_name_resolution_surfaces_broken_schema_metadata():
+def test_list_field_wire_name_resolution_surfaces_broken_schema_metadata() -> None:
     """A definition whose published map cannot be read is a configuration error, not a fallback.
 
     An absent map is a shape the framework tolerates; a map that blows up while
@@ -2303,7 +2333,7 @@ def test_list_field_wire_name_resolution_surfaces_broken_schema_metadata():
 
     class ExplodingRawInfo:
         @property
-        def parent_type(self):
+        def parent_type(self) -> NoReturn:
             raise RuntimeError("simulated parent-type failure")
 
     info = SimpleNamespace(
@@ -2317,7 +2347,7 @@ def test_list_field_wire_name_resolution_surfaces_broken_schema_metadata():
         _resolve_argument_wire_name(_as_strawberry_info(info), "order_by")
 
 
-def test_require_orderset_class_rejects_a_target_without_one():
+def test_require_orderset_class_rejects_a_target_without_one() -> None:
     """Ordering a target that declares no ``orderset_class`` is a configuration error.
 
     Both colorings of the ordering step route through this one requirement, so
@@ -2339,7 +2369,7 @@ def test_require_orderset_class_rejects_a_target_without_one():
 
 
 @pytest.mark.django_db
-def test_djangolistfield_resets_the_capture_scope_when_the_seal_rejects():
+def test_djangolistfield_resets_the_capture_scope_when_the_seal_rejects() -> None:
     """A rejected ordering result still closes the capture scope it was opened in.
 
     The post-``OrderSet`` seal runs after ``apply_sync`` has published its
@@ -2365,7 +2395,7 @@ def test_djangolistfield_resets_the_capture_scope_when_the_seal_rejects():
             input_value: object,
             queryset: QuerySet[_M],
             info: object,
-        ):
+        ) -> QuerySet[Category]:
             # Publishes the normalization record, then returns a candidate the
             # seal rejects.
             super().apply_sync(input_value, queryset, info)
@@ -2397,7 +2427,9 @@ def test_djangolistfield_resets_the_capture_scope_when_the_seal_rejects():
     assert _ORDER_NORMALIZATION_CAPTURE.get() is None
 
 
-async def test_list_field_rejected_async_iterator_is_closed_when_building_the_rejection_fails():
+async def test_list_field_rejected_async_iterator_is_closed_when_building_the_rejection_fails() -> (
+    None
+):
     """A failure while CONSTRUCTING the rejection still closes the async-only source.
 
     Once the record says the source must be rejected, the close is owed on every
@@ -2407,24 +2439,24 @@ async def test_list_field_rejected_async_iterator_is_closed_when_building_the_re
     from django_strawberry_framework.list_field import _handle_non_queryset_rejections_async
 
     class InstrumentedAsyncSource:
-        def __init__(self, fail_close: bool = False):
+        def __init__(self, *, fail_close: bool = False) -> None:
             self.fail_close = fail_close
             self.anext_calls = 0
             self.aclose_calls = 0
 
-        def __aiter__(self):
+        def __aiter__(self) -> Self:
             return self
 
-        async def __anext__(self):
+        async def __anext__(self) -> NoReturn:
             self.anext_calls += 1
             raise StopAsyncIteration
 
-        async def aclose(self):
+        async def aclose(self) -> None:
             self.aclose_calls += 1
             if self.fail_close:
                 raise RuntimeError("aclose error")
 
-    def _broken_definition_lookup(_name: str):
+    def _broken_definition_lookup(_name: str) -> NoReturn:
         raise RuntimeError("simulated definition lookup failure")
 
     info = SimpleNamespace(
@@ -2520,12 +2552,14 @@ def test_djangolistfield_rejects_a_fabricated_same_origin_definition() -> None:
         filterset_class=None,
         interfaces=(),
     )
-    with pytest.raises(
-        ConfigurationError,
-        match=r"DjangoListField target FabricatedTargetType is not a registered DjangoType",
+    with (
+        pytest.raises(
+            ConfigurationError,
+            match=r"DjangoListField target FabricatedTargetType is not a registered DjangoType",
+        ),
+        _swap_definition_attribute(FabricatedTargetType, fabricated),
     ):
-        with _swap_definition_attribute(FabricatedTargetType, fabricated):
-            DjangoListField(FabricatedTargetType)
+        DjangoListField(FabricatedTargetType)
 
 
 def test_djangolistfield_rejects_a_copy_of_the_real_definition() -> None:
@@ -2546,12 +2580,14 @@ def test_djangolistfield_rejects_a_copy_of_the_real_definition() -> None:
     duplicate = copy.copy(real)
     assert duplicate is not real
     assert duplicate.origin is CopiedTargetType
-    with pytest.raises(
-        ConfigurationError,
-        match=r"DjangoListField target CopiedTargetType is not a registered DjangoType",
+    with (
+        pytest.raises(
+            ConfigurationError,
+            match=r"DjangoListField target CopiedTargetType is not a registered DjangoType",
+        ),
+        _swap_definition_attribute(CopiedTargetType, duplicate),
     ):
-        with _swap_definition_attribute(CopiedTargetType, duplicate):
-            DjangoListField(CopiedTargetType)
+        DjangoListField(CopiedTargetType)
 
 
 def test_djangolistfield_rejects_a_target_the_registry_has_never_seen() -> None:

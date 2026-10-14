@@ -63,13 +63,13 @@ def _is_test_case_classmethod(value: object) -> "TypeIs[classmethod[SimpleTestCa
     return isinstance(value, classmethod)
 
 
-def _database_failure(wrapped: object):
+def _database_failure(wrapped: object) -> object:
     if _django_patches._DatabaseFailure is None:
         pytest.skip("Django private _DatabaseFailure symbol is unavailable.")
     return _django_patches._DatabaseFailure(wrapped, "test message")
 
 
-def test_apply_is_idempotent():
+def test_apply_is_idempotent() -> None:
     """Repeated calls to :func:`apply` leave the patch installed.
 
     Pins the "ensure current state" contract called out in the module
@@ -81,9 +81,10 @@ def test_apply_is_idempotent():
     assert _django_patches._patch_is_installed() is True
 
 
-def test_apply_reinstalls_when_class_attribute_reverted(monkeypatch: pytest.MonkeyPatch):
-    """``apply()`` re-installs the patch if a third party reverted the
-    class attribute between calls.
+def test_apply_reinstalls_when_class_attribute_reverted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``apply()`` re-installs the patch if a third party reverted the class attribute.
+
+    The revert happens between calls.
 
     Pins the strengthened "re-entrant calls are no-ops; the patch
     re-installs if not currently present" contract on ``apply()``.
@@ -100,7 +101,7 @@ def test_apply_reinstalls_when_class_attribute_reverted(monkeypatch: pytest.Monk
     # classmethod descriptor itself back (assigning a bound method back via the
     # attribute would replace the descriptor with a regular function and break
     # later tests).
-    def _foreign(_cls: type[SimpleTestCase]):
+    def _foreign(_cls: type[SimpleTestCase]) -> None:
         pass
 
     monkeypatch.setattr(SimpleTestCase, "_remove_databases_failures", classmethod(_foreign))
@@ -110,9 +111,8 @@ def test_apply_reinstalls_when_class_attribute_reverted(monkeypatch: pytest.Monk
     assert _django_patches._patch_is_installed() is True
 
 
-def test_patch_is_installed_on_simple_test_case():
-    """``SimpleTestCase._remove_databases_failures`` is the patched
-    version after :func:`apply` runs.
+def test_patch_is_installed_on_simple_test_case() -> None:
+    """``SimpleTestCase._remove_databases_failures`` is the patched version after ``apply``.
 
     Django defines the method on ``SimpleTestCase`` (not on
     ``TransactionTestCase``), so the patch is installed there. By the
@@ -125,10 +125,10 @@ def test_patch_is_installed_on_simple_test_case():
     )
 
 
-def test_patch_is_inherited_by_transaction_test_case():
-    """``TransactionTestCase`` inherits ``_remove_databases_failures``
-    from ``SimpleTestCase`` - patching the base class covers the
-    subclass for free.
+def test_patch_is_inherited_by_transaction_test_case() -> None:
+    """``TransactionTestCase`` inherits ``_remove_databases_failures`` from ``SimpleTestCase``.
+
+    Patching the base class covers the subclass for free.
     """
     assert (
         remove_databases_failures_function(TransactionTestCase)
@@ -136,10 +136,11 @@ def test_patch_is_inherited_by_transaction_test_case():
     )
 
 
-def test_patch_is_inherited_by_test_case():
-    """``TestCase`` inherits ``_remove_databases_failures`` from
-    ``SimpleTestCase`` (via ``TransactionTestCase``) - one patch
-    covers the whole Django test-case hierarchy.
+def test_patch_is_inherited_by_test_case() -> None:
+    """``TestCase`` inherits ``_remove_databases_failures`` from ``SimpleTestCase``.
+
+    The inheritance runs via ``TransactionTestCase``, so one patch covers the whole
+    Django test-case hierarchy.
     """
     assert (
         remove_databases_failures_function(TestCase)
@@ -149,7 +150,7 @@ def test_patch_is_inherited_by_test_case():
 
 def test_patch_is_installed_returns_false_when_attribute_absent_from_class_dict(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Pin the ``installed is None`` branch of ``_patch_is_installed()``.
 
     Defensive contract: if a future Django release moves
@@ -166,10 +167,12 @@ def test_patch_is_installed_returns_false_when_attribute_absent_from_class_dict(
     assert _django_patches._patch_is_installed() is False
 
 
-def test_patched_remove_databases_failures_unwraps_a_real_wrapper(monkeypatch: pytest.MonkeyPatch):
-    """Happy path: when ``connection.<method>`` is a genuine
-    ``_DatabaseFailure`` instance, the patched method unwraps it
-    exactly as Django's upstream version does.
+def test_patched_remove_databases_failures_unwraps_a_real_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Happy path: a genuine ``_DatabaseFailure`` on ``connection.<method>`` is unwrapped.
+
+    The patched method unwraps it exactly as Django's upstream version does.
 
     Builds a ``TransactionTestCase`` subclass whose ``databases``
     allow-list excludes ``default``, wraps
@@ -195,11 +198,12 @@ def test_patched_remove_databases_failures_unwraps_a_real_wrapper(monkeypatch: p
         connection.cursor = original_cursor
 
 
-def test_patched_remove_databases_failures_skips_non_wrapper_methods():
-    """The Trac #37064 fix proper: when ``connection.<method>`` is NOT
-    a ``_DatabaseFailure`` instance (something replaced it without
-    restoring the wrapper), the patched method leaves it alone instead
-    of crashing on ``method.wrapped``.
+def test_patched_remove_databases_failures_skips_non_wrapper_methods() -> None:
+    """The Trac #37064 fix proper: a non-``_DatabaseFailure`` method is left alone.
+
+    When ``connection.<method>`` is NOT a ``_DatabaseFailure`` instance (something
+    replaced it without restoring the wrapper), the patched method leaves it alone
+    instead of crashing on ``method.wrapped``.
 
     This is the load-bearing assertion of the whole patch - without
     the ``isinstance`` guard, the same setup raises
@@ -229,9 +233,10 @@ def test_patched_remove_databases_failures_skips_non_wrapper_methods():
         connection.cursor = original_cursor
 
 
-def test_patched_remove_databases_failures_covers_direct_simple_test_case_subclass():
-    """Direct ``SimpleTestCase`` subclasses - ``TransactionTestCase``
-    is NOT in their MRO - must also get the unwrap-time protection.
+def test_patched_remove_databases_failures_covers_direct_simple_test_case_subclass() -> None:
+    """Direct ``SimpleTestCase`` subclasses must also get the unwrap-time protection.
+
+    ``TransactionTestCase`` is NOT in their MRO.
 
     Pins that the patch is installed on ``SimpleTestCase`` itself, not
     only on ``TransactionTestCase``. Without this coverage, the patch
@@ -264,7 +269,7 @@ def test_patched_remove_databases_failures_covers_direct_simple_test_case_subcla
 
 def test_unpatched_remove_databases_failures_crashes_on_non_wrapper(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Pins that Trac #37064's bug shape IS still in Django at our pin.
 
     Temporarily reverts ``SimpleTestCase._remove_databases_failures`` to
@@ -306,29 +311,33 @@ def test_unpatched_remove_databases_failures_crashes_on_non_wrapper(
         connection.cursor = original_cursor
 
 
-def test_apply_fails_loudly_when_database_failure_symbol_missing():
+def test_apply_fails_loudly_when_database_failure_symbol_missing() -> None:
     """A private-Django shape change cannot silently disable the teardown patch."""
-    with mock.patch.object(_django_patches, "_DatabaseFailure", None):
-        with pytest.raises(RuntimeError, match="_DatabaseFailure"):
-            _django_patches.apply()
+    with (
+        mock.patch.object(_django_patches, "_DatabaseFailure", None),
+        pytest.raises(RuntimeError, match="_DatabaseFailure"),
+    ):
+        _django_patches.apply()
 
 
-def test_apply_fails_loudly_when_upstream_method_signature_changes():
+def test_apply_fails_loudly_when_upstream_method_signature_changes() -> None:
     """The patch pins the classmethod arity its replacement assumes."""
 
-    def changed(_cls: type[SimpleTestCase], _extra: object):
+    def changed(_cls: type[SimpleTestCase], _extra: object) -> None:
         pass
 
-    with mock.patch.object(
-        _django_patches,
-        "_original_remove_databases_failures",
-        classmethod(changed),
+    with (
+        mock.patch.object(
+            _django_patches,
+            "_original_remove_databases_failures",
+            classmethod(changed),
+        ),
+        pytest.raises(RuntimeError, match=r"expected \(cls\) signature"),
     ):
-        with pytest.raises(RuntimeError, match=r"expected \(cls\) signature"):
-            _django_patches.apply()
+        _django_patches.apply()
 
 
-def test_apply_fails_loudly_when_upstream_body_drifts(monkeypatch: pytest.MonkeyPatch):
+def test_apply_fails_loudly_when_upstream_body_drifts(monkeypatch: pytest.MonkeyPatch) -> None:
     """A shape-passing but body-drifted Django must not get its teardown clobbered.
 
     The patch *reimplements* upstream's whole body rather than wrapping
@@ -343,7 +352,7 @@ def test_apply_fails_loudly_when_upstream_body_drifts(monkeypatch: pytest.Monkey
     ``RuntimeError`` before installing anything.
     """
 
-    def _foreign(_cls: type[SimpleTestCase]):
+    def _foreign(_cls: type[SimpleTestCase]) -> None:
         pass
 
     monkeypatch.setattr(SimpleTestCase, "_remove_databases_failures", classmethod(_foreign))
@@ -354,6 +363,7 @@ def test_apply_fails_loudly_when_upstream_body_drifts(monkeypatch: pytest.Monkey
         databases: set[str]
         _forbidden_connection_methods: tuple[tuple[str, str], ...]
 
+        # ruff: disable[ANN206] - the body mirrors Django's unannotated upstream source
         @classmethod
         def _remove_databases_failures(cls):
             """A (cls)-shaped upstream whose body renamed the method list."""
@@ -365,18 +375,22 @@ def test_apply_fails_loudly_when_upstream_body_drifts(monkeypatch: pytest.Monkey
                     method = getattr(connection, name)
                     setattr(connection, name, method.wrapped)
 
-    with mock.patch.object(
-        _django_patches,
-        "_original_remove_databases_failures",
-        _DriftedShape.__dict__["_remove_databases_failures"],
+        # ruff: enable[ANN206]
+
+    with (
+        mock.patch.object(
+            _django_patches,
+            "_original_remove_databases_failures",
+            _DriftedShape.__dict__["_remove_databases_failures"],
+        ),
+        pytest.raises(RuntimeError, match="upstream body"),
     ):
-        with pytest.raises(RuntimeError, match="upstream body"):
-            _django_patches.apply()
+        _django_patches.apply()
     # ``apply()`` raised during validation, before the install step.
     assert _django_patches._patch_is_installed() is False
 
 
-def test_audited_upstream_bodies_are_exactly_the_two_known_shapes():
+def test_audited_upstream_bodies_are_exactly_the_two_known_shapes() -> None:
     """The body pin is a closed SET of the two audited Django shapes."""
     assert _django_patches._AUDITED_REMOVE_DATABASES_FAILURES_SOURCES == (
         _django_patches._CLASS_ATTRIBUTE_REMOVE_DATABASES_FAILURES_SOURCE,
@@ -384,7 +398,7 @@ def test_audited_upstream_bodies_are_exactly_the_two_known_shapes():
     )
 
 
-def test_validation_accepts_the_class_attribute_upstream_body():
+def test_validation_accepts_the_class_attribute_upstream_body() -> None:
     """Django 5.2.16-6.0.x body is accepted regardless of which Django is installed.
 
     Nested so ``inspect.getsource`` after ``textwrap.dedent`` matches the
@@ -396,6 +410,7 @@ def test_validation_accepts_the_class_attribute_upstream_body():
         databases: set[str]
         _disallowed_connection_methods: list[tuple[str, str]]
 
+        # ruff: disable[ANN206] - the body mirrors Django's unannotated upstream source
         @classmethod
         def _remove_databases_failures(cls):
             for alias in connections:
@@ -405,6 +420,8 @@ def test_validation_accepts_the_class_attribute_upstream_body():
                 for name, _ in cls._disallowed_connection_methods:
                     method = getattr(connection, name)
                     setattr(connection, name, method.wrapped)
+
+        # ruff: enable[ANN206]
 
     with mock.patch.object(
         _django_patches,
@@ -417,7 +434,7 @@ def test_validation_accepts_the_class_attribute_upstream_body():
         )
 
 
-def test_validation_accepts_the_feature_flag_upstream_body():
+def test_validation_accepts_the_feature_flag_upstream_body() -> None:
     """Django 6.1 body is accepted regardless of which Django is installed.
 
     Nested so ``inspect.getsource`` after ``textwrap.dedent`` matches the
@@ -428,6 +445,7 @@ def test_validation_accepts_the_feature_flag_upstream_body():
         # The slot the pinned body reads; a bare annotation creates no attribute.
         databases: set[str]
 
+        # ruff: disable[ANN206] - the body mirrors Django's unannotated upstream source
         @classmethod
         def _remove_databases_failures(cls):
             for alias in connections:
@@ -441,6 +459,8 @@ def test_validation_accepts_the_feature_flag_upstream_body():
                     method = getattr(connection, name)
                     setattr(connection, name, method.wrapped)
 
+        # ruff: enable[ANN206]
+
     with mock.patch.object(
         _django_patches,
         "_original_remove_databases_failures",
@@ -452,13 +472,14 @@ def test_validation_accepts_the_feature_flag_upstream_body():
         )
 
 
-def test_validation_refuses_an_unaudited_upstream_body():
+def test_validation_refuses_an_unaudited_upstream_body() -> None:
     """A body outside the audited SET is refused, not installed."""
 
     class _UnauditedShape:
         # The slot the body reads; a bare annotation creates no attribute.
         databases: set[str]
 
+        # ruff: disable[ANN206] - the body mirrors Django's unannotated upstream source
         @classmethod
         def _remove_databases_failures(cls):
             for alias in connections:
@@ -466,18 +487,22 @@ def test_validation_refuses_an_unaudited_upstream_body():
                     # Only compared as source, never run: closing is no audited body's step.
                     connections[alias].close()
 
-    with mock.patch.object(
-        _django_patches,
-        "_original_remove_databases_failures",
-        _UnauditedShape.__dict__["_remove_databases_failures"],
+        # ruff: enable[ANN206]
+
+    with (
+        mock.patch.object(
+            _django_patches,
+            "_original_remove_databases_failures",
+            _UnauditedShape.__dict__["_remove_databases_failures"],
+        ),
+        pytest.raises(RuntimeError, match="upstream body"),
     ):
-        with pytest.raises(RuntimeError, match="upstream body"):
-            _django_patches._validate_upstream_shape()
+        _django_patches._validate_upstream_shape()
 
 
 def test_disallowed_methods_read_prefers_the_class_attribute_shape(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Django 5.2.16-6.0.x shape: the pairs come off the test-case class.
 
     Driven against a synthetic ``cls`` so the branch is covered on ANY
@@ -517,7 +542,7 @@ def test_disallowed_methods_read_prefers_the_class_attribute_shape(
 
 def test_disallowed_methods_read_falls_back_to_the_connection_feature_flag(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Django 6.1 shape: the class attribute is gone, the feature flag carries the pairs.
 
     Driven against a synthetic ``cls`` with no
@@ -579,7 +604,7 @@ def test_disallowed_methods_read_falls_back_to_the_connection_feature_flag(
             del connections[alias].features.disallowed_simple_test_case_connection_methods
 
 
-def test_disallowed_methods_rejects_an_unvalidated_upstream_shape():
+def test_disallowed_methods_rejects_an_unvalidated_upstream_shape() -> None:
     """An unrecognized upstream body makes the method read raise, never guess a shape.
 
     The two audited Django shapes keep the ``(name, operation)`` pairs in
@@ -590,16 +615,18 @@ def test_disallowed_methods_rejects_an_unvalidated_upstream_shape():
     suite would attribute here. The raise is what keeps a future Django's
     restructuring a loud failure at the patch instead.
     """
-    with mock.patch.object(
-        _django_patches,
-        "_validated_remove_databases_failures_source",
-        "unexpected source",
+    with (
+        mock.patch.object(
+            _django_patches,
+            "_validated_remove_databases_failures_source",
+            "unexpected source",
+        ),
+        pytest.raises(RuntimeError, match="without a validated upstream"),
     ):
-        with pytest.raises(RuntimeError, match="without a validated upstream"):
-            _django_patches._disallowed_connection_methods(SimpleTestCase, connections["default"])
+        _django_patches._disallowed_connection_methods(SimpleTestCase, connections["default"])
 
 
-def test_apply_fails_loudly_when_upstream_source_is_unavailable():
+def test_apply_fails_loudly_when_upstream_source_is_unavailable() -> None:
     """An unreadable captured original is treated as drift, not approved.
 
     ``inspect.getsource`` raises ``OSError`` for a function with no
@@ -615,15 +642,17 @@ def test_apply_fails_loudly_when_upstream_source_is_unavailable():
     _sourceless.__code__ = _sourceless.__code__.replace(co_filename="<sourceless>")
     descriptor: classmethod[SimpleTestCase, ..., object] = classmethod(_sourceless)
 
-    with mock.patch.object(_django_patches, "_original_remove_databases_failures", descriptor):
-        with pytest.raises(RuntimeError, match="upstream body"):
-            _django_patches.apply()
+    with (
+        mock.patch.object(_django_patches, "_original_remove_databases_failures", descriptor),
+        pytest.raises(RuntimeError, match="upstream body"),
+    ):
+        _django_patches.apply()
 
 
 def test_apply_no_ops_when_toggle_disabled(
     settings: pytest_django.Settings,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """``APPLY_UPSTREAM_PATCHES = False`` makes ``apply()`` decline to install.
 
     The Trac #37064 patch is gated by the same flag as the package's
@@ -633,7 +662,7 @@ def test_apply_no_ops_when_toggle_disabled(
     is back on.
     """
 
-    def _foreign(_cls: type[SimpleTestCase]):
+    def _foreign(_cls: type[SimpleTestCase]) -> None:
         pass
 
     monkeypatch.setattr(SimpleTestCase, "_remove_databases_failures", classmethod(_foreign))
@@ -651,7 +680,7 @@ def test_apply_no_ops_when_toggle_disabled(
 def test_apply_no_ops_when_django_dependency_opted_out(
     settings: pytest_django.Settings,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """``{"APPLY_UPSTREAM_PATCHES": {"django": False}}`` disables only this module.
 
     The per-dependency escape: a mapping naming ``"django"`` makes this
@@ -660,7 +689,7 @@ def test_apply_no_ops_when_django_dependency_opted_out(
     name).
     """
 
-    def _foreign(_cls: type[SimpleTestCase]):
+    def _foreign(_cls: type[SimpleTestCase]) -> None:
         pass
 
     monkeypatch.setattr(SimpleTestCase, "_remove_databases_failures", classmethod(_foreign))
@@ -675,7 +704,7 @@ def test_apply_no_ops_when_django_dependency_opted_out(
     assert _django_patches._patch_is_installed() is True
 
 
-def test_reload_preserves_the_installed_patch_teardown(monkeypatch: pytest.MonkeyPatch):
+def test_reload_preserves_the_installed_patch_teardown(monkeypatch: pytest.MonkeyPatch) -> None:
     """``importlib.reload()`` must not break the RUNNING patch's teardown.
 
     ``importlib.reload()`` retains the module dictionary but re-executes the
@@ -746,7 +775,9 @@ def test_reload_preserves_the_installed_patch_teardown(monkeypatch: pytest.Monke
         _django_patches.apply()
 
 
-def test_django_dependency_opt_out_silences_drifted_pin_abort(settings: pytest_django.Settings):
+def test_django_dependency_opt_out_silences_drifted_pin_abort(
+    settings: pytest_django.Settings,
+) -> None:
     """The inherited escape-hatch coupling, resolved end to end.
 
     A drifted upstream body pin aborts ``apply()`` with a ``RuntimeError``

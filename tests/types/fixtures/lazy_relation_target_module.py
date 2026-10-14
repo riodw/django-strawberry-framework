@@ -17,6 +17,8 @@ from django_strawberry_framework import DjangoType
 
 
 class LazyItemType(DjangoType):
+    """The lazily referenced target type over ``Item``."""
+
     class Meta:
         model = models.Item
         fields = ("id", "name")

@@ -15,7 +15,7 @@ from apps.scalars.models import NullableScalarSpecimen, ScalarSpecimen, ScalarSp
 
 
 @pytest.mark.django_db
-def test_str_representations_and_relations():
+def test_str_representations_and_relations() -> None:
     tag = ScalarSpecimenTag.objects.create(label="alpha")
     parent = ScalarSpecimen.objects.create(
         label="root",
@@ -48,7 +48,7 @@ def test_str_representations_and_relations():
 
 
 @pytest.mark.django_db
-def test_tag_label_unique():
+def test_tag_label_unique() -> None:
     ScalarSpecimenTag.objects.create(label="dup")
     with pytest.raises(IntegrityError), transaction.atomic():
         ScalarSpecimenTag.objects.create(label="dup")

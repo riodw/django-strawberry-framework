@@ -36,6 +36,7 @@ from django.db.models import Field, Model, Prefetch, QuerySet
 from graphql import GraphQLError
 from strawberry.relay.utils import from_base64, to_base64
 from strawberry.schema.config import StrawberryConfig
+from strawberry.types import Info
 
 import django_strawberry_framework as framework
 from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
@@ -83,11 +84,11 @@ if TYPE_CHECKING:
 ISSUE_ORDER = ("-number", "id")
 
 
-def _issue_columns():
+def _issue_columns() -> tuple[CursorColumn, ...]:
     return cursor_columns_for(Issue, ISSUE_ORDER)
 
 
-def _fingerprint():
+def _fingerprint() -> str:
     return order_fingerprint(ISSUE_ORDER)
 
 
@@ -95,7 +96,7 @@ def _mint(
     row: object,
     columns: tuple[CursorColumn, ...] | None = None,
     fingerprint: str | None = None,
-):
+) -> str:
     return encode_keyset_cursor(
         columns or _issue_columns(),
         row,
@@ -108,17 +109,17 @@ def _mint(
 # ---------------------------------------------------------------------------
 
 
-def test_split_order_ref_parses_direction():
+def test_split_order_ref_parses_direction() -> None:
     assert split_order_ref("number") == ("number", False)
     assert split_order_ref("-number") == ("number", True)
 
 
-def test_split_order_ref_rejects_bare_dash():
+def test_split_order_ref_rejects_bare_dash() -> None:
     with pytest.raises(ConfigurationError, match="Invalid cursor_field entry"):
         split_order_ref("-")
 
 
-def test_cursor_columns_for_resolves_pk_alias():
+def test_cursor_columns_for_resolves_pk_alias() -> None:
     (column,) = cursor_columns_for(Issue, ("pk",))
     assert column.name == "pk"
     assert column.field is Issue._meta.pk
@@ -130,7 +131,7 @@ def test_cursor_columns_for_resolves_pk_alias():
 # ---------------------------------------------------------------------------
 
 
-def test_validate_cursor_field_accepts_declared_shape():
+def test_validate_cursor_field_accepts_declared_shape() -> None:
     validate_cursor_field_columns("IssueType", Issue, ("-number", "id"))
     validate_cursor_field_columns("IssueType", Issue, ("pk",))
     # A unique non-pk terminal also anchors a total order.
@@ -155,33 +156,33 @@ def test_validate_cursor_field_accepts_declared_shape():
 def test_validate_cursor_field_references_match_declaration_rules(
     cursor_field: tuple[str, ...],
     expected: str,
-):
+) -> None:
     """Finalization applies the same entry syntax and duplicate rules as class creation."""
     with pytest.raises(ConfigurationError, match=expected):
         validate_cursor_field_columns("IssueType", Issue, cursor_field)
 
 
-def test_validate_cursor_field_rejects_unknown_column():
+def test_validate_cursor_field_rejects_unknown_column() -> None:
     with pytest.raises(ConfigurationError, match="does not resolve to a field"):
         validate_cursor_field_columns("IssueType", Issue, ("nope", "id"))
 
 
-def test_validate_cursor_field_rejects_relation_column():
+def test_validate_cursor_field_rejects_relation_column() -> None:
     with pytest.raises(ConfigurationError, match="local concrete column"):
         validate_cursor_field_columns("IssueType", Issue, ("periodical", "id"))
 
 
-def test_validate_cursor_field_rejects_nullable_column():
+def test_validate_cursor_field_rejects_nullable_column() -> None:
     with pytest.raises(ConfigurationError, match="nullable"):
         validate_cursor_field_columns("BookType", Book, ("subtitle", "id"))
 
 
-def test_validate_cursor_field_rejects_json_column():
+def test_validate_cursor_field_rejects_json_column() -> None:
     with pytest.raises(ConfigurationError, match="JSON ordering differs"):
         validate_cursor_field_columns("ScalarType", ScalarSpecimen, ("payload", "id"))
 
 
-def test_validate_cursor_field_rejects_non_unique_terminal():
+def test_validate_cursor_field_rejects_non_unique_terminal() -> None:
     with pytest.raises(ConfigurationError, match="must end in a unique column"):
         validate_cursor_field_columns("IssueType", Issue, ("number",))
 
@@ -192,7 +193,7 @@ def test_validate_cursor_field_rejects_non_unique_terminal():
 
 
 @pytest.mark.django_db
-def test_cursor_round_trip_preserves_values():
+def test_cursor_round_trip_preserves_values() -> None:
     periodical = Periodical.objects.create(name="P")
     issue = Issue.objects.create(periodical=periodical, number=7, title="seven")
     cursor = _mint(issue)
@@ -205,12 +206,12 @@ def test_cursor_round_trip_preserves_values():
     assert decoded.values == (7, issue.pk)
 
 
-def test_decrypt_cursor_payload_rejects_non_ascii_token():
+def test_decrypt_cursor_payload_rejects_non_ascii_token() -> None:
     with pytest.raises(GraphQLError, match="invalid cursor"):
         _decrypt_cursor_payload("\u00e9", "after")
 
 
-def test_decrypt_cursor_payload_rejects_non_json_plaintext():
+def test_decrypt_cursor_payload_rejects_non_json_plaintext() -> None:
     from django.conf import settings as django_settings
 
     invalid_json = base64.urlsafe_b64encode(
@@ -223,14 +224,14 @@ def test_decrypt_cursor_payload_rejects_non_json_plaintext():
         _decrypt_cursor_payload(invalid_json, "after")
 
 
-def test_cursor_crypto_is_cached_per_secret():
+def test_cursor_crypto_is_cached_per_secret() -> None:
     _cursor_aessiv.cache_clear()
     first = _cursor_aessiv("cache-test-secret")
     assert _cursor_aessiv("cache-test-secret") is first
     assert _cursor_aessiv.cache_info().hits == 1
 
 
-def test_cursor_crypto_cache_retains_every_rotation_key():
+def test_cursor_crypto_cache_retains_every_rotation_key() -> None:
     """More than four configured secrets do not thrash the AES-SIV derivation cache."""
     secrets = tuple(f"rotation-secret-{index}" for index in range(6))
     _cursor_aessiv.cache_clear()
@@ -240,17 +241,17 @@ def test_cursor_crypto_cache_retains_every_rotation_key():
     assert _cursor_aessiv.cache_info().hits == len(secrets)
 
 
-def test_cursor_crypto_is_a_soft_dependency():
+def test_cursor_crypto_is_a_soft_dependency() -> None:
     with simulated_absence("cryptography", parent=framework, attr="keyset"):
         _cursor_aessiv.cache_clear()
         _cursor_crypto_types.cache_clear()
-        with pytest.raises(ImportError, match="Meta.cursor_field requires cryptography"):
+        with pytest.raises(ImportError, match=r"Meta\.cursor_field requires cryptography"):
             _cursor_aessiv("missing-crypto-secret")
     _cursor_aessiv.cache_clear()
     _cursor_crypto_types.cache_clear()
 
 
-def test_decode_rejects_non_base64():
+def test_decode_rejects_non_base64() -> None:
     with pytest.raises(GraphQLError, match="invalid cursor"):
         decode_keyset_cursor(
             "!!not-base64!!",
@@ -261,7 +262,7 @@ def test_decode_rejects_non_base64():
 
 
 @pytest.mark.django_db
-def test_decode_rejects_tampered_ciphertext():
+def test_decode_rejects_tampered_ciphertext() -> None:
     """A well-framed envelope carrying corrupted ciphertext is still rejected.
 
     Package-only: the inner ciphertext sits under the base64 envelope
@@ -284,13 +285,13 @@ def test_decode_rejects_tampered_ciphertext():
         )
 
 
-def _encrypted_payload_cursor(payload: object):
+def _encrypted_payload_cursor(payload: object) -> str:
     # basedpyright: each payload the encoder would never mint is the hostile input under test;
     # _encrypt_cursor_payload types the parameter as dict[str, str | list[str]]
     return to_base64(KEYSET_CURSOR_PREFIX, _encrypt_cursor_payload(payload))  # pyright: ignore[reportArgumentType]
 
 
-def test_decode_rejects_non_dict_payload():
+def test_decode_rejects_non_dict_payload() -> None:
     with pytest.raises(GraphQLError, match="invalid cursor"):
         decode_keyset_cursor(
             _encrypted_payload_cursor(["not", "a", "dict"]),
@@ -300,7 +301,7 @@ def test_decode_rejects_non_dict_payload():
         )
 
 
-def test_decode_rejects_value_arity_mismatch():
+def test_decode_rejects_value_arity_mismatch() -> None:
     with pytest.raises(GraphQLError, match="invalid cursor"):
         decode_keyset_cursor(
             _encrypted_payload_cursor({"o": _fingerprint(), "v": ["1"]}),
@@ -310,7 +311,7 @@ def test_decode_rejects_value_arity_mismatch():
         )
 
 
-def test_decode_rejects_non_list_values():
+def test_decode_rejects_non_list_values() -> None:
     with pytest.raises(GraphQLError, match="invalid cursor"):
         decode_keyset_cursor(
             _encrypted_payload_cursor({"o": _fingerprint(), "v": "12"}),
@@ -320,7 +321,7 @@ def test_decode_rejects_non_list_values():
         )
 
 
-def test_decode_rejects_non_string_value_entries():
+def test_decode_rejects_non_string_value_entries() -> None:
     with pytest.raises(GraphQLError, match="invalid cursor"):
         decode_keyset_cursor(
             _encrypted_payload_cursor({"o": _fingerprint(), "v": [1, 2]}),
@@ -330,7 +331,7 @@ def test_decode_rejects_non_string_value_entries():
         )
 
 
-def test_decode_rejects_unparsable_value_shape():
+def test_decode_rejects_unparsable_value_shape() -> None:
     with pytest.raises(GraphQLError, match="invalid cursor"):
         decode_keyset_cursor(
             _encrypted_payload_cursor({"o": _fingerprint(), "v": ["not-an-int", "2"]}),
@@ -341,7 +342,7 @@ def test_decode_rejects_unparsable_value_shape():
 
 
 @pytest.mark.django_db
-def test_decode_without_secret_key_fallbacks_attribute(monkeypatch: pytest.MonkeyPatch):
+def test_decode_without_secret_key_fallbacks_attribute(monkeypatch: pytest.MonkeyPatch) -> None:
     """When SECRET_KEY_FALLBACKS attribute is absent on settings, decryption still works."""
     from django.conf import settings as django_settings
 
@@ -365,12 +366,12 @@ def _concrete_field(model: type[Model], name: str) -> "ConcreteField":
     return field
 
 
-def test_serialize_cursor_value_uses_field_codec():
+def test_serialize_cursor_value_uses_field_codec() -> None:
     number_field = _concrete_field(Issue, "number")
     assert serialize_cursor_value(number_field, 7) == "7"
 
 
-def test_serialize_cursor_value_rejects_null():
+def test_serialize_cursor_value_rejects_null() -> None:
     """NULL must not reach ``value_to_string`` (Char/Text would mint ``"None"``)."""
     title_field = _concrete_field(Issue, "title")
     with pytest.raises(ValueError, match="NULL value for keyset cursor column"):
@@ -380,7 +381,7 @@ def test_serialize_cursor_value_rejects_null():
         serialize_cursor_value(number_field, None)
 
 
-def test_encode_keyset_cursor_rejects_null_ordering_value():
+def test_encode_keyset_cursor_rejects_null_ordering_value() -> None:
     """Minting with a NULL column fails loudly instead of encoding string ``"None"``."""
     columns = cursor_columns_for(Issue, ("title", "id"))
 
@@ -401,7 +402,7 @@ def test_encode_keyset_cursor_rejects_null_ordering_value():
 # ---------------------------------------------------------------------------
 
 
-def test_keyset_seek_greater_direction_table():
+def test_keyset_seek_greater_direction_table() -> None:
     """The canonical direction rule both seek dialects render from."""
     assert keyset_seek_greater(descending=False, flip=False) is True
     assert keyset_seek_greater(descending=True, flip=False) is False
@@ -409,7 +410,7 @@ def test_keyset_seek_greater_direction_table():
     assert keyset_seek_greater(descending=True, flip=True) is True
 
 
-def test_build_keyset_seek_plan_mixed_and_uniform():
+def test_build_keyset_seek_plan_mixed_and_uniform() -> None:
     """The shared plan owns directions, values, and the uniform/lead facts."""
     mixed = build_keyset_seek_plan([True, False], (3, 1))
     assert mixed == KeysetSeekPlan(greater=(False, True), values=(3, 1))
@@ -427,7 +428,7 @@ def test_build_keyset_seek_plan_mixed_and_uniform():
         build_keyset_seek_plan([False], (1, 2))
 
 
-def test_keyset_seek_sql_uniform_row_value_and_mixed_or_expansion():
+def test_keyset_seek_sql_uniform_row_value_and_mixed_or_expansion() -> None:
     """SQL renderer: row-value when uniform; leading-bound OR-expansion when mixed."""
     uniform = build_keyset_seek_plan([False, False], (3, 1))
     sql, params = keyset_seek_sql(['"number"', '"id"'], uniform)
@@ -451,7 +452,7 @@ def test_keyset_seek_sql_uniform_row_value_and_mixed_or_expansion():
 
 
 @pytest.mark.django_db
-def test_keyset_seek_q_mixed_directions_both_ways():
+def test_keyset_seek_q_mixed_directions_both_ways() -> None:
     periodical = Periodical.objects.create(name="P")
     issues = [
         Issue.objects.create(periodical=periodical, number=number, title=str(number))
@@ -469,7 +470,7 @@ def test_keyset_seek_q_mixed_directions_both_ways():
 
 
 @pytest.mark.django_db
-def test_keyset_seek_carrier_q_matches_builder():
+def test_keyset_seek_carrier_q_matches_builder() -> None:
     columns = _issue_columns()
     cursor = KeysetCursor(values=(2, 1))
     seek = KeysetSeek(columns=columns, cursor=cursor)
@@ -487,12 +488,12 @@ def test_keyset_seek_carrier_q_matches_builder():
 # ---------------------------------------------------------------------------
 
 
-def _capped_info(relay_max_results: int = 50):
+def _capped_info(relay_max_results: int = 50) -> Info[object, object]:
     """A real Strawberry ``Info`` whose schema config caps connection pages at the given size."""
     return make_info(config=StrawberryConfig(relay_max_results=relay_max_results))
 
 
-def test_derive_keyset_window_bounds_forward_shapes():
+def test_derive_keyset_window_bounds_forward_shapes() -> None:
     bounds = derive_keyset_window_bounds(
         _capped_info(),
         before=None,
@@ -513,7 +514,7 @@ def test_derive_keyset_window_bounds_forward_shapes():
     assert unbounded.limit == 50
 
 
-def test_derive_keyset_window_bounds_backward_shapes_are_unwindowable():
+def test_derive_keyset_window_bounds_backward_shapes_are_unwindowable() -> None:
     with pytest.raises(UnwindowableConnection):
         derive_keyset_window_bounds(
             _capped_info(),
@@ -534,7 +535,7 @@ def test_derive_keyset_window_bounds_backward_shapes_are_unwindowable():
         )
 
 
-def test_derive_keyset_window_bounds_first_validation():
+def test_derive_keyset_window_bounds_first_validation() -> None:
     with pytest.raises(PaginationArgumentError, match="non-negative"):
         derive_keyset_window_bounds(
             _capped_info(),
@@ -555,7 +556,7 @@ def test_derive_keyset_window_bounds_first_validation():
         )
 
 
-def test_resolve_relay_max_results_precedence():
+def test_resolve_relay_max_results_precedence() -> None:
     assert resolve_relay_max_results(_capped_info(), 7) == 7
     assert resolve_relay_max_results(_capped_info(), None) == 50
 
@@ -571,7 +572,7 @@ def test_resolve_relay_max_results_precedence():
 # ---------------------------------------------------------------------------
 
 
-def test_window_range_plan_keyset_counted_floor_and_markers():
+def test_window_range_plan_keyset_counted_floor_and_markers() -> None:
     plan = window_range_plan(offset=0, limit=2, reverse=False, keyset_counted=True)
     assert plan.lower_bound == 0  # the exclusive rn-0 floor
     assert plan.upper_bound == 2
@@ -583,7 +584,7 @@ def test_window_range_plan_keyset_counted_floor_and_markers():
     assert plan.next_page_probe is False
 
 
-def test_window_range_plan_keyset_counted_suppresses_probe():
+def test_window_range_plan_keyset_counted_suppresses_probe() -> None:
     plan = window_range_plan(
         offset=0,
         limit=2,
@@ -594,14 +595,14 @@ def test_window_range_plan_keyset_counted_suppresses_probe():
     assert plan.next_page_probe is False
 
 
-def test_window_range_plan_keyset_counted_unbounded_keeps_markers():
+def test_window_range_plan_keyset_counted_unbounded_keeps_markers() -> None:
     plan = window_range_plan(offset=0, limit=None, reverse=False, keyset_counted=True)
     assert plan.lower_bound == 0
     assert plan.upper_bound is None
     assert plan.add_marker_rows is True
 
 
-def test_window_range_plan_without_keyset_is_unchanged():
+def test_window_range_plan_without_keyset_is_unchanged() -> None:
     plan = window_range_plan(offset=0, limit=2, reverse=False)
     assert plan.lower_bound is None
     assert plan.add_marker_rows is False
@@ -613,7 +614,7 @@ def test_window_range_plan_without_keyset_is_unchanged():
 
 
 @pytest.mark.django_db
-def test_apply_window_pagination_counted_keyset_serves_pre_seek_counts():
+def test_apply_window_pagination_counted_keyset_serves_pre_seek_counts() -> None:
     """The counted seek window: page-relative rn, PRE-seek totals, abs-first markers."""
     from django_strawberry_framework.optimizer.plans import (
         WINDOW_KEYSET_SEEK_COUNT,
@@ -672,7 +673,7 @@ def test_apply_window_pagination_counted_keyset_serves_pre_seek_counts():
 
 
 @pytest.mark.django_db
-def test_apply_window_pagination_count_free_keyset_seeks_in_base_where():
+def test_apply_window_pagination_count_free_keyset_seeks_in_base_where() -> None:
     from django_strawberry_framework.optimizer.plans import apply_window_pagination
 
     seek = KeysetSeek(columns=_issue_columns(), cursor=KeysetCursor(values=(2, 1)))
@@ -694,7 +695,7 @@ def test_apply_window_pagination_count_free_keyset_seeks_in_base_where():
     assert '"_dst_row_number" <= 3' in sql
 
 
-def test_apply_window_pagination_rejects_reversed_keyset_seek():
+def test_apply_window_pagination_rejects_reversed_keyset_seek() -> None:
     from django_strawberry_framework.optimizer.plans import apply_window_pagination
 
     seek = KeysetSeek(columns=_issue_columns(), cursor=KeysetCursor(values=(2, 1)))
@@ -719,7 +720,7 @@ def _issue_lateral_request(
     *,
     with_total_count: bool = False,
     next_page_probe: bool = False,
-):
+) -> "NestedConnectionRequest":
     from django_strawberry_framework.optimizer.join_taxonomy import classify_relation_join
     from django_strawberry_framework.optimizer.nested_fetch import NestedConnectionRequest
 
@@ -768,8 +769,9 @@ def _lateral_spec(queryset: QuerySet[Model]) -> "LateralWindowSpec":
 def _issue_seek(
     values: tuple[object, ...] = (3, 1),
     order: tuple[str, ...] = ISSUE_ORDER,
+    *,
     flip: bool = False,
-):
+) -> KeysetSeek:
     return KeysetSeek(
         columns=cursor_columns_for(Issue, order),
         cursor=KeysetCursor(values=values),
@@ -777,7 +779,7 @@ def _issue_seek(
     )
 
 
-def test_lateral_count_free_keyset_renders_in_branch_seek():
+def test_lateral_count_free_keyset_renders_in_branch_seek() -> None:
     from django_strawberry_framework.optimizer.lateral_fetch import (
         LateralQuerySet,
         build_lateral_sql,
@@ -808,7 +810,7 @@ def test_lateral_count_free_keyset_renders_in_branch_seek():
     ]  # parents, seek values, page 2 + probe
 
 
-def test_lateral_keyset_prepares_values_through_model_fields():
+def test_lateral_keyset_prepares_values_through_model_fields() -> None:
     from django_strawberry_framework.optimizer.lateral_fetch import build_lateral_sql
 
     spec = _lateral_spec(
@@ -816,7 +818,7 @@ def test_lateral_keyset_prepares_values_through_model_fields():
     )
     prepared: list[tuple[str, object]] = []
 
-    def prepare_value(field: "ConcreteField", value: object):
+    def prepare_value(field: "ConcreteField", value: object) -> str:
         prepared.append((field.attname, value))
         return f"{field.attname}:{value}"
 
@@ -837,7 +839,7 @@ def test_lateral_keyset_prepares_values_through_model_fields():
     ]
 
 
-def test_lateral_uniform_keyset_renders_row_value_seek():
+def test_lateral_uniform_keyset_renders_row_value_seek() -> None:
     from dataclasses import replace
 
     from django_strawberry_framework.optimizer.lateral_fetch import build_lateral_sql
@@ -855,7 +857,7 @@ def test_lateral_uniform_keyset_renders_row_value_seek():
     ]
 
 
-def test_lateral_single_column_keyset_renders_scalar_seek():
+def test_lateral_single_column_keyset_renders_scalar_seek() -> None:
     from dataclasses import replace
 
     from django_strawberry_framework.optimizer.lateral_fetch import build_lateral_sql
@@ -868,14 +870,14 @@ def test_lateral_single_column_keyset_renders_scalar_seek():
     assert params == [1, 5, 2]
 
 
-def test_lateral_counted_keyset_downgrades_to_windowed():
+def test_lateral_counted_keyset_downgrades_to_windowed() -> None:
     from django_strawberry_framework.optimizer.lateral_fetch import LateralQuerySet
 
     windowed = _plan_lateral(_issue_lateral_request(_issue_seek(), with_total_count=True))
     assert not isinstance(windowed, LateralQuerySet)
 
 
-def test_lateral_seek_arity_mismatch_downgrades_to_windowed():
+def test_lateral_seek_arity_mismatch_downgrades_to_windowed() -> None:
     from django_strawberry_framework.optimizer.lateral_fetch import LateralQuerySet
 
     # One seek value, two order columns: the deterministic order grew a tail
@@ -888,7 +890,7 @@ def test_lateral_seek_arity_mismatch_downgrades_to_windowed():
     assert not isinstance(windowed, LateralQuerySet)
 
 
-def test_lateral_fetch_recognizes_planned_seek_residue():
+def test_lateral_fetch_recognizes_planned_seek_residue() -> None:
     from django_strawberry_framework.optimizer.lateral_fetch import (
         LateralQuerySet,
         _recognize_lateral_fetch,
@@ -903,7 +905,7 @@ def test_lateral_fetch_recognizes_planned_seek_residue():
     assert recognized.parent_ids == [1, 2]
 
 
-def test_lateral_fetch_rejects_foreign_filters_and_missing_seek():
+def test_lateral_fetch_rejects_foreign_filters_and_missing_seek() -> None:
     from django_strawberry_framework.optimizer.lateral_fetch import (
         LateralQuerySet,
         _recognize_lateral_fetch,
@@ -930,7 +932,7 @@ def _as_seek_nodes(*nodes: object) -> "_NodeChildren":
     return list(nodes)  # pyright: ignore[reportReturnType]
 
 
-def test_lateral_seek_quals_match_rejects_shape_drift():
+def test_lateral_seek_quals_match_rejects_shape_drift() -> None:
     """The structural matcher's mismatch arms, driven directly."""
     from dataclasses import replace
     from types import SimpleNamespace

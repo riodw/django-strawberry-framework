@@ -45,12 +45,16 @@ from . import models
 
 
 class ScalarSpecimenTagFilter(FilterSet):
+    """Filters scalar specimen tags by id, label and active flag."""
+
     class Meta:
         model = models.ScalarSpecimenTag
         fields = {"id": "__all__", "label": "__all__", "active": "__all__"}
 
 
 class ScalarSpecimenFilter(FilterSet):
+    """Filters scalar specimens by the listed scalar columns (not ``payload``), the tag and price span."""
+
     tag = RelatedFilter(ScalarSpecimenTagFilter, field_name="tag")
     price_span = RangeFilter(field_name="price", lookup_expr="range")
 
@@ -79,6 +83,8 @@ class ScalarSpecimenFilter(FilterSet):
 
 
 class NullableScalarSpecimenFilter(FilterSet):
+    """Filters nullable scalar specimens, with the partner relation and price span."""
+
     partner = RelatedFilter(ScalarSpecimenFilter, field_name="partner")
     price_span = RangeFilter(field_name="price", lookup_expr="range")
 

@@ -64,7 +64,7 @@ class _Window:
     next_page_probe: bool
 
 
-def test_last_only_window_limit_is_literal_last_not_expected():
+def test_last_only_window_limit_is_literal_last_not_expected() -> None:
     """A ``last``-only window's bound is the literal ``last``, NOT ``slice_meta.expected``.
 
     This is the load-bearing reverse-branch rule: ``SliceMetadata`` sets
@@ -88,7 +88,7 @@ def test_last_only_window_limit_is_literal_last_not_expected():
     assert bounds == ConnectionWindowBounds(offset=0, limit=2, reverse=True)
 
 
-def test_forward_window_limit_is_expected_and_not_reverse():
+def test_forward_window_limit_is_expected_and_not_reverse() -> None:
     """A forward ``first`` window is not reversed and bounds to ``expected``."""
     bounds = derive_connection_window_bounds(
         None,
@@ -104,7 +104,7 @@ def test_forward_window_limit_is_expected_and_not_reverse():
 
 def test_offset_window_applies_request_page_ceiling_to_plan_cap(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """The optimizer window cannot fetch past the request's page-size policy."""
     context: dict[str, object] = {}
     arm_resource_budget(context, ResourcePolicy(max_page_size=5))
@@ -123,7 +123,7 @@ def test_offset_window_applies_request_page_ceiling_to_plan_cap(
     assert bounds == ConnectionWindowBounds(offset=4, limit=5, reverse=False)
 
 
-def test_before_with_last_is_a_forward_window_not_reverse():
+def test_before_with_last_is_a_forward_window_not_reverse() -> None:
     """``before`` + ``last`` resolves to a forward offset window (reverse stays False)."""
     after = SliceMetadata.from_arguments(unread_info(), first=5, max_results=_MAX)
     # Build a real ``before`` cursor from the forward window's end so the helper
@@ -143,7 +143,7 @@ def test_before_with_last_is_a_forward_window_not_reverse():
     assert bounds.reverse is False
 
 
-def test_after_with_last_is_unwindowable_not_reverse_with_offset():
+def test_after_with_last_is_unwindowable_not_reverse_with_offset() -> None:
     """``after`` + ``last`` raises ``UnwindowableConnection`` instead of a reverse window.
 
     The offset-bearing backward shape (no ``first`` / no ``before``) resolves a
@@ -180,7 +180,7 @@ def test_after_with_last_is_unwindowable_not_reverse_with_offset():
         )
 
 
-def test_after_with_first_stays_a_windowed_forward_offset():
+def test_after_with_first_stays_a_windowed_forward_offset() -> None:
     """``after`` + ``first`` keeps a windowed forward offset window (not unwindowable).
 
     The companion to the ``after`` + ``last`` rejection: a forward offset window
@@ -200,7 +200,7 @@ def test_after_with_first_stays_a_windowed_forward_offset():
     assert bounds == ConnectionWindowBounds(offset=3, limit=2, reverse=False)
 
 
-def test_inverted_after_before_is_unwindowable_not_a_negative_limit_window():
+def test_inverted_after_before_is_unwindowable_not_a_negative_limit_window() -> None:
     """An inverted ``after`` + ``before`` window raises ``UnwindowableConnection``.
 
     When ``before`` resolves at or before ``after``, ``SliceMetadata`` yields
@@ -267,7 +267,7 @@ def test_inverted_after_before_is_unwindowable_not_a_negative_limit_window():
 def test_decode_offset_cursor_returns_the_minted_index_or_none_when_absent(
     value: str | None,
     expected: int | None,
-):
+) -> None:
     """An absent cursor is ``None`` by the engine's truthiness; a minted one is its index.
 
     The wire sees only rejections and served pages; the decoded value itself is
@@ -277,7 +277,7 @@ def test_decode_offset_cursor_returns_the_minted_index_or_none_when_absent(
     assert decode_offset_cursor(value, argument="after", prefix=_PREFIX) == expected
 
 
-def test_decode_offset_cursor_rejects_a_foreign_prefix_itself():
+def test_decode_offset_cursor_rejects_a_foreign_prefix_itself() -> None:
     """The decoder owns the prefix check rather than leaving it to ``SliceMetadata``.
 
     Strawberry's engine rejects a foreign prefix with the same message, so the
@@ -287,7 +287,7 @@ def test_decode_offset_cursor_rejects_a_foreign_prefix_itself():
     """
     with pytest.raises(
         PaginationArgumentError,
-        match="^Argument 'before' contains a non-existing value.$",
+        match=r"^Argument 'before' contains a non-existing value\.$",
     ):
         decode_offset_cursor(to_base64("GenreType", "1"), argument="before", prefix=_PREFIX)
 
@@ -301,7 +301,7 @@ _CUSTOM_PREFIX = "customcursor"
     [(_CUSTOM_PREFIX, _PREFIX), (_PREFIX, _CUSTOM_PREFIX)],
     ids=["custom-edge", "stock-edge"],
 )
-def test_decode_offset_cursor_reads_the_connection_prefix(prefix: str, foreign: str):
+def test_decode_offset_cursor_reads_the_connection_prefix(prefix: str, foreign: str) -> None:
     """The decoder accepts the prefix it is handed and refuses every other one.
 
     A connection mints its offset cursors under its own edge class's
@@ -311,7 +311,7 @@ def test_decode_offset_cursor_reads_the_connection_prefix(prefix: str, foreign: 
     assert decode_offset_cursor(to_base64(prefix, "3"), argument="after", prefix=prefix) == 3
     with pytest.raises(
         PaginationArgumentError,
-        match="^Argument 'after' contains a non-existing value.$",
+        match=r"^Argument 'after' contains a non-existing value\.$",
     ):
         decode_offset_cursor(to_base64(foreign, "3"), argument="after", prefix=prefix)
 
@@ -327,7 +327,7 @@ def test_decode_offset_cursor_reads_the_connection_prefix(prefix: str, foreign: 
 def test_window_bounds_decode_under_the_connection_prefix(
     argument: str,
     expected: ConnectionWindowBounds,
-):
+) -> None:
     """The window derivation hands the engine the prefix its cursors were validated under.
 
     A cursor minted under a consumer edge prefix passes the decoder and then the
@@ -347,7 +347,7 @@ def test_window_bounds_decode_under_the_connection_prefix(
     assert bounds == expected
 
 
-def test_non_inverted_after_before_stays_a_windowed_forward_offset():
+def test_non_inverted_after_before_stays_a_windowed_forward_offset() -> None:
     """A NON-inverted ``after`` + ``before`` window stays windowable (guards over-rejection).
 
     ``after`` index 1, ``before`` index 4 resolves ``start=2``, ``end=4`` (a
@@ -366,7 +366,7 @@ def test_non_inverted_after_before_stays_a_windowed_forward_offset():
     assert bounds == ConnectionWindowBounds(offset=2, limit=2, reverse=False)
 
 
-def test_zero_width_after_before_stays_windowable():
+def test_zero_width_after_before_stays_windowable() -> None:
     """A zero-width interval is representable and must not be over-rejected."""
     bounds = derive_connection_window_bounds(
         None,
@@ -384,26 +384,30 @@ def test_zero_width_after_before_stays_windowable():
     ("offset", "limit", "message"),
     [(-1, 2, "window offset cannot be negative"), (4, -2, "window limit cannot be negative")],
 )
-def test_window_range_plan_rejects_negative_direct_bounds(offset: int, limit: int, message: str):
+def test_window_range_plan_rejects_negative_direct_bounds(
+    offset: int,
+    limit: int,
+    message: str,
+) -> None:
     """A malformed internal request fails loud instead of changing its range."""
     with pytest.raises(OptimizerError, match=message):
         window_range_plan(offset=offset, limit=limit, reverse=False)
 
 
-def test_sidecar_kwarg_family_constants():
+def test_sidecar_kwarg_family_constants() -> None:
     """The sidecar kwarg names are pinned in both vocabularies the readers see."""
     assert CONNECTION_FILTER_KWARG == "filter"
     assert CONNECTION_ORDER_KWARG == "order_by"
     assert CONNECTION_ORDER_KWARG_GRAPHQL == "orderBy"
 
 
-def test_connection_sidecar_inputs_from_kwargs_extracts_both():
+def test_connection_sidecar_inputs_from_kwargs_extracts_both() -> None:
     """Extraction reads the two kwarg keys (missing keys come back as ``None``)."""
     assert connection_sidecar_inputs_from_kwargs({"filter": "F", "order_by": "O"}) == ("F", "O")
     assert connection_sidecar_inputs_from_kwargs({}) == (None, None)
 
 
-def test_connection_sidecar_inputs_reads_the_graphql_order_spelling():
+def test_connection_sidecar_inputs_reads_the_graphql_order_spelling() -> None:
     """The reader accepts BOTH order vocabularies (resolver kwargs vs walker args).
 
     The walker passes the converted selection's RAW GraphQL argument names, so
@@ -419,14 +423,14 @@ def test_connection_sidecar_inputs_reads_the_graphql_order_spelling():
     assert has_connection_sidecar_kwargs({"orderBy": "O"}) is True
 
 
-def test_has_connection_sidecar_input_presence_predicate():
+def test_has_connection_sidecar_input_presence_predicate() -> None:
     """The presence predicate is True when EITHER input is non-``None``."""
     assert has_connection_sidecar_input(filter_input="F", order_by_input=None) is True
     assert has_connection_sidecar_input(filter_input=None, order_by_input="O") is True
     assert has_connection_sidecar_input(filter_input=None, order_by_input=None) is False
 
 
-def test_has_connection_sidecar_kwargs_combines_extraction_and_predicate():
+def test_has_connection_sidecar_kwargs_combines_extraction_and_predicate() -> None:
     """The kwargs predicate extracts then tests presence in one call."""
     assert has_connection_sidecar_kwargs({"filter": "F"}) is True
     assert has_connection_sidecar_kwargs({"order_by": "O"}) is True
@@ -434,7 +438,7 @@ def test_has_connection_sidecar_kwargs_combines_extraction_and_predicate():
     assert has_connection_sidecar_kwargs({}) is False
 
 
-def test_assert_relay_pagination_bound_matches_slice_metadata_text():
+def test_assert_relay_pagination_bound_matches_slice_metadata_text() -> None:
     """Page-size errors carry SliceMetadata's exact text as a ``PaginationArgumentError``.
 
     ``derive_keyset_window_bounds`` and the root keyset slicer both route
@@ -446,14 +450,17 @@ def test_assert_relay_pagination_bound_matches_slice_metadata_text():
     assert_relay_pagination_bound("first", 3, cap=10)  # in range: no-op
     with pytest.raises(
         PaginationArgumentError,
-        match="Argument 'first' must be a non-negative integer.",
+        match=r"Argument 'first' must be a non-negative integer\.",
     ):
         assert_relay_pagination_bound("first", -1, cap=10)
-    with pytest.raises(PaginationArgumentError, match="Argument 'last' cannot be higher than 10."):
+    with pytest.raises(
+        PaginationArgumentError,
+        match=r"Argument 'last' cannot be higher than 10\.",
+    ):
         assert_relay_pagination_bound("last", 11, cap=10)
 
 
-def test_pagination_argument_error_is_a_graphql_error_and_a_framework_error():
+def test_pagination_argument_error_is_a_graphql_error_and_a_framework_error() -> None:
     """The rejection is client-facing by type and catchable beside every framework error.
 
     The production error policy passes an ``original_error`` that IS a
@@ -502,7 +509,7 @@ _INVALID_OFFSET_PAGINATION_ROWS = [
 )
 def test_validate_offset_pagination_matches_slice_metadata_text_and_order(
     arguments: dict[str, str | int],
-):
+) -> None:
     """The validator rejects what the engine rejects, first argument first, in the engine's words.
 
     Each row runs Strawberry's own ``SliceMetadata.from_arguments`` over the
@@ -538,7 +545,7 @@ def test_validate_offset_pagination_matches_slice_metadata_text_and_order(
     assert rejection.value.message == str(engine.value)
 
 
-def test_validate_offset_pagination_accepts_what_the_engine_accepts():
+def test_validate_offset_pagination_accepts_what_the_engine_accepts() -> None:
     """Valid arguments, absent cursors and non-``int`` page sizes pass without a rejection."""
     validate_offset_pagination(
         before=None,
@@ -566,11 +573,11 @@ def test_validate_offset_pagination_accepts_what_the_engine_accepts():
     )
 
 
-def test_derive_connection_window_bounds_rejects_with_pagination_argument_error():
+def test_derive_connection_window_bounds_rejects_with_pagination_argument_error() -> None:
     """The window derivation raises the typed rejection the walker declines to plan on."""
     with pytest.raises(
         PaginationArgumentError,
-        match="^Argument 'first' cannot be higher than 100.$",
+        match=r"^Argument 'first' cannot be higher than 100\.$",
     ):
         derive_connection_window_bounds(
             None,
@@ -583,7 +590,7 @@ def test_derive_connection_window_bounds_rejects_with_pagination_argument_error(
         )
     with pytest.raises(
         PaginationArgumentError,
-        match="^Argument 'after' contains a non-existing value.$",
+        match=r"^Argument 'after' contains a non-existing value\.$",
     ):
         derive_connection_window_bounds(
             None,
@@ -601,7 +608,7 @@ def test_derive_connection_window_bounds_rejects_with_pagination_argument_error(
 # ---------------------------------------------------------------------------
 
 
-def test_fetch_mode_probes_on_plain_first_and_offset_pages_with_has_next_not_total():
+def test_fetch_mode_probes_on_plain_first_and_offset_pages_with_has_next_not_total() -> None:
     """``fetch_mode`` returns ``PROBED`` on the probe shapes when only hasNextPage is up.
 
     True for the plain ``first: N`` shape AND the bounded forward offset page
@@ -633,7 +640,7 @@ def test_fetch_mode_probes_on_plain_first_and_offset_pages_with_has_next_not_tot
         )
 
 
-def test_next_page_probe_field_honored_on_plain_first_and_offset_pages():
+def test_next_page_probe_field_honored_on_plain_first_and_offset_pages() -> None:
     """The ``next_page_probe`` kwarg is honored on the plain-first AND offset pages."""
     for offset, limit in [(0, 3), (5, 3)]:
         assert window_range_plan(
@@ -659,7 +666,7 @@ def test_next_page_probe_field_honored_on_plain_first_and_offset_pages():
         assert plan.next_page_probe is False
 
 
-def test_fetch_bounds_add_one_only_when_probe_active():
+def test_fetch_bounds_add_one_only_when_probe_active() -> None:
     """``fetch_upper_bound`` / ``fetch_limit`` add the single sentinel row iff probing.
 
     Equal to the PAGE bounds (``upper_bound`` / ``limit``) whenever the probe is
@@ -682,7 +689,7 @@ def test_fetch_bounds_add_one_only_when_probe_active():
     assert on.fetch_limit - on.limit == on._probe_increment
 
 
-def test_fetch_bounds_are_none_for_an_unbounded_window():
+def test_fetch_bounds_are_none_for_an_unbounded_window() -> None:
     """An unbounded window (no ``first``) has no fetch ceiling - both bounds are None.
 
     The probe never engages on the unbounded shape, so an unbounded window
@@ -696,7 +703,7 @@ def test_fetch_bounds_are_none_for_an_unbounded_window():
     assert unbounded.fetch_limit is None
 
 
-def test_probe_composes_with_marker_but_never_with_count():
+def test_probe_composes_with_marker_but_never_with_count() -> None:
     """Probe and marker COMPOSE on the offset page; probe XOR count holds.
 
     The whole design now rests on ``next_page_probe`` XOR ``with_total_count``
@@ -737,7 +744,7 @@ def test_probe_composes_with_marker_but_never_with_count():
                         assert plan.add_marker_rows is True
 
 
-def test_assert_window_fetch_mode_rejects_engaged_probe_with_count():
+def test_assert_window_fetch_mode_rejects_engaged_probe_with_count() -> None:
     """An engaged probe window carrying the count is a rejected planner bug.
 
     The probe answers ``hasNextPage`` from an overfetched sentinel; a count
@@ -755,14 +762,14 @@ def test_assert_window_fetch_mode_rejects_engaged_probe_with_count():
         assert_window_fetch_mode(engaged, with_total_count=False)
 
 
-def test_assert_window_fetch_mode_allows_count_without_probe():
+def test_assert_window_fetch_mode_allows_count_without_probe() -> None:
     """A counted window with no engaged probe is the ordinary shape - allowed."""
     plain = window_range_plan(offset=0, limit=3, reverse=False)
     assert plain.next_page_probe is False
     assert_window_fetch_mode(plain, with_total_count=True)
 
 
-def test_assert_window_fetch_mode_for_allows_inert_off_shape_probe_with_count():
+def test_assert_window_fetch_mode_for_allows_inert_off_shape_probe_with_count() -> None:
     """The RAW-flag pair is fine off any probe-eligible shape (the probe is inert).
 
     ``window_range_plan`` drops ``next_page_probe`` off the probe-eligible shapes
@@ -793,11 +800,11 @@ def test_assert_window_fetch_mode_for_allows_inert_off_shape_probe_with_count():
         )
 
 
-def _rows(*row_numbers: int):
+def _rows(*row_numbers: int) -> list[SimpleNamespace]:
     return [SimpleNamespace(rn=n) for n in row_numbers]
 
 
-def test_split_window_rows_marker_offset_shape_drops_the_marker():
+def test_split_window_rows_marker_offset_shape_drops_the_marker() -> None:
     """Ambiguous ``after:`` shape: rows at or below the offset are dropped markers."""
     plan = window_range_plan(offset=5, limit=2, reverse=False)
     assert plan.add_marker_rows is True
@@ -806,7 +813,7 @@ def test_split_window_rows_marker_offset_shape_drops_the_marker():
     assert probe_seen is False
 
 
-def test_split_window_rows_first_zero_shape_has_no_page():
+def test_split_window_rows_first_zero_shape_has_no_page() -> None:
     """``first: 0`` marker shape: the marker is kept in SQL but the page is empty."""
     plan = window_range_plan(offset=0, limit=0, reverse=False)
     assert plan.add_marker_rows is True
@@ -815,7 +822,7 @@ def test_split_window_rows_first_zero_shape_has_no_page():
     assert probe_seen is False
 
 
-def test_split_window_rows_probe_shape_reports_and_drops_the_sentinel():
+def test_split_window_rows_probe_shape_reports_and_drops_the_sentinel() -> None:
     """Probe shape: rows past ``upper_bound`` are the dropped sentinel = ``hasNextPage``."""
     plan = window_range_plan(offset=0, limit=3, reverse=False, next_page_probe=True)
     # A full page plus the overfetched sentinel row (rn 4).
@@ -828,7 +835,7 @@ def test_split_window_rows_probe_shape_reports_and_drops_the_sentinel():
     assert probe_seen is False
 
 
-def test_split_window_rows_plain_shape_passes_rows_through():
+def test_split_window_rows_plain_shape_passes_rows_through() -> None:
     """A non-marker, non-probe window returns every row and no sentinel."""
     plan = window_range_plan(offset=0, limit=3, reverse=False)
     assert plan.add_marker_rows is False
@@ -838,7 +845,7 @@ def test_split_window_rows_plain_shape_passes_rows_through():
     assert probe_seen is False
 
 
-def test_split_window_rows_composed_offset_probe_drops_marker_and_sentinel():
+def test_split_window_rows_composed_offset_probe_drops_marker_and_sentinel() -> None:
     """Composed offset page: the marker (rn 1) AND the probe sentinel drop.
 
     ``after:`` offset 5, ``first: 2`` with the probe engaged fetches the abs-first
@@ -936,11 +943,12 @@ def test_split_window_rows_composed_offset_probe_drops_marker_and_sentinel():
 def test_window_range_plan_mode_table(
     offset: int,
     limit: int | None,
+    *,
     reverse: bool,
     expect_marker: bool,
     expect_probe: bool,
     expect_mode: FetchMode,
-):
+) -> None:
     """Fetch-mode decision table for ``window_range_plan`` (probe passed on).
 
     Pins the composed offset-page shape (marker AND probe both set), the
@@ -1023,10 +1031,11 @@ _FETCH_MODE_TRIPLE = {
 )
 def test_fetch_mode_maps_to_the_count_probe_constant_false_triple(
     plan: WindowRangePlan,
+    *,
     has_next_selected: bool,
     total_selected: bool,
     expected_mode: FetchMode,
-):
+) -> None:
     """Each ``FetchMode`` resolves to exactly one (count, probe, constant_false) triple.
 
     The single source of truth: the planner derives ``with_total_count`` from
@@ -1049,7 +1058,7 @@ def test_fetch_mode_maps_to_the_count_probe_constant_false_triple(
         assert plan.constant_false_shape is True
 
 
-def test_has_connection_sidecar_input_ignores_strawberry_unset():
+def test_has_connection_sidecar_input_ignores_strawberry_unset() -> None:
     """`has_connection_sidecar_input` returns False when inputs are `strawberry.UNSET`."""
     assert has_connection_sidecar_input(filter_input=None, order_by_input=None) is False
     assert (
@@ -1071,7 +1080,7 @@ def test_has_connection_sidecar_input_ignores_strawberry_unset():
     )
 
 
-def test_derive_connection_window_bounds_handles_strawberry_unset():
+def test_derive_connection_window_bounds_handles_strawberry_unset() -> None:
     """`derive_connection_window_bounds` correctly ignores `strawberry.UNSET` inputs."""
     bounds = derive_connection_window_bounds(
         None,
@@ -1107,7 +1116,7 @@ def test_derive_connection_window_bounds_handles_strawberry_unset():
     assert bounds_last == ConnectionWindowBounds(offset=0, limit=5, reverse=True)
 
 
-def test_derive_keyset_window_bounds_handles_strawberry_unset():
+def test_derive_keyset_window_bounds_handles_strawberry_unset() -> None:
     """`derive_keyset_window_bounds` correctly ignores `strawberry.UNSET` inputs."""
     from django_strawberry_framework.utils.connections import derive_keyset_window_bounds
 
@@ -1132,7 +1141,7 @@ def test_derive_keyset_window_bounds_handles_strawberry_unset():
     assert bounds_first == ConnectionWindowBounds(offset=0, limit=7, reverse=False)
 
 
-def test_split_window_rows_handles_iterators_and_generators():
+def test_split_window_rows_handles_iterators_and_generators() -> None:
     """`split_window_rows` accepts one-shot generators and iterators without losing probe flags."""
     from django_strawberry_framework.utils.connections import (
         split_window_rows,
@@ -1166,7 +1175,7 @@ def test_split_window_rows_handles_iterators_and_generators():
     assert probe_plain is True
 
 
-def test_connection_sidecar_kwargs_handles_none_and_empty():
+def test_connection_sidecar_kwargs_handles_none_and_empty() -> None:
     """Sidecar helper functions safely accept None and empty dicts."""
     from django_strawberry_framework.utils.connections import (
         connection_sidecar_inputs_from_kwargs,
@@ -1179,7 +1188,7 @@ def test_connection_sidecar_kwargs_handles_none_and_empty():
     assert has_connection_sidecar_kwargs({}) is False
 
 
-def test_resolve_relay_max_results_handles_unset():
+def test_resolve_relay_max_results_handles_unset() -> None:
     """`resolve_relay_max_results` treats `strawberry.UNSET` as unspecified."""
     from django_strawberry_framework.utils.connections import (
         derive_connection_window_bounds,

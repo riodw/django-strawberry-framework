@@ -655,6 +655,7 @@ class Query:
         filter: FilterInput[filters.CardFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.CardOrder]] | None = None,
     ) -> QuerySet[models.Card]:
+        """Every ``Card`` row, ordered by ``number`` by default."""
         queryset = models.Card.objects.order_by("number")
         if filter is not None:
             queryset = filters.CardFilter.apply_sync(filter, queryset, info)
@@ -698,6 +699,7 @@ class Query:
         filter: FilterInput[filters.CardItemFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.CardItemOrder]] | None = None,
     ) -> QuerySet[models.CardItem]:
+        """Every ``CardItem`` row, ordered by ``id`` by default."""
         queryset = models.CardItem.objects.order_by("id")
         if filter is not None:
             queryset = filters.CardItemFilter.apply_sync(filter, queryset, info)
@@ -712,6 +714,7 @@ class Query:
         filter: FilterInput[filters.CardGlossaryTermFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.CardGlossaryTermOrder]] | None = None,
     ) -> QuerySet[models.CardGlossaryTerm]:
+        """Every ``CardGlossaryTerm`` row, ordered by card number, then ``order``."""
         queryset = models.CardGlossaryTerm.objects.order_by("card__number", "order")
         if filter is not None:
             queryset = filters.CardGlossaryTermFilter.apply_sync(filter, queryset, info)
@@ -726,6 +729,7 @@ class Query:
         filter: FilterInput[filters.StatusFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.StatusOrder]] | None = None,
     ) -> QuerySet[models.Status]:
+        """Every ``Status`` row, ordered by ``order`` by default."""
         queryset = models.Status.objects.order_by("order")
         if filter is not None:
             queryset = filters.StatusFilter.apply_sync(filter, queryset, info)
@@ -740,6 +744,7 @@ class Query:
         filter: FilterInput[filters.PriorityFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.PriorityOrder]] | None = None,
     ) -> QuerySet[models.Priority]:
+        """Every ``Priority`` row, ordered by ``order`` by default."""
         queryset = models.Priority.objects.order_by("order")
         if filter is not None:
             queryset = filters.PriorityFilter.apply_sync(filter, queryset, info)
@@ -754,6 +759,7 @@ class Query:
         filter: FilterInput[filters.MilestoneFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.MilestoneOrder]] | None = None,
     ) -> QuerySet[models.Milestone]:
+        """Every ``Milestone`` row, ordered by ``order`` by default."""
         queryset = models.Milestone.objects.order_by("order")
         if filter is not None:
             queryset = filters.MilestoneFilter.apply_sync(filter, queryset, info)
@@ -768,6 +774,7 @@ class Query:
         filter: FilterInput[filters.UpstreamFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.UpstreamOrder]] | None = None,
     ) -> QuerySet[models.Upstream]:
+        """Every ``Upstream`` row, ordered by ``order`` by default."""
         queryset = models.Upstream.objects.order_by("order")
         if filter is not None:
             queryset = filters.UpstreamFilter.apply_sync(filter, queryset, info)
@@ -782,6 +789,7 @@ class Query:
         filter: FilterInput[filters.ParityLevelFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.ParityLevelOrder]] | None = None,
     ) -> QuerySet[models.ParityLevel]:
+        """Every ``ParityLevel`` row, ordered by ``order`` by default."""
         queryset = models.ParityLevel.objects.order_by("order")
         if filter is not None:
             queryset = filters.ParityLevelFilter.apply_sync(filter, queryset, info)
@@ -796,6 +804,7 @@ class Query:
         filter: FilterInput[filters.SectionFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.SectionOrder]] | None = None,
     ) -> QuerySet[models.Section]:
+        """Every ``Section`` row, ordered by ``order`` by default."""
         queryset = models.Section.objects.order_by("order")
         if filter is not None:
             queryset = filters.SectionFilter.apply_sync(filter, queryset, info)
@@ -810,6 +819,7 @@ class Query:
         filter: FilterInput[filters.CardReferenceKindFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.CardReferenceKindOrder]] | None = None,
     ) -> QuerySet[models.CardReferenceKind]:
+        """Every ``CardReferenceKind`` row, ordered by ``order`` by default."""
         queryset = models.CardReferenceKind.objects.order_by("order")
         if filter is not None:
             queryset = filters.CardReferenceKindFilter.apply_sync(filter, queryset, info)
@@ -824,6 +834,7 @@ class Query:
         filter: FilterInput[filters.BoardDocKindFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.BoardDocKindOrder]] | None = None,
     ) -> QuerySet[models.BoardDocKind]:
+        """Kanban-namespace ``BoardDocKind`` rows, ordered by ``order`` by default."""
         queryset = models.BoardDocKind.objects.filter(docs__namespace="kanban").distinct()
         queryset = queryset.order_by("order")
         if filter is not None:
@@ -839,6 +850,7 @@ class Query:
         filter: FilterInput[filters.TargetVersionFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.TargetVersionOrder]] | None = None,
     ) -> QuerySet[models.TargetVersion]:
+        """Every ``TargetVersion`` row, ordered by ``number`` by default."""
         queryset = models.TargetVersion.objects.order_by("number")
         if filter is not None:
             queryset = filters.TargetVersionFilter.apply_sync(filter, queryset, info)
@@ -853,6 +865,7 @@ class Query:
         filter: FilterInput[filters.LabelFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.LabelOrder]] | None = None,
     ) -> QuerySet[models.Label]:
+        """Every ``Label`` row, ordered by ``key`` by default."""
         queryset = models.Label.objects.order_by("key")
         if filter is not None:
             queryset = filters.LabelFilter.apply_sync(filter, queryset, info)
@@ -867,6 +880,7 @@ class Query:
         filter: FilterInput[filters.TrackedPathFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.TrackedPathOrder]] | None = None,
     ) -> QuerySet[models.TrackedPath]:
+        """Every ``TrackedPath`` row, ordered by ``path`` by default."""
         queryset = models.TrackedPath.objects.order_by("path")
         if filter is not None:
             queryset = filters.TrackedPathFilter.apply_sync(filter, queryset, info)
@@ -881,6 +895,7 @@ class Query:
         filter: FilterInput[filters.RelativeSizeFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.RelativeSizeOrder]] | None = None,
     ) -> QuerySet[models.RelativeSize]:
+        """Every ``RelativeSize`` row, ordered by ``order`` by default."""
         queryset = models.RelativeSize.objects.order_by("order")
         if filter is not None:
             queryset = filters.RelativeSizeFilter.apply_sync(filter, queryset, info)
@@ -895,6 +910,7 @@ class Query:
         filter: FilterInput[filters.BoardDocFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.BoardDocOrder]] | None = None,
     ) -> QuerySet[models.BoardDoc]:
+        """Every kanban-namespace ``BoardDoc`` row, ordered by ``order`` by default."""
         queryset = models.BoardDoc.objects.filter(namespace="kanban").order_by("order")
         if filter is not None:
             queryset = filters.BoardDocFilter.apply_sync(filter, queryset, info)
@@ -909,6 +925,7 @@ class Query:
         filter: FilterInput[filters.ActorFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.ActorOrder]] | None = None,
     ) -> QuerySet[models.Actor]:
+        """Every ``Actor`` row, ordered by ``order``, then ``key``."""
         queryset = models.Actor.objects.order_by("order", "key")
         if filter is not None:
             queryset = filters.ActorFilter.apply_sync(filter, queryset, info)
@@ -923,6 +940,7 @@ class Query:
         filter: FilterInput[filters.AttemptOutcomeFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.AttemptOutcomeOrder]] | None = None,
     ) -> QuerySet[models.AttemptOutcome]:
+        """Every ``AttemptOutcome`` row, ordered by ``order`` by default."""
         queryset = models.AttemptOutcome.objects.order_by("order")
         if filter is not None:
             queryset = filters.AttemptOutcomeFilter.apply_sync(filter, queryset, info)
@@ -937,6 +955,7 @@ class Query:
         filter: FilterInput[filters.VerificationKindFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.VerificationKindOrder]] | None = None,
     ) -> QuerySet[models.VerificationKind]:
+        """Every ``VerificationKind`` row, ordered by ``order`` by default."""
         queryset = models.VerificationKind.objects.order_by("order")
         if filter is not None:
             queryset = filters.VerificationKindFilter.apply_sync(filter, queryset, info)
@@ -951,6 +970,7 @@ class Query:
         filter: FilterInput[filters.CardTransitionFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.CardTransitionOrder]] | None = None,
     ) -> QuerySet[models.CardTransition]:
+        """Every ``CardTransition`` row, ordered by card number, then ``occurred_at``."""
         queryset = models.CardTransition.objects.order_by("card__number", "occurred_at")
         if filter is not None:
             queryset = filters.CardTransitionFilter.apply_sync(filter, queryset, info)
@@ -965,6 +985,7 @@ class Query:
         filter: FilterInput[filters.WorkAttemptFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.WorkAttemptOrder]] | None = None,
     ) -> QuerySet[models.WorkAttempt]:
+        """Every ``WorkAttempt`` row, ordered by card number, then ``started_at``."""
         queryset = models.WorkAttempt.objects.order_by("card__number", "started_at")
         if filter is not None:
             queryset = filters.WorkAttemptFilter.apply_sync(filter, queryset, info)
@@ -979,6 +1000,7 @@ class Query:
         filter: FilterInput[filters.DecisionFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.DecisionOrder]] | None = None,
     ) -> QuerySet[models.Decision]:
+        """Every ``Decision`` row, ordered by ``decided_at`` by default."""
         queryset = models.Decision.objects.order_by("decided_at")
         if filter is not None:
             queryset = filters.DecisionFilter.apply_sync(filter, queryset, info)
@@ -1280,7 +1302,7 @@ class SetCardItemComplete(_ServiceErrorMixin):
         del info
         data = form.cleaned_data
         complete = data.get("complete")
-        services.set_item_complete(data["item"], True if complete is None else complete)
+        services.set_item_complete(data["item"], complete=True if complete is None else complete)
 
 
 class VerifyCardItem(_ServiceErrorMixin):

@@ -91,14 +91,14 @@ from django_strawberry_framework import _strawberry_patches as patches
 from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
 
 
-def test_apply_is_idempotent():
+def test_apply_is_idempotent() -> None:
     """Repeated ``apply()`` calls leave the patch installed (self-healing no-op)."""
     patches.apply()
     patches.apply()
     assert patches._patch_is_installed() is True
 
 
-def test_apply_reinstalls_when_method_reverted(monkeypatch: pytest.MonkeyPatch):
+def test_apply_reinstalls_when_method_reverted(monkeypatch: pytest.MonkeyPatch) -> None:
     """``apply()`` re-installs if a third party reverted ``BaseView.parse_json``."""
     patches.apply()
     assert patches._patch_is_installed() is True
@@ -110,7 +110,7 @@ def test_apply_reinstalls_when_method_reverted(monkeypatch: pytest.MonkeyPatch):
     assert patches._patch_is_installed() is True
 
 
-def test_patch_is_installed_on_base_view():
+def test_patch_is_installed_on_base_view() -> None:
     """By collection, ``AppConfig.ready()`` has installed every patch member."""
     assert BaseView.__dict__["parse_json"] is patches._patched_parse_json
     assert BaseView.__dict__["parse_query_params"] is patches._patched_parse_query_params
@@ -118,7 +118,9 @@ def test_patch_is_installed_on_base_view():
     assert AsyncBaseHTTPView.__dict__["parse_multipart"] is patches._patched_async_parse_multipart
 
 
-def test_apply_reinstalls_pair_when_parse_query_params_reverted(monkeypatch: pytest.MonkeyPatch):
+def test_apply_reinstalls_pair_when_parse_query_params_reverted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A partial revert (only ``parse_query_params``) makes ``apply()`` re-install the pair.
 
     ``_patch_is_installed()`` must report ``False`` when either method was
@@ -138,7 +140,7 @@ def test_apply_reinstalls_pair_when_parse_query_params_reverted(monkeypatch: pyt
 
 def test_apply_reinstalls_all_members_when_one_multipart_method_reverted(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A partial multipart revert heals with the BaseView pair intact.
 
     The envelope guard's GET shield and the two multipart wrappers form one
@@ -163,7 +165,7 @@ def test_apply_reinstalls_all_members_when_one_multipart_method_reverted(
     assert AsyncBaseHTTPView.__dict__["parse_multipart"] is patches._patched_async_parse_multipart
 
 
-def test_patched_parse_json_translates_unicode_decode_error():
+def test_patched_parse_json_translates_unicode_decode_error() -> None:
     """An undecodable ``bytes`` body -> controlled ``400``, not a raw ``UnicodeDecodeError``.
 
     This is gap 1 in isolation, i.e. the state a consumer who mounts
@@ -182,7 +184,7 @@ def test_patched_parse_json_translates_unicode_decode_error():
     assert type(excinfo.value.__cause__) is UnicodeDecodeError
 
 
-def test_patched_parse_json_passes_through_valid_json():
+def test_patched_parse_json_passes_through_valid_json() -> None:
     """The success path is untouched: valid JSON parses exactly as upstream.
 
     Both an ASCII body and a genuinely multi-byte one (the second carries an
@@ -205,8 +207,8 @@ def test_patched_parse_json_passes_through_valid_json():
         pytest.param("utf-8-sig", id="utf-8-bom"),
     ],
 )
-def test_patched_parse_json_leaves_upstreams_bytes_semantics_alone(encoding: str):
-    """This wrapper does **not** narrow the accepted encodings, and must not start.
+def test_patched_parse_json_leaves_upstreams_bytes_semantics_alone(encoding: str) -> None:
+    """The wrapper does **not** narrow the accepted encodings, and must not start.
 
     The inverse of the view boundary's contract, asserted here so the ownership
     split cannot silently collapse back into one site. ``json.loads`` on ``bytes``
@@ -224,7 +226,7 @@ def test_patched_parse_json_leaves_upstreams_bytes_semantics_alone(encoding: str
     assert patches._patched_parse_json(BaseView(), body) == {"a": 1}
 
 
-def test_patched_parse_json_passes_a_str_body_through_without_reencoding():
+def test_patched_parse_json_passes_a_str_body_through_without_reencoding() -> None:
     """A ``str`` input reaches the delegate as the **same object**, not a round trip.
 
     The GET query-param and multipart form-field paths arrive already decoded,
@@ -235,7 +237,7 @@ def test_patched_parse_json_passes_a_str_body_through_without_reencoding():
     body = '{"a": 1}'
     seen: list[str | bytes] = []
 
-    def _recorder(_view: object, data: str | bytes):
+    def _recorder(_view: object, data: str | bytes) -> dict[str, bool]:
         seen.append(data)
         return {"recorded": True}
 
@@ -245,7 +247,7 @@ def test_patched_parse_json_passes_a_str_body_through_without_reencoding():
     assert seen[0] is body
 
 
-def test_patched_parse_json_passes_through_list_for_batch_handling():
+def test_patched_parse_json_passes_through_list_for_batch_handling() -> None:
     """A JSON array of objects passes through so upstream's batch validation owns it.
 
     The guard rejects scalars and lists with non-dict elements, but must NOT
@@ -301,14 +303,14 @@ def _async_request(
 class _MultipartView(DjangoGraphQLView):
     """The package's sync view: both upstream parsers read its ``parse_json`` hook."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(schema=_EMPTY_SCHEMA)
 
 
 class _AsyncMultipartView(AsyncDjangoGraphQLView):
     """The package's async view, read the same way."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(schema=_EMPTY_SCHEMA)
 
 
@@ -336,7 +338,7 @@ _MULTIPART_LIST_OPERATIONS = '{"query": "{ __typename }", "variables": []}'
 def test_patched_sync_parse_multipart_rejects_structurally_invalid_maps(
     operations: str,
     files_map: str,
-):
+) -> None:
     """Every malformed map that upstream leaks as a Python error becomes its 400."""
     with pytest.raises(HTTPException) as excinfo:
         patches._patched_sync_parse_multipart(
@@ -348,7 +350,7 @@ def test_patched_sync_parse_multipart_rejects_structurally_invalid_maps(
     assert excinfo.value.reason == patches._UPSTREAM_MULTIPART_PARSE_REASON
 
 
-async def test_patched_async_parse_multipart_rejects_structurally_invalid_maps():
+async def test_patched_async_parse_multipart_rejects_structurally_invalid_maps() -> None:
     """The async parser has the same untrusted-map failure boundary as the sync one."""
     with pytest.raises(HTTPException) as excinfo:
         await patches._patched_async_parse_multipart(
@@ -363,7 +365,7 @@ async def test_patched_async_parse_multipart_rejects_structurally_invalid_maps()
 class _UnformableRequest(AsyncDjangoHTTPRequestAdapter):
     """An adapter whose form-data read fails the way a broken multipart body does."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(_multipart_request("{}", "{}", {}))
 
     @override
@@ -371,7 +373,7 @@ class _UnformableRequest(AsyncDjangoHTTPRequestAdapter):
         raise ValueError("malformed multipart body")
 
 
-async def test_the_multipart_reason_is_upstreams_own_native_literal():
+async def test_the_multipart_reason_is_upstreams_own_native_literal() -> None:
     """The delegates' 400 reason stays byte-identical to Strawberry's own.
 
     ``_UPSTREAM_MULTIPART_PARSE_REASON`` reproduces the one native multipart-400
@@ -392,7 +394,7 @@ async def test_the_multipart_reason_is_upstreams_own_native_literal():
     assert excinfo.value.reason == patches._UPSTREAM_MULTIPART_PARSE_REASON
 
 
-def test_patched_sync_parse_multipart_preserves_a_non_structural_parser_exception():
+def test_patched_sync_parse_multipart_preserves_a_non_structural_parser_exception() -> None:
     """The malformed-envelope wrapper cannot hide a consumer JSON hook failure."""
 
     class _ExplodingView(_MultipartView):
@@ -422,7 +424,7 @@ class _StructurallyBuggyAsyncView(_AsyncMultipartView):
         raise TypeError("server-side bug before the upload traversal")
 
 
-def test_patched_sync_parse_multipart_does_not_downgrade_a_server_bug_to_400():
+def test_patched_sync_parse_multipart_does_not_downgrade_a_server_bug_to_400() -> None:
     """A traversal-typed failure raised OUTSIDE the upload utility keeps its 500 shape.
 
     The wrapper delegates the whole upstream parser, which also runs the request
@@ -437,7 +439,7 @@ def test_patched_sync_parse_multipart_does_not_downgrade_a_server_bug_to_400():
         patches._patched_sync_parse_multipart(_StructurallyBuggyView(), request)
 
 
-async def test_patched_async_parse_multipart_does_not_downgrade_a_server_bug_to_400():
+async def test_patched_async_parse_multipart_does_not_downgrade_a_server_bug_to_400() -> None:
     """The async twin scopes the translation to the upload utility identically."""
     request = _async_request(_MULTIPART_OPERATIONS, "{}", {})
 
@@ -445,7 +447,7 @@ async def test_patched_async_parse_multipart_does_not_downgrade_a_server_bug_to_
         await patches._patched_async_parse_multipart(_StructurallyBuggyAsyncView(), request)
 
 
-def test_patched_sync_parse_multipart_preserves_valid_batched_operations():
+def test_patched_sync_parse_multipart_preserves_valid_batched_operations() -> None:
     """The batch allowance belongs to ``operations`` and remains available to Strawberry."""
     operations = '[{"query": "{ __typename }", "variables": {"upload": null}}]'
     http_request = _multipart_request(operations, '{"0": ["0.variables.upload"]}', {"0": "upload"})
@@ -460,23 +462,25 @@ def test_patched_sync_parse_multipart_preserves_valid_batched_operations():
     ]
 
 
-def test_patched_parse_query_params_skips_empty_string_param():
+def test_patched_parse_query_params_skips_empty_string_param() -> None:
     """An empty-string param is left unparsed - upstream's falsy skip, byte-for-byte."""
     result = patches._patched_parse_query_params(BaseView(), {"variables": ""})
     assert result["variables"] == ""
 
 
-def test_patch_is_installed_false_when_base_view_symbol_missing():
+def test_patch_is_installed_false_when_base_view_symbol_missing() -> None:
     """``_patch_is_installed`` short-circuits to ``False`` when the symbol moved."""
     with mock.patch.object(patches, "BaseView", None):
         assert patches._patch_is_installed() is False
 
 
-def test_apply_fails_loudly_when_symbols_missing():
+def test_apply_fails_loudly_when_symbols_missing() -> None:
     """A dependency-shape change cannot silently disable request hardening."""
-    with mock.patch.object(patches, "BaseView", None):
-        with pytest.raises(RuntimeError, match="BaseView.parse_json"):
-            patches.apply()
+    with (
+        mock.patch.object(patches, "BaseView", None),
+        pytest.raises(RuntimeError, match=r"BaseView\.parse_json"),
+    ):
+        patches.apply()
 
 
 @pytest.mark.parametrize(
@@ -486,14 +490,16 @@ def test_apply_fails_loudly_when_symbols_missing():
         pytest.param("AsyncBaseHTTPView", id="async-multipart-view"),
     ],
 )
-def test_apply_fails_loudly_when_a_multipart_view_symbol_moves(name: str):
+def test_apply_fails_loudly_when_a_multipart_view_symbol_moves(name: str) -> None:
     """A moved multipart owner cannot turn the malformed-map fix into an AttributeError."""
-    with mock.patch.object(patches, name, None):
-        with pytest.raises(RuntimeError, match="parse_multipart"):
-            patches.apply()
+    with (
+        mock.patch.object(patches, name, None),
+        pytest.raises(RuntimeError, match="parse_multipart"),
+    ):
+        patches.apply()
 
 
-def test_apply_fails_loudly_when_the_upload_utility_moves():
+def test_apply_fails_loudly_when_the_upload_utility_moves() -> None:
     """A moved upload utility cannot silently widen the multipart translation.
 
     The multipart delegates scope their ``400`` by the utility's own frame, so a
@@ -501,12 +507,14 @@ def test_apply_fails_loudly_when_the_upload_utility_moves():
     unable to tell a client-input traversal failure from a server bug. That is a
     dependency-shape change, and it fails at ``apply()`` like every other.
     """
-    with mock.patch.object(patches, "replace_placeholders_with_files", None):
-        with pytest.raises(RuntimeError, match="replace_placeholders_with_files"):
-            patches.apply()
+    with (
+        mock.patch.object(patches, "replace_placeholders_with_files", None),
+        pytest.raises(RuntimeError, match="replace_placeholders_with_files"),
+    ):
+        patches.apply()
 
 
-def test_apply_fails_loudly_when_the_upload_utility_is_not_a_plain_function():
+def test_apply_fails_loudly_when_the_upload_utility_is_not_a_plain_function() -> None:
     """The frame-scoped ``400`` reads the utility's code object, so callability is not enough.
 
     A release that wrapped the utility in a callable with no ``__code__`` (a
@@ -517,9 +525,11 @@ def test_apply_fails_loudly_when_the_upload_utility_is_not_a_plain_function():
     utility = patches.replace_placeholders_with_files
     assert utility is not None
     wrapped = functools.partial(utility)
-    with mock.patch.object(patches, "replace_placeholders_with_files", wrapped):
-        with pytest.raises(RuntimeError, match="replace_placeholders_with_files"):
-            patches.apply()
+    with (
+        mock.patch.object(patches, "replace_placeholders_with_files", wrapped),
+        pytest.raises(RuntimeError, match="replace_placeholders_with_files"),
+    ):
+        patches.apply()
 
 
 def _self_only_method(_self: object) -> None:
@@ -527,25 +537,31 @@ def _self_only_method(_self: object) -> None:
     return
 
 
-def test_apply_fails_loudly_when_parse_json_signature_changes():
+def test_apply_fails_loudly_when_parse_json_signature_changes() -> None:
     """The patch pins the method arity it delegates to."""
-    with mock.patch.object(patches, "_original_parse_json", _self_only_method):
-        with pytest.raises(RuntimeError, match=r"expected \(self, data\) signature"):
-            patches.apply()
+    with (
+        mock.patch.object(patches, "_original_parse_json", _self_only_method),
+        pytest.raises(RuntimeError, match=r"expected \(self, data\) signature"),
+    ):
+        patches.apply()
 
 
-def test_apply_fails_loudly_when_parse_query_params_missing():
+def test_apply_fails_loudly_when_parse_query_params_missing() -> None:
     """A missing ``parse_query_params`` cannot silently strand the guard unshielded."""
-    with mock.patch.object(patches, "_original_parse_query_params", None):
-        with pytest.raises(RuntimeError, match="parse_query_params"):
-            patches.apply()
+    with (
+        mock.patch.object(patches, "_original_parse_query_params", None),
+        pytest.raises(RuntimeError, match="parse_query_params"),
+    ):
+        patches.apply()
 
 
-def test_apply_fails_loudly_when_parse_query_params_signature_changes():
+def test_apply_fails_loudly_when_parse_query_params_signature_changes() -> None:
     """The shield pins the reimplemented method's arity."""
-    with mock.patch.object(patches, "_original_parse_query_params", _self_only_method):
-        with pytest.raises(RuntimeError, match=r"expected \(self, params\) signature"):
-            patches.apply()
+    with (
+        mock.patch.object(patches, "_original_parse_query_params", _self_only_method),
+        pytest.raises(RuntimeError, match=r"expected \(self, params\) signature"),
+    ):
+        patches.apply()
 
 
 @pytest.mark.parametrize(
@@ -558,14 +574,18 @@ def test_apply_fails_loudly_when_parse_query_params_signature_changes():
 def test_apply_fails_loudly_when_parse_multipart_signature_changes(
     name: str,
     method: Callable[..., object],
-):
+) -> None:
     """Each delegating multipart wrapper pins the upstream call shape it invokes."""
-    with mock.patch.object(patches, name, method):
-        with pytest.raises(RuntimeError, match=r"expected \(self, request\) signature"):
-            patches.apply()
+    with (
+        mock.patch.object(patches, name, method),
+        pytest.raises(RuntimeError, match=r"expected \(self, request\) signature"),
+    ):
+        patches.apply()
 
 
-def test_apply_fails_loudly_when_parse_query_params_body_drifts(monkeypatch: pytest.MonkeyPatch):
+def test_apply_fails_loudly_when_parse_query_params_body_drifts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A shape-passing but body-drifted upstream must not be silently superseded.
 
     The shield *reimplements* upstream's ``parse_query_params`` body, so
@@ -581,7 +601,7 @@ def test_apply_fails_loudly_when_parse_query_params_body_drifts(monkeypatch: pyt
     monkeypatch.setattr(BaseView, "parse_query_params", patches._original_parse_query_params)
     assert patches._patch_is_installed() is False
 
-    def _drifted(self: BaseView[Never], params: Mapping[str, str]):
+    def _drifted(self: BaseView[Never], params: Mapping[str, str]) -> dict[str, str]:
         """A (self, params)-shaped upstream whose body dropped the falsy skip."""
         params = dict(params)
         if "variables" in params:
@@ -590,14 +610,16 @@ def test_apply_fails_loudly_when_parse_query_params_body_drifts(monkeypatch: pyt
             params["extensions"] = self.parse_json(params["extensions"])
         return params
 
-    with mock.patch.object(patches, "_original_parse_query_params", _drifted):
-        with pytest.raises(RuntimeError, match="upstream body"):
-            patches.apply()
+    with (
+        mock.patch.object(patches, "_original_parse_query_params", _drifted),
+        pytest.raises(RuntimeError, match="upstream body"),
+    ):
+        patches.apply()
     # ``apply()`` raised during validation, before the install step.
     assert patches._patch_is_installed() is False
 
 
-def test_apply_fails_loudly_when_parse_query_params_source_is_unavailable():
+def test_apply_fails_loudly_when_parse_query_params_source_is_unavailable() -> None:
     """An unreadable captured original is treated as drift, not approved.
 
     ``inspect.getsource`` raises ``OSError`` for a function with no
@@ -612,15 +634,17 @@ def test_apply_fails_loudly_when_parse_query_params_source_is_unavailable():
 
     _sourceless.__code__ = _sourceless.__code__.replace(co_filename="<sourceless>")
 
-    with mock.patch.object(patches, "_original_parse_query_params", _sourceless):
-        with pytest.raises(RuntimeError, match="upstream body"):
-            patches.apply()
+    with (
+        mock.patch.object(patches, "_original_parse_query_params", _sourceless),
+        pytest.raises(RuntimeError, match="upstream body"),
+    ):
+        patches.apply()
 
 
 def test_apply_no_ops_when_toggle_disabled(
     settings: pytest_django.Settings,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """``APPLY_UPSTREAM_PATCHES = False`` makes ``apply()`` decline to install."""
     monkeypatch.setattr(BaseView, "parse_json", patches._original_parse_json)
     assert patches._patch_is_installed() is False
@@ -636,7 +660,7 @@ def test_apply_no_ops_when_toggle_disabled(
 def test_apply_no_ops_when_strawberry_dependency_opted_out(
     settings: pytest_django.Settings,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """``{"strawberry": False}`` disables only this module; ``{"django": False}`` does not.
 
     The production half of the per-dependency opt-out contract: opting out of
@@ -659,7 +683,7 @@ def test_apply_no_ops_when_strawberry_dependency_opted_out(
 def test_the_gated_workarounds_really_stop_hardening_when_opted_out(
     settings: pytest_django.Settings,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The opt-out is behavioral, not just an install flag - and stays that way.
 
     The companion to ``tests/test_views.py``'s patch-opted-out rows, and the
@@ -688,7 +712,7 @@ def test_the_gated_workarounds_really_stop_hardening_when_opted_out(
         view.parse_json(b'{"a":"\xff\xfe"}')
 
 
-def test_capture_returns_none_when_upstream_owner_is_missing():
+def test_capture_returns_none_when_upstream_owner_is_missing() -> None:
     """A missing upstream owner captures as ``None`` instead of failing at import.
 
     The four captures run at module scope, and the import guard above them sets
@@ -702,7 +726,9 @@ def test_capture_returns_none_when_upstream_owner_is_missing():
     assert patches._captured_upstream_method(None, "parse_json") is None
 
 
-def test_patched_parse_json_translates_a_pathologically_nested_body(pathological_json_text: str):
+def test_patched_parse_json_translates_a_pathologically_nested_body(
+    pathological_json_text: str,
+) -> None:
     """A body nested past the parser's C stack -> controlled 400, not a raw escape.
 
     The second half of gap 1: ``json.loads`` answers a pathologically nested
@@ -725,7 +751,7 @@ def test_patched_parse_json_translates_a_pathologically_nested_body(pathological
 def test_patched_parse_query_params_translates_a_deep_param(
     param: str,
     pathological_json_text: str,
-):
+) -> None:
     """The GET shield owns gap 1's error channel without owning its guard.
 
     The shield routes the two query-param parses around the envelope guard
@@ -747,7 +773,7 @@ def test_patched_parse_query_params_translates_a_deep_param(
 
 def test_patched_sync_parse_multipart_translates_a_deep_operations_document(
     deepcopy_overflow_operations_text: str,
-):
+) -> None:
     """The upload utility's ``copy.deepcopy`` recursion becomes its own 400.
 
     A valid-JSON ``operations`` document whose value nesting exceeds Python's
@@ -767,7 +793,7 @@ def test_patched_sync_parse_multipart_translates_a_deep_operations_document(
 
 async def test_patched_async_parse_multipart_translates_a_deep_operations_document(
     deepcopy_overflow_operations_text: str,
-):
+) -> None:
     """The async delegate scopes the deepcopy recursion identically."""
     request = _async_request(deepcopy_overflow_operations_text, "{}", {})
 

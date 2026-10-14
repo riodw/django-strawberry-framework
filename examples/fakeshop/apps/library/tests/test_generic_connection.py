@@ -22,7 +22,7 @@ each test independent.
 
 import os
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 
 import pytest
 import strawberry
@@ -46,7 +46,7 @@ from django_strawberry_framework.registry import registry
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     """Reset the global registry and connection-type cache around each test.
 
     Every test declares fresh function-scope ``DjangoType`` classes; connection
@@ -60,7 +60,7 @@ def _isolate_registry():
     _connection_type_cache.clear()
 
 
-def _build_schema(*, strategy: str | None = None, total_count: bool = False):
+def _build_schema(*, strategy: str | None = None, total_count: bool = False) -> strawberry.Schema:
     """Build a schema exposing ``branches`` with a windowed ``tagsConnection``.
 
     ``strategy`` selects the nested-connection strategy
@@ -99,7 +99,7 @@ def _build_schema(*, strategy: str | None = None, total_count: bool = False):
     )
 
 
-def _window_sql(captured_queries: Sequence[Mapping[str, str]]):
+def _window_sql(captured_queries: Sequence[Mapping[str, str]]) -> str:
     """Return the windowed child SQL (the ``ROW_NUMBER`` prefetch), asserting it ran.
 
     Its presence proves the generic connection took the WINDOWED path rather
@@ -112,7 +112,7 @@ def _window_sql(captured_queries: Sequence[Mapping[str, str]]):
 
 
 @pytest.mark.django_db
-def test_windowed_generic_connection_first_page_excludes_poison_row():
+def test_windowed_generic_connection_first_page_excludes_poison_row() -> None:
     """first:N page + cursors + totalCount are correct with a poison row present.
 
     The poison ``TaggedItem`` shares ``object_id`` with the branch but carries a
@@ -158,7 +158,7 @@ def test_windowed_generic_connection_first_page_excludes_poison_row():
 
 
 @pytest.mark.django_db
-def test_generic_connection_has_next_page_probe_composes_with_ws_a():
+def test_generic_connection_has_next_page_probe_composes_with_ws_a() -> None:
     """A hasNextPage-only generic page composes with the count-free probe.
 
     No ``totalCount`` selected on a bounded first page -> the window overfetches
@@ -195,7 +195,7 @@ def test_generic_connection_has_next_page_probe_composes_with_ws_a():
 
 
 @pytest.mark.django_db
-def test_scalar_only_generic_connection_has_no_per_row_refetch():
+def test_scalar_only_generic_connection_has_no_per_row_refetch() -> None:
     """A pageInfo-only generic window loads object_id + content_type_id, so no N+1.
 
     The projection includes BOTH the ``object_id`` connector and the
@@ -227,7 +227,7 @@ def test_scalar_only_generic_connection_has_no_per_row_refetch():
 
 
 @pytest.mark.django_db
-def test_lateral_strategy_generic_connection_degrades_to_windowed():
+def test_lateral_strategy_generic_connection_degrades_to_windowed() -> None:
     """A generic connection under the lateral strategy degrades to the windowed body.
 
     ``parent_link_field`` is ``None`` for the generic join, so the lateral
@@ -252,7 +252,7 @@ def test_lateral_strategy_generic_connection_degrades_to_windowed():
 _OPTIMIZER_PATH_MARKER = os.sep + "optimizer" + os.sep
 
 
-def _sync_only_optimizer_frames(error: GraphQLError):
+def _sync_only_optimizer_frames(error: GraphQLError) -> tuple[BaseException, list[str]]:
     """Return ``(original_error, optimizer_frame_filenames)`` for a GraphQL error.
 
     The GraphQL layer wraps the raised exception; ``original_error`` is the real
@@ -267,7 +267,7 @@ def _sync_only_optimizer_frames(error: GraphQLError):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_generic_connection_planning_does_no_sync_orm_work_under_async():
+async def test_generic_connection_planning_does_no_sync_orm_work_under_async() -> None:
     """Async ``schema.execute`` of a generic connection plans without touching the DB.
 
     Runs the optimizer through the REAL async GraphQL execution path
@@ -316,7 +316,7 @@ async def test_generic_connection_planning_does_no_sync_orm_work_under_async():
     assert optimizer_frames == [], optimizer_frames
 
 
-def _build_proxy_schema():
+def _build_proxy_schema() -> strawberry.Schema:
     """Build a schema exposing ``proxyBranches`` with a ``proxyTagsConnection``.
 
     ``ProxyBranch`` is a proxy of ``Branch`` whose ``proxy_tags`` generic
@@ -356,7 +356,7 @@ def _build_proxy_schema():
 
 
 @pytest.mark.django_db
-def test_generic_connection_honors_non_default_for_concrete_model():
+def test_generic_connection_honors_non_default_for_concrete_model() -> None:
     """A ``for_concrete_model=False`` generic connection morphs to the PROXY content type.
 
     ``ProxyBranch.proxy_tags`` is declared ``for_concrete_model=False``, so its

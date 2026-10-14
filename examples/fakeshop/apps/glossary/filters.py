@@ -9,30 +9,40 @@ from . import models
 
 
 class GlossaryStatusFilter(FilterSet):
+    """Filters ``GlossaryStatus`` rows by ``id``, ``key`` and ``label``."""
+
     class Meta:
         model = models.GlossaryStatus
         fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
 
 
 class GlossaryCategoryFilter(FilterSet):
+    """Filters ``GlossaryCategory`` rows by ``id``, ``key`` and ``label``."""
+
     class Meta:
         model = models.GlossaryCategory
         fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
 
 
 class GlossaryAliasFilter(FilterSet):
+    """Filters ``GlossaryAlias`` rows by ``id``, ``label`` and ``normalized``."""
+
     class Meta:
         model = models.GlossaryAlias
         fields = {"id": "__all__", "label": "__all__", "normalized": "__all__"}
 
 
 class GlossaryTermLinkKindFilter(FilterSet):
+    """Filters ``GlossaryTermLinkKind`` rows by ``id``, ``key`` and ``label``."""
+
     class Meta:
         model = models.GlossaryTermLinkKind
         fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
 
 
 class GlossaryTermLinkFilter(FilterSet):
+    """Filters ``GlossaryTermLink`` rows by the listed columns, and across ``kind``."""
+
     kind = RelatedFilter(GlossaryTermLinkKindFilter, field_name="kind")
 
     class Meta:
@@ -41,6 +51,8 @@ class GlossaryTermLinkFilter(FilterSet):
 
 
 class GlossaryCategoryMembershipFilter(FilterSet):
+    """Filters ``GlossaryCategoryMembership`` rows by the listed columns, and across ``category``."""
+
     category = RelatedFilter(GlossaryCategoryFilter, field_name="category")
 
     class Meta:
@@ -49,6 +61,8 @@ class GlossaryCategoryMembershipFilter(FilterSet):
 
 
 class GlossarySpecMentionFilter(FilterSet):
+    """Filters ``GlossarySpecMention`` rows by the listed columns."""
+
     class Meta:
         model = models.GlossarySpecMention
         fields = {
@@ -61,6 +75,8 @@ class GlossarySpecMentionFilter(FilterSet):
 
 
 class GlossarySourceLinkFilter(FilterSet):
+    """Filters ``GlossarySourceLink`` rows by the listed columns."""
+
     class Meta:
         model = models.GlossarySourceLink
         fields = {
@@ -73,6 +89,8 @@ class GlossarySourceLinkFilter(FilterSet):
 
 
 class GlossaryDocumentFilter(FilterSet):
+    """Filters ``BoardDoc`` rows by the listed columns."""
+
     class Meta:
         model = kanban_models.BoardDoc
         fields = {
@@ -86,6 +104,12 @@ class GlossaryDocumentFilter(FilterSet):
 
 
 class GlossaryTermFilter(FilterSet):
+    """Filters ``GlossaryTerm`` rows by the listed columns.
+
+    Related filtersets: ``status``, ``categories``, ``aliases``, ``spec_mentions``,
+    ``outgoing_links`` and ``incoming_links``.
+    """
+
     status = RelatedFilter(GlossaryStatusFilter, field_name="status")
     categories = RelatedFilter(GlossaryCategoryFilter, field_name="categories")
     aliases = RelatedFilter(GlossaryAliasFilter, field_name="aliases")

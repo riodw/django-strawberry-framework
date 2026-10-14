@@ -60,7 +60,7 @@ from django.test import override_settings
 from django.urls import clear_url_caches, path
 from graphql_client import JSONObject
 
-from django_strawberry_framework import strawberry_config
+from django_strawberry_framework import DjangoSchema, strawberry_config
 from django_strawberry_framework.testing import AsyncTestClient
 from django_strawberry_framework.views import AsyncDjangoGraphQLView
 
@@ -76,7 +76,7 @@ async def _async_graphql_view(request: HttpRequest) -> HttpResponseBase:
 urlpatterns = [path("graphql-async/", _async_graphql_view)]
 
 
-def _seed_loan_graph():
+def _seed_loan_graph() -> models.Patron:
     """Create a patron holding two loans, plus the branch/shelf/book chain they need.
 
     Inline ``Model.objects.create(...)`` rather than a seed helper: the library
@@ -93,7 +93,7 @@ def _seed_loan_graph():
     return patron
 
 
-def _seed_card_graph():
+def _seed_card_graph() -> tuple[models.Patron, models.Patron]:
     """Create one patron holding a card and one holding none.
 
     The absent-card row is what drives ``reverse_one_to_one_resolver``'s
@@ -125,7 +125,7 @@ async def _post_async(schema: strawberry.Schema, query: str) -> JSONObject:
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_forward_fk_lazy_loads_over_http():
+async def test_async_forward_fk_lazy_loads_over_http() -> None:
     """A forward FK on an unfetched row lazy-loads inside the event loop.
 
     ``Loan.patron`` targets ``PatronType``, which declares no ``get_queryset``,
@@ -133,7 +133,7 @@ async def test_async_forward_fk_lazy_loads_over_http():
     """
     await sync_to_async(_seed_loan_graph)()
 
-    def _build():
+    def _build() -> strawberry.Schema:
         from apps.library.schema import LoanType
 
         @strawberry.type
@@ -157,7 +157,7 @@ async def test_async_forward_fk_lazy_loads_over_http():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_many_side_lazy_loads_over_http():
+async def test_async_many_side_lazy_loads_over_http() -> None:
     """A reverse-FK many side on an unfetched row lazy-loads inside the event loop.
 
     ``Patron.loans`` targets ``LoanType``, which declares no ``get_queryset``,
@@ -166,7 +166,7 @@ async def test_async_many_side_lazy_loads_over_http():
     """
     await sync_to_async(_seed_loan_graph)()
 
-    def _build():
+    def _build() -> strawberry.Schema:
         from apps.library.schema import PatronType
 
         @strawberry.type
@@ -189,7 +189,7 @@ async def test_async_many_side_lazy_loads_over_http():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_reverse_one_to_one_lazy_loads_over_http():
+async def test_async_reverse_one_to_one_lazy_loads_over_http() -> None:
     """A reverse OneToOne lazy-loads inside the event loop, present and absent alike.
 
     ``Patron.card`` targets ``MembershipCardType``, which declares no
@@ -199,7 +199,7 @@ async def test_async_reverse_one_to_one_lazy_loads_over_http():
     """
     await sync_to_async(_seed_card_graph)()
 
-    def _build():
+    def _build() -> strawberry.Schema:
         from apps.library.schema import PatronType
 
         @strawberry.type
@@ -222,7 +222,7 @@ async def test_async_reverse_one_to_one_lazy_loads_over_http():
     }
 
 
-def _seed_sponsor_graph():
+def _seed_sponsor_graph() -> None:
     """Two venues, two sponsors over the no-``related_name`` M2M, and three tickets.
 
     ``VenueSponsor.venues`` declares no ``related_name``: a venue reaches its
@@ -258,7 +258,7 @@ _SPONSOR_GRAPH_DATA = {
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_planned_many_side_prefetches_resolve_over_http():
+async def test_async_planned_many_side_prefetches_resolve_over_http() -> None:
     """Optimizer-planned prefetches of every many-side kind resolve inside the event loop.
 
     The composed fakeshop schema (``DjangoOptimizerExtension`` installed) plans
@@ -270,7 +270,7 @@ async def test_async_planned_many_side_prefetches_resolve_over_http():
     """
     await sync_to_async(_seed_sponsor_graph)()
 
-    def _build():
+    def _build() -> DjangoSchema:
         from config.schema import schema
 
         return schema
@@ -291,7 +291,7 @@ async def test_async_planned_many_side_prefetches_resolve_over_http():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_consumer_prefetched_many_side_resolves_over_http():
+async def test_async_consumer_prefetched_many_side_resolves_over_http() -> None:
     """A consumer's own ``prefetch_related`` of every many-side kind resolves in the event loop.
 
     No optimizer: the root resolvers prefetch the relations themselves, so the
@@ -303,7 +303,7 @@ async def test_async_consumer_prefetched_many_side_resolves_over_http():
     """
     await sync_to_async(_seed_sponsor_graph)()
 
-    def _build():
+    def _build() -> strawberry.Schema:
         from apps.library.schema import VenueSponsorType, VenueType
 
         @strawberry.type
@@ -340,7 +340,7 @@ async def test_async_consumer_prefetched_many_side_resolves_over_http():
     assert payload["data"] == _SPONSOR_GRAPH_DATA
 
 
-def _seed_withdrawn_badge_and_sponsor():
+def _seed_withdrawn_badge_and_sponsor() -> bool:
     """Two venues, each with a visible and a withdrawn row on the no-``related_name`` relations.
 
     ``VenueBadgeType`` hides the ``VOID-RAMP`` badge on ``Depot`` and
@@ -384,7 +384,7 @@ def _unoptimized_venue_schema() -> strawberry.Schema:
 )
 async def test_async_withdrawn_badges_and_sponsors_are_absent_over_http(
     build: Callable[[], strawberry.Schema],
-):
+) -> None:
     """A withdrawn badge or sponsor is absent from the async wire, never an error.
 
     The composed schema's optimizer plans both reverse relations as prefetches

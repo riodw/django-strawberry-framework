@@ -60,7 +60,7 @@ class _BaseConsumer:
         return None
 
 
-def test_base_with_every_hook_builds_the_consumer():
+def test_base_with_every_hook_builds_the_consumer() -> None:
     """A base whose classes carry every overridden hook is derived from."""
     # basedpyright: a plain stand-in carrying exactly the hooks the factory checks;
     # build_revalidating_consumer_class types the parameter as type[GraphQLWSConsumer]
@@ -69,7 +69,7 @@ def test_base_with_every_hook_builds_the_consumer():
     assert issubclass(consumer_class, _BaseConsumer)
 
 
-def test_base_whose_adapter_lacks_close_is_refused():
+def test_base_whose_adapter_lacks_close_is_refused() -> None:
     """An adapter without ``close`` is refused before any class derives from it."""
 
     class _Base(_BaseConsumer):

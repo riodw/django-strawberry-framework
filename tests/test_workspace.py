@@ -192,7 +192,7 @@ def test_check_shared_checkout_refuses_a_copy(repo: Path, tmp_path: Path) -> Non
 
     with pytest.raises(workspace.WorkspaceError, match="shared checkout"):
         workspace.check_shared_checkout(copy)
-    with pytest.raises(workspace.WorkspaceError, match="no .git"):
+    with pytest.raises(workspace.WorkspaceError, match=r"no \.git"):
         workspace.check_shared_checkout((tmp_path / "plain").resolve())
 
 
@@ -235,7 +235,7 @@ def test_database_names_are_per_copy_and_fit_postgres_identifiers(repo: Path) ->
         ("scripts/workspace.py", False),
     ],
 )
-def test_is_excluded_drops_cycle_scratch_and_parked_copies(name: str, excluded: bool) -> None:
+def test_is_excluded_drops_cycle_scratch_and_parked_copies(name: str, *, excluded: bool) -> None:
     assert workspace.is_excluded(name) is excluded
 
 
@@ -481,6 +481,7 @@ def test_a_sync_that_dies_part_way_resyncs_on_the_next_run(
     layout: workspace.Layout,
     syncs: list[Path],
     monkeypatch: pytest.MonkeyPatch,
+    *,
     fresh: bool,
 ) -> None:
     if fresh:
@@ -1011,9 +1012,11 @@ def test_release_keep_frees_a_phase_and_spares_the_pinned_copy(layout: workspace
 def test_release_refuses_while_a_command_runs_in_the_copy(layout: workspace.Layout) -> None:
     binding = workspace.bind(layout, _address("perf-1"))
 
-    with workspace.file_lock(layout.slot_lock(binding.slot)):
-        with pytest.raises(workspace.LockBusyError, match="still runs"):
-            workspace.release(layout, "pkg/a.py")
+    with (
+        workspace.file_lock(layout.slot_lock(binding.slot)),
+        pytest.raises(workspace.LockBusyError, match="still runs"),
+    ):
+        workspace.release(layout, "pkg/a.py")
     assert workspace.release(layout, "pkg/a.py") == ["slot-1 review/pkg/a.py/perf-1"]
 
 
@@ -1107,9 +1110,8 @@ def test_a_lock_taken_after_gc_never_brings_the_flow_back(
     binding = workspace.bind(layout, _address("perf-1"))
     workspace.gc(layout)
 
-    with pytest.raises(FileNotFoundError):
-        with workspace.file_lock(layout.slot_lock(binding.slot)):
-            pass
+    with pytest.raises(FileNotFoundError), workspace.file_lock(layout.slot_lock(binding.slot)):
+        pass
     assert workspace.release(layout, "pkg/a.py") == []
     assert workspace.status(layout.repo_root, layout.flow)[1] == "review: 0 of 4 copies"
     assert not layout.flow_dir.exists()
@@ -1125,12 +1127,13 @@ def test_a_flow_folder_is_made_while_another_gc_removes_the_empty_parents(
     def _parent_removed_twice(
         path: Path,
         mode: int = 0o777,
+        *,
         parents: bool = False,
         exist_ok: bool = False,
     ) -> None:
         if path == layout.flow_dir and races:
             raise OSError(races.pop(0), "a parent was removed", str(path))
-        real_mkdir(path, mode, parents, exist_ok)
+        real_mkdir(path, mode, parents=parents, exist_ok=exist_ok)
 
     monkeypatch.setattr(Path, "mkdir", _parent_removed_twice)
 
@@ -1149,13 +1152,14 @@ def test_a_flow_folder_gone_right_after_it_exists_is_made_again_and_a_file_there
     def _exists_then_vanishes(
         path: Path,
         mode: int = 0o777,
+        *,
         parents: bool = False,
         exist_ok: bool = False,
     ) -> None:
         if path == layout.flow_dir and vanished:
             vanished.pop()
             raise FileExistsError(errno.EEXIST, "made and removed again", str(path))
-        real_mkdir(path, mode, parents, exist_ok)
+        real_mkdir(path, mode, parents=parents, exist_ok=exist_ok)
 
     monkeypatch.setattr(Path, "mkdir", _exists_then_vanishes)
     workspace._make_flow_dir(layout.flow_dir)
@@ -1199,15 +1203,19 @@ def test_release_keeps_the_copy_until_its_binding_is_gone(
     assert actors.reached("run", "bound")
     actors.start("release", "release", "review/pkg/a.py", pauses=("postgres",))
     assert actors.reached("release", "postgres")
-    with pytest.raises(workspace.LockBusyError):
-        with workspace.file_lock(layout.slot_lock("slot-1"), blocking=False):
-            pass
+    with (
+        pytest.raises(workspace.LockBusyError),
+        workspace.file_lock(layout.slot_lock("slot-1"), blocking=False),
+    ):
+        pass
 
     actors.go("run", "bound")
 
-    with pytest.raises(workspace.LockBusyError):
-        with workspace.file_lock(layout.slot_lock("slot-1"), blocking=False):
-            pass
+    with (
+        pytest.raises(workspace.LockBusyError),
+        workspace.file_lock(layout.slot_lock("slot-1"), blocking=False),
+    ):
+        pass
     assert not actors.reached("run", "in", within=0.5)
     actors.go("release", "postgres")
     assert actors.finish("release") == (
@@ -1281,9 +1289,11 @@ def test_status_never_makes_a_release_refuse(layout: workspace.Layout, actors: _
         pass
     actors.start("status", "status", "review", pauses=("probe",))
     assert actors.reached("status", "probe")
-    with pytest.raises(workspace.LockBusyError):
-        with workspace.file_lock(layout.pool_lock, blocking=False):
-            pass
+    with (
+        pytest.raises(workspace.LockBusyError),
+        workspace.file_lock(layout.pool_lock, blocking=False),
+    ):
+        pass
 
     actors.start("release", "release", "review/pkg/a.py")
 

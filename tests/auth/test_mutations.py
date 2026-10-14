@@ -26,11 +26,11 @@ import json
 import subprocess
 import sys
 import threading
-from collections.abc import Callable, Iterable, Iterator, MutableMapping
+from collections.abc import Callable, Generator, Iterable, Iterator, MutableMapping
 from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, NoReturn, Protocol, runtime_checkable
 
 import pytest
 import strawberry
@@ -62,9 +62,10 @@ from django.http import HttpRequest, HttpResponse
 from django.test import RequestFactory, override_settings
 from django.utils.functional import SimpleLazyObject
 from strawberry import relay
+from strawberry.types import ExecutionResult
 from strawberry.types.base import has_object_definition
 from strawberry.types.field import StrawberryField
-from typing_extensions import override
+from typing_extensions import NotRequired, TypedDict, override
 
 from django_strawberry_framework import (
     DjangoMutation,
@@ -107,7 +108,6 @@ from tests.auth._helpers import _drain_until, _session_request
 if TYPE_CHECKING:
     from typing import TypeAlias
 
-    from channels.testing.http import _HTTPTestResponse
     from django.db.models.expressions import Combinable
 
     from django_strawberry_framework.auth.mutations import _RegisterDecoded
@@ -174,7 +174,7 @@ class _AllowAll:
         _operation: str,
         _data: object,
         _instance: object = None,
-    ):
+    ) -> bool:
         return True
 
 
@@ -188,11 +188,11 @@ class _DenyAll:
         _operation: str,
         _data: object,
         _instance: object = None,
-    ):
+    ) -> bool:
         return False
 
 
-def _declare_user_type(fields: tuple[str, ...] = ("id", "username", "email")):
+def _declare_user_type(fields: tuple[str, ...] = ("id", "username", "email")) -> type:
     """Register a fresh Relay-backed primary ``DjangoType`` over the user model.
 
     ``fields`` seams the exposed column set: the default identity trio, or a
@@ -211,7 +211,7 @@ def _declare_user_type(fields: tuple[str, ...] = ("id", "username", "email")):
     )
 
 
-def _declare_group_type():
+def _declare_group_type() -> type:
     """Register a Relay-backed ``DjangoType`` over ``Group``, the user's M2M target.
 
     Declared beside ``_declare_user_type`` rather than shared with
@@ -279,7 +279,7 @@ def _login_logout_schema(
     query_type: type = _Query,
     optimizer: DjangoOptimizerExtension | None = None,
     permission_classes: Iterable[type[object]] | None = None,
-):
+) -> strawberry.Schema:
     """Declare the user type + a login/logout Mutation; return the finalized schema.
 
     ``declare`` is the per-call user-type declaration callable (default the plain
@@ -380,7 +380,7 @@ _LOGOUT_Q = "mutation{ logout{ ok errors{ field } } }"
 # ---------------------------------------------------------------------------
 
 
-def test_same_args_factory_calls_dedupe_to_one_cached_holder():
+def test_same_args_factory_calls_dedupe_to_one_cached_holder() -> None:
     """A repeat same-``permission_classes`` call returns the identity-cached holder."""
     login_mutation()
     holder = _declared_auth_surface("login")
@@ -389,7 +389,7 @@ def test_same_args_factory_calls_dedupe_to_one_cached_holder():
     assert len(_auth_declarations) == 1
 
 
-def test_presentation_kwargs_never_enter_the_conflict_key():
+def test_presentation_kwargs_never_enter_the_conflict_key() -> None:
     """``description`` / ``deprecation_reason`` / ``directives`` deltas never raise."""
     login_mutation(description="A")
     holder = _declared_auth_surface("login")
@@ -398,14 +398,14 @@ def test_presentation_kwargs_never_enter_the_conflict_key():
     assert len(_auth_declarations) == 1
 
 
-def test_conflicting_permission_classes_second_call_raises():
+def test_conflicting_permission_classes_second_call_raises() -> None:
     """A different-``permission_classes`` repeat is the loud one-declaration raise."""
     login_mutation()
     with pytest.raises(ConfigurationError, match=r"auth login_mutation\(\) is already declared"):
         login_mutation(permission_classes=[_AllowAll])
 
 
-def test_declarations_survive_the_pre_bind_reset():
+def test_declarations_survive_the_pre_bind_reset() -> None:
     """The pre-bind emit-ledger reset never touches the auth DECLARATION ledger."""
     login_mutation()
     logout_mutation()
@@ -415,7 +415,7 @@ def test_declarations_survive_the_pre_bind_reset():
     assert len(_auth_declarations) == 2
 
 
-def test_registry_clear_drains_ledger_and_resets_conflict_state():
+def test_registry_clear_drains_ledger_and_resets_conflict_state() -> None:
     """``registry.clear()`` drains the ledger; a post-clear re-gate mints a fresh holder."""
     login_mutation()
     stale_holder = _declared_auth_surface("login")
@@ -430,7 +430,7 @@ def test_registry_clear_drains_ledger_and_resets_conflict_state():
     assert fresh_holder._mutation_meta.permission_classes == (_AllowAll,)
 
 
-def test_auth_permission_holder_snapshot_is_sealed():
+def test_auth_permission_holder_snapshot_is_sealed() -> None:
     """A fixed-surface holder's validated snapshot refuses writes and deletes.
 
     The holder's duck-typed snapshot IS the fixed auth surface's per-request
@@ -459,7 +459,7 @@ def test_auth_permission_holder_snapshot_is_sealed():
     assert snapshot.operation == "logout"
 
 
-def test_auth_permission_holder_head_is_sealed():
+def test_auth_permission_holder_head_is_sealed() -> None:
     """A synthesized holder's ``_mutation_meta`` head is write-once.
 
     ``_SealedAuthHolderMeta`` mirrors the write-flavor metaclass guard: a
@@ -491,7 +491,7 @@ def test_auth_permission_holder_head_is_sealed():
     assert "_primary_type" not in holder.__dict__
 
 
-def test_registry_clear_does_not_import_the_auth_subsystem():
+def test_registry_clear_does_not_import_the_auth_subsystem() -> None:
     """``registry.clear()`` in an auth-free process never imports ``auth.mutations``.
 
     Half of the structural opt-in (spec-040 Decision 3): a clear callback only
@@ -555,7 +555,7 @@ assert "django_strawberry_framework.auth.mutations" not in sys.modules, sorted(
     [_FINALIZE_DRIVER_BODY, _SCHEMA_DRIVER_BODY],
     ids=["finalize", "schema"],
 )
-def test_finalize_in_an_auth_free_process_never_imports_the_auth_subsystem(driver: str):
+def test_finalize_in_an_auth_free_process_never_imports_the_auth_subsystem(driver: str) -> None:
     """Phase 2.5's auth bind reaches ``auth.mutations`` only when it is ALREADY loaded.
 
     The other half of the structural opt-in (spec-040 Decision 3): the finalizer
@@ -572,7 +572,7 @@ def test_finalize_in_an_auth_free_process_never_imports_the_auth_subsystem(drive
     _auth_free_subprocess(driver + _AUTH_UNIMPORTED_ASSERT)
 
 
-def test_factory_after_finalize_raises_the_standing_configuration_error():
+def test_factory_after_finalize_raises_the_standing_configuration_error() -> None:
     """The declare-after-finalize rule covers the fixed factories and the rider synthesis."""
     _login_logout_schema()
     with pytest.raises(ConfigurationError, match="after finalization"):
@@ -581,7 +581,7 @@ def test_factory_after_finalize_raises_the_standing_configuration_error():
         register_mutation()
 
 
-def test_register_factory_recache_and_reregister_on_every_call():
+def test_register_factory_recache_and_reregister_on_every_call() -> None:
     """Same-args ``register_mutation()`` reuses the one rider and re-records BOTH ledgers."""
     register_mutation()
     rider = _declared_auth_surface("register")
@@ -611,13 +611,13 @@ _REGISTER_ARM_ERROR = (
 )
 
 
-def test_login_only_schema_without_user_type_raises_the_login_arm_error():
+def test_login_only_schema_without_user_type_raises_the_login_arm_error() -> None:
     login_mutation()
     with pytest.raises(ConfigurationError, match=_LOGIN_ARM_ERROR):
         finalize_django_types()
 
 
-def test_register_only_schema_without_user_type_raises_the_register_arm_error():
+def test_register_only_schema_without_user_type_raises_the_register_arm_error() -> None:
     """The auth-specific register arm pre-empts ``_resolve_primary_type``'s generic message."""
     register_mutation()
     with pytest.raises(ConfigurationError, match=_REGISTER_ARM_ERROR) as excinfo:
@@ -629,7 +629,7 @@ def test_register_only_schema_without_user_type_raises_the_register_arm_error():
     )
 
 
-def test_ambiguous_user_primary_raises_the_set_meta_primary_message():
+def test_ambiguous_user_primary_raises_the_set_meta_primary_message() -> None:
     """Two user types with no declared primary split onto the ambiguity message."""
 
     class UserA(DjangoType):
@@ -648,7 +648,7 @@ def test_ambiguous_user_primary_raises_the_set_meta_primary_message():
         bind_auth_mutations()
 
 
-def test_logout_only_schema_binds_with_no_user_type_and_no_orphan_payloads():
+def test_logout_only_schema_binds_with_no_user_type_and_no_orphan_payloads() -> None:
     """The structural logout exemption: no primary resolved, only ``LogoutPayload`` emitted."""
 
     @strawberry.type
@@ -662,7 +662,7 @@ def test_logout_only_schema_binds_with_no_user_type_and_no_orphan_payloads():
 
 
 @pytest.mark.django_db
-def test_logout_with_lazy_none_or_modeless_actor_is_anonymous():
+def test_logout_with_lazy_none_or_modeless_actor_is_anonymous() -> None:
     """Hostile actor shapes with no ``is_authenticated`` collapse logout to anonymous ``ok: false``.
 
     A live ``/graphql/`` request always carries ``AuthenticationMiddleware``'s
@@ -705,27 +705,27 @@ def test_logout_with_lazy_none_or_modeless_actor_is_anonymous():
 class _BoolRaisingValue:
     """An ``is_authenticated`` value whose ``bool()`` raises (the documented five)."""
 
-    def __init__(self, exc: BaseException):
+    def __init__(self, exc: BaseException) -> None:
         self._exc = exc
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         raise self._exc
 
 
 class _LenOnlyRaiser:
     """A sequence-style value: truthiness rides ``__len__``, which raises."""
 
-    def __init__(self, exc: BaseException):
+    def __init__(self, exc: BaseException) -> None:
         self._exc = exc
 
-    def __len__(self):
+    def __len__(self) -> int:
         raise self._exc
 
 
 class _HostileValueUser:
     """A user-like actor whose ``is_authenticated`` attribute holds a hostile value."""
 
-    def __init__(self, value: object):
+    def __init__(self, value: object) -> None:
         self.is_authenticated = value
 
 
@@ -748,7 +748,7 @@ class _HostileValueUser:
 )
 def test_hostile_is_authenticated_value_truthiness_collapses_to_anonymous(
     raised: type[Exception],
-):
+) -> None:
     """A hostile is_authenticated VALUE whose truthiness raises collapses to anonymous.
 
     The fourth hostile surface beside the descriptor read and the legacy-callable
@@ -773,7 +773,7 @@ def test_hostile_is_authenticated_value_truthiness_collapses_to_anonymous(
 
 
 @pytest.mark.django_db
-def test_logout_with_hostile_is_authenticated_value_never_false_success():
+def test_logout_with_hostile_is_authenticated_value_never_false_success() -> None:
     """A hostile is_authenticated VALUE on the LIVE logout surface: contained capture, fail-closed teardown.
 
     Two layers on the live logout surface: the ``ok`` CAPTURE is
@@ -801,7 +801,7 @@ def test_logout_with_hostile_is_authenticated_value_never_false_success():
     assert request.session.get("logout_residue") == "must be flushed"
 
 
-def test_login_only_bind_emits_no_orphan_logout_payload():
+def test_login_only_bind_emits_no_orphan_logout_payload() -> None:
     """The surface-keyed bind materializes only the DECLARED surfaces' payloads."""
     _declare_user_type()
 
@@ -814,7 +814,7 @@ def test_login_only_bind_emits_no_orphan_logout_payload():
     assert "LogoutPayload" not in _materialized_names
 
 
-def test_register_only_surface_keyed_bind_emits_no_login_logout_payloads():
+def test_register_only_surface_keyed_bind_emits_no_login_logout_payloads() -> None:
     """A register-only schema materializes ``RegisterInput`` / ``RegisterPayload`` only."""
     _declare_user_type()
 
@@ -837,8 +837,8 @@ def test_register_only_surface_keyed_bind_emits_no_login_logout_payloads():
     assert spec_by_attr["username"].kind != EXCLUDED
 
 
-def test_reload_idempotence_cycle_rebuilds_the_full_auth_surface():
-    """finalize -> ``registry.clear()`` -> re-declare -> finalize reconstructs everything."""
+def test_reload_idempotence_cycle_rebuilds_the_full_auth_surface() -> None:
+    """Finalize -> ``registry.clear()`` -> re-declare -> finalize reconstructs everything."""
     first = _login_logout_schema()
     assert "login" in str(first)
 
@@ -857,7 +857,7 @@ def test_reload_idempotence_cycle_rebuilds_the_full_auth_surface():
     assert "register(data: RegisterInput!): RegisterPayload!" in sdl
 
 
-def test_register_arm_error_survives_a_reload_cycle():
+def test_register_arm_error_survives_a_reload_cycle() -> None:
     """After clear + re-declare, the SECOND finalize still fires the auth-specific arm.
 
     Pins the every-call auth-ledger re-record (spec-040 Decision 8): were the
@@ -880,7 +880,7 @@ def test_register_arm_error_survives_a_reload_cycle():
 # ---------------------------------------------------------------------------
 
 
-def test_bridged_async_body_is_a_real_coroutine_function():
+def test_bridged_async_body_is_a_real_coroutine_function() -> None:
     """The async resolver body is a genuine ``async def`` (not a sync body in disguise)."""
 
     def _sync_body(_info: object, **_kwargs: object) -> None:
@@ -890,7 +890,7 @@ def test_bridged_async_body_is_a_real_coroutine_function():
     assert inspect.iscoroutinefunction(body)
 
 
-def test_auth_field_dispatch_splits_sync_and_async_resolver_bodies():
+def test_auth_field_dispatch_splits_sync_and_async_resolver_bodies() -> None:
     """``_make_auth_field`` picks the sync body vs the async body by ``in_async_context``."""
     sync_calls: list[dict[str, object]] = []
     async_calls: list[dict[str, object]] = []
@@ -924,7 +924,7 @@ def test_auth_field_dispatch_splits_sync_and_async_resolver_bodies():
 @pytest.mark.django_db
 def test_sync_login_dispatch_never_enters_the_async_boundary(
     sync_boundary_spy: list[Callable[..., object]],
-):
+) -> None:
     """``execute_sync`` login runs the native sync body with no event-loop bridge."""
     schema = _login_logout_schema()
     User.objects.create_user(username="probe", password="pw-9x-strong")
@@ -944,7 +944,7 @@ def test_sync_login_dispatch_never_enters_the_async_boundary(
 @pytest.mark.django_db(transaction=True)
 async def test_async_login_dispatch_awaits_the_native_async_body_exactly_once(
     sync_boundary_spy: list[Callable[..., object]],
-):
+) -> None:
     """``await schema.execute`` login awaits the native async body exactly once."""
     schema = _login_logout_schema()
     await User.objects.acreate_user(username="probe", password="pw-9x-strong")
@@ -965,7 +965,7 @@ async def test_async_login_dispatch_awaits_the_native_async_body_exactly_once(
 @pytest.mark.django_db
 def test_sync_logout_dispatch_never_enters_the_async_boundary(
     sync_boundary_spy: list[Callable[..., object]],
-):
+) -> None:
     """``execute_sync`` logout runs the native sync body with no event-loop bridge."""
     schema = _login_logout_schema()
     res = schema.execute_sync(_LOGOUT_Q, context_value=_session_request())
@@ -978,7 +978,7 @@ def test_sync_logout_dispatch_never_enters_the_async_boundary(
 @pytest.mark.django_db(transaction=True)
 async def test_async_logout_dispatch_awaits_the_native_async_body_exactly_once(
     sync_boundary_spy: list[Callable[..., object]],
-):
+) -> None:
     """``await schema.execute`` logout awaits the native async body exactly once."""
     schema = _login_logout_schema()
     res = await schema.execute(_LOGOUT_Q, context_value=_session_request())
@@ -994,7 +994,7 @@ async def test_async_logout_dispatch_awaits_the_native_async_body_exactly_once(
 
 
 @pytest.mark.django_db
-def test_async_has_permission_raises_sync_misuse_never_a_silent_allow():
+def test_async_has_permission_raises_sync_misuse_never_a_silent_allow() -> None:
     """An ``async def has_permission`` is a ``SyncMisuseError``, not an authorization bypass."""
 
     class AsyncGate:
@@ -1005,7 +1005,7 @@ def test_async_has_permission_raises_sync_misuse_never_a_silent_allow():
             _operation: str,
             _data: object,
             _instance: object = None,
-        ):
+        ) -> bool:
             return False
 
     schema = _login_logout_schema(permission_classes=[AsyncGate])
@@ -1019,7 +1019,7 @@ def test_async_has_permission_raises_sync_misuse_never_a_silent_allow():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_permission_hook_rejected_inside_the_sync_worker_too():
+async def test_async_permission_hook_rejected_inside_the_sync_worker_too() -> None:
     """The ``SyncMisuseError`` discipline holds inside the one ``sync_to_async`` boundary."""
 
     class AsyncGate:
@@ -1030,7 +1030,7 @@ async def test_async_permission_hook_rejected_inside_the_sync_worker_too():
             _operation: str,
             _data: object,
             _instance: object = None,
-        ):
+        ) -> bool:
             return False
 
     schema = _login_logout_schema(permission_classes=[AsyncGate])
@@ -1045,7 +1045,7 @@ async def test_async_permission_hook_rejected_inside_the_sync_worker_too():
 
 
 @pytest.mark.django_db
-def test_an_unplanned_relation_under_login_node_is_strictness_visible():
+def test_an_unplanned_relation_under_login_node_is_strictness_visible() -> None:
     """``login``'s payload object is a raw instance, so a relation under it is unplanned.
 
     ``::_login_result_payload`` returns the authenticated actor directly - no
@@ -1078,7 +1078,7 @@ def test_an_unplanned_relation_under_login_node_is_strictness_visible():
 
 
 @pytest.mark.django_db
-def test_gated_login_denies_with_the_exact_pinned_string_before_authenticate():
+def test_gated_login_denies_with_the_exact_pinned_string_before_authenticate() -> None:
     schema = _login_logout_schema(permission_classes=[_DenyAll])
     res = schema.execute_sync(
         _LOGIN_Q,
@@ -1090,7 +1090,7 @@ def test_gated_login_denies_with_the_exact_pinned_string_before_authenticate():
 
 
 @pytest.mark.django_db
-def test_gated_logout_denies_with_the_session_holder_string():
+def test_gated_logout_denies_with_the_session_holder_string() -> None:
     """The model-less denial target IS the pinned holder ``__name__`` (``Session``)."""
     _declare_user_type()
 
@@ -1106,7 +1106,7 @@ def test_gated_logout_denies_with_the_session_holder_string():
 
 
 @pytest.mark.django_db
-def test_gated_register_denies_with_the_standard_create_string():
+def test_gated_register_denies_with_the_standard_create_string() -> None:
     """``register`` is a real ``DjangoMutation``: the standard create denial applies."""
     _declare_user_type()
 
@@ -1126,7 +1126,7 @@ def test_gated_register_denies_with_the_standard_create_string():
 
 
 @pytest.mark.django_db
-def test_login_gate_sees_the_attempted_username_and_never_the_password():
+def test_login_gate_sees_the_attempted_username_and_never_the_password() -> None:
     """The pinned gate payload: ``data = {"username": ...}``, ``instance=None``."""
     seen: dict[str, object] = {}
 
@@ -1155,7 +1155,7 @@ def test_login_gate_sees_the_attempted_username_and_never_the_password():
 
 
 @pytest.mark.django_db
-def test_gate_introspecting_the_mutation_object_raises_on_the_model_less_fields():
+def test_gate_introspecting_the_mutation_object_raises_on_the_model_less_fields() -> None:
     """A gate reading ``mutation.Meta.model`` raises at request time (documented, not guarded).
 
     The ``mutation`` positional on ``login`` / ``logout`` / ``current_user`` is
@@ -1226,7 +1226,7 @@ _PROTECTED_FIELD_REJECT = (
 def _privilege_required_user(
     username_field: str = "username",
     required_fields: Iterable[str] = ("is_staff",),
-):
+) -> type[AbstractBaseUser]:
     """Return a freshly declared user model whose ``REQUIRED_FIELDS`` exposes ``is_staff``.
 
     ``username_field`` / ``required_fields`` replace the two declarations, so a
@@ -1253,11 +1253,11 @@ def _privilege_required_user(
     return PrivilegeRequiredUser
 
 
-def test_derive_register_fields_default_user_model():
+def test_derive_register_fields_default_user_model() -> None:
     assert derive_register_fields(User) == ("username", "email", "password")
 
 
-def test_derive_register_fields_custom_username_and_required_fields():
+def test_derive_register_fields_custom_username_and_required_fields() -> None:
     """A custom-``USERNAME_FIELD`` model derives + dedupes in declaration order.
 
     A project has one ``AUTH_USER_MODEL`` and fakeshop's is Django's ``auth.User``,
@@ -1282,7 +1282,7 @@ def test_derive_register_fields_custom_username_and_required_fields():
     assert derive_register_fields(CustomLoginUser) == ("email", "nickname", "password")
 
 
-def test_derive_register_fields_rejects_privilege_fields():
+def test_derive_register_fields_rejects_privilege_fields() -> None:
     """A custom model cannot turn ``is_staff`` into public registration input."""
     model = _privilege_required_user()
     with pytest.raises(ConfigurationError, match=_PROTECTED_FIELD_REJECT):
@@ -1338,7 +1338,7 @@ def test_derive_register_fields_names_a_protected_str_subclass_by_value(
     username_field: str,
     required_fields: list[str],
     named: str,
-):
+) -> None:
     """A protected entry declared as a ``str`` subclass is refused and named by its value."""
     model = _privilege_required_user(username_field, required_fields)
     with pytest.raises(ConfigurationError) as exc:
@@ -1353,7 +1353,7 @@ def test_derive_register_fields_names_a_protected_str_subclass_by_value(
 
 def test_register_mutation_rejects_a_protected_required_field_at_the_factory_call(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The protected-field reject fires at ``register_mutation()``, not only in the helper.
 
     ``derive_register_fields`` is reached from the rider synthesis, so the
@@ -1363,14 +1363,13 @@ def test_register_mutation_rejects_a_protected_required_field_at_the_factory_cal
     regress independently: a synthesis that stopped calling the helper would
     leave the helper-level row green.
     """
-
     user_model = _privilege_required_user()
     monkeypatch.setattr(auth_mutations, "get_user_model", lambda: user_model)
     with pytest.raises(ConfigurationError, match=_PROTECTED_FIELD_REJECT):
         register_mutation()
 
 
-def test_derive_register_fields_rejects_unknown_names_via_editable_input_fields():
+def test_derive_register_fields_rejects_unknown_names_via_editable_input_fields() -> None:
     """Unknown / non-editable names delegate to the standard narrowing reject.
 
     A ``REQUIRED_FIELDS`` entry naming no column is a malformed user model no
@@ -1395,7 +1394,7 @@ def test_derive_register_fields_rejects_unknown_names_via_editable_input_fields(
         derive_register_fields(BrokenRequiredUser)  # pyright: ignore[reportArgumentType]
 
 
-def test_derive_register_fields_rejects_a_non_string_username_field():
+def test_derive_register_fields_rejects_a_non_string_username_field() -> None:
     """A non-string ``USERNAME_FIELD`` is refused before any name is validated.
 
     Django never checks ``USERNAME_FIELD``'s type when the model class is built,
@@ -1423,7 +1422,7 @@ def test_derive_register_fields_rejects_a_non_string_username_field():
         derive_register_fields(NonStringLoginUser)  # pyright: ignore[reportArgumentType]
 
 
-def test_exclusion_seam_captures_password_and_preserves_the_provided_marker():
+def test_exclusion_seam_captures_password_and_preserves_the_provided_marker() -> None:
     """The spec-040 D6 seam: value captured, marker preserved, attr never constructed."""
     from django_strawberry_framework.mutations.inputs import EXCLUDED, mutation_input_field_specs
 
@@ -1465,7 +1464,7 @@ def test_exclusion_seam_captures_password_and_preserves_the_provided_marker():
     assert "email" in exclude
 
 
-def test_model_decode_step_without_exclusion_keeps_the_historical_three_tuple():
+def test_model_decode_step_without_exclusion_keeps_the_historical_three_tuple() -> None:
     """The default no-exclusion call is byte-compatible with the model flavor."""
     from django_strawberry_framework.mutations.inputs import mutation_input_field_specs
 
@@ -1503,7 +1502,7 @@ def _register_rider() -> type[DjangoMutation]:
     return rider
 
 
-def test_register_with_explicit_none_password_returns_null_field_error():
+def test_register_with_explicit_none_password_returns_null_field_error() -> None:
     """An explicit null password on register is rejected with field-keyed null error."""
     from django_strawberry_framework.auth.mutations import _register_decode_step
 
@@ -1524,7 +1523,7 @@ def test_register_with_explicit_none_password_returns_null_field_error():
     assert errors[0].codes == ["null"]
 
 
-def test_register_write_step_none_password_defense_in_depth():
+def test_register_write_step_none_password_defense_in_depth() -> None:
     """_register_write_step safely rejects None password without crashing validate_password."""
     from django_strawberry_framework.auth.mutations import _register_write_step
 
@@ -1543,8 +1542,8 @@ def test_register_write_step_none_password_defense_in_depth():
     assert errors[0].codes == ["null"]
 
 
-def test_register_decode_step_with_unset_password_returns_none_password():
-    """_register_decode_step safely returns None when password is omitted/UNSET instead of raising KeyError."""
+def test_register_decode_step_with_unset_password_returns_none_password() -> None:
+    """_register_decode_step returns None when password is omitted/UNSET instead of raising KeyError."""
     from django_strawberry_framework.auth.mutations import _register_decode_step
 
     rider = _register_rider()
@@ -1590,7 +1589,7 @@ def test_register_decode_step_with_unset_password_returns_none_password():
         "object",
     ],
 )
-def test_register_write_step_non_str_password_defense_in_depth(bad_password: object):
+def test_register_write_step_non_str_password_defense_in_depth(bad_password: object) -> None:
     """_register_write_step safely rejects non-string password with an invalid field error."""
     from django_strawberry_framework.auth.mutations import _register_write_step
 
@@ -1613,7 +1612,7 @@ def test_register_write_step_non_str_password_defense_in_depth(bad_password: obj
 @pytest.mark.django_db
 def test_register_full_clean_errors_key_to_the_input_fields_sent(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A register ``full_clean()`` error keys to the ``RegisterInput`` field the client sent.
 
     A user model whose ``REQUIRED_FIELDS`` names ``first_name`` exposes it as
@@ -1701,7 +1700,7 @@ class _CountingModelBackend(ModelBackend):
         username: str | None = None,
         password: str | None = None,
         **kwargs: object,
-    ):
+    ) -> AbstractBaseUser | None:
         type(self).calls += 1
         return super().authenticate(request, username=username, password=password, **kwargs)
 
@@ -1715,13 +1714,13 @@ class _AllowInactiveBackend:
         username: str | None = None,
         password: str | None = None,
         **_kwargs: object,
-    ):
+    ) -> AbstractBaseUser | None:
         user = get_user_model().objects.filter(username=username).first()
         if user is not None and user.check_password(password):
             return user
         return None
 
-    def get_user(self, user_id: object):
+    def get_user(self, user_id: object) -> AbstractBaseUser | None:
         return get_user_model().objects.filter(pk=user_id).first()
 
 
@@ -1729,7 +1728,7 @@ class _CycleCreateRaises(DBSessionStore):
     """A real DB session store whose ``create`` raises (session cycle/flush outage)."""
 
     @override
-    def create(self):
+    def create(self) -> NoReturn:
         raise OSError("session store create failed")
 
 
@@ -1742,7 +1741,7 @@ class _ExplicitSaveRaises(DBSessionStore):
     """
 
     @override
-    def save(self, must_create: bool = False):
+    def save(self, must_create: bool = False) -> None:
         if not must_create:
             raise OSError("explicit session save failed")
         return super().save(must_create=must_create)
@@ -1752,7 +1751,7 @@ class _DeleteRaises(DBSessionStore):
     """A real DB store whose ``delete`` raises (compensation ``flush`` fails)."""
 
     @override
-    def delete(self, session_key: str | None = None):
+    def delete(self, session_key: str | None = None) -> NoReturn:
         raise OSError("session delete failed")
 
 
@@ -1760,15 +1759,15 @@ class _DeleteCancelled(DBSessionStore):
     """A real DB store whose cleanup delete is cancelled after establishment fails."""
 
     @override
-    def delete(self, session_key: str | None = None):
+    def delete(self, session_key: str | None = None) -> NoReturn:
         raise asyncio.CancelledError("session delete cancelled")
 
     @override
-    async def adelete(self, session_key: str | None = None):
+    async def adelete(self, session_key: str | None = None) -> NoReturn:
         raise asyncio.CancelledError("async session delete cancelled")
 
 
-def _request_with_store(store: SessionBase):
+def _request_with_store(store: SessionBase) -> HttpRequest:
     """A Django request wired to an explicit session store, anonymous actor."""
     request = RequestFactory().post("/graphql/")
     request.session = store
@@ -1782,7 +1781,7 @@ def _login_exec(
     *,
     username: str = "staff_1",
     password: str = TEST_USER_PASSWORD,
-):
+) -> ExecutionResult:
     return schema.execute_sync(
         _LOGIN_VAR_Q,
         variable_values={"u": username, "p": password},
@@ -1791,11 +1790,11 @@ def _login_exec(
 
 
 @contextlib.contextmanager
-def _raising_receiver(signal: Signal, message: str):
+def _raising_receiver(signal: Signal, message: str) -> Generator[None, None, None]:
     """Connect a real ``signal`` receiver that raises ``RuntimeError(message)`` in the block."""
 
-    # basedpyright: Django's Signal.send passes sender= by keyword
-    def _boom(sender: object, **_kwargs: object):  # pyright: ignore[reportUnusedParameter]
+    def _boom(sender: object, **_kwargs: object) -> NoReturn:
+        del sender  # Django's Signal.send passes sender= by keyword; the receiver only raises
         raise RuntimeError(message)
 
     signal.connect(_boom)
@@ -1805,12 +1804,12 @@ def _raising_receiver(signal: Signal, message: str):
         signal.disconnect(_boom)
 
 
-def _raising_login_receiver():
+def _raising_login_receiver() -> contextlib.AbstractContextManager[None]:
     """Connect a real ``user_logged_in`` receiver that raises after the auth keys write."""
     return _raising_receiver(auth_signals.user_logged_in, "login-signal boom")
 
 
-def _assert_login_fully_compensated(request: HttpRequest):
+def _assert_login_fully_compensated(request: HttpRequest) -> None:
     """Assert a failed login left NO trace: anonymous actor, no auth key, no durable row.
 
     The full compensation triple the fail-closed Django-HTTP login rows share: the
@@ -1828,14 +1827,14 @@ def _assert_login_fully_compensated(request: HttpRequest):
 @pytest.mark.django_db
 def test_login_payload_construction_failure_is_execution_error_session_untouched(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Row 5 (the one justified mock): a payload build after authenticate never mutates the session."""
     create_users(1)
     from django_strawberry_framework.mutations import resolvers as mutation_resolvers
 
     schema = _login_logout_schema()
 
-    def _boom(*_args: object, **_kwargs: object):
+    def _boom(*_args: object, **_kwargs: object) -> NoReturn:
         raise RuntimeError("payload construction boom")
 
     monkeypatch.setattr(mutation_resolvers, "build_payload", _boom)
@@ -1853,7 +1852,7 @@ def test_login_payload_construction_failure_is_execution_error_session_untouched
     ],
 )
 @pytest.mark.django_db
-def test_login_backend_selection_failure_compensates(monkeypatch: pytest.MonkeyPatch):
+def test_login_backend_selection_failure_compensates(monkeypatch: pytest.MonkeyPatch) -> None:
     """Row 6: multi-backend + a stripped ``user.backend`` -> login-time ``ValueError`` + compensation.
 
     ``authenticate`` always annotates ``user.backend``; the annotation is removed
@@ -1864,7 +1863,7 @@ def test_login_backend_selection_failure_compensates(monkeypatch: pytest.MonkeyP
     create_users(1)
     real_authenticate = auth.authenticate
 
-    def _strip_backend(request: HttpRequest | None, **kwargs: object):
+    def _strip_backend(request: HttpRequest | None, **kwargs: object) -> AbstractBaseUser | None:
         user = real_authenticate(request, **kwargs)
         if user is not None and hasattr(user, "backend"):
             del user.backend
@@ -1880,7 +1879,7 @@ def test_login_backend_selection_failure_compensates(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.django_db
-def test_login_session_cycle_failure_keeps_actor_anonymous_and_surfaces_original():
+def test_login_session_cycle_failure_keeps_actor_anonymous_and_surfaces_original() -> None:
     """Row 7: a session-store outage during rotation -> no success, actor anonymous, error observable."""
     create_users(1)
     schema = _login_logout_schema()
@@ -1894,7 +1893,7 @@ def test_login_session_cycle_failure_keeps_actor_anonymous_and_surfaces_original
 
 
 @pytest.mark.django_db
-def test_login_explicit_save_failure_compensates():
+def test_login_explicit_save_failure_compensates() -> None:
     """Row 9: the explicit in-resolver ``save`` failing -> compensation, no candidate actor remains."""
     create_users(1)
     schema = _login_logout_schema()
@@ -1905,8 +1904,11 @@ def test_login_explicit_save_failure_compensates():
 
 
 @pytest.mark.django_db
-def test_login_cleanup_failure_retains_primary_and_chains_cleanup():
-    """Row 12: a raising signal (primary) + a raising ``delete`` (cleanup) -> primary retained, cleanup chained."""
+def test_login_cleanup_failure_retains_primary_and_chains_cleanup() -> None:
+    """Row 12: a raising signal (primary) plus a raising ``delete`` (cleanup) retains the primary.
+
+    The cleanup failure is chained onto it.
+    """
     create_users(1)
     schema = _login_logout_schema()
     request = _request_with_store(_DeleteRaises())
@@ -1921,7 +1923,7 @@ def test_login_cleanup_failure_retains_primary_and_chains_cleanup():
 
 
 @pytest.mark.django_db
-def test_login_cleanup_cancellation_retains_primary_and_chains_cleanup():
+def test_login_cleanup_cancellation_retains_primary_and_chains_cleanup() -> None:
     """A cancellation during compensation cannot replace the establishment failure."""
     create_users(1)
     schema = _login_logout_schema()
@@ -1940,13 +1942,13 @@ def test_login_cleanup_cancellation_retains_primary_and_chains_cleanup():
 
 
 class _StubContext:
-    def __init__(self, request: object):
+    def __init__(self, request: object) -> None:
         self.request = request
 
 
 @override_settings(AUTHENTICATION_BACKENDS=[f"{_BACKEND_MODULE}._CountingModelBackend"])
 @pytest.mark.django_db
-def test_websocket_login_is_rejected_before_authenticate_is_called():
+def test_websocket_login_is_rejected_before_authenticate_is_called() -> None:
     """A WebSocket login raises the actionable error BEFORE any ``authenticate`` call."""
     create_users(1)
     _CountingModelBackend.calls = 0
@@ -1972,7 +1974,7 @@ _CH_LOGIN = (
 _CH_ME = "{ me{ username } }"
 
 
-def _auth_router_schema():
+def _auth_router_schema() -> strawberry.Schema:
     """Declare UserT + login/logout/me and return a finalized DjangoSchema (Query carries ``me``).
 
     The ``me`` field is built here (per call, inside the test's cleared registry) and
@@ -1987,7 +1989,7 @@ def _auth_router_schema():
     return _login_logout_schema(query_type=Query)
 
 
-def _channels_router(schema: strawberry.Schema):
+def _channels_router(schema: strawberry.Schema) -> ProtocolTypeRouter:
     """Compose GraphQL on BOTH Channels protocols - this suite's own transport harness.
 
     The package's ``DjangoGraphQLProtocolRouter`` hands HTTP to the consumer's own
@@ -2027,12 +2029,20 @@ def _channels_router(schema: strawberry.Schema):
     )
 
 
+class _ChResponse(TypedDict):
+    """A Channels HTTP communicator answer, with the ``status`` and ``body`` it always carries."""
+
+    status: int
+    body: bytes
+    headers: NotRequired[Iterable[tuple[bytes, bytes]]]
+
+
 async def _ch_post(
     router: ProtocolTypeRouter,
     query: str,
     variables: dict[str, object] | None = None,
     cookie: str | None = None,
-):
+) -> _ChResponse:
     body = json.dumps({"query": query, "variables": variables or {}}).encode()
     headers = [
         (b"content-type", b"application/json"),
@@ -2046,10 +2056,13 @@ async def _ch_post(
     # ``get_response`` always returns the ASGI start message's status plus the joined body.
     assert "status" in response
     assert "body" in response
-    return response
+    answer: _ChResponse = {"status": response["status"], "body": response["body"]}
+    if "headers" in response:
+        answer["headers"] = response["headers"]
+    return answer
 
 
-def _set_cookie(response: _HTTPTestResponse):
+def _set_cookie(response: _ChResponse) -> str | None:
     assert "headers" in response
     for name, value in response["headers"]:
         if name.lower() == b"set-cookie":
@@ -2057,18 +2070,18 @@ def _set_cookie(response: _HTTPTestResponse):
     return None
 
 
-def _cookie_key(cookie: str | None):
+def _cookie_key(cookie: str | None) -> str:
     assert cookie is not None
     return cookie.split("=", 1)[1]
 
 
-def _open_store(key: str | None = None):
+def _open_store(key: str | None = None) -> SessionBase:
     import importlib
 
     return importlib.import_module(settings.SESSION_ENGINE).SessionStore(key)
 
 
-def _seed_session(**data: object):
+def _seed_session(**data: object) -> str | None:
     store = _open_store()
     for key, value in data.items():
         store[key] = value
@@ -2076,25 +2089,25 @@ def _seed_session(**data: object):
     return store.session_key
 
 
-def _read_session(key: str, field: str):
+def _read_session(key: str | None, field: str) -> object:
     return _open_store(key).get(field)
 
 
-def _write_session(key: str, **data: object):
+def _write_session(key: str, **data: object) -> None:
     store = _open_store(key)
     for name, value in data.items():
         store[name] = value
     store.save()
 
 
-def _change_password(username: str, password: str):
+def _change_password(username: str, password: str) -> None:
     user = get_user_model().objects.get(username=username)
     user.set_password(password)
     user.save()
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_channels_http_login_round_trip_sets_cookie_keys_and_authenticates():
+async def test_channels_http_login_round_trip_sets_cookie_keys_and_authenticates() -> None:
     """A real Channels ``HttpCommunicator`` login: Set-Cookie, stored keys/backend, authed follow-up."""
     await _acreate_users(1)
     router = _channels_router(_auth_router_schema())
@@ -2116,7 +2129,7 @@ async def test_channels_http_login_round_trip_sets_cookie_keys_and_authenticates
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_channels_http_login_anon_to_auth_cycles_key_and_preserves_data():
+async def test_channels_http_login_anon_to_auth_cycles_key_and_preserves_data() -> None:
     """Rotation branch 1 (Channels HTTP): cycle the key, keep anonymous data."""
     await _acreate_users(1)
     router = _channels_router(_auth_router_schema())
@@ -2135,7 +2148,7 @@ async def test_channels_http_login_anon_to_auth_cycles_key_and_preserves_data():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_channels_http_login_as_different_user_flushes_old_data():
+async def test_channels_http_login_as_different_user_flushes_old_data() -> None:
     """Rotation branch 2 (Channels HTTP): a different user flushes old data + new key."""
     await _acreate_users(1)
     router = _channels_router(_auth_router_schema())
@@ -2155,7 +2168,7 @@ async def test_channels_http_login_as_different_user_flushes_old_data():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_channels_http_relogin_same_user_matching_hash_retains_key():
+async def test_channels_http_relogin_same_user_matching_hash_retains_key() -> None:
     """Rotation branch 3 (Channels HTTP): same user + matching auth hash keeps the key."""
     await _acreate_users(1)
     router = _channels_router(_auth_router_schema())
@@ -2172,7 +2185,7 @@ async def test_channels_http_relogin_same_user_matching_hash_retains_key():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_channels_http_relogin_same_user_mismatched_hash_flushes_and_replaces():
+async def test_channels_http_relogin_same_user_mismatched_hash_flushes_and_replaces() -> None:
     """Rotation branch 4 (Channels HTTP): same user + mismatched auth hash flush+replace."""
     await _acreate_users(1)
     router = _channels_router(_auth_router_schema())
@@ -2193,7 +2206,7 @@ async def test_channels_http_relogin_same_user_mismatched_hash_flushes_and_repla
 
 
 @pytest.mark.django_db(transaction=True)
-def test_sync_channels_http_bridge_establishes_and_persists_the_session():
+def test_sync_channels_http_bridge_establishes_and_persists_the_session() -> None:
     """The ``transport is CHANNELS_HTTP`` arm of the SYNC body: one ``async_to_sync`` bridge.
 
     Drives ``_login_resolve_body`` directly over a Channels HTTP scope adapter (the
@@ -2234,7 +2247,7 @@ def test_sync_channels_http_bridge_establishes_and_persists_the_session():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_channels_http_login_signal_failure_compensates_scope_and_durable():
+async def test_channels_http_login_signal_failure_compensates_scope_and_durable() -> None:
     """The Channels twin of the login-signal row: a raising ``user_logged_in`` receiver.
 
     Drives ``_channels_http_login_establish`` directly over a Channels HTTP scope. The
@@ -2254,7 +2267,7 @@ async def test_channels_http_login_signal_failure_compensates_scope_and_durable(
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_channels_http_login_cleanup_failure_retains_primary_and_chains_cleanup():
+async def test_channels_http_login_cleanup_failure_retains_primary_and_chains_cleanup() -> None:
     """The Channels twin of the cleanup-failure row: establishment AND ``aflush`` raise.
 
     A raising ``user_logged_in`` receiver (primary) plus a store whose ``delete`` raises
@@ -2268,7 +2281,7 @@ async def test_channels_http_login_cleanup_failure_retains_primary_and_chains_cl
         """A real DB store whose async ``adelete`` raises (the ``aflush`` cleanup fails)."""
 
         @override
-        async def adelete(self, session_key: str | None = None):
+        async def adelete(self, session_key: str | None = None) -> NoReturn:
             raise OSError("async session delete failed")
 
     store = _AsyncDeleteRaises()
@@ -2284,7 +2297,9 @@ async def test_channels_http_login_cleanup_failure_retains_primary_and_chains_cl
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_channels_http_login_cleanup_cancellation_retains_primary_and_chains_cleanup():
+async def test_channels_http_login_cleanup_cancellation_retains_primary_and_chains_cleanup() -> (
+    None
+):
     """The native Channels compensation has the same primary-error guarantee."""
     await _acreate_users(1)
     user = await get_user_model().objects.aget(username="staff_1")
@@ -2301,7 +2316,7 @@ async def test_channels_http_login_cleanup_cancellation_retains_primary_and_chai
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_channels_http_login_cancelled_between_key_write_and_asave_compensates():
+async def test_channels_http_login_cancelled_between_key_write_and_asave_compensates() -> None:
     """A ``CancelledError`` injected between the Channels key-write and ``asave``.
 
     Compensation must cover ``BaseException`` (not just ``Exception``) so a task
@@ -2317,7 +2332,7 @@ async def test_channels_http_login_cancelled_between_key_write_and_asave_compens
         """A real DB store whose explicit ``asave`` raises ``CancelledError``."""
 
         @override
-        async def asave(self, must_create: bool = False):
+        async def asave(self, must_create: bool = False) -> NoReturn:
             raise asyncio.CancelledError
 
     store = _AsaveCancelled()
@@ -2329,7 +2344,9 @@ async def test_channels_http_login_cancelled_between_key_write_and_asave_compens
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_channels_http_wrong_password_is_failed_login_envelope_session_untouched():
+async def test_async_channels_http_wrong_password_is_failed_login_envelope_session_untouched() -> (
+    None
+):
     """The failed-auth arm of the native ASYNC body over a Channels HTTP scope.
 
     A wrong password through ``_login_resolve_body_async`` on a classified Channels HTTP
@@ -2359,7 +2376,7 @@ async def test_async_channels_http_wrong_password_is_failed_login_envelope_sessi
 
 
 @pytest.mark.django_db
-def test_sync_django_http_login_leaves_session_modified_for_the_cookie():
+def test_sync_django_http_login_leaves_session_modified_for_the_cookie() -> None:
     """``session.modified`` stays true after the resolver's explicit ``save``.
 
     The cookie consequence (``sessionid`` on the client) is live in
@@ -2396,26 +2413,26 @@ def test_sync_django_http_login_leaves_session_modified_for_the_cookie():
 class _FlushRecordingStore(DBSessionStore):
     """A real DB store that counts ``flush`` calls (the signed-cookie WS reject probe)."""
 
-    def __init__(self, *args: str | None, **kwargs: str | None):
+    def __init__(self, *args: str | None, **kwargs: str | None) -> None:
         super().__init__(*args, **kwargs)
         self.flush_calls = 0
 
     @override
-    def flush(self):
+    def flush(self) -> None:
         self.flush_calls += 1
         return super().flush()
 
 
-def _raising_logout_receiver():
+def _raising_logout_receiver() -> contextlib.AbstractContextManager[None]:
     """Connect a real ``user_logged_out`` receiver that raises before the flush."""
     return _raising_receiver(auth_signals.user_logged_out, "logout-signal boom")
 
 
-def _session_row_exists(key: str | None):
+def _session_row_exists(key: str | None) -> bool:
     return Session.objects.filter(session_key=key).exists()
 
 
-def _logout_payload_cls():
+def _logout_payload_cls() -> type:
     """Build the login/logout schema and return the bound ``LogoutPayload`` class."""
     from django_strawberry_framework.mutations import resolvers as mutation_resolvers
 
@@ -2423,7 +2440,10 @@ def _logout_payload_cls():
     return mutation_resolvers.payload_cls_for(_declared_holder("logout"))
 
 
-def _establish_authenticated_django_session(user: AbstractBaseUser, store: SessionBase):
+def _establish_authenticated_django_session(
+    user: AbstractBaseUser,
+    store: SessionBase,
+) -> HttpRequest:
     """Log ``user`` into ``store`` on a real Django request (a durable authed row)."""
     request = RequestFactory().post("/graphql/")
     request.session = store
@@ -2437,7 +2457,7 @@ def _establish_authenticated_django_session(user: AbstractBaseUser, store: Sessi
 
 
 @pytest.mark.django_db
-def test_django_logout_signal_failure_no_ok_and_actor_anonymized():
+def test_django_logout_signal_failure_no_ok_and_actor_anonymized() -> None:
     """Logout row: a raising ``user_logged_out`` receiver -> no ok, actor anonymous.
 
     The receiver fires BEFORE ``flush`` (Stage 0), so the durable row is NOT
@@ -2458,7 +2478,7 @@ def test_django_logout_signal_failure_no_ok_and_actor_anonymized():
 
 
 @pytest.mark.django_db
-def test_django_logout_flush_failure_no_ok_and_actor_anonymized():
+def test_django_logout_flush_failure_no_ok_and_actor_anonymized() -> None:
     """Logout row: a store outage during ``flush``/``delete`` -> no ok, actor anonymous, error propagates."""
     create_users(1)
     schema = _login_logout_schema()
@@ -2475,14 +2495,14 @@ def test_django_logout_flush_failure_no_ok_and_actor_anonymized():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_channels_logout_flush_failure_no_ok_and_scope_anonymized():
+async def test_channels_logout_flush_failure_no_ok_and_scope_anonymized() -> None:
     """The Channels twin: a ``delete`` outage -> no ok payload, scope actor anonymized."""
     await _acreate_users(1)
     payload_cls = await database_sync_to_async(_logout_payload_cls)()
     user = await get_user_model().objects.aget(username="staff_1")
     store = _DeleteRaises()
 
-    def _seed(store: SessionBase):
+    def _seed(store: SessionBase) -> None:
         store["scratch"] = "durable"
         store.save()
 
@@ -2494,7 +2514,7 @@ async def test_channels_logout_flush_failure_no_ok_and_scope_anonymized():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_channels_logout_signal_failure_no_ok_and_scope_anonymized():
+async def test_channels_logout_signal_failure_no_ok_and_scope_anonymized() -> None:
     """The Channels twin: a raising ``user_logged_out`` receiver -> no ok, scope actor anonymized."""
     await _acreate_users(1)
     payload_cls = await database_sync_to_async(_logout_payload_cls)()
@@ -2520,7 +2540,7 @@ async def test_channels_logout_signal_failure_no_ok_and_scope_anonymized():
 @pytest.mark.django_db(transaction=True)
 async def test_the_logout_teardown_holds_both_locks_in_the_documented_order(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The teardown runs under the session lock AND the connection's actor lease.
 
     The ordering rule the whole design rests on, asserted at the one site that
@@ -2546,7 +2566,7 @@ async def test_the_logout_teardown_holds_both_locks_in_the_documented_order(
     native_logout = channels.auth.logout
     observed = {}
 
-    async def observing_logout(scope: MutableMapping[str, object]):
+    async def observing_logout(scope: MutableMapping[str, object]) -> None:
         state = connection_actor_state(scope)
         observed["lease"] = state.lock.locked()
         session_lock = scope[_SCOPE_LOCK_KEY]
@@ -2573,7 +2593,7 @@ async def test_the_logout_teardown_holds_both_locks_in_the_documented_order(
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_channels_logout_latches_the_provenance_of_the_actor_it_revoked():
+async def test_channels_logout_latches_the_provenance_of_the_actor_it_revoked() -> None:
     """An authenticated teardown latches provenance and hands the lease back."""
     await _acreate_users(1)
     payload_cls = await database_sync_to_async(_logout_payload_cls)()
@@ -2591,7 +2611,7 @@ async def test_channels_logout_latches_the_provenance_of_the_actor_it_revoked():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_an_anonymous_channels_logout_latches_no_provenance():
+async def test_an_anonymous_channels_logout_latches_no_provenance() -> None:
     """No actor to revoke, so no provenance - and the read-free carve-out survives.
 
     Nothing was authenticated here, so the socket keeps the carve-out its absent
@@ -2613,7 +2633,7 @@ async def test_an_anonymous_channels_logout_latches_no_provenance():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_failed_channels_logout_still_latches_provenance_and_frees_the_lease():
+async def test_a_failed_channels_logout_still_latches_provenance_and_frees_the_lease() -> None:
     """Fail closed: a raising teardown leaves the provenance set and no lease held.
 
     The compensation arm anonymizes the scope actor and re-raises, so the
@@ -2642,7 +2662,7 @@ async def test_a_failed_channels_logout_still_latches_provenance_and_frees_the_l
 
 @override_settings(SESSION_ENGINE="django.contrib.sessions.backends.signed_cookies")
 @pytest.mark.django_db
-def test_websocket_signed_cookie_logout_rejected_before_any_mutation():
+def test_websocket_signed_cookie_logout_rejected_before_any_mutation() -> None:
     """A signed-cookie WebSocket logout raises the actionable error, session untouched.
 
     The rejection fires in the prologue, BEFORE ``require_session``, the gate, or any
@@ -2665,7 +2685,7 @@ def test_websocket_signed_cookie_logout_rejected_before_any_mutation():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_sync_channels_http_logout_bridge_tears_down_the_session():
+def test_sync_channels_http_logout_bridge_tears_down_the_session() -> None:
     """The ``transport is CHANNELS_HTTP`` arm of the SYNC logout body: one ``async_to_sync`` bridge.
 
     Drives ``_logout_resolve_body`` directly over a Channels HTTP scope adapter (the
@@ -2695,7 +2715,7 @@ def test_sync_channels_http_logout_bridge_tears_down_the_session():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_channels_http_logout_invalidates_cookie_and_durable_session():
+async def test_channels_http_logout_invalidates_cookie_and_durable_session() -> None:
     """A real Channels ``HttpCommunicator`` logout: ok, emptied Set-Cookie, deleted row, anon follow-up."""
     await _acreate_users(1)
     router = _channels_router(_auth_router_schema())
@@ -2720,7 +2740,7 @@ async def test_channels_http_logout_invalidates_cookie_and_durable_session():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_channels_http_anonymous_logout_is_false_but_flushes_residue():
+async def test_channels_http_anonymous_logout_is_false_but_flushes_residue() -> None:
     """Anonymous Channels HTTP logout returns ok:false while still flushing residual data."""
     await _acreate_users(1)
     router = _channels_router(_auth_router_schema())
@@ -2738,7 +2758,7 @@ async def test_channels_http_anonymous_logout_is_false_but_flushes_residue():
 # --- WebSocket server-side logout + reconnect invalidation (real communicator) --
 
 
-async def _ws_open(router: ProtocolTypeRouter, cookie: str | None = None):
+async def _ws_open(router: ProtocolTypeRouter, cookie: str | None = None) -> WebsocketCommunicator:
     """Open a graphql-transport-ws socket and complete connection_init/ack."""
     headers = [(b"origin", b"http://testserver")]
     if cookie is not None:
@@ -2758,7 +2778,11 @@ async def _ws_open(router: ProtocolTypeRouter, cookie: str | None = None):
     return communicator
 
 
-async def _ws_run(communicator: WebsocketCommunicator, query: str, op_id: str):
+async def _ws_run(
+    communicator: WebsocketCommunicator,
+    query: str,
+    op_id: str,
+) -> dict[str, object]:
     """Run one single-result operation, draining the ``next`` and ``complete`` frames."""
     await communicator.send_json_to(
         {"type": "subscribe", "id": op_id, "payload": {"query": query}},
@@ -2773,7 +2797,7 @@ async def _ws_run(communicator: WebsocketCommunicator, query: str, op_id: str):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_websocket_server_side_logout_invalidates_and_survives_reconnect():
+async def test_websocket_server_side_logout_invalidates_and_survives_reconnect() -> None:
     """Real WebSocket logout: ok, same-socket ``me`` null, durable row gone, reconnect anonymous."""
     await _acreate_users(1)
     router = _channels_router(_auth_router_schema())
@@ -2841,7 +2865,7 @@ class _BarrierFlushStore(DBSessionStore):
     the first of them, so operation 2's later teardown runs unblocked.
     """
 
-    def __init__(self, *args: str | None, **kwargs: str | None):
+    def __init__(self, *args: str | None, **kwargs: str | None) -> None:
         super().__init__(*args, **kwargs)
         self.flush_entered = threading.Event()
         self.flush_release = threading.Event()
@@ -2849,7 +2873,7 @@ class _BarrierFlushStore(DBSessionStore):
         self.armed_flushes = 0
 
     @override
-    def flush(self):
+    def flush(self) -> None:
         if self.armed:
             self.armed_flushes += 1
             if self.armed_flushes == 1:
@@ -2858,7 +2882,10 @@ class _BarrierFlushStore(DBSessionStore):
         return super().flush()
 
 
-def _authed_channels_scope(store: SessionBase, scope_type: str):
+def _authed_channels_scope(
+    store: SessionBase,
+    scope_type: str,
+) -> tuple[ChannelsRequestAdapter, AbstractBaseUser, str | None]:
     """Return a scope adapter over ``store`` carrying an authenticated actor.
 
     ``store`` is logged in on a throwaway Django request first (a durable authed
@@ -2873,7 +2900,7 @@ def _authed_channels_scope(store: SessionBase, scope_type: str):
     return adapter, user, key
 
 
-async def _cancel_all(*tasks: asyncio.Task[object]):
+async def _cancel_all(*tasks: asyncio.Task[object]) -> None:
     """Cancel + await every not-done task (``-W error`` orphaned-task hygiene)."""
     for task in tasks:
         if not task.done():
@@ -2883,7 +2910,7 @@ async def _cancel_all(*tasks: asyncio.Task[object]):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_two_concurrent_logouts_on_one_scope_serialize_and_delete_once():
+async def test_two_concurrent_logouts_on_one_scope_serialize_and_delete_once() -> None:
     """Two logouts multiplexed on ONE scope serialize: first sees the actor, second anonymous.
 
     Operation 1 acquires the scope lock and parks inside its native teardown (the
@@ -2935,7 +2962,7 @@ async def test_two_concurrent_logouts_on_one_scope_serialize_and_delete_once():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_logout_racing_a_websocket_login_on_one_scope_cannot_revive_it():
+async def test_logout_racing_a_websocket_login_on_one_scope_cannot_revive_it() -> None:
     """A WebSocket login racing a logout on one scope is rejected before it can mutate.
 
     Login over a WebSocket is unsupported and rejected in the prologue, BEFORE
@@ -3008,13 +3035,13 @@ class _DeleteBeforeExplicitSaveStore(DBSessionStore):
         *args: str | None,
         on_before_explicit_save: Callable[[], object] | None = None,
         **kwargs: str | None,
-    ):
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._on_before_explicit_save = on_before_explicit_save
         self.save_calls: list[bool] = []
 
     @override
-    def save(self, must_create: bool = False):
+    def save(self, must_create: bool = False) -> None:
         self.save_calls.append(must_create)
         if not must_create and self._on_before_explicit_save is not None:
             hook = self._on_before_explicit_save
@@ -3024,7 +3051,7 @@ class _DeleteBeforeExplicitSaveStore(DBSessionStore):
 
 
 @pytest.mark.django_db
-def test_concurrent_session_deletion_propagates_upstream_and_keeps_the_row_deleted():
+def test_concurrent_session_deletion_propagates_upstream_and_keeps_the_row_deleted() -> None:
     """Request B's login save detecting request A's delete propagates, never recreates.
 
     Request A (same cookie) logs out and deletes the shared server-side session row
@@ -3045,7 +3072,7 @@ def test_concurrent_session_deletion_propagates_upstream_and_keeps_the_row_delet
     key = seed_store.session_key
     assert _session_row_exists(key)
 
-    def _request_a_logs_out():
+    def _request_a_logs_out() -> None:
         # Request A deletes the shared row (its logout flush) mid-B-login.
         DBSessionStore(key).flush()
 

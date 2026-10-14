@@ -22,6 +22,7 @@ inline ``Model.objects.create`` (the library app has no ``services.py``).
 """
 
 import os
+from collections.abc import Iterator
 
 import pytest
 
@@ -48,7 +49,7 @@ from django_strawberry_framework.registry import registry
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     """Reset the global registry and connection-type cache around each test."""
     registry.clear()
     _connection_type_cache.clear()
@@ -59,7 +60,7 @@ def _isolate_registry():
     ContentType.objects.clear_cache()
 
 
-def _build_schema():
+def _build_schema() -> strawberry.Schema:
     """Build a schema whose ``branches`` root reads from ``shard_b``."""
 
     class TaggedItemNode(DjangoType):
@@ -93,7 +94,7 @@ def _build_schema():
 
 
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_generic_connection_uses_shard_b_content_type_pk_not_default():
+def test_generic_connection_uses_shard_b_content_type_pk_not_default() -> None:
     """The GFK connection over ``shard_b`` parents returns rows under ``shard_b``'s ct pk.
 
     The default-alias ``Branch`` content-type pk and the ``shard_b`` one are

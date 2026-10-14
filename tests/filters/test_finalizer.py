@@ -30,13 +30,16 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections import OrderedDict
 from collections.abc import Iterator
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 import strawberry
 from apps.library.models import Book, Branch, Genre, LendingDesk, ProxyBranch, Shelf, Venue
 from django.db.models import Model, QuerySet
+from django_filters import Filter
 from strawberry import relay
 from typing_extensions import override
 
@@ -86,7 +89,7 @@ def _isolate_registry() -> Iterator[None]:
 # ---------------------------------------------------------------------------
 
 
-def test_phase_2_5_binds_all_owners_before_expansion():
+def test_phase_2_5_binds_all_owners_before_expansion() -> None:
     """Subpass 1 must complete across both owners before any ``get_filters`` runs.
 
     Pre-declares ``GenreFilter`` so ``BookFilter`` can reference it as a
@@ -121,7 +124,7 @@ def test_phase_2_5_binds_all_owners_before_expansion():
     original_get_filters = GenreFilter.get_filters.__func__
 
     @classmethod
-    def instrumented_get_filters(cls: type[FilterSet]):
+    def instrumented_get_filters(cls: type[FilterSet]) -> OrderedDict[str, Filter]:
         observations.append(cls._owner_definition is not None)
         return original_get_filters(cls)
 
@@ -175,7 +178,7 @@ def test_phase_2_5_binds_all_owners_before_expansion():
 # ---------------------------------------------------------------------------
 
 
-def test_phase_2_5_rejects_multi_owner_with_diverging_pk_identity():
+def test_phase_2_5_rejects_multi_owner_with_diverging_pk_identity() -> None:
     """Two REAL owners diverging on own-PK Relay identity are rejected end-to-end.
 
     Exercises the genuinely owner-dependent axis of the strict
@@ -230,7 +233,7 @@ def test_phase_2_5_rejects_multi_owner_with_diverging_pk_identity():
     assert "PlainBookType" in msg
 
 
-def test_phase_2_5_rejects_multi_owner_with_diverging_get_queryset():
+def test_phase_2_5_rejects_multi_owner_with_diverging_get_queryset() -> None:
     """Two owners of one filterset with divergent ``get_queryset`` are rejected end-to-end.
 
     ``get_queryset`` visibility is a second genuinely owner-dependent axis (beyond
@@ -269,7 +272,7 @@ def test_phase_2_5_rejects_multi_owner_with_diverging_get_queryset():
 
         @classmethod
         @override
-        def get_queryset(cls, queryset: QuerySet[Book], info: object):
+        def get_queryset(cls, queryset: QuerySet[Book], info: object) -> QuerySet[Book]:
             # A distinct visibility hook: excludes a subset the permissive owner shows.
             return queryset.exclude(title="secret")
 
@@ -284,7 +287,7 @@ def test_phase_2_5_rejects_multi_owner_with_diverging_get_queryset():
     assert "RestrictiveBookType" in msg
 
 
-def test_phase_2_5_rejects_multi_owner_sharing_one_custom_get_queryset():
+def test_phase_2_5_rejects_multi_owner_sharing_one_custom_get_queryset() -> None:
     """Two owners sharing ONE custom ``get_queryset`` (via a common base) are rejected.
 
     Function identity is NOT visibility equivalence. Both owners inherit the SAME
@@ -309,7 +312,7 @@ def test_phase_2_5_rejects_multi_owner_sharing_one_custom_get_queryset():
         # owners inherit this one ``get_queryset`` function.
         @classmethod
         @override
-        def get_queryset(cls, queryset: QuerySet[Book], info: object):
+        def get_queryset(cls, queryset: QuerySet[Book], info: object) -> QuerySet[Book]:
             # cls-parameterized in spirit: the hook body can branch on ``cls`` even
             # when the function object is shared, so the shared filterset's
             # related-branch visibility is owner-dependent despite the identity.
@@ -342,7 +345,7 @@ def test_phase_2_5_rejects_multi_owner_sharing_one_custom_get_queryset():
 
 
 @pytest.mark.parametrize("parent_first", [True, False], ids=["parent-first", "child-first"])
-def test_phase_2_5_rejects_multi_owner_reading_different_tables(parent_first: bool):
+def test_phase_2_5_rejects_multi_owner_reading_different_tables(*, parent_first: bool) -> None:
     """A ``Venue`` owner and a ``LendingDesk`` owner of one ``FilterSet`` are refused in both orders.
 
     A path re-entering the set's table reads the type it is bound to, and
@@ -388,7 +391,7 @@ def test_phase_2_5_rejects_multi_owner_reading_different_tables(parent_first: bo
 
 
 @pytest.mark.parametrize("proxy_first", [True, False], ids=["proxy-first", "concrete-first"])
-def test_phase_2_5_accepts_multi_owner_reading_one_table(proxy_first: bool):
+def test_phase_2_5_accepts_multi_owner_reading_one_table(*, proxy_first: bool) -> None:
     """A plain ``Branch`` owner and a plain ``ProxyBranch`` owner read one table, so they share a set."""
 
     class BranchFilter(FilterSet):
@@ -430,9 +433,10 @@ _SUBCLASS_OWNER_CASES = [
 @pytest.mark.django_db
 @pytest.mark.parametrize(("hiding_first", "base_on_hiding"), _SUBCLASS_OWNER_CASES)
 def test_a_filterset_subclass_binds_its_own_owner_apart_from_its_base(
+    *,
     hiding_first: bool,
     base_on_hiding: bool,
-):
+) -> None:
     """``ShelfFilter`` and ``SubShelfFilter(ShelfFilter)`` on two owners each filter by their own owner.
 
     The multi-owner refusal's remedy is a separate set subclass per owner, so a
@@ -472,7 +476,12 @@ def test_a_filterset_subclass_binds_its_own_owner_apart_from_its_base(
 
             @classmethod
             @override
-            def get_queryset(cls, queryset: QuerySet[Shelf], info: object, **kwargs: object):
+            def get_queryset(
+                cls,
+                queryset: QuerySet[Shelf],
+                info: object,
+                **kwargs: object,
+            ) -> QuerySet[Shelf]:
                 return queryset.exclude(topic="secret")
 
         return HidingShelfType
@@ -559,7 +568,7 @@ def test_a_filterset_subclass_binds_its_own_owner_apart_from_its_base(
     assert result.data["viaPlain"]["edges"] == [{"node": {"title": "on-hidden"}}]
 
 
-def test_phase_2_5_accepts_multi_owner_with_identical_target():
+def test_phase_2_5_accepts_multi_owner_with_identical_target() -> None:
     """Two distinct owner definitions sharing one ``FilterSet`` succeed when targets match.
 
     Pins the strict-equality walk through ``related_filters`` (the companion to
@@ -654,7 +663,7 @@ def test_phase_2_5_accepts_multi_owner_with_identical_target():
     assert BookFilter._owner_definition is primary_definition
 
 
-def test_phase_2_5_accepts_idempotent_rebind_of_same_filterset_owner_pair():
+def test_phase_2_5_accepts_idempotent_rebind_of_same_filterset_owner_pair() -> None:
     """Re-binding the same ``(filterset, definition)`` pair is a no-op."""
 
     class BookFilter(FilterSet):
@@ -701,7 +710,7 @@ def test_phase_2_5_accepts_idempotent_rebind_of_same_filterset_owner_pair():
 # ---------------------------------------------------------------------------
 
 
-def test_orphan_filter_input_type_reference_raises_at_finalize():
+def test_orphan_filter_input_type_reference_raises_at_finalize() -> None:
     """A ``filter_input_type(StandaloneFilter)`` without ``Meta.filterset_class`` raises."""
 
     class StandaloneFilter(FilterSet):
@@ -747,7 +756,7 @@ def test_orphan_filter_input_type_reference_raises_at_finalize():
     assert "filterset_class = StandaloneFilter" in msg
 
 
-def test_phase_2_5_orphan_check_runs_before_materialization():
+def test_phase_2_5_orphan_check_runs_before_materialization() -> None:
     """Orphan failure leaves no partial state in the materialization ledgers.
 
     Subpass 3 (orphan validation) now runs BEFORE subpass 4
@@ -811,7 +820,7 @@ def test_phase_2_5_orphan_check_runs_before_materialization():
     assert wired_input_name not in _materialized_names
 
 
-def test_phase_2_5_orphan_validation_lists_every_orphan_filterset():
+def test_phase_2_5_orphan_validation_lists_every_orphan_filterset() -> None:
     """Two orphan FilterSets surface in one ``ConfigurationError`` with the multi-orphan lead-in.
 
     The single-orphan branch is exercised by
@@ -894,7 +903,7 @@ def test_phase_2_5_orphan_validation_lists_every_orphan_filterset():
 # ---------------------------------------------------------------------------
 
 
-def test_phase_2_5_subpass_3_materializes_input_classes_as_module_globals():
+def test_phase_2_5_subpass_3_materializes_input_classes_as_module_globals() -> None:
     """The materialize pass writes ``BookFilterInputType`` to the inputs module globals."""
 
     class BookFilter(FilterSet):
@@ -936,7 +945,7 @@ def test_phase_2_5_subpass_3_materializes_input_classes_as_module_globals():
     assert "BookFilterInputType" in _materialized_names
 
 
-def test_materialize_input_class_is_idempotent_on_same_pair():
+def test_materialize_input_class_is_idempotent_on_same_pair() -> None:
     """Re-materializing the same ``(name, cls)`` pair is a no-op."""
 
     class _Stub:
@@ -953,7 +962,7 @@ def test_materialize_input_class_is_idempotent_on_same_pair():
     delattr(inputs_module, "StubInputType")
 
 
-def test_materialize_input_class_rejects_collision_on_distinct_classes():
+def test_materialize_input_class_rejects_collision_on_distinct_classes() -> None:
     """Re-materializing a name against a different class raises."""
 
     class _StubA:
@@ -977,7 +986,7 @@ def test_materialize_input_class_rejects_collision_on_distinct_classes():
 # ---------------------------------------------------------------------------
 
 
-def test_registry_clear_clears_filter_input_namespace_and_helper_set():
+def test_registry_clear_clears_filter_input_namespace_and_helper_set() -> None:
     """``registry.clear()`` resets the ledger and the helper set.
 
     Materialized class objects are intentionally left parked in
@@ -1018,7 +1027,7 @@ def test_registry_clear_clears_filter_input_namespace_and_helper_set():
     delattr(inputs_module, "LedgerStubInputType")
 
 
-def test_clear_filter_input_namespace_can_be_called_directly():
+def test_clear_filter_input_namespace_can_be_called_directly() -> None:
     """The public helper resets the ledger; parked module globals survive."""
 
     class _Stub:
@@ -1042,7 +1051,7 @@ def test_clear_filter_input_namespace_can_be_called_directly():
     delattr(inputs_module, "DirectClearInputType")
 
 
-def test_registry_clear_works_without_filters_imported():
+def test_registry_clear_works_without_filters_imported() -> None:
     """``registry.clear()`` must not raise when filters package was never imported."""
     # Absolute, ``__file__``-derived path so the subprocess resolves the
     # example app regardless of pytest's working directory.
@@ -1076,7 +1085,7 @@ def test_registry_clear_works_without_filters_imported():
 # ---------------------------------------------------------------------------
 
 
-def test_phase_2_5_unresolved_related_filter_raises_at_finalize():
+def test_phase_2_5_unresolved_related_filter_raises_at_finalize() -> None:
     """A ``RelatedFilter("UnknownFilter")`` propagates as ``ConfigurationError``.
 
     ``LazyRelatedClassMixin.resolve_lazy_class`` raises ``ImportError``
@@ -1131,7 +1140,7 @@ def test_phase_2_5_unresolved_related_filter_raises_at_finalize():
     assert isinstance(exc_info.value.__cause__, ImportError)
 
 
-def test_phase_2_5_unregistered_related_filter_target_raises_at_finalize():
+def test_phase_2_5_unregistered_related_filter_target_raises_at_finalize() -> None:
     """A wired filterset whose ``RelatedFilter`` target model has no registered type raises.
 
     Subpass 2.5: a related branch's visibility scoping runs the target
@@ -1175,7 +1184,7 @@ def test_phase_2_5_unregistered_related_filter_target_raises_at_finalize():
     assert "no DjangoType is registered" in msg
 
 
-def test_phase_2_5_unregistered_target_check_walks_transitive_filtersets():
+def test_phase_2_5_unregistered_target_check_walks_transitive_filtersets() -> None:
     """Subpass 2.5 reaches ``RelatedFilter``s on UNWIRED child filtersets.
 
     The misconfigured ``RelatedFilter`` here lives on ``ShelfFilter``,
@@ -1230,7 +1239,7 @@ def test_phase_2_5_unregistered_target_check_walks_transitive_filtersets():
     assert "no DjangoType is registered" in msg
 
 
-def test_phase_2_5_non_import_get_filters_failure_rewraps_as_configuration_error():
+def test_phase_2_5_non_import_get_filters_failure_rewraps_as_configuration_error() -> None:
     """Non-ImportError raised during ``get_filters()`` surfaces as ``ConfigurationError``.
 
     Subpass 2 only special-cased ``ImportError`` previously; any other
@@ -1241,7 +1250,7 @@ def test_phase_2_5_non_import_get_filters_failure_rewraps_as_configuration_error
     ``__cause__`` so consumer error-matching stays uniform.
     """
 
-    def _broken_factory():
+    def _broken_factory() -> NoReturn:
         raise ValueError("intentional factory failure")
 
     class BookFilter(FilterSet):
@@ -1296,7 +1305,7 @@ def test_phase_2_5_non_import_get_filters_failure_rewraps_as_configuration_error
 # ---------------------------------------------------------------------------
 
 
-def test_phase_2_5_runs_under_relay_node_interface():
+def test_phase_2_5_runs_under_relay_node_interface() -> None:
     """Phase 2.5 filter binding cooperates with Relay-Node interface injection."""
 
     class BookFilter(FilterSet):
@@ -1362,7 +1371,7 @@ def _resolves_nothing(_field_name: object) -> None:
     """A ``related_target_for`` that resolves no relation."""
 
 
-def test_bind_filterset_owner_idempotent_for_same_definition():
+def test_bind_filterset_owner_idempotent_for_same_definition() -> None:
     """Re-binding the SAME definition object short-circuits via identity."""
 
     class ShelfFilter(FilterSet):
@@ -1376,7 +1385,7 @@ def test_bind_filterset_owner_idempotent_for_same_definition():
     assert ShelfFilter._owner_definition is definition
 
 
-def test_bind_filterset_owner_continues_when_both_targets_unresolved():
+def test_bind_filterset_owner_continues_when_both_targets_unresolved() -> None:
     """A field neither owner can resolve is skipped (both-None continue)."""
 
     class ShelfFilter(FilterSet):
@@ -1401,7 +1410,7 @@ def test_bind_filterset_owner_continues_when_both_targets_unresolved():
     assert BookFilter._owner_definition is first
 
 
-def test_bind_filterset_owner_rejects_filterset_model_unrelated_to_owner():
+def test_bind_filterset_owner_rejects_filterset_model_unrelated_to_owner() -> None:
     """A first bind whose filterset ``Meta.model`` is unrelated to the owner raises (H-core-3).
 
     The single most common Phase-2.5 user error is wiring
@@ -1432,7 +1441,7 @@ def test_bind_filterset_owner_rejects_filterset_model_unrelated_to_owner():
     assert getattr(ShelfFilter, "_owner_definition", None) is None
 
 
-def test_bind_filterset_owner_rejects_diverging_own_pk_relay_node_ness():
+def test_bind_filterset_owner_rejects_diverging_own_pk_relay_node_ness() -> None:
     """A Relay-node owner and a plain owner cannot share one FilterSet (H4b).
 
     The filterset's own ``id`` resolves to a GlobalID under the Relay owner
@@ -1475,7 +1484,7 @@ def test_bind_filterset_owner_rejects_diverging_own_pk_relay_node_ness():
     assert "PlainShelfType" in msg
 
 
-def test_bind_filterset_owner_rejects_diverging_own_pk_type_name():
+def test_bind_filterset_owner_rejects_diverging_own_pk_type_name() -> None:
     """Two Relay-node owners with different GraphQL type names can't share a FilterSet (H4b).
 
     Each owner types the own-PK GlobalID to its own ``graphql_type_name``,
@@ -1511,7 +1520,7 @@ def test_bind_filterset_owner_rejects_diverging_own_pk_type_name():
 
 def test_bind_filterset_owner_raises_when_one_owner_resolves_and_other_does_not(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A field resolved by one owner but not the other is a hard mismatch."""
 
     class ShelfFilter(FilterSet):
@@ -1538,7 +1547,7 @@ def test_bind_filterset_owner_raises_when_one_owner_resolves_and_other_does_not(
     assert "shelf" in str(excinfo.value)
 
 
-def test_phase_2_5_configuration_error_from_get_filters_propagates_unwrapped():
+def test_phase_2_5_configuration_error_from_get_filters_propagates_unwrapped() -> None:
     """A ``ConfigurationError`` raised inside ``get_filters()`` is re-raised as-is.
 
     The finalize loop special-cases ``ImportError`` (rewrap) and generic
@@ -1547,7 +1556,7 @@ def test_phase_2_5_configuration_error_from_get_filters_propagates_unwrapped():
     than being double-wrapped.
     """
 
-    def _config_error_factory():
+    def _config_error_factory() -> NoReturn:
         raise ConfigurationError("intentional configuration failure inside get_filters")
 
     class BookFilter(FilterSet):
@@ -1596,7 +1605,7 @@ def test_phase_2_5_configuration_error_from_get_filters_propagates_unwrapped():
 # ---------------------------------------------------------------------------
 
 
-def test_phase_2_5_rejects_globalid_filter_on_callable_strategy_target():
+def test_phase_2_5_rejects_globalid_filter_on_callable_strategy_target() -> None:
     """A GlobalID filter whose own-PK target uses a ``callable`` strategy fails at build.
 
     ``callable`` is encode-only (no decode path), so the schema would otherwise
@@ -1605,7 +1614,7 @@ def test_phase_2_5_rejects_globalid_filter_on_callable_strategy_target():
     naming the filterset and field.
     """
 
-    def encode(_type_cls: type[DjangoType], _model: type[Model], _root: object):
+    def encode(_type_cls: type[DjangoType], _model: type[Model], _root: object) -> str:
         return "GenreType"
 
     class GenreFilter(FilterSet):
@@ -1632,7 +1641,7 @@ def test_phase_2_5_rejects_globalid_filter_on_callable_strategy_target():
     assert "callable" in msg
 
 
-def test_phase_2_5_rejects_globalid_filter_on_custom_strategy_target():
+def test_phase_2_5_rejects_globalid_filter_on_custom_strategy_target() -> None:
     """A GlobalID filter whose own-PK target overrides ``resolve_typename`` fails at build.
 
     Overriding ``resolve_typename`` classifies the target ``custom`` - also
@@ -1653,7 +1662,7 @@ def test_phase_2_5_rejects_globalid_filter_on_custom_strategy_target():
             filterset_class = GenreFilter
 
         @classmethod
-        def resolve_typename(cls, _root: object, _info: object):
+        def resolve_typename(cls, _root: object, _info: object) -> str:
             return "GenreType"
 
     assert registry.get(Genre) is GenreType
@@ -1666,7 +1675,7 @@ def test_phase_2_5_rejects_globalid_filter_on_custom_strategy_target():
     assert "custom" in msg
 
 
-def test_phase_2_5_globalid_audit_skips_unresolvable_target():
+def test_phase_2_5_globalid_audit_skips_unresolvable_target() -> None:
     """The audit skips a GlobalID filter whose target definition resolves to ``None``.
 
     A consumer-declared ``GlobalIDFilter`` pointed at a scalar field ('name')
@@ -1696,9 +1705,10 @@ def test_phase_2_5_globalid_audit_skips_unresolvable_target():
     assert GenreType.__django_strawberry_definition__.finalized
 
 
-def test_finalize_surfaces_the_related_filter_target_gate_identity():
-    """A mis-typed ``RelatedFilter`` target surfaces the GATE's typed message
-    at finalize, never a raw ``AttributeError``.
+def test_finalize_surfaces_the_related_filter_target_gate_identity() -> None:
+    """A mis-typed ``RelatedFilter`` target surfaces the GATE's typed message at finalize.
+
+    It never surfaces as a raw ``AttributeError``.
 
     Pre-gate, the mis-typed target survived declaration + binding + expansion
     and detonated inside ``_expand_related_filter``'s

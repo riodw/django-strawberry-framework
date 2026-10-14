@@ -16,11 +16,12 @@ from collections.abc import Callable
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.middleware import SessionMiddleware
+from django.core.handlers.wsgi import WSGIRequest
 from django.http import HttpResponse
 from django.test import RequestFactory
 
 
-async def _drain_until(predicate: Callable[[], object], *, budget: int = 10_000):
+async def _drain_until(predicate: Callable[[], object], *, budget: int = 10_000) -> None:
     """Yield control (``sleep(0)``) until ``predicate()`` holds, bounded by a counter.
 
     A loop-implementation-agnostic barrier: it advances the event loop a bounded
@@ -35,7 +36,7 @@ async def _drain_until(predicate: Callable[[], object], *, budget: int = 10_000)
     raise AssertionError("barrier predicate never became true within the yield budget")
 
 
-def _session_request(user: AbstractBaseUser | None = None):
+def _session_request(user: AbstractBaseUser | None = None) -> WSGIRequest:
     """Build a real request with a working session (the auth transport contract)."""
     request = RequestFactory().post("/graphql/")
     SessionMiddleware(lambda _request: HttpResponse()).process_request(request)

@@ -48,7 +48,7 @@ def _seed_specimen(label: str, **overrides: object) -> models.ScalarSpecimen:
 
 
 @pytest.mark.django_db
-def test_scalars_filter_by_label_icontains():
+def test_scalars_filter_by_label_icontains() -> None:
     """Text-scalar filter input (``label: { iContains }``)."""
     _seed_specimen("alpha")
     _seed_specimen("beta")
@@ -65,7 +65,7 @@ def test_scalars_filter_by_label_icontains():
 
 
 @pytest.mark.django_db
-def test_scalars_filter_by_flag_exact():
+def test_scalars_filter_by_flag_exact() -> None:
     """Boolean-scalar filter input (``flag: { exact: true }``)."""
     _seed_specimen("alpha", flag=True)
     _seed_specimen("beta", flag=False)
@@ -83,7 +83,7 @@ def test_scalars_filter_by_flag_exact():
 
 
 @pytest.mark.django_db
-def test_scalars_filter_by_non_relay_pk_in_list():
+def test_scalars_filter_by_non_relay_pk_in_list() -> None:
     """Non-Relay ``id: { in: [...] }`` resolves to the integer CSV path (H5c).
 
     The scalar types are not Relay nodes, so ``id`` is a plain integer column.
@@ -109,7 +109,7 @@ def test_scalars_filter_by_non_relay_pk_in_list():
 
 
 @pytest.mark.django_db
-def test_scalars_filter_by_related_tag_label():
+def test_scalars_filter_by_related_tag_label() -> None:
     """``RelatedFilter`` onto ``ScalarSpecimenTag`` (whose ``get_queryset`` is active=True)."""
     hot = models.ScalarSpecimenTag.objects.create(label="hot", active=True)
     _seed_specimen("alpha", tag=hot)
@@ -127,7 +127,7 @@ def test_scalars_filter_by_related_tag_label():
 
 
 @pytest.mark.django_db
-def test_scalars_order_by_label_desc():
+def test_scalars_order_by_label_desc() -> None:
     """``orderBy: [{ label: DESC }]`` sorts specimens by label descending (DONE-028 wiring)."""
     _seed_specimen("alpha")
     _seed_specimen("gamma")
@@ -160,7 +160,7 @@ query {
 
 
 @pytest.mark.django_db
-def test_range_input_types_are_scoped_per_filterset():
+def test_range_input_types_are_scoped_per_filterset() -> None:
     """Two shipped filtersets sharing a RangeFilter field_name mint distinct nested types.
 
     ``price_span`` is a declared ``RangeFilter(field_name="price")`` on both
@@ -183,7 +183,7 @@ def test_range_input_types_are_scoped_per_filterset():
 
 
 @pytest.mark.django_db
-def test_scalars_filter_by_price_span_range():
+def test_scalars_filter_by_price_span_range() -> None:
     """Declared ``priceSpan: { range: { start, end } }`` keeps in-range rows and drops the rest."""
     _seed_specimen("cheap", price=Decimal("1.0000"))
     _seed_specimen("mid", price=Decimal("50.0000"))
@@ -212,7 +212,7 @@ query ($filter: ScalarSpecimenFilterInputType) {
 
 
 @pytest.mark.django_db
-def test_scalars_filter_by_forward_fk_primary_key_exact_and_in():
+def test_scalars_filter_by_forward_fk_primary_key_exact_and_in() -> None:
     """``parent`` takes one raw pk for ``exact`` and a list for ``in``; ``isNull`` stays Boolean."""
     root_a = _seed_specimen("root-a")
     root_b = _seed_specimen("root-b")
@@ -232,7 +232,7 @@ def test_scalars_filter_by_forward_fk_primary_key_exact_and_in():
 
 
 @pytest.mark.django_db
-def test_scalars_forward_fk_primary_key_follows_the_membership_rules():
+def test_scalars_forward_fk_primary_key_follows_the_membership_rules() -> None:
     """A missing pk matches nothing, beside a real one it is dropped, and ``in: []`` is empty.
 
     None of these is a validation error: the relation key never checks that the target
@@ -257,7 +257,7 @@ def test_scalars_forward_fk_primary_key_follows_the_membership_rules():
 
 
 @pytest.mark.django_db
-def test_scalars_filter_by_reverse_fk_primary_keys():
+def test_scalars_filter_by_reverse_fk_primary_keys() -> None:
     """``children`` (the reverse FK) takes a list of raw child pks."""
     root_a = _seed_specimen("root-a")
     root_b = _seed_specimen("root-b")

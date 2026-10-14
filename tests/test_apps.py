@@ -38,13 +38,13 @@ from django_strawberry_framework import (
 from django_strawberry_framework.apps import DjangoStrawberryFrameworkConfig
 
 
-def test_djangostrawberryframeworkconfig_importable_from_apps_module():
+def test_djangostrawberryframeworkconfig_importable_from_apps_module() -> None:
     # The top-level import is the load-bearing assertion; if it fails,
     # pytest collection fails before this body runs.
     assert DjangoStrawberryFrameworkConfig is not None
 
 
-def test_djangostrawberryframeworkconfig_is_appconfig_subclass():
+def test_djangostrawberryframeworkconfig_is_appconfig_subclass() -> None:
     assert issubclass(DjangoStrawberryFrameworkConfig, django.apps.AppConfig)
 
 
@@ -53,11 +53,14 @@ def test_djangostrawberryframeworkconfig_is_appconfig_subclass():
     [("name", "django_strawberry_framework"), ("verbose_name", "Django Strawberry Framework")],
     ids=["name", "verbose-name"],
 )
-def test_djangostrawberryframeworkconfig_pins_name_and_verbose_name(attribute: str, expected: str):
+def test_djangostrawberryframeworkconfig_pins_name_and_verbose_name(
+    attribute: str,
+    expected: str,
+) -> None:
     assert getattr(DjangoStrawberryFrameworkConfig, attribute) == expected
 
 
-def test_djangostrawberryframeworkconfig_resolves_through_django_app_registry():
+def test_djangostrawberryframeworkconfig_resolves_through_django_app_registry() -> None:
     config = django.apps.apps.get_app_config("django_strawberry_framework")
     assert isinstance(config, DjangoStrawberryFrameworkConfig)
 
@@ -74,7 +77,7 @@ def test_djangostrawberryframeworkconfig_resolves_through_django_app_registry():
 def test_djangostrawberryframeworkconfig_defines_no_extra_appconfig_attributes(
     attribute: str,
     why: str,
-):
+) -> None:
     """The AppConfig class body omits ``label``, ``default_auto_field``, and ``default``.
 
     ``ready`` is deliberately absent from this set: it is required on this class,
@@ -88,11 +91,12 @@ def test_djangostrawberryframeworkconfig_defines_no_extra_appconfig_attributes(
     )
 
 
-def test_djangostrawberryframeworkconfig_defines_ready_for_django_patches():
-    """The package's ``AppConfig.ready()`` applies the upstream
-    patches. Pinned so a future refactor that removes the ``ready()``
-    body outright fails loudly; the dispatch behavior itself is pinned
-    by ``test_ready_dispatches_all_four_patch_appliers_and_refires_safely``.
+def test_djangostrawberryframeworkconfig_defines_ready_for_django_patches() -> None:
+    """The package's ``AppConfig.ready()`` applies the upstream patches.
+
+    Pinned so a future refactor that removes the ``ready()`` body outright fails loudly;
+    the dispatch behavior itself is pinned by
+    ``test_ready_dispatches_all_four_patch_appliers_and_refires_safely``.
     """
     assert "ready" in DjangoStrawberryFrameworkConfig.__dict__
     assert callable(DjangoStrawberryFrameworkConfig.__dict__["ready"])
@@ -113,7 +117,7 @@ _PATCHED_SLOTS = (
 )
 
 
-def _all_patches_installed():
+def _all_patches_installed() -> tuple[bool, bool, bool, bool]:
     return (
         _django_patches._patch_is_installed(),
         _strawberry_patches._patch_is_installed(),
@@ -124,7 +128,7 @@ def _all_patches_installed():
 
 def test_ready_dispatches_all_four_patch_appliers_and_refires_safely(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """``ready()`` itself installs all four upstream patches; a re-fire is safe.
 
     The patch-module suites each pin "installed at collection via
@@ -210,7 +214,7 @@ def test_ready_dispatches_all_four_patch_appliers_and_refires_safely(
 def test_ready_reinstalls_patches_after_their_modules_reload(
     module: ModuleType,
     original_names: tuple[str, ...],
-):
+) -> None:
     """A reloaded applier retains its true upstream capture and re-installs cleanly.
 
     An interactive test session can reload a private patch module while its

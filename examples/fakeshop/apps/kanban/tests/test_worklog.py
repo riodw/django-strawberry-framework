@@ -30,7 +30,7 @@ def _worklog_lookups() -> None:
 
 
 @pytest.mark.django_db
-def test_set_card_status_records_transition():
+def test_set_card_status_records_transition() -> None:
     actor = kf.make_actor()
     card = kf.make_card(status=kf.make_status("todo"))
 
@@ -48,7 +48,7 @@ def test_set_card_status_records_transition():
 
 
 @pytest.mark.django_db
-def test_set_card_status_accepts_actor_key():
+def test_set_card_status_accepts_actor_key() -> None:
     kf.make_actor("maintainer")
     card = kf.make_card(status=kf.make_status("todo"))
 
@@ -58,7 +58,7 @@ def test_set_card_status_accepts_actor_key():
 
 
 @pytest.mark.django_db
-def test_set_card_status_illegal_transition_raises_and_writes_nothing():
+def test_set_card_status_illegal_transition_raises_and_writes_nothing() -> None:
     actor = kf.make_actor()
     card = kf.make_card(status=kf.make_status("todo"))
 
@@ -71,7 +71,7 @@ def test_set_card_status_illegal_transition_raises_and_writes_nothing():
 
 
 @pytest.mark.django_db
-def test_set_card_status_rejects_no_op():
+def test_set_card_status_rejects_no_op() -> None:
     actor = kf.make_actor()
     card = kf.make_card(status=kf.make_status("todo"))
 
@@ -80,7 +80,7 @@ def test_set_card_status_rejects_no_op():
 
 
 @pytest.mark.django_db
-def test_signal_guard_rejects_illegal_direct_status_write():
+def test_signal_guard_rejects_illegal_direct_status_write() -> None:
     card = kf.make_card(status=kf.make_status("todo"))
 
     card.status = kf.make_status("done")
@@ -89,7 +89,7 @@ def test_signal_guard_rejects_illegal_direct_status_write():
 
 
 @pytest.mark.django_db
-def test_reopen_transition_is_allowed():
+def test_reopen_transition_is_allowed() -> None:
     actor = kf.make_actor()
     card = kf.make_card(status=kf.make_status("done"))
 
@@ -107,7 +107,7 @@ def test_reopen_transition_is_allowed():
 
 
 @pytest.mark.django_db
-def test_work_attempt_lifecycle():
+def test_work_attempt_lifecycle() -> None:
     card = kf.make_card()
     attempt = kf.make_work_attempt(card=card, summary="first try")
 
@@ -132,7 +132,7 @@ def test_work_attempt_lifecycle():
 
 
 @pytest.mark.django_db
-def test_decision_supersedes_chain():
+def test_decision_supersedes_chain() -> None:
     first = kf.make_decision(card=None, question="Use signals?", choice="Yes")
     second = kf.make_decision(
         card=None,
@@ -152,7 +152,7 @@ def test_decision_supersedes_chain():
 
 
 @pytest.mark.django_db
-def test_card_item_verification_fields():
+def test_card_item_verification_fields() -> None:
     item = kf.make_card_item()
     assert item.verified_at is None
     assert item.verified_by is None
@@ -178,7 +178,7 @@ def test_card_item_verification_fields():
 # ---------------------------------------------------------------------------
 
 
-def _make_done(card: models.Card, actor: models.Actor):
+def _make_done(card: models.Card, actor: models.Actor) -> None:
     """Satisfy the done-card guards (spec + glossary) then flip wip -> done."""
     kf.make_spec_doc(card=card)
     kf.make_card_glossary_term(card=card)
@@ -186,7 +186,7 @@ def _make_done(card: models.Card, actor: models.Actor):
     services.set_card_status(card, "done", actor=actor)
 
 
-def _blocked_pair():
+def _blocked_pair() -> tuple[models.Card, models.Card, models.CardReference]:
     """A source card blocked_by a target card (source.number > target.number)."""
     target = kf.make_card(number=1, title="Blocking target", status=kf.make_status("todo"))
     source = kf.make_card(number=2, title="Blocked source", status=kf.make_status("todo"))
@@ -199,7 +199,7 @@ def _blocked_pair():
 
 
 @pytest.mark.django_db
-def test_done_flip_resolves_incoming_blocked_by_reference():
+def test_done_flip_resolves_incoming_blocked_by_reference() -> None:
     source, target, reference = _blocked_pair()
     source.refresh_from_db()
     assert source.is_blocked is True
@@ -213,7 +213,7 @@ def test_done_flip_resolves_incoming_blocked_by_reference():
 
 
 @pytest.mark.django_db
-def test_reopen_unresolves_incoming_blocked_by_reference():
+def test_reopen_unresolves_incoming_blocked_by_reference() -> None:
     source, target, reference = _blocked_pair()
     actor = kf.make_actor()
     _make_done(target, actor)
@@ -229,7 +229,7 @@ def test_reopen_unresolves_incoming_blocked_by_reference():
 
 
 @pytest.mark.django_db
-def test_is_blocked_respects_resolved_at_even_when_target_not_done():
+def test_is_blocked_respects_resolved_at_even_when_target_not_done() -> None:
     source, _target, reference = _blocked_pair()
     source.refresh_from_db()
     assert source.is_blocked is True
@@ -247,19 +247,19 @@ def test_is_blocked_respects_resolved_at_even_when_target_not_done():
 
 
 @pytest.mark.django_db
-def test_is_ready_true_for_unblocked_todo_card():
+def test_is_ready_true_for_unblocked_todo_card() -> None:
     card = kf.make_card(status=kf.make_status("todo"))
     assert card.is_ready is True
 
 
 @pytest.mark.django_db
-def test_is_ready_false_for_non_todo_card():
+def test_is_ready_false_for_non_todo_card() -> None:
     card = kf.make_card(status=kf.make_status("wip"))
     assert card.is_ready is False
 
 
 @pytest.mark.django_db
-def test_is_ready_false_with_undone_dependency():
+def test_is_ready_false_with_undone_dependency() -> None:
     dependency = kf.make_card(number=1, title="Dep", status=kf.make_status("todo"))
     dependent = kf.make_card(number=2, title="Waiting", status=kf.make_status("todo"))
     models.CardReference.objects.create(
@@ -277,7 +277,7 @@ def test_is_ready_false_with_undone_dependency():
 
 
 @pytest.mark.django_db
-def test_is_ready_false_when_blocked():
+def test_is_ready_false_when_blocked() -> None:
     source, _target, _reference = _blocked_pair()
     source.refresh_from_db()
     assert source.is_blocked is True
@@ -290,7 +290,7 @@ def test_is_ready_false_when_blocked():
 
 
 @pytest.mark.django_db
-def test_set_item_complete_round_trip():
+def test_set_item_complete_round_trip() -> None:
     item = kf.make_card_item()
     assert item.is_complete is False
 
@@ -298,13 +298,13 @@ def test_set_item_complete_round_trip():
     item.refresh_from_db()
     assert item.is_complete is True
 
-    services.set_item_complete(item, False)
+    services.set_item_complete(item, complete=False)
     item.refresh_from_db()
     assert item.is_complete is False
 
 
 @pytest.mark.django_db
-def test_verify_item_stamps_provenance_and_completes():
+def test_verify_item_stamps_provenance_and_completes() -> None:
     item = kf.make_card_item()
     actor = kf.make_actor()
     kf.make_verification_kind("test_run")
@@ -321,7 +321,7 @@ def test_verify_item_stamps_provenance_and_completes():
 
 
 @pytest.mark.django_db
-def test_verify_item_accepts_instances_and_explicit_timestamp():
+def test_verify_item_accepts_instances_and_explicit_timestamp() -> None:
     item = kf.make_card_item()
     actor = kf.make_actor("agent-session", kind=models.ACTOR_AGENT)
     kind = kf.make_verification_kind("manual")
@@ -335,7 +335,7 @@ def test_verify_item_accepts_instances_and_explicit_timestamp():
 
 
 @pytest.mark.django_db
-def test_verify_item_rejects_unknown_kind():
+def test_verify_item_rejects_unknown_kind() -> None:
     item = kf.make_card_item()
 
     with pytest.raises(services.KanbanServiceError) as excinfo:
@@ -344,7 +344,7 @@ def test_verify_item_rejects_unknown_kind():
 
 
 @pytest.mark.django_db
-def test_verify_item_rejects_missing_actor():
+def test_verify_item_rejects_missing_actor() -> None:
     item = kf.make_card_item()
     kf.make_verification_kind("test_run")
 
@@ -359,7 +359,7 @@ def test_verify_item_rejects_missing_actor():
 
 
 @pytest.mark.django_db
-def test_record_and_finish_attempt():
+def test_record_and_finish_attempt() -> None:
     card = kf.make_card()
     actor = kf.make_actor()
     kf.make_attempt_outcome("succeeded")
@@ -385,7 +385,7 @@ def test_record_and_finish_attempt():
 
 
 @pytest.mark.django_db
-def test_record_attempt_accepts_actor_key_and_started_at():
+def test_record_attempt_accepts_actor_key_and_started_at() -> None:
     kf.make_actor("agent-1", kind=models.ACTOR_AGENT)
     started = timezone.now()
 
@@ -401,7 +401,7 @@ def test_record_attempt_accepts_actor_key_and_started_at():
 
 
 @pytest.mark.django_db
-def test_finish_attempt_keeps_summary_and_accepts_explicit_end():
+def test_finish_attempt_keeps_summary_and_accepts_explicit_end() -> None:
     attempt = kf.make_work_attempt(summary="original")
     kf.make_attempt_outcome("failed")
     ended = timezone.now()
@@ -417,7 +417,7 @@ def test_finish_attempt_keeps_summary_and_accepts_explicit_end():
 
 
 @pytest.mark.django_db
-def test_finish_attempt_rejects_unknown_outcome():
+def test_finish_attempt_rejects_unknown_outcome() -> None:
     attempt = kf.make_work_attempt()
 
     with pytest.raises(services.KanbanServiceError) as excinfo:
@@ -426,7 +426,7 @@ def test_finish_attempt_rejects_unknown_outcome():
 
 
 @pytest.mark.django_db
-def test_record_decision_board_level_and_supersession():
+def test_record_decision_board_level_and_supersession() -> None:
     actor = kf.make_actor()
 
     first = services.record_decision(
@@ -449,7 +449,7 @@ def test_record_decision_board_level_and_supersession():
 
 
 @pytest.mark.django_db
-def test_record_decision_scoped_to_card():
+def test_record_decision_scoped_to_card() -> None:
     card = kf.make_card()
 
     decision = services.record_decision(

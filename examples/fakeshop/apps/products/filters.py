@@ -1,4 +1,4 @@
-"""FilterSet declarations for the fakeshop products app.
+r"""FilterSet declarations for the fakeshop products app.
 
 Ported from the ``django-graphene-filters`` cookbook recipe
 (``examples/cookbook/cookbook/recipes/filters.py``) to the
@@ -20,7 +20,7 @@ an explicit visibility queryset). ``RelatedFilter`` cross-references use the
 same-module unqualified-name form (e.g. ``RelatedFilter("EntryFilter")``) so
 the lazy Layer-2 resolution path is exercised end to end.
 
-Because the owning ``DjangoType``\\ s declare ``interfaces = (relay.Node,)``,
+Because the owning ``DjangoType``\ s declare ``interfaces = (relay.Node,)``,
 each model's own ``id`` is a Relay GlobalID over the wire -- so the ``id``
 ``"__all__"`` entry exercises the own-PK ``GlobalIDFilter`` /
 ``GlobalIDMultipleChoiceFilter`` conversion across the PK's lookups.
@@ -43,6 +43,8 @@ from . import models
 
 
 class CategoryFilter(FilterSet):
+    """Filters ``Category`` rows by every lookup of the listed columns and by item name."""
+
     class Meta:
         model = models.Category
         fields = {
@@ -60,6 +62,8 @@ class CategoryFilter(FilterSet):
 
 
 class ItemFilter(FilterSet):
+    """Filters ``Item`` rows by every lookup of the listed columns, its ``category`` and its ``entries``."""
+
     category = RelatedFilter(CategoryFilter, field_name="category")
     entries = RelatedFilter("EntryFilter", field_name="entries")
 
@@ -76,17 +80,20 @@ class ItemFilter(FilterSet):
     #   permission variant below is NOT part of the shipped permissions subsystem -
     #   ``DONE-034-0.0.10`` ships cascade row-visibility and keeps the filter gates unchanged (its
     #   Decision 11), so this variant has no owning card yet. Uncomment in the change that lands
-    #   the hook contract and exempt this pseudo-code block from ERA001 per
-    #   AGENTS.md's TODO-pseudo-code rule.
+    #   the hook contract and drop the ERA001 fence around it.
+    # ruff: disable[ERA001]
     # def check_entries_permission(self, queryset, request):
     #     """Only staff users may filter by Item.entries."""
     #     user = getattr(request, "user", None)
     #     if not user or not user.is_staff:
     #         return queryset.filter(category__name="Secret")
     #     return queryset
+    # ruff: enable[ERA001]
 
 
 class PropertyFilter(FilterSet):
+    """Filters ``Property`` rows by every lookup of the listed columns and by its ``category``."""
+
     category = RelatedFilter(CategoryFilter, field_name="category")
 
     class Meta:
@@ -95,6 +102,8 @@ class PropertyFilter(FilterSet):
 
 
 class EntryFilter(FilterSet):
+    """Filters ``Entry`` rows by the listed columns, with ``property`` scoped to non-secret properties."""
+
     # Explicit queryset: a scope boundary excluding properties named "Secret".
     # ``property: { ... }`` and every flat ``property*`` leaf answer only from the
     # properties it admits, so no property predicate matches a "Secret" entry; an

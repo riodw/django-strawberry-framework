@@ -6,6 +6,7 @@ import sys
 
 
 def main() -> None:
+    """Run Django's command-line utility for the fakeshop project."""
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
     from django.core.management import execute_from_command_line
 

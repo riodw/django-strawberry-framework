@@ -105,7 +105,7 @@ def _introspect_input_fields(type_name: str) -> dict[str, dict[str, object]]:
 
 
 @pytest.mark.django_db
-def test_lending_desk_projects_inherited_columns_through_the_parent_link_join():
+def test_lending_desk_projects_inherited_columns_through_the_parent_link_join() -> None:
     """``name`` is read from ``library_venue`` in the same statement as ``windowCount``.
 
     ``LendingDesk`` stores only ``window_count`` on its own table; ``name`` and
@@ -135,7 +135,7 @@ def test_lending_desk_projects_inherited_columns_through_the_parent_link_join():
 
 
 @pytest.mark.django_db
-def test_self_serve_desk_reads_both_parent_tables_in_one_statement():
+def test_self_serve_desk_reads_both_parent_tables_in_one_statement() -> None:
     """A two-level chain joins both parent tables and projects a column from each.
 
     ``SelfServeDesk`` extends ``LendingDesk``, which extends ``Venue``, so
@@ -164,7 +164,7 @@ def test_self_serve_desk_reads_both_parent_tables_in_one_statement():
 
 
 @pytest.mark.django_db
-def test_lending_desks_order_by_the_inherited_opened_on_column():
+def test_lending_desks_order_by_the_inherited_opened_on_column() -> None:
     """``orderBy: openedOn`` sorts desks by the parent table's column, in each direction.
 
     ``opened_on`` is declared on ``Venue``; ``LendingDeskOrder`` publishes it,
@@ -198,7 +198,7 @@ def test_lending_desks_order_by_the_inherited_opened_on_column():
 
 
 @pytest.mark.django_db
-def test_parent_link_cascade_hides_a_desk_whose_venue_is_hidden():
+def test_parent_link_cascade_hides_a_desk_whose_venue_is_hidden() -> None:
     """A desk under a closed ``Venue`` is hidden through the ``<parent>_ptr`` cascade.
 
     ``VenueType.get_queryset`` hides venues named ``Closed ...``;
@@ -228,7 +228,7 @@ def test_parent_link_cascade_hides_a_desk_whose_venue_is_hidden():
 
 
 @pytest.mark.django_db
-def test_venue_reverse_relations_without_related_name_resolve_through_default_accessors():
+def test_venue_reverse_relations_without_related_name_resolve_through_default_accessors() -> None:
     """``repairticket`` / ``venuebadge`` / ``venuesponsor`` read the default accessors.
 
     None of the three relations declares ``related_name``, so each is published
@@ -338,7 +338,7 @@ def test_withdrawn_badges_and_sponsors_are_absent_from_every_read_path(
     query: str,
     visible: tuple[str, ...],
     expected: dict[str, object],
-):
+) -> None:
     """A withdrawn badge or sponsor is absent from the wire, never an error.
 
     ``VenueBadgeType`` hides ``VOID-`` badges and ``VenueSponsorType`` hides
@@ -362,7 +362,7 @@ def test_withdrawn_badges_and_sponsors_are_absent_from_every_read_path(
 
 
 @pytest.mark.django_db
-def test_nullable_lead_ticket_cycle_cascades_one_way():
+def test_nullable_lead_ticket_cycle_cascades_one_way() -> None:
     """The nullable half of the ``Venue`` <-> ``RepairTicket`` cycle keeps unled venues.
 
     ``VenueType`` cascades over ``lead_ticket``: ``Shed``, whose lead ticket is
@@ -398,7 +398,7 @@ def test_nullable_lead_ticket_cycle_cascades_one_way():
 
 
 @pytest.mark.django_db
-def test_open_venues_are_the_proxy_default_manager_rows():
+def test_open_venues_are_the_proxy_default_manager_rows() -> None:
     """``allLibraryOpenVenues`` serves ``OpenVenue.objects``, which hides unopened venues.
 
     ``OpenVenueType`` declares no hook, so the only filter is the proxy's
@@ -421,7 +421,7 @@ def test_open_venues_are_the_proxy_default_manager_rows():
 
 
 @pytest.mark.django_db
-def test_signage_on_a_city_less_branch_is_hidden_by_the_proxy_default_manager():
+def test_signage_on_a_city_less_branch_is_hidden_by_the_proxy_default_manager() -> None:
     """The cascade composes a proxy target from its default manager, not its base manager.
 
     ``BranchSignage.branch`` is declared to ``VisibleBranch``, whose default
@@ -445,7 +445,7 @@ def test_signage_on_a_city_less_branch_is_hidden_by_the_proxy_default_manager():
 
 
 @pytest.mark.django_db
-def test_circulation_desk_publishes_children_and_profile_under_a_scoped_cascade():
+def test_circulation_desk_publishes_children_and_profile_under_a_scoped_cascade() -> None:
     """Every relation kind on one model; the explicit reverse names resolve.
 
     ``DeskShift.desk`` and ``DeskProfile.desk`` publish on the desk as

@@ -34,11 +34,11 @@ from django_strawberry_framework.mutations.operations import (
 
 class _HostileRepr:
     @override
-    def __repr__(self):
+    def __repr__(self) -> str:
         raise RuntimeError("HostileRepr exploded")
 
 
-def test_mutation_operation_descriptor_immutability():
+def test_mutation_operation_descriptor_immutability() -> None:
     """MutationOperationDescriptor instances are frozen dataclasses."""
     desc = OPERATION_CREATE
     assert isinstance(desc, MutationOperationDescriptor)
@@ -49,7 +49,7 @@ def test_mutation_operation_descriptor_immutability():
         desc.name = "other"  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def test_operation_descriptors_invariants():
+def test_operation_descriptors_invariants() -> None:
     """All standard operation descriptors match expected invariants."""
     assert OPERATION_CREATE.name == "create"
     assert OPERATION_CREATE.input_kind == CREATE
@@ -88,7 +88,7 @@ def test_operation_descriptors_invariants():
     assert OPERATION_FORM.supports_form_mutation
 
 
-def test_get_operation_descriptor():
+def test_get_operation_descriptor() -> None:
     """get_operation_descriptor resolves known operations and returns None for unknown."""
     assert get_operation_descriptor("create") is OPERATION_CREATE
     assert get_operation_descriptor("update") is OPERATION_UPDATE
@@ -98,7 +98,7 @@ def test_get_operation_descriptor():
     assert get_operation_descriptor("") is None
 
 
-def test_operation_takes_id():
+def test_operation_takes_id() -> None:
     """operation_takes_id returns True only for operations taking an id argument."""
     assert not operation_takes_id("create")
     assert operation_takes_id("update")
@@ -107,7 +107,7 @@ def test_operation_takes_id():
     assert not operation_takes_id("unknown")
 
 
-def test_operation_takes_data():
+def test_operation_takes_data() -> None:
     """operation_takes_data returns True only for operations taking a data argument."""
     assert operation_takes_data("create")
     assert operation_takes_data("update")
@@ -116,7 +116,7 @@ def test_operation_takes_data():
     assert not operation_takes_data("unknown")
 
 
-def test_derived_mappings_and_sets():
+def test_derived_mappings_and_sets() -> None:
     """Derived operation mappings and sets match expected values."""
     assert NON_DELETE_OPERATION_INPUT_KIND == {"create": CREATE, "update": PARTIAL}
     assert _OPERATION_INPUT_OVERRIDE_ATTR == {
@@ -132,13 +132,13 @@ def test_derived_mappings_and_sets():
     }
 
 
-def test_non_delete_operation_error_formatting():
+def test_non_delete_operation_error_formatting() -> None:
     """non_delete_operation_error formats ConfigurationError and contains hostile reprs."""
     err = non_delete_operation_error("DjangoModelFormMutation", "ItemMutation", "delete")
     assert isinstance(err, ConfigurationError)
     assert (
-        "DjangoModelFormMutation ItemMutation.Meta.operation must be one of ['create', 'update']; got 'delete'."
-        in str(err)
+        "DjangoModelFormMutation ItemMutation.Meta.operation must be one of ['create', 'update']; "
+        "got 'delete'." in str(err)
     )
 
     hostile_err = non_delete_operation_error("SerializerMutation", "OrderMutation", _HostileRepr())

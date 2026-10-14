@@ -27,7 +27,7 @@ class _NonHashableField:
     """Stand-in for relation metadata whose ``__hash__`` is ``None``."""
 
     @override
-    def __eq__(self, other: object):
+    def __eq__(self, other: object) -> bool:
         return self is other
 
     # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
@@ -54,7 +54,7 @@ def _build_pending() -> PendingRelation:
     )
 
 
-def test_pending_relation_hash_supports_non_hashable_django_field():
+def test_pending_relation_hash_supports_non_hashable_django_field() -> None:
     """``hash(pending)`` does not require a hashable Django relation field.
 
     Records hash by identity, so the field's own ``__hash__`` is never called;
@@ -66,7 +66,7 @@ def test_pending_relation_hash_supports_non_hashable_django_field():
     assert isinstance(hash(pending), int)
 
 
-def test_pending_relation_is_set_member_with_non_hashable_django_field():
+def test_pending_relation_is_set_member_with_non_hashable_django_field() -> None:
     """``set([pending])`` and set membership work without raising."""
     pending = _build_pending()
 
@@ -76,7 +76,7 @@ def test_pending_relation_is_set_member_with_non_hashable_django_field():
     assert len(bucket) == 1
 
 
-def test_equal_valued_pending_relations_stay_distinct():
+def test_equal_valued_pending_relations_stay_distinct() -> None:
     """Two records built from the same values are unequal and occupy two set slots."""
     first = _build_pending()
     second = replace(first)
@@ -85,15 +85,15 @@ def test_equal_valued_pending_relations_stay_distinct():
     assert len({first, second}) == 2
 
 
-def test_pending_relation_annotation_repr():
+def test_pending_relation_annotation_repr() -> None:
     """``PendingRelationAnnotation`` provides a diagnostic repr for unfinalized schemas."""
-    assert (
-        repr(PendingRelationAnnotation)
-        == "<unfinalized DjangoType relation; call finalize_django_types() before constructing strawberry.Schema>"
+    assert repr(PendingRelationAnnotation) == (
+        "<unfinalized DjangoType relation; "
+        "call finalize_django_types() before constructing strawberry.Schema>"
     )
 
 
-def test_pending_relation_is_frozen_dataclass():
+def test_pending_relation_is_frozen_dataclass() -> None:
     """``PendingRelation`` attributes cannot be mutated post-construction."""
     pending = _build_pending()
 

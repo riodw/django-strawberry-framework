@@ -140,7 +140,7 @@ def _make_info() -> SimpleNamespace:
 
 
 @pytest.mark.django_db
-def test_filter_and_order_compose_through_finalizer_and_apply_pipelines():
+def test_filter_and_order_compose_through_finalizer_and_apply_pipelines() -> None:
     """Filter + order compose cleanly through one ``finalize_django_types()`` pass.
 
     Pins the four-part contract from the module docstring: both factories
@@ -243,7 +243,7 @@ def test_filter_and_order_compose_through_finalizer_and_apply_pipelines():
     assert where_idx < order_idx, f"WHERE must precede ORDER BY in the SQL string: {sql!r}"
 
 
-def test_filter_and_order_share_lazy_related_class_mixin_via_neutral_module():
+def test_filter_and_order_share_lazy_related_class_mixin_via_neutral_module() -> None:
     """Both subsystems' ``Related*`` primitives inherit the shared mixin.
 
     Spec-028 pinned the mixin's neutral home at

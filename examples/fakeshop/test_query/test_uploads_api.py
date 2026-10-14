@@ -85,7 +85,7 @@ def _introspect_type(name: str, selection: str) -> JSONObject:
 # ---------------------------------------------------------------------------
 
 
-def test_media_specimen_output_sdl_is_default_nullable_over_http():
+def test_media_specimen_output_sdl_is_default_nullable_over_http() -> None:
     """A *required* FileField / ImageField renders as a NULLABLE output object.
 
     The columns are ``null=False, blank=False`` yet the live SDL exposes
@@ -102,7 +102,7 @@ def test_media_specimen_output_sdl_is_default_nullable_over_http():
     assert by_name["image"] == {"kind": "OBJECT", "name": "DjangoImageType"}
 
 
-def test_default_file_output_objects_expose_no_filesystem_path_over_http():
+def test_default_file_output_objects_expose_no_filesystem_path_over_http() -> None:
     """Neither default output object publishes ``path`` in the live schema (spec-048 D1).
 
     Introspection over the real endpoint, not a rendered SDL string: this is the
@@ -120,7 +120,7 @@ def test_default_file_output_objects_expose_no_filesystem_path_over_http():
     assert file_names == {"name", "size", "url"}
 
 
-def test_file_output_objects_publish_nullable_subfields_over_http():
+def test_file_output_objects_publish_nullable_subfields_over_http() -> None:
     """Every subfield a storage read can fail is nullable; only the stored ``name`` is not.
 
     The divergence from upstream's all-non-null subfields, read off the live
@@ -147,7 +147,7 @@ def test_file_output_objects_publish_nullable_subfields_over_http():
     }
 
 
-def test_filesystem_path_opt_in_is_absent_unless_declared_over_http():
+def test_filesystem_path_opt_in_is_absent_unless_declared_over_http() -> None:
     """The opt-in is per column and per type: only the declared column gets the path type.
 
     ``MediaSpecimenType`` declares no opt-in and keeps the pathless objects;
@@ -453,7 +453,7 @@ def test_suspicious_file_operation_is_reported_not_nulled_over_http(
 # ---------------------------------------------------------------------------
 
 
-def test_media_specimen_input_exposes_upload_over_http():
+def test_media_specimen_input_exposes_upload_over_http() -> None:
     """The generated ``MediaSpecimenInput`` maps file/image columns to NON_NULL ``Upload``.
 
     A file column is a scalar input under its own field name, never the
@@ -643,7 +643,9 @@ def _update_specimen(
     return res.data["updateMediaSpecimen"]
 
 
-def test_media_specimen_partial_input_makes_the_required_file_an_optional_upload_over_http():
+def test_media_specimen_partial_input_makes_the_required_file_an_optional_upload_over_http() -> (
+    None
+):
     """``MediaSpecimenPartialInput.attachment`` is a nullable ``Upload`` though the column is required.
 
     Every partial-input column is omittable, file columns included, so the

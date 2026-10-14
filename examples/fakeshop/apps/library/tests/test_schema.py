@@ -10,7 +10,7 @@ from apps.library import schema as library_schema
 from django_strawberry_framework import DjangoType
 
 
-def test_library_djangotype_declaration_order_stays_awkward():
+def test_library_djangotype_declaration_order_stays_awkward() -> None:
     """Pin the real app's intentionally cross-referenced declaration order."""
     declaration_order = [
         name

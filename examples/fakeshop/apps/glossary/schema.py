@@ -215,6 +215,7 @@ class Query:
         filter: FilterInput[filters.GlossaryTermFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.GlossaryTermOrder]] | None = None,
     ) -> QuerySet[models.GlossaryTerm]:
+        """Return ``GlossaryTerm`` rows, filtered and ordered by the arguments."""
         queryset = models.GlossaryTerm.objects.order_by("entry_order", "title_sort")
         if filter is not None:
             queryset = filters.GlossaryTermFilter.apply_sync(filter, queryset, info)
@@ -229,6 +230,7 @@ class Query:
         filter: FilterInput[filters.GlossaryStatusFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.GlossaryStatusOrder]] | None = None,
     ) -> QuerySet[models.GlossaryStatus]:
+        """Return ``GlossaryStatus`` rows, filtered and ordered by the arguments."""
         queryset = models.GlossaryStatus.objects.order_by("order", "label")
         if filter is not None:
             queryset = filters.GlossaryStatusFilter.apply_sync(filter, queryset, info)
@@ -243,6 +245,7 @@ class Query:
         filter: FilterInput[filters.GlossaryCategoryFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.GlossaryCategoryOrder]] | None = None,
     ) -> QuerySet[models.GlossaryCategory]:
+        """Return ``GlossaryCategory`` rows, filtered and ordered by the arguments."""
         queryset = models.GlossaryCategory.objects.order_by("order", "label")
         if filter is not None:
             queryset = filters.GlossaryCategoryFilter.apply_sync(filter, queryset, info)
@@ -257,6 +260,7 @@ class Query:
         filter: FilterInput[filters.GlossaryCategoryMembershipFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.GlossaryCategoryMembershipOrder]] | None = None,
     ) -> QuerySet[models.GlossaryCategoryMembership]:
+        """Return ``GlossaryCategoryMembership`` rows, filtered and ordered by the arguments."""
         queryset = models.GlossaryCategoryMembership.objects.order_by("category__order", "order")
         if filter is not None:
             queryset = filters.GlossaryCategoryMembershipFilter.apply_sync(filter, queryset, info)
@@ -271,6 +275,7 @@ class Query:
         filter: FilterInput[filters.GlossaryAliasFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.GlossaryAliasOrder]] | None = None,
     ) -> QuerySet[models.GlossaryAlias]:
+        """Return ``GlossaryAlias`` rows, filtered and ordered by the arguments."""
         queryset = models.GlossaryAlias.objects.order_by("term__title_sort", "label")
         if filter is not None:
             queryset = filters.GlossaryAliasFilter.apply_sync(filter, queryset, info)
@@ -285,6 +290,7 @@ class Query:
         filter: FilterInput[filters.GlossaryTermLinkKindFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.GlossaryTermLinkKindOrder]] | None = None,
     ) -> QuerySet[models.GlossaryTermLinkKind]:
+        """Return ``GlossaryTermLinkKind`` rows, filtered and ordered by the arguments."""
         queryset = models.GlossaryTermLinkKind.objects.order_by("order", "label")
         if filter is not None:
             queryset = filters.GlossaryTermLinkKindFilter.apply_sync(filter, queryset, info)
@@ -299,6 +305,7 @@ class Query:
         filter: FilterInput[filters.GlossaryTermLinkFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.GlossaryTermLinkOrder]] | None = None,
     ) -> QuerySet[models.GlossaryTermLink]:
+        """Return ``GlossaryTermLink`` rows, filtered and ordered by the arguments."""
         queryset = models.GlossaryTermLink.objects.order_by("source_term__title_sort", "order")
         if filter is not None:
             queryset = filters.GlossaryTermLinkFilter.apply_sync(filter, queryset, info)
@@ -313,6 +320,7 @@ class Query:
         filter: FilterInput[filters.GlossarySpecMentionFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.GlossarySpecMentionOrder]] | None = None,
     ) -> QuerySet[models.GlossarySpecMention]:
+        """Return ``GlossarySpecMention`` rows, filtered and ordered by the arguments."""
         queryset = models.GlossarySpecMention.objects.order_by("spec_path", "order")
         if filter is not None:
             queryset = filters.GlossarySpecMentionFilter.apply_sync(filter, queryset, info)
@@ -327,6 +335,7 @@ class Query:
         filter: FilterInput[filters.GlossarySourceLinkFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.GlossarySourceLinkOrder]] | None = None,
     ) -> QuerySet[models.GlossarySourceLink]:
+        """Return ``GlossarySourceLink`` rows, filtered and ordered by the arguments."""
         queryset = models.GlossarySourceLink.objects.order_by("term__title_sort", "order")
         if filter is not None:
             queryset = filters.GlossarySourceLinkFilter.apply_sync(filter, queryset, info)
@@ -341,6 +350,7 @@ class Query:
         filter: FilterInput[filters.GlossaryDocumentFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.GlossaryDocumentOrder]] | None = None,
     ) -> QuerySet[kanban_models.BoardDoc]:
+        """Return the ``glossary``-namespace ``BoardDoc`` rows, filtered and ordered by the arguments."""
         queryset = kanban_models.BoardDoc.objects.filter(namespace="glossary").order_by("order")
         if filter is not None:
             queryset = filters.GlossaryDocumentFilter.apply_sync(filter, queryset, info)

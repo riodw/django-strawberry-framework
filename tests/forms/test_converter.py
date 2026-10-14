@@ -76,14 +76,14 @@ from django_strawberry_framework.forms.converter import (
         (forms.TypedMultipleChoiceField(), list[str]),
     ],
 )
-def test_scalar_field_annotations(field: forms.Field, expected: object):
+def test_scalar_field_annotations(field: forms.Field, expected: object) -> None:
     """Each supported scalar form field maps to its Strawberry annotation, kind ``scalar``."""
     conversion = convert_form_field(field)
     assert conversion.annotation == expected
     assert conversion.kind == SCALAR
 
 
-def test_null_boolean_field_is_optional_bool():
+def test_null_boolean_field_is_optional_bool() -> None:
     """``NullBooleanField`` -> ``bool | None``, always optional (graphene parity).
 
     Django's ``NullBooleanField.validate`` is a no-op, so ``field.required`` is
@@ -101,7 +101,7 @@ def test_null_boolean_field_is_optional_bool():
     assert convert_form_field(forms.NullBooleanField(required=False)).required is False
 
 
-def test_null_boolean_subclass_with_real_validation_stays_required():
+def test_null_boolean_subclass_with_real_validation_stays_required() -> None:
     """A custom subclass is not assumed to retain NullBooleanField's no-op validation."""
 
     class RequiredNullableBoolean(forms.NullBooleanField):
@@ -116,7 +116,7 @@ def test_null_boolean_subclass_with_real_validation_stays_required():
     assert ProbeForm(data={}).errors["flag"] == ["This field is required."]
 
 
-def test_null_boolean_validating_subclass_generates_required_input():
+def test_null_boolean_validating_subclass_generates_required_input() -> None:
     """A validating subclass must not generate nullable-required SDL.
 
     The converter preserves the subclass's real requiredness and emits a
@@ -161,7 +161,7 @@ def test_null_boolean_validating_subclass_generates_required_input():
     assert schema.execute_sync("{ probe(inp: {flag: true}) }").errors is None
 
 
-def test_json_field_maps_to_json_scalar_not_charfield_str():
+def test_json_field_maps_to_json_scalar_not_charfield_str() -> None:
     """``JSONField`` subclasses ``CharField`` but must resolve to ``JSON``, not ``str``.
 
     Without an explicit registry row the MRO walk would hit ``CharField`` ->
@@ -173,20 +173,20 @@ def test_json_field_maps_to_json_scalar_not_charfield_str():
     assert conversion.kind == SCALAR
 
 
-def test_required_ness_reflects_field_required():
+def test_required_ness_reflects_field_required() -> None:
     """``required`` mirrors ``field.required`` for both states (non-NullBoolean)."""
     assert convert_form_field(forms.CharField(required=True)).required is True
     assert convert_form_field(forms.CharField(required=False)).required is False
 
 
-def test_email_field_maps_via_mro_under_charfield():
+def test_email_field_maps_via_mro_under_charfield() -> None:
     """A known subclass (``EmailField``) resolves to its ``CharField`` parent's scalar."""
     # EmailField is not its own entry in the scalar table; the MRO walk reaches
     # CharField -> str. This is the parity behavior the spec mandates.
     assert convert_form_field(forms.EmailField()).annotation is str
 
 
-def test_float_and_decimal_do_not_collapse_to_integer_parent():
+def test_float_and_decimal_do_not_collapse_to_integer_parent() -> None:
     """``FloatField`` / ``DecimalField`` subclass ``IntegerField`` but keep their own scalar.
 
     A naive "first ``isinstance`` wins" walk over an ``IntegerField``-first
@@ -204,7 +204,7 @@ def test_float_and_decimal_do_not_collapse_to_integer_parent():
 # ---------------------------------------------------------------------------
 
 
-def test_model_choice_field_is_relation_single():
+def test_model_choice_field_is_relation_single() -> None:
     """``ModelChoiceField`` -> kind ``relation_single`` (annotation finalized at build site).
 
     The converter only reads ``field.required`` and returns the relation ``kind``
@@ -218,7 +218,7 @@ def test_model_choice_field_is_relation_single():
     assert conversion.annotation is None
 
 
-def test_model_multiple_choice_field_is_relation_multi():
+def test_model_multiple_choice_field_is_relation_multi() -> None:
     """``ModelMultipleChoiceField`` -> kind ``relation_multi`` (precedes the single check)."""
     field: forms.ModelMultipleChoiceField[models.Model] = forms.ModelMultipleChoiceField(
         queryset=None,
@@ -228,7 +228,7 @@ def test_model_multiple_choice_field_is_relation_multi():
     assert conversion.annotation is None
 
 
-def test_file_and_image_fields_are_file_kind():
+def test_file_and_image_fields_are_file_kind() -> None:
     """``FileField`` / ``ImageField`` -> kind ``file`` (the ``Upload`` annotation is build-site)."""
     assert convert_form_field(forms.FileField()).kind == FILE
     assert convert_form_field(forms.ImageField()).kind == FILE
@@ -239,14 +239,14 @@ def test_file_and_image_fields_are_file_kind():
 # ---------------------------------------------------------------------------
 
 
-def test_bare_field_maps_to_str_as_exact_type_special_case():
+def test_bare_field_maps_to_str_as_exact_type_special_case() -> None:
     """A bare ``forms.Field`` is an exact-type special case -> ``str`` (not a catch-all)."""
     conversion = convert_form_field(forms.Field())
     assert conversion.annotation is str
     assert conversion.kind == SCALAR
 
 
-def test_unknown_custom_field_subclass_raises():
+def test_unknown_custom_field_subclass_raises() -> None:
     """A custom ``forms.Field`` subclass with no supported ancestor raises ``ConfigurationError``.
 
     This is the catch-all-shadowing regression: if a base-``forms.Field`` -> ``str``
@@ -261,23 +261,23 @@ def test_unknown_custom_field_subclass_raises():
         convert_form_field(CustomField())
 
 
-def test_unknown_field_with_hostile_repr_still_raises_configuration_error():
+def test_unknown_field_with_hostile_repr_still_raises_configuration_error() -> None:
     """Formatting the unsupported-field diagnostic cannot replace its typed error."""
 
     class HostileField(forms.Field):
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise KeyboardInterrupt("repr trap")
 
     with pytest.raises(ConfigurationError, match="unprintable HostileField"):
         convert_form_field(HostileField())
 
 
-def test_form_field_required_column_backed_variations():
+def test_form_field_required_column_backed_variations() -> None:
     """``form_field_required`` accounts for backing column nullability on exact NullBooleanField."""
 
     class MockColumn:
-        def __init__(self, null: bool):
+        def __init__(self, *, null: bool) -> None:
             self.null = null
 
     class MockColumnNoNull:
@@ -305,7 +305,7 @@ def test_form_field_required_column_backed_variations():
     assert form_field_required(char_opt, column=MockColumn(null=False)) is False
 
 
-def test_custom_subclasses_of_precheck_kinds():
+def test_custom_subclasses_of_precheck_kinds() -> None:
     """Custom subclasses of relation, file, and multi-choice fields resolve to expected kinds."""
 
     class CustomModelChoiceField(forms.ModelChoiceField[models.Model]):
@@ -332,7 +332,7 @@ def test_custom_subclasses_of_precheck_kinds():
     assert conv_multi.annotation == list[str]
 
 
-def test_unsupported_django_form_fields_raise():
+def test_unsupported_django_form_fields_raise() -> None:
     """Form fields without scalar mapping or supported ancestor raise ConfigurationError."""
     unsupported_fields = [
         forms.DurationField(),

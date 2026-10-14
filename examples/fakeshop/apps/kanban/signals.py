@@ -372,6 +372,7 @@ def prepare_card_save(
     using: str | None,
     **_kwargs: object,
 ) -> None:
+    """Validate a card's status move, spec, glossary link and board number before it saves."""
     _validate_card_status_transition(instance, update_fields, using)
     _validate_done_card_has_spec(instance, using)
     _validate_done_card_has_glossary_link(instance, using)
@@ -380,6 +381,7 @@ def prepare_card_save(
 
 @receiver(pre_save, sender=models.SpecDoc, dispatch_uid="kanban_validate_spec_doc_card")
 def validate_spec_doc_card(instance: models.SpecDoc, using: str | None, **_kwargs: object) -> None:
+    """Require a spec document's card, and refuse moving one off a Done card."""
     if instance.card_id is None:
         raise ValidationError(SPEC_CARD_REQUIRED_ERROR)
     if instance.pk is None:
@@ -396,6 +398,7 @@ def validate_spec_doc_card(instance: models.SpecDoc, using: str | None, **_kwarg
 
 @receiver(pre_delete, sender=models.SpecDoc, dispatch_uid="kanban_protect_done_card_spec")
 def protect_done_card_spec(instance: models.SpecDoc, using: str | None, **kwargs: object) -> None:
+    """Refuse deleting the spec document of a Done card unless the card itself is going."""
     if _delete_origin_is_card(kwargs.get("origin")):
         return
     if _card_is_done(instance.card_id, using):
@@ -412,6 +415,7 @@ def validate_card_glossary_term_card(
     using: str | None,
     **_kwargs: object,
 ) -> None:
+    """Refuse moving a Done card's only glossary link to another card."""
     if instance.pk is None:
         return
     old_card_id = (
@@ -440,6 +444,7 @@ def protect_done_card_glossary_link(
     using: str | None,
     **kwargs: object,
 ) -> None:
+    """Refuse deleting a Done card's only glossary link unless the card itself is going."""
     if _delete_origin_is_card(kwargs.get("origin")):
         return
     if _card_is_done(instance.card_id, using) and not _card_has_other_glossary_link(
@@ -452,6 +457,7 @@ def protect_done_card_glossary_link(
 
 @receiver(post_save, sender=models.Card, dispatch_uid="kanban_sync_card_after_save")
 def sync_card_after_save(instance: models.Card, using: str | None, **_kwargs: object) -> None:
+    """Settle a just-created card at its requested board number."""
     _sync_card_order_after_insert(instance, using)
 
 
@@ -496,6 +502,7 @@ def prepare_card_reference(
 def create_card_path_link_uuid_rows(
     instance: models.Card | models.TrackedPath,
     action: str,
+    *,
     reverse: bool,
     pk_set: set[int] | None,
     using: str | None = None,
@@ -528,6 +535,7 @@ def create_card_path_link_uuid_rows(
 def create_uuid_row(
     sender: type[Model],
     instance: Model,
+    *,
     created: bool,
     using: str | None = None,
     **_kwargs: object,

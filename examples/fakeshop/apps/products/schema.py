@@ -33,10 +33,12 @@ present `filters.py` / `orders.py` modules; `aggregate_class` /
 
 # Future imports (uncomment as Layer-3 subsystems ship):
 #
+# ruff: disable[ERA001]
 # needs TODO-BETA-062-0.1.3 (aggregates):
 # from apps.products import aggregates
 # needs TODO-BETA-059-0.1.1:
 # from apps.products import fields as fieldsets
+# ruff: enable[ERA001]
 
 import strawberry
 from django.db.models import Model, QuerySet
@@ -86,12 +88,14 @@ class CategoryType(DjangoType):
         filterset_class = filters.CategoryFilter
         orderset_class = orders.CategoryOrder
         # Future Layer-3 additions - uncomment each as the relevant card ships:
+        # ruff: disable[ERA001]
         # needs TODO-BETA-060-0.1.2:
         # search_fields = ("name", "description")
         # needs TODO-BETA-062-0.1.3 + aggregates.py:
         # aggregate_class = aggregates.CategoryAggregate
         # needs TODO-BETA-059-0.1.1 + fields.py:
         # fields_class = fieldsets.CategoryFieldSet
+        # ruff: enable[ERA001]
 
     @classmethod
     @override
@@ -134,12 +138,14 @@ class ItemType(DjangoType):
         filterset_class = filters.ItemFilter
         orderset_class = orders.ItemOrder
         # Future Layer-3 additions - uncomment each as the relevant card ships:
+        # ruff: disable[ERA001]
         # needs TODO-BETA-060-0.1.2:
         # search_fields = ("name", "description", "category__name", "category__description")
         # needs TODO-BETA-062-0.1.3 + aggregates.py:
         # aggregate_class = aggregates.ItemAggregate
         # needs TODO-BETA-059-0.1.1 + fields.py:
         # fields_class = fieldsets.ItemFieldSet
+        # ruff: enable[ERA001]
 
     @classmethod
     @override
@@ -148,7 +154,9 @@ class ItemType(DjangoType):
         queryset: QuerySet[models.Item],
         info: strawberry.Info,
     ) -> QuerySet[models.Item]:
-        """Staff see everything; everyone else (incl. view_item holders) sees public Items under a visible Category.
+        """Staff see everything; everyone else sees public Items under a visible Category.
+
+        Everyone else includes ``view_item`` holders.
 
         The view_item branch cascades just like the anonymous fallback: a non-staff
         viewer only sees Items whose ``category`` target is itself visible to them, so
@@ -180,12 +188,14 @@ class PropertyType(DjangoType):
         filterset_class = filters.PropertyFilter
         orderset_class = orders.PropertyOrder
         # Future Layer-3 additions - uncomment each as the relevant card ships:
+        # ruff: disable[ERA001]
         # needs TODO-BETA-060-0.1.2:
         # search_fields = ("name", "description", "category__name", "category__description")
         # needs TODO-BETA-062-0.1.3 + aggregates.py:
         # aggregate_class = aggregates.PropertyAggregate
         # needs TODO-BETA-059-0.1.1 + fields.py:
         # fields_class = fieldsets.PropertyFieldSet
+        # ruff: enable[ERA001]
 
     @classmethod
     @override
@@ -194,7 +204,9 @@ class PropertyType(DjangoType):
         queryset: QuerySet[models.Property],
         info: strawberry.Info,
     ) -> QuerySet[models.Property]:
-        """Staff see everything; everyone else (incl. view_property holders) sees public Properties under a visible Category.
+        """Staff see everything; everyone else sees public Properties under a visible Category.
+
+        Everyone else includes ``view_property`` holders.
 
         Like ItemType, the view_property branch cascades through the non-null
         ``category`` edge so a nested ``category { ... }`` selection can never reach a
@@ -214,7 +226,9 @@ class EntryType(DjangoType):
         fields = (
             "id",
             "value",
-            "description",  # Future: drop this entry to exercise field-level permission gating (TODO-BETA-059-0.1.1 FieldSet read gates)
+            # Future: drop this entry to exercise field-level permission gating
+            # (TODO-BETA-059-0.1.1 FieldSet read gates).
+            "description",
             "property",
             "item",
             "is_private",
@@ -225,12 +239,14 @@ class EntryType(DjangoType):
         filterset_class = filters.EntryFilter
         orderset_class = orders.EntryOrder
         # Future Layer-3 additions - uncomment each as the relevant card ships:
+        # ruff: disable[ERA001]
         # needs TODO-BETA-060-0.1.2:
         # search_fields = ("value", "property__name", "item__name")
         # needs TODO-BETA-062-0.1.3 + aggregates.py:
         # aggregate_class = aggregates.EntryAggregate
         # needs TODO-BETA-059-0.1.1 + fields.py:
         # fields_class = fieldsets.EntryFieldSet
+        # ruff: enable[ERA001]
 
     @classmethod
     @override
@@ -239,7 +255,9 @@ class EntryType(DjangoType):
         queryset: QuerySet[models.Entry],
         info: strawberry.Info,
     ) -> QuerySet[models.Entry]:
-        """Staff see everything; everyone else (incl. view_entry holders) sees public Entries whose item and property are visible.
+        """Staff see everything; everyone else sees public Entries whose targets are visible.
+
+        Everyone else includes ``view_entry`` holders; the targets are the item and the property.
 
         The view_entry branch cascades through both non-null FK edges (``item`` and
         ``property``), so a non-staff viewer only sees Entries whose targets are visible
@@ -505,7 +523,9 @@ class UpdateItemViaSerializer(SerializerMutation):
 
 
 class CreateItemViaRenamedSerializer(SerializerMutation):
-    """Create an ``Item`` through ``RenamedRelationItemSerializer`` (the renamed-field reverse-map matrix).
+    """Create an ``Item`` through ``RenamedRelationItemSerializer``.
+
+    This is the renamed-field reverse-map matrix.
 
     The serializer renames its scalar (``display_name`` -> ``displayName``, source
     ``name``) and relation (``category_pk`` -> ``categoryPk``, source ``category``), so
@@ -528,9 +548,10 @@ class Mutation:
     import, so the factory types the field via a `strawberry.lazy` forward-ref. The
     `DjangoMutation` `Item` writes cover create / update / delete; `createCategory`
     exercises a second model end to end, and `createItemHold` writes the `ItemHold`
-    whose `PROTECT` / `RESTRICT` references make `deleteItem` refusable. No `permission_classes` override - the default
-    `DjangoModelPermission` (the Django `add` / `change` / `delete` model perms) is
-    exactly what the live write-authorization tests exercise (spec-036 Decision 15).
+    whose `PROTECT` / `RESTRICT` references make `deleteItem` refusable. No
+    `permission_classes` override - the default `DjangoModelPermission` (the Django
+    `add` / `change` / `delete` model perms) is exactly what the live
+    write-authorization tests exercise (spec-036 Decision 15).
 
     The form-mutation surface (spec-038) adds the `DjangoModelFormMutation`
     create / update over `Item` via `ItemModelForm` (`createItemViaForm` /

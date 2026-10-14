@@ -88,7 +88,7 @@ def _field(
     selections: list[SimpleNamespace] | None = None,
     directives: dict[str, object] | None = None,
     alias: str | None = None,
-):
+) -> SimpleNamespace:
     return SimpleNamespace(
         name=name,
         alias=alias,
@@ -101,7 +101,7 @@ def _field(
 def _fragment(
     selections: Iterable[SimpleNamespace] | None = None,
     directives: dict[str, object] | None = None,
-):
+) -> SimpleNamespace:
     return SimpleNamespace(
         type_condition="T",
         directives=directives or {},
@@ -114,7 +114,7 @@ def _fragment(
 # ---------------------------------------------------------------------------
 
 
-def test_ast_child_selections_returns_children_or_empty():
+def test_ast_child_selections_returns_children_or_empty() -> None:
     """A field with a selection set yields its children; a leaf yields ``()``."""
     doc = parse("{ a { b c } d }")
     operation = _operation(doc)
@@ -123,7 +123,7 @@ def test_ast_child_selections_returns_children_or_empty():
     assert ast_child_selections(field_d) == ()  # scalar leaf, no selection_set.
 
 
-def test_resolve_unvisited_fragment_resolves_once_then_dedups():
+def test_resolve_unvisited_fragment_resolves_once_then_dedups() -> None:
     """A spread resolves to its definition once; a second visit and misses return ``None``."""
     doc = parse("query { ...F } fragment F on T { x }")
     operation, fragment_def = doc.definitions
@@ -150,7 +150,7 @@ def test_resolve_unvisited_fragment_resolves_once_then_dedups():
     assert resolve_unvisited_fragment(nameless, fragments, set()) is None
 
 
-def test_resolve_unvisited_fragment_depth_keys_visits_per_spread_site():
+def test_resolve_unvisited_fragment_depth_keys_visits_per_spread_site() -> None:
     """With ``depth=``, the visit key is ``(name, depth)`` so each depth resolves once.
 
     The cache-relevant-variable walk needs this: a fragment spread at root depth
@@ -176,7 +176,7 @@ def test_resolve_unvisited_fragment_depth_keys_visits_per_spread_site():
     assert visited == {("F", 0), ("F", 1)}
 
 
-def test_directive_variable_names_collects_skip_include_vars_only():
+def test_directive_variable_names_collects_skip_include_vars_only() -> None:
     """Only ``@skip`` / ``@include`` ``if`` variables are collected."""
     doc = parse(
         "query Q($x: Boolean!, $y: Boolean!, $z: Boolean!) { a @skip(if: $x) @other(if: $z) }",
@@ -189,7 +189,7 @@ def test_directive_variable_names_collects_skip_include_vars_only():
     assert directive_variable_names(field_b) == {"y"}
 
 
-def test_directive_variable_names_ignores_non_directive_objects():
+def test_directive_variable_names_ignores_non_directive_objects() -> None:
     """A ``directives`` collection carrying a non-``DirectiveNode`` is skipped."""
     node = SimpleNamespace(directives=[object()])
     # basedpyright: a stand-in node carrying only the slots the code under test reads;
@@ -202,13 +202,13 @@ def test_directive_variable_names_ignores_non_directive_objects():
 # ---------------------------------------------------------------------------
 
 
-def test_is_fragment_discriminates_on_type_condition():
+def test_is_fragment_discriminates_on_type_condition() -> None:
     """A selection with ``type_condition`` is a fragment; a field is not."""
     assert is_fragment(_fragment()) is True
     assert is_fragment(_field("a")) is False
 
 
-def test_should_include_honors_skip_and_include():
+def test_should_include_honors_skip_and_include() -> None:
     """``@skip(if: true)`` and ``@include(if: false)`` both exclude."""
     assert should_include(_field("a")) is True
     assert should_include(_field("a", directives={"skip": {"if": True}})) is False
@@ -217,13 +217,13 @@ def test_should_include_honors_skip_and_include():
     assert should_include(_field("a", directives={"include": {"if": True}})) is True
 
 
-def test_response_key_prefers_alias():
+def test_response_key_prefers_alias() -> None:
     """``response_key`` returns the alias when present, else the field name."""
     assert response_key(_field("a")) == "a"
     assert response_key(_field("a", alias="b")) == "b"
 
 
-def test_response_keys_reads_merged_marker_or_falls_back():
+def test_response_keys_reads_merged_marker_or_falls_back() -> None:
     """``response_keys`` reads the optimizer marker, else falls back to the single key."""
     assert response_keys(_field("a", alias="b")) == ("b",)
     merged = _field("a")
@@ -231,7 +231,7 @@ def test_response_keys_reads_merged_marker_or_falls_back():
     assert response_keys(merged) == ("b", "c")
 
 
-def test_included_field_selections_inlines_fragments_and_filters_directives():
+def test_included_field_selections_inlines_fragments_and_filters_directives() -> None:
     """Fragment bodies are inlined and ``@skip``-ped fields dropped, flat."""
     selections = [
         _field("keep"),
@@ -242,7 +242,7 @@ def test_included_field_selections_inlines_fragments_and_filters_directives():
     assert names == ["keep", "from_fragment"]
 
 
-def test_named_children_recurses_through_fragments():
+def test_named_children_recurses_through_fragments() -> None:
     """``named_children`` finds direct children of ``name`` through fragment wrappers."""
     connection = _field(
         "booksConnection",
@@ -256,7 +256,7 @@ def test_named_children_recurses_through_fragments():
     assert len(edges) == 2  # the direct edges + the fragment-wrapped edges.
 
 
-def test_node_children_with_runtime_prefix_clones_with_prefix():
+def test_node_children_with_runtime_prefix_clones_with_prefix() -> None:
     """Node children are cloned carrying the connection-aware runtime prefix."""
     node = _field("node", selections=[_field("title"), _field("author")])
     children = node_children_with_runtime_prefix(node, runtime_prefixes=(("booksConnection",),))
@@ -264,7 +264,7 @@ def test_node_children_with_runtime_prefix_clones_with_prefix():
     assert all(c._optimizer_runtime_prefixes == [("booksConnection",)] for c in children)
 
 
-def test_connection_node_children_unwraps_edges_node_with_prefixes():
+def test_connection_node_children_unwraps_edges_node_with_prefixes() -> None:
     """``connection_node_children`` owns the edges->node composition + prefix walk."""
     connection = _field(
         "booksConnection",
@@ -303,7 +303,7 @@ def test_connection_node_children_unwraps_edges_node_with_prefixes():
     ]
 
 
-def test_connection_node_children_empty_without_edges_node():
+def test_connection_node_children_empty_without_edges_node() -> None:
     """Scalar-only connection selections yield no node children."""
     connection = _field(
         "booksConnection",
@@ -317,7 +317,7 @@ def test_connection_node_children_empty_without_edges_node():
 # ---------------------------------------------------------------------------
 
 
-def test_direct_child_selected_matches_direct_and_fragment_wrapped():
+def test_direct_child_selected_matches_direct_and_fragment_wrapped() -> None:
     """A direct ``totalCount`` and a fragment-wrapped one both match."""
     direct = [_field("edges"), _field("totalCount")]
     assert direct_child_selected(direct, "totalCount") is True
@@ -326,7 +326,7 @@ def test_direct_child_selected_matches_direct_and_fragment_wrapped():
     assert direct_child_selected(wrapped, "totalCount") is True
 
 
-def test_direct_child_selected_honors_skip_include():
+def test_direct_child_selected_honors_skip_include() -> None:
     """A directive-excluded ``totalCount`` does NOT match, direct or fragment-wrapped.
 
     ``direct_child_selected`` is a converted-selection walk and must apply the same
@@ -376,7 +376,7 @@ def test_direct_child_selected_honors_skip_include():
     )
 
 
-def test_direct_child_selected_ignores_nested_field_selections():
+def test_direct_child_selected_ignores_nested_field_selections() -> None:
     """A ``totalCount`` nested inside a regular field's selections does NOT match.
 
     The load-bearing contract for nested connections: a node-level ``totalCount``
@@ -390,7 +390,7 @@ def test_direct_child_selected_ignores_nested_field_selections():
     assert direct_child_selected(roots, "totalCount") is False
 
 
-def test_ast_to_converted_selections_memoized_per_execution():
+def test_ast_to_converted_selections_memoized_per_execution() -> None:
     """The converted-selection tree is reused within one installed memo lifecycle.
 
     A nested fallback connection primes ``info.selected_fields`` once per parent
@@ -427,7 +427,7 @@ def test_ast_to_converted_selections_memoized_per_execution():
     assert ast_to_converted_selections(info, single) is not first
 
 
-def test_included_field_selections_returns_input_list_when_already_flat():
+def test_included_field_selections_returns_input_list_when_already_flat() -> None:
     """The fragment-free, fully-included shape passes through without a rebuild.
 
     The common query shape (no fragments, nothing directive-excluded) would
@@ -452,7 +452,7 @@ def test_included_field_selections_returns_input_list_when_already_flat():
     assert [s.name for s in inlined] == ["a", "c"]
 
 
-def test_included_field_selections_materializes_one_shot_iterables():
+def test_included_field_selections_materializes_one_shot_iterables() -> None:
     """One-shot iterables are materialized once at entry.
 
     The fast-path probe loop and the rebuild loop both iterate the input
@@ -485,7 +485,10 @@ def test_included_field_selections_materializes_one_shot_iterables():
     assert included_field_selections(tup) is tup
 
 
-def _count_observers(selection: SimpleNamespace, **kwargs: ConnectionFieldNames):
+def _count_observers(
+    selection: SimpleNamespace,
+    **kwargs: ConnectionFieldNames,
+) -> tuple[bool, bool]:
     """Return ``(totalCount selected, hasNextPage selected)`` for one connection selection."""
     return (
         connection_total_count_selected(selection, **kwargs),
@@ -493,7 +496,7 @@ def _count_observers(selection: SimpleNamespace, **kwargs: ConnectionFieldNames)
     )
 
 
-def test_connection_count_observers_matrix():
+def test_connection_count_observers_matrix() -> None:
     """The two count observers fire on ``totalCount`` / ``pageInfo.hasNextPage`` only.
 
     The plan-time half of the conditional ``_dst_total_count`` contract
@@ -561,7 +564,7 @@ def test_connection_count_observers_matrix():
 # ---------------------------------------------------------------------------
 
 
-def _info_with_converter(converter: object):
+def _info_with_converter(converter: object) -> SimpleNamespace:
     """A plan-time-shaped ``info`` whose schema config carries ``converter``."""
     return SimpleNamespace(
         schema=SimpleNamespace(
@@ -572,7 +575,7 @@ def _info_with_converter(converter: object):
     )
 
 
-def test_connection_field_names_default_converter_is_camel_case():
+def test_connection_field_names_default_converter_is_camel_case() -> None:
     """Strawberry's default converter yields the historical camelCase vocabulary."""
     from strawberry.schema.name_converter import NameConverter
 
@@ -585,7 +588,7 @@ def test_connection_field_names_default_converter_is_camel_case():
     )
 
 
-def test_connection_field_names_follow_auto_camel_case_disabled():
+def test_connection_field_names_follow_auto_camel_case_disabled() -> None:
     """``auto_camel_case=False`` renders the snake_case field names, and we match those.
 
     The defect this pins: matching the camelCase literals made both count
@@ -604,11 +607,11 @@ def test_connection_field_names_follow_auto_camel_case_disabled():
     )
 
 
-def test_connection_field_names_honor_a_custom_naming_config():
+def test_connection_field_names_honor_a_custom_naming_config() -> None:
     """A converter overriding ``apply_naming_config`` drives the vocabulary too."""
 
     class _Shouty:
-        def apply_naming_config(self, name: str):
+        def apply_naming_config(self, name: str) -> str:
             return name.upper()
 
     names = connection_field_names(_info_with_converter(_Shouty()))
@@ -616,7 +619,7 @@ def test_connection_field_names_honor_a_custom_naming_config():
     assert names.has_next_page == "HAS_NEXT_PAGE"
 
 
-def test_connection_field_names_fall_back_without_a_reachable_converter():
+def test_connection_field_names_fall_back_without_a_reachable_converter() -> None:
     """No schema config (or no ``apply_naming_config``) means Strawberry's defaults.
 
     Covers the direct / test-caller shapes: a bare ``info`` stub, ``None``, and a
@@ -630,7 +633,7 @@ def test_connection_field_names_fall_back_without_a_reachable_converter():
     )
 
 
-def test_connection_field_python_names_matches_dataclass_fields():
+def test_connection_field_python_names_matches_dataclass_fields() -> None:
     """``_CONNECTION_FIELD_PYTHON_NAMES`` exactly matches the field attributes of ``ConnectionFieldNames``."""
     from dataclasses import fields
 
@@ -645,7 +648,7 @@ def test_connection_field_python_names_matches_dataclass_fields():
     )
 
 
-def test_connection_predicates_consume_the_resolved_names():
+def test_connection_predicates_consume_the_resolved_names() -> None:
     """Each selection walk matches the supplied vocabulary, not a camelCase literal."""
     from strawberry.schema.name_converter import NameConverter
 
@@ -668,7 +671,7 @@ def test_connection_predicates_consume_the_resolved_names():
     assert [child.name for child in node_children] == ["title"]
 
 
-def test_ast_to_converted_selections_converts_anonymous_and_named_fragments():
+def test_ast_to_converted_selections_converts_anonymous_and_named_fragments() -> None:
     """``ast_to_converted_selections`` converts field nodes, named/anonymous fragments, and spreads."""
     from strawberry.types.nodes import FragmentSpread, InlineFragment, SelectedField
 
@@ -727,7 +730,7 @@ def test_ast_to_converted_selections_converts_anonymous_and_named_fragments():
     assert spread.selections[0].name == "penName"
 
 
-def test_prime_selected_fields_lifecycle():
+def test_prime_selected_fields_lifecycle() -> None:
     """``prime_selected_fields`` populates ``info.__dict__['selected_fields']`` idempotently."""
     from strawberry.types.nodes import SelectedField
 
@@ -767,7 +770,7 @@ def test_prime_selected_fields_lifecycle():
     assert info_to_prime.selected_fields[0].name == "item"
 
 
-def test_connection_total_count_and_has_next_page_selected_direct():
+def test_connection_total_count_and_has_next_page_selected_direct() -> None:
     """``connection_total_count_selected`` and ``connection_has_next_page_selected`` isolate their paths."""
     total_only = _field("conn", selections=[_field("totalCount")])
     assert connection_total_count_selected(total_only) is True

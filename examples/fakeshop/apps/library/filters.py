@@ -215,6 +215,7 @@ class PatronFilter(FilterSet):
         request: HttpRequest | None = None,
         prefix: str | None = None,
     ) -> None:
+        """Build the filterset and wire the ``@`` validator onto ``email_must_have_at_sign``."""
         super().__init__(data=data, queryset=queryset, request=request, prefix=prefix)
         # Wire the validator on the underlying ``forms.CharField`` so
         # ``form.is_valid()`` fires the "missing @" gate on inputs without

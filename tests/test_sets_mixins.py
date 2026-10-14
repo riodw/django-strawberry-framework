@@ -18,6 +18,9 @@ empty-input no-ops live in ``examples/fakeshop/test_query/test_library_api.py``,
 ``test_kanban_api.py`` (``CardOrderInputType``).
 """
 
+from collections.abc import Iterator
+from typing import NoReturn
+
 import pytest
 from apps.library import models as library_models
 from typing_extensions import override
@@ -44,18 +47,18 @@ _SHARED_PERMISSION_METHODS = (
 )
 
 
-def _unbound(owner: type, name: str):
+def _unbound(owner: type, name: str) -> object:
     attr = getattr(owner, name)
     return getattr(attr, "__func__", attr)
 
 
-def test_filterset_and_orderset_share_active_input_permission_mixin():
+def test_filterset_and_orderset_share_active_input_permission_mixin() -> None:
     """Both set families list the shared mixin in MRO. A request cannot observe class MRO."""
     assert ActiveInputPermissionMixin in FilterSet.__mro__
     assert ActiveInputPermissionMixin in OrderSet.__mro__
 
 
-def test_permission_facade_methods_are_single_sourced_on_the_mixin():
+def test_permission_facade_methods_are_single_sourced_on_the_mixin() -> None:
     """Facade methods are identity-equal to the mixin, not per-family copies.
 
     Live HTTP fires those methods (products/library permission rows); this pin
@@ -67,7 +70,7 @@ def test_permission_facade_methods_are_single_sourced_on_the_mixin():
         assert _unbound(OrderSet, name) is mixin_fn
 
 
-def test_permission_family_config_stays_on_each_set_class():
+def test_permission_family_config_stays_on_each_set_class() -> None:
     """Per-family ``_permission`` slots (label, target attr, list vs object).
 
     Wire grammar those slots produce (``and``/``or``/``not`` vs list
@@ -83,7 +86,7 @@ def test_permission_family_config_stays_on_each_set_class():
     assert OrderSet._permission.traversal.handle_top_level_list is True
 
 
-def test_permission_fallback_path_is_the_family_remap_hook():
+def test_permission_fallback_path_is_the_family_remap_hook() -> None:
     """FilterSet gates a spec-less key on its head's gate path; OrderSet on the key itself.
 
     ``BookFilter``'s flat ``shelf__home_branch`` is an expansion of the declared
@@ -103,7 +106,7 @@ def test_permission_fallback_path_is_the_family_remap_hook():
     assert OrderSet._permission_fallback_path("i_contains") == "i_contains"
 
 
-def test_apply_pipelines_remain_family_owned():
+def test_apply_pipelines_remain_family_owned() -> None:
     """``apply_sync`` / ``apply_async`` stay distinct functions per family.
 
     A request sees filter vs order *behavior* (live); it cannot observe that
@@ -113,7 +116,7 @@ def test_apply_pipelines_remain_family_owned():
     assert _unbound(FilterSet, "apply_async") is not _unbound(OrderSet, "apply_async")
 
 
-def test_sets_mixins_all_exports_are_complete():
+def test_sets_mixins_all_exports_are_complete() -> None:
     """``__all__`` names every public symbol. A request cannot prove absence of extras."""
     import django_strawberry_framework.sets_mixins as sm
 
@@ -122,7 +125,7 @@ def test_sets_mixins_all_exports_are_complete():
         assert hasattr(sm, symbol), f"Symbol {symbol!r} in __all__ but not in sets_mixins"
 
 
-def test_should_cache_expansion_gates_on_dict_and_unresolved_strings():
+def test_should_cache_expansion_gates_on_dict_and_unresolved_strings() -> None:
     """Cache-write gate: inherited map, unresolved string target, resolved class.
 
     Expansion cache is class-creation state; a request cannot see whether a
@@ -182,7 +185,7 @@ def test_should_cache_expansion_gates_on_dict_and_unresolved_strings():
     )
 
 
-def test_class_based_type_name_mixin():
+def test_class_based_type_name_mixin() -> None:
     """Configurable suffixes plus empty-path ``ConfigurationError``.
 
     Shipped root names are live (``BranchFilterInputType``,
@@ -217,7 +220,7 @@ class _BoundScope:
     pass
 
 
-def test_lazy_related_class_mixin():
+def test_lazy_related_class_mixin() -> None:
     """Resolve class / callable factory / absolute / relative string; ImportError.
 
     Live related-filter rows use already-resolved shipped targets
@@ -253,7 +256,7 @@ def test_lazy_related_class_mixin():
         mixin.resolve_lazy_class("NonExistentDottedPathClass", None)
 
 
-def test_related_set_target_mixin():
+def test_related_set_target_mixin() -> None:
     """Idempotent owner-bind, resolved-target read, and ``_set_target`` store.
 
     Bind/lazy machinery has no wire shape; family type gates are the next two
@@ -274,11 +277,11 @@ def test_related_set_target_mixin():
         # attribute, so the first bind still finds it unset.
         bound_owner: object
 
-        def __init__(self, target: object):
+        def __init__(self, target: object) -> None:
             self._target = target
 
         @override
-        def _validate_target(self, resolved: object):
+        def _validate_target(self, resolved: object) -> None:
             """Permissive gate -- this test pins the bind/lazy machinery, not the gate."""
 
     class _OwnerOne(OrderSet):
@@ -304,7 +307,7 @@ def test_related_set_target_mixin():
     assert item._resolved_target() is _AlternativeStub
 
 
-def test_related_set_target_mixin_hook_is_abstract_without_a_family_validator():
+def test_related_set_target_mixin_hook_is_abstract_without_a_family_validator() -> None:
     """The base ``_validate_target`` fails loud: a hookless subclass cannot read targets.
 
     The resolution seam is the one site every consumer's resolved target flows
@@ -321,14 +324,14 @@ def test_related_set_target_mixin_hook_is_abstract_without_a_family_validator():
         _target_attr = "_target"
         _owner_attr = "bound_owner"
 
-        def __init__(self, target: object):
+        def __init__(self, target: object) -> None:
             self._target = target
 
     with pytest.raises(NotImplementedError, match="_validate_target"):
         _Hookless(object())._resolved_target()
 
 
-def test_related_set_target_mixin_gates_resolved_targets_at_the_seam():
+def test_related_set_target_mixin_gates_resolved_targets_at_the_seam() -> None:
     """A family-supplied validator fires from ``_resolved_target`` on every read.
 
     Regression pin for the BFS-enqueue lead: gate protection no longer depends
@@ -350,11 +353,11 @@ def test_related_set_target_mixin_gates_resolved_targets_at_the_seam():
         _target_attr = "_target"
         _owner_attr = "bound_owner"
 
-        def __init__(self, target: object):
+        def __init__(self, target: object) -> None:
             self._target = target
 
         @override
-        def _validate_target(self, resolved: object):
+        def _validate_target(self, resolved: object) -> None:
             validated.append(resolved)
             if not (isinstance(resolved, type) and issubclass(resolved, _FamilyTarget)):
                 raise ConfigurationError(f"not a _FamilyTarget subclass: {resolved!r}")
@@ -372,7 +375,7 @@ def test_related_set_target_mixin_gates_resolved_targets_at_the_seam():
     assert validated == [_FamilyTarget, _Hostile]
 
 
-def test_both_families_supply_their_own_target_validator():
+def test_both_families_supply_their_own_target_validator() -> None:
     """The shipped families override the hook (a deleted override fails this pin).
 
     Identity of the override vs the mixin's abstract ``NotImplementedError``.
@@ -387,7 +390,7 @@ def test_both_families_supply_their_own_target_validator():
     assert _unbound(RelatedOrder, "_validate_target") is not mixin_hook
 
 
-def test_collect_related_declarations():
+def test_collect_related_declarations() -> None:
     """Metaclass collect/bind: inherit, own override, ``None`` tombstone.
 
     Declaration maps are class-creation; live related-filter/order rows use
@@ -428,7 +431,7 @@ def test_collect_related_declarations():
     assert _NewCls.related_items is collected
 
 
-def test_expanded_once():
+def test_expanded_once() -> None:
     """Expansion cache hit, build-under-guard, and reentry fallback.
 
     Class-level cache/guard; a request cannot tell a cached expansion from a
@@ -454,7 +457,7 @@ def test_expanded_once():
     class _UncachedSet:
         pass
 
-    def _build_fn():
+    def _build_fn() -> dict[str, bool]:
         assert getattr(_UncachedSet, "_guard", False) is True
         return {"built": True}
 
@@ -481,7 +484,7 @@ def test_expanded_once():
     assert res3 == {"fallback": True}
 
 
-def test_set_lifecycle_attrs():
+def test_set_lifecycle_attrs() -> None:
     """``SetLifecycleAttrs.binding_attrs`` concatenates owner/cache/guard/extra.
 
     Attr-name descriptor consumed by ``registry.clear()``. No wire shape.
@@ -507,7 +510,7 @@ def test_set_lifecycle_attrs():
     )
 
 
-def test_active_input_permission_mixin_hooks():
+def test_active_input_permission_mixin_hooks() -> None:
     """Default family hooks are no-ops; inactive input does not raise.
 
     Empty ``filter: {}`` / ``orderBy: []`` no-ops are live
@@ -546,7 +549,7 @@ def test_active_input_permission_mixin_hooks():
     _ProbePermissionSet._run_permission_checks(None, None)
 
 
-def test_lazy_related_class_mixin_fallback_and_non_class_types():
+def test_lazy_related_class_mixin_fallback_and_non_class_types() -> None:
     """Non-class values pass through; an unresolvable relative string raises ImportError."""
     import pytest
 
@@ -566,7 +569,7 @@ def test_lazy_related_class_mixin_fallback_and_non_class_types():
         mixin.resolve_lazy_class("NonExistentSiblingClass12345", _Scope)
 
 
-def test_expanded_once_resets_guard_on_exception():
+def test_expanded_once_resets_guard_on_exception() -> None:
     """``expanded_once`` clears the reentry guard in ``finally`` after ``build`` raises."""
     import pytest
 
@@ -575,7 +578,7 @@ def test_expanded_once_resets_guard_on_exception():
     class _ErrorSet:
         _guard = False
 
-    def _failing_build():
+    def _failing_build() -> NoReturn:
         assert _ErrorSet._guard is True
         raise RuntimeError("simulated expansion error")
 
@@ -591,7 +594,7 @@ def test_expanded_once_resets_guard_on_exception():
     assert _ErrorSet._guard is False
 
 
-def test_collect_related_declarations_diamond_tombstone():
+def test_collect_related_declarations_diamond_tombstone() -> None:
     """An earlier base's class-level tombstone removes a later base's related declaration.
 
     Diamond MRO at metaclass collect time. No GraphQL spelling.
@@ -632,7 +635,7 @@ def test_collect_related_declarations_diamond_tombstone():
     assert "shared_rel" not in collected
 
 
-def test_collect_related_declarations_base_declarations_precedence():
+def test_collect_related_declarations_base_declarations_precedence() -> None:
     """A non-related entry in ``base_declarations_attr`` shadows a related declaration."""
     from django_strawberry_framework.sets_mixins import (
         RelatedSetTargetMixin,
@@ -673,7 +676,7 @@ def test_collect_related_declarations_base_declarations_precedence():
     assert "scalar_key" not in collected
 
 
-def test_active_input_permission_mixin_field_paths_and_branches():
+def test_active_input_permission_mixin_field_paths_and_branches() -> None:
     """Mixin walkers return active leaf paths and related branches on throwaway types.
 
     Nested/flat permission firing is live
@@ -752,7 +755,7 @@ def test_active_input_permission_mixin_field_paths_and_branches():
     assert branches[0][2] == _ChildInput(sub_field="sub")
 
 
-def test_family_input_traversal_is_derived_from_the_permission_config():
+def test_family_input_traversal_is_derived_from_the_permission_config() -> None:
     """``_input_traversal()`` is the family's ``_permission.traversal`` plus field specs.
 
     ``and``/``or``/``not`` and list ``orderBy`` are live; ``field_specs is``
@@ -781,7 +784,7 @@ def test_family_input_traversal_is_derived_from_the_permission_config():
 
 def test_order_normalizer_consumes_the_family_permission_traversal(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """``normalize_input_value`` drives ``iter_active_fields`` with ``cls._input_traversal()``.
 
     Monkeypatch of the helper; a request cannot observe which config object
@@ -793,7 +796,11 @@ def test_order_normalizer_consumes_the_family_permission_traversal(
     sentinel = object()
     captured: dict[str, SetInputTraversal] = {}
 
-    def _spy(_set_cls: type[object], _input_value: object, config: SetInputTraversal):
+    def _spy(
+        _set_cls: type[object],
+        _input_value: object,
+        config: SetInputTraversal,
+    ) -> Iterator[object]:
         captured["config"] = config
         return iter(())
 
@@ -825,7 +832,7 @@ def test_order_normalizer_consumes_the_family_permission_traversal(
 
 def test_filter_normalizer_consumes_the_family_permission_traversal(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """``FilterSet._normalize_input`` classifies through the derived config.
 
     The filter-side twin of
@@ -839,7 +846,11 @@ def test_filter_normalizer_consumes_the_family_permission_traversal(
 
     captured = {}
 
-    def _spy(_set_cls: type[object], _input_value: object, config: SetInputTraversal):
+    def _spy(
+        _set_cls: type[object],
+        _input_value: object,
+        config: SetInputTraversal,
+    ) -> Iterator[object]:
         captured["config"] = config
         return iter(())
 
@@ -849,7 +860,7 @@ def test_filter_normalizer_consumes_the_family_permission_traversal(
     assert captured["config"] == FilterSet._input_traversal()
 
 
-def test_filter_normalizer_honors_a_subclass_unset_sentinel_override():
+def test_filter_normalizer_honors_a_subclass_unset_sentinel_override() -> None:
     """An overridden ``_permission.traversal.unset_sentinel`` governs the apply path too.
 
     The defect the derived config closes: ``_normalize_input`` used to read a
@@ -890,7 +901,7 @@ def test_filter_normalizer_honors_a_subclass_unset_sentinel_override():
 # ---------------------------------------------------------------------------
 
 
-def test_re_readable_gate_accepts_every_sized_collection():
+def test_re_readable_gate_accepts_every_sized_collection() -> None:
     """The contract is ``Collection``, not a hardcoded builtin allow-list.
 
     A consumer legitimately computes ``Meta.fields`` from a mapping
@@ -904,16 +915,16 @@ def test_re_readable_gate_accepts_every_sized_collection():
     class _NameSet:
         """A minimal ``Collection`` that is none of the builtin containers."""
 
-        def __init__(self, *names: str):
+        def __init__(self, *names: str) -> None:
             self._names = names
 
-        def __iter__(self):
+        def __iter__(self) -> Iterator[str]:
             return iter(self._names)
 
-        def __len__(self):
+        def __len__(self) -> int:
             return len(self._names)
 
-        def __contains__(self, item: object):
+        def __contains__(self, item: object) -> bool:
             return item in self._names
 
     accepted = (
@@ -931,7 +942,7 @@ def test_re_readable_gate_accepts_every_sized_collection():
         assert is_re_readable_field_declaration(value) is True
 
 
-def test_re_readable_gate_rejects_one_shot_and_text_atoms():
+def test_re_readable_gate_rejects_one_shot_and_text_atoms() -> None:
     """One-shot producers and text atoms are the two rejected shapes.
 
     A generator / ``iter(...)`` / ``map`` object is exhausted by the first
@@ -956,7 +967,7 @@ def test_re_readable_gate_rejects_one_shot_and_text_atoms():
         assert is_re_readable_field_declaration(value) is False
 
 
-def test_re_readable_gate_never_iterates_the_declaration():
+def test_re_readable_gate_never_iterates_the_declaration() -> None:
     """The gate is structural, so a hostile ``__iter__`` is never entered.
 
     An object defining only ``__iter__`` is not a ``Collection``, so it is
@@ -964,13 +975,13 @@ def test_re_readable_gate_never_iterates_the_declaration():
     """
 
     class _Boom:
-        def __iter__(self):
+        def __iter__(self) -> NoReturn:
             raise RuntimeError("boom")  # never entered
 
     assert is_re_readable_field_declaration(_Boom()) is False
 
 
-def test_re_readable_gate_message_names_the_receipt_and_the_contract():
+def test_re_readable_gate_message_names_the_receipt_and_the_contract() -> None:
     """The rejection names the offending class, the received type, and what IS accepted."""
 
     class _Probe:
@@ -991,7 +1002,7 @@ def test_re_readable_gate_message_names_the_receipt_and_the_contract():
     assert "not a one-shot iterator or generator" in message
 
 
-def test_two_related_filters_on_one_relation_are_refused():
+def test_two_related_filters_on_one_relation_are_refused() -> None:
     """Two branches with one ``field_name`` raise at class creation, naming both and the relation.
 
     The flat spellings of a branch (a flat filter leaf, an order term, a flat-path
@@ -1011,7 +1022,7 @@ def test_two_related_filters_on_one_relation_are_refused():
     assert "the relation 'shelf'" in message
 
 
-def test_two_related_orders_on_one_relation_are_refused():
+def test_two_related_orders_on_one_relation_are_refused() -> None:
     """The order family refuses two branches on one relation as the filter family does."""
     with pytest.raises(ConfigurationError) as excinfo:
 
@@ -1026,7 +1037,7 @@ def test_two_related_orders_on_one_relation_are_refused():
     assert "the relation 'shelf'" in message
 
 
-def test_a_related_filter_named_after_another_ones_relation_is_refused():
+def test_a_related_filter_named_after_another_ones_relation_is_refused() -> None:
     """A branch declaring no ``field_name`` declares the relation its attribute names."""
     with pytest.raises(ConfigurationError, match="'shelf' and 'home_shelf'"):
 
@@ -1036,7 +1047,7 @@ def test_a_related_filter_named_after_another_ones_relation_is_refused():
             home_shelf = RelatedFilter(FilterSet, field_name="shelf")
 
 
-def test_a_related_order_named_after_another_ones_relation_is_refused():
+def test_a_related_order_named_after_another_ones_relation_is_refused() -> None:
     """A branch declaring no ``field_name`` declares the relation its attribute names."""
     with pytest.raises(ConfigurationError, match="'shelf' and 'home_shelf'"):
 
@@ -1046,7 +1057,7 @@ def test_a_related_order_named_after_another_ones_relation_is_refused():
             home_shelf = RelatedOrder(OrderSet, field_name="shelf")
 
 
-def test_a_subclass_related_filter_on_an_inherited_relation_is_refused():
+def test_a_subclass_related_filter_on_an_inherited_relation_is_refused() -> None:
     """An inherited branch claims its relation in every subclass."""
 
     class _Base(FilterSet):
@@ -1059,7 +1070,7 @@ def test_a_subclass_related_filter_on_an_inherited_relation_is_refused():
             visible_shelf = RelatedFilter(FilterSet, field_name="shelf")
 
 
-def test_a_subclass_related_order_on_an_inherited_relation_is_refused():
+def test_a_subclass_related_order_on_an_inherited_relation_is_refused() -> None:
     """An inherited branch claims its relation in every subclass."""
 
     class _Base(OrderSet):
@@ -1072,7 +1083,7 @@ def test_a_subclass_related_order_on_an_inherited_relation_is_refused():
             visible_shelf = RelatedOrder(OrderSet, field_name="shelf")
 
 
-def test_an_overriding_related_filter_and_an_overlapping_path_are_accepted():
+def test_an_overriding_related_filter_and_an_overlapping_path_are_accepted() -> None:
     """A same-named override replaces the inherited branch; a longer path is another relation."""
 
     class _Base(FilterSet):
@@ -1086,7 +1097,7 @@ def test_an_overriding_related_filter_and_an_overlapping_path_are_accepted():
     assert _Child.related_filters["shelf"] is not _Base.related_filters["shelf"]
 
 
-def test_an_overriding_related_order_and_an_overlapping_path_are_accepted():
+def test_an_overriding_related_order_and_an_overlapping_path_are_accepted() -> None:
     """A same-named override replaces the inherited branch; a longer path is another relation."""
 
     class _Base(OrderSet):
@@ -1100,7 +1111,7 @@ def test_an_overriding_related_order_and_an_overlapping_path_are_accepted():
     assert _Child.related_orders["shelf"] is not _Base.related_orders["shelf"]
 
 
-def test_a_non_string_field_name_claims_no_relation():
+def test_a_non_string_field_name_claims_no_relation() -> None:
     """A ``field_name`` that is not a string names no relation, so it collides with nothing.
 
     ``utils/permissions.py::walk_declared_relation_path`` matches no hop on one either.
@@ -1115,7 +1126,7 @@ def test_a_non_string_field_name_claims_no_relation():
     assert list(_Owner.related_orders) == ["first", "second"]
 
 
-def test_a_longer_related_filter_capturing_a_branchs_flat_leaves_is_refused():
+def test_a_longer_related_filter_capturing_a_branchs_flat_leaves_is_refused() -> None:
     """``shelf__branch`` beside ``shelf`` takes ``shelf``'s flat leaves into ``branch``; refused.
 
     The flat leaf ``public_shelf__branch__name`` carries the path
@@ -1155,7 +1166,7 @@ def test_a_longer_related_filter_capturing_a_branchs_flat_leaves_is_refused():
     assert "_ShelfFilter of 'public_shelf' reaches" in message
 
 
-def test_a_longer_related_order_capturing_a_branchs_terms_is_refused():
+def test_a_longer_related_order_capturing_a_branchs_terms_is_refused() -> None:
     """The order twin: ``shelf: {branch: ...}`` normalizes to a path the longer declaration takes."""
 
     class _BranchOrder(OrderSet):
@@ -1190,7 +1201,7 @@ def test_a_longer_related_order_reaching_a_target_path_is_refused(
     shelf_fields: list[str],
     longer: str,
     branch_target: list[str] | None,
-):
+) -> None:
     """A continuation reached by a path of the target's own, or through its branch, is refused."""
 
     class _BranchOrder(OrderSet):
@@ -1217,7 +1228,7 @@ def test_a_longer_related_order_reaching_a_target_path_is_refused(
         _BookOrder.get_fields()
 
 
-def test_a_longer_related_order_the_target_never_reaches_is_accepted():
+def test_a_longer_related_order_the_target_never_reaches_is_accepted() -> None:
     """An overlap no path through the shorter branch reaches reads unambiguously.
 
     The shape of kanban's ``target_version`` beside ``target_version__milestone``;

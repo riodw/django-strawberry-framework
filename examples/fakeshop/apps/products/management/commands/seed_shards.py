@@ -85,6 +85,8 @@ SHARD_ALIASES = ("shard_b",)
 
 
 class Command(BaseCommand):
+    """Migrate, create users and seed the secondary shard database."""
+
     help = (
         "Migrate, create users, and seed the secondary shard SQLite DB "
         "(shard_b -> db_shard_b.sqlite3). Requires FAKESHOP_SHARDED=1 in the environment."

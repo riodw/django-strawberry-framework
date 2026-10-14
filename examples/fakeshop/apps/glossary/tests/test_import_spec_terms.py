@@ -61,7 +61,7 @@ def _make_done_card_with_spec(
 
 
 @pytest.mark.django_db
-def test_import_spec_terms_reconciles_done_card_csv_to_db(tmp_path: Path):
+def test_import_spec_terms_reconciles_done_card_csv_to_db(tmp_path: Path) -> None:
     spec_path = "docs/SPECS/spec-099-example-0_0_9.md"
     djangotype = gf.make_glossary_term(
         title="`DjangoType`",
@@ -110,7 +110,7 @@ def test_import_spec_terms_reconciles_done_card_csv_to_db(tmp_path: Path):
 
 
 @pytest.mark.django_db
-def test_import_spec_terms_check_rejects_mismatched_done_card_links(tmp_path: Path):
+def test_import_spec_terms_check_rejects_mismatched_done_card_links(tmp_path: Path) -> None:
     spec_path = "docs/SPECS/spec-099-example-0_0_9.md"
     gf.make_glossary_term(title="`DjangoType`", title_sort="djangotype", anchor="djangotype")
     stale = gf.make_glossary_term(title="`Stale`", title_sort="stale", anchor="stale")
@@ -128,7 +128,7 @@ def test_import_spec_terms_check_rejects_mismatched_done_card_links(tmp_path: Pa
 
 
 @pytest.mark.django_db
-def test_import_spec_terms_reads_archived_companion_from_appx(tmp_path: Path):
+def test_import_spec_terms_reads_archived_companion_from_appx(tmp_path: Path) -> None:
     spec_path = "docs/SPECS/spec-099-example-0_0_9.md"
     gf.make_glossary_term(title="`DjangoType`", title_sort="djangotype", anchor="djangotype")
     card = _make_done_card_with_spec(spec_path)
@@ -157,7 +157,7 @@ def test_import_spec_terms_reads_archived_companion_from_appx(tmp_path: Path):
 
 
 @pytest.mark.django_db
-def test_import_spec_terms_requires_csv_for_every_done_card(tmp_path: Path):
+def test_import_spec_terms_requires_csv_for_every_done_card(tmp_path: Path) -> None:
     _make_done_card_with_spec("docs/SPECS/spec-099-example-0_0_9.md")
 
     with pytest.raises(CommandError, match="Missing terms CSV"):

@@ -34,7 +34,7 @@ def _isolate_registry() -> Iterator[None]:
 @pytest.mark.django_db(transaction=True)
 def test_relay_id_with_custom_pk_attname_avoids_lazy_load(
     django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+) -> None:
     """A Relay type whose pk attname is not ``id`` answers ``{ id postalCode }`` in one query.
 
     The walker resolves the configured ``id_attr``, projects the real pk column

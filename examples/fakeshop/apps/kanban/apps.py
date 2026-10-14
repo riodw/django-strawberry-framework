@@ -7,6 +7,8 @@ from typing_extensions import override
 
 
 class KanbanConfig(AppConfig):
+    """App configuration for the kanban data app."""
+
     default_auto_field = "django.db.models.BigAutoField"
     # Keep the app import path explicit so the example never relies on
     # adding apps/ itself to sys.path.

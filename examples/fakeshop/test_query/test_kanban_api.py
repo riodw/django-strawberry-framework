@@ -241,7 +241,7 @@ def _seed_board() -> _SeededBoard:
 
 
 @pytest.mark.django_db
-def test_filter_cards_by_status_key_via_related_filter():
+def test_filter_cards_by_status_key_via_related_filter() -> None:
     """The FK-dense surface: filter cards by the related ``status.key``."""
     _seed_board()
     _assert_graphql_data(
@@ -288,7 +288,7 @@ def test_flat_composite_milestone_filter_fires_target_permission_gate(
 
 
 @pytest.mark.django_db
-def test_filter_cards_by_own_pk_relay_global_id_in():
+def test_filter_cards_by_own_pk_relay_global_id_in() -> None:
     """Own-PK Relay ``id: { in: [...] }`` accepts a list of GlobalIDs."""
     seed = _seed_board()
     gid_filters = str(
@@ -310,13 +310,15 @@ def test_filter_cards_by_own_pk_relay_global_id_in():
 
 
 @pytest.mark.django_db
-def test_filter_non_relay_card_items_by_plain_integer_id_in():
+def test_filter_non_relay_card_items_by_plain_integer_id_in() -> None:
     """``CardItemType`` is non-Relay, so ``id: { in: [...] }`` takes plain ints."""
     seed = _seed_board()
     _assert_graphql_data(
         f"""
         query {{
-          allKanbanCardItems(filter: {{ id: {{ in: [{seed["item_filters"].pk}, {seed["item_conn"].pk}] }} }}) {{
+          allKanbanCardItems(
+            filter: {{ id: {{ in: [{seed["item_filters"].pk}, {seed["item_conn"].pk}] }} }}
+          ) {{
             text
           }}
         }}
@@ -326,7 +328,7 @@ def test_filter_non_relay_card_items_by_plain_integer_id_in():
 
 
 @pytest.mark.django_db
-def test_select_card_glossary_terms_and_filter_by_term_anchor():
+def test_select_card_glossary_terms_and_filter_by_term_anchor() -> None:
     """Kanban cards expose ordered glossary-term links through the live API."""
     seed = _seed_board()
     _assert_graphql_data(
@@ -386,7 +388,7 @@ def test_select_card_glossary_terms_and_filter_by_term_anchor():
 
 
 @pytest.mark.django_db
-def test_select_and_filter_cards_by_changed_tracked_paths():
+def test_select_and_filter_cards_by_changed_tracked_paths() -> None:
     """Kanban cards expose linked tracked paths through the live API."""
     seed = _seed_board()
     _assert_graphql_data(
@@ -428,7 +430,7 @@ def test_select_and_filter_cards_by_changed_tracked_paths():
 
 
 @pytest.mark.django_db
-def test_filter_cards_by_own_pk_relay_id_isnull_coerces_boolean():
+def test_filter_cards_by_own_pk_relay_id_isnull_coerces_boolean() -> None:
     """Own-PK Relay ``id: { isNull: ... }`` coerces a Boolean.
 
     Regression for forcing every non-``in`` lookup on a Relay PK to
@@ -454,7 +456,7 @@ def test_filter_cards_by_own_pk_relay_id_isnull_coerces_boolean():
 
 
 @pytest.mark.django_db
-def test_filter_non_relay_card_items_by_plain_integer_id_exact():
+def test_filter_non_relay_card_items_by_plain_integer_id_exact() -> None:
     """Non-Relay int PK ``id: { exact: <int> }`` accepts an Int.
 
     Companion to the ``id: { in: [...] }`` case: the scalar catch-all now uses
@@ -476,7 +478,7 @@ def test_filter_non_relay_card_items_by_plain_integer_id_exact():
 
 
 @pytest.mark.django_db
-def test_filter_cards_by_m2m_through_parity_key():
+def test_filter_cards_by_m2m_through_parity_key() -> None:
     """M2M-through traversal: only the card with a graphene parity claim matches."""
     _seed_board()
     _assert_graphql_data(
@@ -492,7 +494,7 @@ def test_filter_cards_by_m2m_through_parity_key():
 
 
 @pytest.mark.django_db
-def test_filter_cards_by_self_referential_dependency():
+def test_filter_cards_by_self_referential_dependency() -> None:
     """Self-referential M2M: cards depending on card #21."""
     _seed_board()
     _assert_graphql_data(
@@ -525,9 +527,10 @@ def _nested_dependency_filter(depth: int) -> str:
 
 @pytest.mark.django_db
 @override_settings(**_ERROR_POLICY_PASS_THROUGH)
-def test_deeply_nested_self_referential_dependency_filter_is_capped():
-    """A pathologically deep self-referential ``dependencies`` filter raises a
-    typed depth-cap error, not a raw ``RecursionError`` (report Defect 5).
+def test_deeply_nested_self_referential_dependency_filter_is_capped() -> None:
+    """A pathologically deep self-referential ``dependencies`` filter raises a typed error.
+
+    The depth cap answers with a typed error, not a raw ``RecursionError`` (report Defect 5).
 
     ``CardFilter.dependencies`` is a real self-referential ``RelatedFilter``, so a
     client can nest the same branch arbitrarily deep. Before the fix the
@@ -557,7 +560,7 @@ def test_deeply_nested_self_referential_dependency_filter_is_capped():
 
 
 @pytest.mark.django_db
-def test_filter_and_select_normalized_card_references():
+def test_filter_and_select_normalized_card_references() -> None:
     """Card references expose the parsed kind instead of only prose."""
     _seed_board()
     _assert_graphql_data(
@@ -593,7 +596,7 @@ def test_filter_and_select_normalized_card_references():
 
 
 @pytest.mark.django_db
-def test_select_m2m_through_parity_claims_with_edge_level():
+def test_select_m2m_through_parity_claims_with_edge_level() -> None:
     """Select the through-edge data (level + upstream) off a card."""
     _seed_board()
     _assert_graphql_data(
@@ -625,7 +628,7 @@ def test_select_m2m_through_parity_claims_with_edge_level():
 
 
 @pytest.mark.django_db
-def test_select_o2o_spec_uuid_side_table_and_timestamps():
+def test_select_o2o_spec_uuid_side_table_and_timestamps() -> None:
     """O2O spec link, the reverse ``uuid`` side-table, and inherited timestamps."""
     _seed_board()
     data = _graphql_data(
@@ -655,7 +658,7 @@ def test_select_o2o_spec_uuid_side_table_and_timestamps():
 
 
 @pytest.mark.django_db
-def test_reverse_fk_from_lookup_status_to_cards():
+def test_reverse_fk_from_lookup_status_to_cards() -> None:
     """Query the board from the option side: ``status { cards }`` reverse-FK."""
     _seed_board()
     _assert_graphql_data(
@@ -672,7 +675,7 @@ def test_reverse_fk_from_lookup_status_to_cards():
 
 
 @pytest.mark.django_db
-def test_select_board_docs_and_lookup_roots_for_static_dashboard():
+def test_select_board_docs_and_lookup_roots_for_static_dashboard() -> None:
     """The static dashboard can fetch board docs and FK options directly.
 
     ``Section`` is the one lookup on this query whose table is non-empty in a
@@ -737,7 +740,7 @@ def test_select_board_docs_and_lookup_roots_for_static_dashboard():
 
 
 @pytest.mark.django_db
-def test_filter_cards_logical_or_across_statuses():
+def test_filter_cards_logical_or_across_statuses() -> None:
     """``or: [...]`` unions two status branches (ordered by number)."""
     _seed_board()
     _assert_graphql_data(
@@ -758,7 +761,7 @@ def test_filter_cards_logical_or_across_statuses():
 
 
 @pytest.mark.django_db
-def test_filter_cards_logical_not_scalar():
+def test_filter_cards_logical_not_scalar() -> None:
     """``not: {...}`` negates a scalar branch -- every card whose number isn't 21.
 
     (Negation is exercised over a direct scalar field; ``not`` over a
@@ -779,7 +782,7 @@ def test_filter_cards_logical_not_scalar():
 
 
 @pytest.mark.django_db
-def test_filter_cards_logical_and_number_range():
+def test_filter_cards_logical_and_number_range() -> None:
     """``and: [...]`` intersects two number-range branches."""
     _seed_board()
     _assert_graphql_data(
@@ -802,7 +805,7 @@ def test_filter_cards_logical_and_number_range():
 
 
 @pytest.mark.django_db
-def test_filter_cards_by_title_icontains():
+def test_filter_cards_by_title_icontains() -> None:
     """``title: { iContains }`` -- a lookup that exists only via per-field "__all__"."""
     _seed_board()
     _assert_graphql_data(
@@ -818,7 +821,7 @@ def test_filter_cards_by_title_icontains():
 
 
 @pytest.mark.django_db
-def test_filter_cards_by_number_gt():
+def test_filter_cards_by_number_gt() -> None:
     """``number: { gt }`` numeric lookup on the card's own integer field."""
     _seed_board()
     _assert_graphql_data(
@@ -839,7 +842,7 @@ def test_filter_cards_by_number_gt():
 
 
 @pytest.mark.django_db
-def test_filter_cards_by_milestone_key():
+def test_filter_cards_by_milestone_key() -> None:
     """Filter by the related ``milestone.key``.
 
     Both cards target version ``0.0.8``, whose milestone is ``alpha``; the
@@ -860,7 +863,7 @@ def test_filter_cards_by_milestone_key():
 
 
 @pytest.mark.django_db
-def test_filter_cards_by_related_size_order_numeric_lookup():
+def test_filter_cards_by_related_size_order_numeric_lookup() -> None:
     """A numeric lookup (``order: { gte }``) reached through the size RelatedFilter."""
     _seed_board()
     _assert_graphql_data(
@@ -876,7 +879,7 @@ def test_filter_cards_by_related_size_order_numeric_lookup():
 
 
 @pytest.mark.django_db
-def test_filter_cards_by_items_text_reverse_fk_related_filter():
+def test_filter_cards_by_items_text_reverse_fk_related_filter() -> None:
     """Reverse-FK RelatedFilter: filter cards by a child ``CardItem.text``."""
     _seed_board()
     _assert_graphql_data(
@@ -892,7 +895,7 @@ def test_filter_cards_by_items_text_reverse_fk_related_filter():
 
 
 @pytest.mark.django_db
-def test_filter_cards_combined_related_and_scalar():
+def test_filter_cards_combined_related_and_scalar() -> None:
     """Top-level fields AND together: a RelatedFilter plus a scalar lookup."""
     _seed_board()
     _assert_graphql_data(
@@ -908,7 +911,7 @@ def test_filter_cards_combined_related_and_scalar():
 
 
 @pytest.mark.django_db
-def test_filter_cards_empty_result():
+def test_filter_cards_empty_result() -> None:
     """A filter matching nothing returns an empty list, not an error."""
     _seed_board()
     _assert_graphql_data(
@@ -929,7 +932,7 @@ def test_filter_cards_empty_result():
 
 
 @pytest.mark.django_db
-def test_select_multi_fk_fanout_and_second_hop():
+def test_select_multi_fk_fanout_and_second_hop() -> None:
     """Select every FK lookup off a card, plus the second hop targetVersion -> milestone."""
     _seed_board()
     _assert_graphql_data(
@@ -967,7 +970,7 @@ def test_select_multi_fk_fanout_and_second_hop():
 
 
 @pytest.mark.django_db
-def test_select_self_referential_dependents_reverse():
+def test_select_self_referential_dependents_reverse() -> None:
     """The reverse side of the self-M2M: ``dependents`` off the depended-on card."""
     _seed_board()
     _assert_graphql_data(
@@ -991,7 +994,7 @@ def test_select_self_referential_dependents_reverse():
 
 
 @pytest.mark.django_db
-def test_reverse_m2m_from_upstream_to_cards():
+def test_reverse_m2m_from_upstream_to_cards() -> None:
     """M2M-through reverse: an ``Upstream`` lists the cards that claim it."""
     _seed_board()
     _assert_graphql_data(
@@ -1018,7 +1021,7 @@ def test_reverse_m2m_from_upstream_to_cards():
 
 
 @pytest.mark.django_db
-def test_select_lookup_uuid_side_table():
+def test_select_lookup_uuid_side_table() -> None:
     """Lookups carry a UUID side-row too (the signal is connected for every model)."""
     _seed_board()
     data = _graphql_data(
@@ -1037,7 +1040,7 @@ def test_select_lookup_uuid_side_table():
 
 
 @pytest.mark.django_db
-def test_select_labels_m2m():
+def test_select_labels_m2m() -> None:
     """Plain M2M selection: a card's labels."""
     _seed_board()
     filters_card = models.Card.objects.get(title="Filtering subsystem")
@@ -1060,7 +1063,7 @@ def test_select_labels_m2m():
 
 
 @pytest.mark.django_db
-def test_order_kanban_statuses_by_key_desc():
+def test_order_kanban_statuses_by_key_desc() -> None:
     """``orderBy: [{ key: DESC }]`` reorders the statuses list (DONE-028 order wiring)."""
     _seed_board()
     expected = [
@@ -1079,7 +1082,7 @@ def test_order_kanban_statuses_by_key_desc():
 
 
 @pytest.mark.django_db
-def test_ready_cards_over_http_excludes_done_and_blocked():
+def test_ready_cards_over_http_excludes_done_and_blocked() -> None:
     """``readyCards`` returns unblocked ``todo`` cards whose dependencies are done.
 
     The seeded board's ``DjangoConnectionField`` (todo) depends only on the
@@ -1094,7 +1097,7 @@ def test_ready_cards_over_http_excludes_done_and_blocked():
 
 
 @pytest.mark.django_db
-def test_set_card_status_transition_selectable_from_card():
+def test_set_card_status_transition_selectable_from_card() -> None:
     """A ``CardTransition`` written by the service is selectable off its card."""
     seed = _seed_board()
     # Ensure the maintainer actor exists: migration 0014 seeds it, but a prior
@@ -1132,7 +1135,7 @@ def test_set_card_status_transition_selectable_from_card():
 
 
 @pytest.mark.django_db
-def test_query_seeded_actor_and_attempt_outcome_lookups_with_filter():
+def test_query_seeded_actor_and_attempt_outcome_lookups_with_filter() -> None:
     """The migration-seeded worklog lookups are queryable with a RelatedFilter."""
     # Re-assert the seed rows idempotently: migration 0014 creates them, but a
     # prior transactional test can flush them (migration seeds are not restored).
@@ -1156,7 +1159,7 @@ def test_query_seeded_actor_and_attempt_outcome_lookups_with_filter():
 
 
 @pytest.mark.django_db
-def test_query_work_attempts_and_decisions_root_fields():
+def test_query_work_attempts_and_decisions_root_fields() -> None:
     """Root list fields for WorkAttempt and Decision expose their rows + filters."""
     seed = _seed_board()
     # Ensure the seeded worklog lookups exist (a prior transactional test may
@@ -1209,7 +1212,7 @@ def test_query_work_attempts_and_decisions_root_fields():
 
 
 @pytest.mark.django_db
-def test_nested_decisions_connection_window_orders_by_decided_at_then_pk():
+def test_nested_decisions_connection_window_orders_by_decided_at_then_pk() -> None:
     """The nested ``decisionsConnection`` window orders by ``decided_at`` then pk.
 
     ``Decision`` is the board model whose ``Meta.ordering`` is a single non-pk
@@ -1274,7 +1277,7 @@ def test_nested_decisions_connection_window_orders_by_decided_at_then_pk():
     assert pk_at > decided_at_at, sql
 
 
-def test_kanban_card_order_input_type_exposes_only_column_backed_all_fields():
+def test_kanban_card_order_input_type_exposes_only_column_backed_all_fields() -> None:
     """``Meta.fields = "__all__"`` exposes FK columns but not reverse/M2M managers."""
     data = _graphql_data(
         """
@@ -1327,7 +1330,7 @@ def test_kanban_card_order_input_type_exposes_only_column_backed_all_fields():
 
 
 @pytest.mark.django_db
-def test_select_derived_card_id_slug_blocked_and_ready_fields():
+def test_select_derived_card_id_slug_blocked_and_ready_fields() -> None:
     """The derived ``cardId`` / ``slug`` / ``isBlocked`` / ``isReady`` fields resolve.
 
     The seeded board's ``Filtering subsystem`` is ``done`` (its card id drops the
@@ -1369,7 +1372,7 @@ def test_select_derived_card_id_slug_blocked_and_ready_fields():
 
 
 @pytest.mark.django_db
-def test_ready_cards_excludes_a_blocked_todo_card():
+def test_ready_cards_excludes_a_blocked_todo_card() -> None:
     """A ``todo`` card gated by an unfinished ``blocked_by`` edge is not ``ready``."""
     _seed_board()
     blocked_by = models.CardReferenceKind.objects.create(

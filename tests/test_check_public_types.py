@@ -22,13 +22,14 @@ import json
 import subprocess
 from collections.abc import Iterable, Sequence
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 
 from scripts import check_public_types
 
 
-def _report(score: float, symbols: Iterable[object] = (), general: Iterable[object] = ()):
+def _report(score: float, symbols: Iterable[object] = (), general: Iterable[object] = ()) -> str:
     """A ``--outputjson`` payload carrying ``score``, ``symbols`` and ``general`` diagnostics."""
     return json.dumps(
         {
@@ -44,7 +45,7 @@ def _report(score: float, symbols: Iterable[object] = (), general: Iterable[obje
     )
 
 
-def _symbol(name: str, *diagnostics: tuple[str, str]):
+def _symbol(name: str, *diagnostics: tuple[str, str]) -> dict[str, str | list[dict[str, str]]]:
     """One ``typeCompleteness.symbols`` entry carrying ``(severity, message)`` diagnostics."""
     return {
         "category": "variable",
@@ -68,13 +69,18 @@ _WIDGET_WARNING = check_public_types.Diagnostic(
 _WIDGET_ENTRY = check_public_types.AllowedDiagnostic(_WIDGET_WARNING, "the fixture's reason.")
 
 
-def _judge(payload: str, allowlist: Sequence[check_public_types.AllowedDiagnostic] = ()):
+def _judge(
+    payload: str,
+    allowlist: Sequence[check_public_types.AllowedDiagnostic] = (),
+) -> tuple[check_public_types.Verdict, list[str]]:
     """Parse ``payload`` and judge it against ``allowlist``; return the verdict and its lines."""
     verdict = check_public_types.verdict_for(check_public_types.parse_report(payload), allowlist)
     return verdict, check_public_types.format_report(verdict)
 
 
-def _widget_symbol(*diagnostics: check_public_types.Diagnostic):
+def _widget_symbol(
+    *diagnostics: check_public_types.Diagnostic,
+) -> dict[str, str | list[dict[str, str]]]:
     """The fixture entry's symbol, carrying ``diagnostics`` as ``Diagnostic`` values."""
     return _symbol(
         _WIDGET_WARNING.symbol,
@@ -82,7 +88,7 @@ def _widget_symbol(*diagnostics: check_public_types.Diagnostic):
     )
 
 
-def test_a_complete_report_with_nothing_listed_passes():
+def test_a_complete_report_with_nothing_listed_passes() -> None:
     """Score ``1.0``, symbols all clean: the only shape the gate accepts."""
     verdict, lines = _judge(_report(1.0, [_CLEAN_SYMBOL]))
 
@@ -92,7 +98,7 @@ def test_a_complete_report_with_nothing_listed_passes():
     assert lines[-1].startswith("OK:")
 
 
-def test_a_symbol_error_fails_and_is_printed_with_its_symbol_and_severity():
+def test_a_symbol_error_fails_and_is_printed_with_its_symbol_and_severity() -> None:
     """A listed error fails the gate, and its symbol, severity and message are all printed."""
     message = (
         "Type is missing type annotation and could be inferred differently by type checkers"
@@ -115,7 +121,7 @@ def test_a_symbol_error_fails_and_is_printed_with_its_symbol_and_severity():
     assert lines[-1].startswith("FAIL:")
 
 
-def test_a_warning_alone_fails_even_at_a_complete_score():
+def test_a_warning_alone_fails_even_at_a_complete_score() -> None:
     """Warnings count: a missing docstring outside the allowlist fails at a score of ``1.0``."""
     verdict, lines = _judge(_report(1.0, [_widget_symbol(_WIDGET_WARNING)]))
 
@@ -130,7 +136,7 @@ def test_a_warning_alone_fails_even_at_a_complete_score():
     )
 
 
-def test_an_allowlisted_diagnostic_passes_and_is_printed_with_its_reason():
+def test_an_allowlisted_diagnostic_passes_and_is_printed_with_its_reason() -> None:
     """An exact match is accepted, and the run still shows what it accepted and why."""
     verdict, lines = _judge(_report(1.0, [_widget_symbol(_WIDGET_WARNING)]), [_WIDGET_ENTRY])
 
@@ -146,7 +152,7 @@ def test_an_allowlisted_diagnostic_passes_and_is_printed_with_its_reason():
 
 
 @pytest.mark.parametrize("field", ["symbol", "severity", "message"])
-def test_a_diagnostic_differing_from_an_entry_in_one_field_fails(field: str):
+def test_a_diagnostic_differing_from_an_entry_in_one_field_fails(field: str) -> None:
     """Only an exact match is ignored: the same symbol's other diagnostics still count.
 
     The report carries the entry's own diagnostic too, so the entry is not stale
@@ -165,7 +171,7 @@ def test_a_diagnostic_differing_from_an_entry_in_one_field_fails(field: str):
     assert lines[-1].startswith("FAIL:")
 
 
-def test_a_stale_allowlist_entry_fails_a_clean_report():
+def test_a_stale_allowlist_entry_fails_a_clean_report() -> None:
     """An entry the verifier no longer reports fails the run, so it cannot outlive its cause."""
     verdict, lines = _judge(_report(1.0, [_CLEAN_SYMBOL]), [_WIDGET_ENTRY])
 
@@ -180,7 +186,7 @@ def test_a_stale_allowlist_entry_fails_a_clean_report():
 
 
 @pytest.mark.parametrize("score", [0.9433962264150944, 0.99999])
-def test_a_score_below_one_fails_with_no_diagnostic_listed(score: float):
+def test_a_score_below_one_fails_with_no_diagnostic_listed(score: float) -> None:
     """The score is its own verdict: short of ``1.0`` fails even when no symbol is listed."""
     verdict, lines = _judge(_report(score, [_CLEAN_SYMBOL]))
 
@@ -190,7 +196,7 @@ def test_a_score_below_one_fails_with_no_diagnostic_listed(score: float):
     assert lines[-1].startswith("FAIL:")
 
 
-def test_a_general_diagnostic_is_reported_ahead_of_the_symbols():
+def test_a_general_diagnostic_is_reported_ahead_of_the_symbols() -> None:
     """A general diagnostic beside measured symbols fails, and is listed first."""
     general = {"file": "", "severity": "error", "message": "Package could not be analyzed"}
     verdict, lines = _judge(
@@ -221,13 +227,13 @@ def test_a_general_diagnostic_is_reported_ahead_of_the_symbols():
         json.dumps({"typeCompleteness": {"completenessScore": True}}),
     ],
 )
-def test_output_that_is_not_a_scored_report_is_a_measurement_error(payload: str):
+def test_output_that_is_not_a_scored_report_is_a_measurement_error(payload: str) -> None:
     """No report, or one without a numeric score, cannot be judged: it never passes silently."""
     with pytest.raises(check_public_types.MeasurementError):
         check_public_types.completeness_score(check_public_types.parse_report(payload))
 
 
-def test_child_environments_drop_every_redirect_and_take_the_temporary_one(tmp_path: Path):
+def test_child_environments_drop_every_redirect_and_take_the_temporary_one(tmp_path: Path) -> None:
     """The caller's virtualenv, import path and uv project redirects never reach a child."""
     inherited = dict.fromkeys(check_public_types.REDIRECTING_VARIABLES, "/caller")
     inherited["PATH"] = "/usr/bin"
@@ -253,7 +259,7 @@ def test_child_environments_drop_every_redirect_and_take_the_temporary_one(tmp_p
 def test_a_report_listing_no_symbol_is_a_measurement_error_not_a_stale_allowlist(
     general: list[dict[str, str]],
     reason_lines: list[str],
-):
+) -> None:
     """A run that measured nothing is never judged, so no allowlist entry reads as stale."""
     report = check_public_types.parse_report(_report(0, general=general))
 
@@ -313,7 +319,7 @@ _NO_DIAGNOSTICS: list[dict[str, object]] = []
 def test_a_report_entry_missing_a_field_is_a_measurement_error(
     symbols: list[dict[str, object]],
     general: list[dict[str, str]],
-):
+) -> None:
     """An entry without its string ``name``, ``severity`` or ``message`` cannot be judged."""
     report = check_public_types.parse_report(_report(1.0, symbols, general=general))
 
@@ -321,13 +327,16 @@ def test_a_report_entry_missing_a_field_is_a_measurement_error(
         check_public_types.verdict_for(report, ())
 
 
-def test_an_environment_without_basedpyright_is_a_measurement_error(tmp_path: Path):
+def test_an_environment_without_basedpyright_is_a_measurement_error(tmp_path: Path) -> None:
     """A build that installed no verifier fails as a measurement before any child starts."""
     with pytest.raises(check_public_types.MeasurementError, match="installed no basedpyright"):
         check_public_types.run_verifier(tmp_path / "env", cwd=tmp_path)
 
 
-def test_a_stale_uv_is_a_measurement_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_a_stale_uv_is_a_measurement_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     """A ``UV`` naming a removed executable fails as a measurement before any child starts."""
     monkeypatch.setenv("UV", str(tmp_path / "uv"))
 
@@ -335,7 +344,10 @@ def test_a_stale_uv_is_a_measurement_error(monkeypatch: pytest.MonkeyPatch, tmp_
         check_public_types.build_environment(tmp_path / "env")
 
 
-def test_no_uv_at_all_is_a_measurement_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_no_uv_at_all_is_a_measurement_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     """No ``UV`` and no ``uv`` on ``PATH`` fails as a measurement before any child starts."""
     monkeypatch.delenv("UV", raising=False)
     monkeypatch.setenv("PATH", str(tmp_path))
@@ -358,10 +370,10 @@ def test_a_child_that_cannot_start_or_decode_is_a_measurement_error(
     tmp_path: Path,
     error: Exception,
     match: str,
-):
+) -> None:
     """``subprocess.run``'s start and decode failures surface as a measurement error."""
 
-    def refuse(*_args: object, **_kwargs: object):
+    def refuse(*_args: object, **_kwargs: object) -> NoReturn:
         raise error
 
     monkeypatch.setattr(subprocess, "run", refuse)

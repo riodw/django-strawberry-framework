@@ -26,6 +26,7 @@ fields are awaitable).
 """
 
 import inspect
+from collections.abc import AsyncIterator, Awaitable
 from unittest import mock
 
 import pytest
@@ -36,25 +37,25 @@ from django_strawberry_framework import _graphql_core_patches as patches
 
 
 class _SimpleAsyncIterable:
-    def __init__(self, items: list[object]):
+    def __init__(self, items: list[object]) -> None:
         self.items = items
 
-    def __aiter__(self):
-        async def gen():
+    def __aiter__(self) -> AsyncIterator[object]:
+        async def gen() -> AsyncIterator[object]:
             for item in self.items:
                 yield item
 
         return gen()
 
 
-def test_patch_is_installed_at_app_load_and_apply_is_idempotent():
+def test_patch_is_installed_at_app_load_and_apply_is_idempotent() -> None:
     assert patches._patch_is_installed() is True
     patches.apply()
     patches.apply()
     assert patches._patch_is_installed() is True
 
 
-def test_apply_reinstalls_a_reverted_executor_method(monkeypatch: pytest.MonkeyPatch):
+def test_apply_reinstalls_a_reverted_executor_method(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         ExecutionContext,
         "complete_list_value",
@@ -65,14 +66,14 @@ def test_apply_reinstalls_a_reverted_executor_method(monkeypatch: pytest.MonkeyP
     assert patches._patch_is_installed() is True
 
 
-def test_captured_upstream_still_returns_a_residual_awaitable():
+def test_captured_upstream_still_returns_a_residual_awaitable() -> None:
     """The captured upstream method still yields a residual awaitable after one ``await``."""
 
     class Context:
         is_awaitable = staticmethod(inspect.isawaitable)
 
-        def complete_list_value(self, *_args: object):
-            async def child_completion():
+        def complete_list_value(self, *_args: object) -> Awaitable[list[str]]:
+            async def child_completion() -> list[str]:
                 return ["done"]
 
             return child_completion()
@@ -81,8 +82,8 @@ def test_captured_upstream_still_returns_a_residual_awaitable():
     assert original_complete_list_value is not None
     first = original_complete_list_value(
         # basedpyright: a stand-in execution context plus placeholders the captured method only
-        # forwards to it; graphql-core types them as ExecutionContext, GraphQLList,
-        # list[FieldNode], GraphQLResolveInfo and Path
+        # forwards to it; graphql-core types them as ExecutionContext, GraphQLList, a list
+        # of FieldNode, GraphQLResolveInfo and Path
         Context(),  # pyright: ignore[reportArgumentType]
         object(),  # pyright: ignore[reportArgumentType]
         (),  # pyright: ignore[reportArgumentType]
@@ -92,7 +93,7 @@ def test_captured_upstream_still_returns_a_residual_awaitable():
     )
     assert inspect.isawaitable(first)
 
-    async def inspect_residual():
+    async def inspect_residual() -> None:
         residual = await first
         assert inspect.isawaitable(residual)
         assert inspect.iscoroutine(residual)
@@ -103,13 +104,15 @@ def test_captured_upstream_still_returns_a_residual_awaitable():
     asyncio.run(inspect_residual())
 
 
-def test_apply_fails_loudly_when_upstream_shape_changes():
+def test_apply_fails_loudly_when_upstream_shape_changes() -> None:
     def _one_argument_completer(_self: object) -> None:
         return None
 
-    with mock.patch.object(patches, "_original_complete_list_value", _one_argument_completer):
-        with pytest.raises(RuntimeError, match="complete_list_value no longer"):
-            patches.apply()
+    with (
+        mock.patch.object(patches, "_original_complete_list_value", _one_argument_completer),
+        pytest.raises(RuntimeError, match="complete_list_value no longer"),
+    ):
+        patches.apply()
 
 
 @pytest.mark.parametrize(
@@ -120,16 +123,18 @@ def test_apply_fails_loudly_when_upstream_shape_changes():
         ("_original_complete_list_value", "ExecutionContext.complete_list_value"),
     ],
 )
-def test_apply_fails_loudly_when_required_upstream_symbols_are_missing(name: str, message: str):
-    with mock.patch.object(patches, name, None):
-        with pytest.raises(RuntimeError, match=message):
-            patches.apply()
+def test_apply_fails_loudly_when_required_upstream_symbols_are_missing(
+    name: str,
+    message: str,
+) -> None:
+    with mock.patch.object(patches, name, None), pytest.raises(RuntimeError, match=message):
+        patches.apply()
 
 
 def test_apply_uses_independent_dependency_gate(
     settings: pytest_django.Settings,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     monkeypatch.setattr(
         ExecutionContext,
         "complete_list_value",
@@ -151,7 +156,7 @@ def test_apply_uses_independent_dependency_gate(
 def test_apply_obeys_global_disable(
     settings: pytest_django.Settings,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     monkeypatch.setattr(
         ExecutionContext,
         "complete_list_value",
@@ -162,7 +167,7 @@ def test_apply_obeys_global_disable(
     assert patches._patch_is_installed() is False
 
 
-def test_captured_upstream_method_returns_none_without_an_owner():
+def test_captured_upstream_method_returns_none_without_an_owner() -> None:
     """A missing owner class yields no captured method rather than an attribute error.
 
     ``_captured_upstream_method`` is called with whatever

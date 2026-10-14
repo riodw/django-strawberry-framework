@@ -86,7 +86,7 @@ class _AllowAll:
         _operation: str,
         _data: object,
         _instance: object = None,
-    ):
+    ) -> bool:
         return True
 
 
@@ -163,7 +163,11 @@ def _category_gid(category_type: type[DjangoType]) -> str:
 # --------------------------------------------------------------------------- model
 
 
-def _run_model(shape: str, raised: _Raised, monkeypatch: pytest.MonkeyPatch):
+def _run_model(
+    shape: str,
+    raised: _Raised,
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str, list[str]]]:
     """``DjangoMutation`` over ``Item``; ``Item.clean`` raises inside ``full_clean()``."""
     category_type, _item_type = _category_types()
     meta: dict[str, object] = {
@@ -197,7 +201,11 @@ def _run_model(shape: str, raised: _Raised, monkeypatch: pytest.MonkeyPatch):
 # --------------------------------------------------------------------------- forms
 
 
-def _run_modelform(shape: str, raised: _Raised, monkeypatch: pytest.MonkeyPatch):
+def _run_modelform(
+    shape: str,
+    raised: _Raised,
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str, list[str]]]:
     """``DjangoModelFormMutation`` over an ``Item`` form whose ``clean()`` raises."""
     del monkeypatch
     category_type, _item_type = _category_types()
@@ -229,7 +237,11 @@ def _run_modelform(shape: str, raised: _Raised, monkeypatch: pytest.MonkeyPatch)
     )
 
 
-def _run_plain_form(shape: str, raised: _Raised, monkeypatch: pytest.MonkeyPatch):
+def _run_plain_form(
+    shape: str,
+    raised: _Raised,
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str, list[str]]]:
     """Plain ``DjangoFormMutation`` over a form whose ``clean()`` raises."""
     del monkeypatch
     category_type, _item_type = _category_types()
@@ -274,10 +286,17 @@ def _serializer_mutation(serializer_class: type[DRFSerializer]) -> type[Serializ
     )
 
 
-def _run_serializer(*, save_time: bool):
+def _run_serializer(
+    *,
+    save_time: bool,
+) -> Callable[[str, _Raised, pytest.MonkeyPatch], list[tuple[str, list[str]]]]:
     """A serializer runner raising from ``validate()`` or, ``save_time``, from ``create()``."""
 
-    def run(shape: str, raised: _Raised, monkeypatch: pytest.MonkeyPatch):
+    def run(
+        shape: str,
+        raised: _Raised,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> list[tuple[str, list[str]]]:
         del shape, monkeypatch
         category_type, _item_type = _category_types()
         name, message = raised
@@ -312,7 +331,11 @@ def _run_serializer(*, save_time: bool):
 # --------------------------------------------------------------------------- register
 
 
-def _run_register(shape: str, raised: _Raised, monkeypatch: pytest.MonkeyPatch):
+def _run_register(
+    shape: str,
+    raised: _Raised,
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str, list[str]]]:
     """``register_mutation()`` over a user model requiring ``first_name``; ``clean`` raises."""
     del shape
 
@@ -537,7 +560,7 @@ def test_validator_error_keys_to_the_input_field_sent(
     raised_name: str | None,
     expected: str,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The flavor's validator error comes back under the input name, one-segment ``path``."""
     errors = _RUNNERS[flavor](shape, (raised_name, "keyed failure"), monkeypatch)
 
@@ -546,7 +569,9 @@ def test_validator_error_keys_to_the_input_field_sent(
 
 
 @pytest.mark.django_db
-def test_rename_onto_an_unexposed_model_name_shares_one_key(monkeypatch: pytest.MonkeyPatch):
+def test_rename_onto_an_unexposed_model_name_shares_one_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A rename onto an unexposed field's model name makes two errors share one key.
 
     ``Meta.input_class`` exposes ``Item.name`` as ``category`` while the FK ``category``
@@ -585,7 +610,7 @@ def test_rename_onto_an_unexposed_model_name_shares_one_key(monkeypatch: pytest.
 @pytest.mark.django_db
 def test_decode_error_keeps_its_input_name_under_a_swapped_rename(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A decode error already names the input field and never passes through the key map.
 
     ``Meta.input_class`` swaps ``name`` and ``description`` (``name`` is sent as
@@ -645,7 +670,7 @@ def test_decode_error_keeps_its_input_name_under_a_swapped_rename(
 @pytest.mark.django_db
 def test_constraint_listing_a_forward_key_column_keys_to_its_input(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A constraint naming a forward key by its column (``category_id``) reports ``categoryId``.
 
     ``Model.validate_constraints()`` keys a single-field unique error by the name the

@@ -35,6 +35,7 @@ class OneHotLinkCount(models.Expression):
     """
 
     def __init__(self, *field_names: str) -> None:
+        """Store the field names whose non-null values are counted."""
         if not field_names:
             raise ValueError("OneHotLinkCount requires at least one field name.")
         self.field_names = field_names

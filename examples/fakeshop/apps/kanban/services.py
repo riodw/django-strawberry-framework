@@ -70,7 +70,8 @@ class KanbanServiceError(ValueError):
     the rare raise that has no more specific class.
     """
 
-    def __init__(self, message: str, *, code: str = "kanban_error"):
+    def __init__(self, message: str, *, code: str = "kanban_error") -> None:
+        """Carry the human-readable ``message`` and the machine-stable ``code``."""
         super().__init__(message)
         self.code = code
 
@@ -847,7 +848,7 @@ def set_card_status(
 # ---------------------------------------------------------------------------
 
 
-def set_item_complete(item: models.CardItem, complete: bool = True) -> models.CardItem:
+def set_item_complete(item: models.CardItem, *, complete: bool = True) -> models.CardItem:
     """Set a card item's ``is_complete`` checkbox (the general per-bullet flag).
 
     A bare completion carries no verification provenance, so it takes no actor --

@@ -54,7 +54,7 @@ def _isolate_state() -> Iterator[None]:
 # ---------------------------------------------------------------------------
 
 
-def test_factory_visits_every_reachable_relatedorder_target_via_bfs():
+def test_factory_visits_every_reachable_relatedorder_target_via_bfs() -> None:
     """A ``Book -> Shelf`` + ``Book -> Genre`` graph -> all three classes built."""
 
     class ShelfOrderBfs(OrderSet):
@@ -76,13 +76,13 @@ def test_factory_visits_every_reachable_relatedorder_target_via_bfs():
             fields = ["title"]
 
     factory = OrderArgumentsFactory(BookOrderBfs)
-    factory.arguments  # trigger build
+    _ = factory.arguments  # trigger build
     for name in ("BookOrderBfsInputType", "ShelfOrderBfsInputType", "GenreOrderBfsInputType"):
         assert name in OrderArgumentsFactory.input_object_types
         assert name in OrderArgumentsFactory._type_orderset_registry
 
 
-def test_factory_handles_cycles_via_seen_set():
+def test_factory_handles_cycles_via_seen_set() -> None:
     """Mutual ``A -> B -> A`` ``RelatedOrder``s do not blow the BFS stack."""
 
     class AOrderCycle(OrderSet):
@@ -105,7 +105,7 @@ def test_factory_handles_cycles_via_seen_set():
     AOrderCycle.related_orders["b"] = rel
 
     factory = OrderArgumentsFactory(AOrderCycle)
-    factory.arguments  # must not recurse forever
+    _ = factory.arguments  # must not recurse forever
     assert "AOrderCycleInputType" in OrderArgumentsFactory.input_object_types
     assert "BOrderCycleInputType" in OrderArgumentsFactory.input_object_types
     # Each class is built exactly once (no duplicate-build).
@@ -113,7 +113,7 @@ def test_factory_handles_cycles_via_seen_set():
     assert OrderArgumentsFactory._type_orderset_registry["BOrderCycleInputType"] is BOrderCycle
 
 
-def test_factory_builds_leaf_fields_with_ordering_or_none_annotation():
+def test_factory_builds_leaf_fields_with_ordering_or_none_annotation() -> None:
     """Leaf fields land typed as ``Ordering | None``."""
 
     class BookOrderLeaf(OrderSet):
@@ -133,7 +133,9 @@ def test_factory_builds_leaf_fields_with_ordering_or_none_annotation():
     assert type(None) in args
 
 
-def test_factory_builds_relatedorder_fields_with_annotated_strawberry_lazy_forward_reference():
+def test_factory_builds_relatedorder_fields_with_annotated_strawberry_lazy_forward_reference() -> (
+    None
+):
     """``RelatedOrder`` fields produce ``Annotated[ForwardRef, strawberry.lazy(...)] | None``."""
 
     class ShelfOrderRel(OrderSet):
@@ -166,7 +168,7 @@ def test_factory_builds_relatedorder_fields_with_annotated_strawberry_lazy_forwa
     assert forward_name == "ShelfOrderRelInputType"
 
 
-def test_factory_raises_on_two_distinct_ordersets_sharing_classname():
+def test_factory_raises_on_two_distinct_ordersets_sharing_classname() -> None:
     """Two distinct ``OrderSet`` classes with the same ``__name__`` -> ``ConfigurationError``."""
 
     class DupOrder(OrderSet):
@@ -175,7 +177,7 @@ def test_factory_raises_on_two_distinct_ordersets_sharing_classname():
             fields = ["name"]
 
     factory = OrderArgumentsFactory(DupOrder)
-    factory.arguments  # build the first one
+    _ = factory.arguments  # build the first one
 
     # Synthesize a second class with the same ``__name__``.
     DupOrder2 = type(
@@ -191,7 +193,7 @@ def test_factory_raises_on_two_distinct_ordersets_sharing_classname():
     )
     factory2 = OrderArgumentsFactory(DupOrder2)
     with pytest.raises(ConfigurationError) as excinfo:
-        factory2.arguments
+        _ = factory2.arguments
     message = str(excinfo.value)
     assert "DupOrderInputType" in message
     # The shared BFS substrate keeps family-specific wording: the message
@@ -200,7 +202,7 @@ def test_factory_raises_on_two_distinct_ordersets_sharing_classname():
     assert "OrderSet" in message
 
 
-def test_factory_arguments_is_idempotent():
+def test_factory_arguments_is_idempotent() -> None:
     """Repeated reads of ``.arguments`` return the same input class instance."""
 
     class IdempotentOrder(OrderSet):
@@ -214,7 +216,7 @@ def test_factory_arguments_is_idempotent():
     assert first is second
 
 
-def test_factory_input_object_types_shared_across_factory_instances():
+def test_factory_input_object_types_shared_across_factory_instances() -> None:
     """``input_object_types`` is a class-level dict shared across instances."""
 
     class SharedOrderA(OrderSet):
@@ -228,14 +230,14 @@ def test_factory_input_object_types_shared_across_factory_instances():
             fields = ["code"]
 
     factory_a = OrderArgumentsFactory(SharedOrderA)
-    factory_a.arguments
+    _ = factory_a.arguments
     factory_b = OrderArgumentsFactory(SharedOrderB)
-    factory_b.arguments
+    _ = factory_b.arguments
     assert "SharedOrderAInputType" in OrderArgumentsFactory.input_object_types
     assert "SharedOrderBInputType" in OrderArgumentsFactory.input_object_types
 
 
-def test_factory_subclass_rejected_at_class_creation_time():
+def test_factory_subclass_rejected_at_class_creation_time() -> None:
     """Subclassing ``OrderArgumentsFactory`` raises ``TypeError`` immediately."""
     with pytest.raises(TypeError) as excinfo:
 
@@ -246,7 +248,7 @@ def test_factory_subclass_rejected_at_class_creation_time():
     assert "does not support subclassing" in str(excinfo.value)
 
 
-def test_factory_skips_related_order_with_none_target():
+def test_factory_skips_related_order_with_none_target() -> None:
     """``RelatedOrder(None, ...)`` placeholders are skipped silently in the BFS."""
 
     class BookOrderNone(OrderSet):
@@ -259,11 +261,11 @@ def test_factory_skips_related_order_with_none_target():
             fields = ["title"]
 
     factory = OrderArgumentsFactory(BookOrderNone)
-    factory.arguments  # must not raise on the None target
+    _ = factory.arguments  # must not raise on the None target
     assert "BookOrderNoneInputType" in OrderArgumentsFactory.input_object_types
 
 
-def test_factory_rejects_related_orders_with_colliding_graphql_names():
+def test_factory_rejects_related_orders_with_colliding_graphql_names() -> None:
     """The order family shares the generated GraphQL-name collision guard."""
 
     class ShelfOrder(OrderSet):
@@ -284,7 +286,7 @@ def test_factory_rejects_related_orders_with_colliding_graphql_names():
 
     factory = OrderArgumentsFactory(BranchCollisionOrder)
     with pytest.raises(ConfigurationError) as excinfo:
-        factory.arguments
+        _ = factory.arguments
     message = str(excinfo.value)
     assert "'foo_bar'" in message
     assert "'fooBar'" in message
@@ -302,7 +304,7 @@ def test_factory_rejects_related_orders_with_colliding_graphql_names():
 # ---------------------------------------------------------------------------
 
 
-def test_factory_raises_on_orderset_with_no_orderable_fields():
+def test_factory_raises_on_orderset_with_no_orderable_fields() -> None:
     """An ``OrderSet`` whose expansion is empty raises ``ConfigurationError``.
 
     Pre-fix the factory built a zero-field ``@strawberry.input`` that only blew
@@ -319,7 +321,7 @@ def test_factory_raises_on_orderset_with_no_orderable_fields():
 
     factory = OrderArgumentsFactory(EmptyOrder)
     with pytest.raises(ConfigurationError) as excinfo:
-        factory.arguments
+        _ = factory.arguments
     message = str(excinfo.value)
     assert "EmptyOrderInputType" in message
     assert "no fields" in message
@@ -328,7 +330,7 @@ def test_factory_raises_on_orderset_with_no_orderable_fields():
     assert "OrderSet" in message
 
 
-def test_factory_raises_on_orderset_with_empty_fields_list():
+def test_factory_raises_on_orderset_with_empty_fields_list() -> None:
     """``Meta.fields = []`` is also rejected at the factory boundary."""
 
     class EmptyListOrder(OrderSet):
@@ -338,11 +340,11 @@ def test_factory_raises_on_orderset_with_empty_fields_list():
 
     factory = OrderArgumentsFactory(EmptyListOrder)
     with pytest.raises(ConfigurationError) as excinfo:
-        factory.arguments
+        _ = factory.arguments
     assert "EmptyListOrderInputType" in str(excinfo.value)
 
 
-def test_factory_raises_when_reachable_related_orderset_is_empty():
+def test_factory_raises_when_reachable_related_orderset_is_empty() -> None:
     """The BFS rejects an empty related target, not only an empty root."""
 
     class EmptyChildOrder(OrderSet):
@@ -359,7 +361,7 @@ def test_factory_raises_when_reachable_related_orderset_is_empty():
 
     factory = OrderArgumentsFactory(ParentOrder)
     with pytest.raises(ConfigurationError) as excinfo:
-        factory.arguments
+        _ = factory.arguments
     message = str(excinfo.value)
     assert "EmptyChildOrderInputType" in message
     assert "no fields" in message
@@ -370,7 +372,7 @@ def test_factory_raises_when_reachable_related_orderset_is_empty():
 # ---------------------------------------------------------------------------
 
 
-def test_factory_dedupes_double_enqueued_target_via_seen_check():
+def test_factory_dedupes_double_enqueued_target_via_seen_check() -> None:
     """Covers ``utils/inputs.py::GeneratedInputArgumentsFactory._ensure_built`` #"if set_cls in seen:".
 
     The existing ``test_factory_handles_cycles_via_seen_set`` pins the same
@@ -400,7 +402,7 @@ def test_factory_dedupes_double_enqueued_target_via_seen_check():
             fields = ["name"]
 
     factory = OrderArgumentsFactory(ParentOrderDedup)
-    factory.arguments  # must not raise; the pop-time guard fires.
+    _ = factory.arguments  # must not raise; the pop-time guard fires.
     # The target was built exactly once (the registry has one entry).
     assert (
         OrderArgumentsFactory._type_orderset_registry["ChildOrderDedupInputType"]
@@ -413,7 +415,7 @@ def test_factory_dedupes_double_enqueued_target_via_seen_check():
 # ---------------------------------------------------------------------------
 
 
-def test_orderset_set_shaped_meta_fields_expand_in_canonical_order():
+def test_orderset_set_shaped_meta_fields_expand_in_canonical_order() -> None:
     """Class-declared set-shaped ``Meta.fields`` expand in ``repr``-sorted order."""
 
     class BookOrderSetFields(OrderSet):
@@ -426,7 +428,7 @@ def test_orderset_set_shaped_meta_fields_expand_in_canonical_order():
     assert BookOrderSetFields.Meta.fields == {"title", "subtitle"}
 
 
-def test_factory_handles_diamond_dependency_graph():
+def test_factory_handles_diamond_dependency_graph() -> None:
     """A -> B -> D and A -> C -> D diamond graph builds D once and all 4 classes exist."""
 
     class DOrder(OrderSet):
@@ -470,7 +472,7 @@ def test_factory_handles_diamond_dependency_graph():
     assert OrderArgumentsFactory._type_orderset_registry["DOrderInputType"] is DOrder
 
 
-def test_factory_handles_4_tier_deep_chain():
+def test_factory_handles_4_tier_deep_chain() -> None:
     """Book -> Shelf -> Branch -> TaggedItem chain builds all 4 input classes in BFS order."""
 
     class DOrder(OrderSet):
@@ -500,7 +502,7 @@ def test_factory_handles_4_tier_deep_chain():
             fields = ["title"]
 
     factory = OrderArgumentsFactory(AOrder)
-    factory.arguments
+    _ = factory.arguments
     for name in (
         "AOrderInputType",
         "BOrderInputType",
@@ -510,7 +512,7 @@ def test_factory_handles_4_tier_deep_chain():
         assert name in OrderArgumentsFactory.input_object_types
 
 
-def test_factory_handles_related_order_targeting_callable_factory():
+def test_factory_handles_related_order_targeting_callable_factory() -> None:
     """RelatedOrder targeting a callable factory is resolved and enqueued properly in BFS."""
 
     class TargetOrder(OrderSet):
@@ -526,7 +528,7 @@ def test_factory_handles_related_order_targeting_callable_factory():
             fields = ["title"]
 
     factory = OrderArgumentsFactory(RootOrder)
-    factory.arguments
+    _ = factory.arguments
     assert "RootOrderInputType" in OrderArgumentsFactory.input_object_types
     assert "TargetOrderInputType" in OrderArgumentsFactory.input_object_types
 

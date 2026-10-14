@@ -40,13 +40,13 @@ class BOrder(OrderSet):
     """
 
 
-def test_related_order_accepts_class_reference():
+def test_related_order_accepts_class_reference() -> None:
     """Pass an ``OrderSet`` class directly; ``.orderset`` returns it untouched."""
     related = RelatedOrder(AOrder, field_name="a")
     assert related.orderset is AOrder
 
 
-def test_related_order_accepts_absolute_import_path_string():
+def test_related_order_accepts_absolute_import_path_string() -> None:
     """Pass a fully-qualified path; ``LazyRelatedClassMixin`` resolves it."""
     related = RelatedOrder(
         "tests.orders.test_base.AOrder",
@@ -60,7 +60,7 @@ def test_related_order_accepts_absolute_import_path_string():
     assert Owner.a.orderset is AOrder
 
 
-def test_related_order_accepts_unqualified_name_in_same_module():
+def test_related_order_accepts_unqualified_name_in_same_module() -> None:
     """Unqualified strings resolve against ``bound_orderset.__module__``.
 
     The first ``import_string`` attempt fails (no absolute module
@@ -74,7 +74,7 @@ def test_related_order_accepts_unqualified_name_in_same_module():
     assert Owner.a.orderset is AOrder
 
 
-def test_related_order_unresolved_target_raises_importerror_through_lazy_mixin():
+def test_related_order_unresolved_target_raises_importerror_through_lazy_mixin() -> None:
     """Unresolvable strings surface the raw ``ImportError`` from the mixin.
 
     Pins the contract the finalizer's ``_bind_ordersets`` subpass depends on
@@ -90,7 +90,7 @@ def test_related_order_unresolved_target_raises_importerror_through_lazy_mixin()
         _ = Owner.a.orderset
 
 
-def test_related_order_bind_orderset_is_idempotent():
+def test_related_order_bind_orderset_is_idempotent() -> None:
     """A second ``bind_orderset`` call does not clobber the first binding."""
     related = RelatedOrder(AOrder, field_name="a")
     related.bind_orderset(AOrder)
@@ -98,7 +98,7 @@ def test_related_order_bind_orderset_is_idempotent():
     assert related.bound_orderset is AOrder
 
 
-def test_related_order_imports_lazy_mixin_from_sets_mixins_not_filters_base():
+def test_related_order_imports_lazy_mixin_from_sets_mixins_not_filters_base() -> None:
     """The mixin in ``RelatedOrder.__mro__`` is the neutral one (spec-028).
 
     Re-coupling to ``filters.base`` would force the order subsystem to
@@ -116,28 +116,28 @@ def test_related_order_imports_lazy_mixin_from_sets_mixins_not_filters_base():
 # ---------------------------------------------------------------------------
 
 
-def test_meta_orderset_class_is_in_allowed_meta_keys():
+def test_meta_orderset_class_is_in_allowed_meta_keys() -> None:
     """``"orderset_class"`` is now in ``ALLOWED_META_KEYS`` (spec-028)."""
     from django_strawberry_framework.types.base import ALLOWED_META_KEYS
 
     assert "orderset_class" in ALLOWED_META_KEYS
 
 
-def test_meta_orderset_class_is_not_in_deferred_meta_keys():
+def test_meta_orderset_class_is_not_in_deferred_meta_keys() -> None:
     """``"orderset_class"`` has been promoted out of ``DEFERRED_META_KEYS``."""
     from django_strawberry_framework.types.base import DEFERRED_META_KEYS
 
     assert "orderset_class" not in DEFERRED_META_KEYS
 
 
-def test_validate_orderset_class_returns_none_for_missing_value():
+def test_validate_orderset_class_returns_none_for_missing_value() -> None:
     """The validator short-circuits to ``None`` when ``Meta.orderset_class`` is absent."""
     from django_strawberry_framework.types.base import _validate_orderset_class
 
     assert _validate_orderset_class(Category, None) is None
 
 
-def test_validate_orderset_class_accepts_order_set_subclass():
+def test_validate_orderset_class_accepts_order_set_subclass() -> None:
     """The validator returns the class unchanged when it's an ``OrderSet`` subclass."""
     from django_strawberry_framework.types.base import _validate_orderset_class
 
@@ -147,7 +147,7 @@ def test_validate_orderset_class_accepts_order_set_subclass():
     assert _validate_orderset_class(Category, MyOrder) is MyOrder
 
 
-def test_validate_orderset_class_rejects_non_order_set():
+def test_validate_orderset_class_rejects_non_order_set() -> None:
     """The validator raises ``ConfigurationError`` for non-``OrderSet`` types."""
     from django_strawberry_framework.exceptions import ConfigurationError
     from django_strawberry_framework.types.base import _validate_orderset_class
@@ -163,7 +163,7 @@ def test_validate_orderset_class_rejects_non_order_set():
     assert "NotAnOrderSet" in msg
 
 
-def test_validate_orderset_class_uses_local_import():
+def test_validate_orderset_class_uses_local_import() -> None:
     """The ``OrderSet`` import lives inside the function body (spec-028)."""
     import inspect
 
@@ -182,7 +182,7 @@ def test_validate_orderset_class_uses_local_import():
 # ---------------------------------------------------------------------------
 
 
-def test_related_order_orderset_setter_assigns_underscore_orderset():
+def test_related_order_orderset_setter_assigns_underscore_orderset() -> None:
     """Covers ``orders/base.py::RelatedOrder.orderset`` #"self._set_target(value)".
 
     The setter delegates to
@@ -198,11 +198,11 @@ def test_related_order_orderset_setter_assigns_underscore_orderset():
     assert related._orderset is BOrder
 
 
-def test_related_order_accepts_callable_factory():
+def test_related_order_accepts_callable_factory() -> None:
     """Pass a callable factory as target; resolves and caches on first access."""
     invocations = 0
 
-    def factory():
+    def factory() -> type[AOrder]:
         nonlocal invocations
         invocations += 1
         return AOrder
@@ -216,14 +216,14 @@ def test_related_order_accepts_callable_factory():
     assert invocations == 1
 
 
-def test_related_order_default_field_name_is_none():
+def test_related_order_default_field_name_is_none() -> None:
     """``field_name`` is optional and defaults to ``None``."""
     related = RelatedOrder(AOrder)
     assert related.field_name is None
     assert related.orderset is AOrder
 
 
-def test_related_order_unbound_absolute_import_path_resolves():
+def test_related_order_unbound_absolute_import_path_resolves() -> None:
     """Absolute import string resolves even when ``bound_orderset`` is unset."""
     related = RelatedOrder("tests.orders.test_base.AOrder", field_name="a")
     assert not hasattr(related, "bound_orderset")
@@ -239,7 +239,7 @@ class _NotAnOrderSet:
     """A plain class -- legal Python, not an ``OrderSet``."""
 
 
-def test_related_order_rejects_plain_class_target_with_typed_error():
+def test_related_order_rejects_plain_class_target_with_typed_error() -> None:
     """A resolved non-``OrderSet`` class target raises ``ConfigurationError``.
 
     The gate fires at the ``.orderset`` read -- the one seam every consumer
@@ -264,7 +264,7 @@ def test_related_order_rejects_plain_class_target_with_typed_error():
     assert "OrderSet subclass" in msg
 
 
-def test_related_order_rejects_filterset_target():
+def test_related_order_rejects_filterset_target() -> None:
     """The cross-family twin (``FilterSet``) is rejected, never silently built.
 
     A ``FilterSet`` carries ``type_name_for`` / a ``get_fields``-shaped
@@ -294,7 +294,7 @@ def test_related_order_rejects_filterset_target():
     assert "ShelfFilter" in msg
 
 
-def test_related_order_rejects_factory_returning_non_class():
+def test_related_order_rejects_factory_returning_non_class() -> None:
     """A factory resolving to a non-class is rejected by the same gate."""
 
     class Owner(OrderSet):
@@ -310,7 +310,7 @@ def test_related_order_rejects_factory_returning_non_class():
     assert "object" in str(exc_info.value)
 
 
-def test_related_order_target_gate_names_unbound_owner():
+def test_related_order_target_gate_names_unbound_owner() -> None:
     """A never-bound declaration reports ``<unbound>`` as its owner label."""
     # basedpyright: the non-OrderSet target is the hostile input under test; RelatedOrder types the
     # parameter as _OrderSetTarget
@@ -320,13 +320,13 @@ def test_related_order_target_gate_names_unbound_owner():
     assert "<unbound>" in str(exc_info.value)
 
 
-def test_related_order_none_placeholder_target_still_reads_none():
+def test_related_order_none_placeholder_target_still_reads_none() -> None:
     """The ``RelatedOrder(None, ...)`` placeholder keeps its skip-silently read."""
     related = RelatedOrder(None, field_name="shelf")
     assert related.orderset is None
 
 
-def test_related_order_target_gate_preserves_importerror_for_unresolved_strings():
+def test_related_order_target_gate_preserves_importerror_for_unresolved_strings() -> None:
     """The gate fires AFTER string resolution: unresolvable strings stay ``ImportError``.
 
     Pins the finalizer's subpass-2 contract -- the rewrap keys on the raw

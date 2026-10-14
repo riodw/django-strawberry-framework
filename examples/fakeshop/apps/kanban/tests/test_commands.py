@@ -3,6 +3,7 @@
 import json
 from io import StringIO
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 from django.core.management import CommandError, call_command
@@ -48,7 +49,7 @@ def _write_json(tmp_path: Path, payload: dict[str, object]) -> str:
 def test_import_card_files_changed_dry_run_rolls_back(
     tmp_path: Path,
     beta_version: models.TargetVersion,
-):
+) -> None:
     card = kf.make_card(
         title="Existing card",
         target_version=beta_version,
@@ -70,7 +71,7 @@ def test_import_card_files_changed_dry_run_rolls_back(
 def test_import_card_files_changed_replaces_existing_links(
     tmp_path: Path,
     beta_version: models.TargetVersion,
-):
+) -> None:
     card = kf.make_card(
         title="Existing card",
         target_version=beta_version,
@@ -94,7 +95,7 @@ def test_import_card_files_changed_replaces_existing_links(
 def test_import_card_files_changed_clears_links(
     tmp_path: Path,
     beta_version: models.TargetVersion,
-):
+) -> None:
     card = kf.make_card(
         title="Existing card",
         target_version=beta_version,
@@ -112,7 +113,7 @@ def test_import_card_files_changed_clears_links(
 def test_import_card_files_missing_files_key_errors(
     tmp_path: Path,
     beta_version: models.TargetVersion,
-):
+) -> None:
     card = kf.make_card(title="Existing card", target_version=beta_version)
     path = _write_json(tmp_path, {"cards": [{"card": card.title}]})
 
@@ -121,7 +122,10 @@ def test_import_card_files_missing_files_key_errors(
 
 
 @pytest.mark.django_db
-def test_import_card_files_requires_kind(tmp_path: Path, beta_version: models.TargetVersion):
+def test_import_card_files_requires_kind(
+    tmp_path: Path,
+    beta_version: models.TargetVersion,
+) -> None:
     card = kf.make_card(title="Existing card", target_version=beta_version)
     path = _write_json(tmp_path, {"cards": [{"card": card.title, "files": []}]})
 
@@ -136,7 +140,7 @@ def test_import_card_files_requires_kind(tmp_path: Path, beta_version: models.Ta
 def test_import_card_files_predicted_dry_run_rolls_back(
     tmp_path: Path,
     beta_version: models.TargetVersion,
-):
+) -> None:
     card = kf.make_card(title="Future card", target_version=beta_version)
     path = _write_json(
         tmp_path,
@@ -155,7 +159,7 @@ def test_import_card_files_predicted_dry_run_rolls_back(
 def test_import_card_files_predicted_replaces_idempotently(
     tmp_path: Path,
     beta_version: models.TargetVersion,
-):
+) -> None:
     card = kf.make_card(title="Future card", target_version=beta_version)
     path = _write_json(
         tmp_path,
@@ -188,7 +192,7 @@ def test_import_card_files_predicted_replaces_idempotently(
 def test_import_card_files_predicted_marks_directories(
     tmp_path: Path,
     beta_version: models.TargetVersion,
-):
+) -> None:
     card = kf.make_card(title="Future card", target_version=beta_version)
     path = _write_json(
         tmp_path,
@@ -210,7 +214,7 @@ def test_import_card_files_predicted_marks_directories(
 def test_import_card_files_predicted_rejects_done_card(
     tmp_path: Path,
     beta_version: models.TargetVersion,
-):
+) -> None:
     card = kf.make_card(
         title="Shipped card",
         target_version=beta_version,
@@ -231,7 +235,7 @@ def test_import_card_files_predicted_rejects_done_card(
 def test_import_card_files_predicted_rejects_path_outside_roots(
     tmp_path: Path,
     beta_version: models.TargetVersion,
-):
+) -> None:
     card = kf.make_card(title="Future card", target_version=beta_version)
     path = _write_json(
         tmp_path,
@@ -249,13 +253,13 @@ def test_import_card_files_wraps_validation_error_as_command_error(
     tmp_path: Path,
     beta_version: models.TargetVersion,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A signal-guard ValidationError surfaces as CommandError, not a raw traceback."""
     from django.core.exceptions import ValidationError
 
     card = kf.make_card(title="Guarded card", target_version=beta_version)
 
-    def _raise(*_args: object, **_kwargs: object):
+    def _raise(*_args: object, **_kwargs: object) -> NoReturn:
         raise ValidationError("guard says no")
 
     monkeypatch.setattr(services, "set_card_changed_files", _raise)

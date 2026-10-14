@@ -7,6 +7,8 @@ from apps.products.services import TEST_USER_PASSWORD, create_users
 
 
 class Command(BaseCommand):
+    """Seed permission-shaped test users through ``create_users``."""
+
     help = (
         "Create test users with individual model-view permissions. "
         "Each unit creates 5 users: 1 staff + 4 per-permission users."

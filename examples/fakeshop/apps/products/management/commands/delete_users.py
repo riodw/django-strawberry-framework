@@ -7,6 +7,8 @@ from apps.products.services import delete_users
 
 
 class Command(BaseCommand):
+    """Delete the first N generated users, or every non-superuser."""
+
     help = (
         "Delete test users (never deletes superusers). "
         "Pass an integer to delete the first N users, "

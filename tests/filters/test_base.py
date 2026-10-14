@@ -23,6 +23,7 @@ import strawberry
 from apps.library import models
 from django.core.exceptions import ValidationError
 from django.db.models import Model, QuerySet
+from django.forms import Form
 from django.http import HttpRequest, QueryDict
 from django_filters import BaseInFilter, CharFilter
 from graphql import GraphQLError
@@ -116,7 +117,7 @@ def _isolate_registry() -> Iterator[None]:
 # ---------------------------------------------------------------------------
 
 
-def test_typed_filter_drops_input_type_property():
+def test_typed_filter_drops_input_type_property() -> None:
     """The Graphene-port `input_type` property is intentionally dropped.
 
     The Strawberry-side annotation derives from the resolved filter
@@ -127,13 +128,13 @@ def test_typed_filter_drops_input_type_property():
     assert not hasattr(f, "input_type")
 
 
-def test_typed_filter_does_not_carry_graphene_input_type_attribute():
+def test_typed_filter_does_not_carry_graphene_input_type_attribute() -> None:
     """The Graphene-port `_input_type` private slot is also gone."""
     f = TypedFilter()
     assert not hasattr(f, "_input_type")
 
 
-def test_typed_filter_is_a_django_filter_filter():
+def test_typed_filter_is_a_django_filter_filter() -> None:
     assert issubclass(TypedFilter, Filter)
 
 
@@ -142,7 +143,7 @@ def test_typed_filter_is_a_django_filter_filter():
 # ---------------------------------------------------------------------------
 
 
-def test_array_filter_treats_empty_list_as_value():
+def test_array_filter_treats_empty_list_as_value() -> None:
     """`[]` is a real value for `ArrayField`; default filter must run."""
     qs = _RecordingQs()
 
@@ -152,7 +153,7 @@ def test_array_filter_treats_empty_list_as_value():
     assert qs.captured == {"tags__exact": []}
 
 
-def test_array_filter_passes_through_none():
+def test_array_filter_passes_through_none() -> None:
     """`None` is `EMPTY_VALUES`-ish and short-circuits."""
     sentinel = _RecordingQs()
     f = ArrayFilter(field_name="tags")
@@ -160,10 +161,10 @@ def test_array_filter_passes_through_none():
     assert f.filter(sentinel, None) is sentinel
 
 
-def test_array_filter_method_setter_swaps_in_array_filter_method():
+def test_array_filter_method_setter_swaps_in_array_filter_method() -> None:
     """A consumer-supplied `method=` callable plugs in `ArrayFilterMethod`."""
 
-    def custom(_qs: object, name: str, value: object):
+    def custom(_qs: object, name: str, value: object) -> tuple[str, str, object]:
         return ("custom", name, value)
 
     f = ArrayFilter(field_name="tags", method=custom)
@@ -175,28 +176,28 @@ def test_array_filter_method_setter_swaps_in_array_filter_method():
 # ---------------------------------------------------------------------------
 
 
-def test_validate_range_accepts_two_values():
+def test_validate_range_accepts_two_values() -> None:
     assert validate_range([1, 2]) is None
 
 
-def test_validate_range_rejects_single_value():
+def test_validate_range_rejects_single_value() -> None:
     with pytest.raises(ValidationError) as excinfo:
         validate_range([1])
     assert excinfo.value.code == "invalid"
 
 
-def test_validate_range_rejects_three_values():
+def test_validate_range_rejects_three_values() -> None:
     with pytest.raises(ValidationError):
         validate_range(
             [1, 2, 3],
         )
 
 
-def test_range_filter_uses_range_field_class():
+def test_range_filter_uses_range_field_class() -> None:
     assert RangeFilter.field_class is RangeField
 
 
-def test_range_field_missing_pair_cleans_to_none():
+def test_range_field_missing_pair_cleans_to_none() -> None:
     """An omitted ``_0``/``_1`` pair is empty, not a range of nulls.
 
     Live apply of a supplied pair:
@@ -219,10 +220,11 @@ def test_range_field_missing_pair_cleans_to_none():
 # ---------------------------------------------------------------------------
 
 
-def test_integer_range_filter_decomposes_range_into_gte_lte():
-    """A two-bound range applies a single ``gte`` + ``lte`` predicate, never a raw
-    ``__range`` (``BETWEEN``) bind - so each bound flows through Django's range-aware
-    integer lookup instead of overflowing the backend on an out-of-range value.
+def test_integer_range_filter_decomposes_range_into_gte_lte() -> None:
+    """A two-bound range applies one ``gte`` + ``lte`` predicate, never a raw ``__range`` bind.
+
+    Each bound flows through Django's range-aware integer lookup, so an out-of-range value never
+    overflows the backend (a ``BETWEEN`` bind would).
     """
     qs = _RecordingQs()
 
@@ -232,9 +234,10 @@ def test_integer_range_filter_decomposes_range_into_gte_lte():
     assert qs.captured == {"signed_big__gte": 1, "signed_big__lte": 100}
 
 
-def test_integer_range_filter_excludes_via_negated_conjunction():
-    """Under ``exclude=True`` the decomposed pair is applied through ``qs.exclude`` -
-    the exact complement of ``NOT (col BETWEEN a AND b)``.
+def test_integer_range_filter_excludes_via_negated_conjunction() -> None:
+    """Under ``exclude=True`` the decomposed pair is applied through ``qs.exclude``.
+
+    That is the exact complement of ``NOT (col BETWEEN a AND b)``.
     """
     qs = _RecordingQs()
 
@@ -243,22 +246,24 @@ def test_integer_range_filter_excludes_via_negated_conjunction():
     assert qs.captured == {"signed_big__gte": 1, "signed_big__lte": 100}
 
 
-def test_integer_range_filter_passes_through_empty_value():
+def test_integer_range_filter_passes_through_empty_value() -> None:
     """An empty / ``None`` range keeps django-filter's skip (no bounds supplied)."""
     sentinel = _RecordingQs()
     f = IntegerRangeFilter(field_name="signed_big", lookup_expr="range")
     assert f.filter(sentinel, None) is sentinel
 
 
-def test_integer_range_filter_lying_list_subclass_fails_closed():
-    """A ``list`` SUBCLASS whose ``__iter__`` raises detonates inside the
-    ``list(value)`` materialization; the containment arm fails closed to the
-    unfiltered skip (the GraphQL contract rejects the shape upstream) instead
-    of leaking the raw ``RuntimeError``."""
+def test_integer_range_filter_lying_list_subclass_fails_closed() -> None:
+    """A ``list`` SUBCLASS whose ``__iter__`` raises fails closed to the unfiltered skip.
+
+    The raise would detonate inside the ``list(value)`` materialization; the containment arm skips
+    instead (the GraphQL contract rejects the shape upstream) rather than leak the raw
+    ``RuntimeError``.
+    """
 
     class Lying(list[object]):
         @override
-        def __iter__(self):
+        def __iter__(self) -> Iterator[object]:
             raise RuntimeError("hostile __iter__ detonated")
 
     sentinel = _RecordingQs()
@@ -266,7 +271,7 @@ def test_integer_range_filter_lying_list_subclass_fails_closed():
     assert f.filter(sentinel, Lying([1, 2])) is sentinel
 
 
-def test_integer_range_filter_applies_distinct_when_flagged():
+def test_integer_range_filter_applies_distinct_when_flagged() -> None:
     """``IntegerRangeFilter.filter`` calls ``.distinct()`` when ``distinct=True``."""
     qs = _RecordingQs()
 
@@ -282,14 +287,14 @@ def test_integer_range_filter_applies_distinct_when_flagged():
 # ---------------------------------------------------------------------------
 
 
-def test_list_filter_returns_qs_none_on_empty_list():
+def test_list_filter_returns_qs_none_on_empty_list() -> None:
     qs = _RecordingQs()
 
     f = ListFilter(field_name="ids")
     assert f.filter(qs, []) is qs.nothing
 
 
-def test_list_filter_defers_to_super_for_nonempty_lists():
+def test_list_filter_defers_to_super_for_nonempty_lists() -> None:
     qs = _RecordingQs()
 
     f = ListFilter(field_name="ids", lookup_expr="in")
@@ -297,10 +302,12 @@ def test_list_filter_defers_to_super_for_nonempty_lists():
     assert qs.captured == {"ids__in": [1, 2]}
 
 
-def test_list_filter_passes_through_none():
-    """``None`` skips the list-shape gate entirely and falls through to
-    ``Filter.filter``, which short-circuits on ``EMPTY_VALUES`` - the same
-    omission pass-through the sibling ``MembershipInFilter`` documents."""
+def test_list_filter_passes_through_none() -> None:
+    """``None`` skips the list-shape gate and falls through to ``Filter.filter``.
+
+    ``Filter.filter`` short-circuits on ``EMPTY_VALUES``, the same omission pass-through the sibling
+    ``MembershipInFilter`` documents.
+    """
     sentinel = _RecordingQs()
     f = ListFilter(field_name="ids")
     assert f.filter(sentinel, None) is sentinel
@@ -311,7 +318,7 @@ def test_list_filter_passes_through_none():
 # ---------------------------------------------------------------------------
 
 
-def test_global_id_filter_decodes_via_strawberry_relay():
+def test_global_id_filter_decodes_via_strawberry_relay() -> None:
     """The decoded `node_id` reaches the underlying `Filter.filter` call."""
     qs = _RecordingQs()
 
@@ -321,7 +328,7 @@ def test_global_id_filter_decodes_via_strawberry_relay():
     assert qs.captured == {"id__exact": "42"}
 
 
-def test_global_id_filter_passes_through_none():
+def test_global_id_filter_passes_through_none() -> None:
     qs = _RecordingQs()
 
     f = GlobalIDFilter(field_name="id", lookup_expr="exact")
@@ -331,11 +338,13 @@ def test_global_id_filter_passes_through_none():
     assert result is qs
 
 
-def test_global_id_multiple_choice_filter_decodes_every_element(monkeypatch: pytest.MonkeyPatch):
+def test_global_id_multiple_choice_filter_decodes_every_element(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Decoded `node_id`s reach the underlying `MultipleChoiceFilter.filter`."""
     captured: list[list[str]] = []
 
-    def spy(_self: object, qs: object, value: Iterable[str]):
+    def spy(_self: object, qs: object, value: Iterable[str]) -> object:
         captured.append(list(value))
         return qs
 
@@ -351,7 +360,7 @@ def test_global_id_multiple_choice_filter_decodes_every_element(monkeypatch: pyt
     assert captured == [["1", "2"]]
 
 
-def test_global_id_multiple_choice_filter_passes_through_none():
+def test_global_id_multiple_choice_filter_passes_through_none() -> None:
     qs = _RecordingQs()
 
     f = GlobalIDMultipleChoiceFilter(field_name="id")
@@ -361,7 +370,7 @@ def test_global_id_multiple_choice_filter_passes_through_none():
 
 
 @pytest.mark.parametrize("value", [iter(["not-a-global-id"]), object(), "not-a-list"])
-def test_global_id_multiple_choice_filter_rejects_malformed_container(value: object):
+def test_global_id_multiple_choice_filter_rejects_malformed_container(value: object) -> None:
     """Malformed direct inputs fail as coded GraphQL errors, not leaked ``TypeError``."""
     f = GlobalIDMultipleChoiceFilter(field_name="id", lookup_expr="in")
 
@@ -371,7 +380,7 @@ def test_global_id_multiple_choice_filter_rejects_malformed_container(value: obj
     assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
 
 
-def test_global_id_multiple_choice_field_distinguishes_absent_from_explicit_empty():
+def test_global_id_multiple_choice_field_distinguishes_absent_from_explicit_empty() -> None:
     """Form cleaning keeps omission as ``None`` and a supplied empty list as ``[]``."""
     field = GlobalIDMultipleChoiceFilter(field_name="id").field
 
@@ -386,7 +395,7 @@ class _CharInFilter(BaseInFilter, CharFilter):
     """django-filter's ``in`` shape over ``CharFilter`` (what ``filter_for_lookup`` builds)."""
 
 
-def test_membership_in_field_reads_a_raw_empty_string_as_omission():
+def test_membership_in_field_reads_a_raw_empty_string_as_omission() -> None:
     """``?field__in=`` (django-filter's CSV ``""``) cleans to ``None``; a list stays a list.
 
     Raw form data keeps django-filter's empty-value rule (no constraint) while the
@@ -405,7 +414,7 @@ def test_membership_in_field_reads_a_raw_empty_string_as_omission():
     assert field.clean(csv) == ["a", "b"]
 
 
-def test_membership_in_filter_class_wraps_a_new_class_per_call_and_rejects_a_scalar():
+def test_membership_in_filter_class_wraps_a_new_class_per_call_and_rejects_a_scalar() -> None:
     """A NEW class per call (django-filter's lifecycle) keeping the inner name; a scalar is coded."""
     wrapped = membership_in_filter_class(_CharInFilter)
     assert wrapped is not membership_in_filter_class(_CharInFilter)
@@ -416,7 +425,7 @@ def test_membership_in_filter_class_wraps_a_new_class_per_call_and_rejects_a_sca
     assert exc_info.value.extensions == {"code": "FILTER_INVALID"}
 
 
-def test_global_id_multiple_choice_field_omission_still_enforces_required():
+def test_global_id_multiple_choice_field_omission_still_enforces_required() -> None:
     """Preserving ``None`` must not bypass Django's required-field validation."""
     field = GlobalIDMultipleChoiceFilter(field_name="id", required=True).field
     absent = field.widget.value_from_datadict(QueryDict(), {}, "id")
@@ -425,7 +434,7 @@ def test_global_id_multiple_choice_field_omission_still_enforces_required():
         field.clean(absent)
 
 
-def test_global_id_multiple_choice_filter_empty_in_matches_nothing_like_list_filter():
+def test_global_id_multiple_choice_filter_empty_in_matches_nothing_like_list_filter() -> None:
     qs = _RecordingQs()
     global_ids = GlobalIDMultipleChoiceFilter(field_name="id", lookup_expr="in")
     list_filter = ListFilter(field_name="id", lookup_expr="in")
@@ -434,7 +443,7 @@ def test_global_id_multiple_choice_filter_empty_in_matches_nothing_like_list_fil
     assert list_filter.filter(qs, []) is qs.nothing
 
 
-def test_global_id_multiple_choice_filter_empty_exact_matches_nothing_like_list_filter():
+def test_global_id_multiple_choice_filter_empty_exact_matches_nothing_like_list_filter() -> None:
     """Empty membership is match-nothing for non-``in`` lookups too.
 
     Many-side Relay relations resolve to ``GlobalIDMultipleChoiceFilter`` with
@@ -443,7 +452,6 @@ def test_global_id_multiple_choice_filter_empty_exact_matches_nothing_like_list_
     which would silently widen ``exact: []`` to no constraint. The empty-set
     contract must not be ``in``-only.
     """
-
     qs = _RecordingQs()
     # Default lookup_expr is ``exact`` (settings.DEFAULT_LOOKUP_EXPR).
     global_ids = GlobalIDMultipleChoiceFilter(field_name="genres")
@@ -466,7 +474,7 @@ def test_global_id_multiple_choice_filter_empty_exact_matches_nothing_like_list_
 )
 def test_excluded_empty_membership_matches_every_row_as_a_constraint(
     excluding: Callable[[], Filter],
-):
+) -> None:
     """Exclude + empty membership is the complement of match-nothing: every row.
 
     The rows come back on a new queryset, never the input by identity, which the
@@ -495,7 +503,7 @@ def test_excluded_empty_membership_matches_every_row_as_a_constraint(
 # ---------------------------------------------------------------------------
 
 
-def test_global_id_multiple_choice_filter_empty_node_id_exact_path_rejects():
+def test_global_id_multiple_choice_filter_empty_node_id_exact_path_rejects() -> None:
     """The same reject covers the non-``in`` (per-element) path.
 
     Live ``in`` twins:
@@ -509,7 +517,7 @@ def test_global_id_multiple_choice_filter_empty_node_id_exact_path_rejects():
     assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
 
 
-def test_global_id_multiple_choice_filter_well_formed_list_still_applies_predicate():
+def test_global_id_multiple_choice_filter_well_formed_list_still_applies_predicate() -> None:
     """Regression: a well-formed non-empty ``in`` list still yields the whole-list predicate.
 
     Removing the empty-stripping block must not disturb the normal path -- a list
@@ -527,7 +535,7 @@ def test_global_id_multiple_choice_filter_well_formed_list_still_applies_predica
 # ---------------------------------------------------------------------------
 
 
-def test_bound_field_name_reads_the_path_the_filterset_binds():
+def test_bound_field_name_reads_the_path_the_filterset_binds() -> None:
     """A declared filter with no ``field_name`` is bound to its attribute name."""
 
     class BookFilterSet(FilterSet):
@@ -540,7 +548,7 @@ def test_bound_field_name_reads_the_path_the_filterset_binds():
     assert _bound_field_name(BookFilterSet.base_filters["title"]) == "title"
 
 
-def test_bound_field_name_refuses_a_filter_with_no_path():
+def test_bound_field_name_refuses_a_filter_with_no_path() -> None:
     """A ``None`` path is refused by name, never handed to a model-field walk."""
     with pytest.raises(ConfigurationError, match=r"^Filter has no field_name;"):
         _bound_field_name(Filter())
@@ -551,44 +559,44 @@ def test_bound_field_name_refuses_a_filter_with_no_path():
 # ---------------------------------------------------------------------------
 
 
-def test_relation_uses_non_pk_to_field_true_for_to_field_fk():
+def test_relation_uses_non_pk_to_field_true_for_to_field_fk() -> None:
     """A forward FK on a non-pk ``to_field`` (``favorite_genre`` -> ``name``) is flagged."""
     field = models.PatronProfile._meta.get_field("favorite_genre")
     assert _relation_uses_non_pk_to_field(field) is True
 
 
-def test_relation_uses_non_pk_to_field_false_for_ordinary_fk_to_pk():
+def test_relation_uses_non_pk_to_field_false_for_ordinary_fk_to_pk() -> None:
     """An ordinary FK whose target field IS the related pk is not flagged."""
     field = models.Book._meta.get_field("shelf")
     assert _relation_uses_non_pk_to_field(field) is False
 
 
-def test_relation_uses_non_pk_to_field_false_for_m2m():
+def test_relation_uses_non_pk_to_field_false_for_m2m() -> None:
     """A ``ManyToManyField`` (non-concrete) is not flagged."""
     field = models.Book._meta.get_field("genres")
     assert _relation_uses_non_pk_to_field(field) is False
 
 
-def test_relation_uses_non_pk_to_field_false_for_reverse_relation():
+def test_relation_uses_non_pk_to_field_false_for_reverse_relation() -> None:
     """A reverse relation object (non-concrete) is not flagged."""
     field = models.Book._meta.get_field("loans")
     assert _relation_uses_non_pk_to_field(field) is False
 
 
-def test_relation_uses_non_pk_to_field_false_for_generic_foreign_key():
+def test_relation_uses_non_pk_to_field_false_for_generic_foreign_key() -> None:
     """A ``GenericForeignKey`` is forward-single but carries no link pairs, so it is not flagged."""
     field = models.TaggedItem._meta.get_field("content_object")
     assert _relation_uses_non_pk_to_field(field) is False
 
 
-def test_relation_uses_non_pk_to_field_false_for_unreadable_relation_flags():
+def test_relation_uses_non_pk_to_field_false_for_unreadable_relation_flags() -> None:
     """A descriptor whose relation flags are not booleans is not flagged (no raise)."""
     from types import SimpleNamespace
 
     assert _relation_uses_non_pk_to_field(SimpleNamespace(many_to_many="yes")) is False
 
 
-def test_relation_uses_non_pk_to_field_false_for_non_relation():
+def test_relation_uses_non_pk_to_field_false_for_non_relation() -> None:
     """A plain scalar column is not flagged."""
     field = models.Book._meta.get_field("title")
     assert _relation_uses_non_pk_to_field(field) is False
@@ -610,7 +618,7 @@ def _seed_favorite_genre_profiles(*genre_names: str) -> list[models.Genre]:
 
 
 @pytest.mark.django_db
-def test_global_id_filter_non_pk_to_field_matches_by_target_pk():
+def test_global_id_filter_non_pk_to_field_matches_by_target_pk() -> None:
     """A marked forward-FK GlobalID filter compiles against the target's pk.
 
     The Relay GlobalID carries the genre's PRIMARY KEY, but
@@ -637,7 +645,7 @@ def test_global_id_filter_non_pk_to_field_matches_by_target_pk():
 
 
 @pytest.mark.django_db
-def test_global_id_multiple_choice_filter_non_pk_to_field_union_by_pk():
+def test_global_id_multiple_choice_filter_non_pk_to_field_union_by_pk() -> None:
     """A marked multi-choice ``in`` filter unions both genres' profiles by pk."""
     alpha, beta, _gamma = _seed_favorite_genre_profiles("ALPHA", "BETA", "GAMMA")
     encoded = [
@@ -658,7 +666,7 @@ def test_global_id_multiple_choice_filter_non_pk_to_field_union_by_pk():
     assert wrong.count() == 0
 
 
-def test_global_id_filter_fk_to_pk_predicate_is_byte_identical():
+def test_global_id_filter_fk_to_pk_predicate_is_byte_identical() -> None:
     """Without the marker, the predicate is the unchanged ``{field__lookup: node_id}``."""
     qs = _RecordingQs()
 
@@ -669,7 +677,7 @@ def test_global_id_filter_fk_to_pk_predicate_is_byte_identical():
     assert qs.captured == {"shelf__exact": "7"}
 
 
-def test_global_id_multiple_choice_filter_in_predicate_is_byte_identical():
+def test_global_id_multiple_choice_filter_in_predicate_is_byte_identical() -> None:
     """Without the marker, the ``in`` predicate keeps the raw whole-list form."""
     qs = _RecordingQs()
 
@@ -681,7 +689,7 @@ def test_global_id_multiple_choice_filter_in_predicate_is_byte_identical():
     assert qs.captured == {"genres__in": ["1", "2"]}
 
 
-def test_global_id_filter_marked_empty_node_id_rejects_before_query():
+def test_global_id_filter_marked_empty_node_id_rejects_before_query() -> None:
     """The marked non-pk-``to_field`` path also rejects an empty id -- never a 500.
 
     Unmarked own-PK empty-id over HTTP:
@@ -712,7 +720,7 @@ class _SampleClass:
     """Throw-away target for the lazy-resolution callable branch."""
 
 
-def test_lazy_related_class_mixin_resolves_absolute_path():
+def test_lazy_related_class_mixin_resolves_absolute_path() -> None:
     mixin = LazyRelatedClassMixin()
     resolved = mixin.resolve_lazy_class(
         "tests.filters.fixtures.filtersets.ShelfFilter",
@@ -723,7 +731,7 @@ def test_lazy_related_class_mixin_resolves_absolute_path():
     assert resolved is ShelfFilter
 
 
-def test_lazy_related_class_mixin_falls_back_to_bound_module():
+def test_lazy_related_class_mixin_falls_back_to_bound_module() -> None:
     mixin = LazyRelatedClassMixin()
     from tests.filters.fixtures.filtersets import BranchFilter, ShelfFilter
 
@@ -731,12 +739,12 @@ def test_lazy_related_class_mixin_falls_back_to_bound_module():
     assert resolved is ShelfFilter
 
 
-def test_lazy_related_class_mixin_returns_class_as_is():
+def test_lazy_related_class_mixin_returns_class_as_is() -> None:
     mixin = LazyRelatedClassMixin()
     assert mixin.resolve_lazy_class(_SampleClass, None) is _SampleClass
 
 
-def test_lazy_related_class_mixin_invokes_callable_factory():
+def test_lazy_related_class_mixin_invokes_callable_factory() -> None:
     mixin = LazyRelatedClassMixin()
     instance = mixin.resolve_lazy_class(
         partial(_SampleClass),
@@ -745,7 +753,7 @@ def test_lazy_related_class_mixin_invokes_callable_factory():
     assert isinstance(instance, _SampleClass)
 
 
-def test_lazy_related_class_mixin_raises_when_unresolved_string_has_no_bound_class():
+def test_lazy_related_class_mixin_raises_when_unresolved_string_has_no_bound_class() -> None:
     mixin = LazyRelatedClassMixin()
     with pytest.raises(ImportError):
         mixin.resolve_lazy_class("definitely.not.a.module.ClassName", None)
@@ -756,24 +764,24 @@ def test_lazy_related_class_mixin_raises_when_unresolved_string_has_no_bound_cla
 # ---------------------------------------------------------------------------
 
 
-def test_related_filter_accepts_class_argument():
+def test_related_filter_accepts_class_argument() -> None:
     from tests.filters.fixtures.filtersets import ShelfFilter
 
     f = RelatedFilter(ShelfFilter)
     assert f._filterset is ShelfFilter
 
 
-def test_related_filter_accepts_absolute_path_argument():
+def test_related_filter_accepts_absolute_path_argument() -> None:
     f = RelatedFilter("tests.filters.fixtures.filtersets.ShelfFilter")
     assert f._filterset == "tests.filters.fixtures.filtersets.ShelfFilter"
 
 
-def test_related_filter_accepts_unqualified_name_argument():
+def test_related_filter_accepts_unqualified_name_argument() -> None:
     f = RelatedFilter("ShelfFilter")
     assert f._filterset == "ShelfFilter"
 
 
-def test_related_filter_bind_filterset_sets_bound_filterset():
+def test_related_filter_bind_filterset_sets_bound_filterset() -> None:
     f = RelatedFilter("ShelfFilter")
 
     from tests.filters.fixtures.filtersets import BranchFilter, ShelfFilter
@@ -785,21 +793,21 @@ def test_related_filter_bind_filterset_sets_bound_filterset():
     assert f.bound_filterset is ShelfFilter
 
 
-def test_related_filter_filterset_property_resolves_lazy_string():
+def test_related_filter_filterset_property_resolves_lazy_string() -> None:
     from tests.filters.fixtures.filtersets import BranchFilterByString, ShelfFilter
 
     rel = BranchFilterByString.related_filters["shelves"]
     assert rel.filterset is ShelfFilter
 
 
-def test_related_filter_filterset_property_resolves_absolute_path():
+def test_related_filter_filterset_property_resolves_absolute_path() -> None:
     from tests.filters.fixtures.filtersets import BranchFilterByPath, ShelfFilter
 
     rel = BranchFilterByPath.related_filters["shelves"]
     assert rel.filterset is ShelfFilter
 
 
-def test_related_filter_get_queryset_auto_derives_from_target_model():
+def test_related_filter_get_queryset_auto_derives_from_target_model() -> None:
     from tests.filters.fixtures.filtersets import BranchFilter
 
     rel = BranchFilter.related_filters["shelves"]
@@ -808,7 +816,7 @@ def test_related_filter_get_queryset_auto_derives_from_target_model():
     assert qs.model is models.Shelf
 
 
-def test_related_filter_get_queryset_honors_explicit_queryset():
+def test_related_filter_get_queryset_honors_explicit_queryset() -> None:
     from tests.filters.fixtures.filtersets import ShelfFilter
 
     explicit_qs = models.Shelf.objects.filter(code="topic-A")
@@ -818,12 +826,12 @@ def test_related_filter_get_queryset_honors_explicit_queryset():
     assert f.get_queryset(request=None) is explicit_qs
 
 
-def test_related_filter_explicit_queryset_ledger_defaults_false_when_absent():
+def test_related_filter_explicit_queryset_ledger_defaults_false_when_absent() -> None:
     f = RelatedFilter("ShelfFilter")
     assert f._has_explicit_queryset is False
 
 
-def test_related_filter_rejects_lookups_kwarg():
+def test_related_filter_rejects_lookups_kwarg() -> None:
     """The cookbook-port `lookups=` kwarg is dropped; nothing read it.
 
     Pinning: passing `lookups=` to `RelatedFilter.__init__` must raise
@@ -835,7 +843,7 @@ def test_related_filter_rejects_lookups_kwarg():
         RelatedFilter("ShelfFilter", lookups=["exact", "in"])
 
 
-def test_related_filter_filterset_setter_substitutes_target():
+def test_related_filter_filterset_setter_substitutes_target() -> None:
     """The `filterset` setter swaps the resolved target class in place."""
     from tests.filters.fixtures.filtersets import BranchFilter, ShelfFilter
 
@@ -855,10 +863,10 @@ def test_related_filter_filterset_setter_substitutes_target():
 # ---------------------------------------------------------------------------
 
 
-def test_array_filter_method_call_passes_through_none():
+def test_array_filter_method_call_passes_through_none() -> None:
     """`ArrayFilterMethod.__call__` returns the queryset untouched for `None`."""
 
-    def custom(_qs: object, name: str, value: object):
+    def custom(_qs: object, name: str, value: object) -> tuple[str, str, object]:
         return ("custom", name, value)
 
     sentinel = _RecordingQs()
@@ -867,30 +875,30 @@ def test_array_filter_method_call_passes_through_none():
     assert f.filter(sentinel, None) is sentinel
 
 
-def test_array_filter_method_call_dispatches_to_custom_method():
+def test_array_filter_method_call_dispatches_to_custom_method() -> None:
     """A non-`None` value reaches the consumer callable with `(qs, field_name, value)`."""
 
-    def custom(_qs: object, name: str, value: object):
+    def custom(_qs: object, name: str, value: object) -> tuple[str, str, object]:
         return ("custom", name, value)
 
     f = ArrayFilter(field_name="tags", method=custom)
     assert f.filter(_RecordingQs(), [1, 2]) == ("custom", "tags", [1, 2])
 
 
-def test_list_filter_method_setter_swaps_in_list_filter_method():
+def test_list_filter_method_setter_swaps_in_list_filter_method() -> None:
     """A consumer-supplied `method=` callable plugs in `ListFilterMethod`."""
 
-    def custom(qs: object, _name: str, _value: object):
+    def custom(qs: object, _name: str, _value: object) -> object:
         return qs
 
     f = ListFilter(field_name="ids", method=custom)
     assert isinstance(f.filter, ListFilterMethod)
 
 
-def test_list_filter_method_call_passes_through_none():
+def test_list_filter_method_call_passes_through_none() -> None:
     """`ListFilterMethod.__call__` returns the queryset untouched for `None`."""
 
-    def custom(_qs: object, name: str, value: object):
+    def custom(_qs: object, name: str, value: object) -> tuple[str, str, object]:
         return ("custom", name, value)
 
     sentinel = _RecordingQs()
@@ -898,17 +906,17 @@ def test_list_filter_method_call_passes_through_none():
     assert f.filter(sentinel, None) is sentinel
 
 
-def test_list_filter_method_call_dispatches_to_custom_method():
+def test_list_filter_method_call_dispatches_to_custom_method() -> None:
     """A non-`None` value reaches the consumer callable with `(qs, field_name, value)`."""
 
-    def custom(_qs: object, name: str, value: object):
+    def custom(_qs: object, name: str, value: object) -> tuple[str, str, object]:
         return ("custom", name, value)
 
     f = ListFilter(field_name="ids", method=custom)
     assert f.filter(_RecordingQs(), [1, 2]) == ("custom", "ids", [1, 2])
 
 
-def test_array_filter_applies_distinct_when_flagged():
+def test_array_filter_applies_distinct_when_flagged() -> None:
     """`ArrayFilter.filter` calls `.distinct()` when the filter is `distinct=True`."""
     qs = _RecordingQs()
 
@@ -980,20 +988,20 @@ def _global_id_filter_with_owner(field_name: str, owner: DjangoTypeDefinition) -
     return _bound(GlobalIDFilter(field_name=field_name), owner)
 
 
-def test_target_definition_for_returns_none_without_owner():
+def test_target_definition_for_returns_none_without_owner() -> None:
     """No bound owner -> no definition (node-id-only fallback in unit contexts)."""
     f = _bound(GlobalIDFilter(field_name="id"), None)
     assert _target_definition_for(f) is None
 
 
-def test_target_definition_for_own_pk_branch():
+def test_target_definition_for_own_pk_branch() -> None:
     """When the field is the owner's PK, the owner definition itself is returned."""
     owner = _owner()
     f = _global_id_filter_with_owner("id", owner)
     assert _target_definition_for(f) is owner
 
 
-def test_target_definition_for_relation_branch():
+def test_target_definition_for_relation_branch() -> None:
     """A relation head resolves through `related_target_for` to the target definition."""
     target_def = _definition(models.Genre, "GenreType")
     owner = _owner()
@@ -1001,19 +1009,19 @@ def test_target_definition_for_relation_branch():
     assert _target_definition_for(f) is target_def
 
 
-def test_target_definition_for_relation_branch_unresolved_target():
+def test_target_definition_for_relation_branch_unresolved_target() -> None:
     """An unresolvable relation head returns `None` (decode without validation)."""
     owner = _owner()
     f = _global_id_filter_with_owner("genres__id", owner)
     assert _target_definition_for(f) is None
 
 
-def test_accepted_globalid_type_names_none_definition():
+def test_accepted_globalid_type_names_none_definition() -> None:
     """No definition -> `None` (node-id-only fallback)."""
     assert _accepted_globalid_type_names(None) is None
 
 
-def test_accepted_globalid_type_names_per_strategy():
+def test_accepted_globalid_type_names_per_strategy() -> None:
     """Each framework strategy maps to its accepted `type_name` payload set."""
     model_owner = _owner("model")
     type_owner = _owner("type")
@@ -1023,7 +1031,9 @@ def test_accepted_globalid_type_names_per_strategy():
     assert _accepted_globalid_type_names(both_owner) == {"library.book", "OwnerType"}
 
 
-def test_accepted_globalid_type_names_keep_the_default_spelling_for_an_unpublished_target():
+def test_accepted_globalid_type_names_keep_the_default_spelling_for_an_unpublished_target() -> (
+    None
+):
     """A schema publishing no object type for the target keeps the ``graphql_type_name``.
 
     Live siblings accept the schema-published name on every GlobalID filter shape
@@ -1043,7 +1053,7 @@ def test_accepted_globalid_type_names_keep_the_default_spelling_for_an_unpublish
     }
 
 
-def test_filter_schema_is_none_outside_the_apply_pipeline():
+def test_filter_schema_is_none_outside_the_apply_pipeline() -> None:
     """A filterset constructed directly carries no resolver ``info``, so no schema."""
     f = _global_id_filter_with_owner("id", _owner("type"))
     assert _filter_schema(f) is None
@@ -1051,7 +1061,7 @@ def test_filter_schema_is_none_outside_the_apply_pipeline():
 
 
 @pytest.mark.parametrize("strategy", ["callable", "custom", None])
-def test_accepted_globalid_type_names_non_framework_strategies(strategy: str | None):
+def test_accepted_globalid_type_names_non_framework_strategies(strategy: str | None) -> None:
     """`callable` / `custom` / absent strategy -> `None` accepted set (defensive belt).
 
     `_decode_and_validate_global_id` fail-closes on these before reaching this
@@ -1063,7 +1073,7 @@ def test_accepted_globalid_type_names_non_framework_strategies(strategy: str | N
     assert _accepted_globalid_type_names(owner) is None
 
 
-def test_filter_model_strategy_accepts_model_label():
+def test_filter_model_strategy_accepts_model_label() -> None:
     """Under `model`, an own-PK filter accepts the model-label payload."""
     owner = _owner("model")
     f = _global_id_filter_with_owner("id", owner)
@@ -1071,7 +1081,7 @@ def test_filter_model_strategy_accepts_model_label():
     assert _decode_and_validate_global_id(encoded, f) == 42
 
 
-def test_filter_model_strategy_accepts_predecoded_global_id():
+def test_filter_model_strategy_accepts_predecoded_global_id() -> None:
     """The filter accepts Strawberry's already-coerced ``GlobalID`` value unchanged."""
     owner = _owner("model")
     f = _global_id_filter_with_owner("id", owner)
@@ -1079,7 +1089,7 @@ def test_filter_model_strategy_accepts_predecoded_global_id():
     assert _decode_and_validate_global_id(relay.GlobalID("library.book", "42"), f) == 42
 
 
-def test_filter_model_strategy_rejects_type_name():
+def test_filter_model_strategy_rejects_type_name() -> None:
     """Under `model`, the old bare GraphQL type name is rejected."""
     owner = _owner("model")
     f = _global_id_filter_with_owner("id", owner)
@@ -1088,7 +1098,7 @@ def test_filter_model_strategy_rejects_type_name():
         _decode_and_validate_global_id(encoded, f)
 
 
-def test_filter_type_strategy_accepts_graphql_name():
+def test_filter_type_strategy_accepts_graphql_name() -> None:
     """`type` preserves the pre-0.0.9 `graphql_type_name` acceptance."""
     owner = _owner("type")
     f = _global_id_filter_with_owner("id", owner)
@@ -1099,7 +1109,7 @@ def test_filter_type_strategy_accepts_graphql_name():
         _decode_and_validate_global_id(relay.to_base64("library.book", "7"), f)
 
 
-def test_filter_type_plus_model_accepts_both():
+def test_filter_type_plus_model_accepts_both() -> None:
     """`type+model` accepts model-label AND type-name inputs."""
     owner = _owner("type+model")
     f = _global_id_filter_with_owner("id", owner)
@@ -1108,7 +1118,7 @@ def test_filter_type_plus_model_accepts_both():
 
 
 @pytest.mark.parametrize("strategy", ["callable", "custom"])
-def test_filter_encode_only_strategy_rejects_fail_closed(strategy: str):
+def test_filter_encode_only_strategy_rejects_fail_closed(strategy: str) -> None:
     """`callable` / `custom` targets fail closed: the strategy is encode-only.
 
     These strategies have no decode path, so a typed filter input for the
@@ -1124,7 +1134,7 @@ def test_filter_encode_only_strategy_rejects_fail_closed(strategy: str):
     assert strategy in str(exc_info.value)
 
 
-def test_filter_known_definition_none_strategy_rejects_fail_closed():
+def test_filter_known_definition_none_strategy_rejects_fail_closed() -> None:
     """A known target whose recorded strategy is `None` is a lifecycle defect.
 
     An unfinalized / non-Relay target should never reach a GlobalID filter; the
@@ -1134,12 +1144,12 @@ def test_filter_known_definition_none_strategy_rejects_fail_closed():
     owner = _owner(None)
     f = _global_id_filter_with_owner("id", owner)
     encoded = relay.to_base64("AnythingAtAll", "99")
-    with pytest.raises(GraphQLError, match="no .*recorded globalid strategy") as exc_info:
+    with pytest.raises(GraphQLError, match=r"no .*recorded globalid strategy") as exc_info:
         _decode_and_validate_global_id(encoded, f)
     assert exc_info.value.extensions == {"code": "GLOBALID_UNVALIDATABLE"}
 
 
-def test_multi_value_filter_encode_only_reject_names_index():
+def test_multi_value_filter_encode_only_reject_names_index() -> None:
     """`GlobalIDMultipleChoiceFilter` names the offending index on a fail-closed reject."""
     owner = _owner("callable")
     f = _bound(GlobalIDMultipleChoiceFilter(field_name="id"), owner)
@@ -1148,14 +1158,14 @@ def test_multi_value_filter_encode_only_reject_names_index():
     assert exc_info.value.extensions == {"code": "GLOBALID_UNVALIDATABLE"}
 
 
-def test_filter_unbound_owner_node_id_only():
+def test_filter_unbound_owner_node_id_only() -> None:
     """No bound owner -> node-id-only fallback (the existing `None`-definition path)."""
     f = _bound(GlobalIDFilter(field_name="id"), None)
     encoded = relay.to_base64("WhateverType", "5")
     assert _decode_and_validate_global_id(encoded, f) == "5"
 
 
-def test_filter_wrong_model_rejected():
+def test_filter_wrong_model_rejected() -> None:
     """A wrong-model GlobalID is still rejected for a framework strategy."""
     owner = _owner("model")
     f = _global_id_filter_with_owner("id", owner)
@@ -1164,7 +1174,7 @@ def test_filter_wrong_model_rejected():
         _decode_and_validate_global_id(encoded, f)
 
 
-def test_related_filter_relation_branch_strategy_aware():
+def test_related_filter_relation_branch_strategy_aware() -> None:
     """A relation-branch (target-definition) filter applies the target's strategy."""
     _definition(models.Genre, "GenreType", "model")
     owner = _owner()
@@ -1175,7 +1185,9 @@ def test_related_filter_relation_branch_strategy_aware():
         _decode_and_validate_global_id(relay.to_base64("GenreType", "3"), f)
 
 
-def test_multi_value_filter_strategy_aware_indexes_rejection(monkeypatch: pytest.MonkeyPatch):
+def test_multi_value_filter_strategy_aware_indexes_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """`GlobalIDMultipleChoiceFilter` routes through the strategy-aware check.
 
     A wrong-shape element names its index in the rejection message; a
@@ -1187,7 +1199,7 @@ def test_multi_value_filter_strategy_aware_indexes_rejection(monkeypatch: pytest
     owner = _owner("model")
     captured: list[list[object]] = []
 
-    def spy(_self: object, qs: object, value: Iterable[object]):
+    def spy(_self: object, qs: object, value: Iterable[object]) -> object:
         captured.append(list(value))
         return qs
 
@@ -1213,7 +1225,7 @@ def test_multi_value_filter_strategy_aware_indexes_rejection(monkeypatch: pytest
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_globalid_target_definition_multihop():
+def test_resolve_globalid_target_definition_multihop() -> None:
     """`resolve_globalid_target_definition` walks multi-hop relation paths.
 
     Scope note. The CONSUMER-VISIBLE half of this contract is pinned live at
@@ -1281,7 +1293,7 @@ def test_resolve_globalid_target_definition_walks_a_relation_primary_key(
     owner_model: type[Model],
     field_name: str,
     expected_model: type[Model],
-):
+) -> None:
     """A primary key that is itself a relation is walked as a relation, never the owner's own id.
 
     The terminal ``pk`` / key name resolves to the model the key points at, and a
@@ -1329,14 +1341,14 @@ def test_resolve_globalid_target_definition_walks_a_relation_primary_key(
         "ab",
     ],
 )
-def test_validate_range_rejects_non_two_element_sequences(invalid_value: object):
+def test_validate_range_rejects_non_two_element_sequences(invalid_value: object) -> None:
     """`validate_range` rejects non-sequences, wrong lengths, and mappings with ValidationError."""
     with pytest.raises(ValidationError) as exc_info:
         validate_range(invalid_value)
     assert exc_info.value.code == "invalid"
 
 
-def test_integer_in_filter_unbound_and_missing_model():
+def test_integer_in_filter_unbound_and_missing_model() -> None:
     """`IntegerInFilter.filter` safely filters when unbound or when model field is unresolvable."""
     qs = models.Shelf.objects.all()
 
@@ -1358,7 +1370,7 @@ def test_integer_in_filter_unbound_and_missing_model():
     assert exc_info.value.extensions == {"code": "FILTER_INVALID"}
 
 
-def test_integer_range_filter_malformed_values_pass_through():
+def test_integer_range_filter_malformed_values_pass_through() -> None:
     """`IntegerRangeFilter.filter` passes through malformed non-range values without crashing."""
     qs = models.Shelf.objects.all()
     f = IntegerRangeFilter(field_name="id")
@@ -1371,7 +1383,7 @@ def test_integer_range_filter_malformed_values_pass_through():
     assert f.filter(qs, "invalid") is qs
 
 
-def test_filters_base_edge_cases():
+def test_filters_base_edge_cases() -> None:
     """Edge cases for _coerce_int_in_members and the relation-pk marker helpers."""
     from django_strawberry_framework.filters.base import (
         _GLOBALID_RELATION_PK_ATTR,
@@ -1399,9 +1411,8 @@ def test_filters_base_edge_cases():
     assert _marked_pk_field_name(f) == "target__pk"
 
 
-def test_related_filter_get_queryset_mistyped_target_is_typed():
-    """`RelatedFilter.get_queryset` surfaces the family gate's typed rejection
-    for a mis-typed target.
+def test_related_filter_get_queryset_mistyped_target_is_typed() -> None:
+    """``RelatedFilter.get_queryset`` rejects a mis-typed target with the gate's typed error.
 
     Replaces the pre-gate silent ``None`` propagation: a non-FilterSet
     target made the fallback return ``None`` (its ``_meta`` read came back
@@ -1430,7 +1441,7 @@ class _PlainClassTarget:
     """A plain class that is not a FilterSet (the mis-typed RelatedFilter target)."""
 
 
-def test_related_filter_gate_accepts_filterset_class_target():
+def test_related_filter_gate_accepts_filterset_class_target() -> None:
     class Target(FilterSet):
         class Meta:
             model = models.Shelf
@@ -1440,29 +1451,33 @@ def test_related_filter_gate_accepts_filterset_class_target():
     assert related.filterset is Target
 
 
-def test_related_filter_gate_passes_the_none_placeholder():
-    """``RelatedFilter(None)`` is the skip-silently placeholder: the gate must
-    pass it so the BFS enqueue and ``_expand_related_filter`` skip the branch."""
+def test_related_filter_gate_passes_the_none_placeholder() -> None:
+    """``RelatedFilter(None)`` is the skip-silently placeholder, and the gate passes it.
+
+    The BFS enqueue and ``_expand_related_filter`` then skip the branch.
+    """
     related = RelatedFilter(None, field_name="shelves")
     assert related.filterset is None
 
 
-def test_related_filter_gate_rejects_plain_class_target():
+def test_related_filter_gate_rejects_plain_class_target() -> None:
     # basedpyright: the non-FilterSet target is the hostile input under test; RelatedFilter types
     # the parameter as _FilterSetTarget
     related = RelatedFilter(_PlainClassTarget, field_name="shelves")  # pyright: ignore[reportArgumentType]
     with pytest.raises(ConfigurationError) as exc_info:
-        related.filterset
+        _ = related.filterset
     msg = str(exc_info.value)
     assert "declares RelatedFilter 'shelves'" in msg
     assert "_PlainClassTarget" in msg
     assert "is not a FilterSet subclass" in msg
 
 
-def test_related_filter_gate_rejects_cross_family_orderset_target():
+def test_related_filter_gate_rejects_cross_family_orderset_target() -> None:
     """The cross-family twin: an ``OrderSet`` cannot filter a relation branch.
-    Pre-gate it was silently enqueued into the FILTER BFS, walking the order
-    family's fields through the filter input builder."""
+
+    The gate rejects it; otherwise it would be enqueued into the FILTER BFS, walking the order
+    family's fields through the filter input builder.
+    """
     from django_strawberry_framework.orders import OrderSet
 
     class AnyOrderset(OrderSet):
@@ -1474,30 +1489,32 @@ def test_related_filter_gate_rejects_cross_family_orderset_target():
     # parameter as _FilterSetTarget
     related = RelatedFilter(AnyOrderset, field_name="shelves")  # pyright: ignore[reportArgumentType]
     with pytest.raises(ConfigurationError) as exc_info:
-        related.filterset
+        _ = related.filterset
     assert "is not a FilterSet subclass" in str(exc_info.value)
 
 
-def test_related_filter_gate_rejects_factory_returning_non_class():
-    def factory():
+def test_related_filter_gate_rejects_factory_returning_non_class() -> None:
+    def factory() -> int:
         return 42
 
     # basedpyright: the factory returning a non-class is the hostile input under test;
     # RelatedFilter types the parameter as _FilterSetTarget
     related = RelatedFilter(factory, field_name="shelves")  # pyright: ignore[reportArgumentType]
     with pytest.raises(ConfigurationError):
-        related.filterset
+        _ = related.filterset
 
 
-def test_related_filter_gate_preserves_raw_import_error_for_unresolvable_strings():
-    """The unresolvable-string raw ``ImportError`` is the finalizer's rewrap
-    key and MUST stay raw at the property read."""
+def test_related_filter_gate_preserves_raw_import_error_for_unresolvable_strings() -> None:
+    """The unresolvable-string raw ``ImportError`` stays raw at the property read.
+
+    It is the finalizer's rewrap key.
+    """
     related = RelatedFilter("no.such.module.NoSuchFilter", field_name="shelves")
     with pytest.raises(ImportError):
-        related.filterset
+        _ = related.filterset
 
 
-def test_related_filter_gate_names_the_bound_owner():
+def test_related_filter_gate_names_the_bound_owner() -> None:
     class Target(FilterSet):
         class Meta:
             model = models.Shelf
@@ -1516,14 +1533,16 @@ def test_related_filter_gate_names_the_bound_owner():
     # declares only the FilterSet target shapes
     Owner.related_filters["shelves"].filterset = _PlainClassTarget  # pyright: ignore[reportAttributeAccessIssue]
     with pytest.raises(ConfigurationError) as exc_info:
-        Owner.related_filters["shelves"].filterset
+        _ = Owner.related_filters["shelves"].filterset
     assert "Owner" in str(exc_info.value)
 
 
-def test_related_filter_expansion_surfaces_the_gate_not_a_raw_attribute_error():
-    """``FilterSet.get_filters()`` expansion (``_expand_related_filter``
-    reading ``f.filterset``) surfaces the typed gate error instead of the
-    pre-fix raw ``AttributeError: ... has no attribute 'get_filters'``."""
+def test_related_filter_expansion_surfaces_the_gate_not_a_raw_attribute_error() -> None:
+    """``FilterSet.get_filters()`` expansion surfaces the typed gate error.
+
+    ``_expand_related_filter`` reads ``f.filterset``; a mis-typed target yields the typed error, not a
+    raw ``AttributeError: ... has no attribute 'get_filters'``.
+    """
 
     class Parent(FilterSet):
         # basedpyright: the non-FilterSet target is the hostile input under test; RelatedFilter
@@ -1539,10 +1558,12 @@ def test_related_filter_expansion_surfaces_the_gate_not_a_raw_attribute_error():
     assert "is not a FilterSet subclass" in str(exc_info.value)
 
 
-def test_related_filter_gate_rejects_mistyped_target_at_bfs_enqueue():
-    """The BFS factory's enqueue (``getattr(related, 'filterset')``) hits the
-    gate instead of enqueueing the mis-typed target and detonating inside
-    ``set_input_type_name``."""
+def test_related_filter_gate_rejects_mistyped_target_at_bfs_enqueue() -> None:
+    """The BFS factory's enqueue hits the gate instead of enqueueing a mis-typed target.
+
+    ``getattr(related, 'filterset')`` raises the typed error rather than detonating inside
+    ``set_input_type_name``.
+    """
     from django_strawberry_framework.filters.factories import FilterArgumentsFactory
 
     class Parent(FilterSet):
@@ -1559,9 +1580,11 @@ def test_related_filter_gate_rejects_mistyped_target_at_bfs_enqueue():
         factory._ensure_built()
 
 
-def test_related_filter_gate_passes_none_placeholder_through_bfs_enqueue():
-    """The ``None`` placeholder is skipped silently by the BFS: the build
-    succeeds with the related branch omitted."""
+def test_related_filter_gate_passes_none_placeholder_through_bfs_enqueue() -> None:
+    """The ``None`` placeholder is skipped silently by the BFS.
+
+    The build succeeds with the related branch omitted.
+    """
     from django_strawberry_framework.filters.factories import FilterArgumentsFactory
 
     class Parent(FilterSet):
@@ -1581,44 +1604,51 @@ def test_related_filter_gate_passes_none_placeholder_through_bfs_enqueue():
 # ---------------------------------------------------------------------------
 
 
-def test_list_filter_scalar_value_is_a_coded_reject():
-    """The old bare ``len(value)`` leaked ``TypeError: object of type 'int'
-    has no len()`` -- the exact sibling of the leak the GlobalID
-    multiple-choice gate's own docstring documents as fixed."""
+def test_list_filter_scalar_value_is_a_coded_reject() -> None:
+    """A non-sized value under ``ListFilter`` raises the typed error, not a raw ``TypeError``.
+
+    A bare ``len(value)`` would leak ``TypeError: object of type 'int' has no len()``: the exact
+    sibling of the leak the GlobalID multiple-choice gate's own docstring documents as fixed.
+    """
     f = ListFilter(field_name="code")
     with pytest.raises(GraphQLError) as exc_info:
         f.filter(models.Shelf.objects.none(), 42)
     assert exc_info.value.extensions == {"code": "FILTER_INVALID"}
 
 
-def test_list_filter_one_shot_iterator_is_a_coded_reject():
+def test_list_filter_one_shot_iterator_is_a_coded_reject() -> None:
     f = ListFilter(field_name="code")
     with pytest.raises(GraphQLError):
         f.filter(models.Shelf.objects.none(), iter(["a", "b"]))
 
 
-def test_list_filter_string_value_is_rejected_not_iterated_charwise():
-    """A string under an ``in`` lookup used to reach Django's char-wise
-    string iteration (``in: "26"`` compiling to ``IN ('2','6')``); the shape
-    gate rejects the non-list shape first."""
+def test_list_filter_string_value_is_rejected_not_iterated_charwise() -> None:
+    """A string under an ``in`` lookup is rejected by the shape gate before iteration.
+
+    Django would otherwise iterate it char-wise (``in: "26"`` compiling to ``IN ('2','6')``).
+    """
     f = ListFilter(field_name="code", lookup_expr="in")
     with pytest.raises(GraphQLError):
         f.filter(models.Shelf.objects.none(), "26")
 
 
-def test_integer_in_filter_scalar_value_is_a_coded_reject():
-    """The coercion loop leaked ``TypeError: 'int' object is not iterable``
-    for a scalar that bypasses form coercion."""
+def test_integer_in_filter_scalar_value_is_a_coded_reject() -> None:
+    """A scalar that bypasses form coercion raises the typed error in the coercion loop.
+
+    The loop would otherwise leak ``TypeError: 'int' object is not iterable``.
+    """
     f = IntegerInFilter(field_name="lifetime_fines_cents")
     with pytest.raises(GraphQLError) as exc_info:
         f.filter(models.Shelf.objects.none(), 42)
     assert exc_info.value.extensions == {"code": "FILTER_INVALID"}
 
 
-def test_integer_in_filter_string_value_is_rejected_not_iterated_charwise():
-    """A string value iterated char-by-char through the coercion loop:
-    ``in: "26"`` coerced to ``[2, 6]`` -- a wrong-result membership, not
-    just a raw escape."""
+def test_integer_in_filter_string_value_is_rejected_not_iterated_charwise() -> None:
+    """A string value is rejected before the coercion loop iterates it char-by-char.
+
+    ``in: "26"`` would otherwise coerce to ``[2, 6]``: a wrong-result membership, not just a raw
+    escape.
+    """
 
     class PatronFilter(FilterSet):
         fines = IntegerInFilter(field_name="lifetime_fines_cents")
@@ -1633,13 +1663,15 @@ def test_integer_in_filter_string_value_is_rejected_not_iterated_charwise():
         f.filter(models.Shelf.objects.none(), "26")
 
 
-def test_globalid_multiple_choice_lying_list_subclass_is_a_coded_reject():
-    """A ``list`` SUBCLASS whose ``__iter__`` raises passes the ``isinstance``
-    shape gate and used to detonate inside ``list(value)``."""
+def test_globalid_multiple_choice_lying_list_subclass_is_a_coded_reject() -> None:
+    """A ``list`` SUBCLASS whose ``__iter__`` raises is a coded reject.
+
+    It passes the ``isinstance`` shape gate, then detonates inside ``list(value)``.
+    """
 
     class Lying(list[object]):
         @override
-        def __iter__(self):
+        def __iter__(self) -> Iterator[object]:
             raise RuntimeError("hostile __iter__ detonated")
 
     f = GlobalIDMultipleChoiceFilter(field_name="id")
@@ -1648,21 +1680,23 @@ def test_globalid_multiple_choice_lying_list_subclass_is_a_coded_reject():
     assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
 
 
-def test_array_filter_hostile_emptiness_probe_is_a_coded_reject():
-    """``value in EMPTY_VALUES`` evaluates ``value == ...``; a hostile
-    ``__eq__`` used to detonate raw inside the probe."""
+def test_array_filter_hostile_emptiness_probe_is_a_coded_reject() -> None:
+    """A hostile ``__eq__`` in the ``value in EMPTY_VALUES`` probe is a coded reject.
+
+    ``value in EMPTY_VALUES`` evaluates ``value == ...``; the raise is converted, not left raw.
+    """
 
     class Hostile:
         @override
-        def __eq__(self, other: object):
+        def __eq__(self, other: object) -> bool:
             raise RuntimeError("hostile __eq__ detonated")
 
         @override
-        def __ne__(self, other: object):
+        def __ne__(self, other: object) -> bool:
             raise RuntimeError("hostile __ne__ detonated")
 
         @override
-        def __hash__(self):
+        def __hash__(self) -> int:
             return 0
 
     f = ArrayFilter(field_name="tags")
@@ -1671,18 +1705,20 @@ def test_array_filter_hostile_emptiness_probe_is_a_coded_reject():
     assert exc_info.value.extensions == {"code": "FILTER_INVALID"}
 
 
-def test_integer_range_filter_hostile_value_skips_without_detonating():
-    """The shape check runs BEFORE any value probe, so a hostile ``__eq__``
-    takes the documented pass-through skip instead of detonating inside the
-    old leading ``value in EMPTY_VALUES`` membership."""
+def test_integer_range_filter_hostile_value_skips_without_detonating() -> None:
+    """The shape check runs BEFORE any value probe, so a hostile ``__eq__`` never detonates.
+
+    The value takes the documented pass-through skip instead of detonating in a
+    ``value in EMPTY_VALUES`` probe, which this filter does not run.
+    """
 
     class Hostile:
         @override
-        def __eq__(self, other: object):
+        def __eq__(self, other: object) -> bool:
             raise RuntimeError("hostile __eq__ detonated")
 
         @override
-        def __hash__(self):
+        def __hash__(self) -> int:
             return 0
 
     qs = models.Shelf.objects.none()
@@ -1690,15 +1726,17 @@ def test_integer_range_filter_hostile_value_skips_without_detonating():
     assert f.filter(qs, Hostile()) is qs
 
 
-def test_decode_global_id_hostile_repr_still_raises_the_coded_error():
-    """The malformed-payload message interpolates the rejected value; a
-    hostile ``__repr__`` used to detonate DURING the GraphQLError assembly,
-    replacing the promised coded error with a raw ``RuntimeError``. The
-    guarded repr fallback renders ``<unprintable ...>`` instead."""
+def test_decode_global_id_hostile_repr_still_raises_the_coded_error() -> None:
+    """A hostile ``__repr__`` in a malformed payload still raises the coded error.
+
+    The malformed-payload message interpolates the rejected value; the guarded repr fallback renders
+    ``<unprintable ...>`` instead of letting a ``RuntimeError`` replace the promised coded
+    ``GraphQLError``.
+    """
 
     class Hostile:
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("hostile __repr__ detonated")
 
     with pytest.raises(GraphQLError) as exc_info:
@@ -1712,7 +1750,7 @@ def test_decode_global_id_hostile_repr_still_raises_the_coded_error():
 # ---------------------------------------------------------------------------
 
 
-def test_relation_identity_column_follows_a_relation_valued_primary_key():
+def test_relation_identity_column_follows_a_relation_valued_primary_key() -> None:
     """A target whose own key is a one-to-one types by the column that key points at.
 
     ``Annotation.profile`` targets ``PatronProfile``, whose primary key IS its
@@ -1722,7 +1760,7 @@ def test_relation_identity_column_follows_a_relation_valued_primary_key():
     assert column is models.Patron._meta.pk
 
 
-def test_relation_identity_column_is_none_without_a_resolved_relation():
+def test_relation_identity_column_is_none_without_a_resolved_relation() -> None:
     """A plain column, and a relation with no resolved target model, have no identity column."""
     from types import SimpleNamespace
 
@@ -1731,7 +1769,7 @@ def test_relation_identity_column_is_none_without_a_resolved_relation():
 
 
 @pytest.mark.django_db
-def test_relation_pk_filters_generated_for_non_pk_to_field_match_by_target_pk():
+def test_relation_pk_filters_generated_for_non_pk_to_field_match_by_target_pk() -> None:
     """A raw-pk ``favorite_genre`` key (FK on ``to_field="name"``) matches the genre's pk.
 
     No ``DjangoType`` exposes ``Genre`` here, so both leaves are raw-pk filters carrying
@@ -1752,7 +1790,7 @@ def test_relation_pk_filters_generated_for_non_pk_to_field_match_by_target_pk():
     assert getattr(exact_leaf, _GLOBALID_RELATION_PK_ATTR) is True
     assert getattr(in_leaf, _GLOBALID_RELATION_PK_ATTR) is True
 
-    def codes(data: dict[str, object]):
+    def codes(data: dict[str, object]) -> list[str]:
         filterset = ProfileFilter(
             data=data,
             queryset=models.PatronProfile.objects.order_by("postal_code"),
@@ -1765,7 +1803,7 @@ def test_relation_pk_filters_generated_for_non_pk_to_field_match_by_target_pk():
 
 
 @pytest.mark.django_db
-def test_relation_pk_filters_drop_a_value_the_target_column_cannot_hold():
+def test_relation_pk_filters_drop_a_value_the_target_column_cannot_hold() -> None:
     """An uncoercible key identifies no row: ``exact`` matches nothing, ``in`` drops it.
 
     The GraphQL scalar rejects such a value at the wire, so only a direct caller reaches
@@ -1780,7 +1818,7 @@ def test_relation_pk_filters_drop_a_value_the_target_column_cannot_hold():
             model = models.Book
             fields = {"shelf": ["exact", "in"]}
 
-    def titles(data: dict[str, object]):
+    def titles(data: dict[str, object]) -> list[str]:
         filterset = BookShelfFilter(
             data=data,
             queryset=models.Book.objects.order_by("id"),
@@ -1794,7 +1832,7 @@ def test_relation_pk_filters_drop_a_value_the_target_column_cannot_hold():
 
 
 @pytest.mark.django_db
-def test_relation_pk_list_field_skips_existence_checks_and_rejects_a_non_list():
+def test_relation_pk_list_field_skips_existence_checks_and_rejects_a_non_list() -> None:
     """The list form field accepts a pk no row carries, and refuses a scalar with a coded error.
 
     django-filter's ``ModelMultipleChoiceField`` answered "Select a valid choice" for the
@@ -1806,7 +1844,7 @@ def test_relation_pk_list_field_skips_existence_checks_and_rejects_a_non_list():
             model = models.Book
             fields = {"genres": ["exact"]}
 
-    def form(data: dict[str, object]):
+    def form(data: dict[str, object]) -> Form:
         return BookGenreFilter(
             data=data,
             queryset=models.Book.objects.all(),
@@ -1822,7 +1860,7 @@ def test_relation_pk_list_field_skips_existence_checks_and_rejects_a_non_list():
 
 
 @pytest.mark.django_db
-def test_unbound_relation_pk_filters_apply_the_value_uncoerced():
+def test_unbound_relation_pk_filters_apply_the_value_uncoerced() -> None:
     """A filter with no parent filterset has no model to read a column from: value as given."""
     branch = models.Branch.objects.create(name="Home", city="Boston")
     shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)

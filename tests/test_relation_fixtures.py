@@ -30,7 +30,7 @@ from tests._relation_fixtures import (
 
 
 @pytest.mark.django_db(transaction=True)
-def test_composite_pk_pair_round_trips():
+def test_composite_pk_pair_round_trips() -> None:
     """Fixture smoke: the composite-pk parent exposes its tuple pk and a reverse to-many.
 
     No live request can express this: fakeshop has no ``CompositePrimaryKey``
@@ -49,7 +49,7 @@ def test_composite_pk_pair_round_trips():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_fixture_tables_are_dropped_on_exit():
+def test_fixture_tables_are_dropped_on_exit() -> None:
     """Fixture smoke: after the context exits the tables are gone (no residue).
 
     No live request can express this: ``schema_editor.delete_model`` is

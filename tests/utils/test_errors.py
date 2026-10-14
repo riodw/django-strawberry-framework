@@ -10,15 +10,16 @@ is ``tests/utils/test_error_keys.py``.
 """
 
 import ast
+from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 import pytest
 from apps.library import models as library_models
 from apps.products import models as product_models
 from django.core.exceptions import ValidationError
 from django.db.models import Model
-from typing_extensions import override
+from typing_extensions import Self, override
 
 from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY, FieldError
 from django_strawberry_framework.utils import errors as errors_module
@@ -59,24 +60,24 @@ def _as_validation_error(stand_in: object) -> ValidationError:
 
 class _HostileString:
     @override
-    def __str__(self):
+    def __str__(self) -> str:
         raise RuntimeError("hostile message string")
 
     @override
-    def __repr__(self):
+    def __repr__(self) -> str:
         raise RuntimeError("hostile message repr")
 
 
 class _HostilePath(str):
-    def __bool__(self):
+    def __bool__(self) -> bool:
         raise RuntimeError("hostile path truthiness")
 
     @override
-    def __eq__(self, other: object):
+    def __eq__(self, other: object) -> bool:
         raise RuntimeError("hostile path equality")
 
     @override
-    def split(self, *args: object, **kwargs: object):
+    def split(self, *args: object, **kwargs: object) -> NoReturn:
         raise RuntimeError("hostile path split")
 
     # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
@@ -84,11 +85,11 @@ class _HostilePath(str):
 
 
 class _HostileIterable:
-    def __iter__(self):
+    def __iter__(self) -> Iterator[object]:
         raise RuntimeError("hostile iterable")
 
 
-def test_field_error_normalizes_hostile_string_subclass_paths_and_messages():
+def test_field_error_normalizes_hostile_string_subclass_paths_and_messages() -> None:
     error = field_error(_HostilePath("items.0.name"), [_HostileString()])
 
     assert error.field == "items.0.name"
@@ -96,7 +97,7 @@ def test_field_error_normalizes_hostile_string_subclass_paths_and_messages():
     assert error.messages == ["<unprintable _HostileString>"]
 
 
-def test_relation_field_error_and_path_joining_normalize_hostile_string_subclasses():
+def test_relation_field_error_and_path_joining_normalize_hostile_string_subclasses() -> None:
     relation_error = relation_field_error(_HostilePath("categoryId"))
 
     assert relation_error.field == "categoryId"
@@ -104,7 +105,7 @@ def test_relation_field_error_and_path_joining_normalize_hostile_string_subclass
     assert join_error_path(_HostilePath("items.0"), _HostilePath("name")) == "items.0.name"
 
 
-def test_validation_error_mapper_survives_hostile_message_objects():
+def test_validation_error_mapper_survives_hostile_message_objects() -> None:
     (error,) = validation_error_to_field_errors(
         ValidationError({"name": [_HostileString()]}),
     )
@@ -113,7 +114,7 @@ def test_validation_error_mapper_survives_hostile_message_objects():
     assert error.messages == ["<unprintable _HostileString>"]
 
 
-def test_validation_error_mapper_keeps_normal_codes_and_non_field_shape():
+def test_validation_error_mapper_keeps_normal_codes_and_non_field_shape() -> None:
     (error,) = validation_error_to_field_errors(
         ValidationError("whole-object", code="invalid"),
     )
@@ -124,11 +125,11 @@ def test_validation_error_mapper_keeps_normal_codes_and_non_field_shape():
     assert error.codes == ["invalid"]
 
 
-def test_validation_error_mapper_degrades_malformed_error_dict_entries():
+def test_validation_error_mapper_degrades_malformed_error_dict_entries() -> None:
     exception = ValidationError("whole-object")
 
     class _MalformedErrorDict:
-        def items(self):
+        def items(self) -> list[tuple[str]]:
             return [("missing-value",)]
 
     # basedpyright: the malformed error_dict is the hostile input under test; the stubs type it
@@ -141,31 +142,31 @@ def test_validation_error_mapper_degrades_malformed_error_dict_entries():
     assert error.codes == ["invalid"]
 
 
-def test_field_error_degrades_an_unreadable_message_container():
+def test_field_error_degrades_an_unreadable_message_container() -> None:
     error = field_error("name", _HostileIterable())
 
     assert error.field == "name"
     assert error.messages == ["<unprintable _HostileIterable>"]
 
 
-def test_validation_error_mapper_degrades_unreadable_dict_and_fallback_metadata():
+def test_validation_error_mapper_degrades_unreadable_dict_and_fallback_metadata() -> None:
     class _UnreadableErrorDict:
-        def items(self):
+        def items(self) -> NoReturn:
             raise RuntimeError("hostile error items")
 
     class _MalformedValidationError:
         error_dict = _UnreadableErrorDict()
 
         @property
-        def error_list(self):
+        def error_list(self) -> NoReturn:
             raise RuntimeError("hostile error list")
 
         @property
-        def messages(self):
+        def messages(self) -> NoReturn:
             raise RuntimeError("hostile messages")
 
         @override
-        def __str__(self):
+        def __str__(self) -> str:
             return "unreadable validation details"
 
     (error,) = validation_error_to_field_errors(_as_validation_error(_MalformedValidationError()))
@@ -175,25 +176,25 @@ def test_validation_error_mapper_degrades_unreadable_dict_and_fallback_metadata(
     assert error.codes == []
 
 
-def test_validation_error_mapper_degrades_unreadable_field_error_metadata():
+def test_validation_error_mapper_degrades_unreadable_field_error_metadata() -> None:
     class _UnreadableFieldErrors:
-        def __iter__(self):
+        def __iter__(self) -> Iterator[object]:
             raise RuntimeError("hostile field errors")
 
         @property
-        def messages(self):
+        def messages(self) -> NoReturn:
             raise RuntimeError("hostile leaf messages")
 
         @property
-        def message(self):
+        def message(self) -> NoReturn:
             raise RuntimeError("hostile leaf message")
 
         @property
-        def error_list(self):
+        def error_list(self) -> NoReturn:
             raise RuntimeError("hostile leaf list")
 
         @override
-        def __str__(self):
+        def __str__(self) -> str:
             return "unreadable field details"
 
     class _MalformedValidationError:
@@ -206,10 +207,10 @@ def test_validation_error_mapper_degrades_unreadable_field_error_metadata():
     assert error.codes == []
 
 
-def test_validation_error_mapper_drops_an_unreadable_leaf_code():
+def test_validation_error_mapper_drops_an_unreadable_leaf_code() -> None:
     class _UnreadableCode:
         @property
-        def code(self):
+        def code(self) -> NoReturn:
             raise RuntimeError("hostile code")
 
     class _MalformedValidationError:
@@ -231,7 +232,7 @@ def test_validation_error_mapper_drops_an_unreadable_leaf_code():
 def test_validation_error_mapper_never_returns_an_empty_envelope(
     payload: dict[str, list[str]] | list[str],
     field: str,
-):
+) -> None:
     (error,) = validation_error_to_field_errors(ValidationError(payload))
 
     assert error.field == field
@@ -239,13 +240,13 @@ def test_validation_error_mapper_never_returns_an_empty_envelope(
     assert error.codes == ["invalid"]
 
 
-def test_field_error_handles_scalar_integers_booleans_and_floats():
+def test_field_error_handles_scalar_integers_booleans_and_floats() -> None:
     error_int = field_error("count", 123, codes=456)
     assert error_int.field == "count"
     assert error_int.messages == ["123"]
     assert error_int.codes == ["456"]
 
-    error_bool = field_error("active", False, codes=True)
+    error_bool = field_error("active", False, codes=True)  # noqa: FBT003 - the bool is the value under test
     assert error_bool.field == "active"
     assert error_bool.messages == ["False"]
     assert error_bool.codes == ["True"]
@@ -256,14 +257,14 @@ def test_field_error_handles_scalar_integers_booleans_and_floats():
     assert error_float.codes == []
 
 
-def test_field_error_handles_byte_strings_without_splitting():
+def test_field_error_handles_byte_strings_without_splitting() -> None:
     error = field_error("token", b"invalid_token", codes=b"invalid")
     assert error.field == "token"
     assert error.messages == ["b'invalid_token'"]
     assert error.codes == ["b'invalid'"]
 
 
-def test_validation_error_mapper_handles_bare_string_and_byte_values_in_error_dict():
+def test_validation_error_mapper_handles_bare_string_and_byte_values_in_error_dict() -> None:
     class _BareStringDictError:
         error_dict = {"title": "This title is already taken", "code": b"invalid_code"}
 
@@ -274,7 +275,7 @@ def test_validation_error_mapper_handles_bare_string_and_byte_values_in_error_di
     assert by_field["code"].messages == ["b'invalid_code'"]
 
 
-def test_validation_error_mapper_handles_leaf_with_string_messages_attribute():
+def test_validation_error_mapper_handles_leaf_with_string_messages_attribute() -> None:
     class _StringMessagesError:
         messages = "Single error message as string"
 
@@ -283,7 +284,7 @@ def test_validation_error_mapper_handles_leaf_with_string_messages_attribute():
     assert error.messages == ["Single error message as string"]
 
 
-def test_validation_error_mapper_extracts_code_from_leaf_without_error_list():
+def test_validation_error_mapper_extracts_code_from_leaf_without_error_list() -> None:
     class _CodeOnlyError:
         code = "permission_denied"
         message = "Permission denied for operation"
@@ -294,16 +295,17 @@ def test_validation_error_mapper_extracts_code_from_leaf_without_error_list():
     assert error.codes == ["permission_denied"]
 
 
-def test_field_error_and_join_path_survive_hostile_class_property():
+def test_field_error_and_join_path_survive_hostile_class_property() -> None:
     class _HostileClass:
         @property
         @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is the guard's input
-        def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is
+        # the guard's input
+        def __class__(self) -> type:  # pyright: ignore[reportIncompatibleMethodOverride]
             raise RuntimeError("hostile __class__")
 
         @override
-        def __str__(self):
+        def __str__(self) -> str:
             return "hostile_instance"
 
     bad = _HostileClass()
@@ -318,10 +320,12 @@ def test_field_error_and_join_path_survive_hostile_class_property():
     assert join_error_path(bad, "child") == "<unprintable _HostileClass>.child"  # pyright: ignore[reportArgumentType]
 
 
-def test_validation_error_mapper_handles_leaf_with_message_collection_when_messages_raises():
+def test_validation_error_mapper_handles_leaf_with_message_collection_when_messages_raises() -> (
+    None
+):
     class _CollectionMessageError:
         @property
-        def messages(self):
+        def messages(self) -> NoReturn:
             raise RuntimeError("hostile messages")
 
         message = ["First message", "Second message"]
@@ -331,7 +335,7 @@ def test_validation_error_mapper_handles_leaf_with_message_collection_when_messa
     assert errors[0].messages == ["First message", "Second message"]
 
 
-def test_field_error_handles_lazy_translation_proxy_without_character_iteration():
+def test_field_error_handles_lazy_translation_proxy_without_character_iteration() -> None:
     """Verify Django lazy translation proxies (Promise) are treated as atomic strings."""
     from django.utils.translation import gettext_lazy as _
 
@@ -344,7 +348,7 @@ def test_field_error_handles_lazy_translation_proxy_without_character_iteration(
     assert error.codes == ["required"]
 
 
-def test_validation_error_mapper_handles_lazy_translation_objects():
+def test_validation_error_mapper_handles_lazy_translation_objects() -> None:
     """Verify ValidationError containing lazy translations formats cleanly into FieldError."""
     from django.utils.translation import gettext_lazy as _
 
@@ -372,7 +376,7 @@ def test_validation_error_mapper_handles_lazy_translation_objects():
         ("items.0", "__all__", "items.0.__all__"),
     ],
 )
-def test_join_error_path_variations(prefix: str, segment: str, expected: str):
+def test_join_error_path_variations(prefix: str, segment: str, expected: str) -> None:
     """Verify join_error_path joins prefixes and child segments correctly."""
     assert join_error_path(prefix, segment) == expected
 
@@ -382,7 +386,7 @@ def test_join_error_path_variations(prefix: str, segment: str, expected: str):
 # -------------------------------------------------------------------------
 
 
-def test_field_error_code_vocabulary_is_the_public_wire_contract():
+def test_field_error_code_vocabulary_is_the_public_wire_contract() -> None:
     assert FIELD_ERROR_CODE_INVALID == "invalid"
     assert FIELD_ERROR_CODE_NULL == "null"
     assert FIELD_ERROR_CODE_CONSTRAINT == "constraint"
@@ -411,7 +415,7 @@ def test_field_error_code_vocabulary_is_the_public_wire_contract():
         assert name in errors_module.__all__
 
 
-def test_coded_error_extensions_shape():
+def test_coded_error_extensions_shape() -> None:
     assert coded_error_extensions("GLOBALID_INVALID") == {"code": "GLOBALID_INVALID"}
     assert coded_error_extensions("FILTER_INVALID", errors={"name": "bad"}) == {
         "code": "FILTER_INVALID",
@@ -425,7 +429,7 @@ def test_coded_error_extensions_shape():
     }
 
 
-def test_null_field_error_and_empty_validation_error_leaf_shapes():
+def test_null_field_error_and_empty_validation_error_leaf_shapes() -> None:
     null_leaf = null_field_error("categoryId")
     assert null_leaf.field == "categoryId"
     assert null_leaf.messages == ["This field cannot be null."]
@@ -443,7 +447,7 @@ def test_null_field_error_and_empty_validation_error_leaf_shapes():
     assert named_empty.path == ["name"]
 
 
-def test_conflict_code_reaches_the_leaf_through_the_public_ctor():
+def test_conflict_code_reaches_the_leaf_through_the_public_ctor() -> None:
     leaf = field_error(
         "id",
         "The row was changed or removed by a concurrent operation; retry.",
@@ -455,7 +459,7 @@ def test_conflict_code_reaches_the_leaf_through_the_public_ctor():
     assert leaf.path == ["id"]
 
 
-def test_validation_error_mapper_keys_django_non_field_bucket_to_sentinel():
+def test_validation_error_mapper_keys_django_non_field_bucket_to_sentinel() -> None:
     exception = ValidationError(
         {"__all__": [ValidationError("model wide", code="mw")], "name": [ValidationError("bad")]},
     )
@@ -468,14 +472,14 @@ def test_validation_error_mapper_keys_django_non_field_bucket_to_sentinel():
     assert by_field["name"].messages == ["bad"]
 
 
-def test_field_error_degrades_a_midway_raising_iterator_to_one_unprintable_leaf():
+def test_field_error_degrades_a_midway_raising_iterator_to_one_unprintable_leaf() -> None:
     class _MidwayIterator:
         consumed = 0
 
-        def __iter__(self):
+        def __iter__(self) -> Self:
             return self
 
-        def __next__(self):
+        def __next__(self) -> str:
             self.consumed += 1
             if self.consumed > 1:
                 raise RuntimeError("midway iterator failure")
@@ -488,10 +492,10 @@ def test_field_error_degrades_a_midway_raising_iterator_to_one_unprintable_leaf(
     assert error.messages == ["<unprintable _MidwayIterator>"]
 
 
-def test_validation_error_mapper_drops_a_hostile_truthiness_leaf_code():
+def test_validation_error_mapper_drops_a_hostile_truthiness_leaf_code() -> None:
     class _HostileBoolCode(int):
         @override
-        def __bool__(self):
+        def __bool__(self) -> bool:
             raise RuntimeError("hostile code truthiness")
 
     class _Leaf:
@@ -508,7 +512,7 @@ def test_validation_error_mapper_drops_a_hostile_truthiness_leaf_code():
     assert error.codes == []
 
 
-def test_errors_module_performs_no_settings_reads():
+def test_errors_module_performs_no_settings_reads() -> None:
     """The error leaf module is configuration-free (layering pin)."""
     source = Path(errors_module.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source, filename="errors.py")
@@ -532,7 +536,7 @@ def test_errors_module_performs_no_settings_reads():
         memoryview(b"atom list"),
     ],
 )
-def test_validation_error_mapper_treats_a_text_atom_error_list_as_one_leaf(atom: object):
+def test_validation_error_mapper_treats_a_text_atom_error_list_as_one_leaf(atom: object) -> None:
     """A text atom planted in the ``error_list`` slot is ONE leaf, never iterated.
 
     The hostile slot shape would otherwise explode into per-character /
@@ -563,7 +567,7 @@ def _keys(errors: list[FieldError]) -> list[tuple[str, list[str], list[str]]]:
     return [(fe.field, fe.path, fe.messages) for fe in errors]
 
 
-def test_rekey_error_segment_never_rekeys_the_non_field_sentinel():
+def test_rekey_error_segment_never_rekeys_the_non_field_sentinel() -> None:
     """``"__all__"`` is checked before the map, so even a map entry for it is ignored."""
     key_map: ErrorKeyMap = {NON_FIELD_ERROR_KEY: ("hijacked", {"x": ("y", None)})}
 
@@ -575,7 +579,7 @@ def test_rekey_error_segment_never_rekeys_the_non_field_sentinel():
     assert (error.field, error.path) == (NON_FIELD_ERROR_KEY, [])
 
 
-def test_rekey_error_segment_keeps_an_unmapped_name_verbatim():
+def test_rekey_error_segment_keeps_an_unmapped_name_verbatim() -> None:
     """A name with no map entry (a field the input does not expose) keeps its own name."""
     key_map: ErrorKeyMap = {"category": ("categoryId", None)}
 
@@ -591,7 +595,7 @@ def test_rekey_error_segment_keeps_an_unmapped_name_verbatim():
     ]
 
 
-def test_validation_error_mapper_without_a_map_keys_every_name_verbatim():
+def test_validation_error_mapper_without_a_map_keys_every_name_verbatim() -> None:
     """``key_map=None`` (and an omitted map) keeps each ``error_dict`` name as raised."""
     exc = ValidationError({"category": ["bad"], NON_FIELD_ERROR_KEY: ["whole"]})
 
@@ -604,7 +608,7 @@ def test_validation_error_mapper_without_a_map_keys_every_name_verbatim():
     )
 
 
-def test_validation_error_mapper_resolves_swapped_names_in_one_lookup():
+def test_validation_error_mapper_resolves_swapped_names_in_one_lookup() -> None:
     """Two inputs renamed onto each other's names each re-key exactly once."""
     key_map: ErrorKeyMap = {"name": ("description", None), "description": ("name", None)}
     errors = validation_error_to_field_errors(
@@ -617,7 +621,7 @@ def test_validation_error_mapper_resolves_swapped_names_in_one_lookup():
     ]
 
 
-def test_validation_error_mapper_lets_a_rename_share_an_unexposed_name():
+def test_validation_error_mapper_lets_a_rename_share_an_unexposed_name() -> None:
     """A rename onto an unexposed field's name yields two errors on one key, never merged."""
     key_map: ErrorKeyMap = {"name": ("category", None)}
     errors = validation_error_to_field_errors(
@@ -630,7 +634,7 @@ def test_validation_error_mapper_lets_a_rename_share_an_unexposed_name():
     ]
 
 
-def test_build_error_key_map_recurses_into_nested_specs():
+def test_build_error_key_map_recurses_into_nested_specs() -> None:
     """A nested field carries its own level's map; a flat field carries ``None``."""
     child = (
         InputFieldSpec(
@@ -668,7 +672,7 @@ def test_build_error_key_map_recurses_into_nested_specs():
     assert rekey_error_segment("alt_branches", child_map) == ("altBranches", {})
 
 
-def test_build_error_key_map_keys_by_keys_of_at_every_depth():
+def test_build_error_key_map_keys_by_keys_of_at_every_depth() -> None:
     """``keys_of`` replaces ``target_name`` as the validator-side names, nested levels included."""
     child = (
         InputFieldSpec(
@@ -726,7 +730,7 @@ def test_build_error_key_map_keys_by_keys_of_at_every_depth():
     assert "full_name" not in by_source
 
 
-def test_build_error_key_map_never_lets_an_alias_displace_a_primary_name():
+def test_build_error_key_map_never_lets_an_alias_displace_a_primary_name() -> None:
     """Every primary name is entered before any alias; an alias fills only an unclaimed name.
 
     A synthetic ``keys_of`` hands two specs overlapping name tuples, so the two-pass
@@ -772,6 +776,6 @@ def test_model_field_error_names_add_a_forward_relation_attname(
     model: type[Model],
     name: str,
     expected: tuple[str, ...],
-):
+) -> None:
     """A forward relation answers to its ``attname`` too; every other field to its name alone."""
     assert model_field_error_names(model._meta.get_field(name)) == expected

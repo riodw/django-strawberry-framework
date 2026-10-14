@@ -14,7 +14,7 @@ from strawberry.types.nodes import SelectedField
 from tests._info import make_info, response_path, unread_info
 
 
-def test_unread_info_is_a_real_info_that_refuses_every_read():
+def test_unread_info_is_a_real_info_that_refuses_every_read() -> None:
     """A read of any ``Info`` slot fails with the slot's name."""
     info = unread_info()
     assert isinstance(info, strawberry.Info)
@@ -24,7 +24,7 @@ def test_unread_info_is_a_real_info_that_refuses_every_read():
         _ = info.schema
 
 
-def test_make_info_reads_back_what_the_test_varied():
+def test_make_info_reads_back_what_the_test_varied() -> None:
     """Context, field, selections, fragments, path, variables and config read back as given."""
     context = object()
     info = make_info(

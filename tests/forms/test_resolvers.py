@@ -105,7 +105,7 @@ class _AllowAll:
         _operation: str,
         _data: object,
         _instance: object = None,
-    ):
+    ) -> bool:
         return True
 
 
@@ -141,7 +141,7 @@ def _schema(mutation_type: type) -> strawberry.Schema:
 # ---------------------------------------------------------------------------
 
 
-def _item_model_form():
+def _item_model_form() -> type[forms.ModelForm[product_models.Item]]:
     class ItemModelForm(forms.ModelForm[product_models.Item]):
         class Meta:
             model = product_models.Item
@@ -156,7 +156,15 @@ def _build_item_form_schema(
     item_get_queryset: object = None,
     permission_classes: list[type] | None = None,
     form_class: type[forms.BaseForm] | None = None,
-):
+) -> tuple[
+    strawberry.Schema,
+    tuple[
+        type[DjangoType],
+        type[DjangoType],
+        type[DjangoModelFormMutation],
+        type[DjangoModelFormMutation],
+    ],
+]:
     """Declare Item/Category Relay primaries + a create/update ModelForm mutation."""
     perms = permission_classes if permission_classes is not None else [_AllowAll]
 
@@ -237,7 +245,7 @@ def _relay_global_id(type_cls: type, pk: object) -> relay.GlobalID:
 
 
 @pytest.mark.django_db
-def test_decode_split_relation_lands_under_form_key_not_id_attr():
+def test_decode_split_relation_lands_under_form_key_not_id_attr() -> None:
     """``categoryId`` decodes to ``{"category": pk}`` in ``provided_data``.
 
     Wire write-through is
@@ -270,7 +278,7 @@ def test_decode_split_relation_lands_under_form_key_not_id_attr():
 
 
 @pytest.mark.django_db
-def test_decode_split_upload_lands_in_files_never_data():
+def test_decode_split_upload_lands_in_files_never_data() -> None:
     """An ``Upload`` field lands in ``provided_files``, never ``provided_data``."""
 
     class MediaForm(forms.ModelForm[scalars_models.MediaSpecimen]):
@@ -317,7 +325,7 @@ def test_decode_split_upload_lands_in_files_never_data():
 
 
 @pytest.mark.django_db
-def test_decode_unwraps_choice_enum_to_raw_value():
+def test_decode_unwraps_choice_enum_to_raw_value() -> None:
     """A scalar choice-enum member is unwrapped to its raw Django value in ``provided_data``."""
 
     class BookForm(forms.ModelForm[library_models.Book]):
@@ -384,7 +392,13 @@ def test_decode_unwraps_choice_enum_to_raw_value():
 # ---------------------------------------------------------------------------
 
 
-def _build_book_m2m_schema(*, genre_relay: bool, genre_get_queryset: object = None):
+_M2MSchema: TypeAlias = tuple[
+    strawberry.Schema,
+    tuple[type[DjangoType], type[DjangoType], type[DjangoType]],
+]
+
+
+def _build_book_m2m_schema(*, genre_relay: bool, genre_get_queryset: object = None) -> _M2MSchema:
     """A ModelForm create over Book with a genres M2M; the Genre primary is Relay or plain."""
 
     class BookForm(forms.ModelForm[library_models.Book]):
@@ -431,7 +445,7 @@ def _build_book_m2m_schema(*, genre_relay: bool, genre_get_queryset: object = No
 
 
 @pytest.mark.django_db
-def test_relation_visibility_relay_multi_hidden_rejected():
+def test_relation_visibility_relay_multi_hidden_rejected() -> None:
     """A hidden Relay-``GlobalID`` M2M member -> field-keyed error (multi branch).
 
     ``GenreType`` has no hide hook, so no shipped form mutation can feed a hidden
@@ -439,7 +453,11 @@ def test_relation_visibility_relay_multi_hidden_rejected():
     """
 
     @classmethod
-    def hide_all(_cls: type[DjangoType], qs: models.QuerySet[models.Model], _info: object):
+    def hide_all(
+        _cls: type[DjangoType],
+        qs: models.QuerySet[models.Model],
+        _info: object,
+    ) -> models.QuerySet[models.Model]:
         return qs.none()
 
     schema, (GenreT, ShelfT, _BookT) = _build_book_m2m_schema(
@@ -466,7 +484,7 @@ def test_relation_visibility_relay_multi_hidden_rejected():
 
 
 @pytest.mark.django_db
-def test_null_boolean_field_omitted_in_mutation_uses_unset_default():
+def test_null_boolean_field_omitted_in_mutation_uses_unset_default() -> None:
     """Omitting a ``NullBooleanField`` in the input succeeds at RUNTIME (the UNSET default).
 
     The motivating regression this commit fixes: baking ``bool | None`` while
@@ -491,7 +509,11 @@ def test_null_boolean_field_omitted_in_mutation_uses_unset_default():
             permission_classes = []
 
         @override
-        def perform_mutate(self, form: forms.BaseForm, info: strawberry.Info[object, object]):
+        def perform_mutate(
+            self,
+            form: forms.BaseForm,
+            info: strawberry.Info[object, object],
+        ) -> None:
             captured["flag"] = form.cleaned_data["flag"]
 
     @strawberry.type
@@ -517,7 +539,7 @@ def test_null_boolean_field_omitted_in_mutation_uses_unset_default():
 
 
 @pytest.mark.django_db
-def test_get_form_kwargs_override_waives_create_required_guard():
+def test_get_form_kwargs_override_waives_create_required_guard() -> None:
     """Overriding ``get_form_kwargs`` waives the create-required-narrowing guard.
 
     A ``Meta.fields`` narrowing dropping a still-required form field would normally
@@ -542,7 +564,7 @@ def test_get_form_kwargs_override_waives_create_required_guard():
             data: dict[str, object],
             files: dict[str, object],
             instance: models.Model | None = None,
-        ):
+        ) -> dict[str, object]:
             merged = dict(data)
             merged["injected"] = "supplied"
             return {"data": merged, "files": files}
@@ -564,7 +586,7 @@ def test_get_form_kwargs_override_waives_create_required_guard():
 
 
 @pytest.mark.django_db
-def test_get_form_only_override_builds_the_form_and_waives_the_required_guard():
+def test_get_form_only_override_builds_the_form_and_waives_the_required_guard() -> None:
     """A ``get_form``-ONLY override is honored at bind AND at construction.
 
     The coarser construction hook, exercised without ``get_form_kwargs`` in the
@@ -598,7 +620,7 @@ def test_get_form_only_override_builds_the_form_and_waives_the_required_guard():
             data: dict[str, object],
             files: dict[str, object],
             instance: models.Model | None = None,
-        ):
+        ) -> forms.BaseForm:
             merged = dict(data)
             merged["injected"] = "from-get-form"
             # basedpyright: get_form's hook signature types files as dict[str, object];
@@ -607,7 +629,11 @@ def test_get_form_only_override_builds_the_form_and_waives_the_required_guard():
             return built["form"]
 
         @override
-        def perform_mutate(self, form: forms.BaseForm, info: strawberry.Info[object, object]):
+        def perform_mutate(
+            self,
+            form: forms.BaseForm,
+            info: strawberry.Info[object, object],
+        ) -> None:
             captured["form"] = form
             captured["injected"] = form.cleaned_data["injected"]
 
@@ -631,7 +657,7 @@ def test_get_form_only_override_builds_the_form_and_waives_the_required_guard():
 
 
 @pytest.mark.django_db
-def test_get_form_kwargs_queryset_scoping_leaves_the_generated_input_shape_unchanged():
+def test_get_form_kwargs_queryset_scoping_leaves_the_generated_input_shape_unchanged() -> None:
     """A ``get_form_kwargs`` override scoping a relation queryset changes runtime, not the input.
 
     Two mutations over ONE form, one plain and one overriding ``get_form_kwargs``
@@ -662,7 +688,7 @@ def test_get_form_kwargs_queryset_scoping_leaves_the_generated_input_shape_uncha
             allowed_categories: models.QuerySet[product_models.Category] | None = None,
             # basedpyright: verbatim forward to forms.Form.__init__; object fails its typed params
             **kwargs: Any,  # pyright: ignore[reportExplicitAny]
-        ):
+        ) -> None:
             super().__init__(*args, **kwargs)
             if allowed_categories is not None:
                 assert isinstance(self.fields["category"], forms.ModelChoiceField)
@@ -688,7 +714,7 @@ def test_get_form_kwargs_queryset_scoping_leaves_the_generated_input_shape_uncha
             data: dict[str, object],
             files: dict[str, object],
             instance: models.Model | None = None,
-        ):
+        ) -> dict[str, object]:
             kwargs = super().get_form_kwargs(info, data=data, files=files, instance=instance)
             kwargs["allowed_categories"] = allowed["queryset"]
             return kwargs
@@ -741,7 +767,7 @@ def test_get_form_kwargs_queryset_scoping_leaves_the_generated_input_shape_uncha
 
 
 @pytest.mark.django_db
-def test_partial_update_preserves_unprovided_m2m_with_to_field_name():
+def test_partial_update_preserves_unprovided_m2m_with_to_field_name() -> None:
     """An omitted M2M whose form field sets ``to_field_name`` survives a partial update (Finding 3).
 
     The decode lands a PROVIDED M2M as ``to_field_name`` values
@@ -820,7 +846,7 @@ def test_partial_update_preserves_unprovided_m2m_with_to_field_name():
 
 
 @pytest.mark.django_db
-def test_partial_update_preserves_unprovided_fk_with_to_field_name():
+def test_partial_update_preserves_unprovided_fk_with_to_field_name() -> None:
     """An omitted FK whose form field sets ``to_field_name`` survives a partial update.
 
     The single-FK twin of the M2M ``to_field_name`` case. The bound
@@ -894,7 +920,7 @@ def test_partial_update_preserves_unprovided_fk_with_to_field_name():
     "file_field_name",
     ["attachment", "image"],
 )
-def test_partial_reconstruction_excludes_every_file_field_flavor(file_field_name: str):
+def test_partial_reconstruction_excludes_every_file_field_flavor(file_field_name: str) -> None:
     """Both a ``FileField`` and its ``ImageField`` subclass stay out of the reconstructed data.
 
     The exclusion is one ``isinstance(form_field, forms.FileField)``, and
@@ -942,9 +968,10 @@ def test_partial_reconstruction_excludes_every_file_field_flavor(file_field_name
 
 
 @pytest.mark.django_db
-def test_required_extra_field_omitted_on_update_is_coercion_error():
-    """A required non-model extra field stays required in the partial input; omitting it
-    is a GraphQL coercion error BEFORE the resolver
+def test_required_extra_field_omitted_on_update_is_coercion_error() -> None:
+    """A required non-model extra field stays required in the partial input.
+
+    Omitting it is a GraphQL coercion error BEFORE the resolver
     (``spec-038-form_mutations-0_0_12`` Finding 2).
 
     The partial input keeps a required non-model extra field required (it
@@ -1006,7 +1033,7 @@ def test_required_extra_field_omitted_on_update_is_coercion_error():
 # ---------------------------------------------------------------------------
 
 
-def test_plain_form_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.MonkeyPatch):
+def test_plain_form_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.MonkeyPatch) -> None:
     """Plain form is a decode/write rider of ``run_write_pipeline_sync``, not a second orchestration."""
     seen: dict[str, object] = {}
 
@@ -1019,7 +1046,7 @@ def test_plain_form_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.Mon
         decode_step: object,
         write_step: object,
         tail_step: object = None,
-    ):
+    ) -> str:
         seen["id"] = id_
         seen["decode_step"] = decode_step
         seen["write_step"] = write_step
@@ -1049,7 +1076,7 @@ def test_plain_form_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.Mon
 
 
 @pytest.mark.django_db
-def test_perform_mutate_override_runs_only_on_success():
+def test_perform_mutate_override_runs_only_on_success() -> None:
     """The ``perform_mutate`` override runs on a valid submit, NOT on a failing one.
 
     Live siblings: ``submitContact`` success/fail envelopes and
@@ -1061,7 +1088,7 @@ def test_perform_mutate_override_runs_only_on_success():
     class ContactForm(forms.Form):
         message = forms.CharField()
 
-        def clean_message(self):
+        def clean_message(self) -> object:
             value = self.cleaned_data["message"]
             if value == "fail":
                 raise forms.ValidationError("nope")
@@ -1073,7 +1100,11 @@ def test_perform_mutate_override_runs_only_on_success():
             permission_classes = []
 
         @override
-        def perform_mutate(self, form: forms.BaseForm, info: strawberry.Info[object, object]):
+        def perform_mutate(
+            self,
+            form: forms.BaseForm,
+            info: strawberry.Info[object, object],
+        ) -> None:
             calls.append(form.cleaned_data["message"])
 
     @strawberry.type
@@ -1093,7 +1124,7 @@ def test_perform_mutate_override_runs_only_on_success():
 
 
 @pytest.mark.django_db
-def test_plain_form_rejects_write_sql_outside_the_write_phase():
+def test_plain_form_rejects_write_sql_outside_the_write_phase() -> None:
     """A plain-form ``clean_*`` write on the pinned alias fails closed (0.0.14 phase hardening).
 
     The model-less body now rides ``pipeline_alias_guard`` + ``pipeline_write_phase``
@@ -1105,7 +1136,7 @@ def test_plain_form_rejects_write_sql_outside_the_write_phase():
     class SideEffectForm(forms.Form):
         message = forms.CharField()
 
-        def clean_message(self):
+        def clean_message(self) -> object:
             product_models.Category.objects.create(name=_uniq("PhaseLeak"))
             return self.cleaned_data["message"]
 
@@ -1134,7 +1165,7 @@ def test_plain_form_rejects_write_sql_outside_the_write_phase():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_plain_form_expired_deadline_rejects_before_perform_mutate_write():
+def test_plain_form_expired_deadline_rejects_before_perform_mutate_write() -> None:
     """An expired policy stops the model-less write before ``perform_mutate`` or SQL."""
     created: list[str] = []
 
@@ -1147,7 +1178,11 @@ def test_plain_form_expired_deadline_rejects_before_perform_mutate_write():
             permission_classes = []
 
         @override
-        def perform_mutate(self, form: forms.BaseForm, info: strawberry.Info[object, object]):
+        def perform_mutate(
+            self,
+            form: forms.BaseForm,
+            info: strawberry.Info[object, object],
+        ) -> None:
             del form, info
             name = _uniq("ExpiredPlainForm")
             product_models.Category.objects.create(name=name)
@@ -1194,14 +1229,14 @@ def test_plain_form_expired_deadline_rejects_before_perform_mutate_write():
 
 
 @pytest.mark.django_db
-def test_sync_create_meeting_async_get_queryset_raises_sync_misuse():
+def test_sync_create_meeting_async_get_queryset_raises_sync_misuse() -> None:
     """A sync form create meeting an ``async def get_queryset`` on a relation raises ``SyncMisuseError``."""
 
     async def _async_get_queryset(
         _cls: type[DjangoType],
         qs: models.QuerySet[models.Model],
         _info: object,
-    ):
+    ) -> models.QuerySet[models.Model]:
         return qs
 
     CategoryT = type(
@@ -1254,7 +1289,7 @@ def test_sync_create_meeting_async_get_queryset_raises_sync_misuse():
 
 
 @pytest.mark.django_db
-def test_modelform_refetch_keeps_select_related_and_suppresses_only():
+def test_modelform_refetch_keeps_select_related_and_suppresses_only() -> None:
     """The ModelForm re-fetch plan KEEPS ``select_related`` and applies NO ``.only(...)`` (G2).
 
     ``dst_optimizer_plan`` is not a wire field. Nested ``category { name }`` on
@@ -1291,7 +1326,7 @@ def test_modelform_refetch_keeps_select_related_and_suppresses_only():
 
 
 @pytest.mark.django_db
-def test_narrowed_update_preserves_excluded_required_fk_and_validates_constraint():
+def test_narrowed_update_preserves_excluded_required_fk_and_validates_constraint() -> None:
     """A ``Meta.fields``-narrowed update reconstructs an EXCLUDED required FK from the row.
 
     The ModelForm declares ``('name', 'category')`` while the update mutation
@@ -1373,7 +1408,7 @@ def test_narrowed_update_preserves_excluded_required_fk_and_validates_constraint
 
 
 @pytest.mark.django_db
-def test_decode_relation_single_empty_value_passes_through():
+def test_decode_relation_single_empty_value_passes_through() -> None:
     """An explicit ``null`` single-relation value passes through unchanged (Finding 4).
 
     The decode does NOT decide required-ness or report a bogus 'Invalid id' for an
@@ -1394,7 +1429,7 @@ def test_decode_relation_single_empty_value_passes_through():
 
 
 @pytest.mark.django_db
-def test_decode_relation_multi_empty_values_return_empty_list():
+def test_decode_relation_multi_empty_values_return_empty_list() -> None:
     """An explicit ``null`` or empty list on an M2M returns ``[]`` and never iterates ``None`` (Finding 4)."""
     field = forms.ModelMultipleChoiceField(queryset=library_models.Genre.objects.all())
     empties: tuple[None, list[object]] = (None, [])
@@ -1418,7 +1453,7 @@ def test_decode_relation_multi_empty_values_return_empty_list():
 
 
 @pytest.mark.django_db
-def test_visible_related_object_no_primary_uses_default_manager():
+def test_visible_related_object_no_primary_uses_default_manager() -> None:
     """With no registered primary type, ``visible_related_object`` scopes via the default manager.
 
     A relation whose related model has no primary ``DjangoType`` carries no
@@ -1433,7 +1468,7 @@ def test_visible_related_object_no_primary_uses_default_manager():
 
 
 @pytest.mark.django_db
-def test_decode_form_relation_single_uncoercible_raw_pk_is_field_error():
+def test_decode_form_relation_single_uncoercible_raw_pk_is_field_error() -> None:
     """A raw-pk relation value that does not coerce to the target pk is a field-keyed error.
 
     The raw-pk branch coerces through the target pk field; an uncoercible value
@@ -1455,7 +1490,7 @@ def test_decode_form_relation_single_uncoercible_raw_pk_is_field_error():
 
 
 @pytest.mark.django_db
-def test_decode_form_relation_multi_collects_valid_then_short_circuits_on_bad():
+def test_decode_form_relation_multi_collects_valid_then_short_circuits_on_bad() -> None:
     """An M2M list collects each valid member's form key, and short-circuits on a bad element."""
     genre = library_models.Genre.objects.create(name=_uniq("G"))
     field = forms.ModelMultipleChoiceField(queryset=library_models.Genre.objects.all())
@@ -1484,7 +1519,7 @@ def test_decode_form_relation_multi_collects_valid_then_short_circuits_on_bad():
 
 
 @pytest.mark.django_db
-def test_plain_form_relation_decode_error_yields_not_ok_envelope():
+def test_plain_form_relation_decode_error_yields_not_ok_envelope() -> None:
     """A plain form's relation id that fails decode -> ``{ ok: false }`` with a field-keyed error.
 
     The plain-form pipeline short-circuits a relation decode failure to the pinned
@@ -1526,7 +1561,7 @@ def test_plain_form_relation_decode_error_yields_not_ok_envelope():
     assert [e["field"] for e in payload["errors"]] == ["genreId"]
 
 
-def test_decode_form_relation_multi_non_iterable_returns_field_error():
+def test_decode_form_relation_multi_non_iterable_returns_field_error() -> None:
     """Passing a non-iterable to _decode_form_relation_multi returns a field-keyed error."""
     field = forms.ModelMultipleChoiceField(queryset=library_models.Genre.objects.all())
     keys, error = form_resolvers._decode_form_relation_multi(
@@ -1543,7 +1578,7 @@ def test_decode_form_relation_multi_non_iterable_returns_field_error():
 
 
 @pytest.mark.django_db
-def test_partial_update_reconstruct_with_extra_model_choice_field():
+def test_partial_update_reconstruct_with_extra_model_choice_field() -> None:
     """A ModelForm with an extra ModelChoiceField does not crash reconstruction on non-model attrs."""
     cat = product_models.Category.objects.create(name=_uniq("cat"))
     item = product_models.Item.objects.create(name=_uniq("item"), category=cat)
@@ -1574,7 +1609,7 @@ def test_partial_update_reconstruct_with_extra_model_choice_field():
 
 
 @pytest.mark.django_db
-def test_partial_update_reconstruct_with_reverse_relation_field():
+def test_partial_update_reconstruct_with_reverse_relation_field() -> None:
     """A ModelForm with a field name matching a reverse relation does not crash reconstruction."""
     cat = product_models.Category.objects.create(name=_uniq("cat"))
     item = product_models.Item.objects.create(name=_uniq("item"), category=cat)
@@ -1610,7 +1645,7 @@ def test_partial_update_reconstruct_with_reverse_relation_field():
 def test_partial_update_reconstruct_reads_the_related_row_only_off_the_stored_key(
     to_field_name: str | None,
     reads: int,
-):
+) -> None:
     """An omitted FK is read back from its related row only when the form key is another column.
 
     ``Book.shelf`` stores the shelf pk. A declared ``ModelChoiceField`` resolving its
@@ -1646,7 +1681,7 @@ def test_partial_update_reconstruct_reads_the_related_row_only_off_the_stored_ke
 
 
 @pytest.mark.django_db
-def test_partial_update_reconstruct_with_dangling_fk_target():
+def test_partial_update_reconstruct_with_dangling_fk_target() -> None:
     """A ModelForm with a dangling FK does not crash reconstruction with DoesNotExist."""
     cat = product_models.Category.objects.create(name=_uniq("cat"))
     item = product_models.Item.objects.create(name=_uniq("item"), category=cat)
@@ -1676,7 +1711,7 @@ def test_partial_update_reconstruct_with_dangling_fk_target():
 
 def test_to_form_key_value_handles_serializable_value_exceptions(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     from django.core.exceptions import FieldDoesNotExist
 
     from django_strawberry_framework.forms.resolvers import _to_form_key_value
@@ -1697,7 +1732,7 @@ def test_to_form_key_value_handles_serializable_value_exceptions(
     assert _to_form_key_value(row, field) == 42
 
 
-def test_is_empty_form_value_handles_unhashable_and_typeerror():
+def test_is_empty_form_value_handles_unhashable_and_typeerror() -> None:
     from django_strawberry_framework.forms.resolvers import _is_empty_form_value
 
     class FakeField:
@@ -1705,11 +1740,11 @@ def test_is_empty_form_value_handles_unhashable_and_typeerror():
 
     class UnhashableValue:
         @override
-        def __hash__(self):
+        def __hash__(self) -> int:
             raise TypeError("unhashable")
 
         @override
-        def __eq__(self, other: object):
+        def __eq__(self, other: object) -> bool:
             raise TypeError("cannot compare")
 
     # basedpyright: a stand-in form field carrying only the slots the code under test reads;
@@ -1717,7 +1752,7 @@ def test_is_empty_form_value_handles_unhashable_and_typeerror():
     assert not _is_empty_form_value(UnhashableValue(), FakeField())  # pyright: ignore[reportArgumentType]
 
 
-def test_decode_form_relation_multi_rejects_non_collection_sequences():
+def test_decode_form_relation_multi_rejects_non_collection_sequences() -> None:
     from django_strawberry_framework.forms.resolvers import _decode_form_relation_multi
 
     for bad in (
@@ -1743,7 +1778,7 @@ def test_decode_form_relation_multi_rejects_non_collection_sequences():
 
 
 @pytest.mark.django_db
-def test_decode_form_relation_multi_one_shot_generator_fully_decoded():
+def test_decode_form_relation_multi_one_shot_generator_fully_decoded() -> None:
     """A one-shot M2M container is materialized once, then decoded elementwise.
 
     The decoder consumes the container exactly once (no re-iteration of a
@@ -1764,7 +1799,7 @@ def test_decode_form_relation_multi_one_shot_generator_fully_decoded():
     assert keys == [first.pk, second.pk]
 
 
-def test_decode_form_relation_multi_iteration_failures_stay_in_envelope():
+def test_decode_form_relation_multi_iteration_failures_stay_in_envelope() -> None:
     """A container that fails DURING iteration is the uniform field-keyed error.
 
     A generator raising midway and an ``__iter__`` raising ``BaseException``
@@ -1776,12 +1811,12 @@ def test_decode_form_relation_multi_iteration_failures_stay_in_envelope():
         pass
 
     class _MidwayRaise:
-        def __iter__(self):
+        def __iter__(self) -> Iterator[int]:
             yield 1
             raise RuntimeError("midway")
 
     class _BaseExceptionIter:
-        def __iter__(self):
+        def __iter__(self) -> Iterator[object]:
             raise _ProbeBaseException("hostile iteration")
 
     field = forms.ModelMultipleChoiceField(queryset=library_models.Genre.objects.none())
@@ -1799,7 +1834,7 @@ def test_decode_form_relation_multi_iteration_failures_stay_in_envelope():
 
 
 @pytest.mark.django_db
-def test_decode_form_relation_multi_materializes_before_any_visibility_query():
+def test_decode_form_relation_multi_materializes_before_any_visibility_query() -> None:
     """A partially-consumed M2M container never reaches a visibility query.
 
     The container is materialized BEFORE any member is decoded, so an iterator
@@ -1810,7 +1845,7 @@ def test_decode_form_relation_multi_materializes_before_any_visibility_query():
     genre = library_models.Genre.objects.create(name=_uniq("G"))
     field = forms.ModelMultipleChoiceField(queryset=library_models.Genre.objects.all())
 
-    def _container():
+    def _container() -> Iterator[int]:
         yield genre.pk
         raise RuntimeError("hostile second pull")
 
@@ -1828,7 +1863,7 @@ def test_decode_form_relation_multi_materializes_before_any_visibility_query():
     assert ctx.captured_queries == []
 
 
-def test_reconstruct_partial_data_m2m_does_not_exist(monkeypatch: pytest.MonkeyPatch):
+def test_reconstruct_partial_data_m2m_does_not_exist(monkeypatch: pytest.MonkeyPatch) -> None:
     from django.core.exceptions import ObjectDoesNotExist
 
     from django_strawberry_framework.forms.resolvers import _reconstruct_partial_data
@@ -1879,7 +1914,6 @@ def _blank_choice_schema(
 
     Returns the schema and the create / update input type names.
     """
-
     form_class = type(
         f"{model_class.__name__}Form",
         (forms.ModelForm,),
@@ -2009,7 +2043,7 @@ def test_modelform_blank_choice_save_failure_is_field_keyed_null_error(
     operation: str,
     pick_input: dict[str, object],
     stored: object,
-):
+) -> None:
     """A ``blank=True, null=False`` non-text choice column cleaned to ``""`` is the ``null`` error.
 
     Django's form field keeps ``empty_value=""`` on the column, ``Model.clean_fields``
@@ -2046,7 +2080,7 @@ def test_modelform_blank_choice_save_failure_is_field_keyed_null_error(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_modelform_blank_choice_filled_in_by_model_save_writes():
+def test_modelform_blank_choice_filled_in_by_model_save_writes() -> None:
     """A model ``save()`` that fills the blank column in writes; nothing guards it beforehand.
 
     Django keeps ``blank=True, null=False`` so ``save()`` can supply the value
@@ -2090,7 +2124,7 @@ _CONSUMER_SAVE_ERROR = ValueError("consumer save refused the row")
 
 
 @pytest.mark.django_db(transaction=True)
-def test_modelform_unrelated_save_value_error_propagates():
+def test_modelform_unrelated_save_value_error_propagates() -> None:
     """A consumer ``save()`` ``ValueError`` with no unstorable blank column is not mapped.
 
     The exception class is the trigger, never the diagnosis: ``pick`` holds a member

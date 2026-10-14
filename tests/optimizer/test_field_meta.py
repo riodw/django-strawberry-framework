@@ -8,7 +8,7 @@ walker metadata have no wire shape. Relation SQL on shipped types is
 import copy
 from collections.abc import Iterable, Iterator
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 import pytest
 import strawberry
@@ -69,7 +69,7 @@ def _isolate_registry() -> Iterator[None]:
 # ---------------------------------------------------------------------------
 
 
-def test_from_django_field_scalar():
+def test_from_django_field_scalar() -> None:
     """Scalar fields produce a FieldMeta with is_relation=False."""
     name_field = Category._meta.get_field("name")
     fm = FieldMeta.from_django_field(name_field)
@@ -82,7 +82,7 @@ def test_from_django_field_scalar():
     assert fm.fk_id_elision_eligible is False
 
 
-def test_from_django_field_nullable_scalar():
+def test_from_django_field_nullable_scalar() -> None:
     """Scalar ``null=True`` fields preserve effective nullable metadata."""
     subtitle_field = Book._meta.get_field("subtitle")
     fm = FieldMeta.from_django_field(subtitle_field)
@@ -91,7 +91,7 @@ def test_from_django_field_nullable_scalar():
     assert fm.nullable is True
 
 
-def test_from_django_field_forward_fk():
+def test_from_django_field_forward_fk() -> None:
     """Forward FK produces is_relation=True with attname and related_model."""
     cat_field = Item._meta.get_field("category")
     fm = FieldMeta.from_django_field(cat_field)
@@ -107,7 +107,7 @@ def test_from_django_field_forward_fk():
     assert fm.nullable is False
 
 
-def test_from_django_field_reverse_fk():
+def test_from_django_field_reverse_fk() -> None:
     """Reverse FK (one_to_many) is detected correctly."""
     # Category.items is the reverse side of Item.category
     items_field = None
@@ -136,7 +136,7 @@ def test_from_django_field_reverse_fk():
     assert fm.accessor_name == "items"
 
 
-def test_from_django_field_populates_accessor_name_for_unnamed_reverse_fk():
+def test_from_django_field_populates_accessor_name_for_unnamed_reverse_fk() -> None:
     """``accessor_name`` carries ``get_accessor_name()`` when it diverges from ``name``.
 
     ``apps/library/models.py::RepairTicket.venue`` declares no ``related_name``,
@@ -155,7 +155,7 @@ def test_from_django_field_populates_accessor_name_for_unnamed_reverse_fk():
     assert fm.accessor_name == "repairticket_set"
 
 
-def test_from_django_field_reverse_many_to_many():
+def test_from_django_field_reverse_many_to_many() -> None:
     """Reverse M2M descriptor sets ``many_to_many=True`` with ``nullable=False``.
 
     Genre is the target of ``Book.genres = models.ManyToManyField(Genre)``,
@@ -180,7 +180,7 @@ def test_from_django_field_reverse_many_to_many():
     assert fm.nullable is False
 
 
-def test_from_django_field_many_to_many():
+def test_from_django_field_many_to_many() -> None:
     """M2M forward field sets many_to_many=True, is_relation=True, related_model."""
     genres_field = Book._meta.get_field("genres")
     fm = FieldMeta.from_django_field(genres_field)
@@ -197,7 +197,7 @@ def test_from_django_field_many_to_many():
     assert fm.nullable is False
 
 
-def test_from_django_field_non_column_relations_stamp_attname_none():
+def test_from_django_field_non_column_relations_stamp_attname_none() -> None:
     """Relations that store no column stamp ``attname=None``.
 
     Django fills ``attname`` with the RELATION NAME on a forward
@@ -224,7 +224,7 @@ def test_from_django_field_non_column_relations_stamp_attname_none():
     assert FieldMeta.from_django_field(Item._meta.get_field("name")).attname == "name"
 
 
-def test_from_django_field_duck_typed_double_keeps_attname_without_concrete():
+def test_from_django_field_duck_typed_double_keeps_attname_without_concrete() -> None:
     """A non-M2M descriptor that omits ``concrete`` keeps its attname.
 
     The gate drops a poisoned attname when the field POSITIVELY declares
@@ -245,7 +245,7 @@ def test_from_django_field_duck_typed_double_keeps_attname_without_concrete():
     assert fm.attname == "author_id"
 
 
-def test_from_django_field_django_52_m2m_shape_stamps_attname_none():
+def test_from_django_field_django_52_m2m_shape_stamps_attname_none() -> None:
     """Django 5.2 forward M2M is ``concrete=True`` with ``attname == name``.
 
     The ``concrete is False`` arm (Django 6.1's real M2M / generic shapes)
@@ -265,7 +265,7 @@ def test_from_django_field_django_52_m2m_shape_stamps_attname_none():
     assert fm.many_to_many is True
 
 
-def test_from_django_field_generic_relation():
+def test_from_django_field_generic_relation() -> None:
     """A ``GenericRelation`` populates the content-type / object-id slots and classifies generic.
 
     The duck-typed detector reads the two slots as non-``None`` (never
@@ -287,7 +287,7 @@ def test_from_django_field_generic_relation():
     assert FieldMeta.from_django_field(Book._meta.get_field("genres")).object_id_field_name is None
 
 
-def test_from_django_field_one_to_one():
+def test_from_django_field_one_to_one() -> None:
     """Forward OneToOne sets one_to_one=True with attname and target field."""
     patron_field = MembershipCard._meta.get_field("patron")
     fm = FieldMeta.from_django_field(patron_field)
@@ -308,7 +308,7 @@ def test_from_django_field_one_to_one():
     assert fm.nullable is False
 
 
-def test_from_django_field_reverse_one_to_one_is_nullable():
+def test_from_django_field_reverse_one_to_one_is_nullable() -> None:
     """Reverse OneToOne is effectively nullable because the related row may not exist."""
     card_field = Patron._meta.get_field("card")
     fm = FieldMeta.from_django_field(card_field)
@@ -321,7 +321,7 @@ def test_from_django_field_reverse_one_to_one_is_nullable():
     assert fm.nullable is True
 
 
-def test_from_django_field_rejects_non_django_input():
+def test_from_django_field_rejects_non_django_input() -> None:
     """Inputs missing 'name'/'is_relation' raise OptimizerError at the call site.
 
     Without the guard, the failure mode would be ``AttributeError`` deep
@@ -338,7 +338,7 @@ def test_from_django_field_rejects_non_django_input():
         FieldMeta.from_django_field(NotAField())  # pyright: ignore[reportArgumentType]
 
 
-def test_from_django_field_rejects_partial_shape():
+def test_from_django_field_rejects_partial_shape() -> None:
     """An input with 'name' but missing 'is_relation' still raises OptimizerError."""
 
     class PartialField:
@@ -350,19 +350,19 @@ def test_from_django_field_rejects_partial_shape():
         FieldMeta.from_django_field(PartialField())  # pyright: ignore[reportArgumentType]
 
 
-def test_from_django_field_rejects_hostile_required_attributes_safely():
+def test_from_django_field_rejects_hostile_required_attributes_safely() -> None:
     """Malformed field descriptors cannot replace the typed error with their own failure."""
 
     class HostileRepr:
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr should never run")
 
     class HostileAttribute:
         name = "field"
 
         @property
-        def is_relation(self):
+        def is_relation(self) -> NoReturn:
             raise RuntimeError("attribute should be translated")
 
     for field in (HostileRepr(), HostileAttribute()):
@@ -372,7 +372,7 @@ def test_from_django_field_rejects_hostile_required_attributes_safely():
             FieldMeta.from_django_field(field)  # pyright: ignore[reportArgumentType]
 
 
-def test_target_pk_name_defensively_resolves_and_contains_errors():
+def test_target_pk_name_defensively_resolves_and_contains_errors() -> None:
     """_target_pk_name returns model's pk name or None without raising unhandled errors."""
     assert _target_pk_name(None) is None
     # basedpyright: each non-model is the hostile input under test; _target_pk_name types the
@@ -391,7 +391,7 @@ def test_target_pk_name_defensively_resolves_and_contains_errors():
 
     class HostileMeta:
         @property
-        def _meta(self):
+        def _meta(self) -> NoReturn:
             raise RuntimeError("hostile _meta access")
 
     # basedpyright: the raising _meta is the hostile input under test; _target_pk_name types
@@ -400,7 +400,7 @@ def test_target_pk_name_defensively_resolves_and_contains_errors():
 
     class HostilePkMeta:
         @property
-        def pk(self):
+        def pk(self) -> NoReturn:
             raise RuntimeError("hostile pk property")
 
     raising_pk = SimpleNamespace(_meta=HostilePkMeta())
@@ -410,7 +410,7 @@ def test_target_pk_name_defensively_resolves_and_contains_errors():
     assert _target_pk_name(Category) == "id"
 
 
-def test_from_django_field_rejects_non_string_field_name():
+def test_from_django_field_rejects_non_string_field_name() -> None:
     """Non-string field names are rejected with OptimizerError at stamp time."""
     non_str_field = SimpleNamespace(name=123, is_relation=False)
     with pytest.raises(OptimizerError, match="expected a string field name"):
@@ -419,7 +419,7 @@ def test_from_django_field_rejects_non_string_field_name():
         FieldMeta.from_django_field(non_str_field)  # pyright: ignore[reportArgumentType]
 
 
-def test_from_django_field_rejects_hostile_or_invalid_relation_metadata():
+def test_from_django_field_rejects_hostile_or_invalid_relation_metadata() -> None:
     """Hostile or invalid relation metadata raises typed ConfigurationError."""
 
     class HostileM2M:
@@ -427,7 +427,7 @@ def test_from_django_field_rejects_hostile_or_invalid_relation_metadata():
         is_relation = True
 
         @property
-        def many_to_many(self):
+        def many_to_many(self) -> NoReturn:
             raise RuntimeError("m2m access error")
 
     with pytest.raises(
@@ -443,7 +443,7 @@ def test_from_django_field_rejects_hostile_or_invalid_relation_metadata():
 
     with pytest.raises(
         ConfigurationError,
-        match="Relation metadata 'many_to_many' on .* must be a bool",
+        match=r"Relation metadata 'many_to_many' on .* must be a bool",
     ):
         FieldMeta.from_django_field(NonBoolM2M())
 
@@ -453,7 +453,7 @@ def test_from_django_field_rejects_hostile_or_invalid_relation_metadata():
         one_to_many = True
         auto_created = True
 
-        def get_accessor_name(self):
+        def get_accessor_name(self) -> NoReturn:
             raise RuntimeError("accessor error")
 
     with pytest.raises(ConfigurationError, match="Could not resolve relation accessor"):
@@ -466,7 +466,10 @@ def test_from_django_field_rejects_hostile_or_invalid_relation_metadata():
         auto_created = True
         get_accessor_name = "not_callable"
 
-    with pytest.raises(ConfigurationError, match="Relation accessor metadata .* must be callable"):
+    with pytest.raises(
+        ConfigurationError,
+        match=r"Relation accessor metadata .* must be callable",
+    ):
         FieldMeta.from_django_field(NonCallableAccessor())
 
     class NonStrAccessor:
@@ -476,12 +479,12 @@ def test_from_django_field_rejects_hostile_or_invalid_relation_metadata():
 
     with pytest.raises(
         ConfigurationError,
-        match="Relation accessor metadata on .* must be a string",
+        match=r"Relation accessor metadata on .* must be a string",
     ):
         FieldMeta.from_django_field(NonStrAccessor())
 
 
-def test_field_meta_is_frozen():
+def test_field_meta_is_frozen() -> None:
     """FieldMeta instances are immutable."""
     fm = FieldMeta(name="test")
     with pytest.raises((AttributeError, TypeError)):
@@ -490,7 +493,7 @@ def test_field_meta_is_frozen():
         fm.name = "other"  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def test_field_meta_slots_hashing_and_copy():
+def test_field_meta_slots_hashing_and_copy() -> None:
     """FieldMeta is slotted, hashable, and supports copy/deepcopy/pickle."""
     fm = FieldMeta(
         name="category",
@@ -527,7 +530,7 @@ def test_field_meta_slots_hashing_and_copy():
     assert pickled == fm
 
 
-def test_fk_id_elision_edge_cases():
+def test_fk_id_elision_edge_cases() -> None:
     """FK elision correctly checks non-PK to_field and composite primary keys."""
     # Standard FK: elision eligible
     cat_field = Item._meta.get_field("category")
@@ -560,7 +563,7 @@ def test_fk_id_elision_edge_cases():
     assert fm_comp.fk_id_elision_eligible is False
 
 
-def test_is_many_side_pins_every_relation_kind():
+def test_is_many_side_pins_every_relation_kind() -> None:
     """``is_many_side`` is ``True`` for many-side kinds and ``False`` otherwise.
 
     Pins the delegation to ``utils.relations.is_many_side_relation_kind`` for
@@ -610,7 +613,7 @@ def test_is_many_side_pins_every_relation_kind():
 # ---------------------------------------------------------------------------
 
 
-def test_definition_field_map_populated():
+def test_definition_field_map_populated() -> None:
     """B7: definition.field_map is populated after DjangoType subclass creation."""
 
     class CategoryType(DjangoType):
@@ -627,7 +630,7 @@ def test_definition_field_map_populated():
     assert isinstance(field_map["id"], FieldMeta)
 
 
-def test_definition_field_map_contains_relations():
+def test_definition_field_map_contains_relations() -> None:
     """B7: relation fields appear in the map with correct metadata."""
 
     class CategoryType(DjangoType):
@@ -652,7 +655,7 @@ def test_definition_field_map_contains_relations():
     assert cat_meta.related_model is Category
 
 
-def test_definition_field_map_respects_fields_filter():
+def test_definition_field_map_respects_fields_filter() -> None:
     """B7: only Meta.fields-selected fields appear in the map."""
 
     class CategoryType(DjangoType):
@@ -674,7 +677,7 @@ def test_definition_field_map_respects_fields_filter():
 
 
 @pytest.mark.django_db
-def test_walker_plan_never_projects_non_column_relation_names():
+def test_walker_plan_never_projects_non_column_relation_names() -> None:
     """``plan.only_fields`` carries no non-column relation names.
 
     The unregistered fallback path stamps the same ``FieldMeta`` the
@@ -687,7 +690,7 @@ def test_walker_plan_never_projects_non_column_relation_names():
     """
     from django_strawberry_framework.optimizer.walker import plan_optimizations
 
-    def sel(name: str, children: Iterable[SimpleNamespace] = ()):
+    def sel(name: str, children: Iterable[SimpleNamespace] = ()) -> SimpleNamespace:
         return SimpleNamespace(name=name, selections=list(children), arguments=None, alias=None)
 
     m2m_plan = plan_optimizations([sel("genres", [sel("id"), sel("name")])], Book, None)
@@ -705,7 +708,7 @@ def test_walker_plan_never_projects_non_column_relation_names():
 
 @pytest.mark.django_db
 @pytest.mark.usefixtures("django_assert_num_queries")
-def test_walker_produces_same_plan_with_cached_map():
+def test_walker_produces_same_plan_with_cached_map() -> None:
     """B7: the walker's plan is identical whether it uses the cached map or _meta."""
     import strawberry
 
@@ -752,7 +755,7 @@ def test_walker_produces_same_plan_with_cached_map():
 # ---------------------------------------------------------------------------
 
 
-def test_from_django_field_mti_parent_link_is_forward_single_and_non_null():
+def test_from_django_field_mti_parent_link_is_forward_single_and_non_null() -> None:
     """The concrete auto-created MTI link stays forward, required, and elidable."""
     parent_link = LendingDesk._meta.pk
     assert parent_link.name == "venue_ptr"
@@ -777,7 +780,7 @@ def test_from_django_field_mti_parent_link_is_forward_single_and_non_null():
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_field_map_unregistered_stamps_field_meta_under_raw_name():
+def test_resolve_field_map_unregistered_stamps_field_meta_under_raw_name() -> None:
     """Unregistered fallback is ``dict[str, FieldMeta]`` keyed by raw ``f.name``."""
     from django_strawberry_framework.optimizer.walker import _resolve_field_map
 
@@ -794,7 +797,7 @@ def test_resolve_field_map_unregistered_stamps_field_meta_under_raw_name():
     assert cat.target_pk_name == "id"
 
 
-def test_mti_child_type_renders_parent_link_non_null():
+def test_mti_child_type_renders_parent_link_non_null() -> None:
     """A DjangoType exposes the MTI parent link as required in the SDL."""
 
     class VenueNode(DjangoType):
@@ -821,7 +824,7 @@ def test_mti_child_type_renders_parent_link_non_null():
     assert "venuePtr: VenueNode!" in sdl
 
 
-def test_from_django_field_non_string_attributes():
+def test_from_django_field_non_string_attributes() -> None:
     """FieldMeta.from_django_field safely coerces non-string attributes and rejects non-string field_name."""
     # Non-string field_name raises OptimizerError
     non_str_name = SimpleNamespace(name=123, is_relation=False)
@@ -855,7 +858,7 @@ def test_from_django_field_non_string_attributes():
     assert fm.source_target_attnames == ()
 
 
-def test_from_django_field_many_side_nullability_short_circuits():
+def test_from_django_field_many_side_nullability_short_circuits() -> None:
     """Many-side relations force nullable=False regardless of descriptor null attribute."""
     # Duck-typed GenericRelation with null=True
     generic_with_null = SimpleNamespace(
@@ -931,7 +934,7 @@ _LINK_COLUMN_ROWS = {
 
 
 @pytest.mark.parametrize("row", list(_LINK_COLUMN_ROWS), ids=list(_LINK_COLUMN_ROWS))
-def test_from_django_field_stamps_reverse_link_columns(row: str):
+def test_from_django_field_stamps_reverse_link_columns(row: str) -> None:
     """A reverse FK / O2O stamps its child carriers and its non-pk parent targets.
 
     Primary-key targets (an ordinary pk, each ``CompositePrimaryKey`` member) are
@@ -963,7 +966,7 @@ def test_from_django_field_stamps_forward_link_carriers(
     owner: str,
     field_name: str,
     carriers: tuple[str, ...],
-):
+) -> None:
     """A forward relation's source row carries its link's carriers, never its ``attname``.
 
     A one-column ``ForeignObject``'s ``attname`` is the relation name and its
@@ -978,7 +981,7 @@ def test_from_django_field_stamps_forward_link_carriers(
     assert meta.source_link_attnames == carriers
 
 
-def test_from_django_field_multi_column_forward_foreign_object_has_no_single_target():
+def test_from_django_field_multi_column_forward_foreign_object_has_no_single_target() -> None:
     """A two-column forward ``ForeignObject`` stamps without raising and names no target column.
 
     Its target columns come from ``utils/relations.py::relation_link`` (Django's
@@ -1020,7 +1023,7 @@ def test_from_django_field_stamps_m2m_through_source_targets(
     owner: str,
     field_name: str,
     source_targets: tuple[str, ...],
-):
+) -> None:
     """An M2M hop's source row carries the non-pk column its through table's source FK targets.
 
     Auto-created and pk-targeted custom through tables target the source pk, so

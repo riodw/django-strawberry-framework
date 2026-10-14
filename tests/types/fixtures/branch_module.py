@@ -14,12 +14,16 @@ from django_strawberry_framework.filters import FilterSet
 
 
 class BranchFilter(FilterSet):
+    """Filters ``Branch`` rows by ``name``; resolved from ``BranchType.Meta.filterset_class``."""
+
     class Meta:
         model = models.Branch
         fields = {"name": ["exact"]}
 
 
 class BranchType(DjangoType):
+    """Type over ``Branch`` that names its filterset across the module boundary."""
+
     class Meta:
         model = models.Branch
         fields = ("id", "name")

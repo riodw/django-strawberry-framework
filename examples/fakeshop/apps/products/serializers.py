@@ -65,6 +65,7 @@ class ItemSerializer(serializers.ModelSerializer[Item]):
         )
 
     def validate_name(self, value: str) -> str:
+        """Reject the reserved serializer item name."""
         if value == REJECTED_SERIALIZER_ITEM_NAME:
             raise serializers.ValidationError("This serializer name is not allowed.")
         return value
@@ -85,7 +86,9 @@ class ItemSerializer(serializers.ModelSerializer[Item]):
 
 
 class RenamedRelationItemSerializer(serializers.ModelSerializer[Item]):
-    """``Item`` serializer with RENAMED scalar + relation fields (spec-039 Decision-13 renamed-field live matrix).
+    """``Item`` serializer with RENAMED scalar + relation fields.
+
+    Backs the spec-039 Decision-13 renamed-field live matrix.
 
     Proves the reverse map keys errors to the GraphQL WIRE name - not the serializer
     field name, nor the backing model column:
@@ -116,6 +119,7 @@ class RenamedRelationItemSerializer(serializers.ModelSerializer[Item]):
         fields = ("display_name", "category_pk")
 
     def validate_display_name(self, value: str) -> str:
+        """Reject the reserved renamed display name."""
         if value == REJECTED_RENAMED_DISPLAY_NAME:
             raise serializers.ValidationError("This renamed name is not allowed.")
         return value

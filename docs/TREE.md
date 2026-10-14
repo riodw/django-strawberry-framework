@@ -508,9 +508,9 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_graphql_core_patches.py  # Install-lifecycle tests for the graphql-core ``complete_list_value`` residual-awaitable patch.
 ├── test_info.py                  # Smoke tests proving the shared ``tests/_info.py`` builders hand out what they promise.
 ├── test_keyset.py                # Package-side keyset-cursor tests: codec, bounds, window shapes, lateral seek.
-├── test_keyset_connection.py     # Package-side keyset connection tests for class-cached cursor state, defensive window fallbacks, order-state derivation, and nested-planner helpers.
+├── test_keyset_connection.py     # Package-side keyset connection tests for cursor state, window fallbacks and planner helpers.
 ├── test_lateral_pg_parity.py     # Postgres lateral-fetch tests for parity, SQL shape, cleanup, custom joins, adaptation, and index seeks.
-├── test_list_field.py            # Package-side DjangoListField tests for construction-time validation, helper mechanics, and internals a live request cannot express.
+├── test_list_field.py            # Package-side DjangoListField tests for construction-time validation, helper mechanics and internals.
 ├── test_model_field_annotations.py  # Model field annotations agree with the fields they annotate.
 ├── test_permissions.py           # Package-only cascade-permission pins that no live GraphQL request can express.
 ├── test_pg_explain_artifact_footer.py  # The PG EXPLAIN artifact carries a regenerable, valid link-definition footer.
@@ -563,7 +563,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_imports.py           # Package tests for management-command import helpers' CommandError wrapping.
 │   └── test_inspect_django_type.py  # Package tests for inspect_django_type helpers and throwaway-type branches.
 ├── middleware/    # Tests for package Django middleware integrations.
-│   └── test_debug_toolbar.py     # Package tests for DebugToolbarMiddleware import guards, unreachable postprocess bails, and the GraphiQL bridge template source.
+│   └── test_debug_toolbar.py     # Package tests for ``DebugToolbarMiddleware`` guards, bails, and the GraphiQL bridge source.
 ├── mutations/    # Package tests for the mutations subsystem (DjangoMutation + generated inputs).
 │   ├── test_fields.py            # ``DjangoMutationField`` factory tests.
 │   ├── test_inputs.py            # Mutation input tests for generated Input/PartialInput, FieldError, and the payload wrapper.
@@ -788,9 +788,9 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_graphql_core_patches.py  # Install-lifecycle tests for the graphql-core ``complete_list_value`` residual-awaitable patch.
 ├── test_info.py                  # Smoke tests proving the shared ``tests/_info.py`` builders hand out what they promise.
 ├── test_keyset.py                # Package-side keyset-cursor tests: codec, bounds, window shapes, lateral seek.
-├── test_keyset_connection.py     # Package-side keyset connection tests for class-cached cursor state, defensive window fallbacks, order-state derivation, and nested-planner helpers.
+├── test_keyset_connection.py     # Package-side keyset connection tests for cursor state, window fallbacks and planner helpers.
 ├── test_lateral_pg_parity.py     # Postgres lateral-fetch tests for parity, SQL shape, cleanup, custom joins, adaptation, and index seeks.
-├── test_list_field.py            # Package-side DjangoListField tests for construction-time validation, helper mechanics, and internals a live request cannot express.
+├── test_list_field.py            # Package-side DjangoListField tests for construction-time validation, helper mechanics and internals.
 ├── test_model_field_annotations.py  # Model field annotations agree with the fields they annotate.
 ├── test_permissions.py           # Package-only cascade-permission pins that no live GraphQL request can express.
 ├── test_pg_explain_artifact_footer.py  # The PG EXPLAIN artifact carries a regenerable, valid link-definition footer.
@@ -848,7 +848,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_imports.py           # Package tests for management-command import helpers' CommandError wrapping.
 │   └── test_inspect_django_type.py  # Package tests for inspect_django_type helpers and throwaway-type branches.
 ├── middleware/    # Tests for package Django middleware integrations.
-│   └── test_debug_toolbar.py     # Package tests for DebugToolbarMiddleware import guards, unreachable postprocess bails, and the GraphiQL bridge template source.
+│   └── test_debug_toolbar.py     # Package tests for ``DebugToolbarMiddleware`` guards, bails, and the GraphiQL bridge source.
 ├── mutations/    # Package tests for the mutations subsystem (DjangoMutation + generated inputs).
 │   ├── test_fields.py            # ``DjangoMutationField`` factory tests.
 │   ├── test_inputs.py            # Mutation input tests for generated Input/PartialInput, FieldError, and the payload wrapper.

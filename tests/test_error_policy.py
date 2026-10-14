@@ -45,6 +45,7 @@ from __future__ import annotations
 import contextlib
 import logging
 from types import SimpleNamespace
+from typing import NoReturn
 
 import pytest
 import pytest_django
@@ -97,7 +98,7 @@ class _Query:
 # ---------------------------------------------------------------------------
 
 
-def test_the_package_default_is_masking_on_with_the_documented_strings():
+def test_the_package_default_is_masking_on_with_the_documented_strings() -> None:
     """The fail-closed answer is the one a deployment gets by doing nothing."""
     assert DEFAULT_ERROR_POLICY.enabled is True
     assert DEFAULT_ERROR_POLICY.message == "An unexpected error occurred."
@@ -119,7 +120,7 @@ def test_the_package_default_is_masking_on_with_the_documented_strings():
         "none",
     ],
 )
-def test_a_non_bool_enabled_is_rejected_at_construction(value: object):
+def test_a_non_bool_enabled_is_rejected_at_construction(value: object) -> None:
     """``enabled`` is a switch, not a truthiness test.
 
     ``1`` and ``"yes"`` would both silently work under a ``bool()`` coercion, and
@@ -127,7 +128,7 @@ def test_a_non_bool_enabled_is_rejected_at_construction(value: object):
     to disable masking and a deployment that fat-fingered the type would be
     indistinguishable. The rejection names the field.
     """
-    with pytest.raises(ConfigurationError, match="ErrorPolicy.enabled must be a bool"):
+    with pytest.raises(ConfigurationError, match=r"ErrorPolicy\.enabled must be a bool"):
         # basedpyright: each non-bool value is the hostile input under test; ErrorPolicy types
         # the parameter as bool
         ErrorPolicy(enabled=value)  # pyright: ignore[reportArgumentType]
@@ -138,9 +139,12 @@ def test_a_non_bool_enabled_is_rejected_at_construction(value: object):
     ["", None, 42],
     ids=["empty", "none", "int"],
 )
-def test_a_non_string_or_empty_message_is_rejected_at_construction(value: object):
+def test_a_non_string_or_empty_message_is_rejected_at_construction(value: object) -> None:
     """An empty mask is not a mask - the client would read a blank error."""
-    with pytest.raises(ConfigurationError, match="ErrorPolicy.message must be a non-empty string"):
+    with pytest.raises(
+        ConfigurationError,
+        match=r"ErrorPolicy\.message must be a non-empty string",
+    ):
         # basedpyright: each non-string value is the hostile input under test; ErrorPolicy types
         # the parameter as str
         ErrorPolicy(message=value)  # pyright: ignore[reportArgumentType]
@@ -151,11 +155,11 @@ def test_a_non_string_or_empty_message_is_rejected_at_construction(value: object
     ["", None, 42],
     ids=["empty", "none", "int"],
 )
-def test_a_non_string_or_empty_correlation_key_is_rejected_at_construction(value: object):
+def test_a_non_string_or_empty_correlation_key_is_rejected_at_construction(value: object) -> None:
     """An unusable extensions key would publish the id where no client can find it."""
     with pytest.raises(
         ConfigurationError,
-        match="ErrorPolicy.correlation_extension_key must be a non-empty string",
+        match=r"ErrorPolicy\.correlation_extension_key must be a non-empty string",
     ):
         # basedpyright: each non-string value is the hostile input under test; ErrorPolicy types
         # the parameter as str
@@ -166,12 +170,12 @@ class _HostileMessage(str):
     """A ``str`` SUBCLASS: ``isinstance``-valid, and consumer code in every dunder."""
 
     @override
-    def __format__(self, spec: str):
+    def __format__(self, spec: str) -> str:
         raise RuntimeError("Hostile message format")
 
 
 @pytest.mark.parametrize("field", ["message", "correlation_extension_key"])
-def test_a_str_subclass_is_rejected_at_construction(field: str):
+def test_a_str_subclass_is_rejected_at_construction(field: str) -> None:
     """The string fields take the built-in type only, the bound rule's own terms.
 
     ``isinstance`` admits a subclass, whose ``__str__`` / ``__format__`` are
@@ -190,13 +194,16 @@ def test_a_str_subclass_is_rejected_at_construction(field: str):
         ErrorPolicy(**{field: _HostileMessage("Nope.")})  # pyright: ignore[reportArgumentType]
 
 
-def test_a_schema_refuses_a_policy_option_carrying_a_str_subclass():
+def test_a_schema_refuses_a_policy_option_carrying_a_str_subclass() -> None:
     """The rejection is a deployment-time failure, not a per-request surprise."""
-    with pytest.raises(ConfigurationError, match="ErrorPolicy.message must be a non-empty string"):
+    with pytest.raises(
+        ConfigurationError,
+        match=r"ErrorPolicy\.message must be a non-empty string",
+    ):
         DjangoSchema(query=_Query, error_policy={"message": _HostileMessage("Nope.")})
 
 
-def test_a_str_subclass_cannot_survive_into_the_private_record():
+def test_a_str_subclass_cannot_survive_into_the_private_record() -> None:
     """The bypass shape: a policy built without ever running the validation.
 
     ``object.__new__`` plus a ``__dict__`` write produces an ``isinstance``-valid
@@ -211,11 +218,14 @@ def test_a_str_subclass_cannot_survive_into_the_private_record():
         message=_HostileMessage("Nope."),
         correlation_extension_key="correlationId",
     )
-    with pytest.raises(ConfigurationError, match="ErrorPolicy.message must be a non-empty string"):
+    with pytest.raises(
+        ConfigurationError,
+        match=r"ErrorPolicy\.message must be a non-empty string",
+    ):
         resolve_error_policy(smuggled)
 
 
-def test_the_policy_is_frozen_so_a_resolver_cannot_widen_its_own_request():
+def test_the_policy_is_frozen_so_a_resolver_cannot_widen_its_own_request() -> None:
     """Frozen is the point: a request holding the policy cannot loosen it."""
     with pytest.raises(Exception, match="cannot assign to field"):
         # basedpyright: the write to the frozen dataclass field is the mutation under test; the
@@ -228,7 +238,7 @@ def test_the_policy_is_frozen_so_a_resolver_cannot_widen_its_own_request():
 # ---------------------------------------------------------------------------
 
 
-def test_an_explicit_instance_is_taken_as_a_private_duplicate():
+def test_an_explicit_instance_is_taken_as_a_private_duplicate() -> None:
     """An ``ErrorPolicy`` argument supplies values, never the object enforcement reads.
 
     The caller keeps what they passed, so what a schema masks with cannot be
@@ -240,7 +250,7 @@ def test_an_explicit_instance_is_taken_as_a_private_duplicate():
     assert resolved is not policy
 
 
-def test_an_explicit_mapping_is_applied_over_the_package_defaults():
+def test_an_explicit_mapping_is_applied_over_the_package_defaults() -> None:
     """A deployment overrides only what it cares about."""
     policy = resolve_error_policy({"message": "Nope."})
     assert policy.message == "Nope."
@@ -248,7 +258,7 @@ def test_an_explicit_mapping_is_applied_over_the_package_defaults():
     assert policy.correlation_extension_key == "correlationId"
 
 
-def test_no_source_at_all_resolves_to_the_package_defaults():
+def test_no_source_at_all_resolves_to_the_package_defaults() -> None:
     """The values of the exported template, in an object the exported name is not.
 
     A deployment that configures nothing is on exactly the same footing as one
@@ -259,7 +269,7 @@ def test_no_source_at_all_resolves_to_the_package_defaults():
     assert resolved is not DEFAULT_ERROR_POLICY
 
 
-def test_a_written_exported_default_reaches_no_resolution():
+def test_a_written_exported_default_reaches_no_resolution() -> None:
     """The exported constant is a value template, never the object masking reads.
 
     ``DEFAULT_ERROR_POLICY`` is a public export, so consumer code holds it, and a
@@ -284,31 +294,33 @@ def test_a_written_exported_default_reaches_no_resolution():
         DEFAULT_ERROR_POLICY.__dict__.update(declared)
 
 
-def test_the_setting_supplies_the_policy_when_no_argument_does(settings: pytest_django.Settings):
+def test_the_setting_supplies_the_policy_when_no_argument_does(
+    settings: pytest_django.Settings,
+) -> None:
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"ERROR_POLICY": {"message": "From settings."}}
     assert resolve_error_policy(None).message == "From settings."
 
 
-def test_an_explicit_argument_outranks_the_setting(settings: pytest_django.Settings):
+def test_an_explicit_argument_outranks_the_setting(settings: pytest_django.Settings) -> None:
     """A process running a public schema and an internal one must be able to differ."""
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"ERROR_POLICY": {"message": "From settings."}}
     assert resolve_error_policy({"message": "From the argument."}).message == "From the argument."
 
 
-def test_a_non_mapping_policy_setting_is_rejected(settings: pytest_django.Settings):
+def test_a_non_mapping_policy_setting_is_rejected(settings: pytest_django.Settings) -> None:
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"ERROR_POLICY": 12}
     with pytest.raises(ConfigurationError, match="must be an ErrorPolicy or a mapping"):
         resolve_error_policy(None)
 
 
-def test_a_non_mapping_policy_argument_is_rejected():
+def test_a_non_mapping_policy_argument_is_rejected() -> None:
     with pytest.raises(ConfigurationError, match="must be an ErrorPolicy or a mapping"):
         # basedpyright: the non-mapping policy is the hostile input under test;
         # resolve_error_policy types the parameter as ErrorPolicy | Mapping[str, object] | None
         resolve_error_policy("invalid")  # pyright: ignore[reportArgumentType]
 
 
-def test_an_unknown_option_name_is_rejected_with_the_valid_vocabulary():
+def test_an_unknown_option_name_is_rejected_with_the_valid_vocabulary() -> None:
     """Naming the valid options in the message is what makes a typo self-correcting."""
     with pytest.raises(ConfigurationError, match=r"Unknown error-policy option\(s\): mesage"):
         resolve_error_policy({"mesage": "typo"})
@@ -319,7 +331,7 @@ def test_an_unknown_option_name_is_rejected_with_the_valid_vocabulary():
 # ---------------------------------------------------------------------------
 
 
-def test_a_correlation_id_is_thirty_two_lowercase_hex_characters():
+def test_a_correlation_id_is_thirty_two_lowercase_hex_characters() -> None:
     """The format is pinned so a log grep for one cannot match anything else."""
     value = new_correlation_id()
     assert len(value) == 32
@@ -327,7 +339,7 @@ def test_a_correlation_id_is_thirty_two_lowercase_hex_characters():
     assert all(character in "0123456789abcdef" for character in value)
 
 
-def test_correlation_ids_do_not_repeat():
+def test_correlation_ids_do_not_repeat() -> None:
     """Random, not derived: a derived id would be an oracle over the masked text."""
     assert len({new_correlation_id() for _ in range(1000)}) == 1000
 
@@ -337,14 +349,14 @@ def test_correlation_ids_do_not_repeat():
 # ---------------------------------------------------------------------------
 
 
-def test_the_schema_resolves_and_exposes_its_policy_once():
+def test_the_schema_resolves_and_exposes_its_policy_once() -> None:
     """``schema.error_policy`` is the single resolved object the extension reads."""
     schema = DjangoSchema(query=_Query, error_policy={"message": "Nope."})
     assert isinstance(schema.error_policy, ErrorPolicy)
     assert schema.error_policy.message == "Nope."
 
 
-def test_reading_schema_error_policy_answers_a_copy():
+def test_reading_schema_error_policy_answers_a_copy() -> None:
     """The object a resolver can reach is not the stored policy.
 
     Writing ``__dict__["enabled"]`` on the handed-out object must not change a
@@ -358,13 +370,13 @@ def test_reading_schema_error_policy_answers_a_copy():
     assert schema.error_policy.enabled is True
 
 
-def test_an_invalid_policy_fails_the_deployment_at_schema_construction():
+def test_an_invalid_policy_fails_the_deployment_at_schema_construction() -> None:
     """Startup, not the first request that happens to raise."""
     with pytest.raises(ConfigurationError, match=r"Unknown error-policy option\(s\): nope"):
         DjangoSchema(query=_Query, error_policy={"nope": 1})
 
 
-def test_the_error_policy_extension_runs_first_in_every_chain():
+def test_the_error_policy_extension_runs_first_in_every_chain() -> None:
     """Position is the contract, not a detail (spec-048 Decision 10).
 
     ``on_operation`` teardowns unwind LIFO, so the FIRST-listed extension tears
@@ -381,7 +393,7 @@ def test_the_error_policy_extension_runs_first_in_every_chain():
     assert isinstance(resolved[-3], DjangoResourcePolicyExtension)
 
 
-def test_a_callable_policy_entry_cannot_become_the_masking_authority():
+def test_a_callable_policy_entry_cannot_become_the_masking_authority() -> None:
     """What a factory returns next request is decided after the entry was accepted.
 
     A mutable factory can hand back the real extension for one operation and a
@@ -393,7 +405,7 @@ def test_a_callable_policy_entry_cannot_become_the_masking_authority():
     class _FactoryPolicy(DjangoErrorPolicyExtension):
         pass
 
-    def factory():
+    def factory() -> DjangoErrorPolicyExtension:
         return _FactoryPolicy()
 
     schema = DjangoSchema(query=_Query, extensions=[factory])
@@ -406,7 +418,7 @@ def test_a_callable_policy_entry_cannot_become_the_masking_authority():
     ]
 
 
-def test_a_declared_policy_beside_a_debug_factory_preserves_debug_exception_capture():
+def test_a_declared_policy_beside_a_debug_factory_preserves_debug_exception_capture() -> None:
     """Declaring the masking extension must not duplicate it or preempt debug teardown.
 
     A direct entry of the schema's own error-policy extension is read once as a
@@ -417,7 +429,7 @@ def test_a_declared_policy_beside_a_debug_factory_preserves_debug_exception_capt
     already-masked error and leave debug's teardown looking at the wrong one.
     """
 
-    def debug_factory():
+    def debug_factory() -> DjangoDebugExtension:
         return DjangoDebugExtension(allow_unsafe_production=True)
 
     schema = DjangoSchema(
@@ -430,7 +442,7 @@ def test_a_declared_policy_beside_a_debug_factory_preserves_debug_exception_capt
     assert len(result.extensions["debug"]["exceptions"]) == 1
 
 
-def test_a_consumer_extension_is_prepended_behind_the_policy_not_in_front_of_it():
+def test_a_consumer_extension_is_prepended_behind_the_policy_not_in_front_of_it() -> None:
     """A consumer's own extension keeps its order relative to its peers."""
 
     class _ConsumerExtension(SchemaExtension):
@@ -447,7 +459,7 @@ def test_a_consumer_extension_is_prepended_behind_the_policy_not_in_front_of_it(
     ]
 
 
-def test_a_consumer_supplied_policy_entry_declares_the_automatic_one():
+def test_a_consumer_supplied_policy_entry_declares_the_automatic_one() -> None:
     """A consumer who names the extension gets it, and gets exactly one of it.
 
     A second copy would mask an already-masked error and mint a SECOND
@@ -474,7 +486,7 @@ def test_a_consumer_supplied_policy_entry_declares_the_automatic_one():
 
 def test_a_plain_schema_with_the_extension_installed_by_hand_falls_back_to_the_default(
     settings: pytest_django.Settings,
-):
+) -> None:
     """A hand-wired ``strawberry.Schema`` has no ``error_policy`` attribute to read.
 
     The fallback is the MASKING one on purpose: an extension whose whole job is to
@@ -501,7 +513,7 @@ def test_a_plain_schema_with_the_extension_installed_by_hand_falls_back_to_the_d
 # ---------------------------------------------------------------------------
 
 
-def _run_teardown(result: GraphQLExecutionResult | None):
+def _run_teardown(result: GraphQLExecutionResult | None) -> None:
     """Drive one ``on_operation`` teardown over ``result`` under the default policy.
 
     Built directly rather than through a schema because the two cases below are
@@ -523,12 +535,12 @@ def _run_teardown(result: GraphQLExecutionResult | None):
         next(hook)
 
 
-def test_a_none_result_is_a_no_op():
+def test_a_none_result_is_a_no_op() -> None:
     """A parse or validation early return has nothing to mask."""
     _run_teardown(None)
 
 
-def test_an_error_free_result_is_left_alone():
+def test_an_error_free_result_is_left_alone() -> None:
     """The happy path must not allocate a new error list or touch ``data``."""
     result = GraphQLExecutionResult(data={"ping": 1}, errors=None)
     _run_teardown(result)
@@ -538,7 +550,7 @@ def test_an_error_free_result_is_left_alone():
 
 def test_a_graphql_core_execution_result_is_rewritten_in_place_preserving_order(
     settings: pytest_django.Settings,
-):
+) -> None:
     """Both result shapes are served by the one implementation (spec-048 Decision 11).
 
     Arity and order are preserved whether an entry was masked or not, so a client
@@ -561,7 +573,7 @@ def test_a_graphql_core_execution_result_is_rewritten_in_place_preserving_order(
 
 async def test_an_async_pre_execution_error_carries_no_original_error(
     settings: pytest_django.Settings,
-):
+) -> None:
     """Strawberry's async validation result has ``original_error is None``.
 
     graphql-core never builds this shape during execution; the async path assigns
@@ -595,7 +607,9 @@ async def test_an_async_pre_execution_error_carries_no_original_error(
         0,
     ],
 )
-def test_a_schema_attribute_that_is_not_a_policy_falls_back_to_the_default(attribute: object):
+def test_a_schema_attribute_that_is_not_a_policy_falls_back_to_the_default(
+    attribute: object,
+) -> None:
     """A wrong ``schema.error_policy`` must not become a silent way to stop masking.
 
     ``getattr(schema, "error_policy", DEFAULT)`` alone answers the default only
@@ -612,7 +626,7 @@ def test_a_schema_attribute_that_is_not_a_policy_falls_back_to_the_default(attri
     assert fallback is not DEFAULT_ERROR_POLICY
 
 
-def test_an_absent_attribute_and_a_real_policy_are_both_read_correctly():
+def test_an_absent_attribute_and_a_real_policy_are_both_read_correctly() -> None:
     """The two shapes that are not failures: no attribute at all, and a real policy."""
     fallback = schema_error_policy(SimpleNamespace())
     assert fallback == DEFAULT_ERROR_POLICY
@@ -621,12 +635,12 @@ def test_an_absent_attribute_and_a_real_policy_are_both_read_correctly():
     assert schema_error_policy(SimpleNamespace(error_policy=policy)) is policy
 
 
-def test_a_raising_schema_error_policy_property_falls_back_to_the_default():
+def test_a_raising_schema_error_policy_property_falls_back_to_the_default() -> None:
     """A descriptor or property on schema that raises falls back to the masking default."""
 
     class _RaisingSchema:
         @property
-        def error_policy(self):
+        def error_policy(self) -> NoReturn:
             raise RuntimeError("Hostile error_policy read")
 
     fallback = schema_error_policy(_RaisingSchema())
@@ -682,7 +696,7 @@ class _HostileStrawberryResult(StrawberryExecutionResult):
     @errors.setter
     # basedpyright: the hostile shape under test, an ``errors`` property whose read raises; the
     # checker rejects any property overriding a base class attribute
-    def errors(self, value: list[GraphQLError] | None):  # pyright: ignore[reportIncompatibleVariableOverride]
+    def errors(self, value: list[GraphQLError] | None) -> None:  # pyright: ignore[reportIncompatibleVariableOverride]
         self._replacement_errors = value
 
 
@@ -690,7 +704,7 @@ class _WriteRejectingStrawberryResult(StrawberryExecutionResult):
     """A stock-shape subclass that rejects adoption after construction."""
 
     @override
-    def __setattr__(self, name: str, value: object):
+    def __setattr__(self, name: str, value: object) -> None:
         if name == "data" and name in self.__dict__:
             raise RuntimeError("result is frozen")
         super().__setattr__(name, value)
@@ -710,7 +724,7 @@ class _HostileMessagePolicy(ErrorPolicy):
     @override
     # basedpyright: the hostile shape under test, a ``message`` property whose read raises; the
     # checker rejects any property overriding a base class attribute
-    def message(self):  # pyright: ignore[reportIncompatibleVariableOverride]
+    def message(self) -> NoReturn:  # pyright: ignore[reportIncompatibleVariableOverride]
         raise RuntimeError(_SENSITIVE)
 
 
@@ -721,7 +735,7 @@ class _HostileEnabledPolicy(ErrorPolicy):
     @override
     # basedpyright: the hostile shape under test, an ``enabled`` property whose read raises; the
     # checker rejects any property overriding a base class attribute
-    def enabled(self):  # pyright: ignore[reportIncompatibleVariableOverride]
+    def enabled(self) -> NoReturn:  # pyright: ignore[reportIncompatibleVariableOverride]
         raise RuntimeError(_SENSITIVE)
 
 
@@ -738,7 +752,7 @@ class _SneakyError(GraphQLError):
     @override
     # basedpyright: the hostile shape under test, an ``original_error`` property whose read raises;
     # the checker rejects any property overriding a base class attribute
-    def original_error(self):  # pyright: ignore[reportIncompatibleVariableOverride]
+    def original_error(self) -> NoReturn:  # pyright: ignore[reportIncompatibleVariableOverride]
         raise AttributeError("original_error is not available")
 
 
@@ -757,7 +771,7 @@ class _UnreadableSettings:
     it survives a deleted ``DEBUG``.
     """
 
-    def __getattr__(self, name: str):
+    def __getattr__(self, name: str) -> NoReturn:
         raise AttributeError(f"No setting {name!r} exists on this holder.")
 
 
@@ -769,13 +783,13 @@ def _policy_answering(value: object) -> ErrorPolicy:
         @override
         # basedpyright: the hostile shape under test, a ``message`` property answering an arbitrary
         # value; the checker rejects any property overriding a base class attribute
-        def message(self):  # pyright: ignore[reportIncompatibleVariableOverride]
+        def message(self) -> object:  # pyright: ignore[reportIncompatibleVariableOverride]
             return value
 
     return object.__new__(_ShapedMessagePolicy)
 
 
-def test_an_unreadable_enabled_read_is_answered_as_enabled():
+def test_an_unreadable_enabled_read_is_answered_as_enabled() -> None:
     """A policy that will not say whether it masks anything keeps the mask ON.
 
     The ``isinstance`` gate in ``schema_error_policy`` admits an ``ErrorPolicy``
@@ -795,7 +809,7 @@ def test_an_unreadable_enabled_read_is_answered_as_enabled():
 def test_the_masking_gate_stays_active_when_debug_cannot_be_read(
     monkeypatch: pytest.MonkeyPatch,
     absence: str,
-):
+) -> None:
     """A masking question answered by exception is one that stays masking ON.
 
     Deleting the attribute (both the proxy's cache and the wrapped holder,
@@ -815,7 +829,7 @@ def test_the_masking_gate_stays_active_when_debug_cannot_be_read(
 
 def test_a_teardown_with_unreadable_debug_masks_normally_and_keeps_data(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """An unreadable ``DEBUG`` keeps masking AND the client's own data.
 
     The gate used to answer by exception: the teardown caught it into the
@@ -842,7 +856,7 @@ def test_a_teardown_with_unreadable_debug_masks_normally_and_keeps_data(
 
 def test_a_hostile_policy_message_read_degrades_to_the_package_message(
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """The floor survives the one object every other failure is landed on.
 
     ``_degraded`` is what a failed masking call lands on, so it cannot itself
@@ -871,7 +885,9 @@ def test_a_hostile_policy_message_read_degrades_to_the_package_message(
     [42, ""],
     ids=["non-string", "empty-string"],
 )
-def test_a_floor_message_that_will_not_publish_falls_back_to_the_package_default(answer: object):
+def test_a_floor_message_that_will_not_publish_falls_back_to_the_package_default(
+    answer: object,
+) -> None:
     """The floor publishes one non-empty string, whatever the policy answers.
 
     A read that SUCCEEDS with a value the wire cannot carry - a non-string, an
@@ -885,7 +901,7 @@ def test_a_floor_message_that_will_not_publish_falls_back_to_the_package_default
     assert floor.message == DEFAULT_ERROR_POLICY.message
 
 
-def test_a_falsy_but_populated_errors_container_is_still_masked():
+def test_a_falsy_but_populated_errors_container_is_still_masked() -> None:
     """Iteration, not the container's own truthiness, decides what is classified.
 
     A populated container whose ``__bool__`` answers falsy used to be waved
@@ -910,7 +926,7 @@ def test_a_falsy_but_populated_errors_container_is_still_masked():
     assert masked.data == {"ping": 1}
 
 
-def test_a_genuinely_empty_error_list_is_still_a_no_op():
+def test_a_genuinely_empty_error_list_is_still_a_no_op() -> None:
     """Materializing before the emptiness check keeps the empty-list no-op."""
     result = GraphQLExecutionResult(data={"ping": 1}, errors=[])
 
@@ -918,7 +934,7 @@ def test_a_genuinely_empty_error_list_is_still_a_no_op():
     assert result.errors == []
 
 
-def test_an_original_error_read_that_raises_is_masked_not_trusted():
+def test_an_original_error_read_that_raises_is_masked_not_trusted() -> None:
     """An error the classifier cannot read behind is unexpected, not deliberate.
 
     A defaulted ``getattr`` cannot tell an absent ``original_error`` - the parse
@@ -942,7 +958,7 @@ def test_an_original_error_read_that_raises_is_masked_not_trusted():
 
 def test_one_error_that_cannot_be_masked_degrades_to_the_policy_message(
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """A masking failure is a disclosure risk, so it fails CLOSED, not open.
 
     The tempting degrade - leave the entry as it was found - publishes exactly the
@@ -969,7 +985,7 @@ def test_one_error_that_cannot_be_masked_degrades_to_the_policy_message(
 
 def test_a_result_whose_errors_cannot_be_read_degrades_to_one_policy_message(
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """The outer floor: an unreadable error list still answers something safe.
 
     One policy-message error and no ``data``. Dropping ``data`` is deliberate - a
@@ -990,7 +1006,7 @@ def test_a_result_whose_errors_cannot_be_read_degrades_to_one_policy_message(
 
 def test_the_extension_adopts_all_fields_of_the_outer_fail_closed_degrade(
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """An unreadable result retains neither data nor extensions after the floor applies.
 
     The degrade drops all three fields, so the adoption must overwrite the
@@ -1019,7 +1035,7 @@ def test_the_extension_adopts_all_fields_of_the_outer_fail_closed_degrade(
 
 def test_the_extension_replaces_a_result_that_rejects_safe_field_adoption(
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     caplog.set_level(logging.ERROR, logger="django_strawberry_framework")
     result = _WriteRejectingStrawberryResult(
         data={"secret": _SENSITIVE},
@@ -1041,7 +1057,7 @@ def test_the_extension_replaces_a_result_that_rejects_safe_field_adoption(
     assert any(record.exc_info for record in caplog.records)
 
 
-def test_a_non_graphql_error_with_none_original_error_is_masked_as_unexpected():
+def test_a_non_graphql_error_with_none_original_error_is_masked_as_unexpected() -> None:
     """Any non-GraphQLError object in errors is classified as unexpected and masked."""
 
     class _CustomError:
@@ -1061,7 +1077,7 @@ def test_a_non_graphql_error_with_none_original_error_is_masked_as_unexpected():
     assert _SENSITIVE not in str(masked.errors[0].message)
 
 
-def test_a_generator_or_iterator_error_list_is_masked_preserving_data():
+def test_a_generator_or_iterator_error_list_is_masked_preserving_data() -> None:
     """An iterator or generator on result.errors is consumed safely without crashing zip."""
     original = GraphQLError(_SENSITIVE, original_error=ValueError(_SENSITIVE))
     result = StrawberryExecutionResult(
@@ -1080,25 +1096,25 @@ def test_a_generator_or_iterator_error_list_is_masked_preserving_data():
 
 def test_the_extension_teardown_fails_closed_when_context_schema_raises(
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """If extension teardown encounters a hostile schema or context, it degrades safely."""
     caplog.set_level(logging.ERROR, logger="django_strawberry_framework")
     extension = DjangoErrorPolicyExtension()
 
     class _HostileContext:
         @property
-        def schema(self):
+        def schema(self) -> NoReturn:
             raise RuntimeError("Hostile schema lookup")
 
         @property
-        def result(self):
+        def result(self) -> StrawberryExecutionResult:
             return StrawberryExecutionResult(
                 data={"leak": _SENSITIVE},
                 errors=[GraphQLError(_SENSITIVE, original_error=RuntimeError(_SENSITIVE))],
             )
 
         @result.setter
-        def result(self, val: StrawberryExecutionResult):
+        def result(self, val: StrawberryExecutionResult) -> None:
             self._result = val
 
     ctx = _HostileContext()
@@ -1127,7 +1143,7 @@ def test_the_extension_teardown_fails_closed_when_context_schema_raises(
 # ---------------------------------------------------------------------------
 
 
-def test_masking_returns_the_same_object_when_nothing_needed_masking():
+def test_masking_returns_the_same_object_when_nothing_needed_masking() -> None:
     """Identity, so the caller can tell "nothing happened" without comparing lists."""
     deliberate = GraphQLError("Deliberate.", original_error=GraphQLError("Deliberate."))
     result = GraphQLExecutionResult(data=None, errors=[deliberate])
@@ -1142,7 +1158,7 @@ def test_masking_returns_the_same_object_when_nothing_needed_masking():
     )
 
 
-def test_masking_leaves_the_original_result_holding_its_originals():
+def test_masking_leaves_the_original_result_holding_its_originals() -> None:
     """The COPY is what makes the per-event seam safe for the debug extension.
 
     The subscription seam masks each event before delivery, and the engine's own
@@ -1165,7 +1181,7 @@ def test_masking_leaves_the_original_result_holding_its_originals():
     assert masked.errors[0].message == DEFAULT_ERROR_POLICY.message
 
 
-def test_error_policy_extension_on_operation_exploding_execution_context():
+def test_error_policy_extension_on_operation_exploding_execution_context() -> None:
     """Execution context with exploding result setter is safely ignored during exception handling."""
     from django_strawberry_framework.extensions.error_policy import (
         DjangoErrorPolicyExtension,
@@ -1175,7 +1191,7 @@ def test_error_policy_extension_on_operation_exploding_execution_context():
 
     call_count = 0
 
-    def _exploding_policy():
+    def _exploding_policy() -> ErrorPolicy:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -1190,7 +1206,7 @@ def test_error_policy_extension_on_operation_exploding_execution_context():
             return None
 
         @result.setter
-        def result(self, _val: StrawberryExecutionResult | None):
+        def result(self, _val: StrawberryExecutionResult | None) -> NoReturn:
             raise RuntimeError("cannot set result")
 
     # basedpyright: a context whose ``result`` assignment raises is the hostile input under test;
@@ -1208,7 +1224,7 @@ def test_error_policy_extension_on_operation_exploding_execution_context():
 # ---------------------------------------------------------------------------
 
 
-def test_the_return_seam_passes_an_already_masked_result_through_by_identity():
+def test_the_return_seam_passes_an_already_masked_result_through_by_identity() -> None:
     """The teardown and the return seam compose without a flag between them.
 
     The teardown masks whatever it found on the execution context and the schema
@@ -1231,7 +1247,7 @@ def test_the_return_seam_passes_an_already_masked_result_through_by_identity():
 def test_the_return_seam_degrades_when_masking_itself_raises(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """A seam that cannot decide what is safe publishes the floor, not the result.
 
     ``mask_execution_result`` contains its own failures, so what is left for this
@@ -1242,7 +1258,7 @@ def test_the_return_seam_degrades_when_masking_itself_raises(
     caplog.set_level(logging.ERROR, logger="django_strawberry_framework")
     schema = DjangoSchema(query=_Query)
 
-    def _unanswerable(_policy: ErrorPolicy):
+    def _unanswerable(_policy: ErrorPolicy) -> NoReturn:
         raise RuntimeError("the masking gate cannot answer")
 
     monkeypatch.setattr(schema_module, "masking_is_active", _unanswerable)
@@ -1261,7 +1277,7 @@ def test_the_return_seam_degrades_when_masking_itself_raises(
     )
 
 
-def test_the_return_seam_is_a_no_op_when_the_policy_is_disabled():
+def test_the_return_seam_is_a_no_op_when_the_policy_is_disabled() -> None:
     """``error_policy={"enabled": False}`` reaches this seam like every other one."""
     schema = DjangoSchema(query=_Query, error_policy={"enabled": False})
     leaky = GraphQLError(_SENSITIVE, original_error=ValueError(_SENSITIVE))

@@ -1,5 +1,7 @@
 """Kanban service tests for card resolution, creation, tracked paths, validation, and rollback."""
 
+from typing import NoReturn
+
 import pytest
 from django.core.exceptions import ValidationError
 
@@ -42,13 +44,15 @@ def beta_version() -> models.TargetVersion:
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("identifier", ["\u00b2", "1" * 5000])
-def test_resolve_card_digit_like_invalid_reference_raises_service_error(identifier: str):
+def test_resolve_card_digit_like_invalid_reference_raises_service_error(identifier: str) -> None:
     with pytest.raises(services.KanbanServiceError, match="Cannot resolve card reference"):
         services.resolve_card(identifier)
 
 
 @pytest.mark.django_db
-def test_create_card_from_spec_builds_card_and_children(beta_version: models.TargetVersion):
+def test_create_card_from_spec_builds_card_and_children(
+    beta_version: models.TargetVersion,
+) -> None:
     dependency = kf.make_card(number=1, title="Dependency")
     related = kf.make_card(number=2, title="Related")
 
@@ -86,7 +90,7 @@ def test_create_card_from_spec_builds_card_and_children(beta_version: models.Tar
 
 
 @pytest.mark.django_db
-def test_create_card_from_spec_links_changed_files(beta_version: models.TargetVersion):
+def test_create_card_from_spec_links_changed_files(beta_version: models.TargetVersion) -> None:
     card = services.create_card_from_spec(
         {
             "title": "Changed files card",
@@ -103,7 +107,9 @@ def test_create_card_from_spec_links_changed_files(beta_version: models.TargetVe
 
 
 @pytest.mark.django_db
-def test_create_card_from_spec_deduplicates_changed_files(beta_version: models.TargetVersion):
+def test_create_card_from_spec_deduplicates_changed_files(
+    beta_version: models.TargetVersion,
+) -> None:
     card = services.create_card_from_spec(
         {
             "title": "Deduped changed files card",
@@ -119,7 +125,7 @@ def test_create_card_from_spec_deduplicates_changed_files(beta_version: models.T
 @pytest.mark.django_db
 def test_create_card_from_spec_creates_planned_rows_for_future_paths(
     beta_version: models.TargetVersion,
-):
+) -> None:
     """New cards are never done, so unknown paths under allowed roots become planned rows."""
     card = services.create_card_from_spec(
         {
@@ -141,7 +147,7 @@ def test_create_card_from_spec_creates_planned_rows_for_future_paths(
 @pytest.mark.django_db
 def test_create_card_from_spec_rejects_path_outside_allowed_roots(
     beta_version: models.TargetVersion,
-):
+) -> None:
     with pytest.raises(services.KanbanServiceError, match="allowed roots"):
         services.create_card_from_spec(
             {
@@ -156,7 +162,7 @@ def test_create_card_from_spec_rejects_path_outside_allowed_roots(
 
 
 @pytest.mark.django_db
-def test_create_card_from_spec_rejects_escaping_path(beta_version: models.TargetVersion):
+def test_create_card_from_spec_rejects_escaping_path(beta_version: models.TargetVersion) -> None:
     with pytest.raises(services.KanbanServiceError, match="repo-relative"):
         services.create_card_from_spec(
             {
@@ -169,7 +175,9 @@ def test_create_card_from_spec_rejects_escaping_path(beta_version: models.Target
 
 
 @pytest.mark.django_db
-def test_create_card_from_spec_accepts_historical_changed_file(beta_version: models.TargetVersion):
+def test_create_card_from_spec_accepts_historical_changed_file(
+    beta_version: models.TargetVersion,
+) -> None:
     historical = models.TrackedPath.objects.create(
         path="django_strawberry_framework/old_module.py",
         state=models.TRACKED_PATH_HISTORICAL,
@@ -190,7 +198,7 @@ def test_create_card_from_spec_accepts_historical_changed_file(beta_version: mod
 
 
 @pytest.mark.django_db
-def test_set_card_changed_files_rejects_unknown_path(beta_version: models.TargetVersion):
+def test_set_card_changed_files_rejects_unknown_path(beta_version: models.TargetVersion) -> None:
     """The DONE-card surface stays strict: no planned-row creation."""
     card = kf.make_card(
         title="Strict changed files card",
@@ -208,7 +216,7 @@ def test_set_card_changed_files_rejects_unknown_path(beta_version: models.Target
 
 
 @pytest.mark.django_db
-def test_set_card_predicted_files_rejects_done_card(beta_version: models.TargetVersion):
+def test_set_card_predicted_files_rejects_done_card(beta_version: models.TargetVersion) -> None:
     card = kf.make_card(
         title="Shipped card",
         target_version=beta_version,
@@ -222,7 +230,9 @@ def test_set_card_predicted_files_rejects_done_card(beta_version: models.TargetV
 
 
 @pytest.mark.django_db
-def test_set_card_predicted_files_keeps_current_rows_current(beta_version: models.TargetVersion):
+def test_set_card_predicted_files_keeps_current_rows_current(
+    beta_version: models.TargetVersion,
+) -> None:
     """Predicting a path that already exists links the current row unchanged."""
     card = kf.make_card(title="Mixed prediction card", target_version=beta_version)
 
@@ -234,7 +244,7 @@ def test_set_card_predicted_files_keeps_current_rows_current(beta_version: model
 
 
 @pytest.mark.django_db
-def test_add_and_remove_dependency_round_trip(beta_version: models.TargetVersion):
+def test_add_and_remove_dependency_round_trip(beta_version: models.TargetVersion) -> None:
     target = kf.make_card(number=1, title="Dep target", target_version=beta_version)
     source = kf.make_card(number=2, title="Dep source", target_version=beta_version)
 
@@ -247,7 +257,7 @@ def test_add_and_remove_dependency_round_trip(beta_version: models.TargetVersion
 
 
 @pytest.mark.django_db
-def test_add_dependency_rejects_non_dependency_kind(beta_version: models.TargetVersion):
+def test_add_dependency_rejects_non_dependency_kind(beta_version: models.TargetVersion) -> None:
     target = kf.make_card(number=1, title="Kind target", target_version=beta_version)
     source = kf.make_card(number=2, title="Kind source", target_version=beta_version)
 
@@ -256,7 +266,9 @@ def test_add_dependency_rejects_non_dependency_kind(beta_version: models.TargetV
 
 
 @pytest.mark.django_db
-def test_set_card_changed_files_links_carry_changed_kind(beta_version: models.TargetVersion):
+def test_set_card_changed_files_links_carry_changed_kind(
+    beta_version: models.TargetVersion,
+) -> None:
     card = kf.make_card(
         title="Changed-kind card",
         target_version=beta_version,
@@ -270,7 +282,9 @@ def test_set_card_changed_files_links_carry_changed_kind(beta_version: models.Ta
 
 
 @pytest.mark.django_db
-def test_set_card_predicted_files_links_carry_predicted_kind(beta_version: models.TargetVersion):
+def test_set_card_predicted_files_links_carry_predicted_kind(
+    beta_version: models.TargetVersion,
+) -> None:
     card = kf.make_card(title="Predicted-kind card", target_version=beta_version)
     services.set_card_predicted_files(card, [PLANNED_PACKAGE_DIR])
 
@@ -279,7 +293,7 @@ def test_set_card_predicted_files_links_carry_predicted_kind(beta_version: model
 
 
 @pytest.mark.django_db
-def test_set_card_changed_files_link_has_uuid_side_row(beta_version: models.TargetVersion):
+def test_set_card_changed_files_link_has_uuid_side_row(beta_version: models.TargetVersion) -> None:
     # M2M .set() inserts through rows with bulk_create (no post_save), so the
     # UUID side-row must be created by the m2m_changed receiver, not create_uuid_row.
     card = kf.make_card(
@@ -297,7 +311,7 @@ def test_set_card_changed_files_link_has_uuid_side_row(beta_version: models.Targ
 @pytest.mark.django_db
 def test_set_card_changed_files_flips_predicted_link_to_changed(
     beta_version: models.TargetVersion,
-):
+) -> None:
     # A predicted->changed re-import must flip the kind on the retained link;
     # .set(through_defaults=...) alone leaves the old kind on surviving rows. The
     # flip is the ship transition, so the card is done before the changed write.
@@ -316,7 +330,7 @@ def test_set_card_changed_files_flips_predicted_link_to_changed(
 @pytest.mark.django_db
 def test_set_card_predicted_files_flips_changed_link_to_predicted(
     beta_version: models.TargetVersion,
-):
+) -> None:
     # The reverse direction: changed->predicted flip on a retained link (the
     # reopen path, so the card is done for the changed write, then reopened).
     card = kf.make_card(
@@ -334,7 +348,7 @@ def test_set_card_predicted_files_flips_changed_link_to_predicted(
 
 
 @pytest.mark.django_db
-def test_set_card_changed_files_rejects_undone_card(beta_version: models.TargetVersion):
+def test_set_card_changed_files_rejects_undone_card(beta_version: models.TargetVersion) -> None:
     """The symmetric mirror of the predicted-on-done guard: changed needs a done card."""
     card = kf.make_card(title="Undone changed card", target_version=beta_version)
 
@@ -345,7 +359,7 @@ def test_set_card_changed_files_rejects_undone_card(beta_version: models.TargetV
 
 
 @pytest.mark.django_db
-def test_create_card_from_spec_out_of_range_number(beta_version: models.TargetVersion):
+def test_create_card_from_spec_out_of_range_number(beta_version: models.TargetVersion) -> None:
     """An explicit out-of-range ``number`` raises a coded error, not the signal's uncoded one."""
     kf.make_card(number=1, title="First")
     kf.make_card(number=2, title="Second")
@@ -364,7 +378,9 @@ def test_create_card_from_spec_out_of_range_number(beta_version: models.TargetVe
 
 
 @pytest.mark.django_db
-def test_create_card_from_spec_rolls_back_invalid_dependency(beta_version: models.TargetVersion):
+def test_create_card_from_spec_rolls_back_invalid_dependency(
+    beta_version: models.TargetVersion,
+) -> None:
     later_dependency = kf.make_card(number=2, title="Later dependency")
 
     with pytest.raises(ValidationError, match="before dependent"):
@@ -399,7 +415,9 @@ def three_cards() -> list[models.Card]:
 
 
 @pytest.mark.django_db
-def test_move_card_number_down_shifts_intermediate_cards_up(three_cards: list[models.Card]):
+def test_move_card_number_down_shifts_intermediate_cards_up(
+    three_cards: list[models.Card],
+) -> None:
     _first, _second, third = three_cards
 
     moved = services.move_card_number(third, 1)
@@ -409,7 +427,9 @@ def test_move_card_number_down_shifts_intermediate_cards_up(three_cards: list[mo
 
 
 @pytest.mark.django_db
-def test_move_card_number_up_shifts_intermediate_cards_down(three_cards: list[models.Card]):
+def test_move_card_number_up_shifts_intermediate_cards_down(
+    three_cards: list[models.Card],
+) -> None:
     first, _second, _third = three_cards
 
     services.move_card_number(first, 3)
@@ -418,7 +438,7 @@ def test_move_card_number_up_shifts_intermediate_cards_down(three_cards: list[mo
 
 
 @pytest.mark.django_db
-def test_move_card_number_to_middle(three_cards: list[models.Card]):
+def test_move_card_number_to_middle(three_cards: list[models.Card]) -> None:
     first, _second, _third = three_cards
 
     services.move_card_number(first, 2)
@@ -427,7 +447,7 @@ def test_move_card_number_to_middle(three_cards: list[models.Card]):
 
 
 @pytest.mark.django_db
-def test_move_card_number_same_slot_is_a_no_op(three_cards: list[models.Card]):
+def test_move_card_number_same_slot_is_a_no_op(three_cards: list[models.Card]) -> None:
     _first, second, _third = three_cards
 
     services.move_card_number(second, 2)
@@ -436,7 +456,9 @@ def test_move_card_number_same_slot_is_a_no_op(three_cards: list[models.Card]):
 
 
 @pytest.mark.django_db
-def test_move_card_number_does_not_churn_neighbor_updated_date(three_cards: list[models.Card]):
+def test_move_card_number_does_not_churn_neighbor_updated_date(
+    three_cards: list[models.Card],
+) -> None:
     _first, second, third = three_cards
     before = models.Card.objects.get(pk=second.pk).updated_date
 
@@ -447,7 +469,7 @@ def test_move_card_number_does_not_churn_neighbor_updated_date(three_cards: list
 
 
 @pytest.mark.django_db
-def test_move_card_number_rejects_out_of_range_target(three_cards: list[models.Card]):
+def test_move_card_number_rejects_out_of_range_target(three_cards: list[models.Card]) -> None:
     first, _second, _third = three_cards
 
     with pytest.raises(services.KanbanServiceError, match="between 1 and 3") as excinfo:
@@ -461,7 +483,7 @@ def test_move_card_number_rejects_out_of_range_target(three_cards: list[models.C
 
 
 @pytest.mark.django_db
-def test_move_card_number_rejects_non_integer():
+def test_move_card_number_rejects_non_integer() -> None:
     card = kf.make_card(number=1, title="Board card 1")
 
     with pytest.raises(services.KanbanServiceError, match="integer") as excinfo:
@@ -471,7 +493,7 @@ def test_move_card_number_rejects_non_integer():
 
 
 @pytest.mark.django_db
-def test_move_card_number_rejects_unsaved_card():
+def test_move_card_number_rejects_unsaved_card() -> None:
     kf.make_card(number=1, title="Board card 1")
     ghost = models.Card(number=99)
 
@@ -481,7 +503,7 @@ def test_move_card_number_rejects_unsaved_card():
 
 
 @pytest.mark.django_db
-def test_move_card_number_rejects_dependency_reordering(three_cards: list[models.Card]):
+def test_move_card_number_rejects_dependency_reordering(three_cards: list[models.Card]) -> None:
     first, second, _third = three_cards
     services.add_dependency(second, first)
 
@@ -496,7 +518,9 @@ def test_move_card_number_rejects_dependency_reordering(three_cards: list[models
 
 
 @pytest.mark.django_db
-def test_move_card_number_allows_dependency_preserving_move(three_cards: list[models.Card]):
+def test_move_card_number_allows_dependency_preserving_move(
+    three_cards: list[models.Card],
+) -> None:
     first, _second, third = three_cards
     services.add_dependency(third, first)
 
@@ -506,7 +530,7 @@ def test_move_card_number_allows_dependency_preserving_move(three_cards: list[mo
 
 
 @pytest.mark.django_db
-def test_compact_card_numbers_closes_the_delete_gap(three_cards: list[models.Card]):
+def test_compact_card_numbers_closes_the_delete_gap(three_cards: list[models.Card]) -> None:
     _first, second, _third = three_cards
 
     second.delete()
@@ -520,7 +544,7 @@ def test_compact_card_numbers_closes_the_delete_gap(three_cards: list[models.Car
 
 
 @pytest.mark.django_db
-def test_service_error_codes_are_stable():
+def test_service_error_codes_are_stable() -> None:
     with pytest.raises(services.KanbanServiceError) as unresolvable:
         services.resolve_card("no such card")
     assert unresolvable.value.code == "unresolvable_card"
@@ -536,7 +560,7 @@ def test_service_error_codes_are_stable():
 
 
 @pytest.mark.django_db
-def test_tracked_path_error_codes(beta_version: models.TargetVersion):
+def test_tracked_path_error_codes(beta_version: models.TargetVersion) -> None:
     card = kf.make_card(title="Code paths card", target_version=beta_version)
 
     with pytest.raises(services.KanbanServiceError) as outside:
@@ -558,7 +582,7 @@ def test_tracked_path_error_codes(beta_version: models.TargetVersion):
 
 
 @pytest.mark.django_db
-def test_resolve_card_by_uuid(beta_version: models.TargetVersion):
+def test_resolve_card_by_uuid(beta_version: models.TargetVersion) -> None:
     card = kf.make_card(title="Uuid card", target_version=beta_version)
 
     resolved = services.resolve_card({"uuid": str(card.uuid.id)})
@@ -567,7 +591,7 @@ def test_resolve_card_by_uuid(beta_version: models.TargetVersion):
 
 
 @pytest.mark.django_db
-def test_resolve_card_by_slug(beta_version: models.TargetVersion):
+def test_resolve_card_by_slug(beta_version: models.TargetVersion) -> None:
     card = kf.make_card(title="Slug Target Card", target_version=beta_version)
 
     resolved = services.resolve_card({"slug": card.slug})
@@ -576,7 +600,7 @@ def test_resolve_card_by_slug(beta_version: models.TargetVersion):
 
 
 @pytest.mark.django_db
-def test_resolve_card_unknown_uuid_raises_unresolvable():
+def test_resolve_card_unknown_uuid_raises_unresolvable() -> None:
     import uuid as uuid_module
 
     with pytest.raises(services.KanbanServiceError) as error:
@@ -585,14 +609,14 @@ def test_resolve_card_unknown_uuid_raises_unresolvable():
 
 
 @pytest.mark.django_db
-def test_resolve_card_invalid_uuid_raises_unresolvable():
+def test_resolve_card_invalid_uuid_raises_unresolvable() -> None:
     with pytest.raises(services.KanbanServiceError) as error:
         services.resolve_card({"uuid": "not-a-uuid"})
     assert error.value.code == "unresolvable_card"
 
 
 @pytest.mark.django_db
-def test_resolve_card_unknown_slug_raises_unresolvable(beta_version: models.TargetVersion):
+def test_resolve_card_unknown_slug_raises_unresolvable(beta_version: models.TargetVersion) -> None:
     kf.make_card(title="Present card", target_version=beta_version)
 
     with pytest.raises(services.KanbanServiceError) as error:
@@ -601,14 +625,14 @@ def test_resolve_card_unknown_slug_raises_unresolvable(beta_version: models.Targ
 
 
 @pytest.mark.django_db
-def test_resolve_card_spec_without_identifier_raises_unresolvable():
+def test_resolve_card_spec_without_identifier_raises_unresolvable() -> None:
     with pytest.raises(services.KanbanServiceError) as error:
         services.resolve_card({"files": []})
     assert error.value.code == "unresolvable_card"
 
 
 @pytest.mark.django_db
-def test_resolve_card_by_spec_card_key(beta_version: models.TargetVersion):
+def test_resolve_card_by_spec_card_key(beta_version: models.TargetVersion) -> None:
     card = kf.make_card(title="Keyed card", target_version=beta_version)
 
     resolved = services.resolve_card({"card": card.title, "files": []})
@@ -620,7 +644,7 @@ def test_resolve_card_by_spec_card_key(beta_version: models.TargetVersion):
 def test_resolve_card_ambiguous_title_raises(
     beta_version: models.TargetVersion,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Titles are unique today, so this path is unreachable in practice.
 
     We force ``MultipleObjectsReturned`` to prove that a future duplicate title
@@ -628,7 +652,7 @@ def test_resolve_card_ambiguous_title_raises(
     """
     card = kf.make_card(title="Ambiguous card", target_version=beta_version)
 
-    def _raise_multiple(**_kwargs: object):
+    def _raise_multiple(**_kwargs: object) -> NoReturn:
         raise models.Card.MultipleObjectsReturned
 
     monkeypatch.setattr(models.Card.objects, "get", _raise_multiple)

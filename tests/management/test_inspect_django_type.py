@@ -17,6 +17,7 @@ model.
 """
 
 import sys
+import types
 from collections.abc import Iterator
 from enum import Enum
 from io import StringIO
@@ -55,13 +56,13 @@ def _isolate_registry() -> Iterator[None]:
     registry.clear()
 
 
-def _make_test_module(monkeypatch: pytest.MonkeyPatch, **attrs: object):
+def _make_test_module(monkeypatch: pytest.MonkeyPatch, **attrs: object) -> types.ModuleType:
     module = stub_module("test_module", **attrs)
     monkeypatch.setitem(sys.modules, "test_module", module)
     return module
 
 
-def test_ambiguous_bare_name_lists_copyable_dotted_paths(monkeypatch: pytest.MonkeyPatch):
+def test_ambiguous_bare_name_lists_copyable_dotted_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every ambiguity candidate is a directly reusable dotted object path."""
     meta_a = type("Meta", (), {"model": Category, "fields": ("id", "name")})
     duplicate_a = type(
@@ -92,7 +93,7 @@ def test_ambiguous_bare_name_lists_copyable_dotted_paths(monkeypatch: pytest.Mon
     assert import_string(path_b) is duplicate_b
 
 
-def test_schema_help_documents_naming_and_cold_process_requirements():
+def test_schema_help_documents_naming_and_cold_process_requirements() -> None:
     parser = Command().create_parser("manage.py", "inspect_django_type")
     schema_action = next(
         action for action in parser._actions if "--schema" in action.option_strings
@@ -104,7 +105,7 @@ def test_schema_help_documents_naming_and_cold_process_requirements():
     )
 
 
-def test_schema_option_uses_schema_naming_configuration(monkeypatch: pytest.MonkeyPatch):
+def test_schema_option_uses_schema_naming_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     """``--schema`` makes object and scalar names match that schema's actual SDL."""
 
     class PrefixedNames(NameConverter):
@@ -165,7 +166,7 @@ def test_schema_option_uses_schema_naming_configuration(monkeypatch: pytest.Monk
 
 def test_bare_name_resolves_converter_applied_sdl_name_and_titles_it(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A custom ``NameConverter``'s SDL name resolves as a bare name AND titles the table.
 
     The operator pastes the name they see in the schema (``ApiItemRefType`` under a
@@ -219,7 +220,9 @@ def test_bare_name_resolves_converter_applied_sdl_name_and_titles_it(
     assert title.startswith("ApiItemRefType  (model:")
 
 
-def test_abstract_base_without_definition_raises_command_error(monkeypatch: pytest.MonkeyPatch):
+def test_abstract_base_without_definition_raises_command_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # A DjangoType subclass with no Meta never registers a definition.
     class AbstractBase(DjangoType):
         pass
@@ -229,7 +232,7 @@ def test_abstract_base_without_definition_raises_command_error(monkeypatch: pyte
         call_command("inspect_django_type", "test_module.AbstractBase")
 
 
-def test_unfinalized_type_raises_command_error(monkeypatch: pytest.MonkeyPatch):
+def test_unfinalized_type_raises_command_error(monkeypatch: pytest.MonkeyPatch) -> None:
     # A concrete registered DjangoType whose definition.finalized is False
     # (finalize_django_types() has not run) is a distinct branch from the
     # no-definition case above.
@@ -244,7 +247,7 @@ def test_unfinalized_type_raises_command_error(monkeypatch: pytest.MonkeyPatch):
         call_command("inspect_django_type", "test_module.ConcreteType")
 
 
-def test_matched_scalar_key_names_supported_mro_ancestor():
+def test_matched_scalar_key_names_supported_mro_ancestor() -> None:
     # A consumer subclass of a supported field must report the SCALAR_MAP row
     # that actually fired (the matched MRO ancestor), not its own concrete class.
     class CustomTextField(models.TextField[str, str]):
@@ -255,7 +258,7 @@ def test_matched_scalar_key_names_supported_mro_ancestor():
     assert _matched_scalar_key(models.CharField()) == "CharField"
 
 
-def test_sdl_type_name_ignores_inherited_strawberry_definition():
+def test_sdl_type_name_ignores_inherited_strawberry_definition() -> None:
     """A partially finalized child uses its own pending GraphQL name."""
 
     class FinalizedParent(DjangoType):
@@ -276,13 +279,13 @@ def test_sdl_type_name_ignores_inherited_strawberry_definition():
     assert _sdl_type_name(PendingChild, definition, NameConverter()) == "PendingAlias"
 
 
-def test_render_annotation_renders_multi_member_union():
+def test_render_annotation_renders_multi_member_union() -> None:
     # A consumer-authored union annotation (>1 non-None member) renders each
     # member name joined by " | " with no trailing "!" on the members.
     assert _render_annotation(int | str) == "Int | String"
 
 
-def test_inspect_unresolved_forward_ref_relation_raises_command_error():
+def test_inspect_unresolved_forward_ref_relation_raises_command_error() -> None:
     """An annotation-only relation forward ref ``finalize`` can't resolve raises CommandError.
 
     ``CatType.items: list["ItemType"]`` is an annotation-only relation override.
@@ -322,7 +325,7 @@ def _connection_row(text: str, field_name: str) -> str:
     raise AssertionError(f"no row for field {field_name!r} in:\n{text}")
 
 
-def test_inspect_direct_relay_node_inheritance_suppresses_pk_row():
+def test_inspect_direct_relay_node_inheritance_suppresses_pk_row() -> None:
     """Direct ``class Foo(DjangoType, relay.Node)`` reports GlobalID! for the pk.
 
     The inspect command must consume ``types/base.py::_is_relay_shaped`` (both
@@ -350,7 +353,7 @@ def test_inspect_direct_relay_node_inheritance_suppresses_pk_row():
     assert "SCALAR_MAP" not in id_row
 
 
-def test_inspect_one_to_one_pk_on_relay_type_reports_relation_row():
+def test_inspect_one_to_one_pk_on_relay_type_reports_relation_row() -> None:
     """A OneToOneField primary key on a Relay-Node-shaped type renders as a relation.
 
     ``_build_annotations`` suppresses the pk annotation for a Relay-shaped type
@@ -400,7 +403,7 @@ def test_inspect_one_to_one_pk_on_relay_type_reports_relation_row():
     assert "patron: InspRelPkTargetType!" in sdl
 
 
-def test_inspect_mti_parent_link_pk_on_relay_type_reports_relation_row():
+def test_inspect_mti_parent_link_pk_on_relay_type_reports_relation_row() -> None:
     """An MTI parent-link pk (``<child>_ptr``) renders as a relation row.
 
     The parent link is a ``OneToOneField`` - it IS ``model._meta.pk`` for the
@@ -438,7 +441,7 @@ def test_inspect_mti_parent_link_pk_on_relay_type_reports_relation_row():
     assert "relay.Node id" not in ptr_row
 
 
-def test_inspect_uses_sdl_names_for_renamed_relation_and_consumer_enum():
+def test_inspect_uses_sdl_names_for_renamed_relation_and_consumer_enum() -> None:
     """Renamed auto-relation and finalized consumer-enum metadata report SDL names."""
 
     @strawberry.enum(name="PublishedState")
@@ -484,7 +487,7 @@ def test_inspect_uses_sdl_names_for_renamed_relation_and_consumer_enum():
     ],
     ids=["two_column_fo", "one_column_fo", "to_field_fk"],
 )
-def test_inspect_labels_a_forward_foreign_object_by_its_link(child_name: str, label: str):
+def test_inspect_labels_a_forward_foreign_object_by_its_link(child_name: str, label: str) -> None:
     """A forward ``ForeignObject`` row reads ``forward ForeignObject``; a ``ForeignKey`` ``forward FK``.
 
     Only a ``ForeignKey`` (any ``to_field``) stores the link in a column of its
@@ -514,7 +517,7 @@ def test_inspect_labels_a_forward_foreign_object_by_its_link(child_name: str, la
     assert parent_row.rstrip().endswith(label)
 
 
-def test_bare_name_meta_name_collision_with_python_name_is_ambiguous():
+def test_bare_name_meta_name_collision_with_python_name_is_ambiguous() -> None:
     """``Meta.name`` of one type colliding with another's ``__name__`` is ambiguous."""
 
     class CategoryView(DjangoType):
@@ -542,7 +545,7 @@ def test_bare_name_meta_name_collision_with_python_name_is_ambiguous():
     assert "fully-dotted object paths" in message
 
 
-def test_scalar_name_uses_custom_scalar_definition_name():
+def test_scalar_name_uses_custom_scalar_definition_name() -> None:
     """A custom scalar wrapper reports its explicit SDL name, never its object repr."""
 
     class TokenValue:
@@ -554,13 +557,12 @@ def test_scalar_name_uses_custom_scalar_definition_name():
     assert _scalar_name(token) == "OpaqueToken"
 
 
-def test_scalar_name_uses_named_union_metadata():
+def test_scalar_name_uses_named_union_metadata() -> None:
     """A finalized named union leaf reports its SDL name, never its object repr."""
-
     assert _scalar_name(strawberry.union("SearchResult")) == "SearchResult"
 
 
-def test_scalar_name_falls_back_to_dunder_name_for_definitionless_type():
+def test_scalar_name_falls_back_to_dunder_name_for_definitionless_type() -> None:
     """A mapless leaf with no Strawberry definition falls back to ``__name__``."""
 
     class UnmappedCustomScalar:

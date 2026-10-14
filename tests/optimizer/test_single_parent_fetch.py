@@ -46,7 +46,7 @@ from tests.optimizer._builders import filter_prefetch_queryset
 from tests.optimizer._builders import nested_connection_request as _request
 
 
-def _shelf_books_request(**overrides: object):
+def _shelf_books_request(**overrides: object) -> NestedConnectionRequest:
     """Reverse FK ``Shelf.books``, count-free (the fast-path-eligible shape).
 
     The single-parent fast path only engages count-free (``totalCount`` keeps the
@@ -68,7 +68,9 @@ def _books(rows: Iterable[Model]) -> list[Book]:
     return proven
 
 
-def _planned_single_parent_queryset(request: NestedConnectionRequest):
+def _planned_single_parent_queryset(
+    request: NestedConnectionRequest,
+) -> SingleParentWindowQuerySet:
     """Run the windowed strategy and return the planned ``SingleParentWindowQuerySet``."""
     plan = OptimizationPlan()
     assert WindowedPrefetchStrategy().plan(request, plan) is True
@@ -78,7 +80,11 @@ def _planned_single_parent_queryset(request: NestedConnectionRequest):
     return entry.queryset
 
 
-def _prefetch_filtered(request: NestedConnectionRequest, field_name: str, parents: list[Model]):
+def _prefetch_filtered(
+    request: NestedConnectionRequest,
+    field_name: str,
+    parents: list[Model],
+) -> SingleParentWindowQuerySet:
     """The planned queryset exactly as Django's prefetch hands it to ``_fetch_all``."""
     queryset = _planned_single_parent_queryset(request)
     filtered = filter_prefetch_queryset(queryset, field_name, parents)
@@ -101,12 +107,12 @@ def _prefetch_filtered(request: NestedConnectionRequest, field_name: str, parent
         ({"limit": 0}, "first: 0 is not a positive bounded page"),
     ],
 )
-def test_spec_rejects_ineligible_windows(overrides: dict[str, object], reason: str):
+def test_spec_rejects_ineligible_windows(overrides: dict[str, object], reason: str) -> None:
     """Every window shape but the count-free plain first page keeps the window."""
     assert single_parent_spec(_shelf_books_request(**overrides)) is None, reason
 
 
-def test_spec_rejects_a_keyset_seek():
+def test_spec_rejects_a_keyset_seek() -> None:
     """A keyset ``after:`` seek is refused at plan time (not a plain filtered LIMIT).
 
     Kept package-side on purpose: the seek is guarded twice in series. If this
@@ -129,7 +135,7 @@ def test_spec_rejects_a_keyset_seek():
     assert single_parent_spec(_shelf_books_request(keyset_seek=seek)) is None
 
 
-def test_spec_rejects_a_custom_queryset_subclass():
+def test_spec_rejects_a_custom_queryset_subclass() -> None:
     """A manager/visibility subclass keeps the window (the class rebind would erase it)."""
 
     class _StatefulQuerySet(QuerySet[Book]):
@@ -144,7 +150,7 @@ def test_spec_rejects_a_custom_queryset_subclass():
 # ---------------------------------------------------------------------------
 
 
-def test_fetch_returns_none_without_a_spec():
+def test_fetch_returns_none_without_a_spec() -> None:
     """A ``SingleParentWindowQuerySet`` built outside the strategy falls straight back."""
     assert _fetch_single_parent_rows(SingleParentWindowQuerySet(model=Book)) is None
 
@@ -182,7 +188,7 @@ _UNRECOGNIZED_SINGLE_PARENT_SHAPES: list[tuple[_SingleParentShape, str]] = [  # 
 def test_fetch_returns_none_for_unrecognized_shapes(
     mutate: Callable[[SingleParentWindowQuerySet], SingleParentWindowQuerySet],
     reason: str,
-):
+) -> None:
     """Every unrecognized fetch-time mutation falls back to the windowed body.
 
     Includes the shared window-predicate-signature guard: the plain re-query
@@ -195,19 +201,19 @@ def test_fetch_returns_none_for_unrecognized_shapes(
     assert _fetch_single_parent_rows(mutate(queryset)) is None, reason
 
 
-def test_fetch_returns_none_without_a_parent_filter():
+def test_fetch_returns_none_without_a_parent_filter() -> None:
     """The bare planned queryset (only the window qual) has no parent list."""
     queryset = _planned_single_parent_queryset(_shelf_books_request())
     assert _fetch_single_parent_rows(queryset) is None
 
 
-def test_fetch_returns_none_for_a_consumer_filter_without_a_parent():
+def test_fetch_returns_none_for_a_consumer_filter_without_a_parent() -> None:
     """A non-window child that is not the parent IN fails the WHERE walk closed."""
     queryset = _planned_single_parent_queryset(_shelf_books_request()).filter(title="x")
     assert _fetch_single_parent_rows(queryset) is None
 
 
-def test_fetch_returns_none_for_a_mutated_root_node():
+def test_fetch_returns_none_for_a_mutated_root_node() -> None:
     """A negated or OR-connected WHERE root is not the planner's shape."""
     queryset = _prefetch_filtered(_shelf_books_request(), "shelf", [Shelf(pk=1)])
     or_root = chain_queryset(queryset)
@@ -218,13 +224,13 @@ def test_fetch_returns_none_for_a_mutated_root_node():
     assert _fetch_single_parent_rows(negated_root) is None
 
 
-def test_fetch_returns_none_for_zero_parents():
+def test_fetch_returns_none_for_zero_parents() -> None:
     """Zero parents (dedup to ``[]``) fall to the windowed body's empty result."""
     queryset = _prefetch_filtered(_shelf_books_request(), "shelf", [])
     assert _fetch_single_parent_rows(queryset) is None
 
 
-def test_fetch_returns_none_for_two_parents():
+def test_fetch_returns_none_for_two_parents() -> None:
     """Two distinct parents are not the degenerate single-parent shape."""
     queryset = _prefetch_filtered(
         _shelf_books_request(),
@@ -239,7 +245,7 @@ def test_fetch_returns_none_for_two_parents():
 # ---------------------------------------------------------------------------
 
 
-def _seed_shelf(titles: list[str]):
+def _seed_shelf(titles: list[str]) -> Shelf:
     """One shelf carrying ``titles`` books in a fresh branch."""
     branch = Branch.objects.create(name="central")
     shelf = Shelf.objects.create(code="a", branch=branch)
@@ -249,7 +255,7 @@ def _seed_shelf(titles: list[str]):
 
 
 @pytest.mark.django_db
-def test_fast_path_synthesizes_forward_row_numbers():
+def test_fast_path_synthesizes_forward_row_numbers() -> None:
     """The recognized shape returns rn 1..N, forward-ordered, count-free, LIMIT-bounded."""
     shelf = _seed_shelf(["t1", "t2", "t3"])
     queryset = _prefetch_filtered(_shelf_books_request(), "shelf", [shelf])
@@ -262,7 +268,7 @@ def test_fast_path_synthesizes_forward_row_numbers():
 
 
 @pytest.mark.django_db
-def test_fast_path_probe_overfetches_the_sentinel_row():
+def test_fast_path_probe_overfetches_the_sentinel_row() -> None:
     """The probe shape fetches ``limit + 1`` rows, numbering the sentinel ``limit + 1``."""
     shelf = _seed_shelf(["t1", "t2", "t3"])
     queryset = _prefetch_filtered(
@@ -277,7 +283,7 @@ def test_fast_path_probe_overfetches_the_sentinel_row():
 
 
 @pytest.mark.django_db
-def test_fast_path_accepts_a_duplicated_single_parent_id():
+def test_fast_path_accepts_a_duplicated_single_parent_id() -> None:
     """Repeated parent ids dedup to one and still fetch the page once."""
     shelf = _seed_shelf(["t1", "t2", "t3"])
     queryset = _prefetch_filtered(_shelf_books_request(), "shelf", [shelf, shelf])
@@ -287,7 +293,7 @@ def test_fast_path_accepts_a_duplicated_single_parent_id():
 
 
 @pytest.mark.django_db
-def test_fast_path_populates_a_nested_prefetch():
+def test_fast_path_populates_a_nested_prefetch() -> None:
     """The pristine child clone carries nested prefetches, so two-level nesting resolves."""
     shelf = _seed_shelf(["t1"])
     genre = Genre.objects.create(name="fiction")
@@ -301,7 +307,7 @@ def test_fast_path_populates_a_nested_prefetch():
     assert list(rows[0].genres.all()) == [genre]
 
 
-def test_clone_carries_the_spec():
+def test_clone_carries_the_spec() -> None:
     """Every clone Django's prefetch machinery makes keeps the single-parent spec."""
     queryset = _planned_single_parent_queryset(_shelf_books_request())
     spec = queryset._dst_single_parent_spec

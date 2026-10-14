@@ -354,7 +354,7 @@ _ITEM_WRITES: dict[
     "model-create": (
         "mutation($d: ItemInput!) { createItem(data: $d) { errors { field messages } } }",
         "products.add_item",
-        lambda item, target: {
+        lambda _item, target: {
             "d": {"name": "RenamedWidget", "categoryId": _gid("ApiCategoryType", target.pk)},
         },
     ),
@@ -375,7 +375,7 @@ _ITEM_WRITES: dict[
             "errors { field messages } } }"
         ),
         "products.add_item",
-        lambda item, target: {
+        lambda _item, target: {
             "d": {"name": "RenamedWidget", "categoryId": _gid("ApiCategoryType", target.pk)},
         },
     ),
@@ -396,7 +396,7 @@ _ITEM_WRITES: dict[
             "errors { field messages } } }"
         ),
         "products.add_item",
-        lambda item, target: {
+        lambda _item, target: {
             "d": {"name": "RenamedWidget", "categoryId": _gid("ApiCategoryType", target.pk)},
         },
     ),

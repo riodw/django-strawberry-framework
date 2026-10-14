@@ -31,24 +31,32 @@ from . import models
 
 
 class MilestoneFilter(FilterSet):
+    """Filters ``Milestone`` rows by ``id``, ``key`` and ``label``."""
+
     class Meta:
         model = models.Milestone
         fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
 
 
 class StatusFilter(FilterSet):
+    """Filters ``Status`` rows by ``id``, ``key`` and ``label``."""
+
     class Meta:
         model = models.Status
         fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
 
 
 class PriorityFilter(FilterSet):
+    """Filters ``Priority`` rows by ``id``, ``key`` and ``label``."""
+
     class Meta:
         model = models.Priority
         fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
 
 
 class RelativeSizeFilter(FilterSet):
+    """Filters ``RelativeSize`` rows by ``id``, ``key``, ``label`` and ``order``."""
+
     class Meta:
         model = models.RelativeSize
         fields = {
@@ -60,54 +68,72 @@ class RelativeSizeFilter(FilterSet):
 
 
 class UpstreamFilter(FilterSet):
+    """Filters ``Upstream`` rows by ``id``, ``key`` and ``label``."""
+
     class Meta:
         model = models.Upstream
         fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
 
 
 class ParityLevelFilter(FilterSet):
+    """Filters ``ParityLevel`` rows by ``id``, ``key`` and ``label``."""
+
     class Meta:
         model = models.ParityLevel
         fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
 
 
 class SectionFilter(FilterSet):
+    """Filters ``Section`` rows by ``id``, ``key`` and ``label``."""
+
     class Meta:
         model = models.Section
         fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
 
 
 class CardReferenceKindFilter(FilterSet):
+    """Filters ``CardReferenceKind`` rows by ``id``, ``key`` and ``label``."""
+
     class Meta:
         model = models.CardReferenceKind
         fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
 
 
 class BoardDocKindFilter(FilterSet):
+    """Filters ``BoardDocKind`` rows by ``id``, ``key`` and ``label``."""
+
     class Meta:
         model = models.BoardDocKind
         fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
 
 
 class TargetVersionFilter(FilterSet):
+    """Filters ``TargetVersion`` rows by ``id`` and ``number``."""
+
     class Meta:
         model = models.TargetVersion
         fields = {"id": "__all__", "number": "__all__"}
 
 
 class AttemptOutcomeFilter(FilterSet):
+    """Filters ``AttemptOutcome`` rows by ``id``, ``key`` and ``label``."""
+
     class Meta:
         model = models.AttemptOutcome
         fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
 
 
 class VerificationKindFilter(FilterSet):
+    """Filters ``VerificationKind`` rows by ``id``, ``key`` and ``label``."""
+
     class Meta:
         model = models.VerificationKind
         fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
 
 
 class ActorFilter(FilterSet):
+    """Filters ``Actor`` rows by ``id``, ``key``, ``label`` and ``kind``."""
+
     class Meta:
         model = models.Actor
         fields = {
@@ -119,6 +145,11 @@ class ActorFilter(FilterSet):
 
 
 class CardTransitionFilter(FilterSet):
+    """Filters ``CardTransition`` rows by the listed columns.
+
+    Related filtersets: ``from_status``, ``to_status`` and ``actor``.
+    """
+
     from_status = RelatedFilter(StatusFilter, field_name="from_status")
     to_status = RelatedFilter(StatusFilter, field_name="to_status")
     actor = RelatedFilter(ActorFilter, field_name="actor")
@@ -129,6 +160,8 @@ class CardTransitionFilter(FilterSet):
 
 
 class WorkAttemptFilter(FilterSet):
+    """Filters ``WorkAttempt`` rows by the listed columns, and across ``actor`` and ``outcome``."""
+
     actor = RelatedFilter(ActorFilter, field_name="actor")
     outcome = RelatedFilter(AttemptOutcomeFilter, field_name="outcome")
 
@@ -144,6 +177,8 @@ class WorkAttemptFilter(FilterSet):
 
 
 class DecisionFilter(FilterSet):
+    """Filters ``Decision`` rows by the listed columns, and across ``actor``."""
+
     actor = RelatedFilter(ActorFilter, field_name="actor")
 
     class Meta:
@@ -158,12 +193,16 @@ class DecisionFilter(FilterSet):
 
 
 class LabelFilter(FilterSet):
+    """Filters ``Label`` rows by ``id``, ``key`` and ``color``."""
+
     class Meta:
         model = models.Label
         fields = {"id": "__all__", "key": "__all__", "color": "__all__"}
 
 
 class TrackedPathFilter(FilterSet):
+    """Filters ``TrackedPath`` rows by ``id``, ``path``, ``state`` and ``is_directory``."""
+
     class Meta:
         model = models.TrackedPath
         fields = {
@@ -175,6 +214,8 @@ class TrackedPathFilter(FilterSet):
 
 
 class CardItemFilter(FilterSet):
+    """Filters ``CardItem`` rows by ``id``, ``text``, ``order`` and ``is_complete``."""
+
     class Meta:
         model = models.CardItem
         # CardItemType is intentionally non-Relay, so ``id`` is a plain integer
@@ -189,6 +230,8 @@ class CardItemFilter(FilterSet):
 
 
 class CardReferenceFilter(FilterSet):
+    """Filters ``CardReference`` rows by the listed columns, and across ``kind``."""
+
     kind = RelatedFilter(CardReferenceKindFilter, field_name="kind")
 
     class Meta:
@@ -197,6 +240,8 @@ class CardReferenceFilter(FilterSet):
 
 
 class CardGlossaryTermFilter(FilterSet):
+    """Filters ``CardGlossaryTerm`` rows by the listed columns, and across ``term``."""
+
     term = RelatedFilter("apps.glossary.filters.GlossaryTermFilter", field_name="term")
 
     class Meta:
@@ -205,12 +250,16 @@ class CardGlossaryTermFilter(FilterSet):
 
 
 class BoardDocCardReferenceFilter(FilterSet):
+    """Filters ``BoardDocCardReference`` rows by ``id``, ``raw_text`` and ``order``."""
+
     class Meta:
         model = models.BoardDocCardReference
         fields = {"id": "__all__", "raw_text": "__all__", "order": "__all__"}
 
 
 class BoardDocFilter(FilterSet):
+    """Filters ``BoardDoc`` rows by the listed columns and across their related filtersets."""
+
     kind = RelatedFilter(BoardDocKindFilter, field_name="kind")
     card_references = RelatedFilter(
         BoardDocCardReferenceFilter,
@@ -235,6 +284,8 @@ class BoardDocFilter(FilterSet):
 
 
 class CardFilter(FilterSet):
+    """Filters ``Card`` rows by the listed columns and across their related filtersets."""
+
     status = RelatedFilter(StatusFilter, field_name="status")
     priority = RelatedFilter(PriorityFilter, field_name="priority")
     relative_size = RelatedFilter(RelativeSizeFilter, field_name="relative_size")

@@ -61,8 +61,9 @@ import json
 import logging
 import re
 import threading
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterator, Mapping
 from functools import cache
+from logging import LogRecord
 from typing import TYPE_CHECKING
 
 import pytest
@@ -72,6 +73,7 @@ from apps.products.services import create_users, seed_data
 from django.conf import settings
 from django.contrib.auth.models import Permission, User
 from django.http import HttpRequest
+from django.http.response import HttpResponseBase
 from django.test import Client
 from django.test import override_settings as _override_settings
 from django.urls import include, path
@@ -94,6 +96,7 @@ from django_strawberry_framework.testing import AsyncTestClient, Response
 from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
 
 if TYPE_CHECKING:
+    from django.test.client import _MonkeyPatchedWSGIResponse
     from typing_extensions import TypeIs
 
 pytestmark = pytest.mark.urls(__name__)
@@ -129,7 +132,7 @@ _DEBUG_PASS_THROUGH = {
 }
 
 
-def _probe_query_type():
+def _probe_query_type() -> type:
     """Fakeshop's own ``Query``, extended with resolvers that fail on demand.
 
     Inheriting rather than replacing keeps every framework rejection site the
@@ -181,9 +184,10 @@ def _probe_query_type():
 
         @strawberry.field
         def boom_non_null(self) -> str:
-            """Raise from a NON-NULL field, so the error reaches the client through
-            graphql-core's value-COMPLETION phase (null propagation) rather than as
-            a nullable field's own entry.
+            """Raise from a NON-NULL field, reaching the client through value completion.
+
+            The error arrives via graphql-core's value-COMPLETION phase (null propagation)
+            rather than as a nullable field's own entry.
             """
             raise ValueError(_SENSITIVE)
 
@@ -220,20 +224,22 @@ def _probe_schema(**schema_kwargs: Unpack[_ProbeSchemaOptions]) -> DjangoSchema:
     )
 
 
-def _probe_view(**schema_kwargs: Unpack[_ProbeSchemaOptions]):
+def _probe_view(**schema_kwargs: Unpack[_ProbeSchemaOptions]) -> Callable[..., HttpResponseBase]:
     """Mount the sync package view over a probe schema built per request."""
 
-    def view(request: HttpRequest, *args: object, **kwargs: object):
+    def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = DjangoGraphQLView.as_view(schema=_probe_schema(**schema_kwargs))
         return built(request, *args, **kwargs)
 
     return csrf_exempt(view)
 
 
-def _probe_async_view(**schema_kwargs: Unpack[_ProbeSchemaOptions]):
+def _probe_async_view(
+    **schema_kwargs: Unpack[_ProbeSchemaOptions],
+) -> Callable[..., Coroutine[object, object, HttpResponseBase]]:
     """The async twin of ``_probe_view``, so parity is proven on a real event loop."""
 
-    async def view(request: HttpRequest, *args: object, **kwargs: object):
+    async def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = AsyncDjangoGraphQLView.as_view(schema=_probe_schema(**schema_kwargs))
         return await built(request, *args, **kwargs)
 
@@ -246,7 +252,7 @@ def _probe_async_view(**schema_kwargs: Unpack[_ProbeSchemaOptions]):
 _MAX_TOKENS = 4
 
 
-def _error_policy_factory():
+def _error_policy_factory() -> DjangoErrorPolicyExtension:
     """A factory resolving to the masking authority, which is not a thing an entry can be."""
     return DjangoErrorPolicyExtension()
 
@@ -257,26 +263,26 @@ class _FactoryHookWitness(SchemaExtension):
     ran: list[str] = []
 
     @override
-    def on_operation(self):
+    def on_operation(self) -> Iterator[None]:
         """Note the operation seam, on both sides of the request."""
         _FactoryHookWitness.ran.append("operation")
         yield
         _FactoryHookWitness.ran.append("operation-done")
 
     @override
-    def on_parse(self):
+    def on_parse(self) -> Iterator[None]:
         """Note the parse seam, which a refused request still passes through."""
         _FactoryHookWitness.ran.append("parse")
         yield
 
     @override
-    def on_execute(self):
+    def on_execute(self) -> Iterator[None]:
         """Note execution, which a refused request must never reach."""
         _FactoryHookWitness.ran.append("execute")
         yield
 
 
-def _hook_exception():
+def _hook_exception() -> RuntimeError:
     """The plain exception a failing consumer hook raises by default."""
     return RuntimeError(_SENSITIVE)
 
@@ -286,7 +292,7 @@ def _hook_exception():
 _DELIBERATE_HOOK_MESSAGE = "This hook message was written for the client."
 
 
-def _deliberate_hook_exception():
+def _deliberate_hook_exception() -> GraphQLError:
     """A hook's own ``GraphQLError`` - a statement written for the client."""
     return GraphQLError(_DELIBERATE_HOOK_MESSAGE, extensions={"code": "CONSUMER_HOOK_REJECTION"})
 
@@ -315,26 +321,26 @@ class _HookFailure(SchemaExtension):
     """
 
     @override
-    def on_operation(self):
+    def on_operation(self) -> Iterator[None]:
         """Fail at the teardown half, which unwinds INSIDE the masking authority's."""
         yield
         _fail_hook("operation-teardown")
 
     @override
-    def on_validate(self):
+    def on_validate(self) -> Iterator[None]:
         """Fail at either half of the validation stage."""
         _fail_hook("validate-setup")
         yield
         _fail_hook("validate-teardown")
 
     @override
-    def on_execute(self):
+    def on_execute(self) -> Iterator[None]:
         """Fail as execution begins."""
         _fail_hook("execute-setup")
         yield
 
 
-def _fail_hook(where: str):
+def _fail_hook(where: str) -> None:
     """Raise the armed exception when ``where`` is the armed failure point."""
     if _HOOK_FAILURE["where"] != where:
         return
@@ -343,7 +349,10 @@ def _fail_hook(where: str):
 
 
 @contextlib.contextmanager
-def _failing_hook(where: str, build: Callable[[], Exception] = _hook_exception):
+def _failing_hook(
+    where: str,
+    build: Callable[[], Exception] = _hook_exception,
+) -> Generator[None, None, None]:
     """Arm the consumer extension to fail at ``where`` for the duration of one row."""
     _HOOK_FAILURE["where"] = where
     _HOOK_FAILURE["build"] = build
@@ -435,7 +444,7 @@ class _SharedEntryCoordinator(SchemaExtension):
     armed = False
 
     @override
-    def on_parse(self):
+    def on_parse(self) -> Iterator[None]:
         """Park the failing document, once, while the overlap row is armed."""
         if _SharedEntryCoordinator.armed and "boom" in (self.execution_context.query or ""):
             _SharedEntryCoordinator.parked.set()
@@ -455,7 +464,7 @@ class _SharedEntryConsumer(SchemaExtension):
     """
 
     @override
-    def on_operation(self):
+    def on_operation(self) -> Iterator[None]:
         """Occupy the operation seam and change nothing about the result."""
         yield
 
@@ -477,7 +486,9 @@ def _fresh_consumer_extension() -> _SharedEntryConsumer:
     return _SharedEntryConsumer()
 
 
-def _shared_entry_entry(spelling: str):
+def _shared_entry_entry(
+    spelling: str,
+) -> type[SchemaExtension] | Callable[[], SchemaExtension] | SchemaExtension:
     """The ``extensions=[...]`` entry that spells ``spelling``.
 
     Strawberry resolves an entry as ``ext if isinstance(ext, SchemaExtension)
@@ -517,20 +528,22 @@ def _shared_entry_schema(spelling: str) -> DjangoSchema:
     )
 
 
-def _shared_entry_view(spelling: str):
+def _shared_entry_view(spelling: str) -> Callable[..., HttpResponseBase]:
     """Mount the synchronous package view over one entry spelling."""
 
-    def view(request: HttpRequest, *args: object, **kwargs: object):
+    def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = DjangoGraphQLView.as_view(schema=_shared_entry_schema(spelling))
         return built(request, *args, **kwargs)
 
     return csrf_exempt(view)
 
 
-def _shared_entry_async_view(spelling: str):
+def _shared_entry_async_view(
+    spelling: str,
+) -> Callable[..., Coroutine[object, object, HttpResponseBase]]:
     """Mount the asynchronous package view over one entry spelling."""
 
-    async def view(request: HttpRequest, *args: object, **kwargs: object):
+    async def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = AsyncDjangoGraphQLView.as_view(schema=_shared_entry_schema(spelling))
         return await built(request, *args, **kwargs)
 
@@ -594,7 +607,7 @@ def _post(
     variables: Mapping[str, object] | None = None,
     *,
     client: Client | None = None,
-):
+) -> tuple[_MonkeyPatchedWSGIResponse, JSONObject]:
     """POST one GraphQL document to a mount and return ``(response, parsed envelope)``."""
     response = post_graphql(query, client=client, variables=variables, url=mount)
     assert response.status_code == 200, response.content
@@ -605,7 +618,7 @@ def _masked_error(
     payload: JSONObject,
     *,
     key: str = DEFAULT_ERROR_POLICY.correlation_extension_key,
-):
+) -> JSONObject:
     """Return the single masked error in ``payload``, asserting the masked shape.
 
     Every masking row funnels through here, so "the error was masked" always means
@@ -622,12 +635,12 @@ def _masked_error(
     return error
 
 
-def _await_response(coroutine: Awaitable[Response]):
+def _await_response(coroutine: Awaitable[Response]) -> Response:
     """Run one ``AsyncTestClient.query`` coroutine to completion on a fresh event loop."""
     return asyncio.run(_resolve(coroutine))
 
 
-async def _resolve(coroutine: Awaitable[Response]):
+async def _resolve(coroutine: Awaitable[Response]) -> Response:
     return await coroutine
 
 
@@ -637,7 +650,7 @@ async def _resolve(coroutine: Awaitable[Response]):
 
 
 @pytest.mark.django_db
-def test_an_unexpected_exception_reaches_the_client_as_the_policy_message_only():
+def test_an_unexpected_exception_reaches_the_client_as_the_policy_message_only() -> None:
     """The masking contract, stated once over a real response body.
 
     Three claims, and the third is the one that matters: the client reads exactly
@@ -664,7 +677,7 @@ def test_an_unexpected_exception_reaches_the_client_as_the_policy_message_only()
 def test_an_exception_surfaced_through_value_completion_is_masked_too(
     document: str,
     sensitive: str,
-):
+) -> None:
     """graphql-core raises from two phases, and both are masked (spec-048 Decision 8).
 
     A resolver exception does not always reach the client from the resolve phase:
@@ -682,7 +695,7 @@ def test_an_exception_surfaced_through_value_completion_is_masked_too(
 
 
 @pytest.mark.django_db
-def test_the_masked_error_retains_the_path_of_the_field_that_failed():
+def test_the_masked_error_retains_the_path_of_the_field_that_failed() -> None:
     """Masking removes the message, never the attribution (spec-048 Decision 9).
 
     The client wrote the query, so ``path`` discloses nothing - and without it
@@ -698,7 +711,7 @@ def test_the_masked_error_retains_the_path_of_the_field_that_failed():
 @pytest.mark.django_db
 def test_the_correlation_id_reaches_the_server_log_with_the_original_exception(
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """The id the client holds resolves to the original exception, or masking is just deletion.
 
     Pinned on the exact log destination the spec fixes: the package logger
@@ -727,7 +740,7 @@ def test_the_correlation_id_reaches_the_server_log_with_the_original_exception(
 @pytest.mark.django_db
 def test_a_factory_resolving_to_the_masker_refuses_the_request_instead_of_masking(
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """A factory cannot become the schema's masker; the schema refuses the operation.
 
     The masker is the schema's own, built per operation from the configuration
@@ -764,7 +777,7 @@ def test_a_factory_resolving_to_the_masker_refuses_the_request_instead_of_maskin
 @pytest.mark.django_db
 def test_two_unexpected_errors_in_one_response_carry_two_different_ids(
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """One FRESH id PER MASKED ERROR, not one per operation.
 
     A response reporting two unrelated failures is exactly when a shared id would
@@ -792,7 +805,7 @@ def test_two_unexpected_errors_in_one_response_carry_two_different_ids(
 
 
 @pytest.mark.django_db
-def test_a_parse_error_keeps_its_own_message_and_carries_no_correlation_id():
+def test_a_parse_error_keeps_its_own_message_and_carries_no_correlation_id() -> None:
     """``original_error is None``, so nothing was masked - and nothing should be.
 
     A syntax error describes the client's own document. Masking it would tell a
@@ -805,7 +818,7 @@ def test_a_parse_error_keeps_its_own_message_and_carries_no_correlation_id():
 
 
 @pytest.mark.django_db
-def test_a_validation_error_keeps_its_own_message_and_carries_no_correlation_id():
+def test_a_validation_error_keeps_its_own_message_and_carries_no_correlation_id() -> None:
     """The validation half of the ``original_error is None`` column.
 
     An unknown field is named back to the client verbatim; the schema is public,
@@ -819,7 +832,7 @@ def test_a_validation_error_keeps_its_own_message_and_carries_no_correlation_id(
 
 
 @pytest.mark.django_db
-def test_an_async_validation_error_keeps_its_own_message_and_carries_no_correlation_id():
+def test_an_async_validation_error_keeps_its_own_message_and_carries_no_correlation_id() -> None:
     """The async validation half of the ``original_error is None`` column."""
     async_response = _await_response(
         AsyncTestClient().query(
@@ -842,7 +855,7 @@ def test_an_async_validation_error_keeps_its_own_message_and_carries_no_correlat
 
 
 @pytest.mark.django_db
-def test_an_audited_globalid_rejection_keeps_its_message_and_its_code():
+def test_an_audited_globalid_rejection_keeps_its_message_and_its_code() -> None:
     """The ``GLOBALID_INVALID`` boundary survives the policy intact.
 
     The regression this row exists to catch is the one Strawberry's own
@@ -861,7 +874,7 @@ def test_an_audited_globalid_rejection_keeps_its_message_and_its_code():
 
 
 @pytest.mark.django_db
-def test_an_audited_resource_limit_rejection_keeps_its_message_and_its_code():
+def test_an_audited_resource_limit_rejection_keeps_its_message_and_its_code() -> None:
     """A ``RESOURCE_LIMIT_EXCEEDED`` refusal survives the policy intact.
 
     ``ResourceLimitExceeded`` multiple-inherits ``GraphQLError``, so the structural
@@ -877,7 +890,7 @@ def test_an_audited_resource_limit_rejection_keeps_its_message_and_its_code():
 
 
 @pytest.mark.django_db
-def test_a_consumer_raised_graphql_error_keeps_its_own_message():
+def test_a_consumer_raised_graphql_error_keeps_its_own_message() -> None:
     """Consumer code is trusted: a ``GraphQLError`` IS the statement "this is for the client".
 
     The classifier is not a heuristic about this package's internals, so a
@@ -892,7 +905,7 @@ def test_a_consumer_raised_graphql_error_keeps_its_own_message():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_a_permission_denial_keeps_its_not_authorized_message():
+def test_a_permission_denial_keeps_its_not_authorized_message() -> None:
     """The mutation pipeline's denial is a ``GraphQLError``, so it reaches the client verbatim.
 
     Masking this one would be a real UX regression rather than a security gain:
@@ -921,7 +934,7 @@ def test_a_permission_denial_keeps_its_not_authorized_message():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_a_field_error_envelope_is_untouched_because_it_is_data_not_an_error():
+def test_a_field_error_envelope_is_untouched_because_it_is_data_not_an_error() -> None:
     """A validation envelope needs no carve-out - the policy never sees it.
 
     A form / serializer validation failure is returned in ``data`` as a structured
@@ -969,7 +982,7 @@ def test_a_field_error_envelope_is_untouched_because_it_is_data_not_an_error():
 
 
 @pytest.mark.django_db
-def test_the_sync_and_async_transports_produce_the_same_masked_entry():
+def test_the_sync_and_async_transports_produce_the_same_masked_entry() -> None:
     """One synchronous teardown serves both execution colors (spec-048 Decision 11).
 
     Both mounts are compared entry-for-entry with only the correlation id removed:
@@ -997,7 +1010,7 @@ def test_the_sync_and_async_transports_produce_the_same_masked_entry():
 
 
 @pytest.mark.django_db
-def test_debug_true_restores_the_original_message_end_to_end():
+def test_debug_true_restores_the_original_message_end_to_end() -> None:
     """Under ``settings.DEBUG`` the policy is a pass-through, read at OPERATION time.
 
     The local traceback is the reason the setting exists, and the gate is read per
@@ -1021,7 +1034,9 @@ def test_debug_true_restores_the_original_message_end_to_end():
         pytest.param(object(), id="object"),
     ],
 )
-def test_a_malformed_debug_setting_keeps_production_masking_end_to_end(debug_value: object):
+def test_a_malformed_debug_setting_keeps_production_masking_end_to_end(
+    debug_value: object,
+) -> None:
     """Only an explicit ``DEBUG=True`` opens the development pass-through gate."""
     with _override_settings(
         DEBUG=debug_value,
@@ -1034,7 +1049,7 @@ def test_a_malformed_debug_setting_keeps_production_masking_end_to_end(debug_val
 
 
 @pytest.mark.django_db
-def test_a_resolver_cannot_turn_masking_off_by_writing_the_schemas_policy():
+def test_a_resolver_cannot_turn_masking_off_by_writing_the_schemas_policy() -> None:
     """``info.schema.error_policy`` is a copy, so a resolver write cannot unmask this request."""
     response, payload = _post("/ep/", "{ unmask boom }")
     _masked_error(payload)
@@ -1044,7 +1059,7 @@ def test_a_resolver_cannot_turn_masking_off_by_writing_the_schemas_policy():
 
 
 @pytest.mark.django_db
-def test_a_written_exported_default_cannot_unmask_a_later_schema():
+def test_a_written_exported_default_cannot_unmask_a_later_schema() -> None:
     """The exported default is a value template; masking reads the package's own policy.
 
     ``DEFAULT_ERROR_POLICY`` is a root export, so any consumer module holds it,
@@ -1075,7 +1090,7 @@ def test_a_written_exported_default_cannot_unmask_a_later_schema():
 
 
 @pytest.mark.django_db
-def test_the_explicit_opt_out_returns_the_original_message_under_debug_false():
+def test_the_explicit_opt_out_returns_the_original_message_under_debug_false() -> None:
     """``error_policy={"enabled": False}`` is the recorded decision to own your own masking.
 
     Distinct from the ``DEBUG`` gate: this deployment is in production and has
@@ -1090,7 +1105,7 @@ def test_the_explicit_opt_out_returns_the_original_message_under_debug_false():
 
 
 @pytest.mark.django_db
-def test_a_custom_message_and_extension_key_both_reach_the_wire():
+def test_a_custom_message_and_extension_key_both_reach_the_wire() -> None:
     """Both configurable fields are honored on a real response."""
     _, payload = _post("/ep-custom/", "{ boom }")
     error = payload["errors"][0]
@@ -1131,7 +1146,7 @@ def _entry_request(entry: tuple[str, str], query: str) -> JSONObject:
     return payload
 
 
-def _assert_masked_and_clean(payload: JSONObject, body: str):
+def _assert_masked_and_clean(payload: JSONObject, body: str) -> JSONObject:
     """The whole masking contract for one shared-entry row, in one place."""
     error = _masked_error(payload)
     assert _SENSITIVE not in body
@@ -1144,7 +1159,7 @@ def _assert_masked_and_clean(payload: JSONObject, body: str):
     ENTRY_ROWS,
     ids=ENTRY_IDS,
 )
-def test_a_nested_operation_does_not_unmask_the_outer_failure(spelling: str, color: str):
+def test_a_nested_operation_does_not_unmask_the_outer_failure(spelling: str, color: str) -> None:
     """A whole inner operation runs mid-resolver, and the outer failure still masks.
 
     The masking teardown reads the completed result off this operation's engine
@@ -1171,7 +1186,7 @@ def test_a_nested_operation_does_not_unmask_the_outer_failure(spelling: str, col
     ENTRY_ROWS,
     ids=ENTRY_IDS,
 )
-def test_an_overlapping_request_does_not_unmask_a_failing_one(spelling: str, color: str):
+def test_an_overlapping_request_does_not_unmask_a_failing_one(spelling: str, color: str) -> None:
     """Two requests overlap on one entry, and the failing one is still masked.
 
     The failing request is held open between its parse hooks, a benign request
@@ -1185,7 +1200,7 @@ def test_an_overlapping_request_does_not_unmask_a_failing_one(spelling: str, col
     _SharedEntryCoordinator.armed = True
     overlapped: dict[str, JSONObject] = {}
 
-    def _run_failing():
+    def _run_failing() -> None:
         overlapped["payload"] = _entry_request(entry, "{ boom }")
 
     held = threading.Thread(target=_run_failing)
@@ -1212,7 +1227,11 @@ def test_an_overlapping_request_does_not_unmask_a_failing_one(spelling: str, col
 # ---------------------------------------------------------------------------
 
 
-def _hook_request(color: str, mount: str | None = None, document: str = "{ fine }"):
+def _hook_request(
+    color: str,
+    mount: str | None = None,
+    document: str = "{ fine }",
+) -> tuple[str, JSONObject]:
     """POST one document to a hook mount of ``color``, returning ``(body, payload)``.
 
     The color selects both the mount and the client, so an async row cannot be
@@ -1229,7 +1248,7 @@ def _hook_request(color: str, mount: str | None = None, document: str = "{ fine 
     return body, json.loads(body)
 
 
-def _package_error_records(caplog: pytest.LogCaptureFixture):
+def _package_error_records(caplog: pytest.LogCaptureFixture) -> list[LogRecord]:
     """Every ``ERROR`` the package logger emitted during one row."""
     return [
         record
@@ -1243,7 +1262,7 @@ def _package_error_records(caplog: pytest.LogCaptureFixture):
 def test_an_exception_from_a_consumer_hook_is_masked_like_a_resolver_exception(
     where: str,
     color: str,
-):
+) -> None:
     """A hook failure is an unexpected exception, and reads as one on the wire.
 
     A consumer extension raising a plain exception is exactly the resolver case
@@ -1268,7 +1287,7 @@ def test_an_exception_from_a_consumer_hook_is_masked_like_a_resolver_exception(
 def test_the_hook_correlation_id_reaches_the_server_log_with_the_original_exception(
     caplog: pytest.LogCaptureFixture,
     color: str,
-):
+) -> None:
     """The id a hook failure hands the client resolves to the exception that raised it.
 
     The same guarantee the resolver row states, over the seam where the masking
@@ -1296,7 +1315,7 @@ def test_one_hook_failure_produces_exactly_one_masked_entry_and_one_log_record(
     caplog: pytest.LogCaptureFixture,
     where: str,
     color: str,
-):
+) -> None:
     """One failure is masked once, whichever seam ends up doing it.
 
     The operation teardown and the schema's own return of the result upstream
@@ -1317,7 +1336,7 @@ def test_one_hook_failure_produces_exactly_one_masked_entry_and_one_log_record(
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("color", HOOK_COLORS, ids=HOOK_COLORS)
-def test_debug_true_restores_the_original_hook_message(color: str):
+def test_debug_true_restores_the_original_hook_message(color: str) -> None:
     """The development pass-through covers the hook seam as well as the resolver one."""
     with _override_settings(**_DEBUG_PASS_THROUGH), _failing_hook("operation-teardown"):
         _, payload = _hook_request(color)
@@ -1328,7 +1347,7 @@ def test_debug_true_restores_the_original_hook_message(color: str):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("color", HOOK_COLORS, ids=HOOK_COLORS)
-def test_the_explicit_opt_out_returns_the_original_hook_message(color: str):
+def test_the_explicit_opt_out_returns_the_original_hook_message(color: str) -> None:
     """``error_policy={"enabled": False}`` is honored at the hook seam too."""
     assert settings.DEBUG is False
     with _failing_hook("operation-teardown"):
@@ -1340,7 +1359,7 @@ def test_the_explicit_opt_out_returns_the_original_hook_message(color: str):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize(("where", "color"), HOOK_ROWS, ids=HOOK_IDS)
-def test_a_hook_raising_a_graphql_error_keeps_its_own_message(where: str, color: str):
+def test_a_hook_raising_a_graphql_error_keeps_its_own_message(where: str, color: str) -> None:
     """A hook's deliberate ``GraphQLError`` is a client-facing statement and travels.
 
     The same structural rule the resolver rows state, asked at the seam this file's

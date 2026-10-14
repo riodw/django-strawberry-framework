@@ -30,7 +30,7 @@ Estimating created rows for a given count (X):
     Total rows = 25 + 174 + (25 * X) + (174 * X)
                = 199 + 199X
 
-    Examples:
+Examples:
         X=1   ->    398 rows
         X=5   ->   1194 rows
         X=50  ->  10149 rows
@@ -478,7 +478,7 @@ def delete_data(target: int | str) -> dict[str, int]:
 #   ``IntegrityError`` at seed time rather than showing up as a visible-rows
 #   difference.
 #
-# ``examples/fakeshop/apps/products/tests/test_services.py::test_every_named_fixture_helper_seeds_into_one_database``
+# ``examples/fakeshop/apps/products/tests/test_services.py::test_every_named_fixture_helper_seeds_into_one_database``  # noqa: E501 - citation path cannot wrap
 # holds that second rule, by calling every helper below against one database.
 
 

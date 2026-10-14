@@ -5,6 +5,8 @@ SKIP identity, factory classmethods, frozen immutability, and invalid-state
 ``examples/fakeshop/test_query/test_library_api.py::test_library_optimizer_hints_are_observable_over_http``.
 """
 
+from typing import NoReturn
+
 import pytest
 from django.db.models import Prefetch
 from typing_extensions import override
@@ -172,7 +174,7 @@ class TestStrategyFactory:
             @override
             # basedpyright: the hostile shape under test, a ``__name__`` property whose read
             # raises; the checker rejects any property overriding a base class attribute
-            def __name__(cls):  # pyright: ignore[reportIncompatibleVariableOverride]
+            def __name__(cls) -> NoReturn:  # pyright: ignore[reportIncompatibleVariableOverride]
                 raise RuntimeError("type name should never run")
 
         class NotStrategy(metaclass=HostileType):
@@ -217,21 +219,21 @@ class TestStrategyFactory:
 
         class HostileRepr(str):
             @override
-            def __repr__(self):
+            def __repr__(self) -> str:
                 raise RuntimeError("repr should never run")
 
         class HostileEq(str):
             @override
-            def __eq__(self, other: object):
+            def __eq__(self, other: object) -> NoReturn:
                 raise RuntimeError("eq should never run")
 
             @override
-            def __hash__(self):
+            def __hash__(self) -> int:
                 return str.__hash__(self)
 
         class HostileHash(str):
             @override
-            def __hash__(self):
+            def __hash__(self) -> NoReturn:
                 raise RuntimeError("hash should never run")
 
         class HostilePlan(NestedConnectionStrategy):
@@ -271,7 +273,7 @@ class TestStrategyFactory:
 
         class HostileHash(str):
             @override
-            def __hash__(self):
+            def __hash__(self) -> NoReturn:
                 raise RuntimeError("hash should never run")
 
         with pytest.raises(
@@ -396,10 +398,10 @@ class TestInvalidStatesRejected:
             OptimizerHint(prefetch_obj=Prefetch("items"), force_prefetch=True)
 
     def test_prefetch_obj_rejects_non_prefetch_value(self) -> None:
-        """Pins ``rev-optimizer__hints.md`` Medium: ``prefetch(obj)`` must
-        receive a ``Prefetch`` instance; the previous ``obj: Any`` factory
-        signature let strings or other shapes through ``__post_init__`` and
-        crash later in the walker.  Reject at construction time instead.
+        """``prefetch(obj)`` must receive a ``Prefetch`` instance.
+
+        An ``obj: Any`` factory signature would let strings or other shapes through
+        ``__post_init__`` and crash later in the walker, so construction rejects them.
         """
         from django_strawberry_framework.exceptions import ConfigurationError
 
@@ -420,7 +422,7 @@ class TestInvalidStatesRejected:
             @override
             # basedpyright: the hostile shape under test, a ``__name__`` property whose read
             # raises; the checker rejects any property overriding a base class attribute
-            def __name__(cls):  # pyright: ignore[reportIncompatibleVariableOverride]
+            def __name__(cls) -> NoReturn:  # pyright: ignore[reportIncompatibleVariableOverride]
                 raise RuntimeError("type name should never run")
 
         class NotPrefetch(metaclass=HostileType):
@@ -453,7 +455,7 @@ class TestSkipPredicate:
                 return super().__getattribute__(name)
 
         class HostileBoolean:
-            def __bool__(self):
+            def __bool__(self) -> bool:
                 raise RuntimeError("bool should never run")
 
         hostile_attribute = HostileAttribute()

@@ -71,7 +71,7 @@ _SET_STATUS = (
 
 
 @pytest.mark.django_db
-def test_set_card_status_happy_path():
+def test_set_card_status_happy_path() -> None:
     card = kf.make_card(status=kf.make_status("todo"))
     client = _staff_client()
 
@@ -89,7 +89,7 @@ def test_set_card_status_happy_path():
 
 
 @pytest.mark.django_db
-def test_set_card_status_illegal_transition_returns_envelope():
+def test_set_card_status_illegal_transition_returns_envelope() -> None:
     card = kf.make_card(status=kf.make_status("todo"))
     client = _staff_client()
 
@@ -108,7 +108,7 @@ def test_set_card_status_illegal_transition_returns_envelope():
 
 
 @pytest.mark.django_db
-def test_set_card_status_permission_denied_anonymous():
+def test_set_card_status_permission_denied_anonymous() -> None:
     card = kf.make_card(status=kf.make_status("todo"))
 
     payload = _run(
@@ -123,7 +123,7 @@ def test_set_card_status_permission_denied_anonymous():
 
 
 @pytest.mark.django_db
-def test_set_card_status_unknown_lookup_envelope_uses_all_sentinel():
+def test_set_card_status_unknown_lookup_envelope_uses_all_sentinel() -> None:
     """An unknown ``statusKey`` is an in-band ``unknown_lookup`` on ``__all__``."""
     card = kf.make_card(status=kf.make_status("todo"))
     client = _staff_client()
@@ -142,7 +142,7 @@ def test_set_card_status_unknown_lookup_envelope_uses_all_sentinel():
 
 
 @pytest.mark.django_db
-def test_set_card_status_form_errors_key_to_the_input_fields_sent():
+def test_set_card_status_form_errors_key_to_the_input_fields_sent() -> None:
     """A plain-form validation error keys to the GraphQL input field, never the form field.
 
     ``SetCardStatusForm`` declares ``status_key`` / ``actor_key``; the generated input
@@ -172,7 +172,7 @@ def test_set_card_status_form_errors_key_to_the_input_fields_sent():
 
 
 @pytest.mark.django_db
-def test_create_card_from_spec_happy_path():
+def test_create_card_from_spec_happy_path() -> None:
     version = kf.make_target_version("9.9.9")
     client = _staff_client()
 
@@ -196,7 +196,7 @@ def test_create_card_from_spec_happy_path():
 
 
 @pytest.mark.django_db
-def test_create_card_from_spec_duplicate_title_envelope():
+def test_create_card_from_spec_duplicate_title_envelope() -> None:
     version = kf.make_target_version("9.9.9")
     kf.make_card(title="Dup card")
     client = _staff_client()
@@ -217,7 +217,7 @@ def test_create_card_from_spec_duplicate_title_envelope():
 
 
 @pytest.mark.django_db
-def test_move_card_number_happy_path():
+def test_move_card_number_happy_path() -> None:
     kf.make_card(number=1)
     card = kf.make_card(number=2)
     kf.make_card(number=3)
@@ -237,7 +237,7 @@ def test_move_card_number_happy_path():
 
 
 @pytest.mark.django_db
-def test_move_card_number_out_of_range_envelope():
+def test_move_card_number_out_of_range_envelope() -> None:
     card = kf.make_card(number=1)
     client = _staff_client()
 
@@ -255,7 +255,7 @@ def test_move_card_number_out_of_range_envelope():
 
 
 @pytest.mark.django_db
-def test_add_dependency_happy_path():
+def test_add_dependency_happy_path() -> None:
     dependency = kf.make_card(number=1)
     dependent = kf.make_card(number=2)
     client = _staff_client()
@@ -276,7 +276,7 @@ def test_add_dependency_happy_path():
 
 
 @pytest.mark.django_db
-def test_add_dependency_invalid_kind_envelope():
+def test_add_dependency_invalid_kind_envelope() -> None:
     dependency = kf.make_card(number=1)
     dependent = kf.make_card(number=2)
     client = _staff_client()
@@ -300,7 +300,7 @@ def test_add_dependency_invalid_kind_envelope():
 
 
 @pytest.mark.django_db
-def test_remove_dependency_happy_path():
+def test_remove_dependency_happy_path() -> None:
     dependency = kf.make_card(number=1)
     dependent = kf.make_card(number=2)
     kf.make_card_reference(
@@ -326,7 +326,7 @@ def test_remove_dependency_happy_path():
 
 
 @pytest.mark.django_db
-def test_set_card_item_complete_happy_path():
+def test_set_card_item_complete_happy_path() -> None:
     item = kf.make_card_item(section=kf.make_section("scope"), is_complete=False)
     client = _staff_client()
 
@@ -344,7 +344,7 @@ def test_set_card_item_complete_happy_path():
 
 
 @pytest.mark.django_db
-def test_verify_card_item_happy_path():
+def test_verify_card_item_happy_path() -> None:
     item = kf.make_card_item(section=kf.make_section("scope"))
     client = _staff_client()
 
@@ -366,7 +366,7 @@ def test_verify_card_item_happy_path():
 
 
 @pytest.mark.django_db
-def test_verify_card_item_unknown_kind_envelope():
+def test_verify_card_item_unknown_kind_envelope() -> None:
     item = kf.make_card_item(section=kf.make_section("scope"))
     client = _staff_client()
 
@@ -383,7 +383,7 @@ def test_verify_card_item_unknown_kind_envelope():
 
 
 @pytest.mark.django_db
-def test_record_and_finish_work_attempt_happy_path():
+def test_record_and_finish_work_attempt_happy_path() -> None:
     card = kf.make_card()
     client = _staff_client()
 
@@ -414,7 +414,7 @@ def test_record_and_finish_work_attempt_happy_path():
 
 
 @pytest.mark.django_db
-def test_finish_work_attempt_unknown_outcome_envelope():
+def test_finish_work_attempt_unknown_outcome_envelope() -> None:
     attempt = kf.make_work_attempt(card=kf.make_card(), actor=kf.make_actor("maintainer"))
     client = _staff_client()
 
@@ -431,7 +431,7 @@ def test_finish_work_attempt_unknown_outcome_envelope():
 
 
 @pytest.mark.django_db
-def test_record_decision_happy_path():
+def test_record_decision_happy_path() -> None:
     client = _staff_client()
 
     payload = _run(
@@ -447,7 +447,7 @@ def test_record_decision_happy_path():
 
 
 @pytest.mark.django_db
-def test_set_card_files_predicted_happy_path():
+def test_set_card_files_predicted_happy_path() -> None:
     card = kf.make_card(status=kf.make_status("todo"))
     path = "django_strawberry_framework/mutations_ws3b_live_probe.py"
     client = _staff_client()
@@ -464,7 +464,7 @@ def test_set_card_files_predicted_happy_path():
 
 
 @pytest.mark.django_db
-def test_set_card_files_outside_root_envelope():
+def test_set_card_files_outside_root_envelope() -> None:
     card = kf.make_card(status=kf.make_status("todo"))
     client = _staff_client()
 
@@ -483,7 +483,7 @@ def test_set_card_files_outside_root_envelope():
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("bad", [0, False])
-def test_set_card_files_rejects_a_falsy_non_list_without_clearing_links(bad: object):
+def test_set_card_files_rejects_a_falsy_non_list_without_clearing_links(bad: object) -> None:
     # The ``paths`` JSON scalar admits any value; a falsy non-list is a malformed
     # input rejected by the service, never read as the empty list that clears links.
     card = kf.make_card(status=kf.make_status("todo"))
@@ -519,7 +519,7 @@ _ALLOWLISTED_PATH = "django_strawberry_framework/filters/base.py"
 
 
 @pytest.mark.django_db
-def test_set_card_files_changed_happy_path():
+def test_set_card_files_changed_happy_path() -> None:
     # A DONE card is the only legal home for ``kind=changed`` links; the factory
     # builds the required spec + glossary link and ships it through todo->wip->done.
     card = kf.make_card(status=kf.make_status("done"))
@@ -537,7 +537,7 @@ def test_set_card_files_changed_happy_path():
 
 
 @pytest.mark.django_db
-def test_set_card_files_unencodable_path_is_field_error_not_a_crash():
+def test_set_card_files_unencodable_path_is_field_error_not_a_crash() -> None:
     # ``paths`` is a ``JSON`` value whose strings the service stores in a text column; a
     # lone surrogate in one element is refused at decode, keyed to that element, before
     # the service writes a planned TrackedPath row (which SQLite cannot encode).
@@ -569,7 +569,7 @@ def test_set_card_files_unencodable_path_is_field_error_not_a_crash():
 
 
 @pytest.mark.django_db
-def test_set_card_files_changed_on_undone_card_envelope():
+def test_set_card_files_changed_on_undone_card_envelope() -> None:
     card = kf.make_card(status=kf.make_status("todo"))
     client = _staff_client()
 
@@ -588,7 +588,7 @@ def test_set_card_files_changed_on_undone_card_envelope():
 
 
 @pytest.mark.django_db
-def test_create_card_from_spec_number_branch_places_and_shifts():
+def test_create_card_from_spec_number_branch_places_and_shifts() -> None:
     """Passing an explicit ``number`` inserts the card at that slot and shifts neighbours up."""
     version = kf.make_target_version("9.9.9")
     kf.make_card(number=1, title="Board one")

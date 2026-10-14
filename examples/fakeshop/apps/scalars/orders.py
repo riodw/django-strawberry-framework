@@ -18,12 +18,16 @@ from . import models
 
 
 class ScalarSpecimenTagOrder(OrderSet):
+    """Orders ``ScalarSpecimenTag`` rows by its declared scalar columns."""
+
     class Meta:
         model = models.ScalarSpecimenTag
         fields = ["id", "label", "active"]
 
 
 class ScalarSpecimenOrder(OrderSet):
+    """Orders ``ScalarSpecimen`` rows by its declared scalar columns."""
+
     class Meta:
         model = models.ScalarSpecimen
         fields = [
@@ -42,6 +46,8 @@ class ScalarSpecimenOrder(OrderSet):
 
 
 class NullableScalarSpecimenOrder(OrderSet):
+    """Orders ``NullableScalarSpecimen`` rows by its declared scalar columns."""
+
     class Meta:
         model = models.NullableScalarSpecimen
         fields = [

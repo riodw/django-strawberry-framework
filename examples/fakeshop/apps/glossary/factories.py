@@ -54,10 +54,12 @@ def _next_order(manager: Manager[Model], **scope: object) -> int:
 
 
 def make_glossary_status(key: str = "shipped", **defaults: object) -> models.GlossaryStatus:
+    """Return the status lookup row for ``key``, creating it on first use."""
     return _lookup(models.GlossaryStatus, key, **defaults)
 
 
 def make_glossary_category(key: str = "filtering", **defaults: object) -> models.GlossaryCategory:
+    """Return the category lookup row for ``key``, creating it on first use."""
     return _lookup(models.GlossaryCategory, key, **defaults)
 
 
@@ -65,6 +67,7 @@ def make_glossary_term_link_kind(
     key: str = "see_also",
     **defaults: object,
 ) -> models.GlossaryTermLinkKind:
+    """Return the term-link kind lookup row for ``key``, creating it on first use."""
     return _lookup(models.GlossaryTermLinkKind, key, **defaults)
 
 
@@ -98,6 +101,7 @@ def make_glossary_alias(
     label: str | None = None,
     **fields: object,
 ) -> models.GlossaryAlias:
+    """Create an alias for ``term`` with a unique ``label`` and its normalized form."""
     term = term or make_glossary_term()
     label = label or f"{fake.word()} {_seq()}"
     fields.setdefault("normalized", label.lower())
@@ -111,6 +115,7 @@ def make_glossary_term_link(
     kind: models.GlossaryTermLinkKind | None = None,
     **fields: object,
 ) -> models.GlossaryTermLink:
+    """Create a link between two terms, auto-filling both ends, the kind and ``order``."""
     source_term = source_term or make_glossary_term()
     target_term = target_term or make_glossary_term()
     kind = kind or make_glossary_term_link_kind()
@@ -130,6 +135,7 @@ def make_glossary_category_membership(
     term: models.GlossaryTerm | None = None,
     **fields: object,
 ) -> models.GlossaryCategoryMembership:
+    """Create a category membership for ``term`` with the next ``order`` in the category."""
     category = category or make_glossary_category()
     term = term or make_glossary_term()
     fields.setdefault("order", _next_order(category.memberships))
@@ -145,6 +151,7 @@ def make_glossary_spec_mention(
     term: models.GlossaryTerm | None = None,
     **fields: object,
 ) -> models.GlossarySpecMention:
+    """Create a spec mention for ``term`` with a unique spec path and the next ``order``."""
     term = term or make_glossary_term()
     fields.setdefault("spec_path", f"docs/SPECS/spec-{_seq():03d}-{fake.slug()}.md")
     fields.setdefault("term_text", fake.word())
@@ -158,6 +165,7 @@ def make_glossary_source_link(
     term: models.GlossaryTerm | None = None,
     **fields: object,
 ) -> models.GlossarySourceLink:
+    """Create a source link for ``term`` with a generated label and URL and the next ``order``."""
     term = term or make_glossary_term()
     fields.setdefault("label", fake.sentence(nb_words=3).rstrip("."))
     fields.setdefault("target", fake.url())

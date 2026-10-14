@@ -5,7 +5,7 @@ rules still switched off and the `# pyright: ignore[...]` comments still in the 
 Each item is fixed at the root, gated (both passes 0 errors, full suite in one pass at 100% coverage), then committed.
 A split suite run on a tree other sessions are editing can drop modules from every part, so it is not a coverage gate.
 
-Progress: 23 done, 7 to do. Ignore comments: 927 lines (1897 at the start of 0.0.15's ignore sweep).
+Progress: 23 done, 7 to do. Ignore comments: 881 lines (1897 at the start of 0.0.15's ignore sweep).
 
 ## Pre-commit (`uvx pre-commit run --all-files`, 4ce779e1, clean clone)
 
@@ -72,7 +72,8 @@ Progress: 23 done, 7 to do. Ignore comments: 927 lines (1897 at the start of 0.0
 - [x] 10. `reportUnusedParameter` on everywhere: a parameter the caller passes by position is renamed `_name`, a
   fixture requested for its side effect moves to `@pytest.mark.usefixtures`, an optional Strawberry `root` / `info`
   or unread private parameter is removed, and `NestedConnectionStrategy.plan` takes its arguments positional-only;
-  98 suppression lines keep a parameter a caller binds by name
+  a parameter a caller binds by name is `del`eted in the body with its reason (`del info, required  # ...`), which
+  leaves no suppression
 
 ## To do: rules still off
 
@@ -154,8 +155,8 @@ strawberry_django does?
 
 ## Ignore breakdown
 
-Lines carrying `# pyright: ignore[...]`: 927 (1008 rule hits) in 177 files: tests 668, package 189, examples
-68, scripts 1, root 1.
+Lines carrying `# pyright: ignore[...]`: 881 (963 rule hits) in 175 files: tests 624, package 189, examples
+67, scripts 1.
 
 ### By cause
 
@@ -183,7 +184,6 @@ another rule evaluates to Unknown.
 | `reportExplicitAny` | 95 | 59 | 21 | 14 | 1 | 0 |
 | `reportIncompatibleVariableOverride` | 87 | 5 | 55 | 27 | 0 | 0 |
 | `reportIncompatibleMethodOverride` | 76 | 7 | 64 | 5 | 0 | 0 |
-| `reportUnusedParameter` | 46 | 0 | 44 | 1 | 0 | 1 |
 | `reportUnknownMemberType` | 47 | 29 | 16 | 2 | 0 | 0 |
 | `reportUnknownVariableType` | 33 | 22 | 11 | 0 | 0 | 0 |
 | `reportAssignmentType` | 31 | 0 | 30 | 1 | 0 | 0 |
@@ -198,8 +198,8 @@ another rule evaluates to Unknown.
 | `reportUndefinedVariable` | 7 | 0 | 7 | 0 | 0 | 0 |
 | `reportFunctionMemberAccess` | 6 | 4 | 1 | 1 | 0 | 0 |
 | `reportUnnecessaryComparison` | 6 | 5 | 1 | 0 | 0 | 0 |
+| `reportGeneralTypeIssues` | 6 | 0 | 6 | 0 | 0 | 0 |
 | `reportPropertyTypeMismatch` | 5 | 5 | 0 | 0 | 0 | 0 |
-| `reportGeneralTypeIssues` | 5 | 0 | 5 | 0 | 0 | 0 |
 | `reportUnknownParameterType` | 4 | 1 | 3 | 0 | 0 | 0 |
 | `reportInvalidTypeArguments` | 3 | 1 | 2 | 0 | 0 | 0 |
 | `reportOptionalMemberAccess` | 3 | 3 | 0 | 0 | 0 | 0 |

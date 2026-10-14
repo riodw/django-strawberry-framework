@@ -113,7 +113,7 @@ def _seed_nullable_specimen(**overrides: object) -> models.NullableScalarSpecime
     return models.NullableScalarSpecimen.objects.create(**overrides)
 
 
-def _seed_tag(label: str, *, active: bool = True):
+def _seed_tag(label: str, *, active: bool = True) -> models.ScalarSpecimenTag:
     """Seed a ``ScalarSpecimenTag`` with the given label and active flag."""
     return models.ScalarSpecimenTag.objects.create(label=label, active=active)
 
@@ -147,7 +147,7 @@ def _query_one_specimen() -> JSONObject:
 
 
 @pytest.mark.django_db
-def test_scalar_specimen_every_field_wire_format_over_http():
+def test_scalar_specimen_every_field_wire_format_over_http() -> None:
     _seed_specimen()
     row = _query_one_specimen()
 
@@ -176,7 +176,7 @@ def test_scalar_specimen_every_field_wire_format_over_http():
 
 
 @pytest.mark.django_db
-def test_scalar_specimen_bigint_negative_signed_round_trip():
+def test_scalar_specimen_bigint_negative_signed_round_trip() -> None:
     """Signed ``BigInt`` survives a negative value past the JS safe-integer floor."""
     _seed_specimen(label="negative", signed_big=-_SIGNED_BIG)
     row = _query_one_specimen()
@@ -184,7 +184,7 @@ def test_scalar_specimen_bigint_negative_signed_round_trip():
 
 
 @pytest.mark.django_db
-def test_scalar_specimen_bigint_zero_serializes_as_string():
+def test_scalar_specimen_bigint_zero_serializes_as_string() -> None:
     """Edge case: zero still serializes as the string ``"0"`` (not a JSON number)."""
     _seed_specimen(label="zero", signed_big=0, unsigned_big=0)
     row = _query_one_specimen()
@@ -193,7 +193,7 @@ def test_scalar_specimen_bigint_zero_serializes_as_string():
 
 
 @pytest.mark.django_db
-def test_filter_specimens_by_bigint_in_accepts_64bit_values():
+def test_filter_specimens_by_bigint_in_accepts_64bit_values() -> None:
     """A ``BigIntegerField`` ``in`` lookup uses the ``BigInt`` scalar.
 
     Regression for the generated CSV (``BaseInFilter``) element collapsing to
@@ -219,7 +219,7 @@ def test_filter_specimens_by_bigint_in_accepts_64bit_values():
 
 
 @pytest.mark.django_db
-def test_filter_specimens_by_bigint_in_drops_past_64bit_members_no_overflow():
+def test_filter_specimens_by_bigint_in_drops_past_64bit_members_no_overflow() -> None:
     """A past-signed-64-bit ``in`` member is dropped, never a raw backend ``OverflowError``.
 
     A scalar ``__in`` lookup binds each element directly, so a value past the column's
@@ -284,7 +284,7 @@ def test_filter_specimens_by_bigint_in_drops_past_64bit_members_no_overflow():
 def test_filter_specimens_explicit_empty_in_is_the_empty_set_on_every_column(
     leaf: str,
     valid: str,
-):
+) -> None:
     """An explicit ``in: []`` is the empty set on every column type, as Django's ``x__in=[]``.
 
     No rows; ``not`` of it every row; ``or`` with a real arm that arm, ``and`` with one no
@@ -319,7 +319,7 @@ def test_filter_specimens_explicit_empty_in_is_the_empty_set_on_every_column(
 
 
 @pytest.mark.django_db
-def test_filter_specimens_by_unsigned_bigint_in_drops_below_zero_members():
+def test_filter_specimens_by_unsigned_bigint_in_drops_below_zero_members() -> None:
     """A negative ``in`` member on a ``PositiveBigIntegerField`` is dropped by the LOWER-bound validator.
 
     ``unsigned_big`` is a ``PositiveBigIntegerField`` whose range validators reject
@@ -370,7 +370,7 @@ def test_filter_specimens_by_unsigned_bigint_in_drops_below_zero_members():
 
 
 @pytest.mark.django_db
-def test_filter_specimens_by_bigint_range_out_of_range_bound_no_overflow():
+def test_filter_specimens_by_bigint_range_out_of_range_bound_no_overflow() -> None:
     """A past-signed-64-bit ``range`` bound is range-adapted, never a raw backend ``OverflowError``.
 
     The ``range`` counterpart of
@@ -576,7 +576,7 @@ def test_scalar_specimen_by_signed_big_accepts_canonical_literals(
 
 
 @pytest.mark.django_db
-def test_scalar_specimen_self_referential_parent_children_over_http():
+def test_scalar_specimen_self_referential_parent_children_over_http() -> None:
     """Self-FK round-trip: parent + reverse-FK ``children`` traversal both work.
 
     Seeds a three-level chain (root -> middle -> leaf) and queries the full
@@ -635,9 +635,10 @@ def _introspect_field_types(type_name: str) -> dict[str, JSONObject]:
 
 
 @pytest.mark.django_db
-def test_scalar_specimen_introspects_bigint_scalar_for_both_fields():
-    """Both halves of the ``BigInt`` converter table entry - signed and unsigned -
-    introspect correctly in both shapes (``NON_NULL`` and nullable ``SCALAR``).
+def test_scalar_specimen_introspects_bigint_scalar_for_both_fields() -> None:
+    """Both halves of the ``BigInt`` converter entry introspect correctly in both shapes.
+
+    Signed and unsigned alike, as ``NON_NULL`` and as nullable ``SCALAR``.
     """
     required_fields = _introspect_field_types("ScalarSpecimenType")
     nullable_fields = _introspect_field_types("NullableScalarSpecimenType")
@@ -658,7 +659,7 @@ def test_scalar_specimen_introspects_bigint_scalar_for_both_fields():
 
 
 @pytest.mark.django_db
-def test_scalar_specimen_introspects_json_scalar_in_both_shapes():
+def test_scalar_specimen_introspects_json_scalar_in_both_shapes() -> None:
     """``payload`` introspects as ``JSON`` in both non-null and nullable shapes.
 
     Pins the ``JSONField -> strawberry.scalars.JSON`` converter table entry at
@@ -681,7 +682,7 @@ def test_scalar_specimen_introspects_json_scalar_in_both_shapes():
 
 
 @pytest.mark.django_db
-def test_scalar_specimen_id_maps_big_auto_pk_to_int():
+def test_scalar_specimen_id_maps_big_auto_pk_to_int() -> None:
     """``DEFAULT_AUTO_FIELD = BigAutoField`` still publishes ``id`` as GraphQL ``Int``.
 
     Fakeshop's settings pin ``django.db.models.BigAutoField``, so ``ScalarSpecimenType.id``
@@ -693,7 +694,7 @@ def test_scalar_specimen_id_maps_big_auto_pk_to_int():
 
 
 @pytest.mark.django_db
-def test_nullable_scalar_specimen_all_null_wire_format_over_http():
+def test_nullable_scalar_specimen_all_null_wire_format_over_http() -> None:
     """Every nullable scalar serializes as JSON ``null`` when the column is NULL.
 
     Pins the nullable-branch wire format for every entry in
@@ -752,7 +753,7 @@ def test_nullable_scalar_specimen_all_null_wire_format_over_http():
 
 
 @pytest.mark.django_db
-def test_nullable_scalar_specimen_partner_fk_linkage_over_http():
+def test_nullable_scalar_specimen_partner_fk_linkage_over_http() -> None:
     """Cross-model FK round-trip: ``NullableScalarSpecimen.partner -> ScalarSpecimen``.
 
     Exercises forward-FK selection across a model boundary inside the same
@@ -786,7 +787,7 @@ def test_nullable_scalar_specimen_partner_fk_linkage_over_http():
 
 
 @pytest.mark.django_db
-def test_scalar_specimen_nullable_partners_reverse_relation_over_http():
+def test_scalar_specimen_nullable_partners_reverse_relation_over_http() -> None:
     """Reverse-FK exposure: ``ScalarSpecimen.nullable_partners``.
 
     Two ``NullableScalarSpecimen`` rows point at the same ``ScalarSpecimen``;
@@ -820,7 +821,7 @@ def test_scalar_specimen_nullable_partners_reverse_relation_over_http():
 
 
 @pytest.mark.django_db
-def test_scalars_set_null_ondelete_detaches_partner_in_http_query():
+def test_scalars_set_null_ondelete_detaches_partner_in_http_query() -> None:
     """Deleting the partner target detaches the source row via ``on_delete=SET_NULL``.
 
     Pins ``NullableScalarSpecimen.partner``'s ``SET_NULL`` ondelete
@@ -892,7 +893,7 @@ def test_scalars_set_null_ondelete_detaches_partner_in_http_query():
 
 
 @pytest.mark.django_db
-def test_nullable_self_fk_dangling_parent_resolves_to_null_over_http():
+def test_nullable_self_fk_dangling_parent_resolves_to_null_over_http() -> None:
     """A nullable self-FK whose target was deleted under disabled constraints is ``null``.
 
     ``ScalarSpecimen.parent`` stays populated against a missing row. The wire is
@@ -930,7 +931,7 @@ def test_nullable_self_fk_dangling_parent_resolves_to_null_over_http():
 
 
 @pytest.mark.django_db
-def test_scalar_specimen_bigint_input_decimal_string_argument_over_http():
+def test_scalar_specimen_bigint_input_decimal_string_argument_over_http() -> None:
     """A ``BigInt!`` argument provided as a decimal-string literal parses correctly.
 
     Pins ``BigInt.parse_value``'s decimal-string acceptance end-to-end:
@@ -965,7 +966,7 @@ def test_scalar_specimen_bigint_input_decimal_string_argument_over_http():
 
 
 @pytest.mark.django_db
-def test_scalar_specimen_bigint_input_int_literal_argument_over_http():
+def test_scalar_specimen_bigint_input_int_literal_argument_over_http() -> None:
     """A ``BigInt!`` argument provided as a JSON-int literal parses correctly.
 
     Pins ``BigInt.parse_value``'s int acceptance end-to-end: when the
@@ -997,7 +998,7 @@ def test_scalar_specimen_bigint_input_int_literal_argument_over_http():
 
 
 @pytest.mark.django_db
-def test_scalars_optimizer_select_related_on_self_fk_in_http_query():
+def test_scalars_optimizer_select_related_on_self_fk_in_http_query() -> None:
     """Forward self-FK selection collapses to one SQL query under the optimizer.
 
     Pins ``DjangoOptimizerExtension``'s ``select_related`` plan against a
@@ -1036,7 +1037,7 @@ def test_scalars_optimizer_select_related_on_self_fk_in_http_query():
 
 
 @pytest.mark.django_db
-def test_scalars_optimizer_prefetch_related_on_reverse_self_fk_in_http_query():
+def test_scalars_optimizer_prefetch_related_on_reverse_self_fk_in_http_query() -> None:
     """Reverse self-FK selection collapses to two SQL queries via ``prefetch_related``.
 
     Pins the ``DjangoOptimizerExtension`` ``prefetch_related`` plan against
@@ -1073,7 +1074,7 @@ def test_scalars_optimizer_prefetch_related_on_reverse_self_fk_in_http_query():
 
 
 @pytest.mark.django_db
-def test_scalars_optimizer_fk_id_elision_for_self_fk_in_http_query():
+def test_scalars_optimizer_fk_id_elision_for_self_fk_in_http_query() -> None:
     """``parent { id }`` is served from ``ScalarSpecimen.parent_id`` with no JOIN.
 
     Pins the ``B2`` FK-id elision behavior end-to-end against a self-
@@ -1127,7 +1128,7 @@ def test_scalars_optimizer_fk_id_elision_for_self_fk_in_http_query():
 
 
 @pytest.mark.django_db
-def test_scalars_optimizer_fk_id_elision_query_count_is_flat_across_row_counts():
+def test_scalars_optimizer_fk_id_elision_query_count_is_flat_across_row_counts() -> None:
     """An id-only forward FK stays one query as the elided rows multiply.
 
     The load-bearing property of FK-id elision is that it removes a query,
@@ -1205,7 +1206,7 @@ def test_scalars_optimizer_fk_id_elision_query_count_is_flat_across_row_counts()
 
 
 @pytest.mark.django_db
-def test_scalars_optimizer_no_fk_id_elision_when_extra_scalar_selected_in_http_query():
+def test_scalars_optimizer_no_fk_id_elision_when_extra_scalar_selected_in_http_query() -> None:
     """Selecting any target scalar beyond ``id`` forces the normal JOIN path.
 
     Pins B2's "elision opt-out" rule end-to-end: as soon as the consumer
@@ -1249,7 +1250,7 @@ def test_scalars_optimizer_no_fk_id_elision_when_extra_scalar_selected_in_http_q
 
 
 @pytest.mark.django_db
-def test_scalars_optimizer_fk_id_elision_for_each_alias_in_http_query():
+def test_scalars_optimizer_fk_id_elision_for_each_alias_in_http_query() -> None:
     """Duplicate aliases on an id-only forward FK both resolve from the source FK column.
 
     Pins B2/O4 behavior end-to-end: selecting the same FK twice under two
@@ -1297,7 +1298,7 @@ def test_scalars_optimizer_fk_id_elision_for_each_alias_in_http_query():
 
 
 @pytest.mark.django_db
-def test_scalars_optimizer_fk_id_elision_does_not_leak_to_sibling_root_in_http_query():
+def test_scalars_optimizer_fk_id_elision_does_not_leak_to_sibling_root_in_http_query() -> None:
     """FK-id elision on one root branch does not poison a sibling branch.
 
     The first root selects ``ScalarSpecimen.parent { id }`` and should use
@@ -1346,7 +1347,9 @@ def test_scalars_optimizer_fk_id_elision_does_not_leak_to_sibling_root_in_http_q
 
 
 @pytest.mark.django_db
-def test_scalars_optimizer_o6_downgrade_to_prefetch_for_custom_get_queryset_in_http_query():
+def test_scalars_optimizer_o6_downgrade_to_prefetch_for_custom_get_queryset_in_http_query() -> (
+    None
+):
     """O6 / B2: forward FK to a target with custom ``get_queryset`` downgrades to ``Prefetch``.
 
     When the target type declares ``get_queryset(cls, queryset, info)``, the
@@ -1394,7 +1397,7 @@ def test_scalars_optimizer_o6_downgrade_to_prefetch_for_custom_get_queryset_in_h
 
 
 @pytest.mark.django_db
-def test_scalars_custom_get_queryset_filters_inactive_tag_to_null_in_http_query():
+def test_scalars_custom_get_queryset_filters_inactive_tag_to_null_in_http_query() -> None:
     """A specimen pointing at an inactive tag resolves ``tag`` to ``null``.
 
     Pins the consumer-visible effect of ``ScalarSpecimenTagType.get_queryset``
@@ -1434,7 +1437,7 @@ def test_scalars_custom_get_queryset_filters_inactive_tag_to_null_in_http_query(
 
 
 @pytest.mark.django_db
-def test_scalars_tagged_specimens_reverse_fk_in_http_query():
+def test_scalars_tagged_specimens_reverse_fk_in_http_query() -> None:
     """The reverse-FK ``ScalarSpecimenTag.tagged_specimens`` lists every linked specimen.
 
     Distinct from the existing reverse-FK shapes on ``ScalarSpecimenType``
@@ -1469,7 +1472,7 @@ def test_scalars_tagged_specimens_reverse_fk_in_http_query():
 
 
 @pytest.mark.django_db
-def test_scalars_optimizer_coerces_manager_to_queryset_in_http_query():
+def test_scalars_optimizer_coerces_manager_to_queryset_in_http_query() -> None:
     """A plain ``@strawberry.field`` resolver returning a bare ``Manager`` is still optimized.
 
     Pins the optimizer's defensive ``Manager``-coercion code path:
@@ -1521,7 +1524,7 @@ def test_scalars_optimizer_coerces_manager_to_queryset_in_http_query():
 
 
 @pytest.mark.django_db
-def test_override_specimen_consumer_field_overrides_resolve_over_http():
+def test_override_specimen_consumer_field_overrides_resolve_over_http() -> None:
     """The override corners plus the ``auto`` corner resolve correctly over ``/graphql/``.
 
     ``OverriddenScalarSpecimenType`` (``apps/scalars/schema.py``) demonstrates the

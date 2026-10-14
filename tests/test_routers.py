@@ -118,22 +118,30 @@ import threading
 import time
 from collections import defaultdict
 from collections.abc import (
+    AsyncGenerator,
     AsyncIterator,
     Awaitable,
     Callable,
+    Coroutine,
     Iterable,
     Iterator,
     Mapping,
 )
 from io import BytesIO
+from logging import LogRecord
 from pathlib import Path
-from types import CoroutineType, SimpleNamespace
+from types import CoroutineType, ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Any, NoReturn, Protocol, TypeAlias, TypeGuard
 from urllib.parse import urlparse
 
 import pytest
 import strawberry
-from asgiref.typing import ASGIReceiveCallable, ASGISendCallable, HTTPScope, WebSocketScope
+from asgiref.typing import (
+    ASGIReceiveCallable,
+    ASGISendCallable,
+    HTTPScope,
+    WebSocketScope,
+)
 from channels.auth import AuthMiddleware
 from channels.consumer import AsyncConsumer
 from channels.db import database_sync_to_async
@@ -154,6 +162,7 @@ from django.urls import URLPattern, path
 from graphql import GraphQLError
 from graphql_client import JSONObject
 from strawberry.extensions import SchemaExtension
+from strawberry.types import ExecutionResult
 from strawberry.types.execution import ExecutionResult as StrawberryExecutionResult
 from typing_extensions import override
 
@@ -274,13 +283,13 @@ class _OperationController:
     operation's real task is observable.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.started = asyncio.Event()
         self.gates: defaultdict[int, asyncio.Event] = defaultdict(asyncio.Event)
         self.emitted: list[str] = []
         self.finalized = False
 
-    def release(self, index: int):
+    def release(self, index: int) -> None:
         """Let the operation produce its ``index``-th (0-based) result."""
         self.gates[index].set()
 
@@ -305,22 +314,22 @@ def _clear_operation_controllers() -> Iterator[None]:
     _CONTROLLERS.clear()
 
 
-def _controller(channel: str):
+def _controller(channel: str) -> _OperationController:
     """Register and return a fresh controller for ``channel``."""
     controller = _OperationController()
     _CONTROLLERS[channel] = controller
     return controller
 
 
-def _controlled_subscription(channel: str):
+def _controlled_subscription(channel: str) -> str:
     return f'subscription {{ controlled(channel: "{channel}") }}'
 
 
-def _burst_subscription(channel: str, count: int = _BURST_RESULTS):
+def _burst_subscription(channel: str, count: int = _BURST_RESULTS) -> str:
     return f'subscription {{ burst(channel: "{channel}", count: {count}) }}'
 
 
-def _controlled_query(channel: str):
+def _controlled_query(channel: str) -> str:
     return f'{{ controlledPing(channel: "{channel}") }}'
 
 
@@ -340,6 +349,8 @@ def _scope_actor(request: ChannelsRequestAdapter) -> AbstractUser | AnonymousUse
 
 @strawberry.type
 class Query:
+    """The root query the router rows mount: a ping plus the session-actor probes."""
+
     @strawberry.field
     def ping(self) -> str:
         return "pong"
@@ -410,15 +421,18 @@ class EmittedRow:
 
     @strawberry.field
     def boom(self) -> str | None:
-        """Raise a plain exception carrying a sensitive string. Nullable, so the
-        error stays attributed to this field's own ``path`` instead of nulling the
-        whole event.
+        """Raise a plain exception carrying a sensitive string.
+
+        Nullable, so the error stays attributed to this field's own ``path`` instead of
+        nulling the whole event.
         """
         raise ValueError(_EVENT_SENSITIVE)
 
 
 @strawberry.type
 class Subscription:
+    """The subscription root the router rows drive: streams whose events carry failing fields."""
+
     @strawberry.subscription
     async def leaky(self, count: int = 2) -> AsyncIterator[EmittedRow]:
         """Emit ``count`` events, each of which fails one of its own fields.
@@ -519,7 +533,7 @@ class _GatedOperationExtension(SchemaExtension):
     """
 
     @override
-    async def on_operation(self):
+    async def on_operation(self) -> AsyncIterator[None]:
         controller = _CONTROLLERS.get(_GATED_EXTENSION_CHANNEL)
         if controller is not None:
             controller.started.set()
@@ -549,7 +563,7 @@ GATED_SCHEMA = strawberry.Schema(
 _LOGOUT_PROBE_PATH = "probe/logout/"
 
 
-def _logout_probe(request: HttpRequest):
+def _logout_probe(request: HttpRequest) -> JsonResponse:
     """Log the request's session out, reporting what it saw before and after.
 
     Django's own ``logout`` - not an ORM stand-in: it flushes the session record
@@ -576,7 +590,7 @@ def _logout_probe(request: HttpRequest):
 urlpatterns = [path(_LOGOUT_PROBE_PATH, _logout_probe)]
 
 
-def _router_class():
+def _router_class() -> type[routers_module.DjangoGraphQLProtocolRouter]:
     from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter
 
     return DjangoGraphQLProtocolRouter
@@ -605,7 +619,7 @@ class _RecordingDjangoApplication:
     async def __call__(
         self,
         scope: HTTPScope,
-        receive: ASGIReceiveCallable,
+        _receive: ASGIReceiveCallable,
         send: ASGISendCallable,
     ) -> None:
         self.paths.append(scope["path"])
@@ -634,7 +648,7 @@ async def _unreachable_application(
 class _ConsumerState:
     """The state the revalidation helpers read off a consumer: revocation, scope, window."""
 
-    def __init__(self, scope: dict[str, object] | None = None, window: float = 0.0):
+    def __init__(self, scope: dict[str, object] | None = None, window: float = 0.0) -> None:
         self._revocation = consumers_module._ConnectionRevocation()
         self.scope: dict[str, object] = {} if scope is None else scope
         self.revalidation_window = window
@@ -650,7 +664,10 @@ class _UnreadRevocationOwner:
 
 # basedpyright: verbatim forward to DjangoGraphQLProtocolRouter.__init__ (rows pass deliberately
 # unusable values); object fails its typed params
-def _router(schema: strawberry.Schema = SCHEMA, **kwargs: Any):  # pyright: ignore[reportExplicitAny]
+def _router(
+    schema: strawberry.Schema = SCHEMA,
+    **kwargs: Any,  # pyright: ignore[reportExplicitAny]
+) -> routers_module.DjangoGraphQLProtocolRouter:
     """Build the router, supplying the required ``django_application`` once.
 
     A caller that cares about the HTTP value passes its own instance; a caller
@@ -667,7 +684,7 @@ def _router(schema: strawberry.Schema = SCHEMA, **kwargs: Any):  # pyright: igno
 # ---------------------------------------------------------------------------
 
 
-def unwrap_host_validator(ws_app: object):
+def unwrap_host_validator(ws_app: object) -> object:
     """Assert the OUTERMOST WS layer is the package's Host validator; return its child.
 
     The layer spec-046 Decision 19 adds outside Channels' origin check. Asserted by
@@ -679,7 +696,7 @@ def unwrap_host_validator(ws_app: object):
     return ws_app.application
 
 
-def unwrap_origin_validator(ws_app: object):
+def unwrap_origin_validator(ws_app: object) -> object:
     """Assert the WS layer is the ``OriginValidator`` instance; return its child.
 
     ``AllowedHostsOriginValidator`` is a factory FUNCTION - the isinstance
@@ -690,7 +707,7 @@ def unwrap_origin_validator(ws_app: object):
     return ws_app.application
 
 
-def unwrap_auth_stack(app: object):
+def unwrap_auth_stack(app: object) -> object:
     """Assert the ``AuthMiddlewareStack`` layers in order; return the inner application.
 
     The stack is ``CookieMiddleware(SessionMiddleware(AuthMiddleware(inner)))``;
@@ -731,7 +748,7 @@ def _ws_url_router(router: ProtocolTypeRouter) -> URLRouter:
 # ---------------------------------------------------------------------------
 
 
-def _graphql_post(application: ProtocolTypeRouter, query: str):
+def _graphql_post(application: ProtocolTypeRouter, query: str) -> HttpCommunicator:
     """A well-formed GraphQL POST envelope aimed at ``/graphql`` over HTTP.
 
     The envelope is still spelled in full because the HTTP delegation test's
@@ -754,7 +771,7 @@ def _ws_communicator(
     cookie: str | None = None,
     subprotocol: str = _TRANSPORT_WS,
     path: str = "/graphql",
-):
+) -> WebsocketCommunicator:
     """Build a handshake-ready ``WebsocketCommunicator`` for the WS branch.
 
     An optional ``cookie`` rides the handshake headers, which is how a real
@@ -781,7 +798,7 @@ async def _open_ws(
     *,
     cookie: str | None = None,
     subprotocol: str = _TRANSPORT_WS,
-):
+) -> AsyncGenerator[WebsocketCommunicator, None]:
     """Open ONE acknowledged GraphQL socket and yield the communicator.
 
     handshake -> connection_init -> connection_ack, then the caller runs as many
@@ -810,7 +827,12 @@ def _offered_protocol(communicator: WebsocketCommunicator) -> str:
     return next(iter(subprotocols))
 
 
-async def _send_operation(communicator: WebsocketCommunicator, query: str, *, op_id: str = "1"):
+async def _send_operation(
+    communicator: WebsocketCommunicator,
+    query: str,
+    *,
+    op_id: str = "1",
+) -> None:
     """Send ONE operation frame and return without reading anything back.
 
     The half of ``_ws_operation`` the outbound-checkpoint rows need: their
@@ -824,7 +846,12 @@ async def _send_operation(communicator: WebsocketCommunicator, query: str, *, op
     )
 
 
-async def _ws_operation(communicator: WebsocketCommunicator, query: str, *, op_id: str = "1"):
+async def _ws_operation(
+    communicator: WebsocketCommunicator,
+    query: str,
+    *,
+    op_id: str = "1",
+) -> JSONObject:
     """Run ONE operation round trip on an open socket; return its first frame.
 
     The protocol is read back off the communicator's own scope, so a caller
@@ -847,7 +874,11 @@ async def _ws_operation(communicator: WebsocketCommunicator, query: str, *, op_i
     return message
 
 
-async def _ws_graphql_data(application: ProtocolTypeRouter, query: str, cookie: str | None = None):
+async def _ws_graphql_data(
+    application: ProtocolTypeRouter,
+    query: str,
+    cookie: str | None = None,
+) -> JSONObject:
     """Run one graphql-transport-ws operation on its own socket; return ``data``.
 
     The single-operation shape (open, one operation, close) three tests still
@@ -893,7 +924,7 @@ async def _drain_until_close(
         frames.append(json.loads(message["text"]))
 
 
-def _assert_revoked_close(closed: dict[str, object]):
+def _assert_revoked_close(closed: dict[str, object]) -> None:
     """Assert the ONE documented connection-level revocation close.
 
     Connection-scoped revocation means there is no per-protocol rejection shape
@@ -953,7 +984,7 @@ def _make_user_and_session(
 
 
 @database_sync_to_async
-def _flush_the_session(_user: AbstractBaseUser, session_key: str):
+def _flush_the_session(_user: AbstractBaseUser, session_key: str) -> None:
     """Revoke the session out of band: clear it and DELETE its row.
 
     What ``logout`` does on any server-side engine, so this single mutator covers
@@ -966,7 +997,7 @@ def _flush_the_session(_user: AbstractBaseUser, session_key: str):
 
 
 @database_sync_to_async
-def _session_row_still_exists(session_key: str):
+def _session_row_still_exists(session_key: str) -> bool:
     """Whether the configured engine still holds a record for ``session_key``.
 
     The durability half of the same-socket logout rows: they assert what the wire
@@ -980,7 +1011,7 @@ def _session_row_still_exists(session_key: str):
 
 
 @database_sync_to_async
-def _disable_the_user(user: AbstractBaseUser, _session_key: str):
+def _disable_the_user(user: AbstractBaseUser, _session_key: str) -> None:
     """Disable the actor out of band; the session row itself stays valid.
 
     ``ModelBackend.user_can_authenticate`` then rejects the load, so
@@ -991,7 +1022,7 @@ def _disable_the_user(user: AbstractBaseUser, _session_key: str):
 
 
 @database_sync_to_async
-def _rotate_the_password(user: AbstractBaseUser, _session_key: str):
+def _rotate_the_password(user: AbstractBaseUser, _session_key: str) -> None:
     """Rotate the actor's password out of band, invalidating the session auth hash.
 
     The shape a password change (or a ``logout`` elsewhere) produces:
@@ -1003,7 +1034,7 @@ def _rotate_the_password(user: AbstractBaseUser, _session_key: str):
 
 
 @database_sync_to_async
-def _rename_and_promote_the_user(user: AbstractBaseUser, username: str):
+def _rename_and_promote_the_user(user: AbstractBaseUser, username: str) -> None:
     """Change two identity fields the next operation can read back.
 
     Neither field feeds ``get_session_auth_hash`` (that is derived from the
@@ -1016,7 +1047,7 @@ def _rename_and_promote_the_user(user: AbstractBaseUser, username: str):
     user.save(update_fields=["username", "is_staff"])
 
 
-def _poison_the_session_store(monkeypatch: pytest.MonkeyPatch):
+def _poison_the_session_store(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make the revalidation's fresh-store resolver raise on every call.
 
     One poisoning target for three rows: it proves the fail-closed degrade when
@@ -1031,17 +1062,17 @@ def _poison_the_session_store(monkeypatch: pytest.MonkeyPatch):
     patching the module attribute is what the coroutine reads.
     """
 
-    def _raise():
+    def _raise() -> NoReturn:
         raise RuntimeError("poisoned session store")
 
     monkeypatch.setattr(session_store_module, "session_store_class", _raise)
 
 
-def _package_logger_records(caplog: pytest.LogCaptureFixture):
+def _package_logger_records(caplog: pytest.LogCaptureFixture) -> list[LogRecord]:
     return [record for record in caplog.records if record.name == "django_strawberry_framework"]
 
 
-def _actor_lease(consumer: AsyncConsumer):
+def _actor_lease(consumer: AsyncConsumer) -> asyncio.Lock:
     """The ``asyncio.Lock`` object serving as this connection's actor lease.
 
     Literally the expression the production checkpoints acquire, not a second one
@@ -1055,7 +1086,7 @@ def _actor_lease(consumer: AsyncConsumer):
     return session_store_module.actor_lease(consumer.scope)  # pyright: ignore[reportArgumentType]
 
 
-def _actor_lease_held(consumer: AsyncConsumer):
+def _actor_lease_held(consumer: AsyncConsumer) -> bool:
     """Whether ANYONE holds this connection's shared actor lease.
 
     The lease lives on the ASGI scope rather than on the consumer instance, which
@@ -1098,7 +1129,7 @@ def _message_loop_task(consumer: "GraphQLWSConsumer") -> asyncio.Task[object] | 
 class _RevalidationProbe:
     """Count the revalidation's session reads, and optionally hold or poison one."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.reads = 0
         self.entered = asyncio.Event()
         self.hold: asyncio.Event | None = None
@@ -1113,7 +1144,7 @@ def _scope_session_key(scope: Mapping[str, object]) -> str | None:
     return session.session_key
 
 
-def _instrument_revalidation(monkeypatch: pytest.MonkeyPatch):
+def _instrument_revalidation(monkeypatch: pytest.MonkeyPatch) -> _RevalidationProbe:
     """Count every session read the revalidation performs; return the probe.
 
     The read is the whole cost of the feature, so several rows assert its exact
@@ -1145,7 +1176,7 @@ def _instrument_revalidation(monkeypatch: pytest.MonkeyPatch):
     probe = _RevalidationProbe()
     original = consumers_module._refreshed_actor
 
-    async def counting_refreshed_actor(scope: Mapping[str, object]):
+    async def counting_refreshed_actor(scope: Mapping[str, object]) -> AnonymousUser | object:
         probe.reads += 1
         probe.entered.set()
         if probe.hold is not None and probe.hold_key in (None, _scope_session_key(scope)):
@@ -1177,14 +1208,14 @@ class _CloseProbe:
     must not be recorded as a completed close.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.calls: list[tuple[int | None, str | None]] = []
         self.entered = asyncio.Event()
         self.park: asyncio.Event | None = None
         self.failures = 0
 
 
-def _instrument_consumer_close(monkeypatch: pytest.MonkeyPatch):
+def _instrument_consumer_close(monkeypatch: pytest.MonkeyPatch) -> _CloseProbe:
     """Observe - and optionally park or break - the close the revocation performs.
 
     Patched on Channels' own ``AsyncWebsocketConsumer.close`` rather than on any
@@ -1205,7 +1236,7 @@ def _instrument_consumer_close(monkeypatch: pytest.MonkeyPatch):
         consumer: AsyncWebsocketConsumer,
         code: int | None = None,
         reason: str | None = None,
-    ):
+    ) -> None:
         probe.calls.append((code, reason))
         probe.entered.set()
         if probe.park is not None:
@@ -1236,11 +1267,11 @@ class _TransportLog:
     position in it is the only reference point the rows need.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.messages: list[dict[str, object]] = []
 
     @property
-    def frame_types(self):
+    def frame_types(self) -> list[str]:
         """The type of every JSON frame committed, in order."""
         return [
             json.loads(_sent_text(message))["type"]
@@ -1265,7 +1296,7 @@ class _TransportLog:
         )
 
 
-def _record_the_transport(monkeypatch: pytest.MonkeyPatch):
+def _record_the_transport(monkeypatch: pytest.MonkeyPatch) -> _TransportLog:
     """Record every ASGI message the consumer commits; return the log.
 
     Patched on Channels' own ``AsyncConsumer.send`` - the one call every outbound
@@ -1282,7 +1313,7 @@ def _record_the_transport(monkeypatch: pytest.MonkeyPatch):
     log = _TransportLog()
     native = AsyncConsumer.send
 
-    async def recording_send(consumer: AsyncConsumer, message: dict[str, object]):
+    async def recording_send(consumer: AsyncConsumer, message: dict[str, object]) -> None:
         log.messages.append(message)
         await native(consumer, message)
 
@@ -1293,12 +1324,12 @@ def _record_the_transport(monkeypatch: pytest.MonkeyPatch):
 class _LoopSentinel:
     """A tick count from a task nobody involved in the operation under test knows about."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.ticks = 0
 
 
 @contextlib.asynccontextmanager
-async def _loop_sentinel():
+async def _loop_sentinel() -> AsyncGenerator[_LoopSentinel, None]:
     """Run an independent ticking task for the duration of the block.
 
     The liveness half of the stop-protocol rows. A revoked operation that cannot be
@@ -1311,7 +1342,7 @@ async def _loop_sentinel():
     """
     sentinel = _LoopSentinel()
 
-    async def tick():
+    async def tick() -> None:
         while True:
             await asyncio.sleep(0)
             sentinel.ticks += 1
@@ -1328,7 +1359,7 @@ async def _loop_sentinel():
 class _OutboundGateProbe:
     """What the outbound checkpoint did: who entered, whose lease, and when it sent."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.entries: list[object] = []
         self.frame_types: list[object] = []
         self.from_run_task: list[bool] = []
@@ -1339,7 +1370,7 @@ class _OutboundGateProbe:
         self.hold_before_send: asyncio.Event | None = None
 
 
-def _record_outbound_gate(monkeypatch: pytest.MonkeyPatch):
+def _record_outbound_gate(monkeypatch: pytest.MonkeyPatch) -> _OutboundGateProbe:
     """Observe the outbound checkpoint from the outside; return the probe.
 
     Every observation is of the real production objects at the real moments the
@@ -1389,7 +1420,7 @@ def _record_outbound_gate(monkeypatch: pytest.MonkeyPatch):
         websocket: "_GatedSocket",
         message: dict[str, object],
         send: Callable[[dict[str, object]], Awaitable[None]],
-    ):
+    ) -> None:
         from strawberry.channels import GraphQLWSConsumer
         from strawberry.channels.handlers.ws_handler import ChannelsWebSocketAdapter
 
@@ -1404,7 +1435,7 @@ def _record_outbound_gate(monkeypatch: pytest.MonkeyPatch):
         probe.tasks.append(operation_task)
         probe.consumers.append(consumer)
 
-        async def observing_send(payload: dict[str, object]):
+        async def observing_send(payload: dict[str, object]) -> None:
             probe.sends_under_lease.append(_actor_lease_held(consumer))
             probe.reached_send.set()
             if probe.hold_before_send is not None:
@@ -1417,7 +1448,7 @@ def _record_outbound_gate(monkeypatch: pytest.MonkeyPatch):
     return probe
 
 
-async def _reached(event: asyncio.Event, message: str, *, timeout: float = 10):
+async def _reached(event: asyncio.Event, message: str, *, timeout: float = 10) -> None:
     """Await one controller/probe ``Event``, failing loudly instead of hanging.
 
     Every wait in these rows is for a state the production code is about to
@@ -1440,7 +1471,7 @@ async def _wait_until(
     *,
     tries: int = 2500,
     delay: float = 0.002,
-):
+) -> None:
     """Yield to the event loop until ``predicate()`` holds, or fail loudly.
 
     Used only where the awaited state is something the production code appends to
@@ -1465,7 +1496,7 @@ async def _wait_until(
     raise AssertionError(describe())
 
 
-async def _logout_through_a_real_second_request(session_key: str, username: str):
+async def _logout_through_a_real_second_request(session_key: str, username: str) -> None:
     """Revoke the socket's session through a REAL second HTTP request.
 
     Django's own ``logout``, reached over ``AsyncClient`` against this module's
@@ -1496,7 +1527,7 @@ async def _logout_through_a_real_second_request(session_key: str, username: str)
 # ---------------------------------------------------------------------------
 
 
-def test_router_is_a_protocol_type_router_mapping_exactly_http_and_websocket():
+def test_router_is_a_protocol_type_router_mapping_exactly_http_and_websocket() -> None:
     """A true ``ProtocolTypeRouter`` whose mapping carries exactly the two protocols.
 
     Framed as a current-shape parity assertion (upstream maps exactly these
@@ -1510,7 +1541,7 @@ def test_router_is_a_protocol_type_router_mapping_exactly_http_and_websocket():
     assert set(router.application_mapping) == {"http", "websocket"}
 
 
-def test_http_branch_is_the_supplied_django_application_by_identity():
+def test_http_branch_is_the_supplied_django_application_by_identity() -> None:
     """Spec-046 row 8: ``"http"`` IS the supplied object, with no wrapper.
 
     Object identity, not structural equality: after the protocol split there is
@@ -1533,7 +1564,7 @@ def test_http_branch_is_the_supplied_django_application_by_identity():
     assert not isinstance(http_branch, (CookieMiddleware, URLRouter, OriginValidator))
 
 
-def test_construction_rejects_an_omitted_or_unusable_django_application():
+def test_construction_rejects_an_omitted_or_unusable_django_application() -> None:
     """Spec-046 row 10: omission is ``TypeError``; unusable is ``ConfigurationError``.
 
     Omission fails as a required parameter should - Python's own signature
@@ -1563,7 +1594,7 @@ def test_construction_rejects_an_omitted_or_unusable_django_application():
         assert "DjangoGraphQLView" in message
 
 
-def test_graphql_http_consumer_left_the_router_module_entirely():
+def test_graphql_http_consumer_left_the_router_module_entirely() -> None:
     """Spec-046 row 9: ``GraphQLHTTPConsumer`` is nowhere in ``routers.py``.
 
     Read the module's own SOURCE, not ``dir(routers_module)``: an unimported name
@@ -1581,12 +1612,16 @@ def test_graphql_http_consumer_left_the_router_module_entirely():
     assert "GraphQLHTTPConsumer" not in source
 
 
-def _source_of(node: ast.AST | None):
+def _source_of(node: ast.AST | None) -> str | None:
     """``ast.unparse`` of ``node``, or ``None`` where the source spells nothing."""
     return None if node is None else ast.unparse(node)
 
 
-def _parameter_row(parameter: ast.arg, kind: str, default: ast.expr | None = None):
+def _parameter_row(
+    parameter: ast.arg,
+    kind: str,
+    default: ast.expr | None = None,
+) -> tuple[str, str, str | None, str | None]:
     """One parameter as ``(name, kind, annotation, default)``, each spelled as source."""
     return (
         parameter.arg,
@@ -1596,7 +1631,9 @@ def _parameter_row(parameter: ast.arg, kind: str, default: ast.expr | None = Non
     )
 
 
-def _constructor_parameters(init: ast.FunctionDef):
+def _constructor_parameters(
+    init: ast.FunctionDef,
+) -> list[tuple[str, str, str | None, str | None]]:
     """Every parameter of ``init`` as a ``_parameter_row``, in declaration order."""
     arguments = init.args
     positional = [*arguments.posonlyargs, *arguments.args]
@@ -1652,7 +1689,7 @@ def _router_constructor_definitions() -> tuple[ast.FunctionDef, ast.FunctionDef]
     return found["declared"][0], found["runtime"][0]
 
 
-def test_the_declared_router_constructor_matches_the_runtime_one():
+def test_the_declared_router_constructor_matches_the_runtime_one() -> None:
     """The ``TYPE_CHECKING`` router declaration carries the runtime constructor exactly.
 
     Checkers and downstream imports only ever see the declaration: the real class
@@ -1669,7 +1706,7 @@ def test_the_declared_router_constructor_matches_the_runtime_one():
     assert _constructor_parameters(declared) == _constructor_parameters(runtime)
 
 
-def test_websocket_branch_wraps_origin_validator_outside_the_auth_stack():
+def test_websocket_branch_wraps_origin_validator_outside_the_auth_stack() -> None:
     """``AllowedHostsOriginValidator`` OUTSIDE ``AuthMiddlewareStack`` on WS only.
 
     Both original assertions are preserved verbatim (the origin validator sits
@@ -1693,7 +1730,7 @@ def test_websocket_branch_wraps_origin_validator_outside_the_auth_stack():
     assert not isinstance(router.application_mapping["http"], OriginValidator)
 
 
-def test_custom_websocket_url_pattern_reaches_only_the_websocket_re_path():
+def test_custom_websocket_url_pattern_reaches_only_the_websocket_re_path() -> None:
     """Spec-046 row 11, structural half: the pattern is WebSocket-only now.
 
     ``websocket_url_pattern=`` governs one branch; the HTTP value stays the
@@ -1723,7 +1760,7 @@ def test_custom_websocket_url_pattern_reaches_only_the_websocket_re_path():
         pytest.param("[", id="invalid-regex"),
     ],
 )
-def test_malformed_websocket_url_pattern_fails_at_construction(pattern: object):
+def test_malformed_websocket_url_pattern_fails_at_construction(pattern: object) -> None:
     """A malformed route value cannot silently install a never-matching WebSocket route.
 
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
@@ -1733,7 +1770,7 @@ def test_malformed_websocket_url_pattern_fails_at_construction(pattern: object):
         _router(websocket_url_pattern=pattern)
 
 
-def test_hostile_websocket_url_pattern_repr_still_has_a_typed_error():
+def test_hostile_websocket_url_pattern_repr_still_has_a_typed_error() -> None:
     """The malformed-route rejection remains render-safe for hostile string subclasses.
 
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
@@ -1742,18 +1779,18 @@ def test_hostile_websocket_url_pattern_repr_still_has_a_typed_error():
 
     class HostilePattern(str):
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr exploded")
 
         @override
-        def __str__(self):
+        def __str__(self) -> str:
             raise RuntimeError("str exploded")
 
     with pytest.raises(ConfigurationError, match="unprintable HostilePattern"):
         _router(websocket_url_pattern=HostilePattern("graphql"))
 
 
-def test_the_websocket_pattern_is_keyword_only_with_no_legacy_url_pattern_alias():
+def test_the_websocket_pattern_is_keyword_only_with_no_legacy_url_pattern_alias() -> None:
     """Spec-046 Decision 4: both NEGATIVE halves of the rename.
 
     Decision 4 renames rather than aliases - "a single parameter that no longer
@@ -1775,7 +1812,7 @@ def test_the_websocket_pattern_is_keyword_only_with_no_legacy_url_pattern_alias(
         _router_class()(SCHEMA, _RecordingDjangoApplication(), "^graphql")  # pyright: ignore[reportCallIssue]
 
 
-def test_repeated_access_returns_the_cached_class_which_is_subclassable():
+def test_repeated_access_returns_the_cached_class_which_is_subclassable() -> None:
     """The builder memoizes into ``_router_class``; the class is a real base.
 
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
@@ -1794,7 +1831,9 @@ def test_repeated_access_returns_the_cached_class_which_is_subclassable():
     assert routers_module.__all__ == ("DjangoGraphQLProtocolRouter",)
 
 
-def test_concurrent_first_class_access_returns_one_cached_class(monkeypatch: pytest.MonkeyPatch):
+def test_concurrent_first_class_access_returns_one_cached_class(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Concurrent lazy access cannot materialize two router class identities.
 
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
@@ -1809,7 +1848,7 @@ def test_concurrent_first_class_access_returns_one_cached_class(monkeypatch: pyt
     results: list[type[ProtocolTypeRouter]] = []
     errors: list[BaseException] = []
 
-    def synchronized_guard():
+    def synchronized_guard() -> ModuleType:
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -1824,7 +1863,7 @@ def test_concurrent_first_class_access_returns_one_cached_class(monkeypatch: pyt
 
     monkeypatch.setattr(routers_module, "require_channels", synchronized_guard)
 
-    def load_class():
+    def load_class() -> None:
         ready.wait(timeout=5)
         results.append(_router_class())
 
@@ -1847,7 +1886,7 @@ def test_concurrent_first_class_access_returns_one_cached_class(monkeypatch: pyt
 # ---------------------------------------------------------------------------
 
 
-def _graphql_ws_consumer():
+def _graphql_ws_consumer() -> "type[GraphQLWSConsumer[None, None]]":
     """Resolve upstream's consumer class at CALL time, not at collection time.
 
     The eviction-simulated-absence tests replace and restore
@@ -1900,7 +1939,7 @@ def _mounted_ws_callback(router: ProtocolTypeRouter) -> _MountedConsumerApp:
     return _as_asgi_app(_mounted_ws_app(router))
 
 
-def test_the_default_websocket_consumer_is_the_packages_revalidating_subclass():
+def test_the_default_websocket_consumer_is_the_packages_revalidating_subclass() -> None:
     """Spec-046 checklist boxes 2-3: the default mount is the package consumer.
 
     ``websocket_consumer_class=None`` selects ``consumers.py``'s revalidating
@@ -1926,7 +1965,7 @@ def test_the_default_websocket_consumer_is_the_packages_revalidating_subclass():
         assert installed.__mro__[1].__name__.startswith("BaseGraphQL")
 
 
-def test_the_generated_consumer_installs_a_derived_websocket_adapter_class():
+def test_the_generated_consumer_installs_a_derived_websocket_adapter_class() -> None:
     """The outbound checkpoint is a CLASS seam.
 
     ``AsyncBaseHTTPView.run`` instantiates ``self.websocket_adapter_class(...)`` by
@@ -1959,7 +1998,7 @@ def test_the_generated_consumer_installs_a_derived_websocket_adapter_class():
     assert upstream_consumer.websocket_adapter_class is upstream_adapter
 
 
-def test_only_information_bearing_frames_reach_the_outbound_checkpoint():
+def test_only_information_bearing_frames_reach_the_outbound_checkpoint() -> None:
     """The gated frame set is exactly the payload-carrying frames.
 
     The structural half of "connection-control frames retain upstream behavior".
@@ -1986,7 +2025,7 @@ def test_only_information_bearing_frames_reach_the_outbound_checkpoint():
         assert control_frame not in consumers_module._INFORMATION_BEARING_FRAME_TYPES
 
 
-def test_an_injected_consumer_class_still_sits_inside_all_three_wrappers():
+def test_an_injected_consumer_class_still_sits_inside_all_three_wrappers() -> None:
     """Spec-046 row 28: injection opts out of revalidation, not of the wrappers.
 
     ``DjangoWebSocketHostValidator``, ``AllowedHostsOriginValidator`` and
@@ -2019,7 +2058,7 @@ def test_an_injected_consumer_class_still_sits_inside_all_three_wrappers():
     assert router.application_mapping["http"] is django_application
 
 
-async def _valid_asgi_application(_scope: object, _receive: object, _send: object):
+async def _valid_asgi_application(_scope: object, _receive: object, _send: object) -> NoReturn:
     """The ASGI application a CORRECT factory returns: an async callable.
 
     Module-level so the four factory rows below mount the same object and assert
@@ -2029,7 +2068,7 @@ async def _valid_asgi_application(_scope: object, _receive: object, _send: objec
     raise AssertionError("no row drives the injected ASGI application")
 
 
-def test_an_injected_consumer_factory_is_called_with_the_schema_and_mounted():
+def test_an_injected_consumer_factory_is_called_with_the_schema_and_mounted() -> None:
     """Spec-046 Decision 11: the factory shape's calling convention.
 
     A non-class callable is a factory, invoked as ``factory(schema=schema)``, and
@@ -2047,7 +2086,7 @@ def test_an_injected_consumer_factory_is_called_with_the_schema_and_mounted():
     """
     received: dict[str, object] = {}
 
-    def factory(**kwargs: object):
+    def factory(**kwargs: object) -> Callable[[object, object, object], Awaitable[None]]:
         received.update(kwargs)
         return _valid_asgi_application
 
@@ -2071,7 +2110,7 @@ def test_an_injected_consumer_factory_is_called_with_the_schema_and_mounted():
 def test_a_factory_returning_a_non_application_fails_at_construction(
     returned: object,
     expected_tail: str,
-):
+) -> None:
     """The factory's RESULT is validated before mounting.
 
     Before this row the router mounted whatever the factory handed back, so a
@@ -2090,8 +2129,8 @@ def test_a_factory_returning_a_non_application_fails_at_construction(
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
 
-    # basedpyright: the router invokes a WebSocket consumer factory as factory(schema=schema)
-    def factory(*, schema: object):  # pyright: ignore[reportUnusedParameter]
+    def factory(*, schema: object) -> object:
+        del schema  # the router passes schema= by keyword; this factory ignores it
         return returned
 
     with pytest.raises(ConfigurationError) as exc_info:
@@ -2103,7 +2142,7 @@ def test_a_factory_returning_a_non_application_fails_at_construction(
     assert f"returned {expected_tail}" in message
 
 
-def test_an_async_factory_is_rejected_and_the_refused_coroutine_is_closed():
+def test_an_async_factory_is_rejected_and_the_refused_coroutine_is_closed() -> None:
     """A coroutine is not an ASGI application.
 
     An ``async def`` factory returns a coroutine object, which is not callable and
@@ -2122,8 +2161,11 @@ def test_an_async_factory_is_rejected_and_the_refused_coroutine_is_closed():
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
 
-    # basedpyright: the router invokes a WebSocket consumer factory as factory(schema=schema)
-    async def async_factory(*, schema: object):  # pyright: ignore[reportUnusedParameter]
+    async def async_factory(
+        *,
+        schema: object,
+    ) -> Callable[[object, object, object], Awaitable[None]]:
+        del schema  # the router passes schema= by keyword; this factory ignores it
         return _valid_asgi_application
 
     with pytest.raises(ConfigurationError) as exc_info:
@@ -2134,7 +2176,10 @@ def test_an_async_factory_is_rejected_and_the_refused_coroutine_is_closed():
 
     coroutines: list[CoroutineType[object, object, object]] = []
 
-    def wrapping_factory(*, schema: object):
+    def wrapping_factory(
+        *,
+        schema: object,
+    ) -> Coroutine[object, object, Callable[[object, object, object], Awaitable[None]]]:
         coroutine = async_factory(schema=schema)
         coroutines.append(coroutine)
         return coroutine
@@ -2146,7 +2191,7 @@ def test_an_async_factory_is_rejected_and_the_refused_coroutine_is_closed():
     assert refused.cr_frame is None, "the router must close the coroutine it refuses"
 
 
-def test_a_factory_that_cannot_accept_the_schema_keyword_fails_at_construction():
+def test_a_factory_that_cannot_accept_the_schema_keyword_fails_at_construction() -> None:
     """The calling convention is a construction error too.
 
     ``factory(schema=schema)`` is the seam's one calling convention, so a factory
@@ -2157,7 +2202,7 @@ def test_a_factory_that_cannot_accept_the_schema_keyword_fails_at_construction()
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
 
-    def factory():
+    def factory() -> Callable[[object, object, object], Awaitable[None]]:
         return _valid_asgi_application
 
     with pytest.raises(ConfigurationError) as exc_info:
@@ -2169,7 +2214,7 @@ def test_a_factory_that_cannot_accept_the_schema_keyword_fails_at_construction()
     assert isinstance(exc_info.value.__cause__, TypeError)
 
 
-def test_a_factory_that_raises_from_its_body_is_not_normalized():
+def test_a_factory_that_raises_from_its_body_is_not_normalized() -> None:
     """Only the CONVENTION is normalized, never the body.
 
     The convention check binds the call with ``inspect.signature`` *before*
@@ -2182,15 +2227,15 @@ def test_a_factory_that_raises_from_its_body_is_not_normalized():
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
 
-    # basedpyright: the router invokes a WebSocket consumer factory as factory(schema=schema)
-    def factory(*, schema: object):  # pyright: ignore[reportUnusedParameter]
+    def factory(*, schema: object) -> NoReturn:
+        del schema  # the router passes schema= by keyword; this factory ignores it
         raise TypeError("the factory's own bug")
 
     with pytest.raises(TypeError, match="the factory's own bug"):
         _router(websocket_consumer_class=factory)
 
 
-def test_a_factory_whose_signature_cannot_be_read_is_judged_by_the_call():
+def test_a_factory_whose_signature_cannot_be_read_is_judged_by_the_call() -> None:
     """An un-introspectable callable is not pre-rejected.
 
     ``inspect.signature`` raises for a callable it cannot describe (a C callable,
@@ -2205,7 +2250,10 @@ def test_a_factory_whose_signature_cannot_be_read_is_judged_by_the_call():
     class _Unintrospectable:
         __signature__ = "not a signature"
 
-        def __call__(self, **kwargs: object):
+        def __call__(
+            self,
+            **kwargs: object,
+        ) -> Callable[[object, object, object], Awaitable[None]]:
             return _valid_asgi_application
 
     callback = _mounted_ws_app(_router(websocket_consumer_class=_Unintrospectable()))
@@ -2213,7 +2261,7 @@ def test_a_factory_whose_signature_cannot_be_read_is_judged_by_the_call():
     assert callback is _valid_asgi_application
 
 
-def test_a_factory_signature_descriptor_failure_is_treated_as_unintrospectable():
+def test_a_factory_signature_descriptor_failure_is_treated_as_unintrospectable() -> None:
     """A consumer-defined signature descriptor may fail without blocking a valid factory.
 
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
@@ -2222,10 +2270,13 @@ def test_a_factory_signature_descriptor_failure_is_treated_as_unintrospectable()
 
     class _BrokenSignature:
         @property
-        def __signature__(self):
+        def __signature__(self) -> inspect.Signature:
             raise RuntimeError("signature inspection exploded")
 
-        def __call__(self, **kwargs: object):
+        def __call__(
+            self,
+            **kwargs: object,
+        ) -> Callable[[object, object, object], Awaitable[None]]:
             return _valid_asgi_application
 
     callback = _mounted_ws_app(_router(websocket_consumer_class=_BrokenSignature()))
@@ -2242,7 +2293,7 @@ def test_a_factory_signature_descriptor_failure_is_treated_as_unintrospectable()
         pytest.param(7, id="non-callable-scalar"),
     ],
 )
-def test_an_unusable_websocket_consumer_class_is_a_construction_error(unusable: object):
+def test_an_unusable_websocket_consumer_class_is_a_construction_error(unusable: object) -> None:
     """Spec-046 Decision 11: neither accepted shape, so ConfigurationError.
 
     A class that is not a ``GraphQLWSConsumer`` subclass must NOT be quietly
@@ -2274,7 +2325,7 @@ def test_an_unusable_websocket_consumer_class_is_a_construction_error(unusable: 
         pytest.param(-(10**10000), id="negative-int-with-no-float-image"),
     ],
 )
-def test_the_revalidation_window_rejects_unusable_values(unusable: object):
+def test_the_revalidation_window_rejects_unusable_values(unusable: object) -> None:
     """Spec-046 Decision 11: the window's construction-time domain.
 
     ``bool`` is rejected because the gate admits the built-in ``int`` and
@@ -2303,7 +2354,7 @@ def test_the_revalidation_window_rejects_unusable_values(unusable: object):
         _router(websocket_revalidation_window=unusable)
 
 
-def test_the_huge_window_rejection_chains_its_cause_and_still_renders():
+def test_the_huge_window_rejection_chains_its_cause_and_still_renders() -> None:
     """The enormous-window rejection is complete, not just typed.
 
     Two properties the parametrized rejection row's ``pytest.raises`` cannot
@@ -2327,7 +2378,7 @@ class _HostileFloat(float):
     """A ``float`` whose conversion raises - the numeric dunder is overridable."""
 
     @override
-    def __float__(self):
+    def __float__(self) -> float:
         raise RuntimeError("hostile conversion")
 
 
@@ -2342,7 +2393,7 @@ class _WellBehavedInt(int):
         pytest.param(_WellBehavedInt(30), id="well-behaved-int-subclass"),
     ],
 )
-def test_the_revalidation_window_admits_the_builtin_numbers_exactly(subclass_value: float):
+def test_the_revalidation_window_admits_the_builtin_numbers_exactly(subclass_value: float) -> None:
     """The window's type gate is exact: a subclass of ``int`` or ``float`` is not one.
 
     A subclass may override ``__float__``, so admitting one would run consumer
@@ -2370,7 +2421,10 @@ def test_the_revalidation_window_admits_the_builtin_numbers_exactly(subclass_val
         pytest.param(1e308, 1e308, id="largest-order-of-magnitude-float"),
     ],
 )
-def test_the_revalidation_window_accepts_and_coerces_numbers(accepted: float, expected: float):
+def test_the_revalidation_window_accepts_and_coerces_numbers(
+    accepted: float,
+    expected: float,
+) -> None:
     """The accepted half, including the int -> float coercion.
 
     The consumer receives a ``float`` whatever the caller passed, so the window
@@ -2396,7 +2450,7 @@ def test_the_revalidation_window_accepts_and_coerces_numbers(accepted: float, ex
     assert isinstance(window, float)
 
 
-def test_injecting_a_consumer_class_with_a_window_is_a_construction_error():
+def test_injecting_a_consumer_class_with_a_window_is_a_construction_error() -> None:
     """Spec-046 row 29: a knob that does nothing is worse than an error.
 
     The window configures the PACKAGE consumer, so a positive value alongside an
@@ -2419,7 +2473,7 @@ def test_injecting_a_consumer_class_with_a_window_is_a_construction_error():
     assert _mounted_ws_callback(router).consumer_class is Injected
 
 
-def test_the_two_new_websocket_keywords_are_keyword_only():
+def test_the_two_new_websocket_keywords_are_keyword_only() -> None:
     """All three WebSocket keywords are KEYWORD_ONLY, with their defaults.
 
     The sibling of the row whose subject is the ``url_pattern`` rename: this one
@@ -2465,7 +2519,7 @@ def test_the_two_new_websocket_keywords_are_keyword_only():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_http_branch_delegates_every_path_to_the_supplied_application():
+async def test_http_branch_delegates_every_path_to_the_supplied_application() -> None:
     """Spec-046 Decision 13: HTTP is delegation, for GraphQL paths too.
 
     The merge of the old GraphQL-round-trip and non-GraphQL-fallback tests. Both
@@ -2508,8 +2562,9 @@ async def test_http_branch_delegates_every_path_to_the_supplied_application():
 @pytest.mark.django_db(transaction=True)
 async def test_websocket_handshake_origin_directions(
     headers: list[tuple[bytes, bytes]],
+    *,
     expected_connected: bool,
-):
+) -> None:
     """The three origin directions (match / mismatch / missing) on the WS branch.
 
     pytest-django's environment appends ``"testserver"`` to ``ALLOWED_HOSTS``,
@@ -2552,7 +2607,11 @@ async def test_websocket_handshake_origin_directions(
     ],
 )
 @pytest.mark.django_db(transaction=True)
-async def test_default_websocket_url_pattern_matches_exactly(path: str, expected_connected: bool):
+async def test_default_websocket_url_pattern_matches_exactly(
+    path: str,
+    *,
+    expected_connected: bool,
+) -> None:
     """Spec-046 row 11, behavioral half: the default pattern is exact.
 
     ``r"^graphql/?$"`` is anchored at both ends, so - with Channels' leading-slash
@@ -2585,7 +2644,7 @@ async def test_default_websocket_url_pattern_matches_exactly(path: str, expected
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_schema_object_passes_through_unchanged_with_extensions_intact():
+async def test_schema_object_passes_through_unchanged_with_extensions_intact() -> None:
     """Spec-046 row 12: the consumer holds the exact schema; extensions execute.
 
     The transport is the WebSocket branch: the package composes no HTTP
@@ -2601,7 +2660,7 @@ async def test_schema_object_passes_through_unchanged_with_extensions_intact():
 
     class RecordingExtension(SchemaExtension):
         @override
-        def on_operation(self):
+        def on_operation(self) -> Iterator[None]:
             fired.append("operation")
             yield
 
@@ -2660,7 +2719,7 @@ def _django_http_host_verdict(
     host: str | None = None,
     forwarded_host: str | None = None,
     server: tuple[str, int] | None = None,
-):
+) -> str | None:
     """Ask DJANGO the same Host question over HTTP; return its host or ``None``.
 
     The oracle for every delegation row. A real ``WSGIRequest``, built by Django's
@@ -2696,7 +2755,7 @@ def _django_http_host_verdict(
 def _handshake_scope(
     headers: Iterable[tuple[bytes, bytes]],
     server: tuple[str, int] | None = None,
-):
+) -> WebSocketScope:
     """The handshake scope the Host projection reads.
 
     One scope builder feeding BOTH oracles below, so the projection and Django's own
@@ -2724,7 +2783,7 @@ def _http_scope_of(handshake: WebSocketScope) -> dict[str, object]:
 def _django_asgi_host_meta(
     headers: Iterable[tuple[bytes, bytes]],
     server: tuple[str, int] | None = None,
-):
+) -> dict[str, object]:
     """Ask DJANGO's own ASGI adapter what ``META`` this handshake produces.
 
     The ``META`` oracle, standing beside ``_django_http_host_verdict``'s *verdict*
@@ -2747,7 +2806,7 @@ def _django_asgi_host_meta(
 def _django_asgi_host_verdict(
     headers: Iterable[tuple[bytes, bytes]],
     server: tuple[str, int] | None = None,
-):
+) -> str | None:
     """Django's Host verdict for a handshake, with Django supplying the projection too.
 
     ``_django_http_host_verdict`` cannot express "this request carries no server
@@ -2777,7 +2836,7 @@ async def _ws_handshake(
     origin: str | None = None,
     extra_headers: Iterable[tuple[bytes, bytes]] = (),
     server: tuple[str, int] | None = None,
-):
+) -> tuple[bool, int | str | None]:
     """Drive ONE handshake through the router's WS branch; return ``(connected, detail)``.
 
     ``host`` / ``origin`` are spelled as optional str so a row can omit either
@@ -2831,7 +2890,7 @@ async def _ws_handshake(
 def test_the_host_projection_matches_djangos_asgi_adapter_key_for_key(
     headers: list[tuple[bytes, bytes]],
     server: tuple[str, int] | None,
-):
+) -> None:
     """Each projection item, its own row.
 
     ``consumers.py::_host_validation_request`` promises to reproduce
@@ -2890,8 +2949,9 @@ def test_the_host_projection_matches_djangos_asgi_adapter_key_for_key(
 async def test_the_websocket_host_and_origin_checks_are_independent(
     host: str,
     origin: str | None,
+    *,
     expected_connected: bool,
-):
+) -> None:
     """The direction the shipped suite never supplied.
 
     An allowed ``Origin`` with a hostile ``Host`` is the row that was missing, and
@@ -2936,7 +2996,7 @@ async def test_django_owns_the_websocket_host_matching(
     allowed_hosts: list[str],
     host: str,
     origin: str,
-):
+) -> None:
     """The verdict IS Django's verdict, asserted by delegation.
 
     Wildcards, leading-dot subdomain patterns, an explicit port, an IPv6 literal, a
@@ -2965,7 +3025,7 @@ async def test_django_owns_the_websocket_host_matching(
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_the_debug_localhost_default_matches_djangos_own_websocket_side():
+async def test_the_debug_localhost_default_matches_djangos_own_websocket_side() -> None:
     """``DEBUG`` + empty ``ALLOWED_HOSTS`` is Django's decision too.
 
     The one arm of ``get_host()`` that consults a setting other than
@@ -2993,7 +3053,7 @@ async def test_the_debug_localhost_default_matches_djangos_own_websocket_side():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_duplicate_host_headers_fail_closed_in_djangos_comma_joined_form():
+async def test_duplicate_host_headers_fail_closed_in_djangos_comma_joined_form() -> None:
     """Ambiguity fails closed, in Django's own comma-joined form.
 
     Two ``Host`` headers are not a host, and the projection must not silently pick
@@ -3025,7 +3085,7 @@ async def test_duplicate_host_headers_fail_closed_in_djangos_comma_joined_form()
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_an_odd_cased_host_header_still_reaches_the_boundary():
+async def test_an_odd_cased_host_header_still_reaches_the_boundary() -> None:
     """Header-name casing is normalized, not trusted.
 
     Its own row rather than a tail on the duplicate-header row, which is where it
@@ -3053,7 +3113,7 @@ async def test_an_odd_cased_host_header_still_reaches_the_boundary():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_handshake_carrying_no_host_information_at_all_is_denied():
+async def test_a_handshake_carrying_no_host_information_at_all_is_denied() -> None:
     """The fallback arm's verdict, pinned behaviorally.
 
     No ``Host``, no ``X-Forwarded-Host``, no ``scope["server"]`` - which is exactly
@@ -3090,10 +3150,10 @@ async def test_a_handshake_carrying_no_host_information_at_all_is_denied():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_latin_1_only_host_header_is_decoded_rather_than_crashing():
-    """The transport codec, on the one input that shows it.
+async def test_a_latin_1_only_host_header_is_decoded_rather_than_crashing() -> None:
+    r"""The transport codec, on the one input that shows it.
 
-    ``b"caf\\xe9.example"`` is valid Latin-1 and invalid UTF-8, so it is the only
+    ``b"caf\xe9.example"`` is valid Latin-1 and invalid UTF-8, so it is the only
     kind of value that can tell the projection's codec apart from a plausible
     alternative. Latin-1 is Django's and Channels' ASGI transport convention
     (``ASGIRequest.__init__`` and ``OriginValidator`` both use it), and the
@@ -3126,8 +3186,9 @@ async def test_a_latin_1_only_host_header_is_decoded_rather_than_crashing():
 @pytest.mark.parametrize("use_x_forwarded_host", [True, False])
 @pytest.mark.django_db(transaction=True)
 async def test_x_forwarded_host_is_honoured_only_under_the_django_setting(
+    *,
     use_x_forwarded_host: bool,
-):
+) -> None:
     """``USE_X_FORWARDED_HOST`` behaves identically to HTTP.
 
     ``X-Forwarded-Host`` is projected unconditionally and consulted only by
@@ -3166,7 +3227,7 @@ async def test_x_forwarded_host_is_honoured_only_under_the_django_setting(
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_hostile_x_forwarded_host_is_refused_even_behind_an_allowed_host():
+async def test_a_hostile_x_forwarded_host_is_refused_even_behind_an_allowed_host() -> None:
     """The forwarded header's DENY direction.
 
     The row above proves ``X-Forwarded-Host`` can rescue a hostile ``Host`` when the
@@ -3200,7 +3261,7 @@ async def test_a_hostile_x_forwarded_host_is_refused_even_behind_an_allowed_host
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_with_no_host_header_the_scope_server_supplies_djangos_fallback():
+async def test_with_no_host_header_the_scope_server_supplies_djangos_fallback() -> None:
     """``scope["server"]`` is Django's normal no-host-header fallback.
 
     ``_get_raw_host``'s third option reconstructs the host from ``SERVER_NAME`` /
@@ -3238,7 +3299,9 @@ async def test_with_no_host_header_the_scope_server_supplies_djangos_fallback():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_only_disallowed_host_becomes_a_websocket_denial(monkeypatch: pytest.MonkeyPatch):
+async def test_only_disallowed_host_becomes_a_websocket_denial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """An unexpected exception propagates instead of being reported as a host.
 
     The worst available failure mode for a check whose whole value is that it
@@ -3257,7 +3320,7 @@ async def test_only_disallowed_host_becomes_a_websocket_denial(monkeypatch: pyte
     """
     router = _router()
 
-    def exploding_projection(_scope: object):
+    def exploding_projection(_scope: object) -> NoReturn:
         raise RuntimeError("projection bug")
 
     monkeypatch.setattr(consumers_module, "_host_validation_request", exploding_projection)
@@ -3273,7 +3336,7 @@ async def test_only_disallowed_host_becomes_a_websocket_denial(monkeypatch: pyte
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_non_conformant_header_shape_propagates_instead_of_denying():
+async def test_a_non_conformant_header_shape_propagates_instead_of_denying() -> None:
     """The same contract, with nothing monkeypatched.
 
     The row above injects the failure; this one is the naturally occurring shape, and
@@ -3307,7 +3370,9 @@ async def test_a_non_conformant_header_shape_propagates_instead_of_denying():
 
 @pytest.mark.parametrize("subdomain", ["sub.localhost", "deep.sub.localhost"])
 @pytest.mark.django_db(transaction=True)
-async def test_the_debug_host_and_origin_defaults_diverge_on_a_localhost_subdomain(subdomain: str):
+async def test_the_debug_host_and_origin_defaults_diverge_on_a_localhost_subdomain(
+    subdomain: str,
+) -> None:
     """The one configuration where the two lists differ.
 
     ``DEBUG`` with an empty ``ALLOWED_HOSTS`` is the only case where either check
@@ -3354,7 +3419,13 @@ async def test_the_debug_host_and_origin_defaults_diverge_on_a_localhost_subdoma
     assert control is True
 
 
-def _recording_websocket_application(reached: list[str]):
+_WebSocketApplication: TypeAlias = Callable[
+    [WebSocketScope, ASGIReceiveCallable, ASGISendCallable],
+    Awaitable[None],
+]
+
+
+def _recording_websocket_application(reached: list[str]) -> _WebSocketApplication:
     """An ASGI app that RECORDS being reached, then accepts the socket.
 
     The consumer-side sentinel for the ordering rows: it is mounted through the
@@ -3368,7 +3439,7 @@ def _recording_websocket_application(reached: list[str]):
         scope: WebSocketScope,
         receive: ASGIReceiveCallable,
         send: ASGISendCallable,
-    ):
+    ) -> None:
         reached.append(scope["path"])
         assert (await receive())["type"] == "websocket.connect"
         await send(
@@ -3385,7 +3456,7 @@ def _recording_websocket_application(reached: list[str]):
 @pytest.mark.django_db(transaction=True)
 async def test_a_hostile_host_is_denied_before_the_auth_stack_and_the_consumer(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A hostile ``Host`` is denied before authentication and the consumer (two sentinels).
 
     spec-046 Decision 19 #"before authentication and before the consumer is constructed**".
@@ -3416,14 +3487,14 @@ async def test_a_hostile_host_is_denied_before_the_auth_stack_and_the_consumer(
         scope: "_ChannelScope",
         receive: ASGIReceiveCallable,
         send: ASGISendCallable,
-    ):
+    ) -> None:
         auth_stack_entries.append(scope["path"])
         await original_call(self, scope, receive, send)
 
     monkeypatch.setattr(CookieMiddleware, "__call__", recording_call)
 
-    # basedpyright: the router invokes a WebSocket consumer factory as factory(schema=schema)
-    def _recording_consumer(schema: object):  # pyright: ignore[reportUnusedParameter]
+    def _recording_consumer(schema: object) -> _WebSocketApplication:
+        del schema  # the router passes schema= by keyword; this factory ignores it
         return _recording_websocket_application(reached)
 
     router = _router(websocket_consumer_class=_recording_consumer)
@@ -3440,7 +3511,7 @@ async def test_a_hostile_host_is_denied_before_the_auth_stack_and_the_consumer(
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_an_injected_consumer_is_denied_by_both_handshake_boundaries():
+async def test_an_injected_consumer_is_denied_by_both_handshake_boundaries() -> None:
     """Spec-046 row 28 + Decision 19: injection opts out of neither check.
 
     The behavioral half of the structural row above. Both wrappers are the ROUTER's,
@@ -3455,8 +3526,8 @@ async def test_an_injected_consumer_is_denied_by_both_handshake_boundaries():
     """
     reached: list[str] = []
 
-    # basedpyright: the router invokes a WebSocket consumer factory as factory(schema=schema)
-    def _recording_consumer(schema: object):  # pyright: ignore[reportUnusedParameter]
+    def _recording_consumer(schema: object) -> _WebSocketApplication:
+        del schema  # the router passes schema= by keyword; this factory ignores it
         return _recording_websocket_application(reached)
 
     router = _router(websocket_consumer_class=_recording_consumer)
@@ -3506,7 +3577,7 @@ def _simulate_channels_absent() -> Iterator[None]:
 
 
 @pytest.mark.usefixtures("_simulate_channels_absent")
-def test_root_package_and_star_import_stay_channels_free():
+def test_root_package_and_star_import_stay_channels_free() -> None:
     """The root package never touches the guard; the SUBMODULE star opts in.
 
     Absence / import-guard proof; a request cannot show what is not imported. Live
@@ -3524,7 +3595,7 @@ def test_root_package_and_star_import_stay_channels_free():
 
 
 @pytest.mark.usefixtures("_simulate_channels_absent")
-def test_routers_module_import_succeeds_without_channels():
+def test_routers_module_import_succeeds_without_channels() -> None:
     """``import django_strawberry_framework.routers`` itself pays no import.
 
     Absence / import-guard proof; a request cannot show what is not imported. Live
@@ -3535,7 +3606,7 @@ def test_routers_module_import_succeeds_without_channels():
 
 
 @pytest.mark.usefixtures("_simulate_channels_absent")
-def test_symbol_access_raises_the_install_hint_without_channels():
+def test_symbol_access_raises_the_install_hint_without_channels() -> None:
     """The ``from ... import`` line raises ``ImportError`` naming the floor.
 
     Absence / import-guard proof; a request cannot show what is not imported. Live
@@ -3546,7 +3617,7 @@ def test_symbol_access_raises_the_install_hint_without_channels():
     assert isinstance(exc_info.value.__cause__, ImportError)
 
 
-def test_restore_is_two_sided_and_the_present_path_works_again():
+def test_restore_is_two_sided_and_the_present_path_works_again() -> None:
     """After teardown the attribute path and import path hold ONE module object.
 
     The blocked-then-retried import re-executes ``routers.py`` and rebinds the
@@ -3577,7 +3648,7 @@ def test_restore_is_two_sided_and_the_present_path_works_again():
     assert _router_class() is routers_module.DjangoGraphQLProtocolRouter
 
 
-def test_consumers_module_imports_with_channels_absent():
+def test_consumers_module_imports_with_channels_absent() -> None:
     """Spec-046 Decision 11: ``consumers.py`` is channels-free at import.
 
     Load-bearing rather than incidental: ``routers.py`` imports ``consumers.py``
@@ -3619,7 +3690,7 @@ def test_consumers_module_imports_with_channels_absent():
 
 
 @pytest.mark.usefixtures("_simulate_channels_absent")
-def test_unrelated_attribute_miss_stays_a_plain_attribute_error():
+def test_unrelated_attribute_miss_stays_a_plain_attribute_error() -> None:
     """A non-router attribute miss raises ``AttributeError``, never the hint.
 
     Absence / import-guard proof; a request cannot show what is not imported. Live
@@ -3648,7 +3719,7 @@ def test_unrelated_attribute_miss_stays_a_plain_attribute_error():
 def test_degraded_partial_install_raises_the_split_actionable_errors(
     broken_submodule: str,
     expected_substrings: list[str],
-):
+) -> None:
     """Present-but-incompatible installs name WHICH half is broken.
 
     Same eviction + two-sided-restore discipline as the absent path (so the
@@ -3691,7 +3762,7 @@ def test_degraded_partial_install_raises_the_split_actionable_errors(
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_request_contract_resolves_over_the_websocket_branch():
+async def test_request_contract_resolves_over_the_websocket_branch() -> None:
     """A framework-shaped resolver works under the Channels context.
 
     The WebSocket consumer is the context request, with scope directly on it.
@@ -3709,7 +3780,7 @@ async def test_request_contract_resolves_over_the_websocket_branch():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_authenticated_session_round_trip_reaches_the_resolver():
+async def test_authenticated_session_round_trip_reaches_the_resolver() -> None:
     """A real session cookie flows through ``AuthMiddlewareStack`` to the actor.
 
     The transport is the WebSocket handshake: the HTTP branch composes no
@@ -3759,7 +3830,7 @@ async def test_authenticated_session_round_trip_reaches_the_resolver():
 async def test_a_revoked_session_closes_the_socket_on_the_next_operation_without_reconnecting(
     revoke: Callable[[AbstractBaseUser, str], Awaitable[None]],
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Spec-046 row 25: one socket, three revocation shapes, no reconnect.
 
     Operation 1 executes as the authenticated actor. The session is then revoked
@@ -3812,7 +3883,9 @@ async def test_a_revoked_session_closes_the_socket_on_the_next_operation_without
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_valid_session_keeps_executing_and_the_next_operation_sees_the_refreshed_actor():
+async def test_a_valid_session_keeps_executing_and_the_next_operation_sees_the_refreshed_actor() -> (
+    None
+):
     """Spec-046 row 26: the refreshed actor is what the next operation observes.
 
     A valid session keeps executing, and the actor the second operation reads at
@@ -3844,7 +3917,7 @@ async def test_a_valid_session_keeps_executing_and_the_next_operation_sees_the_r
 @pytest.mark.django_db(transaction=True)
 async def test_the_revalidation_window_defers_the_denial_until_it_expires(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Spec-046 row 27: inside the window a revoked session still executes.
 
     With ``websocket_revalidation_window=3600.0`` the accepted revocation delay
@@ -3894,7 +3967,7 @@ async def test_the_revalidation_window_defers_the_denial_until_it_expires(
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_the_legacy_graphql_ws_protocol_is_revalidated_at_handle_start():
+async def test_the_legacy_graphql_ws_protocol_is_revalidated_at_handle_start() -> None:
     """The SECOND protocol's admission is revalidated too.
 
     ``graphql-ws`` is live on the package's mount (upstream's default
@@ -3931,7 +4004,7 @@ async def test_the_legacy_graphql_ws_protocol_is_revalidated_at_handle_start():
 async def test_a_revalidation_store_failure_denies_the_operation_and_is_logged(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """Spec-046 row 30: a failed revalidation read fails CLOSED, and is logged.
 
     The fresh-store resolver raises, so the revalidation cannot answer. The
@@ -3982,7 +4055,7 @@ async def test_a_revalidation_store_failure_denies_the_operation_and_is_logged(
 async def test_a_failing_auth_backend_load_also_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """The same degrade, a second failure shape.
 
     The row above is the whole fail-closed contract resting on ONE injection point -
@@ -4007,7 +4080,7 @@ async def test_a_failing_auth_backend_load_also_fails_closed(
     _user, cookie, _session_key = await _make_user_and_session("backend_failure_probe")
     router = _router()
 
-    async def exploding_get_user(_scope: object):
+    async def exploding_get_user(_scope: object) -> NoReturn:
         raise RuntimeError("auth backend unavailable")
 
     async with _open_ws(router, cookie=cookie) as communicator:
@@ -4030,7 +4103,7 @@ async def test_a_failing_auth_backend_load_also_fails_closed(
 async def test_an_anonymous_socket_is_not_revalidated(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """The anonymous carve-out really skips the session read.
 
     No cookie, so ``scope["user"]`` is anonymous and there is no session actor to
@@ -4057,7 +4130,7 @@ async def test_an_anonymous_socket_is_not_revalidated(
 async def test_a_subscribe_before_connection_init_is_closed_by_upstream_without_revalidating(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """An unacknowledged connection is upstream's 4401, not our rejection.
 
     The pre-hook's first decision is to pass an unacknowledged connection
@@ -4091,7 +4164,7 @@ async def test_a_subscribe_before_connection_init_is_closed_by_upstream_without_
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_revalidation_resolves_its_session_store_outside_the_opt_in_auth_package():
+async def test_revalidation_resolves_its_session_store_outside_the_opt_in_auth_package() -> None:
     """The revalidation does not import the auth subsystem.
 
     ``auth/__init__.py`` eagerly imports ``.mutations`` and ``.queries``, so the
@@ -4143,13 +4216,13 @@ async def test_revalidation_resolves_its_session_store_outside_the_opt_in_auth_p
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_real_second_request_logout_denies_the_next_operation_on_the_open_socket():
+async def test_a_real_second_request_logout_denies_the_next_operation_on_the_open_socket() -> None:
     """Spec-046 row 25: the separate request is a REAL request.
 
     The direct-ORM revocation rows - session flushed, user disabled, password
     rotated - mutate the store in place: precise unit controls that stay, but none
-    of them exercises a second HTTP request's own session lifecycle. This row does: while the socket stays open, an
-    ``AsyncClient`` posts to a probe URLConf view that calls Django's own
+    of them exercises a second HTTP request's own session lifecycle. This row does:
+    while the socket stays open, an ``AsyncClient`` posts to a probe URLConf view that calls Django's own
     ``django.contrib.auth.logout``, so ``SessionMiddleware`` loads the session
     from the cookie, the engine flushes the record, and the response expires the
     cookie - the real revocation path a logout view, a cookie change, or a session
@@ -4200,9 +4273,10 @@ async def test_a_real_second_request_logout_denies_the_next_operation_on_the_ope
 async def test_a_running_subscription_cannot_emit_a_result_after_revocation(
     subprotocol: str,
     monkeypatch: pytest.MonkeyPatch,
-):
-    """A revoked session cannot emit a result on an already-running
-    subscription, on both protocols.
+) -> None:
+    """A revoked session cannot emit a result on an already-running subscription.
+
+    Holds on both protocols.
 
     The sequence: authenticate, start a multi-yield subscription while the
     session is valid, receive result 1, log out through a
@@ -4262,7 +4336,7 @@ async def test_a_running_subscription_cannot_emit_a_result_after_revocation(
 async def test_a_valid_session_keeps_a_running_subscription_emitting_every_result(
     subprotocol: str,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The required control: the gate is not a mute button.
 
     The same socket, the same controlled subscription, and no revocation: both
@@ -4331,7 +4405,7 @@ _CORRELATION_ID_PATTERN = re.compile(r"\A[0-9a-f]{32}\Z")
 
 
 # basedpyright: verbatim forward to DjangoSchema.__init__; object fails its typed params
-def _masking_schema(**schema_kwargs: Any):  # pyright: ignore[reportExplicitAny]
+def _masking_schema(**schema_kwargs: Any) -> "DjangoSchema":  # pyright: ignore[reportExplicitAny]
     """Build a ``DjangoSchema`` over this module's ORM-free operations.
 
     ``DjangoSchema`` rather than the module's plain ``SCHEMA`` because the policy
@@ -4349,7 +4423,7 @@ def _masking_schema(**schema_kwargs: Any):  # pyright: ignore[reportExplicitAny]
 async def test_every_subscription_event_is_masked_before_it_reaches_the_wire(
     subprotocol: str,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """Each event's own errors are masked, on both protocols, not just the last one.
 
     The defect this row exists to catch is subtle and total: masking installed
@@ -4401,7 +4475,7 @@ async def test_every_subscription_event_is_masked_before_it_reaches_the_wire(
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_the_subscription_seam_masks_only_what_the_policy_asks_it_to():
+async def test_the_subscription_seam_masks_only_what_the_policy_asks_it_to() -> None:
     """The opt-out reaches the per-event seam too, so the seam is not a blanket rewrite.
 
     The control for the row above: the same subscription on a schema built with
@@ -4428,7 +4502,7 @@ async def test_the_subscription_seam_masks_only_what_the_policy_asks_it_to():
 @pytest.mark.django_db(transaction=True)
 async def test_a_delayed_query_revoked_after_admission_never_sends_its_response(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The outbound checkpoint covers non-subscription operations too.
 
     A query is admitted, its resolver holds, the session is revoked, and the
@@ -4471,7 +4545,7 @@ async def test_a_delayed_query_revoked_after_admission_never_sends_its_response(
 async def test_an_operation_error_produced_after_revocation_is_suppressed_by_the_close(
     subprotocol: str,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """An operation-scoped ``error`` frame is gated like a payload.
 
     Runtime resolver errors ride inside ``next`` / ``data``, but a pre-execution
@@ -4513,7 +4587,7 @@ async def test_an_operation_error_produced_after_revocation_is_suppressed_by_the
 @pytest.mark.django_db(transaction=True)
 async def test_the_connection_lock_stops_a_sibling_payload_escaping_after_revocation(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """spec-046 Decision 11, the lease held through the send: the sibling race.
 
     The race the design exists to close: two operations on one socket, both
@@ -4591,7 +4665,7 @@ async def test_the_connection_lock_stops_a_sibling_payload_escaping_after_revoca
 @pytest.mark.django_db(transaction=True)
 async def test_a_revoked_but_idle_socket_stays_open_until_its_next_protected_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """spec-046 Decision 11, the accepted idle consequence: event-driven, not polled.
 
     The contract's honest limit, pinned so it stays a decision rather than an
@@ -4641,7 +4715,7 @@ async def test_a_revoked_but_idle_socket_stays_open_until_its_next_protected_che
 @pytest.mark.django_db(transaction=True)
 async def test_the_connection_lock_never_serializes_a_second_connection(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """spec-046 Decision 16, the lease's blast radius: one socket, not the process.
 
     The other half of the head-of-line tradeoff, and the half that makes it
@@ -4706,7 +4780,7 @@ async def test_the_connection_lock_never_serializes_a_second_connection(
 @pytest.mark.django_db(transaction=True)
 async def test_a_positive_window_defers_the_close_on_a_running_subscription(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """spec-046 Decision 16, the window at the frame checkpoint: one read per window.
 
     The window's expanded meaning, measured where it is hardest to get right - a
@@ -4761,7 +4835,7 @@ async def test_a_positive_window_defers_the_close_on_a_running_subscription(
 @pytest.mark.django_db(transaction=True)
 async def test_connection_control_frames_never_reach_the_outbound_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """spec-046 Decision 16, frame-type discrimination: the negative half, on a valid socket.
 
     The fixture is deliberately a **valid** connection with a read counter, not a
@@ -4805,7 +4879,7 @@ async def test_connection_control_frames_never_reach_the_outbound_checkpoint(
         assert gate.sends_under_lease == [True]
 
 
-async def test_control_frame_send_serializes_with_a_concurrent_revocation():
+async def test_control_frame_send_serializes_with_a_concurrent_revocation() -> None:
     """A revocation waits for an in-flight delegated frame instead of overtaking it.
 
     The control-frame branch must hold the connection actor lease through its
@@ -4821,32 +4895,32 @@ async def test_control_frame_send_serializes_with_a_concurrent_revocation():
     sent: list[object] = []
 
     class TransportHandler:
-        async def handle(self):
+        async def handle(self) -> None:
             return None
 
-        async def handle_subscribe(self, _message: object):
+        async def handle_subscribe(self, _message: object) -> None:
             return None
 
     class LegacyHandler:
-        async def handle(self):
+        async def handle(self) -> None:
             return None
 
-        async def handle_start(self, _message: object):
+        async def handle_start(self, _message: object) -> None:
             return None
 
-        async def handle_stop(self, _message: object):
+        async def handle_stop(self, _message: object) -> None:
             return None
 
     class Adapter:
-        def __init__(self, ws_consumer: object, *_args: object):
+        def __init__(self, ws_consumer: object, *_args: object) -> None:
             self.ws_consumer = ws_consumer
 
-        async def send_json(self, message: object):
+        async def send_json(self, message: object) -> None:
             entered.set()
             await release.wait()
             sent.append(message)
 
-        async def close(self, _code: int, _reason: str):
+        async def close(self, _code: int, _reason: str) -> None:
             return None
 
     class BaseConsumer:
@@ -4858,7 +4932,7 @@ async def test_control_frame_send_serializes_with_a_concurrent_revocation():
         def as_asgi(cls, **_initkwargs: object) -> object:
             return cls
 
-        async def disconnect(self, _code: int):
+        async def disconnect(self, _code: int) -> None:
             return None
 
     # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
@@ -4873,7 +4947,7 @@ async def test_control_frame_send_serializes_with_a_concurrent_revocation():
     send_task = asyncio.create_task(adapter.send_json({"type": "pong"}))
     await _reached(entered, "the delegated control frame never reached upstream send")
 
-    async def revoke():
+    async def revoke() -> None:
         async with session_store_module.actor_lease(consumer.scope):
             consumer._revocation.decide()
 
@@ -4903,7 +4977,7 @@ _UPSTREAM_SUBSCRIPTION_LIMIT = 100
 async def test_the_subscription_limit_error_frame_is_gated_from_the_connections_own_task(
     subprotocol: str,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The outbound checkpoint reached from ``run_task``.
 
     The ONE production path that reaches the outbound checkpoint from the
@@ -5012,7 +5086,7 @@ async def test_the_subscription_limit_error_frame_is_gated_from_the_connections_
 async def test_a_revoked_operation_stops_when_its_every_later_result_is_already_available(
     subprotocol: str,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A revoked operation ends deterministically, without a suspension point.
 
     The hard case for stopping an admitted operation, on both protocols. The burst
@@ -5092,7 +5166,7 @@ async def test_a_revoked_operation_stops_when_its_every_later_result_is_already_
 async def test_a_client_cancelling_the_detecting_operation_cannot_abandon_the_close(
     subprotocol: str,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The close belongs to the CONNECTION, not to whichever operation observed it.
 
     Both protocols let a client cancel one of its own operations - ``complete`` on
@@ -5172,7 +5246,7 @@ async def test_a_client_cancelling_the_detecting_operation_cannot_abandon_the_cl
 async def test_a_close_that_raised_is_retried_by_the_next_permitted_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """A failed close is not a completed close.
 
     Nothing upstream records that a close was sent, so the package has to - and a
@@ -5233,7 +5307,7 @@ async def test_a_close_that_raised_is_retried_by_the_next_permitted_checkpoint(
 async def test_the_revocation_close_retry_is_bounded_and_still_refuses_every_payload(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """The retry is bounded, because checkpoints are client-driven.
 
     The other half of the retry policy. Checkpoints happen when a client sends
@@ -5316,18 +5390,20 @@ class _ParkedCloseWebSocket:
     package does with a close that can only be ended by cancellation.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.closes: list[tuple[int | None, str | None]] = []
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
 
-    async def close(self, code: int | None = None, reason: str | None = None):
+    async def close(self, code: int | None = None, reason: str | None = None) -> None:
         self.closes.append((code, reason))
         self.entered.set()
         await self.release.wait()
 
 
-async def _revocation_with_a_parked_attempt(revocation: consumers_module._ConnectionRevocation):
+async def _revocation_with_a_parked_attempt(
+    revocation: consumers_module._ConnectionRevocation,
+) -> tuple[_ParkedCloseWebSocket, asyncio.Task[None]]:
     """Drive ``revocation`` to a real in-flight attempt parked at the transport.
 
     Through ``decide()`` and ``close()`` rather than by assigning the fields, so
@@ -5345,13 +5421,13 @@ async def _revocation_with_a_parked_attempt(revocation: consumers_module._Connec
     return websocket, starter
 
 
-async def _discard(task: asyncio.Task[object]):
+async def _discard(task: asyncio.Task[object]) -> None:
     """Await a task that is expected to end cancelled, leaving nothing behind."""
     with contextlib.suppress(asyncio.CancelledError):
         await task
 
 
-async def test_a_prestart_cancelled_close_task_becomes_abandoned():
+async def test_a_prestart_cancelled_close_task_becomes_abandoned() -> None:
     """A close task cancelled before its body starts cannot leave CLOSING behind.
 
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
@@ -5373,7 +5449,7 @@ async def test_a_prestart_cancelled_close_task_becomes_abandoned():
     await _discard(starter)
 
 
-async def test_close_observes_an_already_cancelled_attempt_as_abandoned():
+async def test_close_observes_an_already_cancelled_attempt_as_abandoned() -> None:
     """A later close finds the cancelled attempt ABANDONED and starts no replacement.
 
     ABANDONED is a terminal reading of the ONE attempt this connection is
@@ -5429,7 +5505,7 @@ def _consumer_with_a_controlled_teardown(
     return consumer_class(schema=SCHEMA, revalidation_window=0.0)
 
 
-async def test_cancelling_the_teardown_ends_the_close_attempt_instead_of_orphaning_it():
+async def test_cancelling_the_teardown_ends_the_close_attempt_instead_of_orphaning_it() -> None:
     """A cancelled ``settle()`` cancels and awaits the attempt it owns.
 
     The helper-level statement of the teardown contract, made where the two
@@ -5479,7 +5555,7 @@ async def test_cancelling_the_teardown_ends_the_close_attempt_instead_of_orphani
 
 async def test_a_cancelled_disconnect_leaves_no_task_retaining_the_connection(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """``disconnect`` cancelled by the server ends the connection's own close task.
 
     The same contract through the consumer the router mounts, with the input an
@@ -5499,7 +5575,7 @@ async def test_a_cancelled_disconnect_leaves_no_task_retaining_the_connection(
     """
     teardown_reached = asyncio.Event()
 
-    async def cancellable_teardown(_consumer: object, _code: int):
+    async def cancellable_teardown(_consumer: object, _code: int) -> None:
         teardown_reached.set()
 
     consumer = _consumer_with_a_controlled_teardown(monkeypatch, cancellable_teardown)
@@ -5526,7 +5602,7 @@ async def test_a_cancelled_disconnect_leaves_no_task_retaining_the_connection(
 
 async def test_a_teardown_cancelled_before_it_returns_still_settles_the_close(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A cancellation that lands INSIDE upstream's teardown does not skip settlement.
 
     The other half of the ``finally`` contract, and the half no other row reaches:
@@ -5549,7 +5625,7 @@ async def test_a_teardown_cancelled_before_it_returns_still_settles_the_close(
     teardown_reached = asyncio.Event()
     teardown_cancelled = asyncio.Event()
 
-    async def parked_teardown(_consumer: object, _code: int):
+    async def parked_teardown(_consumer: object, _code: int) -> None:
         teardown_reached.set()
         try:
             await asyncio.Event().wait()
@@ -5582,7 +5658,7 @@ async def test_a_teardown_cancelled_before_it_returns_still_settles_the_close(
 
 async def test_a_teardown_that_raises_still_settles_the_close_and_propagates(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Upstream's teardown failing does not skip settlement.
 
     Settlement sequenced after an unguarded ``await super().disconnect(code)`` is
@@ -5603,7 +5679,7 @@ async def test_a_teardown_that_raises_still_settles_the_close_and_propagates(
     """
     teardown_reached = asyncio.Event()
 
-    async def failing_teardown(_consumer: object, _code: int):
+    async def failing_teardown(_consumer: object, _code: int) -> NoReturn:
         teardown_reached.set()
         raise RuntimeError("upstream teardown failed")
 
@@ -5648,7 +5724,7 @@ async def test_a_teardown_that_raises_still_settles_the_close_and_propagates(
 async def test_nothing_is_written_to_the_socket_after_the_revocation_close(
     subprotocol: str,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The connection contract: the ``4403`` is the LAST thing the package writes.
 
     A revoked operation's result loop ends NORMALLY - the stop-aware result source
@@ -5712,7 +5788,7 @@ async def test_nothing_is_written_to_the_socket_after_the_revocation_close(
 async def test_a_delegated_control_frame_is_suppressed_once_the_revocation_is_decided(
     subprotocol: str,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The cut-off is the DECISION, not the committed close - and it is not a mute.
 
     The window that distinguishes the two rulings, held open on purpose: the
@@ -5805,7 +5881,7 @@ async def test_a_delegated_control_frame_is_suppressed_once_the_revocation_is_de
     assert probe.reads == 4
 
 
-def _upstream_handler_sources():
+def _upstream_handler_sources() -> list[str]:
     """The source text of upstream's two WebSocket protocol handler modules.
 
     Read off disk rather than described here, so the transparency row below judges
@@ -5822,7 +5898,7 @@ def _upstream_handler_sources():
     ]
 
 
-def _wrapped_schema_reads():
+def _wrapped_schema_reads() -> frozenset[str]:
     """The result-source names ``_StopAwareSchema`` actually overrides.
 
     Derived from the class rather than restated, so the row below compares upstream's
@@ -5836,20 +5912,21 @@ def _wrapped_schema_reads():
     )
 
 
-def _public_schema_names():
+def _public_schema_names() -> frozenset[str]:
     """The public names ``BaseSchema`` declares, the contract a handler reads from."""
     from strawberry.schema import BaseSchema
 
     return frozenset(name for name in vars(BaseSchema) if not name.startswith("_"))
 
 
-def test_the_stop_aware_schema_covers_every_upstream_schema_read():
+def test_the_stop_aware_schema_covers_every_upstream_schema_read() -> None:
     """The substituted schema covers every read upstream makes of it, from its source.
 
     The stop protocol works by replacing the handler's own ``self.schema`` with a
     per-connection wrapper, and a wrapper is only safe while everything upstream asks
-    of that object becomes stoppable and masked. So the name set is DERIVED from the installed handler modules rather than asserted from
-    memory: every ``self.schema.<name>`` must be one the wrapper defines - a call
+    of that object becomes stoppable and masked. So the name set is DERIVED from the
+    installed handler modules rather than asserted from memory: every
+    ``self.schema.<name>`` must be one the wrapper defines - a call
     whose result source has to become stoppable and masked.
 
     **The assertion is containment, not equality.** Pinning the exact pair of names
@@ -5914,11 +5991,11 @@ class _UnrenderableFrame:
     """
 
     @property
-    def errors(self):
+    def errors(self) -> NoReturn:
         raise AttributeError("an incremental patch frame carries no flat error list")
 
 
-async def test_a_streamed_value_the_policy_cannot_mask_reaches_the_transport_unchanged():
+async def test_a_streamed_value_the_policy_cannot_mask_reaches_the_transport_unchanged() -> None:
     """The masking shape gate passes an unmaskable frame through by IDENTITY.
 
     The seam now covers ``schema.stream``, which yields more shapes than a
@@ -5941,7 +6018,7 @@ async def test_a_streamed_value_the_policy_cannot_mask_reaches_the_transport_unc
     maskable = StrawberryExecutionResult(data={"ok": None}, errors=[leaked])
     unrenderable = _UnrenderableFrame()
 
-    async def source():
+    async def source() -> AsyncGenerator[_UnrenderableFrame | ExecutionResult, None]:
         yield unrenderable
         yield maskable
 
@@ -5987,7 +6064,7 @@ async def test_a_streamed_value_the_policy_cannot_mask_reaches_the_transport_unc
 _LOGOUT_MUTATION = "mutation{ logout{ ok } }"
 
 
-def _build_logout_schema():
+def _build_logout_schema() -> "DjangoSchema":
     """Build a schema carrying the package's own ``logout`` beside the controlled operations.
 
     The logout-only auth surface: no ``DjangoType`` is declared, which the
@@ -6019,7 +6096,7 @@ def logout_schema() -> "Iterator[DjangoSchema]":
         registry.clear()
 
 
-async def _logout_on_this_socket(schema: "DjangoSchema", consumer: object):
+async def _logout_on_this_socket(schema: "DjangoSchema", consumer: object) -> None:
     """Run the package's ``logout`` mutation against ONE open socket's own scope.
 
     The real resolver over the real connection: ``request_from_info`` resolves a
@@ -6045,7 +6122,7 @@ async def test_a_same_socket_logout_stops_a_running_subscription_on_both_protoco
     subprotocol: str,
     monkeypatch: pytest.MonkeyPatch,
     logout_schema: "DjangoSchema",
-):
+) -> None:
     """The package's own logout revokes the connection it was sent over.
 
     The composition every external-revocation row misses: authenticate, admit a
@@ -6101,7 +6178,7 @@ async def test_a_same_socket_logout_stops_a_running_subscription_on_both_protoco
 async def test_the_logout_mutations_own_reply_is_suppressed_by_the_connection_close(
     monkeypatch: pytest.MonkeyPatch,
     logout_schema: "DjangoSchema",
-):
+) -> None:
     """The pinned transition contract: the socket ends, so the reply does not arrive.
 
     The frame-driven end-to-end shape, on the one protocol that can execute a
@@ -6146,7 +6223,7 @@ async def test_the_logout_mutations_own_reply_is_suppressed_by_the_connection_cl
 async def test_an_anonymous_socket_that_logs_out_keeps_the_read_free_carve_out(
     monkeypatch: pytest.MonkeyPatch,
     logout_schema: "DjangoSchema",
-):
+) -> None:
     """Provenance, not the current actor: a socket that was never authenticated is untouched.
 
     The control that keeps the carve-out a carve-out. This socket carries no
@@ -6181,7 +6258,7 @@ async def test_an_anonymous_socket_that_logs_out_keeps_the_read_free_carve_out(
 async def test_a_same_socket_logout_cannot_complete_across_a_parked_protected_send(
     monkeypatch: pytest.MonkeyPatch,
     logout_schema: "DjangoSchema",
-):
+) -> None:
     """The send ordering: an authorized frame and a logout are serialized, not raced.
 
     The one interleaving no after-the-fact check can repair, and therefore the one
@@ -6272,7 +6349,7 @@ async def test_a_same_socket_logout_cannot_complete_across_a_parked_protected_se
 async def test_a_transition_in_flight_denies_both_checkpoints_inside_a_positive_window(
     monkeypatch: pytest.MonkeyPatch,
     logout_schema: "DjangoSchema",
-):
+) -> None:
     """The other ordering: a positive window's cache hit is not a bypass.
 
     The reverse of the parked-send row, and the reason a fresh window timestamp
@@ -6312,7 +6389,7 @@ async def test_a_transition_in_flight_denies_both_checkpoints_inside_a_positive_
     inside_transition = asyncio.Event()
     release_transition = asyncio.Event()
 
-    async def parked_logout(scope: "_ChannelScope"):
+    async def parked_logout(scope: "_ChannelScope") -> None:
         """Park inside ``actor_transition``, before the scope actor is replaced."""
         inside_transition.set()
         await release_transition.wait()
@@ -6384,7 +6461,7 @@ async def test_a_transition_in_flight_denies_both_checkpoints_inside_a_positive_
 async def test_router_delegates_non_text_frame_close_behavior_per_protocol(
     subprotocol: str,
     expected_close: int,
-):
+) -> None:
     """Malformed non-text frames retain Strawberry's protocol-specific closes.
 
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
@@ -6400,7 +6477,7 @@ async def test_router_delegates_non_text_frame_close_behavior_per_protocol(
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_router_delegates_legacy_invalid_json_continuation():
+async def test_router_delegates_legacy_invalid_json_continuation() -> None:
     """Legacy graphql-ws ignores malformed JSON and continues its connection.
 
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
@@ -6417,7 +6494,9 @@ async def test_router_delegates_legacy_invalid_json_continuation():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_actor_without_is_authenticated_attribute_degrades_safely_to_unauthenticated():
+async def test_actor_without_is_authenticated_attribute_degrades_safely_to_unauthenticated() -> (
+    None
+):
     """A custom or duck-typed actor object lacking is_authenticated is treated as unauthenticated.
 
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
@@ -6507,9 +6586,15 @@ def _handler_class(consumer_class: type, name: str) -> type:
     return handler_class
 
 
-def _mounted_handler(handler_class: type, websocket: object):
-    """Instantiate one generated handler class against a scripted websocket."""
+class _MountedHandler(Protocol):
+    """The one method every generated handler class exposes that the containment rows drive."""
 
+    async def handle(self) -> None:
+        """Run the handler's receive loop until the socket ends."""
+
+
+def _mounted_handler(handler_class: type[_MountedHandler], websocket: object) -> _MountedHandler:
+    """Instantiate one generated handler class against a scripted websocket."""
     kwargs: dict[str, object] = {
         "view": SimpleNamespace(),
         "websocket": websocket,
@@ -6542,7 +6627,7 @@ def _mounted_handler(handler_class: type, websocket: object):
 async def test_a_non_dispatchable_frame_is_refused_and_the_connection_ends(
     frame_text: str,
     subprotocol: str,
-):
+) -> None:
     """A frame the dispatcher cannot shape takes upstream's invalid-message close.
 
     Every literal below used to kill the message-loop task with a raw
@@ -6581,7 +6666,7 @@ async def test_a_non_dispatchable_frame_is_refused_and_the_connection_ends(
 @pytest.mark.django_db(transaction=True)
 async def test_an_unhashable_operation_id_is_refused_and_the_connection_ends(
     subprotocol: str,
-):
+) -> None:
     """An unhashable operation id cannot crash the connection task.
 
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
@@ -6602,7 +6687,7 @@ async def test_an_unhashable_operation_id_is_refused_and_the_connection_ends(
 @pytest.mark.django_db(transaction=True)
 async def test_a_non_mapping_payload_is_refused_and_the_connection_ends_properly(
     subprotocol: str,
-):
+) -> None:
     """A non-mapping payload is a refusal, not a dead loop.
 
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
@@ -6619,7 +6704,7 @@ async def test_a_non_mapping_payload_is_refused_and_the_connection_ends_properly
 
 @pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])
 @pytest.mark.django_db(transaction=True)
-async def test_a_missing_payload_is_refused_per_protocol(subprotocol: str):
+async def test_a_missing_payload_is_refused_per_protocol(subprotocol: str) -> None:
     """A missing payload field refuses the connection on BOTH protocols.
 
     Before the containment the two protocols disagreed here: transport-ws's own
@@ -6643,7 +6728,7 @@ async def test_a_missing_payload_is_refused_per_protocol(subprotocol: str):
 @pytest.mark.django_db(transaction=True)
 async def test_a_stop_for_an_operation_the_connection_is_not_running_leaves_a_live_socket(
     subprotocol: str,
-):
+) -> None:
     """A client stop naming no running operation is a no-op, never a close.
 
     Three ids the connection is not running: one whose operation finished on its
@@ -6674,7 +6759,7 @@ async def test_a_stop_for_an_operation_the_connection_is_not_running_leaves_a_li
 async def test_a_stack_overflowing_document_is_refused_and_the_connection_ends(
     pathological_json_text: str,
     subprotocol: str,
-):
+) -> None:
     """A ``RecursionError`` out of the frame decode is a refusal, not a dead loop.
 
     The document is syntactically valid JSON whose parse overflows the
@@ -6699,7 +6784,7 @@ async def test_a_stack_overflowing_document_is_refused_and_the_connection_ends(
 @pytest.mark.django_db(transaction=True)
 async def test_a_non_string_query_delivered_over_a_socket_does_not_break_the_loop(
     subprotocol: str,
-):
+) -> None:
     """A non-string ``query`` is one operation's masked error, never a dead loop.
 
     The WebSocket can deliver a non-string ``query``. Upstream parses it inside the
@@ -6772,23 +6857,29 @@ class _ScriptedTransport:
         self,
         iter_exception: BaseException,
         close_exception: BaseException | None = None,
-    ):
+    ) -> None:
         self._iter_exception = iter_exception
         self._close_exception = close_exception
         self.closes: list[tuple[int, str]] = []
 
-    # basedpyright: Strawberry's protocol handler passes ignore_parsing_errors= by keyword
-    def iter_json(self, *, ignore_parsing_errors: bool = False):  # pyright: ignore[reportUnusedParameter]
+    def iter_json(
+        self,
+        *,
+        ignore_parsing_errors: bool = False,
+    ) -> AsyncIterator[dict[str, object]]:
+        del (
+            ignore_parsing_errors
+        )  # Strawberry's handler passes it by keyword; this double ignores it
         exception = self._iter_exception
 
-        async def generator():
+        async def generator() -> AsyncIterator[dict[str, object]]:
             raise exception
             # basedpyright: the yield only makes this an async generator; the raise ends it first
             yield {}  # pyright: ignore[reportUnreachable]
 
         return generator()
 
-    async def close(self, code: int, reason: str):
+    async def close(self, code: int, reason: str) -> None:
         self.closes.append((code, reason))
         if self._close_exception is not None:
             raise self._close_exception
@@ -6836,7 +6927,7 @@ async def test_the_containment_close_names_whose_fault_the_escape_was(
     expected_close: tuple[int, str],
     log_substring: str,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """A server bug that unwinds the loop is ``1011``, never the parse-failure close.
 
     The containment catches every ordinary escape, but the two escape families
@@ -6875,7 +6966,7 @@ async def test_the_containment_close_names_whose_fault_the_escape_was(
 
 
 @pytest.mark.parametrize("handler_class", _revalidating_handler_classes())
-async def test_a_cancellation_delivered_mid_loop_propagates_untouched(handler_class: type):
+async def test_a_cancellation_delivered_mid_loop_propagates_untouched(handler_class: type) -> None:
     """The containment is not a cancellation trap: teardown still unwinds.
 
     A ``CancelledError`` raised from inside the message loop must reach the
@@ -6896,7 +6987,7 @@ async def test_a_cancellation_delivered_mid_loop_propagates_untouched(handler_cl
 @pytest.mark.parametrize("handler_class", _revalidating_handler_classes())
 async def test_a_broken_transport_during_the_refusal_is_logged_not_raised(
     handler_class: type,
-):
+) -> None:
     """A close that raises still ends the containment; the loop never escapes.
 
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
@@ -6914,7 +7005,7 @@ async def test_a_broken_transport_during_the_refusal_is_logged_not_raised(
 
 
 @pytest.mark.parametrize("handler_class", _revalidating_handler_classes())
-async def test_a_cancellation_during_the_refusal_close_propagates(handler_class: type):
+async def test_a_cancellation_during_the_refusal_close_propagates(handler_class: type) -> None:
     """Cancellation delivered while the refusal is being written propagates.
 
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
@@ -6934,7 +7025,7 @@ async def test_a_cancellation_during_the_refusal_close_propagates(handler_class:
 
 
 @pytest.mark.parametrize("handler_class", _revalidating_handler_classes())
-async def test_a_process_level_exception_bypasses_the_guard(handler_class: type):
+async def test_a_process_level_exception_bypasses_the_guard(handler_class: type) -> None:
     """The guard catches ``Exception`` only, BY INHERITANCE, not by name.
 
     ``GeneratorExit`` and a bespoke ``BaseException`` subclass must both escape

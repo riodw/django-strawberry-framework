@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import sys
 import types
+from typing import NoReturn
 
 import pytest
 from django.contrib.sessions.backends.db import SessionStore as DBSessionStore
@@ -40,20 +41,20 @@ from tests.auth._helpers import _drain_until
 # ---------------------------------------------------------------------------
 
 
-def test_session_store_class_resolves_default_engine():
+def test_session_store_class_resolves_default_engine() -> None:
     """Default engine resolves to Django's DB SessionStore."""
     resolved = session_store_class()
     assert resolved is DBSessionStore
 
 
 @override_settings(SESSION_ENGINE="django.contrib.sessions.backends.signed_cookies")
-def test_session_store_class_honors_override_settings():
+def test_session_store_class_honors_override_settings() -> None:
     """Settings overrides at call time dynamically resolve the new store class."""
     resolved = session_store_class()
     assert resolved is SignedCookieSessionStore
 
 
-def test_session_store_class_resolves_custom_engine(monkeypatch: pytest.MonkeyPatch):
+def test_session_store_class_resolves_custom_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     """A custom session engine resolves identically via import_string."""
     module_name = "tests.utils._stub_custom_session_engine"
 
@@ -69,7 +70,7 @@ def test_session_store_class_resolves_custom_engine(monkeypatch: pytest.MonkeyPa
 
 def test_session_store_class_reports_an_unreadable_setting_as_configuration_error(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A ``settings.SESSION_ENGINE`` read that RAISES becomes ``ConfigurationError``.
 
     A settings object whose ``SESSION_ENGINE`` descriptor raises is the
@@ -80,7 +81,7 @@ def test_session_store_class_reports_an_unreadable_setting_as_configuration_erro
     from django.conf import settings as django_settings
 
     class _RaisingSettings:
-        def __getattr__(self, name: str):
+        def __getattr__(self, name: str) -> object:
             raise KeyError(name)
 
     monkeypatch.setattr("django.conf.settings", _RaisingSettings())
@@ -95,21 +96,21 @@ def test_session_store_class_reports_an_unreadable_setting_as_configuration_erro
 
 
 @override_settings(SESSION_ENGINE=object())
-def test_session_store_class_rejects_a_non_string_engine():
+def test_session_store_class_rejects_a_non_string_engine() -> None:
     """A non-string ``SESSION_ENGINE`` is rejected before any import is attempted."""
     with pytest.raises(ConfigurationError, match="must be a string"):
         session_store_class()
 
 
 @override_settings(SESSION_ENGINE="")
-def test_session_store_class_rejects_an_empty_engine():
+def test_session_store_class_rejects_an_empty_engine() -> None:
     """An empty ``SESSION_ENGINE`` is rejected rather than importing ``.SessionStore``."""
     with pytest.raises(ConfigurationError, match="non-empty string"):
         session_store_class()
 
 
 @override_settings(SESSION_ENGINE="tests.utils._no_such_session_engine")
-def test_session_store_class_reports_an_unresolvable_engine_as_configuration_error():
+def test_session_store_class_reports_an_unresolvable_engine_as_configuration_error() -> None:
     """An engine that does not import is a ``ConfigurationError`` naming the engine."""
     with pytest.raises(ConfigurationError, match="_no_such_session_engine"):
         session_store_class()
@@ -117,7 +118,7 @@ def test_session_store_class_reports_an_unresolvable_engine_as_configuration_err
 
 def test_session_store_class_reports_a_storeless_engine_as_configuration_error(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """An engine module WITHOUT ``SessionStore`` is a ``ConfigurationError``, not an ImportError.
 
     ``import_string`` raises ``ImportError`` for a missing module and for a
@@ -127,16 +128,18 @@ def test_session_store_class_reports_a_storeless_engine_as_configuration_error(
     module_name = "tests.utils._stub_storeless_session_engine"
     monkeypatch.setitem(sys.modules, module_name, types.ModuleType(module_name))
 
-    with override_settings(SESSION_ENGINE=module_name):
-        with pytest.raises(ConfigurationError, match="SessionStore"):
-            session_store_class()
+    with (
+        override_settings(SESSION_ENGINE=module_name),
+        pytest.raises(ConfigurationError, match="SessionStore"),
+    ):
+        session_store_class()
 
 
 class _FormatHostileEngine(str):
     """A deployment-supplied engine whose ``__format__`` raises while being interpolated."""
 
     @override
-    def __format__(self, spec: str):
+    def __format__(self, spec: str) -> str:
         raise RuntimeError("hostile __format__")
 
 
@@ -144,12 +147,12 @@ class _ReprHostileEngine(str):
     """A deployment-supplied engine whose ``__repr__`` raises while being rendered."""
 
     @override
-    def __repr__(self):
+    def __repr__(self) -> str:
         raise RuntimeError("hostile __repr__")
 
 
 @override_settings(SESSION_ENGINE=_FormatHostileEngine("tests.utils._no_such_engine"))
-def test_session_store_class_format_hostile_engine_raises_configuration_error():
+def test_session_store_class_format_hostile_engine_raises_configuration_error() -> None:
     """A hostile ``__format__`` on the engine cannot defeat the typed rejection.
 
     ``SESSION_ENGINE`` is deployment-supplied, so the import-path f-string
@@ -165,7 +168,7 @@ def test_session_store_class_format_hostile_engine_raises_configuration_error():
 
 
 @override_settings(SESSION_ENGINE=_ReprHostileEngine("tests.utils._no_such_engine"))
-def test_session_store_class_repr_hostile_engine_raises_configuration_error():
+def test_session_store_class_repr_hostile_engine_raises_configuration_error() -> None:
     """A hostile ``__repr__`` on the engine cannot defeat the typed rejection.
 
     The import-failure message renders the engine through ``{engine!r}`` at the
@@ -179,13 +182,13 @@ def test_session_store_class_repr_hostile_engine_raises_configuration_error():
 
 
 @override_settings(SESSION_ENGINE=_ReprHostileEngine("tests.utils._no_such_engine"))
-def test_session_store_class_repr_hostile_engine_names_the_engine_path():
+def test_session_store_class_repr_hostile_engine_names_the_engine_path() -> None:
     """The flattened engine still renders its path in the rejection message.
 
     Flattening is a safety measure, not a redaction: the actionable part of the
     message (which module could not be imported) survives.
     """
-    with pytest.raises(ConfigurationError, match="tests.utils._no_such_engine"):
+    with pytest.raises(ConfigurationError, match=r"tests\.utils\._no_such_engine"):
         session_store_class()
 
 
@@ -194,7 +197,7 @@ def test_session_store_class_repr_hostile_engine_names_the_engine_path():
 # ---------------------------------------------------------------------------
 
 
-def test_connection_actor_state_initialization():
+def test_connection_actor_state_initialization() -> None:
     """Initial state has unlatched provenance and an asyncio.Lock."""
     state = ConnectionActorState()
     assert state.authenticated_provenance is False
@@ -202,7 +205,7 @@ def test_connection_actor_state_initialization():
     assert not state.lock.locked()
 
 
-def test_connection_actor_state_slots_prevent_arbitrary_attributes():
+def test_connection_actor_state_slots_prevent_arbitrary_attributes() -> None:
     """__slots__ enforces exact field shape and raises AttributeError on typos."""
     state = ConnectionActorState()
     with pytest.raises(AttributeError):
@@ -210,7 +213,7 @@ def test_connection_actor_state_slots_prevent_arbitrary_attributes():
         state.unknown_field = True  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def test_connection_actor_state_get_or_create_reused_per_scope():
+def test_connection_actor_state_get_or_create_reused_per_scope() -> None:
     """First access stores state under the private scope key; subsequent accesses return the same instance."""
     scope: dict[str, object] = {}
     state1 = connection_actor_state(scope)
@@ -222,7 +225,7 @@ def test_connection_actor_state_get_or_create_reused_per_scope():
     assert state2 is state1
 
 
-def test_connection_actor_state_isolated_across_scopes():
+def test_connection_actor_state_isolated_across_scopes() -> None:
     """Distinct scope dictionaries receive independent ConnectionActorState instances."""
     scope1: dict[str, object] = {}
     scope2: dict[str, object] = {}
@@ -237,7 +240,7 @@ def test_connection_actor_state_isolated_across_scopes():
 # ---------------------------------------------------------------------------
 
 
-def test_note_authenticated_actor_latches_provenance():
+def test_note_authenticated_actor_latches_provenance() -> None:
     """Provenance is initially False, becomes True on note, and remains True."""
     scope: dict[str, object] = {}
     assert connection_was_authenticated(scope) is False
@@ -255,7 +258,7 @@ def test_note_authenticated_actor_latches_provenance():
 # ---------------------------------------------------------------------------
 
 
-async def test_actor_lease_returns_scope_lock():
+async def test_actor_lease_returns_scope_lock() -> None:
     """actor_lease returns the ConnectionActorState lock and can be held via async with."""
     scope: dict[str, object] = {}
     lock = actor_lease(scope)
@@ -268,7 +271,7 @@ async def test_actor_lease_returns_scope_lock():
     assert not lock.locked()
 
 
-async def test_actor_transition_with_authenticated_latches_provenance():
+async def test_actor_transition_with_authenticated_latches_provenance() -> None:
     """actor_transition(was_authenticated=True) latches provenance and holds lease."""
     scope: dict[str, object] = {}
     assert connection_was_authenticated(scope) is False
@@ -281,7 +284,7 @@ async def test_actor_transition_with_authenticated_latches_provenance():
     assert connection_was_authenticated(scope) is True
 
 
-async def test_actor_transition_without_authenticated_does_not_latch_provenance():
+async def test_actor_transition_without_authenticated_does_not_latch_provenance() -> None:
     """actor_transition(was_authenticated=False) holds lease without latching provenance."""
     scope: dict[str, object] = {}
     assert connection_was_authenticated(scope) is False
@@ -294,12 +297,12 @@ async def test_actor_transition_without_authenticated_does_not_latch_provenance(
     assert connection_was_authenticated(scope) is False
 
 
-async def test_actor_transition_failure_still_latches_provenance_and_releases_lease():
+async def test_actor_transition_failure_still_latches_provenance_and_releases_lease() -> None:
     """Fail closed: an exception inside actor_transition still latches provenance and frees lease."""
     scope: dict[str, object] = {}
     assert connection_was_authenticated(scope) is False
 
-    async def body_that_raises():
+    async def body_that_raises() -> NoReturn:
         async with actor_transition(scope, was_authenticated=True):
             assert connection_was_authenticated(scope) is True
             raise RuntimeError("teardown boom")
@@ -311,19 +314,19 @@ async def test_actor_transition_failure_still_latches_provenance_and_releases_le
     assert connection_was_authenticated(scope) is True
 
 
-async def test_actor_transition_and_lease_are_mutually_exclusive():
+async def test_actor_transition_and_lease_are_mutually_exclusive() -> None:
     """An in-flight actor_transition serializes against another task acquiring actor_lease."""
     scope: dict[str, object] = {}
     transition_entered = asyncio.Event()
     transition_can_exit = asyncio.Event()
     lease_acquired = {"value": False}
 
-    async def task_transition():
+    async def task_transition() -> None:
         async with actor_transition(scope, was_authenticated=True):
             transition_entered.set()
             await transition_can_exit.wait()
 
-    async def task_lease():
+    async def task_lease() -> None:
         await transition_entered.wait()
         async with actor_lease(scope):
             lease_acquired["value"] = True

@@ -6,6 +6,7 @@ and filter lookup camelCase in ``examples/fakeshop/test_query/test_library_api.p
 """
 
 from collections.abc import Callable
+from typing import NoReturn
 
 import pytest
 from typing_extensions import override
@@ -24,23 +25,23 @@ class _HostileString(str):
     """A string subclass whose ordinary operations cannot be trusted."""
 
     @override
-    def __hash__(self):
+    def __hash__(self) -> int:
         raise RuntimeError("hostile hash")
 
     @override
-    def split(self, *args: object, **kwargs: object):
+    def split(self, *args: object, **kwargs: object) -> NoReturn:
         raise RuntimeError("hostile split")
 
     @override
-    def replace(self, *args: object, **kwargs: object):
+    def replace(self, *args: object, **kwargs: object) -> NoReturn:
         raise RuntimeError("hostile replace")
 
     @override
-    def __str__(self):
+    def __str__(self) -> str:
         raise RuntimeError("hostile string")
 
 
-def test_snake_case_round_trips_camel_case():
+def test_snake_case_round_trips_camel_case() -> None:
     assert snake_case("name") == "name"
     assert snake_case("isPrivate") == "is_private"
     assert snake_case("createdDate") == "created_date"
@@ -57,7 +58,7 @@ def test_snake_case_round_trips_camel_case():
         ("trailing_", "trailing_"),
     ],
 )
-def test_snake_case_pins_acronym_digit_and_underscore_edges(camel: str, snake: str):
+def test_snake_case_pins_acronym_digit_and_underscore_edges(camel: str, snake: str) -> None:
     assert snake_case(camel) == snake
 
 
@@ -88,11 +89,11 @@ def test_snake_case_pins_acronym_digit_and_underscore_edges(camel: str, snake: s
         "a_b__c",
     ],
 )
-def test_graphql_camel_name_round_trips_normalized_snake_case(name: str):
+def test_graphql_camel_name_round_trips_normalized_snake_case(name: str) -> None:
     assert snake_case(graphql_camel_name(name)) == name
 
 
-def test_pascal_case_handles_snake_case_inputs():
+def test_pascal_case_handles_snake_case_inputs() -> None:
     assert pascal_case("status") == "Status"
     assert pascal_case("is_active") == "IsActive"
     assert pascal_case("payment_method") == "PaymentMethod"
@@ -117,7 +118,7 @@ def test_pascal_case_handles_snake_case_inputs():
     assert pascal_case("double__underscore") == "DoubleUnderscore"
 
 
-def test_pascal_case_empty_output_edges():
+def test_pascal_case_empty_output_edges() -> None:
     # Pin the silent-empty contract: every segment filtered out by ``if part``
     # collapses to ``""``.  Unreachable through the documented call chain
     # (Django field names are never empty and never ``"_"``); pinning prevents
@@ -126,7 +127,7 @@ def test_pascal_case_empty_output_edges():
     assert pascal_case("_") == ""
 
 
-def test_flatten_lookup_path_flattens_every_lookup_sep():
+def test_flatten_lookup_path_flattens_every_lookup_sep() -> None:
     """LOOKUP_SEP never survives into a generated identifier."""
     assert flatten_lookup_path("name") == "name"
     assert flatten_lookup_path("category__name") == "category_name"
@@ -137,7 +138,7 @@ def test_flatten_lookup_path_flattens_every_lookup_sep():
     assert flatten_lookup_path("a____b") == flatten_lookup_path(flatten_lookup_path("a____b"))
 
 
-def test_string_helpers_normalize_hostile_string_subclasses():
+def test_string_helpers_normalize_hostile_string_subclasses() -> None:
     """Hostile subclass overrides cannot escape through helper internals."""
     assert snake_case(_HostileString("isPrivate")) == "is_private"
     assert pascal_case(_HostileString("is_private")) == "IsPrivate"
@@ -145,14 +146,14 @@ def test_string_helpers_normalize_hostile_string_subclasses():
     assert flatten_lookup_path(_HostileString("category__name")) == "category_name"
 
 
-def test_graphql_camel_name_escapes_adjacent_uppercase_segments():
+def test_graphql_camel_name_escapes_adjacent_uppercase_segments() -> None:
     """Adjacent one-letter snake segments keep a reversible separator marker."""
     assert graphql_camel_name("a_a_a") == "aA__xA"
     assert snake_case(graphql_camel_name("a_a_a")) == "a_a_a"
     assert snake_case("aA__xA") != snake_case("aAA")
 
 
-def test_snake_case_distinguishes_x_token_from_adjacent_uppercase_escape():
+def test_snake_case_distinguishes_x_token_from_adjacent_uppercase_escape() -> None:
     """__x only functions as an adjacent-segment escape after an uppercase character."""
     # After an uppercase segment, __x is the adjacent one-letter separator
     assert snake_case("aA__xA") == "a_a_a"
@@ -164,7 +165,7 @@ def test_snake_case_distinguishes_x_token_from_adjacent_uppercase_escape():
     assert snake_case("__xA") == "__x_a"
 
 
-def test_pascal_case_or_raise_raises_on_empty_and_delegates_on_valid():
+def test_pascal_case_or_raise_raises_on_empty_and_delegates_on_valid() -> None:
     """pascal_case_or_raise validates non-empty tokens and returns PascalCase."""
     assert (
         pascal_case_or_raise(
@@ -190,14 +191,14 @@ def test_pascal_case_or_raise_raises_on_empty_and_delegates_on_valid():
         flatten_lookup_path,
     ],
 )
-def test_string_helpers_reject_non_string_inputs(helper: Callable[[str], object]):
+def test_string_helpers_reject_non_string_inputs(helper: Callable[[str], object]) -> None:
     """Malformed helper inputs fail with the package's typed configuration error."""
     with pytest.raises(ConfigurationError, match="must be a string"):
         # basedpyright: a non-string input is the bad value the helper must reject
         helper(42)  # pyright: ignore[reportArgumentType]
 
 
-def test_snake_case_preserves_lru_cache_controls():
+def test_snake_case_preserves_lru_cache_controls() -> None:
     """The normalization boundary keeps the historical cache-control surface and public name."""
     assert snake_case.__name__ == "snake_case"
     assert snake_case.__qualname__ == "snake_case"

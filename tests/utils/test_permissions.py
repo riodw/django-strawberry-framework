@@ -6,7 +6,8 @@ Channels scope adapters and hostile ``info.context`` reads have no HTTP mount
 ``examples/fakeshop/test_query/test_library_api.py``.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
+from typing import NoReturn
 
 import pytest
 import pytest_django
@@ -42,12 +43,12 @@ from django_strawberry_framework.utils.querysets import SyncMisuseError
 
 
 class _Ctx:
-    def __init__(self, request: object):
+    def __init__(self, request: object) -> None:
         self.request = request
 
 
 @pytest.mark.parametrize("family_label", ["FilterSet", "OrderSet"])
-def test_request_from_info_resolves_and_names_family(family_label: str):
+def test_request_from_info_resolves_and_names_family(family_label: str) -> None:
     """Every ordinary Django request context resolves; bad shapes name the family."""
     request = HttpRequest()
     info_with_request = type("Info", (), {"context": _Ctx(request)})()
@@ -76,14 +77,14 @@ def test_request_from_info_resolves_and_names_family(family_label: str):
 
 
 class _FakeConsumer:
-    def __init__(self, scope: object):
+    def __init__(self, scope: object) -> None:
         self.scope = scope
 
 
 class _FakeChannelsRequest:
     """The ``ChannelsRequest`` duck shape: ``consumer`` + ``body`` + request attrs."""
 
-    def __init__(self, scope: object):
+    def __init__(self, scope: object) -> None:
         self.consumer = _FakeConsumer(scope)
         self.body = b'{"query": "{ ping }"}'
         self.method = "POST"
@@ -93,7 +94,7 @@ class _FakeChannelsRequest:
 class _FakeInfo:
     """The ``info`` duck shape ``request_from_info`` reads: only ``context``."""
 
-    def __init__(self, context: dict[str, object]):
+    def __init__(self, context: dict[str, object]) -> None:
         self.context = context
 
 
@@ -101,7 +102,7 @@ def _channels_info(scope: object) -> _FakeInfo:
     return _FakeInfo({"request": _FakeChannelsRequest(scope), "response": object()})
 
 
-def test_channels_context_resolves_to_a_wrapping_adapter():
+def test_channels_context_resolves_to_a_wrapping_adapter() -> None:
     """The mapping context resolves; ``.user`` / ``.session`` / ``.scope`` come from the scope."""
     user, session = object(), object()
     scope = {"user": user, "session": session, "type": "http"}
@@ -112,7 +113,7 @@ def test_channels_context_resolves_to_a_wrapping_adapter():
     assert adapter.scope is scope
 
 
-def test_channels_adapter_delegates_unknown_attributes_to_the_wrapped_request():
+def test_channels_adapter_delegates_unknown_attributes_to_the_wrapped_request() -> None:
     """Non-scope attributes fall through to the original ``ChannelsRequest``."""
     scope = {"user": object()}
     info = _channels_info(scope)
@@ -129,7 +130,7 @@ def test_channels_adapter_delegates_unknown_attributes_to_the_wrapped_request():
         _ = adapter.definitely_not_a_request_attribute
 
 
-def test_channels_adapter_scope_fields_default_to_none_when_middleware_absent():
+def test_channels_adapter_scope_fields_default_to_none_when_middleware_absent() -> None:
     """No ``AuthMiddlewareStack`` in the stack: ``.user`` / ``.session`` are ``None``, not errors."""
     adapter = request_from_info(_channels_info({"type": "http"}), family_label="FilterSet")
     assert isinstance(adapter, ChannelsRequestAdapter)
@@ -137,7 +138,7 @@ def test_channels_adapter_scope_fields_default_to_none_when_middleware_absent():
     assert adapter.session is None
 
 
-def test_channels_adapter_supports_permission_hooks_reading_both_kinds_of_attribute():
+def test_channels_adapter_supports_permission_hooks_reading_both_kinds_of_attribute() -> None:
     """A consumer-style gate reading one scope-backed and one delegated attribute succeeds."""
     user = object()
     adapter = request_from_info(_channels_info({"user": user}), family_label="FilterSet")
@@ -145,7 +146,7 @@ def test_channels_adapter_supports_permission_hooks_reading_both_kinds_of_attrib
     seen = {}
 
     class _Gate:
-        def check_name_permission(self, request: ChannelsRequestAdapter):
+        def check_name_permission(self, request: ChannelsRequestAdapter) -> None:
             seen["user"] = request.user  # scope-backed
             seen["method"] = request.method  # delegated to the wrapped request
 
@@ -164,14 +165,14 @@ def test_channels_adapter_supports_permission_hooks_reading_both_kinds_of_attrib
 )
 def test_non_channels_mapping_shapes_still_raise_the_family_labelled_error(
     context: dict[str, object],
-):
+) -> None:
     """Mapping contexts that are not Channels-shaped keep the final ``ConfigurationError``."""
     info = type("Info", (), {"context": context})()
     with pytest.raises(ConfigurationError, match="FilterSet could not resolve"):
         request_from_info(info, family_label="FilterSet")
 
 
-def test_non_mapping_scope_is_not_recognized_as_channels():
+def test_non_mapping_scope_is_not_recognized_as_channels() -> None:
     """A ``consumer.scope`` that is not a mapping falls through to the final error."""
     request = _FakeChannelsRequest({})
     request.consumer.scope = ["not", "a", "mapping"]
@@ -189,7 +190,7 @@ def test_non_mapping_scope_is_not_recognized_as_channels():
 class _FakeWSConsumer:
     """The ``GraphQLWSConsumer`` duck shape: the consumer is the request."""
 
-    def __init__(self, scope: object):
+    def __init__(self, scope: object) -> None:
         self.scope = scope
         self.channel_name = "specific..inmemory!probe"
 
@@ -199,7 +200,7 @@ def _channels_ws_info(scope: object) -> _FakeInfo:
     return _FakeInfo({"request": consumer, "ws": consumer})
 
 
-def test_channels_websocket_context_resolves_to_a_wrapping_adapter():
+def test_channels_websocket_context_resolves_to_a_wrapping_adapter() -> None:
     """Direct scope fields resolve and other consumer attributes still delegate."""
     user, session = object(), object()
     scope = {"user": user, "session": session, "type": "websocket"}
@@ -211,7 +212,7 @@ def test_channels_websocket_context_resolves_to_a_wrapping_adapter():
     assert adapter.channel_name == "specific..inmemory!probe"
 
 
-def test_channels_websocket_scope_fields_default_to_none_when_middleware_absent():
+def test_channels_websocket_scope_fields_default_to_none_when_middleware_absent() -> None:
     """A WS scope with no ``user`` key -> ``.user`` / ``.session`` are ``None``, not errors."""
     adapter = request_from_info(
         _channels_ws_info({"type": "websocket"}),
@@ -222,19 +223,19 @@ def test_channels_websocket_scope_fields_default_to_none_when_middleware_absent(
     assert adapter.session is None
 
 
-def test_non_mapping_websocket_scope_is_not_recognized_as_channels():
+def test_non_mapping_websocket_scope_is_not_recognized_as_channels() -> None:
     """A direct WebSocket scope must still be a mapping."""
     info = _channels_ws_info(["not", "a", "mapping"])
     with pytest.raises(ConfigurationError, match="OrderSet could not resolve"):
         request_from_info(info, family_label="OrderSet")
 
 
-def test_hostile_channels_scope_descriptors_become_configuration_errors():
+def test_hostile_channels_scope_descriptors_become_configuration_errors() -> None:
     """A malformed Channels request cannot leak a raw scope-descriptor exception."""
 
     class _HostileConsumer:
         @property
-        def scope(self):
+        def scope(self) -> NoReturn:
             raise RuntimeError("scope descriptor exploded")
 
     class _HostileRequest:
@@ -245,19 +246,19 @@ def test_hostile_channels_scope_descriptors_become_configuration_errors():
         request_from_info(info, family_label="FilterSet")
 
 
-def test_hostile_direct_scope_and_context_mapping_reads_fail_closed():
+def test_hostile_direct_scope_and_context_mapping_reads_fail_closed() -> None:
     """A scope or context read that explodes yields no request rather than escaping."""
 
     class _HostileDirectScope:
         consumer = None
 
         @property
-        def scope(self):
+        def scope(self) -> NoReturn:
             raise RuntimeError("direct scope exploded")
 
     class _HostileContext(dict[str, object]):
         @override
-        def __getitem__(self, key: str):
+        def __getitem__(self, key: str) -> NoReturn:
             raise RuntimeError("context mapping exploded")
 
     context = _HostileContext(request=object())
@@ -267,23 +268,23 @@ def test_hostile_direct_scope_and_context_mapping_reads_fail_closed():
     assert _request_from_context(context) is None
 
 
-def test_hostile_attribute_context_request_read_fails_closed():
+def test_hostile_attribute_context_request_read_fails_closed() -> None:
     """A context whose ``request`` descriptor raises resolves to no request."""
 
     class _HostileContext:
         @property
-        def request(self):
+        def request(self) -> NoReturn:
             raise RuntimeError("request descriptor exploded")
 
     assert _request_from_context(_HostileContext()) is None
 
 
-def test_hostile_channels_scope_mapping_becomes_configuration_error_on_user_read():
+def test_hostile_channels_scope_mapping_becomes_configuration_error_on_user_read() -> None:
     """A scope mapping that fails during lookup is typed at the adapter boundary."""
 
     class _HostileScope(dict[str, object]):
         @override
-        def __getitem__(self, key: str):
+        def __getitem__(self, key: str) -> NoReturn:
             raise RuntimeError("scope mapping exploded")
 
     adapter = ChannelsRequestAdapter(object(), _HostileScope())
@@ -291,7 +292,7 @@ def test_hostile_channels_scope_mapping_becomes_configuration_error_on_user_read
         _ = adapter.user
 
 
-def test_mapping_request_must_be_a_django_request_or_channels_context():
+def test_mapping_request_must_be_a_django_request_or_channels_context() -> None:
     """A mapping's arbitrary ``request`` value must not bypass request validation."""
 
     class _Context(dict[str, object]):
@@ -302,21 +303,20 @@ def test_mapping_request_must_be_a_django_request_or_channels_context():
         request_from_info(info, family_label="OrderSet")
 
 
-def test_request_like_attribute_context_remains_supported():
+def test_request_like_attribute_context_remains_supported() -> None:
     """Non-mapping wrappers may carry the request-like object used by mutation hooks."""
-
     request = object()
     context = type("Context", (), {"request": request})()
     info = type("Info", (), {"context": context})()
     assert request_from_info(info, family_label="DjangoMutation") is request
 
 
-def test_hostile_info_context_descriptor_becomes_configuration_error():
+def test_hostile_info_context_descriptor_becomes_configuration_error() -> None:
     """A broken ``info.context`` descriptor still follows the typed error boundary."""
 
     class _Info:
         @property
-        def context(self):
+        def context(self) -> NoReturn:
             raise RuntimeError("context descriptor exploded")
 
     with pytest.raises(ConfigurationError, match="FilterSet requires"):
@@ -328,7 +328,7 @@ def test_hostile_info_context_descriptor_becomes_configuration_error():
 # ---------------------------------------------------------------------------
 
 
-def test_iter_input_items_handles_dict_dataclass_and_non_walkable():
+def test_iter_input_items_handles_dict_dataclass_and_non_walkable() -> None:
     assert iter_input_items({"a": 1}) == [("a", 1)]
     assert iter_input_items(42) is None
 
@@ -339,7 +339,7 @@ def test_iter_input_items_handles_dict_dataclass_and_non_walkable():
     assert iter_input_items(_In(a=3)) == [("a", 3)]
 
 
-def test_extract_branch_value_collapses_only_the_configured_sentinel():
+def test_extract_branch_value_collapses_only_the_configured_sentinel() -> None:
     """The order side (default ``unset_sentinel=None``) leaves UNSET intact; filter collapses it."""
     holder = {"branch": strawberry.UNSET, "real": 5}
     # No sentinel configured (order semantics): UNSET passes through unchanged.
@@ -355,11 +355,11 @@ def test_extract_branch_value_collapses_only_the_configured_sentinel():
 # ---------------------------------------------------------------------------
 
 
-def test_invoke_permission_method_fires_once_and_dedupes():
+def test_invoke_permission_method_fires_once_and_dedupes() -> None:
     calls: list[str] = []
 
     class _Bare:
-        def check_name_permission(self, _request: object):
+        def check_name_permission(self, _request: object) -> None:
             calls.append("name")
 
     fired: set[str] = set()
@@ -371,7 +371,7 @@ def test_invoke_permission_method_fires_once_and_dedupes():
     assert calls == ["name"]
 
 
-def test_invoke_permission_method_rejects_an_async_gate_instead_of_silently_allowing():
+def test_invoke_permission_method_rejects_an_async_gate_instead_of_silently_allowing() -> None:
     """An ``async def check_<field>_permission`` is a loud ``SyncMisuseError``, not a silent allow.
 
     A filter / order permission gate is fired synchronously (on the async surface it
@@ -386,7 +386,7 @@ def test_invoke_permission_method_rejects_an_async_gate_instead_of_silently_allo
     denied: list[str] = []
 
     class _Bare:
-        async def check_name_permission(self, _request: object):
+        async def check_name_permission(self, _request: object) -> NoReturn:
             # Would DENY, but as an ``async def`` it can never run under the sync
             # permission pass; the guard must reject the coroutine, not treat it as
             # a truthy success.
@@ -400,12 +400,12 @@ def test_invoke_permission_method_rejects_an_async_gate_instead_of_silently_allo
     assert denied == []
 
 
-def test_invoke_permission_method_passes_a_normal_sync_return_through():
+def test_invoke_permission_method_passes_a_normal_sync_return_through() -> None:
     """A plain sync gate returning ``None`` (the documented shape) is unaffected by the guard."""
     fired: set[str] = set()
 
     class _Bare:
-        def check_name_permission(self, _request: object):
+        def check_name_permission(self, _request: object) -> None:
             return None
 
     # No raise, and the fire is recorded for the dedup set.
@@ -413,7 +413,7 @@ def test_invoke_permission_method_passes_a_normal_sync_return_through():
     assert "check_name_permission" in fired
 
 
-def test_invoke_permission_method_rejects_a_non_callable_gate_slot():
+def test_invoke_permission_method_rejects_a_non_callable_gate_slot() -> None:
     """A DECLARED non-callable gate is a ConfigurationError, never a silent skip.
 
     A bare ``callable()`` probe treated ``check_name_permission = 42`` exactly
@@ -442,7 +442,10 @@ def test_invoke_permission_method_rejects_a_non_callable_gate_slot():
 
         @override
         @classmethod
-        def _permission_walk_gates(cls, input_value: object):
+        def _permission_walk_gates(
+            cls,
+            input_value: object,
+        ) -> tuple[tuple[type[object], str], ...]:
             return ()
 
         @override
@@ -461,7 +464,7 @@ def test_invoke_permission_method_rejects_a_non_callable_gate_slot():
             request: object,
             *,
             fired: set[str] | None = None,
-        ):
+        ) -> None:
             invoke_permission_method(bare_instance, field_path, request, fired=fired)
 
     # ``bare`` must be an instance of the set class (the mixin's
@@ -479,7 +482,7 @@ def test_invoke_permission_method_rejects_a_non_callable_gate_slot():
         )
 
 
-def test_invoke_permission_method_types_an_unreadable_gate_slot():
+def test_invoke_permission_method_types_an_unreadable_gate_slot() -> None:
     """A raising gate descriptor is a typed ConfigurationError, not a raw escape.
 
     The sibling metadata reads on this surface (``_related_declarations``, the
@@ -490,7 +493,7 @@ def test_invoke_permission_method_types_an_unreadable_gate_slot():
 
     class _Hostile:
         @property
-        def check_name_permission(self):
+        def check_name_permission(self) -> NoReturn:
             raise RuntimeError("gate descriptor exploded")
 
     with pytest.raises(
@@ -502,7 +505,7 @@ def test_invoke_permission_method_types_an_unreadable_gate_slot():
     assert "gate descriptor exploded" in str(excinfo.value.__cause__)
 
 
-def test_invoke_permission_method_treats_a_none_slot_as_absent():
+def test_invoke_permission_method_treats_a_none_slot_as_absent() -> None:
     """``check_name_permission = None`` stays a silent no-op (indistinguishable from absent)."""
 
     class _Bare:
@@ -528,19 +531,19 @@ class _Rel:
         target: object,
         *,
         target_attr: str,
-    ):
+    ) -> None:
         self.field_name = field_name
         setattr(self, target_attr, target)
 
 
-def _record_gate(store: list[str], label: str):
-    def _check(_self: object, _request: object):
+def _record_gate(store: list[str], label: str) -> Callable[[object, object], None]:
+    def _check(_self: object, _request: object) -> None:
         store.append(label)
 
     return _check
 
 
-def test_fire_flat_relation_path_gates_fires_the_deep_target_chain():
+def test_fire_flat_relation_path_gates_fires_the_deep_target_chain() -> None:
     """A deep flat path fires each parent relation gate plus the terminal field gate.
 
     ``entries__property__category__name`` fires the SAME gates the nested twin
@@ -580,7 +583,7 @@ def test_fire_flat_relation_path_gates_fires_the_deep_target_chain():
     ]
 
 
-def test_undeclared_walk_reads_no_relation_of_a_set_with_no_model():
+def test_undeclared_walk_reads_no_relation_of_a_set_with_no_model() -> None:
     """The visibility reading walks undeclared relations off the set's model; a model-less set has none."""
 
     class Modelless:
@@ -595,7 +598,9 @@ def test_undeclared_walk_reads_no_relation_of_a_set_with_no_model():
     ) == ((), ("shelves", "code"))
 
 
-def test_walk_declared_relation_path_returns_the_hops_and_the_path_left_on_the_last_target():
+def test_walk_declared_relation_path_returns_the_hops_and_the_path_left_on_the_last_target() -> (
+    None
+):
     """The walk reads the declared chain a flat path spells and hands back the rest.
 
     The longest ``field_name`` match is one hop; the walk stops at a segment no
@@ -617,7 +622,9 @@ def test_walk_declared_relation_path_returns_the_hops_and_the_path_left_on_the_l
             "dangling": _Rel("dangling", None, target_attr="filterset"),
         }
 
-    def _walk(path: str):
+    def _walk(
+        path: str,
+    ) -> tuple[list[tuple[type[object] | None, str, type[object] | None]], tuple[str, ...]]:
         hops, remainder = walk_declared_relation_path(
             Item,
             path,
@@ -637,7 +644,7 @@ def test_walk_declared_relation_path_returns_the_hops_and_the_path_left_on_the_l
     assert _walk("undeclared__name") == ([], ("undeclared", "name"))
 
 
-def test_fire_flat_relation_path_gates_resolves_a_renamed_branch_by_field_name():
+def test_fire_flat_relation_path_gates_resolves_a_renamed_branch_by_field_name() -> None:
     """A hop is matched on ``field_name`` (ORM accessor), not the public attr name.
 
     ``visible_shelves = RelatedFilter(ShelfFilter, field_name="shelves")`` has a
@@ -668,7 +675,7 @@ def test_fire_flat_relation_path_gates_resolves_a_renamed_branch_by_field_name()
     assert calls == ["Book.visible_shelves", "Shelf.code"]
 
 
-def test_fire_flat_relation_path_gates_fires_the_branch_gate_of_a_relation_key_leaf():
+def test_fire_flat_relation_path_gates_fires_the_branch_gate_of_a_relation_key_leaf() -> None:
     """A relation-key leaf (``shelves__isnull``) walks its declared branch, so its gate fires.
 
     The leaf reads the branch's target rows like its nested twin does, so the
@@ -697,7 +704,7 @@ def test_fire_flat_relation_path_gates_fires_the_branch_gate_of_a_relation_key_l
     assert calls == ["Book.visible_shelves"]
 
 
-def test_fire_flat_relation_path_gates_prefers_composite_branch_prefix():
+def test_fire_flat_relation_path_gates_prefers_composite_branch_prefix() -> None:
     """A multi-hop RelatedFilter branch wins over a shorter overlapping branch.
 
     ``milestone`` can be declared over ``target_version__milestone`` while a
@@ -740,7 +747,7 @@ def test_fire_flat_relation_path_gates_prefers_composite_branch_prefix():
     assert calls == ["Card.milestone", "Milestone.key"]
 
 
-def test_fire_flat_relation_path_gates_stops_at_an_unresolved_hop():
+def test_fire_flat_relation_path_gates_stops_at_an_unresolved_hop() -> None:
     """A relation hop with no declared RelatedFilter stops the walk (no guessing)."""
     calls: list[str] = []
 
@@ -762,7 +769,7 @@ def test_fire_flat_relation_path_gates_stops_at_an_unresolved_hop():
     assert calls == []
 
 
-def test_fire_flat_relation_path_gates_dedupes_against_the_nested_twin():
+def test_fire_flat_relation_path_gates_dedupes_against_the_nested_twin() -> None:
     """Flat and nested twins share the per-class ``fired`` map: each gate fires once."""
     calls: list[str] = []
 
@@ -795,7 +802,7 @@ def test_fire_flat_relation_path_gates_dedupes_against_the_nested_twin():
     assert calls == ["Item.category", "Category.name"]
 
 
-def test_fire_flat_relation_path_gates_works_for_the_order_family():
+def test_fire_flat_relation_path_gates_works_for_the_order_family() -> None:
     """The shared fix covers the order family (``related_orders`` / ``orderset``).
 
     The order side exposes flat relation-traversal order fields via the
@@ -822,7 +829,9 @@ def test_fire_flat_relation_path_gates_works_for_the_order_family():
     assert calls == ["ItemOrder.category", "CategoryOrder.name"]
 
 
-def test_fire_flat_relation_path_gates_falls_back_to_declared_attribute_when_field_name_is_none():
+def test_fire_flat_relation_path_gates_falls_back_to_declared_attribute_when_field_name_is_none() -> (
+    None
+):
     """When field_name is None or omitted, the declared attribute name is used.
 
     In RelatedOrder(AuthorOrder) or RelatedFilter(AuthorFilter), field_name is None
@@ -850,7 +859,7 @@ def test_fire_flat_relation_path_gates_falls_back_to_declared_attribute_when_fie
     assert calls == ["BookOrder.author", "AuthorOrder.name"]
 
 
-def test_fire_flat_relation_path_gates_stops_when_a_mid_chain_target_is_unresolved():
+def test_fire_flat_relation_path_gates_stops_when_a_mid_chain_target_is_unresolved() -> None:
     """A hop whose related object's target set resolves to ``None`` stops the walk.
 
     A ``RelatedFilter``/``RelatedOrder`` whose lazy target has not resolved (or is
@@ -877,7 +886,7 @@ def test_fire_flat_relation_path_gates_stops_when_a_mid_chain_target_is_unresolv
     assert calls == ["Item.category"]
 
 
-def test_fire_flat_relation_path_gates_is_a_noop_for_a_non_traversal_leaf():
+def test_fire_flat_relation_path_gates_is_a_noop_for_a_non_traversal_leaf() -> None:
     """A single-segment source path (no relation hop) fires nothing here."""
     calls: list[str] = []
 
@@ -898,12 +907,14 @@ def test_fire_flat_relation_path_gates_is_a_noop_for_a_non_traversal_leaf():
     assert calls == []
 
 
-def test_flat_relation_gate_rejects_unreadable_branch_metadata_and_skips_non_string_names():
+def test_flat_relation_gate_rejects_unreadable_branch_metadata_and_skips_non_string_names() -> (
+    None
+):
     """An unreadable branch name raises; a non-string one matches no hop and fires no gate."""
 
     class _UnreadableRelation:
         @property
-        def field_name(self):
+        def field_name(self) -> NoReturn:
             raise RuntimeError("field name exploded")
 
     class _UnreadableSet(ActiveInputPermissionMixin):
@@ -937,12 +948,12 @@ def test_flat_relation_gate_rejects_unreadable_branch_metadata_and_skips_non_str
     assert calls == []
 
 
-def test_related_permission_declarations_fail_closed_for_malformed_metadata():
+def test_related_permission_declarations_fail_closed_for_malformed_metadata() -> None:
     """Only a readable mapping declares related branches; absent means none, malformed raises."""
 
     class _HostileMeta(type):
         @override
-        def __getattribute__(cls, name: str):
+        def __getattribute__(cls, name: str) -> object:
             if name == "related_filters":
                 raise RuntimeError("related descriptor exploded")
             return super().__getattribute__(name)
@@ -958,19 +969,19 @@ def test_related_permission_declarations_fail_closed_for_malformed_metadata():
 
     class _UnreadableMapping(Mapping[str, object]):
         @override
-        def __getitem__(self, key: str):
+        def __getitem__(self, key: str) -> NoReturn:
             raise KeyError(key)
 
         @override
-        def __iter__(self):
+        def __iter__(self) -> Iterator[str]:
             return iter(())
 
         @override
-        def __len__(self):
+        def __len__(self) -> int:
             return 0
 
         @override
-        def items(self):
+        def items(self) -> NoReturn:
             raise RuntimeError("items exploded")
 
     mapping_set = type("MappingSet", (), {"related_filters": _UnreadableMapping()})
@@ -989,7 +1000,7 @@ def test_related_permission_declarations_fail_closed_for_malformed_metadata():
 # ---------------------------------------------------------------------------
 
 
-def test_run_active_input_permission_checks_double_dispatch_and_dedup():
+def test_run_active_input_permission_checks_double_dispatch_and_dedup() -> None:
     """Parent per-branch gate + child gate both fire once; child recurses via its own class."""
     calls: list[str] = []
 
@@ -1002,7 +1013,7 @@ def test_run_active_input_permission_checks_double_dispatch_and_dedup():
             *,
             _fired: dict[type[object], set[str]] | None = None,
             _depth: int = 0,
-        ):
+        ) -> None:
             (_fired if _fired is not None else {}).setdefault(cls, set())
             calls.append(f"child._run@{_depth}")
 
@@ -1011,7 +1022,10 @@ def test_run_active_input_permission_checks_double_dispatch_and_dedup():
     class _Parent(ActiveInputPermissionMixin):
         @override
         @classmethod
-        def _permission_walk_gates(cls, input_value: object):
+        def _permission_walk_gates(
+            cls,
+            input_value: object,
+        ) -> tuple[tuple[type[object], str], ...]:
             return ()
 
         @override
@@ -1033,13 +1047,13 @@ def test_run_active_input_permission_checks_double_dispatch_and_dedup():
             request: object,
             *,
             fired: set[str] | None = None,
-        ):
+        ) -> None:
             invoke_permission_method(bare_instance, field_path, request, fired=fired)
 
-        def check_name_permission(self, _request: object):
+        def check_name_permission(self, _request: object) -> None:
             calls.append("parent.name")
 
-        def check_child_permission(self, _request: object):
+        def check_child_permission(self, _request: object) -> None:
             calls.append("parent.child")
 
     fired: dict[type, set[str]] = {}
@@ -1061,7 +1075,7 @@ def test_run_active_input_permission_checks_double_dispatch_and_dedup():
     assert calls.count("child._run@1") == 1
 
 
-def test_active_related_branches_empty_when_no_related_collection():
+def test_active_related_branches_empty_when_no_related_collection() -> None:
     class _NoRel(ActiveInputPermissionMixin):
         pass
 
@@ -1075,7 +1089,7 @@ def test_active_related_branches_empty_when_no_related_collection():
     )
 
 
-def test_run_active_input_permission_checks_caps_related_recursion():
+def test_run_active_input_permission_checks_caps_related_recursion() -> None:
     """A self-referential related branch is capped with a typed error (report Defect 5).
 
     The shared core threads a depth budget and refuses to recurse past the set's
@@ -1089,7 +1103,10 @@ def test_run_active_input_permission_checks_caps_related_recursion():
 
         @override
         @classmethod
-        def _permission_walk_gates(cls, input_value: object):
+        def _permission_walk_gates(
+            cls,
+            input_value: object,
+        ) -> tuple[tuple[type[object], str], ...]:
             return ()
 
         @override
@@ -1110,7 +1127,7 @@ def test_run_active_input_permission_checks_caps_related_recursion():
             request: object,
             *,
             fired: set[str] | None = None,
-        ):
+        ) -> None:
             pass
 
         @override
@@ -1123,7 +1140,7 @@ def test_run_active_input_permission_checks_caps_related_recursion():
             _fired: dict[type[object], set[str]] | None = None,
             _bare: ActiveInputPermissionMixin | None = None,
             _depth: int = 0,
-        ):
+        ) -> None:
             run_active_input_permission_checks(
                 cls,
                 input_value,
@@ -1141,7 +1158,7 @@ def test_run_active_input_permission_checks_caps_related_recursion():
         _SelfRef._run_permission_checks({"child": {"x": 1}}, HttpRequest())
 
 
-def test_active_permission_targets_excludes_logic_and_related_keys_from_the_leaf_half():
+def test_active_permission_targets_excludes_logic_and_related_keys_from_the_leaf_half() -> None:
     """The LEAF half of the single classification pass drops logic and related keys.
 
     The gate dispatch consumes exactly this half. It used to reach it through a
@@ -1176,11 +1193,11 @@ def test_active_permission_targets_excludes_logic_and_related_keys_from_the_leaf
 
 def test_auth_aliases_for_permission_classes_gates_alias_resolution(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The explicit no-permissions opt-out grants no auth-alias access."""
     calls: list[None] = []
 
-    def _resolve():
+    def _resolve() -> frozenset[str]:
         calls.append(None)
         return frozenset({"auth"})
 
@@ -1195,23 +1212,23 @@ def test_auth_aliases_for_permission_classes_gates_alias_resolution(
     assert calls == [None]
 
 
-def test_auth_alias_gate_rejects_unreadable_permission_collection_truthiness():
+def test_auth_alias_gate_rejects_unreadable_permission_collection_truthiness() -> None:
     """A permission collection that cannot be tested for emptiness is a configuration error."""
 
     class _UnreadablePermissions:
-        def __bool__(self):
+        def __bool__(self) -> bool:
             raise RuntimeError("permission truthiness exploded")
 
     with pytest.raises(ConfigurationError, match="could not be inspected"):
         auth_aliases_for_permission_classes(_UnreadablePermissions())
 
 
-def test_related_depth_error_survives_hostile_child_qualname():
+def test_related_depth_error_survives_hostile_child_qualname() -> None:
     """The depth-limit error is raised even when the child set's own name cannot be read."""
 
     class _HostileMeta(type):
         @override
-        def __getattribute__(cls, name: str):
+        def __getattribute__(cls, name: str) -> object:
             if name == "__qualname__":
                 raise RuntimeError("qualname exploded")
             return super().__getattribute__(name)
@@ -1227,7 +1244,7 @@ def test_related_depth_error_survives_hostile_child_qualname():
             *,
             _fired: dict[type[object], set[str]] | None,
             _depth: int,
-        ):
+        ) -> NoReturn:
             raise AssertionError("depth gate should fire before recursion")
 
     related = type("Related", (), {"child_set": _Child})()
@@ -1235,7 +1252,10 @@ def test_related_depth_error_survives_hostile_child_qualname():
     class _Parent(ActiveInputPermissionMixin):
         @override
         @classmethod
-        def _permission_walk_gates(cls, input_value: object):
+        def _permission_walk_gates(
+            cls,
+            input_value: object,
+        ) -> tuple[tuple[type[object], str], ...]:
             return ()
 
         @override
@@ -1258,7 +1278,7 @@ def test_related_depth_error_survives_hostile_child_qualname():
         )
 
 
-def test_run_active_input_permission_checks_falls_back_to_default_traversal_depth():
+def test_run_active_input_permission_checks_falls_back_to_default_traversal_depth() -> None:
     """When child set defines no _MAX_LOGIC_DEPTH, traversal uses DEFAULT_SET_INPUT_TRAVERSAL_DEPTH."""
 
     class _ChildWithoutDepthCap:
@@ -1270,7 +1290,7 @@ def test_run_active_input_permission_checks_falls_back_to_default_traversal_dept
             *,
             _fired: dict[type[object], set[str]] | None,
             _depth: int,
-        ):
+        ) -> NoReturn:
             raise AssertionError("depth gate should fire before recursion")
 
     related = type("Related", (), {"child_set": _ChildWithoutDepthCap})()
@@ -1278,7 +1298,10 @@ def test_run_active_input_permission_checks_falls_back_to_default_traversal_dept
     class _Parent(ActiveInputPermissionMixin):
         @override
         @classmethod
-        def _permission_walk_gates(cls, input_value: object):
+        def _permission_walk_gates(
+            cls,
+            input_value: object,
+        ) -> tuple[tuple[type[object], str], ...]:
             return ()
 
         @override
@@ -1307,7 +1330,7 @@ def test_run_active_input_permission_checks_falls_back_to_default_traversal_dept
 
 
 @pytest.mark.django_db
-def test_resolve_auth_aliases_returns_the_default_alias_by_default():
+def test_resolve_auth_aliases_returns_the_default_alias_by_default() -> None:
     """With no divergent router, every auth model reads ``default``."""
     from django_strawberry_framework.utils.permissions import resolve_auth_aliases
 
@@ -1317,7 +1340,7 @@ def test_resolve_auth_aliases_returns_the_default_alias_by_default():
 @pytest.mark.django_db
 def test_resolve_auth_aliases_tracks_a_divergent_router_read_answer(
     settings: pytest_django.Settings,
-):
+) -> None:
     """The auth alias follows the router's read answer for the auth models."""
     from django.contrib.auth import get_user_model
 
@@ -1326,21 +1349,21 @@ def test_resolve_auth_aliases_tracks_a_divergent_router_read_answer(
     auth_app_label = get_user_model()._meta.app_label
 
     class _AuthToShardRouter:
-        def db_for_read(self, model: type[Model], **_hints: object):
+        def db_for_read(self, model: type[Model], **_hints: object) -> str | None:
             # Route the auth app (and its perm/contenttype companions) to a
             # non-default alias; everything else keeps the default.
             if model._meta.app_label in {auth_app_label, "auth", "contenttypes"}:
                 return "shard_b"
             return None
 
-        def db_for_write(self, _model: type[Model], **_hints: object):
+        def db_for_write(self, _model: type[Model], **_hints: object) -> None:
             return None
 
     settings.DATABASE_ROUTERS = [_AuthToShardRouter()]
     assert resolve_auth_aliases() == frozenset({"shard_b"})
 
 
-def test_resolve_auth_aliases_skips_uninstalled_models():
+def test_resolve_auth_aliases_skips_uninstalled_models() -> None:
     """A model the deployment does not install is skipped, never an error."""
     from django_strawberry_framework.utils.permissions import _safe_get_model
 
@@ -1350,7 +1373,7 @@ def test_resolve_auth_aliases_skips_uninstalled_models():
     assert _safe_get_model(None, None) is None  # pyright: ignore[reportArgumentType]
 
 
-def test_channels_request_in_object_context_is_adapted_to_channels_request_adapter():
+def test_channels_request_in_object_context_is_adapted_to_channels_request_adapter() -> None:
     """Channels request stored at context.request resolves to a ChannelsRequestAdapter."""
     from django_strawberry_framework.utils.permissions import (
         ChannelsRequestAdapter,
@@ -1358,11 +1381,11 @@ def test_channels_request_in_object_context_is_adapted_to_channels_request_adapt
     )
 
     class _FakeConsumer:
-        def __init__(self, scope: object):
+        def __init__(self, scope: object) -> None:
             self.scope = scope
 
     class _FakeChannelsRequest:
-        def __init__(self, scope: object):
+        def __init__(self, scope: object) -> None:
             self.consumer = _FakeConsumer(scope)
             self.method = "POST"
 
@@ -1379,7 +1402,7 @@ def test_channels_request_in_object_context_is_adapted_to_channels_request_adapt
     assert resolved.method == "POST"
 
 
-def test_bare_channels_consumer_in_object_context_is_adapted():
+def test_bare_channels_consumer_in_object_context_is_adapted() -> None:
     """A bare Channels WebSocket consumer context resolves to a ChannelsRequestAdapter."""
     from django_strawberry_framework.utils.permissions import (
         ChannelsRequestAdapter,
@@ -1387,7 +1410,7 @@ def test_bare_channels_consumer_in_object_context_is_adapted():
     )
 
     class _FakeWSConsumer:
-        def __init__(self, scope: object):
+        def __init__(self, scope: object) -> None:
             self.scope = scope
             self.channel_name = "specific..inmemory!ws"
 
@@ -1403,7 +1426,7 @@ def test_bare_channels_consumer_in_object_context_is_adapted():
     assert resolved.channel_name == "specific..inmemory!ws"
 
 
-def test_run_active_input_permission_checks_safely_handles_missing_target_attr():
+def test_run_active_input_permission_checks_safely_handles_missing_target_attr() -> None:
     """If a related object lacks target_attr, child recursion is safely skipped without AttributeError."""
     from django_strawberry_framework.utils.permissions import run_active_input_permission_checks
 
@@ -1414,7 +1437,10 @@ def test_run_active_input_permission_checks_safely_handles_missing_target_attr()
     class _SampleFilter(ActiveInputPermissionMixin):
         @override
         @classmethod
-        def _permission_walk_gates(cls, input_value: object):
+        def _permission_walk_gates(
+            cls,
+            input_value: object,
+        ) -> tuple[tuple[type[object], str], ...]:
             return ()
 
         @override
@@ -1433,7 +1459,7 @@ def test_run_active_input_permission_checks_safely_handles_missing_target_attr()
             request: object,
             *,
             fired: set[str] | None = None,
-        ):
+        ) -> None:
             if fired is not None:
                 fired.add(f"check_{field_path}_permission")
 
@@ -1450,7 +1476,7 @@ def test_run_active_input_permission_checks_safely_handles_missing_target_attr()
     assert fired.get(_SampleFilter) == {"check_duck_permission"}
 
 
-def test_channels_request_adapter_idempotent_wrapping():
+def test_channels_request_adapter_idempotent_wrapping() -> None:
     """Wrapping an existing ChannelsRequestAdapter returns the adapter directly."""
     from django_strawberry_framework.utils.permissions import (
         ChannelsRequestAdapter,
@@ -1469,7 +1495,7 @@ def test_channels_request_adapter_idempotent_wrapping():
     assert _request_from_context(type("Ctx", (), {"request": adapter})()) is adapter
 
 
-def test_permissions_all_exports_are_complete():
+def test_permissions_all_exports_are_complete() -> None:
     """Every symbol in permissions.__all__ exists and resolve_auth_aliases is exported."""
     import django_strawberry_framework.utils.permissions as perm
 

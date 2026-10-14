@@ -266,6 +266,7 @@ class Query:
         filter: FilterInput[filters.ScalarSpecimenFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.ScalarSpecimenOrder]] | None = None,
     ) -> QuerySet[models.ScalarSpecimen]:
+        """Root field listing scalar specimens, filtered and ordered by the optional arguments."""
         queryset = models.ScalarSpecimen.objects.order_by("id")
         if filter is not None:
             queryset = filters.ScalarSpecimenFilter.apply_sync(filter, queryset, info)
@@ -295,6 +296,7 @@ class Query:
         filter: FilterInput[filters.NullableScalarSpecimenFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.NullableScalarSpecimenOrder]] | None = None,
     ) -> QuerySet[models.NullableScalarSpecimen]:
+        """Root field listing nullable scalar specimens, filtered and ordered by the optional arguments."""
         queryset = models.NullableScalarSpecimen.objects.order_by("id")
         if filter is not None:
             queryset = filters.NullableScalarSpecimenFilter.apply_sync(filter, queryset, info)
@@ -309,6 +311,7 @@ class Query:
         filter: FilterInput[filters.ScalarSpecimenTagFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.ScalarSpecimenTagOrder]] | None = None,
     ) -> QuerySet[models.ScalarSpecimenTag]:
+        """Root field listing scalar specimen tags, filtered and ordered by the optional arguments."""
         queryset = models.ScalarSpecimenTag.objects.order_by("id")
         if filter is not None:
             queryset = filters.ScalarSpecimenTagFilter.apply_sync(filter, queryset, info)

@@ -38,8 +38,8 @@ from django_strawberry_framework.filters import FilterInput
 from django_strawberry_framework.orders import OrderInput
 
 # Consumer ``resolver=`` helper exercising the shared field-wrapper
-# ``Manager`` coercion line at
-# ``django_strawberry_framework/utils/querysets.py::normalize_query_source #"_coerced_manager_queryset(source)"``.
+# ``Manager`` coercion line (the ``_coerced_manager_queryset(source)`` call) in
+# ``django_strawberry_framework/utils/querysets.py::normalize_query_source``.
 # The README rule at
 # ``examples/fakeshop/test_query/README.md #"Live-first, both verdicts, and the must-not."``
 # requires coverage lines reachable from a live ``/graphql/`` query to land here. Returns
@@ -48,7 +48,7 @@ from django_strawberry_framework.orders import OrderInput
 # share that line; the async color
 # (``django_strawberry_framework/list_field.py::DjangoListField._async_wrap``) is
 # reachable only over ``AsyncDjangoGraphQLView``, where
-# ``examples/fakeshop/test_query/test_list_field_async_api.py::test_async_manager_that_degrades_to_a_list_is_rejected``
+# ``examples/fakeshop/test_query/test_list_field_async_api.py::test_async_manager_that_degrades_to_a_list_is_rejected``  # noqa: E501 - citation path cannot wrap
 # drives an ``async def`` resolver's ``Manager`` through it.
 
 
@@ -277,9 +277,9 @@ class ShelfType(DjangoType):
     def get_queryset(cls, queryset: QuerySet[models.Shelf], info: Info) -> QuerySet[models.Shelf]:
         """Hide ``topic="secret"`` shelves from non-staff requests.
 
-        The nested-``RelatedFilter`` visibility-scoping contract relies on the target type's ``get_queryset`` hiding
-        sensitive rows before the filter clause sees them. Staff requests
-        bypass the gate.
+        The nested-``RelatedFilter`` visibility-scoping contract relies on the target
+        type's ``get_queryset`` hiding sensitive rows before the filter clause sees
+        them. Staff requests bypass the gate.
         """
         if _user_is_staff(info):
             return queryset
@@ -489,9 +489,11 @@ class IssueType(DjangoType):
 
 
 class PeriodicalType(DjangoType):
-    """Parent of the keyset acceptance type - its ``issuesConnection`` nested
-    connection windows with keyset value seeks (uniform value-position across
-    every parent partition)."""
+    """Parent of the keyset acceptance type.
+
+    Its ``issuesConnection`` nested connection windows with keyset value seeks
+    (uniform value-position across every parent partition).
+    """
 
     class Meta:
         model = models.Periodical
@@ -1107,6 +1109,7 @@ class Query:
         filter: FilterInput[filters.BranchFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.BranchOrder]] | None = None,
     ) -> QuerySet[models.Branch]:
+        """Return the visibility-scoped library branches, optionally filtered and ordered."""
         queryset = BranchType.get_queryset(models.Branch.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters.BranchFilter.apply_sync(filter, queryset, info)
@@ -1119,6 +1122,7 @@ class Query:
         self,
         info: strawberry.Info,
     ) -> QuerySet[models.Branch] | list[models.Branch]:
+        """Return branches from a queryset the resolver evaluates before returning it."""
         # The evaluated-queryset guard (spec-035), dogfooded. A consumer that
         # evaluates its queryset before returning it - here an ``if not queryset``
         # empty-guard whose ``bool(...)`` populates ``_result_cache`` - must NOT be
@@ -1185,6 +1189,7 @@ class Query:
         filter: FilterInput[filters.ShelfFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.ShelfOrder]] | None = None,
     ) -> QuerySet[models.Shelf]:
+        """Return the visibility-scoped shelves, optionally filtered and ordered."""
         queryset = ShelfType.get_queryset(models.Shelf.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters.ShelfFilter.apply_sync(filter, queryset, info)
@@ -1220,6 +1225,7 @@ class Query:
         filter: FilterInput[filters.BookFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.BookOrder]] | None = None,
     ) -> QuerySet[models.Book]:
+        """Return the visibility-scoped books, optionally filtered and ordered."""
         queryset = BookType.get_queryset(models.Book.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters.BookFilter.apply_sync(filter, queryset, info)
@@ -1229,12 +1235,14 @@ class Query:
 
     @strawberry.field(graphql_type=list[BookType])
     def all_library_prefetched_books(self) -> QuerySet[models.Book]:
+        """Return books with the shelf and genres relations pre-loaded by the consumer."""
         return (
             models.Book.objects.select_related("shelf").prefetch_related("genres").order_by("id")
         )
 
     @strawberry.field(graphql_type=list[GenreType])
     def all_library_genres_consumer_descendant_prefetch(self) -> QuerySet[models.Genre]:
+        """Return genres carrying a consumer descendant ``books__loans`` prefetch."""
         # Collision surface: a consumer descendant prefetch
         # (``books__loans``) overlaps the optimizer's own Genre -> books ->
         # loans prefetch plan. The optimizer must reconcile the two rather than
@@ -1243,6 +1251,7 @@ class Query:
 
     @strawberry.field(graphql_type=list[GenreType])
     def all_library_genres_consumer_exact_plus_descendant_prefetch(self) -> QuerySet[models.Genre]:
+        """Return genres carrying consumer ``books`` and ``books__loans`` prefetches."""
         # The consumer declares BOTH the exact relation
         # (``books``) and a descendant (``books__loans``); both must reconcile
         # with the optimizer plan without colliding.
@@ -1250,6 +1259,7 @@ class Query:
 
     @strawberry.field(graphql_type=list[NullabilityOverrideBookType])
     def all_library_nullability_override_books(self) -> QuerySet[models.Book]:
+        """Return books whose ``subtitle`` is non-null, matching the ``String!`` override."""
         # ``required_overrides = ("subtitle",)`` declares ``subtitle`` as
         # ``String!`` on this type, but the column is ``null=True`` and fakeshop
         # seeds ``subtitle=None`` rows - so exclude null-subtitle rows to keep
@@ -1264,6 +1274,7 @@ class Query:
         filter: FilterInput[filters_genre.GenreFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders_genre.GenreOrder]] | None = None,
     ) -> QuerySet[models.Genre]:
+        """Return genres through the type's ``get_queryset`` hook, optionally filtered and ordered."""
         queryset = GenreType.get_queryset(models.Genre.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters_genre.GenreFilter.apply_sync(filter, queryset, info)
@@ -1294,6 +1305,7 @@ class Query:
         filter: FilterInput[filters.PatronFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.PatronOrder]] | None = None,
     ) -> QuerySet[models.Patron]:
+        """Return patrons through the type's ``get_queryset`` hook, optionally filtered and ordered."""
         queryset = PatronType.get_queryset(models.Patron.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters.PatronFilter.apply_sync(filter, queryset, info)
@@ -1308,6 +1320,7 @@ class Query:
 
     @strawberry.field(graphql_type=list[MembershipCardType])
     def all_library_membership_cards(self) -> QuerySet[models.MembershipCard]:
+        """Return every membership card ordered by id."""
         return models.MembershipCard.objects.order_by("id")
 
     @strawberry.field(graphql_type=list[LoanType])
@@ -1317,6 +1330,7 @@ class Query:
         filter: FilterInput[filters.LoanFilter] | None = None,  # noqa: A002
         order_by: list[OrderInput[orders.LoanOrder]] | None = None,
     ) -> QuerySet[models.Loan]:
+        """Return loans through the type's ``get_queryset`` hook, optionally filtered and ordered."""
         queryset = LoanType.get_queryset(models.Loan.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters.LoanFilter.apply_sync(filter, queryset, info)
@@ -1614,7 +1628,9 @@ class CreateBranchPair(DjangoFormMutation):
 
 
 class CreateShelfViaSchemaHookSerializer(SerializerMutation):
-    """Create a ``Shelf`` through a construction-kwarg-requiring serializer via the schema hook (spec-039 Decision 7).
+    """Create a ``Shelf`` through a construction-kwarg serializer via the schema hook.
+
+    Pins spec-039 Decision 7.
 
     ``TenantShelfSerializer`` requires a ``tenant`` constructor kwarg, so DRF's default
     no-arg schema discovery fails. The consumer overrides ``get_serializer_for_schema()``
@@ -1691,7 +1707,9 @@ class CreateShelfViaOptionalCodeSerializer(SerializerMutation):
 
 
 class CreateShelfViaSubclassedSerializer(CreateShelfViaSerializer):
-    """A ``SerializerMutation`` SUBCLASS that REDEFINES ``Meta.serializer_class`` (spec-039 subclass validation).
+    """A ``SerializerMutation`` SUBCLASS that REDEFINES ``Meta.serializer_class``.
+
+    Pins spec-039 subclass validation.
 
     Subclasses the concrete ``CreateShelfViaSerializer`` (``serializer_class=ShelfSerializer``)
     but redefines ``serializer_class`` to ``RenamedShelfSerializer`` and narrows to its OWN
@@ -1727,7 +1745,9 @@ class CreateShelfRejectingViaSerializer(SerializerMutation):
 
 
 class CreateShelfViaHookTargetingPatron(SerializerMutation):
-    """One half of a same-serializer hook-collision pair: a shared ``target`` relation pointed at ``Patron`` (spec-039).
+    """One half of a same-serializer hook-collision pair, pointing ``target`` at ``Patron``.
+
+    Pins spec-039.
 
     Shares ``TargetedShelfSerializer`` with ``CreateShelfViaHookTargetingLoan``; both override
     ``get_serializer_for_schema()`` (the schema-time field map) AND ``get_serializer_kwargs``
@@ -1807,7 +1827,9 @@ class CreateShelfViaHookTargetingLoan(SerializerMutation):
 
 
 class CreateShelfViaHookNarrowedSerializer(SerializerMutation):
-    """Create a ``Shelf`` via a serializer whose UNSUPPORTED default field a hook narrows away (spec-039 - unsupported-default-field recovery).
+    """Create a ``Shelf`` via a serializer whose UNSUPPORTED default field a hook narrows away.
+
+    Pins spec-039 unsupported-default-field recovery.
 
     ``HookNarrowedShelfSerializer``'s default ``.fields`` include an unsupported
     ``SlugRelatedField(many=True)`` ``alt_branches``: default discovery succeeds but its WALK
@@ -2087,7 +2109,9 @@ class CreateShelfWithRenamedSaveKwargsCollision(SerializerMutation):
 
 
 class CreateShelfViaAltBranchesSerializer(SerializerMutation):
-    """Create a ``Shelf`` with a raw-pk M2M ``alt_branches`` input - the batched multi-relation visibility path.
+    """Create a ``Shelf`` with a raw-pk M2M ``alt_branches`` input.
+
+    Exercises the batched multi-relation visibility path.
 
     ``alt_branches`` targets the non-Relay ``BranchType``, so the input is a raw-pk list; the
     serializer decode confirms the whole list's visibility in ONE batched ``pk__in`` query

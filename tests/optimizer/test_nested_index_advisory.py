@@ -74,6 +74,7 @@ from django.db.models.functions import Lower
 from django.db.models.options import Options
 from django.db.models.sql.query import Query
 from django.test import override_settings
+from strawberry import Schema
 
 from django_strawberry_framework.optimizer import logger as optimizer_logger
 from django_strawberry_framework.optimizer import nested_planner
@@ -604,10 +605,10 @@ class _FakeConnections:
     def __init__(self, by_alias: dict[str, object]) -> None:
         self._by_alias = by_alias
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         return iter(self._by_alias)
 
-    def __getitem__(self, alias: str):
+    def __getitem__(self, alias: str) -> object:
         return self._by_alias[alias]
 
 
@@ -618,8 +619,10 @@ def _fake_backend(*, supports_ordering: bool) -> SimpleNamespace:
 
 
 class TestEveryBackendSupportsIndexColumnOrdering:
-    """``_every_backend_supports_index_column_ordering`` trusts a DESC term only when EVERY
-    configured backend can store it; fail-soft to ``False`` on any error.
+    """``_every_backend_supports_index_column_ordering`` trusts a DESC term only on EVERY backend.
+
+    It trusts a DESC term only when every configured backend can store it, and
+    fails soft to ``False`` on any error.
 
     A nested plan is backend-neutral and cache-shared, so it cannot consult one
     unhinted route and treat the answer as universal: a divergent router could
@@ -670,7 +673,7 @@ class TestEveryBackendSupportsIndexColumnOrdering:
         """A connection-handler error at plan time degrades to ``False`` (index UNKNOWN)."""
 
         class _Boom:
-            def __iter__(self):
+            def __iter__(self) -> Iterator[str]:
                 raise RuntimeError("connections unavailable at plan time")
 
         monkeypatch.setattr("django.db.connections", _Boom())
@@ -1241,7 +1244,10 @@ class TestAdviseCompositeIndex:
         assert not self._warnings(caplog)
 
 
-def _relation(model: type[models.Model], name: str):
+def _relation(
+    model: type[models.Model],
+    name: str,
+) -> models.Field[object, object] | models.ForeignObjectRel:
     """The raw relation field (or reverse rel) the planner classifies for ``model.name``."""
     return model._meta.get_field(name)
 
@@ -1470,7 +1476,7 @@ class TestAdvisoryDeferredUntilWindowAccepted:
     class _RefuseEveryWindow:
         name = "refuse-all"
 
-        def plan(self, _request: NestedConnectionRequest, _plan: OptimizationPlan):
+        def plan(self, _request: NestedConnectionRequest, _plan: OptimizationPlan) -> bool:
             return False
 
     @staticmethod
@@ -1499,7 +1505,7 @@ class TestAdvisoryDeferredUntilWindowAccepted:
         self._reset_type_caches()
 
     @staticmethod
-    def _shelf_books_schema(strategy: StrategySelection):
+    def _shelf_books_schema(strategy: StrategySelection) -> Schema:
         """A ``shelves { booksConnection }`` schema running ``strategy``."""
         import strawberry
         from apps.library.models import Book, Shelf

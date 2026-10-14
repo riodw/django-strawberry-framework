@@ -24,12 +24,12 @@ def _annotated(row: object) -> object:
     return row
 
 
-def test_annotated_model_rows_are_a_window():
+def test_annotated_model_rows_are_a_window() -> None:
     """Model instances carrying the row number are the walker's window."""
     assert _window_rows_are_annotated([_annotated(Branch(name="north"))]) is True
 
 
-def test_annotated_non_model_row_is_not_a_window():
+def test_annotated_non_model_row_is_not_a_window() -> None:
     """A non-model row disqualifies the list even when it carries the row number."""
     rows = [_annotated(Branch(name="north")), _annotated(_AnnotatedObject())]
 

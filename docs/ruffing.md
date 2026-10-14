@@ -1,17 +1,17 @@
 # Ruffing: to-do list
 
-ruff 0.17.0 lints and formats every tracked Python file (511, the same set `git ls-files '*.py'` lists), configured in
+ruff 0.17.0 lints and formats every tracked Python file (513, the same set `git ls-files '*.py'` lists), configured in
 `pyproject.toml` `[tool.ruff]`. This file tracks the rules switched on, the rules still off, the config-level ignores
 and the `# noqa` comments still in the tree.
 A rule family is selected whole. Every stable code is on except the off-by-design block of `ignore`; the ratchet
 block is empty. A site the rule is wrong about carries a `# noqa: CODE - reason`; a whole folder the rule is wrong
 about gets a per-file ignore with its reason in `pyproject.toml`.
 
-Progress: 36 done, 1 to do (item 31). Stable rules: 815, every one named in the config: 799 on, 16 in `ignore` (off
-by design). The 139 preview-only rules stay off with `preview`. `# noqa` comments: 302 lines in 91 files.
+Progress: 37 done, 0 to do. Stable rules: 815, every one named in the config: 799 on, 16 in `ignore` (off by
+design). The 139 preview-only rules stay off with `preview`. `# noqa` comments: 326 lines in 98 files.
 
 Counts below were measured on ruff 0.17.0 at ee9c8161 (items 1-27), 8ca6a481 (items 28-35) and the tree after
-e42952a5 (items 36-37). "Root" is `conftest.py`, `line_count.py` and `docs/dry/export_dry_review.py`.
+e42952a5 (items 36-37) and fa4182a9 (item 31). "Root" is `conftest.py`, `line_count.py` and `docs/dry/export_dry_review.py`.
 
 ## Done: rules on
 
@@ -93,7 +93,8 @@ e42952a5 (items 36-37). "Root" is `conftest.py`, `line_count.py` and `docs/dry/e
 - [x] `PLC0414`: `permissions.py` gets an `__all__`; the eleven `x as x` re-exports basedpyright needs for consumers
   that import through the converter modules, `utils.inputs`, `types.relay` and `filters.base` keep the alias with a
   `noqa`
-- [x] 36. `D400`, `D404` (7 summaries reworded) and `D401` (every function summary in the imperative mood) on;
+- [x] 36. `D400`, `D404` (7 summaries reworded) and `D401` (every function summary in the imperative mood) on,
+  each selected by code, since the Google convention drops all three from a `D` prefix select;
   `C901` and `PLR0911` / `PLR0912` / `PLR0913` / `PLR0915` / `PLR0917` on as ratchets at today's maxima
   (`mccabe.max-complexity` 45, `pylint.max-branches` 39, `max-returns` 20, `max-args` 18, `max-statements` 133,
   `max-positional-args` 10): no new function may exceed the worst one, and lowering a threshold lists the functions
@@ -107,31 +108,41 @@ e42952a5 (items 36-37). "Root" is `conftest.py`, `line_count.py` and `docs/dry/e
   `hasattr` + `getattr` (`B009`); `tests/_idioms.py` `pickle_roundtrip` and `run_capturing` hold the single `S301` and
   the single test `BLE001`; extension factories are `functools.partial` (`PLW0108`); unused parameters are `del`eted (`ARG`)
 
-## To do: rules still off
+- [x] 31. The tests/ and examples/ per-file ignores shrunk from 21 and 14 codes to 12 and 7 (plus `D102` / `D103`
+  on `test_*.py`, `D` on the generated migrations and `UP031` on `test_query/`). `ANN`: ruff's fix wrote 8370 return
+  types (`-> None` on every test), about 1750 more were annotated by hand (no `Any`; `@contextmanager` helpers are
+  `Generator[...]`, raise-only helpers `NoReturn`). `ARG`: unused lambda and positional stand-in parameters are
+  `_`-prefixed; a parameter a framework passes by keyword is `del`eted, which retires 45 `reportUnusedParameter`
+  ignores. `B018`: `_ = expr`. `D`: every formatting rule is on, and `D1` is on except `D106` (`class Meta:`); the
+  example Filter / Order / Admin / AppConfig / Command classes and Query resolvers carry docstrings. `E501`: 6 `noqa`
+  on `path::Symbol` citations that cannot wrap. `ERA001`: prose reworded; pseudo blocks kept verbatim inside a
+  `# ruff: disable[ERA001]` / `# ruff: enable[ERA001]` fence (9). `FBT`: parametrized bools follow a bare `*`,
+  helpers take their flag by keyword; 15 `noqa` where the bool is the value under test or mirrors Django's positional
+  `execute_wrapper`. `N802`: one rename, 4 `noqa`. `PERF`, `RUF043` (raw strings; three loose patterns tightened),
+  `SIM117` fixed at every site. The four `tests/test_django_patches.py` upstream-shape methods stay unannotated inside
+  a `# ruff: disable[ANN206]` fence: `inspect.getsource` of the two accepted shapes must match Django's source byte for
+  byte, and the two rejected shapes differ from an audited body only in the drift under test
 
-- [ ] 31. Shrink the tests/ and examples/ per-file ignores. What each code hides today:
+## Still ignored in tests/ and examples/
 
-  | Code | Hidden | Tests | Examples |
-  | --- | --- | --- | --- |
-  | `ANN` (`ANN201`, `ANN202`, `ANN204`, `ANN206`, `ANN205`) | 10066 | 8111 | 1955 |
-  | `D` (`D103`, `D106`, `D101`, `D102`, `D205`, `D202`, ...) | 1976 | 1133 | 843 |
-  | `RUF012` (mutable class default) | 1310 | 994 | 316 |
-  | `ARG` | 405 | 222 | 183 |
-  | `N806` | 195 | 195 | 0 |
-  | `E501` | 150 | 99 | 51 |
-  | `DJ008` | 127 | 127 | 0 |
-  | `SIM117` (nested `with`) | 105 | 98 | 7 |
-  | `RUF043` (`match=` metacharacters) | 94 | 91 | 3 |
-  | `SLOT000`, `SLOT001` | 62 | 59 | 3 |
-  | `UP031` (printf formatting) | 48 | 0 | 48 |
-  | `S106`, `S105`, `S107` | 42 | 15 | 27 |
-  | `ERA001` | 36 | 15 | 21 |
-  | `B018` | 35 | 35 | 0 |
-  | `S603`, `S607` | 32 | 32 | 0 |
-  | `N802` | 6 | 6 | 0 |
-  | `PERF` | 3 | 3 | 0 |
+| Code | Tests | Examples | Why |
+| --- | --- | --- | --- |
+| `S101` | 15782 | 5997 | assert is the pytest idiom |
+| `RUF012` | 1002 | 317 | Meta `fields = {...}` / `[...]`, `permission_classes = [...]` and Django `Meta.ordering` are the consumer idiom; a `ClassVar` annotation is not what a consumer writes |
+| `D102`, `D103` (`test_*.py` only) | 887 | 290 | the test name is the summary; most tests carry a contract docstring, the rest are not required to |
+| `D401` | 239 | 133 | a test docstring states the contract declaratively ("A two-bound range applies ...") |
+| `D106` | 12 | 239 | every site is `class Meta:` |
+| `N806` | 193 | 0 | a class built by `type(...)` or a factory binds to a PascalCase local |
+| `DJ008` | 128 | 0 | throwaway test models |
+| `D` (migrations only) | 0 | 63 | `makemigrations` writes them |
+| `SLOT000`, `SLOT001` | 64 | 3 | hostile `str` / `tuple` subclasses model consumer values with an instance `__dict__` |
+| `UP031` (`test_query/` only) | 0 | 48 | GraphQL query text is all braces; `str.format` / f-strings would double them |
+| `S105`, `S106`, `S107` | 15 | 27 | fixture credentials and the example's dev `SECRET_KEY` |
+| `S603`, `S607` | 32 | 0 | fixed argv of git / `sys.executable` |
 
-  scripts/ drops `PERF` (16 sites) and `S603` / `S607` (40).
+scripts/ keeps `PERF` (16 sites) and `S603` / `S607` (40).
+
+## Rules still off
 
 Off by design (not planned):
 
@@ -145,7 +156,7 @@ Off by design (not planned):
 - `PLR2004` (1276, magic value in comparison): 1235 of them are test and example assertions
 - `FIX002` (10), `TD003` (10): a TODO is the `TODO(spec-NNN slice N): ...` anchor convention, which names a spec or
   a backlog entry, not an issue link; the rest of `TD` and `FIX` is on
-- `CPY001` (511, copyright headers)
+- `CPY001` (513, copyright headers)
 - `D203`, `D213`: the opposites of `D211` and `D212`, which the Google convention selects (ruff drops one of each
   pair)
 - `D413` (71, blank line after the last section): the Google convention ends a docstring right after its last
@@ -153,7 +164,7 @@ Off by design (not planned):
 
 ## Files ruff skips
 
-None that it should check. `ruff check --show-files` lists exactly the 511 tracked Python files. The files it skips
+None that it should check. `ruff check --show-files` lists exactly the 513 tracked Python files. The files it skips
 are git-ignored scratch trees (`docs/shadow/`, cycle temp files, `.venv/`, `.claude/worktrees/`), read through
 ruff's default `respect-gitignore`. `[tool.ruff.format]` excludes `*.md`: fenced Python in Markdown is verbatim example
 content, so the formatter owns `.py` only. No file carries a file-level `# ruff: noqa`.
@@ -170,16 +181,19 @@ Per-file ignores:
 
 | Glob | Codes |
 | --- | --- |
-| `tests/**/*.py` | `D`, `ANN`, `ERA001`, `SIM117`, `E501`, `N802`, `N806`, `B018`, `RUF012`, `PERF`, `RUF043`, `ARG`, `S101`, `FBT`, `DJ008`, `SLOT000`, `SLOT001`, `S106`, `S107`, `S603`, `S607` |
-| `examples/**/*.py` | `D`, `ANN`, `ERA001`, `SIM117`, `E501`, `UP031`, `RUF012`, `RUF043`, `ARG`, `S101`, `FBT`, `SLOT000`, `S105`, `S106` |
+| `tests/**/*.py` | `D106`, `D401`, `N806`, `RUF012`, `S101`, `DJ008`, `SLOT000`, `SLOT001`, `S106`, `S107`, `S603`, `S607` |
+| `examples/**/*.py` | `D106`, `D401`, `RUF012`, `S101`, `SLOT000`, `S105`, `S106` |
+| `tests/**/test_*.py`, `examples/**/test_*.py` | `D102`, `D103` |
+| `examples/**/migrations/*.py` | `D` |
 | `scripts/**/*.py` | `PERF`, `T201`, `INP001`, `S603`, `S607` |
 | `line_count.py` | `T201` |
 | `docs/dry/export_dry_review.py` | `T201`, `INP001` |
-| `examples/fakeshop/*.py`, `examples/fakeshop/tests/*.py`, `examples/fakeshop/test_query/**/*.py` | `INP001` |
+| `examples/fakeshop/*.py`, `examples/fakeshop/tests/*.py` | `INP001` |
+| `examples/fakeshop/test_query/**/*.py` | `INP001`, `UP031` |
 
 ## `# noqa` breakdown
 
-Lines carrying `# noqa`: 302 (none bare) in 91 files: package 197, tests 43, examples 54, scripts 4, root 4.
+Lines carrying `# noqa`: 326 (none bare) in 98 files: package 197, tests 66, examples 56, scripts 4, root 3.
 
 | Code | Hits | Package | Tests | Examples | Scripts / root | Why |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -187,15 +201,17 @@ Lines carrying `# noqa`: 302 (none bare) in 91 files: package 197, tests 43, exa
 | `A002` | 55 | 9 | 0 | 46 | 0 | a `filter` / `id` parameter that is the GraphQL argument name or a public keyword |
 | `ANN401` | 21 | 21 | 0 | 0 | 0 | an `Any` the package does not own, each with a basedpyright reason |
 | `PLC0414` | 11 | 11 | 0 | 0 | 0 | explicit re-exports basedpyright needs |
-| `N802` | 10 | 10 | 0 | 0 | 0 | PascalCase field factories (`DjangoConnectionField`, ...), for graphene-django parity, and unittest vocabulary |
+| `FBT003` | 15 | 0 | 15 | 0 | 0 | the bool is the value under test, or mirrors Django's positional `execute_wrapper` |
+| `N802` | 14 | 10 | 4 | 0 | 0 | PascalCase field factories (`DjangoConnectionField`, ...), for graphene-django parity, unittest vocabulary, a camelCase wire name |
 | `S102` | 10 | 0 | 10 | 0 | 0 | `exec` of a literal program the test runs |
 | `N815` | 9 | 0 | 6 | 3 | 0 | camelCase model fields the naming tests need |
 | `DJ001`, `S301`, `S610` | 11 | 0 | 10 | 1 | 0 | NULL as fixture input, the one `pickle` round trip, hostile `.extra()` input |
 | `F821` | 7 | 0 | 7 | 0 | 0 | forward references the definition-order tests leave unresolved |
+| `E501` | 6 | 0 | 4 | 2 | 0 | a `path::Symbol` citation wider than the limit on its own line |
 | `N805`, `N818` | 6 | 4 | 2 | 0 | 0 | metaclass methods take `cls`; control-flow exceptions |
 | `B009`, `B004`, `B010`, `B904`, `TRY004` | 10 | 10 | 0 | 0 | 0 | `getattr` / `setattr` past the stubs, a `__call__` probe, `raise` chaining, `ValueError` for bad input |
 | `S101`, `S608`, `PT009`, `PLW0603`, `PYI034`, `FBT001`, `RUF012` | 15 | 15 | 0 | 0 | 0 | django-filter's asserts, the lateral SQL, the unittest mixin, patched module caches, a metaclass `__new__`, Django's positional `many`, a stub-typed list |
-| `E402`, `PERF203`, `RUF063`, `FBT002`, `TRY301`, `PTH115`, others | 25 | 8 | 7 | 3 | 7 | one to three each |
+| `E402`, `PERF203`, `RUF063`, `FBT002`, `TRY301`, `PTH115`, others | 24 | 8 | 7 | 3 | 6 | one to three each |
 
 ### Most `# noqa` per file
 
@@ -207,10 +223,10 @@ Lines carrying `# noqa`: 302 (none bare) in 91 files: package 197, tests 43, exa
 | `django_strawberry_framework/utils/errors.py` | 11 |
 | `examples/fakeshop/apps/glossary/schema.py` | 10 |
 | `django_strawberry_framework/utils/querysets.py` | 9 |
+| `tests/types/test_definition_order.py` | 9 |
 | `django_strawberry_framework/mutations/sets.py` | 8 |
 | `django_strawberry_framework/testing/client.py` | 8 |
-| `tests/types/test_definition_order.py` | 8 |
-| `django_strawberry_framework/auth/mutations.py` | 7 |
+| `examples/fakeshop/apps/library/schema.py` | 8 |
 
 ## Waiting on You
 
@@ -238,13 +254,19 @@ Lines carrying `# noqa`: 302 (none bare) in 91 files: package 197, tests 43, exa
   only a full suite run can clear. Do it once you are ready to run the suite after it?
 - `TID252` autofixes cleanly (65 files, +172 lines) but leaves sibling imports relative and parent imports absolute;
   judged a wash, so not done.
-- AGENTS.md says TODO-anchored pseudo blocks are exempt from `ERA001`; in ruff 0.17 a `# TODO(...)` line does not
-  exempt the commented code after it, so the claim is nominal.
 - The per-file ignores are policy calls: `DJ008`, `SLOT000` / `SLOT001`, `S105`-`S107` for tests/ and
   examples/, `S603` / `S607` for tests/ and scripts/. The alternatives were 127 `__str__`s, 62 `__slots__ = ()`, and
   about 115 `noqa` lines.
-- Two new tracked files: `django_strawberry_framework/_logger.py` and `tests/_django_private.py`; at commit run
-  `build_kanban_tracked_path_constants.py` and `build_tree_md.py` (the hook does the first).
+- Item 31 passes the default (SQLite) suite at 100% coverage, ruff, format, `check_trailing_commas.py`, basedpyright
+  (main and floor), `check_citations.py` and the `TREE.md` render; the Postgres tier was not run.
+- AGENTS.md's `ERA001` line now prescribes the `# ruff: disable[ERA001]` / `enable` fence instead of a per-line
+  `noqa`, since ruff exempts only the `TODO` line itself. Keep that wording?
+- `D102` / `D103` on test functions: 1177 test functions have no docstring (most of the others carry a contract
+  docstring). Turning the rule on means writing 1177 true contract docstrings. Keep ignored?
+- `N806`: the 82 PascalCase class bindings in tests could be renamed lowercase, which reads as instances. Keep
+  ignored?
+- `tests/forms/test_sets.py`: annotating `_item_model_form` widened one existing ignore on the hostile
+  `form_cls._meta.model = "Item"` line to `reportAttributeAccessIssue, reportGeneralTypeIssues`.
 
 <!-- LINK DEFINITIONS -->
 

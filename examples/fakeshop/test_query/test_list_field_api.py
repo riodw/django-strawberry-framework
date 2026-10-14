@@ -10,7 +10,7 @@ instead of lazy-loading it.
 from __future__ import annotations
 
 import datetime
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import AsyncIterator, Callable, Generator, Iterator, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, SupportsIndex, TypeAlias, cast, overload
 
@@ -68,10 +68,14 @@ from django_strawberry_framework.views import DjangoGraphQLView
 if TYPE_CHECKING:
     from django.db.models.sql.compiler import _AsSqlType
     from django.http import HttpRequest, HttpResponse
+    from django.http.response import HttpResponseBase
+    from django.test.client import _MonkeyPatchedWSGIResponse
     from django.views import View
     from strawberry.schema.name_converter import HasGraphQLName
     from strawberry.types.arguments import StrawberryArgument
     from typing_extensions import TypeIs
+
+    from django_strawberry_framework.resource_policy import ResourcePolicy
 
 _ListResolver: TypeAlias = Callable[[object, strawberry.Info[object, object]], object]
 
@@ -122,7 +126,7 @@ class _CurrentView(TypedDict):
 _CURRENT: _CurrentView = {"schema": None, "view_class": None}
 
 
-def _graphql_view(request: HttpRequest):
+def _graphql_view(request: HttpRequest) -> HttpResponseBase:
     schema = _CURRENT["schema"]
     assert schema is not None
     view_class = _CURRENT["view_class"] or DjangoGraphQLView
@@ -157,7 +161,7 @@ def _post_sync_response(
     client: Client | None = None,
     extra_settings: Mapping[str, object] | None = None,
     view_class: type[View] | None = None,
-):
+) -> _MonkeyPatchedWSGIResponse:
     """Post to the test mount and return the RAW ``HttpResponse``.
 
     The parsed-payload sibling below is what most cases want; the raw response is
@@ -271,7 +275,7 @@ def _introspected_query_fields() -> dict[str, JSONObject]:
     ],
     ids=["default", "nullable", "manager-resolver"],
 )
-def test_shipped_branches_introspection_arguments(field_name: str):
+def test_shipped_branches_introspection_arguments(field_name: str) -> None:
     """Every published list surface carries the same three arguments in the same types."""
     fields = _introspected_query_fields()
     assert field_name in fields
@@ -293,7 +297,7 @@ def test_shipped_branches_introspection_arguments(field_name: str):
 
 
 @pytest.mark.django_db
-def test_shipped_branches_introspection_return_types():
+def test_shipped_branches_introspection_return_types() -> None:
     """The annotation, not ``DjangoListField``, decides the published nullability."""
     fields = _introspected_query_fields()
 
@@ -324,7 +328,7 @@ def test_shipped_branches_introspection_return_types():
 
 
 @pytest.mark.django_db
-def test_shipped_branches_staff_ordered_offset_limit():
+def test_shipped_branches_staff_ordered_offset_limit() -> None:
     library_models.Branch.objects.create(name="Bravo", city="Boston")
     library_models.Branch.objects.create(name="Alpha", city="Boston")
     library_models.Branch.objects.create(name="Delta", city="Boston")
@@ -370,7 +374,7 @@ def test_shipped_branches_staff_ordered_offset_limit():
 
 
 @pytest.mark.django_db
-def test_shipped_branches_anonymous_visibility_before_offset():
+def test_shipped_branches_anonymous_visibility_before_offset() -> None:
     # Restricted city branch must be excluded by BranchType.get_queryset BEFORE offset
     library_models.Branch.objects.create(name="Alpha", city="Boston")
     library_models.Branch.objects.create(name="Hidden", city="restricted")
@@ -395,7 +399,7 @@ def test_shipped_branches_anonymous_visibility_before_offset():
 
 
 @pytest.mark.django_db
-def test_shipped_branches_order_by_alone():
+def test_shipped_branches_order_by_alone() -> None:
     library_models.Branch.objects.create(name="Charlie", city="Boston")
     library_models.Branch.objects.create(name="Alpha", city="Boston")
     library_models.Branch.objects.create(name="Bravo", city="Boston")
@@ -420,7 +424,7 @@ def test_shipped_branches_order_by_alone():
 
 
 @pytest.mark.django_db
-def test_shipped_branches_nonzero_offset_without_order_rejected():
+def test_shipped_branches_nonzero_offset_without_order_rejected() -> None:
     library_models.Branch.objects.create(name="Alpha", city="Boston")
     query = """
     query {
@@ -446,17 +450,21 @@ def _apply_order_unchanged(
     _order_input: object,
     queryset: models.QuerySet[library_models.Branch],
     _info: object,
-):
+) -> models.QuerySet[library_models.Branch]:
     """A mistaken public override: it honours the supplied order by returning nothing new."""
     return queryset
 
 
-def _seed_three_branches():
+def _seed_three_branches() -> None:
     for name in ("Alpha", "Bravo", "Charlie"):
         library_models.Branch.objects.create(name=name, city="Boston")
 
 
-def _branch_offset_page(query: str, *, client: Client | None = None):
+def _branch_offset_page(
+    query: str,
+    *,
+    client: Client | None = None,
+) -> tuple[JSONObject, list[str]]:
     """Post ``query`` and return ``(payload, branch SQL)`` for the offset-guard rows."""
     with CaptureQueriesContext(connection) as captured:
         payload = graphql_payload(query, client=client)
@@ -482,7 +490,9 @@ _RANDOM_ORDER_SQL = "RAND"
 
 
 @pytest.mark.django_db
-def test_shipped_branches_offset_rejects_a_random_model_default(monkeypatch: pytest.MonkeyPatch):
+def test_shipped_branches_offset_rejects_a_random_model_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A random ``Meta.ordering`` defeats a positive offset even with active order input.
 
     The override honours nothing, so the order the request actually runs under is
@@ -515,7 +525,7 @@ def test_shipped_branches_offset_rejects_a_random_model_default(monkeypatch: pyt
 def test_shipped_branches_offset_rejects_a_random_expression_model_default(
     monkeypatch: pytest.MonkeyPatch,
     ordering: _ModelOrdering,
-):
+) -> None:
     """A ``Random()`` ``Meta.ordering`` is the same shuffle as ``"?"``, written as an expression."""
     _seed_three_branches()
     monkeypatch.setattr(library_models.Branch._meta, "ordering", ordering)
@@ -530,7 +540,9 @@ def test_shipped_branches_offset_rejects_a_random_expression_model_default(
 
 
 @pytest.mark.django_db
-def test_shipped_branches_offset_accepts_a_stable_model_default(monkeypatch: pytest.MonkeyPatch):
+def test_shipped_branches_offset_accepts_a_stable_model_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The control for the row above: the same no-op override over a stable default is served.
 
     Only the randomness of the selected order is what the rejection is about. A
@@ -551,7 +563,7 @@ def test_shipped_branches_offset_accepts_a_stable_model_default(monkeypatch: pyt
     assert _RANDOM_ORDER_SQL not in statement, statement
 
 
-def _seed_three_shelves():
+def _seed_three_shelves() -> None:
     for name in ("Alpha", "Bravo", "Charlie"):
         branch = library_models.Branch.objects.create(name=name, city="Boston")
         library_models.Shelf.objects.create(code=f"{name}-1", branch=branch)
@@ -571,7 +583,7 @@ def _shelf_offset_page(
     shelf_ordering: _ModelOrdering,
     branch_ordering: _ModelOrdering,
     resolver: _ListResolver | None = None,
-):
+) -> tuple[JSONObject, list[str]]:
     """Post the shelf page under the two ``Meta.ordering`` values and return it with its SQL.
 
     ``resolver`` supplies the source queryset when a case needs one carrying query
@@ -599,7 +611,7 @@ def _shelf_offset_page(
 @pytest.mark.django_db
 def test_holder_offset_rejects_a_relation_default_that_expands_to_a_random_order(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A relation name orders by the RELATED model's default, so its randomness decides.
 
     ``django/db/models/sql/compiler.py::SQLCompiler.find_ordering_name`` does not
@@ -621,7 +633,7 @@ def test_holder_offset_rejects_a_relation_default_that_expands_to_a_random_order
 @pytest.mark.django_db
 def test_holder_offset_accepts_a_relation_default_that_expands_to_a_stable_order(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The control for the row above: the expansion is read, not assumed random.
 
     The same relation term under a branch ordering by a column pages exactly as a
@@ -642,7 +654,7 @@ def test_holder_offset_accepts_a_relation_default_that_expands_to_a_stable_order
 @pytest.mark.django_db
 def test_holder_offset_accepts_a_relation_attname_over_a_random_related_default(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Naming the column instead of the relation orders by that column and nothing else.
 
     Django expands only a term that does NOT name the field's ``attname``, so
@@ -674,7 +686,7 @@ def test_holder_offset_accepts_a_relation_attname_over_a_random_related_default(
 def test_holder_offset_accepts_an_expression_reference_to_a_relation(
     monkeypatch: pytest.MonkeyPatch,
     shelf_ordering: _ModelOrdering,
-):
+) -> None:
     """Only a STRING ordering term expands; an expression reference is a column order.
 
     ``django/db/models/sql/query.py::Query.resolve_ref`` resolves an ``F`` to the
@@ -694,7 +706,7 @@ def test_holder_offset_accepts_an_expression_reference_to_a_relation(
     assert _RANDOM_ORDER_SQL not in statement, statement
 
 
-def _coin_case_ordering(lookup: str = "coin__gt", threshold: object = 0.5):
+def _coin_case_ordering(lookup: str = "coin__gt", threshold: object = 0.5) -> _ModelOrdering:
     """A conditional ordering whose predicate compares ``lookup`` against ``threshold``."""
     return (
         models.Case(
@@ -719,7 +731,7 @@ _RANDOM_CARRIES: list[_ShelfCarry] = [
 def test_holder_offset_rejects_a_conditional_order_over_a_random_predicate(
     monkeypatch: pytest.MonkeyPatch,
     carry: _ShelfCarry,
-):
+) -> None:
     """A predicate compares two sides, and the side it compares FROM is ordering SQL too.
 
     A ``Case`` picking its value by ``coin__gt`` orders the rows by whatever
@@ -734,7 +746,7 @@ def test_holder_offset_rejects_a_conditional_order_over_a_random_predicate(
         monkeypatch,
         _coin_case_ordering(),
         ("name",),
-        resolver=lambda root, info: carry(library_models.Shelf.objects.all()),
+        resolver=lambda _root, _info: carry(library_models.Shelf.objects.all()),
     )
 
     err = payload["errors"][0]
@@ -746,7 +758,7 @@ def test_holder_offset_rejects_a_conditional_order_over_a_random_predicate(
 @pytest.mark.django_db
 def test_holder_offset_accepts_a_conditional_order_over_a_column_alias_predicate(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The control for the row above: the predicate is read, not assumed unreadable.
 
     The same conditional ordering over an alias naming a column compares one
@@ -758,7 +770,7 @@ def test_holder_offset_accepts_a_conditional_order_over_a_column_alias_predicate
         monkeypatch,
         _coin_case_ordering(),
         ("name",),
-        resolver=lambda root, info: library_models.Shelf.objects.alias(coin=models.F("code")),
+        resolver=lambda _root, _info: library_models.Shelf.objects.alias(coin=models.F("code")),
     )
 
     assert "errors" not in payload, payload
@@ -772,7 +784,7 @@ def test_holder_offset_accepts_a_conditional_order_over_a_column_alias_predicate
 @pytest.mark.django_db
 def test_holder_offset_accepts_a_conditional_order_over_a_plain_column_predicate(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A predicate naming a model column needs no alias to be readable, and still pages."""
     _seed_three_shelves()
 
@@ -870,8 +882,9 @@ class _ProjectLookup(GreaterThan):
 def test_holder_offset_reads_an_expression_by_its_approved_form(
     monkeypatch: pytest.MonkeyPatch,
     ordering: _ModelOrdering,
+    *,
     served: bool,
-):
+) -> None:
     """Holding readable children is not a promise about a node's own SQL.
 
     A ``Func`` emits whatever its ``as_sql`` says around its sources, and a
@@ -902,7 +915,7 @@ class _ProjectF(models.F):
     """A reference subclass that resolves to SQL of its own instead of to the name it holds."""
 
     @override
-    def resolve_expression(self, *args: object, **kwargs: object):
+    def resolve_expression(self, *args: object, **kwargs: object) -> Random:
         return Random()
 
 
@@ -911,21 +924,21 @@ class _ProjectQ(models.Q):
 
     @override
     # basedpyright: deliberately resolves to foreign SQL, the predicate subclass the guard refuses
-    def resolve_expression(self, *args: object, **kwargs: object):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def resolve_expression(self, *args: object, **kwargs: object) -> Random:  # pyright: ignore[reportIncompatibleMethodOverride]
         return Random()
 
 
 class _ProjectName(str):
     """A string subclass Django reads as an expression because it carries the method."""
 
-    def resolve_expression(self, *_args: object, **_kwargs: object):
+    def resolve_expression(self, *_args: object, **_kwargs: object) -> Random:
         return Random()
 
-    def asc(self):
+    def asc(self) -> OrderBy:
         return OrderBy(Random())
 
 
-def _case_ordering_over(condition: models.Q):
+def _case_ordering_over(condition: models.Q) -> _ModelOrdering:
     """A conditional ordering whose ``When`` is built from a predicate object."""
     return (
         models.Case(
@@ -948,8 +961,9 @@ def _case_ordering_over(condition: models.Q):
 def test_holder_offset_reads_a_term_by_the_form_it_resolves_into(
     monkeypatch: pytest.MonkeyPatch,
     ordering: _ModelOrdering,
+    *,
     served: bool,
-):
+) -> None:
     """A reference is read by its exact type, and an expression is never read as a name.
 
     ``django/db/models/sql/compiler.py::SQLCompiler._order_by_pairs`` asks a term
@@ -987,8 +1001,9 @@ def test_holder_offset_reads_a_term_by_the_form_it_resolves_into(
 def test_holder_offset_reads_a_conditional_predicate_by_its_exact_type(
     monkeypatch: pytest.MonkeyPatch,
     condition: models.Q,
+    *,
     served: bool,
-):
+) -> None:
     """A ``When`` compiles whatever its condition resolves to, subclass or not.
 
     ``Case`` / ``When`` is an approved composition, so the predicate inside it is
@@ -1026,7 +1041,7 @@ def test_holder_offset_reads_a_conditional_predicate_by_its_exact_type(
 def test_holder_offset_rejects_a_predicate_chain_of_project_sql(
     monkeypatch: pytest.MonkeyPatch,
     lookup_class: type[_ProjectTransform | _ProjectLookup],
-):
+) -> None:
     """A predicate's transforms and its lookup are SQL wrapped around the reference.
 
     Resolving the column the predicate names says nothing about what is done to
@@ -1052,7 +1067,7 @@ def test_holder_offset_rejects_a_predicate_chain_of_project_sql(
 @pytest.mark.django_db
 def test_holder_offset_accepts_a_predicate_chain_of_approved_forms(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The control for the rows above: an approved transform under an approved lookup pages.
 
     ``stamp__year__gt`` applies Django's own date transform and comparison to a
@@ -1070,7 +1085,7 @@ def test_holder_offset_accepts_a_predicate_chain_of_approved_forms(
         monkeypatch,
         _coin_case_ordering(lookup="stamp__year__gt", threshold=2000),
         ("name",),
-        resolver=lambda root, info: library_models.Shelf.objects.alias(stamp=stamp),
+        resolver=lambda _root, _info: library_models.Shelf.objects.alias(stamp=stamp),
     )
 
     assert "errors" not in payload, payload
@@ -1090,7 +1105,7 @@ def test_holder_offset_accepts_a_predicate_chain_of_approved_forms(
 def test_holder_offset_refuses_a_reference_naming_an_extra_select_alias(
     monkeypatch: pytest.MonkeyPatch,
     ordering: _ModelOrdering,
-):
+) -> None:
     """A name that resolves into ``extra`` is raw SQL wherever the reference stands.
 
     ``extra(select=...)`` strings are handed to the database verbatim, so a
@@ -1104,7 +1119,7 @@ def test_holder_offset_refuses_a_reference_naming_an_extra_select_alias(
         monkeypatch,
         ordering,
         ("name",),
-        resolver=lambda root, info: library_models.Shelf.objects.extra(select={"coin": "1"}),
+        resolver=lambda _root, _info: library_models.Shelf.objects.extra(select={"coin": "1"}),
     )
 
     err = payload["errors"][0]
@@ -1116,7 +1131,7 @@ def test_holder_offset_refuses_a_reference_naming_an_extra_select_alias(
 @pytest.mark.django_db
 def test_holder_offset_accepts_a_predicate_chain_ending_in_a_transform(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A chain whose last piece is a transform is compared under Django's implicit ``exact``.
 
     ``stamp__year`` names no lookup at all: the year is a transform, and the
@@ -1135,7 +1150,7 @@ def test_holder_offset_accepts_a_predicate_chain_ending_in_a_transform(
         monkeypatch,
         _coin_case_ordering(lookup="stamp__year", threshold=2020),
         ("name",),
-        resolver=lambda root, info: library_models.Shelf.objects.alias(stamp=stamp),
+        resolver=lambda _root, _info: library_models.Shelf.objects.alias(stamp=stamp),
     )
 
     assert "errors" not in payload, payload
@@ -1155,8 +1170,9 @@ def test_holder_offset_accepts_a_predicate_chain_ending_in_a_transform(
 def test_holder_offset_reads_a_predicate_nested_inside_a_predicate(
     monkeypatch: pytest.MonkeyPatch,
     nested: models.Q,
+    *,
     served: bool,
-):
+) -> None:
     """A predicate's child can be another predicate, and it carries the same SQL.
 
     Django keeps a combined ``Q`` whose own connector differs as a child node
@@ -1170,7 +1186,7 @@ def test_holder_offset_reads_a_predicate_nested_inside_a_predicate(
         monkeypatch,
         _case_ordering_over(models.Q(code__gt="A") | nested),
         ("name",),
-        resolver=lambda root, info: library_models.Shelf.objects.alias(coin=Random()),
+        resolver=lambda _root, _info: library_models.Shelf.objects.alias(coin=Random()),
     )
 
     if not served:
@@ -1190,7 +1206,7 @@ def test_holder_offset_reads_a_predicate_nested_inside_a_predicate(
 @pytest.mark.django_db
 def test_shipped_branches_offset_accepts_extra_ordering_over_a_dormant_random_order(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Ordering Django supersedes is dormant, and a dormant ``"?"`` cannot reject the offset.
 
     An ``extra`` ordering wins outright over ``query.order_by``, so the ``"?"``
@@ -1206,7 +1222,7 @@ def test_shipped_branches_offset_accepts_extra_ordering_over_a_dormant_random_or
         _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
         _info: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         return queryset.order_by("?").extra(order_by=["id"])
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_extra_supersedes_random))
@@ -1224,7 +1240,7 @@ def test_shipped_branches_offset_accepts_extra_ordering_over_a_dormant_random_or
 @pytest.mark.django_db
 def test_shipped_branches_offset_rejects_extra_random_ordering_over_a_stable_order(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The control for the row above: the superseding collection is the one that decides.
 
     Here the dormant terms are the stable ones and the ``extra`` ordering that
@@ -1238,7 +1254,7 @@ def test_shipped_branches_offset_rejects_extra_random_ordering_over_a_stable_ord
         _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
         _info: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         return queryset.order_by("name").extra(order_by=["?"])
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_extra_random_supersedes_stable))
@@ -1254,7 +1270,7 @@ def test_shipped_branches_offset_rejects_extra_random_ordering_over_a_stable_ord
 @pytest.mark.django_db
 def test_shipped_branches_offset_rejects_an_annotated_random_order(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """An annotation alias carries its expression's verdict into the offset guard.
 
     ``order_by("rnd")`` is an ordinary-looking column name, and Django resolves it
@@ -1270,7 +1286,7 @@ def test_shipped_branches_offset_rejects_an_annotated_random_order(
         _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
         _info: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         return queryset.annotate(rnd=Random()).order_by("rnd")
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_random_annotation))
@@ -1286,7 +1302,7 @@ def test_shipped_branches_offset_rejects_an_annotated_random_order(
 @pytest.mark.django_db
 def test_shipped_branches_offset_rejects_an_f_reference_to_a_random_annotation(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The alias is resolved however the ordering names it, as a string or through ``F``.
 
     An ``F`` is a name too. Reading only the terms that arrive as strings leaves
@@ -1300,7 +1316,7 @@ def test_shipped_branches_offset_rejects_an_f_reference_to_a_random_annotation(
         _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
         _info: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         return queryset.annotate(rnd=Random()).order_by(models.F("rnd").desc())
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_random_annotation_via_f))
@@ -1322,7 +1338,7 @@ def test_shipped_branches_offset_rejects_an_f_reference_to_a_random_annotation(
 def test_shipped_branches_offset_rejects_a_desc_or_lookup_random_alias(
     monkeypatch: pytest.MonkeyPatch,
     term: str,
-):
+) -> None:
     """An annotation alias is resolved after a leading ``-`` or a lookup suffix too."""
     _seed_three_branches()
 
@@ -1331,7 +1347,7 @@ def test_shipped_branches_offset_rejects_a_desc_or_lookup_random_alias(
         _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
         _info: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         return queryset.annotate(rnd=Random()).order_by(term)
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_aliased))
@@ -1345,7 +1361,9 @@ def test_shipped_branches_offset_rejects_a_desc_or_lookup_random_alias(
 
 
 @pytest.mark.django_db
-def test_shipped_branches_offset_rejects_an_extra_select_ordering(monkeypatch: pytest.MonkeyPatch):
+def test_shipped_branches_offset_rejects_an_extra_select_ordering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Raw SQL reached through ``extra`` is opaque, and opaque is not deterministic.
 
     The package passes an ``extra`` select through verbatim and parses no SQL, so
@@ -1361,7 +1379,7 @@ def test_shipped_branches_offset_rejects_an_extra_select_ordering(monkeypatch: p
         _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
         _info: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         return queryset.extra(select={"rnd": "RANDOM()"}, order_by=["rnd"])
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_extra_select_ordering))
@@ -1383,7 +1401,7 @@ def test_shipped_branches_offset_rejects_an_extra_select_ordering(monkeypatch: p
 def test_shipped_branches_offset_rejects_a_dotted_extra_order(
     monkeypatch: pytest.MonkeyPatch,
     term: str,
-):
+) -> None:
     """A dotted ``extra`` term is opaque: the package does not parse that SQL."""
     _seed_three_branches()
 
@@ -1392,7 +1410,7 @@ def test_shipped_branches_offset_rejects_a_dotted_extra_order(
         _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
         _info: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         return queryset.extra(order_by=[term])
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_dotted_extra))
@@ -1406,7 +1424,9 @@ def test_shipped_branches_offset_rejects_a_dotted_extra_order(
 
 
 @pytest.mark.django_db
-def test_shipped_branches_offset_rejects_a_composed_random_order(monkeypatch: pytest.MonkeyPatch):
+def test_shipped_branches_offset_rejects_a_composed_random_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A composition is read through, so nesting does not launder a random term.
 
     ``Coalesce(Random(), Random())`` is not a ``Random()`` at its top level and
@@ -1420,7 +1440,7 @@ def test_shipped_branches_offset_rejects_a_composed_random_order(monkeypatch: py
         _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
         _info: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         return queryset.order_by(Coalesce(Random(), Random()))
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_composed_random))
@@ -1434,7 +1454,7 @@ def test_shipped_branches_offset_rejects_a_composed_random_order(monkeypatch: py
 
 
 @pytest.mark.django_db
-def test_shipped_branches_offset_rejects_a_raw_sql_order(monkeypatch: pytest.MonkeyPatch):
+def test_shipped_branches_offset_rejects_a_raw_sql_order(monkeypatch: pytest.MonkeyPatch) -> None:
     """A raw SQL fragment is a leaf carrying its own statement, and none of it is read.
 
     The package parses no SQL, so the fragment is opaque wherever it is written -
@@ -1450,7 +1470,7 @@ def test_shipped_branches_offset_rejects_a_raw_sql_order(monkeypatch: pytest.Mon
         _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
         _info: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         return queryset.order_by(RawSQL("RANDOM()", []))
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_raw_sql_ordering))
@@ -1466,7 +1486,7 @@ def test_shipped_branches_offset_rejects_a_raw_sql_order(monkeypatch: pytest.Mon
 @pytest.mark.django_db
 def test_shipped_branches_offset_rejects_a_bare_database_function_order(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A ``Func`` naming a database function is the same leaf ``Random()`` is.
 
     ``Random()`` is Django's own name for ``Func(function="RANDOM")``, so a guard
@@ -1480,7 +1500,7 @@ def test_shipped_branches_offset_rejects_a_bare_database_function_order(
         _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
         _info: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         output_field: models.FloatField[float | int | str | Combinable, float] = (
             models.FloatField()
         )
@@ -1497,7 +1517,7 @@ def test_shipped_branches_offset_rejects_a_bare_database_function_order(
 
 
 @pytest.mark.django_db
-def test_shipped_branches_offset_rejects_a_subquery_order(monkeypatch: pytest.MonkeyPatch):
+def test_shipped_branches_offset_rejects_a_subquery_order(monkeypatch: pytest.MonkeyPatch) -> None:
     """An inner query is where the walk over source expressions ends.
 
     A ``Subquery`` hands the compiler a whole query of its own, and what that
@@ -1512,7 +1532,7 @@ def test_shipped_branches_offset_rejects_a_subquery_order(monkeypatch: pytest.Mo
         _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
         _info: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         inner = (
             library_models.Branch.objects.filter(pk=models.OuterRef("pk"))
             .annotate(rnd=Random())
@@ -1533,7 +1553,7 @@ def test_shipped_branches_offset_rejects_a_subquery_order(monkeypatch: pytest.Mo
 @pytest.mark.django_db
 def test_shipped_branches_offset_rejects_raw_sql_inside_a_predicate_container(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A lookup taking a sequence compiles every member, so reading the top level is not enough.
 
     ``name__in`` holds its operands one bracket deeper than ``name=`` does, and
@@ -1548,7 +1568,7 @@ def test_shipped_branches_offset_rejects_raw_sql_inside_a_predicate_container(
         _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
         _info: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         return queryset.order_by(
             models.Case(
                 models.When(
@@ -1570,7 +1590,9 @@ def test_shipped_branches_offset_rejects_raw_sql_inside_a_predicate_container(
 
 
 @pytest.mark.django_db
-def test_shipped_branches_offset_accepts_a_conditional_order(monkeypatch: pytest.MonkeyPatch):
+def test_shipped_branches_offset_accepts_a_conditional_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The control for the leaf rule: columns and literals are read end to end.
 
     A ``Case`` orders by the value its predicate picks, and both halves of that -
@@ -1585,7 +1607,7 @@ def test_shipped_branches_offset_accepts_a_conditional_order(monkeypatch: pytest
         _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
         _info: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         return queryset.order_by(
             models.Case(
                 models.When(city="Boston", then=models.Value(0)),
@@ -1608,7 +1630,9 @@ def test_shipped_branches_offset_accepts_a_conditional_order(monkeypatch: pytest
 
 
 @pytest.mark.django_db
-def test_shipped_branches_offset_accepts_a_stable_annotated_order(monkeypatch: pytest.MonkeyPatch):
+def test_shipped_branches_offset_accepts_a_stable_annotated_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The control for the annotation rows: an alias naming a stable expression pages.
 
     Resolving the alias is what the rejections above are about, not the presence
@@ -1622,7 +1646,7 @@ def test_shipped_branches_offset_accepts_a_stable_annotated_order(monkeypatch: p
         _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
         _info: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         return queryset.annotate(sort_key=Lower("name")).order_by("sort_key")
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_stable_annotation))
@@ -1641,7 +1665,7 @@ def test_shipped_branches_offset_accepts_a_stable_annotated_order(monkeypatch: p
 @pytest.mark.django_db
 def test_shipped_branches_offset_accepts_a_container_predicate_of_readable_leaves(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The control for the container rule: a sequence lookup of literals still pages.
 
     Reading one bracket deeper is what the ``name__in`` rejection above is about,
@@ -1658,7 +1682,7 @@ def test_shipped_branches_offset_accepts_a_container_predicate_of_readable_leave
         _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
         _info: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         return queryset.order_by(
             models.Case(
                 models.When(
@@ -1690,7 +1714,9 @@ def test_shipped_branches_offset_accepts_a_container_predicate_of_readable_leave
 
 
 @pytest.mark.django_db
-def test_shipped_branches_offset_accepts_a_row_count_order(monkeypatch: pytest.MonkeyPatch):
+def test_shipped_branches_offset_accepts_a_row_count_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The control for the aggregate leaf: ``Count("*")`` carries no column and is admitted.
 
     An aggregate's star stands for every row rather than for a named column, so
@@ -1708,7 +1734,7 @@ def test_shipped_branches_offset_accepts_a_row_count_order(monkeypatch: pytest.M
         _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
         _info: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         return queryset.annotate(row_count=models.Count("*")).order_by("row_count", "name")
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_row_count_ordering))
@@ -1725,7 +1751,7 @@ def test_shipped_branches_offset_accepts_a_row_count_order(monkeypatch: pytest.M
 
 
 @pytest.mark.django_db
-def test_shipped_branches_offset_bounds_rejected():
+def test_shipped_branches_offset_bounds_rejected() -> None:
     # Negative offset
     payload_neg = graphql_payload(
         "{ allLibraryBranchesViaListField(offset: -1) { name } }",
@@ -1753,7 +1779,7 @@ def test_shipped_branches_offset_bounds_rejected():
 
 
 @pytest.mark.django_db
-def test_shipped_branches_limit_bounds_rejected():
+def test_shipped_branches_limit_bounds_rejected() -> None:
     # Negative limit
     payload_neg = graphql_payload(
         "{ allLibraryBranchesViaListField(limit: -1) { name } }",
@@ -1810,8 +1836,9 @@ query($off: Int) {
     ids=["string", "boolean", "non-integral-float"],
 )
 def test_shipped_branches_a_limit_variable_outside_int_is_refused_before_sql(
+    *,
     bad_value: str | bool | float,
-):
+) -> None:
     """Each coercion family owns its node: they fail at different layers.
 
     A string and a boolean are refused by variable coercion, a non-integral
@@ -1837,8 +1864,9 @@ def test_shipped_branches_a_limit_variable_outside_int_is_refused_before_sql(
     ids=["string", "boolean", "non-integral-float"],
 )
 def test_shipped_branches_an_offset_variable_outside_int_is_refused_before_sql(
+    *,
     bad_value: str | bool | float,
-):
+) -> None:
     """Offset uses the same Int gate as ``limit``; coercion never reaches the resolver."""
     library_models.Branch.objects.create(name="Alpha", city="Boston")
 
@@ -1852,7 +1880,7 @@ def test_shipped_branches_an_offset_variable_outside_int_is_refused_before_sql(
 
 
 @pytest.mark.django_db
-def test_shipped_branches_a_float_limit_literal_is_refused_before_sql():
+def test_shipped_branches_a_float_limit_literal_is_refused_before_sql() -> None:
     """The document-literal path does not pass through variable coercion at all."""
     library_models.Branch.objects.create(name="Alpha", city="Boston")
 
@@ -1868,7 +1896,7 @@ def test_shipped_branches_a_float_limit_literal_is_refused_before_sql():
 
 
 @pytest.mark.django_db
-def test_shipped_branches_a_float_offset_literal_is_refused_before_sql():
+def test_shipped_branches_a_float_offset_literal_is_refused_before_sql() -> None:
     """The document-literal path for ``offset`` is the same gate as for ``limit``."""
     library_models.Branch.objects.create(name="Alpha", city="Boston")
 
@@ -1884,7 +1912,7 @@ def test_shipped_branches_a_float_offset_literal_is_refused_before_sql():
 
 
 @pytest.mark.django_db
-def test_shipped_branches_an_integral_float_limit_variable_coerces_and_runs():
+def test_shipped_branches_an_integral_float_limit_variable_coerces_and_runs() -> None:
     """The positive control for the rejections above.
 
     Without it they would all still pass if ``limit`` refused every float, which
@@ -1899,7 +1927,7 @@ def test_shipped_branches_an_integral_float_limit_variable_coerces_and_runs():
 
 
 @pytest.mark.django_db
-def test_shipped_branches_limit_zero_short_circuits_sql():
+def test_shipped_branches_limit_zero_short_circuits_sql() -> None:
     library_models.Branch.objects.create(name="Alpha", city="Boston")
     library_models.Branch.objects.create(name="Bravo", city="Boston")
 
@@ -1913,7 +1941,7 @@ def test_shipped_branches_limit_zero_short_circuits_sql():
 
 
 @pytest.mark.django_db
-def test_shipped_branches_offset_with_limit_zero_precondition():
+def test_shipped_branches_offset_with_limit_zero_precondition() -> None:
     # offset: 1, limit: 0 without ordering violates precondition
     payload_no_ord = graphql_payload(
         "{ allLibraryBranchesViaListField(offset: 1, limit: 0) { name } }",
@@ -1948,7 +1976,7 @@ def test_shipped_branches_offset_with_limit_zero_precondition():
 
 
 @pytest.mark.django_db
-def test_holder_trusted_widened_field():
+def test_holder_trusted_widened_field() -> None:
     @strawberry.type
     class _TrustedQuery:
         branches_trusted: list[library_schema.BranchType] = DjangoListField(
@@ -1977,7 +2005,7 @@ def test_holder_trusted_widened_field():
 
 
 @pytest.mark.django_db
-def test_holder_trusted_max_rows_rejects_a_limit_above_the_field_bound():
+def test_holder_trusted_max_rows_rejects_a_limit_above_the_field_bound() -> None:
     """Trusted ``max_rows`` widens the limit ceiling to the field bound, not past it."""
 
     @strawberry.type
@@ -1998,7 +2026,7 @@ def test_holder_trusted_max_rows_rejects_a_limit_above_the_field_bound():
 
 
 @pytest.mark.django_db
-def test_holder_untrusted_max_rows_caps_an_omitted_limit():
+def test_holder_untrusted_max_rows_caps_an_omitted_limit() -> None:
     """A field ``max_rows`` without the trusted opt-in narrows the default window."""
 
     @strawberry.type
@@ -2018,7 +2046,7 @@ def test_holder_untrusted_max_rows_caps_an_omitted_limit():
 
 
 @pytest.mark.django_db
-def test_holder_untrusted_max_rows_is_the_limit_ceiling():
+def test_holder_untrusted_max_rows_is_the_limit_ceiling() -> None:
     """Without the trusted opt-in, the field bound is the limit ceiling."""
 
     @strawberry.type
@@ -2038,7 +2066,7 @@ def test_holder_untrusted_max_rows_is_the_limit_ceiling():
 
 
 @pytest.mark.django_db
-def test_holder_materialized_sequence_subclass_is_still_row_bounded():
+def test_holder_materialized_sequence_subclass_is_still_row_bounded() -> None:
     """A materialized source is bounded by this package, not by its own subscript.
 
     ``DjangoListField(resolver=...)`` is a public path: whatever the resolver
@@ -2072,7 +2100,7 @@ def test_holder_materialized_sequence_subclass_is_still_row_bounded():
             library_schema.BranchType,
             max_rows=2,
             resolver=_list_resolver(
-                lambda root, info: _EscapingRows(library_models.Branch.objects.all()),
+                lambda _root, _info: _EscapingRows(library_models.Branch.objects.all()),
             ),
         )
 
@@ -2094,16 +2122,18 @@ def test_holder_materialized_sequence_subclass_is_still_row_bounded():
 
 
 @pytest.mark.django_db
-def test_holder_materialized_and_nullable_none_fields():
+def test_holder_materialized_and_nullable_none_fields() -> None:
     @strawberry.type
     class _NonQsQuery:
         branches_materialized: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=_list_resolver(lambda root, info: list(library_models.Branch.objects.all())),
+            resolver=_list_resolver(
+                lambda _root, _info: list(library_models.Branch.objects.all()),
+            ),
         )
         branches_nullable_none: list[library_schema.BranchType] | None = DjangoListField(
             library_schema.BranchType,
-            resolver=_list_resolver(lambda root, info: None),
+            resolver=_list_resolver(lambda _root, _info: None),
         )
 
     schema = DjangoSchema(query=_NonQsQuery, config=strawberry_config())
@@ -2149,12 +2179,14 @@ def test_holder_materialized_and_nullable_none_fields():
 @pytest.mark.parametrize(
     "resolver",
     [
-        _list_resolver(lambda root, info: library_models.Branch.objects.all()),
-        _list_resolver(lambda root, info: library_models.Branch.objects),
+        _list_resolver(lambda _root, _info: library_models.Branch.objects.all()),
+        _list_resolver(lambda _root, _info: library_models.Branch.objects),
     ],
     ids=["queryset", "manager"],
 )
-def test_holder_a_query_source_resolver_still_applies_target_visibility(resolver: _ListResolver):
+def test_holder_a_query_source_resolver_still_applies_target_visibility(
+    resolver: _ListResolver,
+) -> None:
     """A ``QuerySet`` or ``Manager`` resolver still runs ``BranchType.get_queryset``."""
     library_models.Branch.objects.create(name="Alpha", city="Boston")
     library_models.Branch.objects.create(name="Hidden", city="restricted")
@@ -2176,7 +2208,7 @@ def test_holder_a_query_source_resolver_still_applies_target_visibility(resolver
 
 
 @pytest.mark.django_db
-def test_holder_a_materialized_list_skips_target_visibility():
+def test_holder_a_materialized_list_skips_target_visibility() -> None:
     """A python-list resolver returns restricted-city rows the queryset path hides."""
     library_models.Branch.objects.create(name="Alpha", city="Boston")
     library_models.Branch.objects.create(name="Hidden", city="restricted")
@@ -2186,7 +2218,7 @@ def test_holder_a_materialized_list_skips_target_visibility():
         branches: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
             resolver=_list_resolver(
-                lambda root, info: list(library_models.Branch.objects.order_by("name")),
+                lambda _root, _info: list(library_models.Branch.objects.order_by("name")),
             ),
         )
 
@@ -2200,12 +2232,12 @@ def test_holder_a_materialized_list_skips_target_visibility():
 
 
 @pytest.mark.django_db
-def test_holder_presliced_configuration_error_under_pass_through():
+def test_holder_presliced_configuration_error_under_pass_through() -> None:
     @strawberry.type
     class _PreslicedQuery:
         branches_presliced: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=_list_resolver(lambda root, info: library_models.Branch.objects.all()[:5]),
+            resolver=_list_resolver(lambda _root, _info: library_models.Branch.objects.all()[:5]),
         )
 
     schema = DjangoSchema(query=_PreslicedQuery, config=strawberry_config())
@@ -2241,7 +2273,9 @@ def test_holder_presliced_configuration_error_under_pass_through():
     ["[]", "[{ id: null }]"],
     ids=["empty-list", "all-null-term"],
 )
-def test_shipped_branches_an_ordering_with_no_terms_does_not_satisfy_an_offset(order_by: str):
+def test_shipped_branches_an_ordering_with_no_terms_does_not_satisfy_an_offset(
+    order_by: str,
+) -> None:
     """Two different spellings of "supplied but empty", each its own regression.
 
     An empty list never reaches term normalization; a list whose only term is
@@ -2255,7 +2289,7 @@ def test_shipped_branches_an_ordering_with_no_terms_does_not_satisfy_an_offset(o
 
 
 @pytest.mark.django_db
-def test_shipped_branches_an_order_permission_denial_precedes_the_order_requirement():
+def test_shipped_branches_an_order_permission_denial_precedes_the_order_requirement() -> None:
     """A staff-gated term under an anonymous user answers permission, not ordering.
 
     A precedence claim between two rejections is independent of whether either
@@ -2268,7 +2302,7 @@ def test_shipped_branches_an_order_permission_denial_precedes_the_order_requirem
 
 
 @pytest.mark.django_db
-def test_shipped_branches_aggregate_order_no_distinct_in_sql():
+def test_shipped_branches_aggregate_order_no_distinct_in_sql() -> None:
     client = _staff_client()
     for i in range(3):
         b = library_models.Branch.objects.create(name=f"Branch {i}", city="Boston")
@@ -2299,7 +2333,7 @@ def test_shipped_branches_aggregate_order_no_distinct_in_sql():
 
 
 @pytest.mark.django_db
-def test_shipped_branches_a_negative_offset_is_named_before_a_negative_limit():
+def test_shipped_branches_a_negative_offset_is_named_before_a_negative_limit() -> None:
     """Two invalid arguments in one request; the rejection names the first."""
     payload = graphql_payload(
         "{ allLibraryBranchesViaListField(offset: -1, limit: -1) { name } }",
@@ -2309,14 +2343,16 @@ def test_shipped_branches_a_negative_offset_is_named_before_a_negative_limit():
 
 
 @pytest.mark.django_db
-def test_shipped_branches_a_materialized_source_is_named_before_the_order_requirement():
+def test_shipped_branches_a_materialized_source_is_named_before_the_order_requirement() -> None:
     """A list cannot be ordered OR offset; the source defect is the answer."""
 
     @strawberry.type
     class _MatQuery:
         branches_materialized: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=_list_resolver(lambda root, info: list(library_models.Branch.objects.all())),
+            resolver=_list_resolver(
+                lambda _root, _info: list(library_models.Branch.objects.all()),
+            ),
         )
 
     payload = _post_sync(
@@ -2327,14 +2363,14 @@ def test_shipped_branches_a_materialized_source_is_named_before_the_order_requir
 
 
 @pytest.mark.django_db
-def test_shipped_branches_a_presliced_source_is_named_before_the_ordering_runs():
+def test_shipped_branches_a_presliced_source_is_named_before_the_ordering_runs() -> None:
     """A source that already took its own window is sealed before ordering touches it."""
 
     @strawberry.type
     class _PreQuery:
         branches_presliced: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=_list_resolver(lambda root, info: library_models.Branch.objects.all()[:2]),
+            resolver=_list_resolver(lambda _root, _info: library_models.Branch.objects.all()[:2]),
         )
 
     payload = _post_sync(
@@ -2354,7 +2390,7 @@ def test_shipped_branches_a_presliced_source_is_named_before_the_ordering_runs()
 @pytest.mark.django_db
 def test_holder_branches_serve_a_combined_source_and_result_as_their_primary_key_sets(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A union source and a union ``OrderSet`` result are windowed as the rows they select.
 
     Under an active list argument the source seal rebuilds the union as its
@@ -2373,7 +2409,7 @@ def test_holder_branches_serve_a_combined_source_and_result_as_their_primary_key
         queryset: models.QuerySet[library_models.Branch],
         info: strawberry.Info[object, object],
         **kwargs: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         nonlocal visibility_calls
         visibility_calls += 1
         return original_get_queryset(queryset, info, **kwargs)
@@ -2390,7 +2426,7 @@ def test_holder_branches_serve_a_combined_source_and_result_as_their_primary_key
         branches_combined: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
             resolver=_list_resolver(
-                lambda root, info: library_models.Branch.objects.filter(name="A").union(
+                lambda _root, _info: library_models.Branch.objects.filter(name="A").union(
                     library_models.Branch.objects.filter(name="B"),
                 ),
             ),
@@ -2412,7 +2448,7 @@ def test_holder_branches_serve_a_combined_source_and_result_as_their_primary_key
         _order_input: object,
         queryset: models.QuerySet[library_models.Branch],
         _info: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         return queryset.filter(name="A").union(queryset.filter(name="B")).order_by("name")
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_combined_apply_sync))
@@ -2434,7 +2470,10 @@ def test_holder_branches_serve_a_combined_source_and_result_as_their_primary_key
     assert p_hook["data"]["allLibraryBranchesViaListField"] == [{"name": "B"}]
 
 
-def _combined_genre_source(_root: object, _info: strawberry.Info[object, object]):
+def _combined_genre_source(
+    _root: object,
+    _info: strawberry.Info[object, object],
+) -> models.QuerySet[library_models.Genre]:
     return library_models.Genre.objects.filter(name="A").union(
         library_models.Genre.objects.exclude(name="A"),
     )
@@ -2463,7 +2502,7 @@ def _combined_genre_schema() -> DjangoSchema:
 
 
 @pytest.mark.django_db
-def test_holder_genres_a_combined_source_is_bounded_with_the_optimizer_installed():
+def test_holder_genres_a_combined_source_is_bounded_with_the_optimizer_installed() -> None:
     for name in (
         "A",
         "B",
@@ -2495,7 +2534,7 @@ def test_holder_genres_a_combined_source_is_bounded_with_the_optimizer_installed
 
 
 @pytest.mark.django_db
-def test_holder_genres_a_combined_connection_runs_unplanned_with_the_optimizer_installed():
+def test_holder_genres_a_combined_connection_runs_unplanned_with_the_optimizer_installed() -> None:
     for name in (
         "A",
         "B",
@@ -2522,7 +2561,7 @@ class _ConsumerUpper(models.Func):
 @pytest.mark.django_db
 def test_holder_genres_a_hook_carrying_a_consumer_expression_names_the_state_on_the_wire(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A ``get_queryset`` annotating with a project ``Func`` is refused with the seal's causes."""
     library_models.Genre.objects.create(name="A")
 
@@ -2531,7 +2570,7 @@ def test_holder_genres_a_hook_carrying_a_consumer_expression_names_the_state_on_
         queryset: models.QuerySet[library_models.Genre],
         _info: strawberry.Info[object, object],
         **_kwargs: object,
-    ):
+    ) -> models.QuerySet[library_models.Genre]:
         return queryset.annotate(u=_ConsumerUpper(models.F("name")))
 
     monkeypatch.setattr(
@@ -2582,7 +2621,7 @@ def _override_in_place_routing(
     _order_input: object,
     queryset: models.QuerySet[library_models.Branch],
     _info: object,
-):
+) -> models.QuerySet[library_models.Branch]:
     set_queryset_hints(queryset, {"tenant": 2})
     return queryset
 
@@ -2592,7 +2631,7 @@ def _override_evaluated(
     _order_input: object,
     queryset: models.QuerySet[library_models.Branch],
     _info: object,
-):
+) -> models.QuerySet[library_models.Branch]:
     list(queryset)
     return queryset
 
@@ -2602,7 +2641,7 @@ def _override_untrusted(
     _order_input: object,
     _queryset: models.QuerySet[library_models.Branch],
     _info: object,
-):
+) -> _DeferredFilterQuerySet:
     candidate = _DeferredFilterQuerySet(model=library_models.Branch)
     # ``negate`` decides whether the predicate is inverted and is truth-tested to
     # do it, so Django's exact ``bool`` is the only shape the bake accepts there.
@@ -2629,42 +2668,42 @@ _MALFORMED_APPLY_SYNC_ROWS: tuple[
     ),
     (
         "materialized-list",
-        lambda cls, order_input, queryset, info: list(queryset),
+        lambda _cls, _order_input, queryset, _info: list(queryset),
         _BRANCH_ORDER_SHAPE_PREFIX + "type defect",
         (),
         1,
     ),
     (
         "none",
-        lambda cls, order_input, queryset, info: None,
+        lambda _cls, _order_input, _queryset, _info: None,
         _BRANCH_ORDER_SHAPE_PREFIX + "type defect",
         (),
         0,
     ),
     (
         "projection",
-        lambda cls, order_input, queryset, info: queryset.values("name"),
+        lambda _cls, _order_input, queryset, _info: queryset.values("name"),
         _BRANCH_ORDER_SHAPE_PREFIX + "projection defect",
         (),
         0,
     ),
     (
         "wrong-model",
-        lambda cls, order_input, queryset, info: library_models.Book.objects.all(),
+        lambda _cls, _order_input, _queryset, _info: library_models.Book.objects.all(),
         _BRANCH_ORDER_SHAPE_PREFIX + "table defect",
         (),
         0,
     ),
     (
         "sliced",
-        lambda cls, order_input, queryset, info: queryset.order_by("name")[:1],
+        lambda _cls, _order_input, queryset, _info: queryset.order_by("name")[:1],
         _BRANCH_ORDER_SHAPE_PREFIX + "sliced defect",
         (),
         0,
     ),
     (
         "combined-duplicates",
-        lambda cls, order_input, queryset, info: queryset.union(queryset, all=True),
+        lambda _cls, _order_input, queryset, _info: queryset.union(queryset, all=True),
         (
             "BranchOrder.apply_sync returned a combined queryset; the visibility boundary serves "
             "a combined queryset as the set of Branch primary keys it selects"
@@ -2674,7 +2713,7 @@ _MALFORMED_APPLY_SYNC_ROWS: tuple[
     ),
     (
         "awaitable-in-sync",
-        lambda cls, order_input, queryset, info: _awaitable_queryset(queryset),
+        lambda _cls, _order_input, queryset, _info: _awaitable_queryset(queryset),
         "BranchOrder.apply_sync returned an awaitable in a sync resolver context.",
         (),
         0,
@@ -2713,7 +2752,7 @@ def test_holder_branches_a_malformed_apply_sync_result_names_its_own_defect(
     message_start: str,
     substrings: tuple[str, ...],
     resolver_queries: int,
-):
+) -> None:
     """Each malformed ``apply_sync`` result names its exact defect, on its own node.
 
     The defect classes are independent boundaries in the seal, so a regression in
@@ -2746,7 +2785,7 @@ def test_holder_branches_a_malformed_apply_sync_result_names_its_own_defect(
 @pytest.mark.django_db
 def test_holder_branches_hostile_normalized_term_is_rejected_before_it_can_run(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A ``_normalize_input`` override returning a ``str`` SUBCLASS term is a configuration error.
 
     The term never reaches the purity compare or the flat-order walk, so its
@@ -2757,13 +2796,13 @@ def test_holder_branches_hostile_normalized_term_is_rejected_before_it_can_run(
 
     class _HostileStr(str):
         @override
-        def __eq__(self, other: object):
+        def __eq__(self, other: object) -> bool:
             raise RuntimeError("hostile equality ran")
 
         __hash__ = str.__hash__
 
         @override
-        def __format__(self, spec: str):
+        def __format__(self, spec: str) -> str:
             raise RuntimeError("hostile format ran")
 
     def _hostile_terms(
@@ -2789,7 +2828,7 @@ def test_holder_branches_hostile_normalized_term_is_rejected_before_it_can_run(
 
 
 @pytest.mark.django_db
-def test_holder_naming_converters():
+def test_holder_naming_converters() -> None:
     # 1. auto_camel_case=False
     @strawberry.type
     class _SnakeQuery:
@@ -2830,7 +2869,7 @@ def test_holder_naming_converters():
     # 2. Custom NameConverter
     class _UpperConverter(NameConverter):
         @override
-        def get_graphql_name(self, obj: HasGraphQLName):
+        def get_graphql_name(self, obj: HasGraphQLName) -> str:
             name = super().get_graphql_name(obj)
             return name.upper()
 
@@ -2861,7 +2900,7 @@ def test_holder_naming_converters():
         calls = 0
 
         @override
-        def from_argument(self, argument: StrawberryArgument):
+        def from_argument(self, argument: StrawberryArgument) -> str:
             type(self).calls += 1
             return super().from_argument(argument).upper()
 
@@ -2892,7 +2931,7 @@ def test_holder_naming_converters():
 
 
 @pytest.mark.django_db
-def test_holder_model_default_ordering_verdicts():
+def test_holder_model_default_ordering_verdicts() -> None:
     @strawberry.type
     class _GlossaryOrderingQuery:
         terms_default_ordered: list[glossary_schema.GlossaryTermType] = DjangoListField(
@@ -2901,7 +2940,7 @@ def test_holder_model_default_ordering_verdicts():
         terms_cleared_ordering: list[glossary_schema.GlossaryTermType] = DjangoListField(
             glossary_schema.GlossaryTermType,
             resolver=_list_resolver(
-                lambda root, info: glossary_models.GlossaryTerm.objects.all().order_by(),
+                lambda _root, _info: glossary_models.GlossaryTerm.objects.all().order_by(),
             ),
         )
 
@@ -2956,7 +2995,7 @@ def test_holder_model_default_ordering_verdicts():
 
 
 @pytest.mark.django_db
-def test_holder_reversed_model_default_ordering_still_pages():
+def test_holder_reversed_model_default_ordering_still_pages() -> None:
     """``.reverse()`` keeps the model's own order, so a positive offset is still served."""
 
     @strawberry.type
@@ -2964,7 +3003,7 @@ def test_holder_reversed_model_default_ordering_still_pages():
         terms_reversed: list[glossary_schema.GlossaryTermType] = DjangoListField(
             glossary_schema.GlossaryTermType,
             resolver=_list_resolver(
-                lambda root, info: glossary_models.GlossaryTerm.objects.all().reverse(),
+                lambda _root, _info: glossary_models.GlossaryTerm.objects.all().reverse(),
             ),
         )
 
@@ -3002,7 +3041,7 @@ def test_holder_reversed_model_default_ordering_still_pages():
 
 
 @pytest.mark.django_db
-def test_holder_empty_model_ordered_queryset_still_pages():
+def test_holder_empty_model_ordered_queryset_still_pages() -> None:
     """An empty source that still carries ``Meta.ordering`` serves a positive offset as []."""
 
     @strawberry.type
@@ -3010,7 +3049,7 @@ def test_holder_empty_model_ordered_queryset_still_pages():
         rows: list[glossary_schema.GlossaryTermType] = DjangoListField(
             glossary_schema.GlossaryTermType,
             resolver=_list_resolver(
-                lambda root, info: glossary_models.GlossaryTerm.objects.none(),
+                lambda _root, _info: glossary_models.GlossaryTerm.objects.none(),
             ),
         )
 
@@ -3023,7 +3062,7 @@ def test_holder_empty_model_ordered_queryset_still_pages():
 
 
 @pytest.mark.django_db
-def test_holder_empty_unordered_queryset_still_requires_order():
+def test_holder_empty_unordered_queryset_still_requires_order() -> None:
     """An empty source with no model order is still ``order_required`` for a positive offset."""
 
     @strawberry.type
@@ -3031,7 +3070,7 @@ def test_holder_empty_unordered_queryset_still_requires_order():
         rows: list[library_schema.MembershipCardType] = DjangoListField(
             library_schema.MembershipCardType,
             resolver=_list_resolver(
-                lambda root, info: library_models.MembershipCard.objects.none(),
+                lambda _root, _info: library_models.MembershipCard.objects.none(),
             ),
         )
 
@@ -3043,7 +3082,7 @@ def test_holder_empty_unordered_queryset_still_requires_order():
 
 
 @pytest.mark.django_db
-def test_holder_target_without_orderset_or_model_ordering():
+def test_holder_target_without_orderset_or_model_ordering() -> None:
     @strawberry.type
     class _CardQuery:
         cards: list[library_schema.MembershipCardType] = DjangoListField(
@@ -3078,7 +3117,7 @@ def _query_marks(queryset: models.QuerySet[models.Model, object]) -> tuple[str, 
 
 def _legacy_reference_resolver(
     source_factory: Callable[[], models.QuerySet[library_models.Branch]],
-):
+) -> Callable[[strawberry.Info[object, object]], models.QuerySet[models.Model]]:
     """The pre-card list pipeline, composed from shipped public primitives only.
 
     Visibility through ``apply_type_visibility_sync`` and ONE ``bounded_rows`` call
@@ -3106,7 +3145,7 @@ def _build_current_parity_schema(
     class _CurrentParityQuery:
         branches: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=_list_resolver(lambda root, info: source_factory()),
+            resolver=_list_resolver(lambda _root, _info: source_factory()),
         )
 
     optimizer = DjangoOptimizerExtension()
@@ -3163,7 +3202,7 @@ def _install_parity_probes(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
         queryset: models.QuerySet[library_models.Branch],
         info: strawberry.Info[object, object],
         **kwargs: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         counters["visibility"] += 1
         return original_get_queryset(queryset, info, **kwargs)
 
@@ -3196,7 +3235,7 @@ def _parity_run(
     schema: DjangoSchema | None = None,
     client: Client | None = None,
     extra_settings: Mapping[str, object] | None = None,
-):
+) -> tuple[_MonkeyPatchedWSGIResponse, list[str], int]:
     """Execute one live request, returning ``(response, branch_sql, visibility_calls)``.
 
     The raw ``HttpResponse`` is returned, not just its parsed body: the oracle's
@@ -3233,7 +3272,7 @@ _SHIPPED_ALL_NULL = (
 class _ParityOracle(TypedDict):
     """A legacy reference's claims: its raw response, branch SQL, hook count and final marks."""
 
-    response: HttpResponse
+    response: _MonkeyPatchedWSGIResponse
     sql: list[str]
     visibility: int
     marks: tuple[str, int, int | None]
@@ -3297,7 +3336,7 @@ def _legacy_branch_oracle(
 def test_branches_a_null_spelling_reproduces_the_legacy_reference_bytes(
     query: str,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Omitted and all-null arguments reproduce the PRE-CARD pipeline, not merely each other.
 
     The all-null form is compared against the legacy OMITTED response because
@@ -3325,7 +3364,7 @@ def test_branches_a_null_spelling_reproduces_the_legacy_reference_bytes(
 def test_branches_the_shipped_field_matches_the_legacy_reference(
     query: str,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The shipped field publishes its own name, so its ROWS carry the byte claim.
 
     A different field name makes the envelopes differ for a reason that has
@@ -3372,7 +3411,7 @@ def _combined_branch_oracle(
     library_models.Branch.objects.create(name="B", city="Boston")
     counters = _install_parity_probes(monkeypatch)
 
-    def _combined_source():
+    def _combined_source() -> models.QuerySet[library_models.Branch]:
         return library_models.Branch.objects.filter(name="A").union(
             library_models.Branch.objects.filter(name="B"),
         )
@@ -3412,7 +3451,7 @@ def _combined_branch_oracle(
 def test_holder_branches_a_combined_legacy_spelling_matches_the_reference(
     query: str,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The combined-source legacy branch is held to the pre-card oracle, not to "no new error"."""
     client = _staff_client()
     counters, current_schema, oracle = _combined_branch_oracle(monkeypatch, client)
@@ -3435,7 +3474,7 @@ def test_holder_branches_a_combined_legacy_spelling_matches_the_reference(
 @pytest.mark.django_db
 def test_holder_branches_an_argument_windows_the_combined_source_after_visibility(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Argument mode windows a union source as the rows it selects.
 
     A union source under omitted / all-null arguments takes the legacy policy
@@ -3466,7 +3505,7 @@ def test_holder_branches_an_argument_windows_the_combined_source_after_visibilit
 
 
 @pytest.mark.django_db
-def test_shipped_branches_offset_alone_bounds():
+def test_shipped_branches_offset_alone_bounds() -> None:
     client = _staff_client()
     for i in range(5):
         library_models.Branch.objects.create(name=f"Branch {i}", city="Boston")
@@ -3499,7 +3538,7 @@ def test_shipped_branches_offset_alone_bounds():
 
 
 @pytest.mark.django_db
-def test_shipped_branches_independent_aliases():
+def test_shipped_branches_independent_aliases() -> None:
     client = _staff_client()
     library_models.Branch.objects.create(name="Alpha", city="Boston")
     library_models.Branch.objects.create(name="Bravo", city="Boston")
@@ -3560,7 +3599,7 @@ def test_holder_nullability_propagation_over_none_source(
     query: str,
     data: JSONObject | None,
     errors: list[tuple[str, str | None]],
-):
+) -> None:
     """A limit-only request hands ``None`` to completion; a rejected argument errors on both.
 
     The declared outer nullability decides the limit-only answer exactly as it does
@@ -3573,11 +3612,11 @@ def test_holder_nullability_propagation_over_none_source(
     class _NullabilityQuery:
         nullable_none: list[library_schema.BranchType] | None = DjangoListField(
             library_schema.BranchType,
-            resolver=_list_resolver(lambda root, info: None),
+            resolver=_list_resolver(lambda _root, _info: None),
         )
         non_null_none: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=_list_resolver(lambda root, info: None),
+            resolver=_list_resolver(lambda _root, _info: None),
         )
 
     schema = DjangoSchema(query=_NullabilityQuery, config=strawberry_config())
@@ -3591,7 +3630,9 @@ def test_holder_nullability_propagation_over_none_source(
 
 
 @pytest.mark.django_db
-def test_holder_orderset_override_returning_queryset_subclass(monkeypatch: pytest.MonkeyPatch):
+def test_holder_orderset_override_returning_queryset_subclass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client = _staff_client()
     library_models.Branch.objects.create(name="Alpha", city="Boston")
     library_models.Branch.objects.create(name="Bravo", city="Boston")
@@ -3606,7 +3647,7 @@ def test_holder_orderset_override_returning_queryset_subclass(monkeypatch: pytes
         order_input: object,
         queryset: models.QuerySet[library_models.Branch],
         info: object,
-    ):
+    ) -> _CustomBranchQuerySet:
         ordered = orig_apply_sync(order_input, queryset, info)
         return _CustomBranchQuerySet(
             model=ordered.model,
@@ -3650,7 +3691,7 @@ class _CapturingContextView(DjangoGraphQLView[_MarkedContext, None]):
     """Pre-populates a consumer attribute on the context and hands the object to the test."""
 
     @override
-    def get_context(self, request: HttpRequest, response: HttpResponse):
+    def get_context(self, request: HttpRequest, response: HttpResponse) -> _MarkedContext:
         context = _MarkedContext(
             request=request,
             response=response,
@@ -3663,22 +3704,22 @@ class _CapturingContextView(DjangoGraphQLView[_MarkedContext, None]):
 class _FrozenContext:
     """A context that refuses every attribute write or delete after construction."""
 
-    def __init__(self, request: HttpRequest, response: HttpResponse):
+    def __init__(self, request: HttpRequest, response: HttpResponse) -> None:
         object.__setattr__(self, "request", request)
         object.__setattr__(self, "response", response)
 
     @override
-    def __setattr__(self, name: str, value: object):
+    def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError(f"frozen context refuses write to {name!r}")
 
     @override
-    def __delattr__(self, name: str):
+    def __delattr__(self, name: str) -> None:
         raise AttributeError(f"frozen context refuses delete of {name!r}")
 
 
 class _FrozenContextView(DjangoGraphQLView[_FrozenContext, None]):
     @override
-    def get_context(self, request: HttpRequest, response: HttpResponse):
+    def get_context(self, request: HttpRequest, response: HttpResponse) -> _FrozenContext:
         return _FrozenContext(request, response)
 
 
@@ -3718,7 +3759,7 @@ _ORDERED_CONTEXT_REQUESTS: tuple[tuple[str, str, str], ...] = (
 def test_holder_ordering_leaves_the_consumer_context_exactly_as_found(
     control_query: str,
     ordered_query: str,
-):
+) -> None:
     """An ordered surface adds nothing to ``info.context`` its control request does not.
 
     The order-normalization handoff is task-local, so the context object holds the
@@ -3752,7 +3793,7 @@ def test_holder_ordering_leaves_the_consumer_context_exactly_as_found(
     [row[2] for row in _ORDERED_CONTEXT_REQUESTS],
     ids=[row[0] for row in _ORDERED_CONTEXT_REQUESTS],
 )
-def test_holder_ordering_succeeds_on_a_context_that_forbids_writes(ordered_query: str):
+def test_holder_ordering_succeeds_on_a_context_that_forbids_writes(ordered_query: str) -> None:
     """A context refusing every write still serves each ordered surface.
 
     Nothing in public ordering, the offset guard, or the post-order seal asks the
@@ -3770,7 +3811,7 @@ def test_holder_ordering_succeeds_on_a_context_that_forbids_writes(ordered_query
 
 
 @pytest.mark.django_db
-def test_holder_a_frozen_context_still_returns_the_windowed_rows():
+def test_holder_a_frozen_context_still_returns_the_windowed_rows() -> None:
     """The positive control: refusing the stash must not quietly empty the window."""
     client = _staff_client()
     for name in ("Alpha", "Bravo"):
@@ -3787,18 +3828,18 @@ def test_holder_a_frozen_context_still_returns_the_windowed_rows():
     assert payload["data"]["branches"] == [{"name": "Bravo"}]
 
 
-def _policy_from_info_object(info: strawberry.Info[object, object]):
+def _policy_from_info_object(info: strawberry.Info[object, object]) -> ResourcePolicy:
     """The policy the package's own bound readers get."""
     return policy_from_info(info)
 
 
-def _schema_attribute_object(info: strawberry.Info[object, object]):
+def _schema_attribute_object(info: strawberry.Info[object, object]) -> ResourcePolicy:
     """The resolved schema policy, which ``info.schema`` puts in every resolver's reach."""
     assert isinstance(info.schema, DjangoSchema)
     return info.schema.resource_policy
 
 
-def _context_mirror_object(info: strawberry.Info[object, object]):
+def _context_mirror_object(info: strawberry.Info[object, object]) -> object:
     """The published mirror, which the spec invites a consumer to read."""
     return get_context_value(info.context, DST_RESOURCE_POLICY)
 
@@ -3814,7 +3855,7 @@ _REACHABLE_POLICY_IDS = ("policy-from-info", "schema-attribute", "context-mirror
 @pytest.mark.parametrize("reach", _REACHABLE_POLICIES, ids=_REACHABLE_POLICY_IDS)
 def test_a_resolver_cannot_widen_the_row_bound_by_writing_a_policy_it_can_reach(
     reach: Callable[[strawberry.Info[object, object]], object],
-):
+) -> None:
     """A sibling field's write to a policy object leaves the operation's ceiling standing.
 
     The write lands in the same operation, before the bounded field resolves, and
@@ -3851,7 +3892,7 @@ def test_a_resolver_cannot_widen_the_row_bound_by_writing_a_policy_it_can_reach(
 @pytest.mark.parametrize("reach", _REACHABLE_POLICIES, ids=_REACHABLE_POLICY_IDS)
 def test_a_policy_a_resolver_widened_does_not_outlive_its_own_request(
     reach: Callable[[strawberry.Info[object, object]], object],
-):
+) -> None:
     """The next request on the same schema is bounded by what the deployment configured.
 
     The policy objects a request can reach are process-lived or operation-lived,
@@ -3885,7 +3926,7 @@ def test_a_policy_a_resolver_widened_does_not_outlive_its_own_request(
 
 
 @pytest.mark.django_db
-def test_holder_item_list_field_drops_rows_under_a_hidden_category():
+def test_holder_item_list_field_drops_rows_under_a_hidden_category() -> None:
     """``DjangoListField`` over ``ItemType`` applies the cascade inside ``get_queryset``."""
     from apps.products.services import seed_cascade_split
 
@@ -3906,7 +3947,7 @@ def test_holder_item_list_field_drops_rows_under_a_hidden_category():
 
 
 @pytest.mark.django_db
-def test_holder_membership_card_list_elides_patron_id_to_one_query():
+def test_holder_membership_card_list_elides_patron_id_to_one_query() -> None:
     """An id-only forward relation on a list field uses the source FK column alone."""
     patron = library_models.Patron.objects.create(name="Cardholder", email="c@example.com")
     library_models.MembershipCard.objects.create(patron=patron, barcode="CARD-1")
@@ -3956,7 +3997,7 @@ def test_holder_list_field_uses_the_named_targets_queryset(
     monkeypatch: pytest.MonkeyPatch,
     field_name: str,
     hidden_name: str,
-):
+) -> None:
     """The field target's ``get_queryset`` runs; the other type on the model does not."""
     library_models.Patron.objects.create(name="from-primary", email="a@example.com")
     library_models.Patron.objects.create(name="from-secondary", email="b@example.com")
@@ -4011,7 +4052,9 @@ def test_holder_list_field_uses_the_named_targets_queryset(
 
 
 @pytest.mark.django_db
-def test_shipped_branches_sync_http_rejects_an_async_get_queryset(monkeypatch: pytest.MonkeyPatch):
+def test_shipped_branches_sync_http_rejects_an_async_get_queryset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The sync view refuses an async ``get_queryset`` instead of skipping visibility."""
     library_models.Branch.objects.create(name="Alpha", city="Boston")
 
@@ -4020,7 +4063,7 @@ def test_shipped_branches_sync_http_rejects_an_async_get_queryset(monkeypatch: p
         queryset: models.QuerySet[library_models.Branch],
         _info: strawberry.Info[object, object],
         **_kwargs: object,
-    ):
+    ) -> models.QuerySet[library_models.Branch]:
         return queryset
 
     monkeypatch.setattr(
@@ -4038,7 +4081,7 @@ def test_shipped_branches_sync_http_rejects_an_async_get_queryset(monkeypatch: p
 @pytest.mark.django_db
 def test_shipped_branches_sync_http_rejects_an_awaitable_get_queryset(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A custom awaitable from ``get_queryset`` cannot skip the sync visibility seal."""
     library_models.Branch.objects.create(name="Alpha", city="Boston")
 
@@ -4068,10 +4111,13 @@ def test_shipped_branches_sync_http_rejects_an_awaitable_get_queryset(
 
 
 @pytest.mark.django_db
-def test_holder_sync_http_rejects_an_async_generator_resolver():
+def test_holder_sync_http_rejects_an_async_generator_resolver() -> None:
     """Sync HTTP refuses an async-generator resolver before GraphQL slices it."""
 
-    async def _resolve(_root: object, _info: strawberry.Info[object, object]):
+    async def _resolve(
+        _root: object,
+        _info: strawberry.Info[object, object],
+    ) -> AsyncIterator[None]:
         # The yield over an empty iterable makes this resolver an async generator that yields nothing.
         for _ in ():
             yield None
@@ -4105,19 +4151,23 @@ class _HostileBranchQuerySet(models.QuerySet[library_models.Branch]):
     """
 
     @override
-    def filter(self, *args: object, **kwargs: object):
+    def filter(self, *args: object, **kwargs: object) -> models.QuerySet[library_models.Branch]:
         return library_models.Branch.objects.all()
 
     @override
-    def order_by(self, *args: str | Combinable, **kwargs: object):
+    def order_by(
+        self,
+        *args: str | Combinable,
+        **kwargs: object,
+    ) -> models.QuerySet[library_models.Branch]:
         return library_models.Branch.objects.all()
 
     @override
-    def __iter__(self):
+    def __iter__(self) -> Iterator[library_models.Branch]:
         return iter(library_models.Branch.objects.all().order_by("pk"))
 
     @override
-    def __aiter__(self):
+    def __aiter__(self) -> AsyncIterator[library_models.Branch]:
         return library_models.Branch.objects.all().order_by("pk").__aiter__()
 
 
@@ -4134,7 +4184,7 @@ def _hostile_branch_hook(
     )
 
 
-def _degrading_branch_manager():
+def _degrading_branch_manager() -> models.Manager[library_models.Branch]:
     def _all(_self: models.Manager[library_models.Branch]) -> list[str]:
         return ["secret"]
 
@@ -4144,10 +4194,10 @@ def _degrading_branch_manager():
     return manager
 
 
-def _alias_drift_branch_manager():
+def _alias_drift_branch_manager() -> models.Manager[library_models.Branch]:
     class _DriftManager(models.Manager[library_models.Branch]):
         @override
-        def get_queryset(self):
+        def get_queryset(self) -> models.QuerySet[library_models.Branch]:
             return library_models.Branch.objects.using("elsewhere")
 
     manager = _DriftManager()
@@ -4159,7 +4209,7 @@ def _alias_drift_branch_manager():
 @pytest.mark.django_db
 def test_shipped_branches_hostile_queryset_subclass_cannot_leak_restricted_rows(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A hostile ``QuerySet`` subclass cannot widen ``allLibraryBranchesViaListField``."""
     library_models.Branch.objects.create(name="Alpha", city="Boston")
     library_models.Branch.objects.create(name="Hidden", city="restricted")
@@ -4177,14 +4227,14 @@ def test_shipped_branches_hostile_queryset_subclass_cannot_leak_restricted_rows(
 
 
 @pytest.mark.django_db
-def test_holder_manager_that_degrades_to_a_list_is_rejected():
+def test_holder_manager_that_degrades_to_a_list_is_rejected() -> None:
     """A ``Manager.all()`` that returns a list is a typed refusal, not a raw list."""
 
     @strawberry.type
     class _DegradeQuery:
         branches: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=_list_resolver(lambda root, info: _degrading_branch_manager()),
+            resolver=_list_resolver(lambda _root, _info: _degrading_branch_manager()),
         )
 
     payload = _post_sync(
@@ -4197,14 +4247,14 @@ def test_holder_manager_that_degrades_to_a_list_is_rejected():
 
 
 @pytest.mark.django_db
-def test_holder_manager_that_drifts_alias_is_rejected():
+def test_holder_manager_that_drifts_alias_is_rejected() -> None:
     """A manager pinned to one alias cannot ``.all()`` onto another."""
 
     @strawberry.type
     class _DriftQuery:
         branches: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=_list_resolver(lambda root, info: _alias_drift_branch_manager()),
+            resolver=_list_resolver(lambda _root, _info: _alias_drift_branch_manager()),
         )
 
     payload = _post_sync(
@@ -4217,7 +4267,7 @@ def test_holder_manager_that_drifts_alias_is_rejected():
 
 
 @pytest.mark.django_db
-def test_cascaded_item_list_stays_silent_under_strictness_raise():
+def test_cascaded_item_list_stays_silent_under_strictness_raise() -> None:
     """Shipped ``ItemType`` cascade under ``strictness="raise"`` plans ``category``.
 
     Fakeshop's composed schema arms the optimizer at default ``strictness="off"``.
@@ -4263,7 +4313,7 @@ def test_cascaded_item_list_stays_silent_under_strictness_raise():
 
 
 @pytest.mark.django_db
-def test_consumer_prefetched_many_to_many_stays_silent_under_strictness_raise():
+def test_consumer_prefetched_many_to_many_stays_silent_under_strictness_raise() -> None:
     """A consumer-prefetched M2M is recognized as loaded on both of its sides.
 
     The holders return LISTS, so the optimizer plans neither relation and

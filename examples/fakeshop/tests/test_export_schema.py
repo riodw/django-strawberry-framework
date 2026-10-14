@@ -10,7 +10,7 @@ from strawberry.printer import print_schema
 pytestmark = pytest.mark.usefixtures("reload_project_schemas")
 
 
-def test_export_schema_writes_fakeshop_sdl_to_stdout_by_default():
+def test_export_schema_writes_fakeshop_sdl_to_stdout_by_default() -> None:
     out = StringIO()
     call_command("export_schema", "config.schema:schema", stdout=out)
     assert "type BranchType" in out.getvalue()
@@ -21,7 +21,7 @@ def test_export_schema_writes_fakeshop_sdl_to_stdout_by_default():
     ["config.schema:schema", "config.schema"],
     ids=["colon-symbol", "default-symbol"],
 )
-def test_export_schema_stdout_matches_print_schema(selector: str):
+def test_export_schema_stdout_matches_print_schema(selector: str) -> None:
     """Stdout SDL bytes match ``print_schema`` for both selector spellings."""
     from config.schema import schema
 
@@ -30,7 +30,7 @@ def test_export_schema_stdout_matches_print_schema(selector: str):
     assert out.getvalue() == print_schema(schema)
 
 
-def test_export_schema_path_file_matches_print_schema(tmp_path: Path):
+def test_export_schema_path_file_matches_print_schema(tmp_path: Path) -> None:
     """``--path`` writes the same UTF-8 SDL bytes ``print_schema`` returns."""
     from config.schema import schema
 
@@ -45,12 +45,12 @@ def test_export_schema_path_file_matches_print_schema(tmp_path: Path):
     assert path.read_text(encoding="utf-8") == print_schema(schema)
 
 
-def test_export_schema_raises_command_error_for_unimportable_module():
+def test_export_schema_raises_command_error_for_unimportable_module() -> None:
     with pytest.raises(CommandError, match="No module named"):
         call_command("export_schema", "does.not.exist:schema")
 
 
-def test_export_schema_raises_command_error_for_missing_attribute_on_module():
+def test_export_schema_raises_command_error_for_missing_attribute_on_module() -> None:
     with pytest.raises(CommandError, match="does_not_exist"):
         call_command("export_schema", "config.schema:does_not_exist")
 
@@ -60,7 +60,7 @@ def test_export_schema_raises_command_error_for_missing_attribute_on_module():
     ["apps.library.schema:BookType", "apps.products.models:Item", "config.settings:DEBUG"],
     ids=["djangotype-class", "model-class", "settings-value"],
 )
-def test_export_schema_raises_command_error_for_non_schema_symbol(symbol: str):
+def test_export_schema_raises_command_error_for_non_schema_symbol(symbol: str) -> None:
     with pytest.raises(CommandError, match=r"must be an instance of strawberry\.Schema"):
         call_command("export_schema", symbol)
 
@@ -74,7 +74,10 @@ def test_export_schema_raises_command_error_for_non_schema_symbol(symbol: str):
     ],
     ids=["empty", "colon-only", "relative"],
 )
-def test_export_schema_raises_command_error_for_malformed_selector(selector: str, message: str):
+def test_export_schema_raises_command_error_for_malformed_selector(
+    selector: str,
+    message: str,
+) -> None:
     with pytest.raises(CommandError, match=message):
         call_command("export_schema", selector)
 
@@ -84,12 +87,12 @@ def test_export_schema_raises_command_error_for_malformed_selector(selector: str
     ["   ", "\t", "\n"],
     ids=["spaces", "tab", "newline"],
 )
-def test_export_schema_raises_command_error_when_path_flag_is_whitespace_only(path: str):
+def test_export_schema_raises_command_error_when_path_flag_is_whitespace_only(path: str) -> None:
     with pytest.raises(CommandError, match="--path requires a non-empty value"):
         call_command("export_schema", "config.schema", "--path", path)
 
 
-def test_export_schema_overwrites_existing_path_with_utf8_fakeshop_sdl(tmp_path: Path):
+def test_export_schema_overwrites_existing_path_with_utf8_fakeshop_sdl(tmp_path: Path) -> None:
     out = StringIO()
     out_path = tmp_path / "schema.graphql"
     out_path.write_text("stale schema sentinel", encoding="utf-8")
@@ -109,7 +112,7 @@ def test_export_schema_overwrites_existing_path_with_utf8_fakeshop_sdl(tmp_path:
     assert f"Wrote schema to {out_path}" in out.getvalue()
 
 
-def test_export_schema_raises_command_error_when_path_directory_missing(tmp_path: Path):
+def test_export_schema_raises_command_error_when_path_directory_missing(tmp_path: Path) -> None:
     """A ``--path`` whose parent directory is missing surfaces a ``CommandError``.
 
     The ``--path`` failure branch (``write_text`` ``OSError`` -> ``CommandError``)
@@ -126,13 +129,13 @@ def test_export_schema_raises_command_error_when_path_directory_missing(tmp_path
         )
 
 
-def test_export_schema_raises_command_error_when_path_flag_is_empty_string():
+def test_export_schema_raises_command_error_when_path_flag_is_empty_string() -> None:
     """An explicit empty ``--path ""`` is rejected against the configured schema."""
     with pytest.raises(CommandError, match="--path requires a non-empty value"):
         call_command("export_schema", "config.schema", "--path", "")
 
 
-def test_export_schema_raises_command_error_when_path_contains_embedded_null():
+def test_export_schema_raises_command_error_when_path_contains_embedded_null() -> None:
     """A path rejected by ``pathlib`` is reported as a normal command failure."""
     with pytest.raises(CommandError, match="embedded null byte"):
         call_command("export_schema", "config.schema", "--path", "schema\x00.graphql")

@@ -39,7 +39,7 @@ belong in ``tests/extensions/test_debug.py``.
 
 import contextlib
 import logging
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Generator, Iterator, Sequence
 from typing import TypeAlias
 
 import pytest
@@ -209,13 +209,13 @@ def install_probe_schema(
     _current["schema"] = None
 
 
-def _middleware_without_debug_toolbar():
+def _middleware_without_debug_toolbar() -> list[str]:
     """MIDDLEWARE minus the toolbar: a truthy ``DEBUG`` must not look up ``djdt`` routes."""
     return [entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry]
 
 
 @contextlib.contextmanager
-def _atomic_requests_enabled():
+def _atomic_requests_enabled() -> Generator[None, None, None]:
     """Turn on ``ATOMIC_REQUESTS`` for the request's own alias without replacing ``DATABASES``.
 
     The handler reads ``DATABASES[<alias>]["ATOMIC_REQUESTS"]``, not a project
@@ -239,7 +239,7 @@ def _atomic_requests_enabled():
         config["ATOMIC_REQUESTS"] = prior
 
 
-def _grant_add_item_and_visible_category_gid():
+def _grant_add_item_and_visible_category_gid() -> tuple[User, str]:
     """``view_item_1`` with ``add_item``, permission cache dropped, plus a visible category id."""
     user = User.objects.get(username="view_item_1")
     user.user_permissions.add(
@@ -285,8 +285,9 @@ def test_query_capture_uses_the_forced_debug_cursor_not_debug_query_logging(
     """The bracket - not Django's ``DEBUG`` query logging - produces the captured rows.
 
     Run deliberately under ``settings.DEBUG`` false, through the
-    acknowledgement factory ``_acknowledged_debug``: Django logs no queries of its own in that posture, so every row in the
-    payload was produced by the extension's own ``force_debug_cursor`` bracket.
+    acknowledgement factory ``_acknowledged_debug``: Django logs no queries of its own in
+    that posture, so every row in the payload was produced by the extension's own
+    ``force_debug_cursor`` bracket.
 
     The mechanism's DEBUG-independence is NOT the extension's gate. Since
     spec-048 Decision 5 the extension fails closed under ``settings.DEBUG``
@@ -452,15 +453,17 @@ def test_enclosing_atomic_requests_transaction_is_not_captured(
     install_probe_schema([_acknowledged_debug])
     client = TestClient()
 
-    with override_settings(DEBUG=True, MIDDLEWARE=_middleware_without_debug_toolbar()):
-        with _atomic_requests_enabled():
-            with client.login(user):
-                res = client.query(
-                    _CREATE_ITEM,
-                    variables={
-                        "d": {"name": "AtomicRequestsWidget", "categoryId": category_gid},
-                    },
-                )
+    with (
+        override_settings(DEBUG=True, MIDDLEWARE=_middleware_without_debug_toolbar()),
+        _atomic_requests_enabled(),
+        client.login(user),
+    ):
+        res = client.query(
+            _CREATE_ITEM,
+            variables={
+                "d": {"name": "AtomicRequestsWidget", "categoryId": category_gid},
+            },
+        )
 
     assert res.data is not None
     assert res.data["createItem"]["errors"] == []
@@ -697,7 +700,7 @@ def test_over_cap_exception_message_is_truncated_in_the_published_payload(
 
 
 @pytest.mark.urls("config.urls")
-def test_project_graphql_endpoint_publishes_no_debug_key():
+def test_project_graphql_endpoint_publishes_no_debug_key() -> None:
     """The real ``/graphql/`` must never carry the diagnostic - the probe URLconf owns it.
 
     The function-level ``urls`` mark overrides this module's, so the request

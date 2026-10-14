@@ -25,7 +25,7 @@ import weakref
 from collections import OrderedDict
 from collections.abc import Iterable, Iterator, Mapping
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, TypeGuard
+from typing import TYPE_CHECKING, NoReturn, TypeGuard
 
 import pytest
 import pytest_django
@@ -123,7 +123,7 @@ def _isolate_registry() -> Iterator[None]:
     registry.clear()
 
 
-def _force_unregister_after_finalize(type_cls: type[DjangoType]):
+def _force_unregister_after_finalize(type_cls: type[DjangoType]) -> None:
     """Test-only helper: drop ``type_cls`` from a *finalized* registry.
 
     The schema-audit tests in this module build a Strawberry schema, then
@@ -154,7 +154,7 @@ def _force_unregister_after_finalize(type_cls: type[DjangoType]):
 
 
 @pytest.mark.django_db
-def test_optimize_coerces_manager_through_all_records_cache_miss():
+def test_optimize_coerces_manager_through_all_records_cache_miss() -> None:
     """The optimizer's plan cache records a miss when coercing ``Manager`` -> ``.all()``.
 
     The behavioral half (1 SQL query, JOIN applied, data round-trips) is
@@ -199,7 +199,7 @@ def test_optimize_coerces_manager_through_all_records_cache_miss():
 
 
 @pytest.mark.django_db
-def test_optimizer_plans_merged_duplicate_root_field_nodes_plan_shape():
+def test_optimizer_plans_merged_duplicate_root_field_nodes_plan_shape() -> None:
     """Merged duplicate root fields contribute all child selections to one plan.
 
     The behavioral half is pinned end-to-end by
@@ -244,7 +244,7 @@ def test_optimizer_plans_merged_duplicate_root_field_nodes_plan_shape():
 
 
 @pytest.mark.django_db
-def test_optimizer_elides_forward_fk_id_only_selection_plan_shape():
+def test_optimizer_elides_forward_fk_id_only_selection_plan_shape() -> None:
     """B2 plan-state inspection: ``category { id }`` produces an elision plan.
 
     The behavioral half (1 SQL query, no JOIN, id round-trips) is pinned by
@@ -295,7 +295,7 @@ def test_optimizer_elides_forward_fk_id_only_selection_plan_shape():
 
 
 @pytest.mark.django_db
-def test_optimizer_elides_forward_fk_id_only_selection_for_each_alias_plan_shape():
+def test_optimizer_elides_forward_fk_id_only_selection_for_each_alias_plan_shape() -> None:
     """B2/O4 plan-state inspection: duplicate aliases each register their own elision key.
 
     The behavioral half (1 SQL query, no JOIN, both aliases return the same
@@ -351,7 +351,7 @@ def test_optimizer_elides_forward_fk_id_only_selection_for_each_alias_plan_shape
 
 
 @pytest.mark.django_db
-def test_optimizer_does_not_elide_forward_fk_when_extra_scalar_selected_plan_shape():
+def test_optimizer_does_not_elide_forward_fk_when_extra_scalar_selected_plan_shape() -> None:
     """B2 plan-state inspection: extra target scalar forces ``select_related`` over elision.
 
     The behavioral half (1 SQL query via JOIN, extra scalar populates from
@@ -403,7 +403,9 @@ def test_optimizer_does_not_elide_forward_fk_when_extra_scalar_selected_plan_sha
 
 
 @pytest.mark.django_db
-def test_optimizer_does_not_elide_forward_fk_when_target_has_custom_get_queryset_plan_shape():
+def test_optimizer_does_not_elide_forward_fk_when_target_has_custom_get_queryset_plan_shape() -> (
+    None
+):
     """B2/O6 plan-state inspection: custom ``get_queryset`` forces ``Prefetch`` even on id-only.
 
     The behavioral half (2 SQL queries, no JOIN on the root, prefetched
@@ -426,7 +428,12 @@ def test_optimizer_does_not_elide_forward_fk_when_target_has_custom_get_queryset
 
         @classmethod
         @override
-        def get_queryset(cls, queryset: QuerySet[Category], info: object, **kwargs: object):
+        def get_queryset(
+            cls,
+            queryset: QuerySet[Category],
+            info: object,
+            **kwargs: object,
+        ) -> QuerySet[Category]:
             return queryset
 
     assert registry.get(Category) is CategoryType
@@ -460,7 +467,9 @@ def test_optimizer_does_not_elide_forward_fk_when_target_has_custom_get_queryset
 
 
 @pytest.mark.django_db
-def test_optimizer_passes_through_unregistered_return_type(caplog: pytest.LogCaptureFixture):
+def test_optimizer_passes_through_unregistered_return_type(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """If the return type isn't in the registry, the queryset is unchanged."""
     services.seed_data(1)
 
@@ -494,16 +503,16 @@ def test_optimizer_passes_through_unregistered_return_type(caplog: pytest.LogCap
 # G1 (spec-035): evaluated-queryset guard internals
 #
 # Wire SQL (one query, no re-execution) is
-# ``examples/fakeshop/test_query/test_library_api.py::test_library_evaluated_queryset_not_re_executed_over_http``.
+# ``examples/fakeshop/test_query/test_library_api.py::test_library_evaluated_queryset_not_re_executed_over_http``.  # noqa: E501 - citation path cannot wrap
 # Manager coercion SQL is
-# ``examples/fakeshop/test_query/test_scalars_api.py::test_scalars_optimizer_coerces_manager_to_queryset_in_http_query``.
+# ``examples/fakeshop/test_query/test_scalars_api.py::test_scalars_optimizer_coerces_manager_to_queryset_in_http_query``.  # noqa: E501 - citation path cannot wrap
 # What remains here is cache-miss / instance-identity / async routing, none of
 # which a response can show.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.django_db
-def test_evaluated_root_queryset_does_not_record_a_plan_cache_miss():
+def test_evaluated_root_queryset_does_not_record_a_plan_cache_miss() -> None:
     """The G1 guard short-circuits before ``_get_or_build_plan``, so misses stay 0.
 
     Live HTTP one-query SQL is ``allLibraryBranchesEagerEval``. This row keeps
@@ -550,7 +559,7 @@ def test_evaluated_root_queryset_does_not_record_a_plan_cache_miss():
 
 
 @pytest.mark.django_db
-def test_optimize_returns_same_instance_for_evaluated_queryset():
+def test_optimize_returns_same_instance_for_evaluated_queryset() -> None:
     """``_optimize`` returns the SAME evaluated queryset object, never a clone.
 
     Instance identity has no wire shape. ``_optimize`` never touches ``info``
@@ -567,7 +576,7 @@ def test_optimize_returns_same_instance_for_evaluated_queryset():
 
 
 @pytest.mark.django_db
-def test_apply_to_returns_a_combined_queryset_unplanned(caplog: pytest.LogCaptureFixture):
+def test_apply_to_returns_a_combined_queryset_unplanned(caplog: pytest.LogCaptureFixture) -> None:
     """A combined queryset is returned as-is before any plan is built.
 
     Django refuses ``only`` / ``select_related`` on a ``union`` result, so
@@ -586,7 +595,7 @@ def test_apply_to_returns_a_combined_queryset_unplanned(caplog: pytest.LogCaptur
 
 
 @pytest.mark.django_db
-def test_resolve_async_passes_through_evaluated_queryset(monkeypatch: pytest.MonkeyPatch):
+def test_resolve_async_passes_through_evaluated_queryset(monkeypatch: pytest.MonkeyPatch) -> None:
     """Async mirror: the await -> ``_optimize`` wrapper inherits the G1 guard.
 
     The async path (``_async_optimize`` awaits the resolver then calls
@@ -605,12 +614,17 @@ def test_resolve_async_passes_through_evaluated_queryset(monkeypatch: pytest.Mon
     qs = Category.objects.all()
     len(qs)  # evaluate synchronously, before the await -> no DB access in the coroutine
 
-    def _tripwire(_info: object):
+    def _tripwire(_info: object) -> NoReturn:
         raise AssertionError("guard must short-circuit before return-type resolution")
 
     monkeypatch.setattr(extension_module, "_resolve_model_from_return_type", _tripwire)
 
-    async def fake_next(_root: object, _info: object, *_args: object, **_kwargs: object):
+    async def fake_next(
+        _root: object,
+        _info: object,
+        *_args: object,
+        **_kwargs: object,
+    ) -> QuerySet[Category]:
         return qs
 
     info = make_info(field_name="allCategories")._raw_info
@@ -626,7 +640,7 @@ def test_resolve_async_passes_through_evaluated_queryset(monkeypatch: pytest.Mon
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_model_from_return_type_unwraps_nested_wrappers():
+def test_resolve_model_from_return_type_unwraps_nested_wrappers() -> None:
     """Recursive unwrap through NonNull(List(NonNull(ObjectType))) -> (origin, Django model)."""
     from graphql import GraphQLList, GraphQLNonNull
 
@@ -657,7 +671,7 @@ def test_resolve_model_from_return_type_unwraps_nested_wrappers():
     assert result.origin is CategoryType
 
 
-def test_resolve_model_returns_none_for_non_object_leaf():
+def test_resolve_model_returns_none_for_non_object_leaf() -> None:
     """When the leaf type has no name, returns None.
 
     Every graphql-core named type carries a name, so a nameless leaf is a defensive arm.
@@ -679,7 +693,7 @@ def _object_type_outside_schema(name: str) -> GraphQLObjectType:
     return object_type
 
 
-def test_resolve_model_returns_none_when_no_strawberry_schema():
+def test_resolve_model_returns_none_when_no_strawberry_schema() -> None:
     """When schema._strawberry_schema is missing, returns None.
 
     A graphql-core schema Strawberry did not build files no ``_strawberry_schema``.
@@ -692,7 +706,7 @@ def test_resolve_model_returns_none_when_no_strawberry_schema():
     assert _resolve_model_from_return_type(info) is None
 
 
-def test_resolve_model_returns_none_when_type_not_in_schema():
+def test_resolve_model_returns_none_when_type_not_in_schema() -> None:
     """When get_type_by_name returns None (type not in schema), returns None."""
 
     class CategoryType(DjangoType):
@@ -716,7 +730,7 @@ def test_resolve_model_returns_none_when_type_not_in_schema():
     assert _resolve_model_from_return_type(info) is None
 
 
-def test_resolve_model_returns_none_when_definition_has_no_origin():
+def test_resolve_model_returns_none_when_definition_has_no_origin() -> None:
     """When the schema's type definition lacks an ``origin`` (e.g. a scalar / interface), returns None."""
 
     def _definition_without_origin(_name: str) -> SimpleNamespace:
@@ -735,7 +749,7 @@ def test_resolve_model_returns_none_when_definition_has_no_origin():
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_passes_through_non_root_resolvers():
+def test_resolve_passes_through_non_root_resolvers() -> None:
     """Non-root resolvers (info.path.prev is not None) bypass _optimize entirely."""
     ext = DjangoOptimizerExtension()
 
@@ -750,7 +764,12 @@ def test_resolve_passes_through_non_root_resolvers():
     qs = Category.objects.all()
     called_with = {}
 
-    def fake_next(_root: object, _info: object, *_args: object, **_kwargs: object):
+    def fake_next(
+        _root: object,
+        _info: object,
+        *_args: object,
+        **_kwargs: object,
+    ) -> QuerySet[Category]:
         called_with["fired"] = True
         return qs
 
@@ -766,7 +785,7 @@ def test_resolve_passes_through_non_root_resolvers():
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_handles_async_root_resolver():
+def test_resolve_handles_async_root_resolver() -> None:
     """An async root resolver's coroutine is awaited before optimization."""
     import asyncio
 
@@ -781,7 +800,12 @@ def test_resolve_handles_async_root_resolver():
 
     qs = Category.objects.all()
 
-    async def fake_next(_root: object, _info: object, *_args: object, **_kwargs: object):
+    async def fake_next(
+        _root: object,
+        _info: object,
+        *_args: object,
+        **_kwargs: object,
+    ) -> QuerySet[Category]:
         return qs
 
     # Root resolver: path.prev is None. Its String return type maps to no registered model.
@@ -801,7 +825,7 @@ def test_resolve_handles_async_root_resolver():
 
 @pytest.mark.django_db
 @pytest.mark.usefixtures("django_assert_num_queries")
-def test_optimize_handles_empty_field_nodes():
+def test_optimize_handles_empty_field_nodes() -> None:
     """If field_nodes is empty, _optimize returns the queryset unchanged."""
     services.seed_data(1)
 
@@ -836,7 +860,9 @@ def test_optimize_handles_empty_field_nodes():
 
 
 @pytest.mark.django_db
-def test_optimize_returns_original_queryset_for_empty_plan(monkeypatch: pytest.MonkeyPatch):
+def test_optimize_returns_original_queryset_for_empty_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """If the walker produces an empty plan, _optimize returns the original queryset."""
     import django_strawberry_framework.optimizer.extension as extension_module
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
@@ -873,7 +899,7 @@ def test_optimize_returns_original_queryset_for_empty_plan(monkeypatch: pytest.M
 # ---------------------------------------------------------------------------
 
 
-def test_on_execute_sets_and_resets_context_var():
+def test_on_execute_sets_and_resets_context_var() -> None:
     """on_execute publishes the running instance for the operation, then closes."""
     ext = DjangoOptimizerExtension()
     assert _active_optimizer() is None
@@ -892,7 +918,7 @@ def test_on_execute_sets_and_resets_context_var():
 
 @pytest.mark.django_db
 @pytest.mark.usefixtures("django_assert_num_queries")
-def test_cache_differentiates_queries():
+def test_cache_differentiates_queries() -> None:
     """B1: different queries produce different cache entries."""
     services.seed_data(1)
 
@@ -926,7 +952,7 @@ def test_cache_differentiates_queries():
 
 
 @pytest.mark.django_db
-def test_cache_differentiates_reachable_named_fragment_bodies():
+def test_cache_differentiates_reachable_named_fragment_bodies() -> None:
     """B1: matching operation text with different fragment bodies gets distinct plans."""
     services.seed_data(1)
 
@@ -977,7 +1003,7 @@ def test_cache_differentiates_reachable_named_fragment_bodies():
 @pytest.mark.django_db
 def test_cache_differentiates_same_model_root_fields(
     django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+) -> None:
     """B1/O4: root fields returning the same model do not share one cached plan."""
     services.seed_data(1)
 
@@ -1020,7 +1046,7 @@ def test_cache_differentiates_same_model_root_fields(
     assert ctx.dst_optimizer_plan.prefetch_related == ()
 
 
-def test_cache_key_includes_root_runtime_path_for_same_model_fields():
+def test_cache_key_includes_root_runtime_path_for_same_model_fields() -> None:
     """B1/O4: cache keys differ for root fields returning the same model."""
     # One operation, two response paths: the path alone separates the keys.
     info_a = make_info(
@@ -1040,7 +1066,7 @@ def test_cache_key_includes_root_runtime_path_for_same_model_fields():
     ) != DjangoOptimizerExtension._build_cache_key(info_b, Category)
 
 
-def test_cache_key_differs_for_named_operations_in_same_document():
+def test_cache_key_differs_for_named_operations_in_same_document() -> None:
     """B1: two named operations in one document must not share a plan cache entry."""
     document = "query A { allItems { name } } query B { allItems { category { name } } }"
     info_a = make_info(document=document, operation_name="A")._raw_info
@@ -1052,7 +1078,7 @@ def test_cache_key_differs_for_named_operations_in_same_document():
     ) != DjangoOptimizerExtension._build_cache_key(info_b, Item)
 
 
-def test_query_and_mutation_plans_coexist_distinct_keys():
+def test_query_and_mutation_plans_coexist_distinct_keys() -> None:
     """spec-035 Decision 4: a query and a byte-identical-selection mutation get distinct keys.
 
     The plan-cache key's first component is the printed operation AST, and
@@ -1076,7 +1102,7 @@ def test_query_and_mutation_plans_coexist_distinct_keys():
 
 
 @pytest.mark.django_db
-def test_mutation_real_execution_suppresses_only_keeps_select_related():
+def test_mutation_real_execution_suppresses_only_keeps_select_related() -> None:
     """spec-035 G2: a REAL ``mutation`` execution suppresses ``only``.
 
     The walker-level tests prove the gate with synthetic ``OperationType.MUTATION``
@@ -1140,9 +1166,8 @@ def test_mutation_real_execution_suppresses_only_keeps_select_related():
     assert query_plan.only_fields != ()
 
 
-def test_cache_eviction_removes_old_entries(monkeypatch: pytest.MonkeyPatch):
+def test_cache_eviction_removes_old_entries(monkeypatch: pytest.MonkeyPatch) -> None:
     """B1: the plan cache evicts least-recently-used entries when full."""
-
     import django_strawberry_framework.optimizer.extension as extension_module
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
@@ -1176,7 +1201,7 @@ def test_cache_eviction_removes_old_entries(monkeypatch: pytest.MonkeyPatch):
     assert ext.cache_info().size == 4
 
 
-def test_doc_key_cache_evicts_when_full(monkeypatch: pytest.MonkeyPatch):
+def test_doc_key_cache_evicts_when_full(monkeypatch: pytest.MonkeyPatch) -> None:
     """B1: the cross-request document-key cache is a bounded LRU.
 
     ``_doc_cache_entry`` memoizes the printed operation-plus-fragments key AND
@@ -1210,7 +1235,7 @@ def test_doc_key_cache_evicts_when_full(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.django_db
-def test_cache_clear_makes_the_next_request_build_its_plan_again():
+def test_cache_clear_makes_the_next_request_build_its_plan_again() -> None:
     """``cache_clear`` empties the plan cache and zeroes both counters.
 
     A warm hit before the clear, zeroed ``cache_info`` after it, and a miss
@@ -1246,7 +1271,7 @@ def test_cache_clear_makes_the_next_request_build_its_plan_again():
     assert ext.cache_info() == (0, 1, 1)
 
 
-def test_registry_clear_empties_the_document_key_cache(monkeypatch: pytest.MonkeyPatch):
+def test_registry_clear_empties_the_document_key_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     """The document-key memo is registered with ``registry.clear()`` and empties on it."""
     from graphql import parse
 
@@ -1262,7 +1287,7 @@ def test_registry_clear_empties_the_document_key_cache(monkeypatch: pytest.Monke
     assert len(extension_module._doc_key_cache) == 0
 
 
-def test_stash_union_skips_restash_when_subset():
+def test_stash_union_skips_restash_when_subset() -> None:
     """A re-publish whose sentinel set is already contained leaves the stash alone.
 
     A nested fallback connection re-publishes the SAME plan once per parent row;
@@ -1284,7 +1309,7 @@ def test_stash_union_skips_restash_when_subset():
 
 def test_get_or_build_plan_reuses_uncacheable_plan_within_execution(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """B1: the per-execution memo reuses an uncacheable plan built earlier this execution.
 
     A nested fallback connection pipeline calls ``_get_or_build_plan`` once per
@@ -1295,13 +1320,12 @@ def test_get_or_build_plan_reuses_uncacheable_plan_within_execution(
     collapsing N per-parent walks to one. The intra-execution reuse is NOT counted
     as a cross-request cache hit (``cache_info`` reports the instance cache only).
     """
-
     import django_strawberry_framework.optimizer.extension as extension_module
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     builds = {"count": 0}
 
-    def _fake_plan_optimizations(*_args: object, **_kwargs: object):
+    def _fake_plan_optimizations(*_args: object, **_kwargs: object) -> OptimizationPlan:
         builds["count"] += 1
         return OptimizationPlan(prefetch_related=["items"], cacheable=False).finalize()
 
@@ -1330,7 +1354,7 @@ def test_get_or_build_plan_reuses_uncacheable_plan_within_execution(
 
 
 @pytest.mark.django_db
-def test_filter_vars_do_not_affect_cache():
+def test_filter_vars_do_not_affect_cache() -> None:
     """B1: variables not used in @skip/@include don't split cache entries."""
     services.seed_data(1)
 
@@ -1366,7 +1390,7 @@ def test_filter_vars_do_not_affect_cache():
 
 
 @pytest.mark.django_db
-def test_cache_separates_operation_names_in_same_document():
+def test_cache_separates_operation_names_in_same_document() -> None:
     """B1: executing two named operations in one document yields two cache entries."""
     services.seed_data(1)
 
@@ -1404,7 +1428,7 @@ def test_cache_separates_operation_names_in_same_document():
     assert ext.cache_info().size == 2
 
 
-def test_build_cache_key_is_stable_when_source_location_missing():
+def test_build_cache_key_is_stable_when_source_location_missing() -> None:
     """B1: cache key still works when the operation has no source body."""
     from graphql import parse
 
@@ -1418,7 +1442,7 @@ def test_build_cache_key_is_stable_when_source_location_missing():
     assert isinstance(key[3], tuple)
 
 
-def test_directive_var_family_with_skip():
+def test_directive_var_family_with_skip() -> None:
     """B1: the directive family finds vars in @skip directives."""
     from graphql import parse
 
@@ -1429,7 +1453,7 @@ def test_directive_var_family_with_skip():
     assert names == frozenset({"show"})
 
 
-def test_directive_var_family_with_include():
+def test_directive_var_family_with_include() -> None:
     """B1: the directive family finds vars in @include directives."""
     from graphql import parse
 
@@ -1440,7 +1464,7 @@ def test_directive_var_family_with_include():
     assert names == frozenset({"v"})
 
 
-def test_directive_var_family_ignores_non_directive_vars():
+def test_directive_var_family_ignores_non_directive_vars() -> None:
     """B1: variables in field arguments (not directives) are not collected."""
     from graphql import parse
 
@@ -1451,7 +1475,7 @@ def test_directive_var_family_ignores_non_directive_vars():
     assert names == frozenset()
 
 
-def test_walk_cache_relevant_vars_ignores_non_directive_objects():
+def test_walk_cache_relevant_vars_ignores_non_directive_objects() -> None:
     """B1: directive collection skips defensive non-DirectiveNode entries."""
     from graphql import parse
 
@@ -1470,7 +1494,7 @@ def test_walk_cache_relevant_vars_ignores_non_directive_objects():
     assert directive_names == {"v"}
 
 
-def test_walk_cache_relevant_vars_visits_each_fragment_once_across_sibling_spreads():
+def test_walk_cache_relevant_vars_visits_each_fragment_once_across_sibling_spreads() -> None:
     """Sibling spreads of the same fragment do not re-walk the fragment subtree."""
     from graphql import parse
 
@@ -1496,7 +1520,7 @@ def test_walk_cache_relevant_vars_visits_each_fragment_once_across_sibling_sprea
     assert visited == {("F", 1)}
 
 
-def test_walk_cache_relevant_vars_handles_unresolved_fragment_name():
+def test_walk_cache_relevant_vars_handles_unresolved_fragment_name() -> None:
     """A spread referencing an unknown fragment name is skipped silently."""
     from graphql import parse
 
@@ -1512,7 +1536,7 @@ def test_walk_cache_relevant_vars_handles_unresolved_fragment_name():
     assert visited == set()
 
 
-def test_directive_var_family_ignores_other_directives():
+def test_directive_var_family_ignores_other_directives() -> None:
     """B1: only @skip and @include directives split the plan cache."""
     from graphql import parse
 
@@ -1523,7 +1547,7 @@ def test_directive_var_family_ignores_other_directives():
     assert names == frozenset()
 
 
-def test_directive_var_family_nested_fragments():
+def test_directive_var_family_nested_fragments() -> None:
     """B1: vars in directives on nested fields are collected."""
     from graphql import parse
 
@@ -1537,7 +1561,7 @@ def test_directive_var_family_nested_fragments():
     assert names == frozenset({"a", "b"})
 
 
-def test_directive_var_family_no_directives():
+def test_directive_var_family_no_directives() -> None:
     """B1: a query with no directives yields an empty directive family."""
     from graphql import parse
 
@@ -1562,7 +1586,7 @@ def _key_for(
     variable_values: dict[str, object],
     path_key: str,
     model: type[Model] = Category,
-):
+) -> "PlanCacheKey":
     """Build a ``_build_cache_key`` tuple for ``document``'s operation at root ``path_key``.
 
     The calls under test differ only in ``variable_values``, so any key inequality is
@@ -1576,7 +1600,7 @@ def _key_for(
     return DjangoOptimizerExtension._build_cache_key(info, model)
 
 
-def test_nested_pagination_variable_keys_cache():
+def test_nested_pagination_variable_keys_cache() -> None:
     """A nested ``first: $n`` value keys the plan cache: two values -> two keys."""
     operation = (
         "query Q($n: Int!) { parents { booksConnection(first: $n) { edges { node { title } } } } }"
@@ -1587,7 +1611,7 @@ def test_nested_pagination_variable_keys_cache():
     assert key_two != key_five
 
 
-def test_root_pagination_variable_shares_cache():
+def test_root_pagination_variable_shares_cache() -> None:
     """A root ``first: $n`` value does NOT key the cache (root slicing post-plan)."""
     operation = "query Q($n: Int!) { someRootConnection(first: $n) { edges { node { name } } } }"
 
@@ -1596,7 +1620,7 @@ def test_root_pagination_variable_shares_cache():
     assert key_two == key_five
 
 
-def test_mixed_root_and_nested_pagination_variables():
+def test_mixed_root_and_nested_pagination_variables() -> None:
     """Only the nested pagination variable keys: vary root -> share, vary nested -> split."""
     operation = (
         "query Q($r: Int!, $n: Int!) { parents(first: $r) "
@@ -1611,7 +1635,7 @@ def test_mixed_root_and_nested_pagination_variables():
     assert base != vary_nested  # nested pagination variable keys the cache
 
 
-def test_root_fragment_pagination_variable_shares_cache():
+def test_root_fragment_pagination_variable_shares_cache() -> None:
     """A root connection through a ``Query`` fragment is still root: ``$n`` stays out.
 
     Decision 7 line 346: depth is preserved at the spread SITE. The fragment
@@ -1631,7 +1655,7 @@ def test_root_fragment_pagination_variable_shares_cache():
     ) == DjangoOptimizerExtension._build_cache_key(info_five, Category)
 
 
-def test_fragment_carried_nested_pagination_variable_collected():
+def test_fragment_carried_nested_pagination_variable_collected() -> None:
     """A nested connection through a parent-node fragment is still nested: ``$n`` keys.
 
     The fragment spreads inside ``node`` (response-path depth >= 1), so its
@@ -1651,7 +1675,7 @@ def test_fragment_carried_nested_pagination_variable_collected():
     ) != DjangoOptimizerExtension._build_cache_key(info_five, Category)
 
 
-def test_fragment_spread_at_two_depths_collects_nested_pagination_variable():
+def test_fragment_spread_at_two_depths_collects_nested_pagination_variable() -> None:
     """A fragment spread at BOTH root and nested depth still keys on its nested ``$n``.
 
     Regression pin for the depth-aware fragment cycle guard. The same fragment is
@@ -1680,7 +1704,7 @@ def test_fragment_spread_at_two_depths_collects_nested_pagination_variable():
         assert names == frozenset({"n"})
 
 
-def test_pagination_var_collection_is_syntactic_superset():
+def test_pagination_var_collection_is_syntactic_superset() -> None:
     """A non-connection nested field with ``first: $n`` is still collected (over-collection).
 
     Decision 7 line 347: the collection is a syntactic superset by design - any
@@ -1697,7 +1721,7 @@ def test_pagination_var_collection_is_syntactic_superset():
     assert names == frozenset({"n"})
 
 
-def test_nested_pagination_var_family_excludes_root_field():
+def test_nested_pagination_var_family_excludes_root_field() -> None:
     """Root-field pagination variables are excluded from the collected name set."""
     from graphql import parse
 
@@ -1708,7 +1732,7 @@ def test_nested_pagination_var_family_excludes_root_field():
     assert names == frozenset()
 
 
-def test_nested_pagination_var_family_all_arg_names():
+def test_nested_pagination_var_family_all_arg_names() -> None:
     """All four pagination arg names collect; a non-pagination arg (``limit``) does not."""
     from graphql import parse
 
@@ -1730,7 +1754,7 @@ def test_nested_pagination_var_family_all_arg_names():
     )  # ``$lim`` (a filter var) stays out
 
 
-def test_nested_pagination_var_family_ignores_inline_literals():
+def test_nested_pagination_var_family_ignores_inline_literals() -> None:
     """A nested pagination arg with an inline literal (not a variable) is not collected.
 
     Inline literals already key the cache via the printed AST; the collector
@@ -1745,12 +1769,12 @@ def test_nested_pagination_var_family_ignores_inline_literals():
     assert names == frozenset()
 
 
-def test_hashable_variable_value_builds_typed_structural_identity():
+def test_hashable_variable_value_builds_typed_structural_identity() -> None:
     """Runtime values become hashable identities without cross-shape collisions."""
     from django_strawberry_framework.optimizer.extension import _hashable_variable_value
 
     assert _hashable_variable_value(5) == _hashable_variable_value(5)
-    assert _hashable_variable_value(1) != _hashable_variable_value(True)
+    assert _hashable_variable_value(1) != _hashable_variable_value(True)  # noqa: FBT003 - the bool is the value under test
     assert _hashable_variable_value([1, 2]) != _hashable_variable_value((1, 2))
     assert _hashable_variable_value({"b": 2, "a": [1]}) == _hashable_variable_value(
         {"a": [1], "b": 2},
@@ -1759,7 +1783,7 @@ def test_hashable_variable_value_builds_typed_structural_identity():
     assert isinstance(hash(_hashable_variable_value({"k": [1, {"x": 2}]})), int)
 
 
-def test_hashable_variable_value_safely_degrades_for_opaque_and_cyclic_values():
+def test_hashable_variable_value_safely_degrades_for_opaque_and_cyclic_values() -> None:
     """Unknown custom-scalar values avoid both crashes and unsafe cache hits."""
     from django_strawberry_framework.optimizer.extension import _hashable_variable_value
 
@@ -1767,7 +1791,7 @@ def test_hashable_variable_value_safely_degrades_for_opaque_and_cyclic_values():
         # Defining ``__eq__`` without ``__hash__`` makes the class unhashable (that is the
         # input under test).
         @override
-        def __eq__(self, other: object):
+        def __eq__(self, other: object) -> bool:
             return self is other
 
         # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
@@ -1783,10 +1807,11 @@ def test_hashable_variable_value_safely_degrades_for_opaque_and_cyclic_values():
     assert isinstance(hash(_hashable_variable_value(cyclic)), int)
 
 
-def test_hashable_custom_scalar_equality_cannot_abort_cache_key_lookup():
+def test_hashable_custom_scalar_equality_cannot_abort_cache_key_lookup() -> None:
     """Hostile hashable custom scalars become opaque cache identities.
 
-    Live HTTP: ``examples/fakeshop/test_query/test_optimizer_auto_api.py::test_repeated_live_query_survives_hashable_custom_scalar_equality``.
+    Live HTTP:
+    ``examples/fakeshop/test_query/test_optimizer_auto_api.py::test_repeated_live_query_survives_hashable_custom_scalar_equality``.
     This row is the freezer unit: opaque identities compare unequal without
     running consumer ``__eq__``.
     """
@@ -1794,11 +1819,11 @@ def test_hashable_custom_scalar_equality_cannot_abort_cache_key_lookup():
 
     class EqualityBomb:
         @override
-        def __hash__(self):
+        def __hash__(self) -> int:
             return 1
 
         @override
-        def __eq__(self, _other: object):
+        def __eq__(self, _other: object) -> NoReturn:
             raise RuntimeError("custom scalar equality must not run in cache lookup")
 
     first = _hashable_variable_value(EqualityBomb())
@@ -1809,14 +1834,14 @@ def test_hashable_custom_scalar_equality_cannot_abort_cache_key_lookup():
     assert isinstance(hash(second), int)
     document = "query Q($value: Int!) { parents { child(first: $value) { value } } }"
 
-    def _key(value: object):
+    def _key(value: object) -> "PlanCacheKey":
         info = make_info(document=document, variables={"value": value})._raw_info
         return DjangoOptimizerExtension._build_cache_key(info, Category)
 
     assert _key(EqualityBomb()) != _key(EqualityBomb())
 
 
-def test_library_owned_scalars_share_one_cache_identity_across_requests():
+def test_library_owned_scalars_share_one_cache_identity_across_requests() -> None:
     """Built-in and stdlib scalar variables must still reach the cross-request cache.
 
     The opaque-identity fallback protects the cache from consumer-defined
@@ -1863,7 +1888,7 @@ def test_library_owned_scalars_share_one_cache_identity_across_requests():
     # A SUBCLASS may override equality, so exact-type membership must exclude it.
     class SneakyDate(datetime.date):
         @override
-        def __eq__(self, _other: object):
+        def __eq__(self, _other: object) -> NoReturn:
             raise RuntimeError("subclass equality must not run in cache lookup")
 
         __hash__ = datetime.date.__hash__
@@ -1871,7 +1896,7 @@ def test_library_owned_scalars_share_one_cache_identity_across_requests():
     assert _hashable_variable_value(SneakyDate(2026, 8, 17))[0] == "opaque"
 
 
-def test_freezer_lets_cancellation_propagate_rather_than_caching_it():
+def test_freezer_lets_cancellation_propagate_rather_than_caching_it() -> None:
     """A ``BaseException`` from hostile type inspection is not absorbed into a key.
 
     Ordinary failures degrade to an opaque identity so malformed consumer data
@@ -1883,7 +1908,7 @@ def test_freezer_lets_cancellation_propagate_rather_than_caching_it():
 
     class CancellingMeta(type):
         @override
-        def __hash__(cls):
+        def __hash__(cls) -> NoReturn:
             raise asyncio.CancelledError
 
     class Cancelling(metaclass=CancellingMeta):
@@ -1891,7 +1916,7 @@ def test_freezer_lets_cancellation_propagate_rather_than_caching_it():
 
     class InterruptingMeta(type):
         @override
-        def __hash__(cls):
+        def __hash__(cls) -> NoReturn:
             raise KeyboardInterrupt
 
     class Interrupting(metaclass=InterruptingMeta):
@@ -1905,37 +1930,37 @@ def test_freezer_lets_cancellation_propagate_rather_than_caching_it():
         _hashable_variable_value(Interrupting())
 
 
-def test_hashable_variable_value_safely_degrades_for_hostile_custom_values():
+def test_hashable_variable_value_safely_degrades_for_hostile_custom_values() -> None:
     """Hostile custom-scalar values cannot abort plan-cache key construction."""
     from django_strawberry_framework.optimizer.extension import _hashable_variable_value
 
     class ExplodingHash:
         @override
-        def __hash__(self):
+        def __hash__(self) -> NoReturn:
             raise RuntimeError("hash boom")
 
     class ExplodingItems(dict[str, object]):
         @override
-        def items(self):
+        def items(self) -> NoReturn:
             raise RuntimeError("items boom")
 
     class ExplodingIterator(list[object]):
         @override
-        def __iter__(self):
+        def __iter__(self) -> NoReturn:
             raise RuntimeError("iter boom")
 
     class HostileRepr:
         @override
-        def __hash__(self):
+        def __hash__(self) -> int:
             return 1
 
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr boom")
 
     class UnhashableMetaclass(type):
         @override
-        def __eq__(cls, other: object):
+        def __eq__(cls, other: object) -> bool:
             return cls is other
 
         # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
@@ -1943,7 +1968,7 @@ def test_hashable_variable_value_safely_degrades_for_hostile_custom_values():
 
     class UnhashableType(metaclass=UnhashableMetaclass):
         @override
-        def __eq__(self, other: object):
+        def __eq__(self, other: object) -> bool:
             return self is other
 
         # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
@@ -1961,7 +1986,7 @@ def test_hashable_variable_value_safely_degrades_for_hostile_custom_values():
         assert isinstance(hash(frozen), int)
 
 
-def test_build_cache_key_tolerates_unhashable_pagination_variable():
+def test_build_cache_key_tolerates_unhashable_pagination_variable() -> None:
     """Nested pagination-named args accept every standard input container.
 
     A non-connection field reusing ``after`` / ``before`` / ``first`` / ``last``
@@ -1970,7 +1995,7 @@ def test_build_cache_key_tolerates_unhashable_pagination_variable():
     while keeping structurally different values distinct.
     """
 
-    def _key(document: str, values: dict[str, object]):
+    def _key(document: str, values: dict[str, object]) -> "PlanCacheKey":
         info = make_info(document=document, variables=values)._raw_info
         return DjangoOptimizerExtension._build_cache_key(info, Category)
 
@@ -1983,7 +2008,7 @@ def test_build_cache_key_tolerates_unhashable_pagination_variable():
     assert _key(events, {"x": {"end": "2021", "start": "2020"}}) == dict_key
 
 
-def _categories_list_schema(ext: DjangoOptimizerExtension):
+def _categories_list_schema(ext: DjangoOptimizerExtension) -> strawberry.Schema:
     """Build a ``DjangoListField(CategoryType)`` root over the reverse FK ``Category.items``.
 
     With the optimizer installed the parent ``Category`` queryset is planned, so
@@ -2039,7 +2064,7 @@ def _categories_list_schema(ext: DjangoOptimizerExtension):
 
 
 @pytest.mark.django_db
-def test_nested_pagination_variable_two_plans_two_windows():
+def test_nested_pagination_variable_two_plans_two_windows() -> None:
     """End-to-end: a nested ``first: $n`` value varying yields two distinct cached plans.
 
     Executes the real synthesized ``itemsConnection`` under an optimizer-planned
@@ -2066,7 +2091,7 @@ def test_nested_pagination_variable_two_plans_two_windows():
 
 
 @pytest.mark.django_db
-def test_root_pagination_variable_one_plan_through_schema():
+def test_root_pagination_variable_one_plan_through_schema() -> None:
     """End-to-end: a ROOT connection's ``first: $n`` value shares one cached plan.
 
     The optimizer-on counterpart of ``test_filter_vars_do_not_affect_cache`` for
@@ -2102,7 +2127,7 @@ def test_root_pagination_variable_one_plan_through_schema():
 @pytest.mark.django_db
 def test_cache_key_variable_name_collection_memoized_for_nested_fallbacks(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The unified var-name AST walk runs once per operation, not per ``_build_cache_key``.
 
     Decision 7: nested fallback connections call ``_build_cache_key`` once per
@@ -2115,7 +2140,6 @@ def test_cache_key_variable_name_collection_memoized_for_nested_fallbacks(
     cross-request document LRU has been emptied, so the per-execution memo is
     pinned on its own rather than through the document cache standing in for it.
     """
-
     import django_strawberry_framework.optimizer.extension as extension_module
 
     calls = {"count": 0}
@@ -2124,7 +2148,7 @@ def test_cache_key_variable_name_collection_memoized_for_nested_fallbacks(
     def _counting(
         operation: OperationDefinitionNode,
         fragments: Mapping[str, FragmentDefinitionNode],
-    ):
+    ) -> frozenset[str]:
         calls["count"] += 1
         return real(operation, fragments)
 
@@ -2167,7 +2191,7 @@ def test_cache_key_variable_name_collection_memoized_for_nested_fallbacks(
     assert calls["count"] == 1
 
 
-def test_collect_cache_relevant_var_names_unifies_both_families_through_fragment():
+def test_collect_cache_relevant_var_names_unifies_both_families_through_fragment() -> None:
     """B1: one traversal returns BOTH a directive var and a nested-pagination var.
 
     The unified ``_collect_cache_relevant_var_names`` walk collects the
@@ -2197,7 +2221,7 @@ def test_collect_cache_relevant_var_names_unifies_both_families_through_fragment
 # ---------------------------------------------------------------------------
 
 
-def test_strictness_invalid_value_raises():
+def test_strictness_invalid_value_raises() -> None:
     """B3: passing an invalid strictness value raises ValueError."""
     with pytest.raises(ValueError, match="strictness must be"):
         DjangoOptimizerExtension(strictness="invalid")
@@ -2208,23 +2232,23 @@ _END_DETONATION = "hostile dunder detonated"
 
 class _DetonatingEqStr(str):
     @override
-    def __eq__(self, other: object):
+    def __eq__(self, other: object) -> NoReturn:
         raise RuntimeError(_END_DETONATION)
 
     @override
-    def __hash__(self):
+    def __hash__(self) -> int:
         return str.__hash__(self)
 
 
 class _DetonatingReprStr(str):
     @override
-    def __repr__(self):
+    def __repr__(self) -> str:
         raise RuntimeError(_END_DETONATION)
 
 
 class _DetonatingEqObject:
     @override
-    def __eq__(self, other: object):
+    def __eq__(self, other: object) -> NoReturn:
         raise RuntimeError(_END_DETONATION)
 
     # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
@@ -2233,11 +2257,11 @@ class _DetonatingEqObject:
 
 class _DetonatingReprObject:
     @override
-    def __eq__(self, other: object):
+    def __eq__(self, other: object) -> bool:
         return False
 
     @override
-    def __repr__(self):
+    def __repr__(self) -> str:
         raise RuntimeError(_END_DETONATION)
 
     # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
@@ -2259,7 +2283,7 @@ class _DetonatingReprObject:
         "repr-object",
     ],
 )
-def test_strictness_hostile_dunder_values_raise_typed_valueerror(hostile: object):
+def test_strictness_hostile_dunder_values_raise_typed_valueerror(hostile: object) -> None:
     """B3: a hostile strictness value is rejected typed, never dispatched into.
 
     The strictness boundary is construction-time consumer configuration with a
@@ -2277,7 +2301,7 @@ def test_strictness_hostile_dunder_values_raise_typed_valueerror(hostile: object
     assert _END_DETONATION not in str(exc_info.value)
 
 
-def test_strictness_accepts_content_equal_str_subclass():
+def test_strictness_accepts_content_equal_str_subclass() -> None:
     """B3: a benign str subclass with valid CONTENT keeps being accepted.
 
     The base-slot comparison classifies by content, so a ``str`` subclass is
@@ -2287,7 +2311,7 @@ def test_strictness_accepts_content_equal_str_subclass():
 
     class ContentRaise(str):
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError(_END_DETONATION)
 
     extension = DjangoOptimizerExtension(strictness=ContentRaise("raise"))
@@ -2306,7 +2330,7 @@ def test_strictness_accepts_content_equal_str_subclass():
 def test_plan_cache_eviction_survives_concurrent_drain(
     monkeypatch: pytest.MonkeyPatch,
     drain_at_pop: int,
-):
+) -> None:
     """B1: the eviction sweep tolerates the shared-instance drain race.
 
     One extension instance is shared across a threaded / ASGI execution, and
@@ -2318,7 +2342,6 @@ def test_plan_cache_eviction_survives_concurrent_drain(
     plan. The drain lands on each pop position of the sweep in turn, so every
     interleaving is pinned, not just the first.
     """
-
     import django_strawberry_framework.optimizer.extension as extension_module
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
@@ -2343,7 +2366,7 @@ def test_plan_cache_eviction_survives_concurrent_drain(
     real_popitem = extension._plan_cache.popitem
     calls = SimpleNamespace(value=0)
 
-    def racing_popitem(*, last: bool):
+    def racing_popitem(*, last: bool) -> "tuple[PlanCacheKey, OptimizationPlan]":
         calls.value += 1
         if calls.value == drain_at_pop:
             extension._plan_cache.clear()
@@ -2364,7 +2387,7 @@ def test_plan_cache_eviction_survives_concurrent_drain(
 
 
 @pytest.mark.django_db
-def test_strictness_warn_logs_unplanned_relation(caplog: pytest.LogCaptureFixture):
+def test_strictness_warn_logs_unplanned_relation(caplog: pytest.LogCaptureFixture) -> None:
     """B3: strictness='warn' logs a warning for unplanned uncached relation access."""
     services.seed_data(1)
 
@@ -2403,7 +2426,7 @@ def test_strictness_warn_logs_unplanned_relation(caplog: pytest.LogCaptureFixtur
 
 
 @pytest.mark.django_db
-def test_strictness_off_does_not_stash_sentinel():
+def test_strictness_off_does_not_stash_sentinel() -> None:
     """B3: strictness='off' does not stash the sentinel on context."""
     services.seed_data(1)
 
@@ -2429,7 +2452,7 @@ def test_strictness_off_does_not_stash_sentinel():
 
 
 @pytest.mark.django_db
-def test_strictness_warn_stashes_sentinel():
+def test_strictness_warn_stashes_sentinel() -> None:
     """B3: strictness='warn' stashes the sentinel on context."""
     services.seed_data(1)
 
@@ -2471,7 +2494,7 @@ def test_strictness_warn_stashes_sentinel():
 def test_strictness_with_empty_plan_does_not_raise_or_warn(
     mode: str,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """B3: an empty plan plus strictness='warn'/'raise' must not raise or warn.
 
     ``_publish_plan_to_context`` stashes the strictness sentinels (planned set,
@@ -2516,7 +2539,9 @@ def test_strictness_with_empty_plan_does_not_raise_or_warn(
 
 
 @pytest.mark.django_db
-def test_strictness_includes_fk_id_elision_in_planned_paths(caplog: pytest.LogCaptureFixture):
+def test_strictness_includes_fk_id_elision_in_planned_paths(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """B2+B3: FK-id-elided relations are planned and do not warn."""
     services.seed_data(1)
 
@@ -2554,7 +2579,7 @@ def test_strictness_includes_fk_id_elision_in_planned_paths(caplog: pytest.LogCa
     assert not any("Potential N+1" in r.message for r in caplog.records)
 
 
-def test_will_lazy_load_false_when_cached():
+def test_will_lazy_load_false_when_cached() -> None:
     """B3: pin the __dict__ compatibility seam used by synthetic test doubles."""
     from django_strawberry_framework.types.resolvers import _will_lazy_load_single
 
@@ -2562,7 +2587,7 @@ def test_will_lazy_load_false_when_cached():
     assert _will_lazy_load_single(root, "category") is False
 
 
-def test_will_lazy_load_false_when_in_fields_cache():
+def test_will_lazy_load_false_when_in_fields_cache() -> None:
     """B3: _will_lazy_load_single returns False when a relation is in _state.fields_cache."""
     from django_strawberry_framework.types.resolvers import _will_lazy_load_single
 
@@ -2571,7 +2596,7 @@ def test_will_lazy_load_false_when_in_fields_cache():
 
 
 @pytest.mark.django_db
-def test_will_lazy_load_false_for_real_forward_fk_in_fields_cache():
+def test_will_lazy_load_false_for_real_forward_fk_in_fields_cache() -> None:
     """B3: real forward FKs cache in _state.fields_cache, not __dict__."""
     from django_strawberry_framework.types.resolvers import _will_lazy_load_single
 
@@ -2585,7 +2610,7 @@ def test_will_lazy_load_false_for_real_forward_fk_in_fields_cache():
 
 
 @pytest.mark.django_db
-def test_will_lazy_load_false_for_real_reverse_one_to_one_in_fields_cache():
+def test_will_lazy_load_false_for_real_reverse_one_to_one_in_fields_cache() -> None:
     """B3: real reverse OneToOne relations also cache in _state.fields_cache."""
     from apps.library.models import MembershipCard, Patron
 
@@ -2600,7 +2625,7 @@ def test_will_lazy_load_false_for_real_reverse_one_to_one_in_fields_cache():
     assert _will_lazy_load_single(cached_patron, "card") is False
 
 
-def test_will_lazy_load_true_when_not_cached():
+def test_will_lazy_load_true_when_not_cached() -> None:
     """B3: _will_lazy_load_single returns True when the relation is not cached."""
     from django_strawberry_framework.types.resolvers import _will_lazy_load_single
 
@@ -2608,7 +2633,7 @@ def test_will_lazy_load_true_when_not_cached():
     assert _will_lazy_load_single(root, "category") is True
 
 
-def test_will_lazy_load_false_when_prefetched():
+def test_will_lazy_load_false_when_prefetched() -> None:
     """B3: _will_lazy_load_many returns False when relation is in _prefetched_objects_cache."""
     from django_strawberry_framework.types.resolvers import _will_lazy_load_many
 
@@ -2620,7 +2645,7 @@ def test_will_lazy_load_false_when_prefetched():
 
 
 @pytest.mark.django_db
-def test_strictness_raise_accepts_unplanned_cached_forward_fk():
+def test_strictness_raise_accepts_unplanned_cached_forward_fk() -> None:
     """B3: strictness='raise' accepts an unplanned forward FK that is already loaded."""
     services.seed_data(1)
 
@@ -2659,7 +2684,7 @@ def test_strictness_raise_accepts_unplanned_cached_forward_fk():
 
 
 @pytest.mark.django_db
-def test_strictness_raise_accepts_unplanned_cached_reverse_one_to_one():
+def test_strictness_raise_accepts_unplanned_cached_reverse_one_to_one() -> None:
     """B3: strictness='raise' accepts an unplanned reverse OneToOne already loaded."""
     from apps.library.models import MembershipCard, Patron
 
@@ -2704,7 +2729,7 @@ def test_strictness_raise_accepts_unplanned_cached_reverse_one_to_one():
 
 
 @pytest.mark.django_db
-def test_strictness_warn_planned_alias_no_warning(caplog: pytest.LogCaptureFixture):
+def test_strictness_warn_planned_alias_no_warning(caplog: pytest.LogCaptureFixture) -> None:
     """B3: aliased relation that IS planned does not trigger a warning."""
     services.seed_data(1)
 
@@ -2744,7 +2769,7 @@ def test_strictness_warn_planned_alias_no_warning(caplog: pytest.LogCaptureFixtu
 
 
 @pytest.mark.django_db
-def test_optimizer_strictness_accepts_nested_planned_relation():
+def test_optimizer_strictness_accepts_nested_planned_relation() -> None:
     """O4+B3: strictness accepts resolver keys from nested plans."""
     services.seed_data(1)
 
@@ -2786,7 +2811,7 @@ def test_optimizer_strictness_accepts_nested_planned_relation():
 
 
 @pytest.mark.django_db
-def test_optimizer_nested_prefetch_with_custom_get_queryset_marks_uncacheable():
+def test_optimizer_nested_prefetch_with_custom_get_queryset_marks_uncacheable() -> None:
     """O4+O6: nested request-dependent prefetch plans are not cached."""
     services.seed_data(1)
     calls: list[object] = []
@@ -2798,7 +2823,12 @@ def test_optimizer_nested_prefetch_with_custom_get_queryset_marks_uncacheable():
 
         @classmethod
         @override
-        def get_queryset(cls, queryset: QuerySet[Entry], info: object, **kwargs: object):
+        def get_queryset(
+            cls,
+            queryset: QuerySet[Entry],
+            info: object,
+            **kwargs: object,
+        ) -> QuerySet[Entry]:
             calls.append(info)
             return queryset
 
@@ -2834,7 +2864,7 @@ def test_optimizer_nested_prefetch_with_custom_get_queryset_marks_uncacheable():
     assert ext.cache_info().size == 0
 
 
-def test_directive_var_family_in_named_fragment():
+def test_directive_var_family_in_named_fragment() -> None:
     """B1: the directive family follows named fragment spreads."""
     from graphql import parse
 
@@ -2850,7 +2880,7 @@ def test_directive_var_family_in_named_fragment():
     assert names == frozenset({"show"})
 
 
-def test_directive_var_family_includes_fragment_spread_directives():
+def test_directive_var_family_includes_fragment_spread_directives() -> None:
     """B1: directives on a ``...Spread`` itself feed the cache key, not just the body."""
     from graphql import parse
 
@@ -2866,7 +2896,7 @@ def test_directive_var_family_includes_fragment_spread_directives():
     assert names == frozenset({"show"})
 
 
-def test_cache_key_includes_fragment_spread_directive_variable_value():
+def test_cache_key_includes_fragment_spread_directive_variable_value() -> None:
     """B1: a variable on a fragment-spread ``@include`` splits the cache."""
     document = (
         "query Q($show: Boolean!) { allItems { ...ItemBits @include(if: $show) } } "
@@ -2886,14 +2916,16 @@ def test_cache_key_includes_fragment_spread_directive_variable_value():
 # ---------------------------------------------------------------------------
 
 
-def test_collect_schema_reachable_types_returns_empty_without_graphql_schema():
+def test_collect_schema_reachable_types_returns_empty_without_graphql_schema() -> None:
     """B6: schemas without a graphql-core schema expose no reachable types."""
     from django_strawberry_framework.optimizer.extension import _collect_schema_reachable_types
 
     assert _collect_schema_reachable_types(SimpleNamespace()) == set()
 
 
-def test_check_schema_skips_unreachable_and_missing_field_map(monkeypatch: pytest.MonkeyPatch):
+def test_check_schema_skips_unreachable_and_missing_field_map(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """B6: check_schema skips orphan types and types without optimizer metadata."""
     import django_strawberry_framework.optimizer.extension as extension_module
 
@@ -2918,7 +2950,7 @@ def test_check_schema_skips_unreachable_and_missing_field_map(monkeypatch: pytes
     assert DjangoOptimizerExtension.check_schema(SimpleNamespace()) == []
 
 
-def test_check_schema_warns_unregistered_target():
+def test_check_schema_warns_unregistered_target() -> None:
     """B6: check_schema warns when a relation's target has no registered DjangoType."""
 
     # Must register CategoryType first so ItemType's category relation resolves at finalize time,
@@ -2947,7 +2979,7 @@ def test_check_schema_warns_unregistered_target():
     assert any("category" in w and "no registered target" in w for w in warnings)
 
 
-def test_check_schema_descends_into_union_types():
+def test_check_schema_descends_into_union_types() -> None:
     """B6: union members are reachable in check_schema's audit walk.
 
     GraphQL unions expose their constituent object types via ``.types``,
@@ -2992,7 +3024,7 @@ def test_check_schema_descends_into_union_types():
     assert any("category" in w and "no registered target" in w for w in warnings)
 
 
-def test_check_schema_descends_into_interface_implementations():
+def test_check_schema_descends_into_interface_implementations() -> None:
     """B6: interface implementers are reachable in check_schema's audit walk.
 
     GraphQL interfaces expose their concrete implementers via
@@ -3047,7 +3079,7 @@ def test_check_schema_descends_into_interface_implementations():
     assert any("category" in w and "no registered target" in w for w in warnings)
 
 
-def test_check_schema_no_warnings_when_all_covered():
+def test_check_schema_no_warnings_when_all_covered() -> None:
     """B6: check_schema returns no warnings when all relations have registered targets."""
 
     class CategoryType(DjangoType):
@@ -3075,7 +3107,7 @@ def test_check_schema_no_warnings_when_all_covered():
     assert not any("category" in w for w in warnings)
 
 
-def test_check_schema_skip_hint_suppresses_warning():
+def test_check_schema_skip_hint_suppresses_warning() -> None:
     """B6: relations with OptimizerHint.SKIP are not flagged."""
     from django_strawberry_framework import OptimizerHint
 
@@ -3106,7 +3138,7 @@ def test_check_schema_skip_hint_suppresses_warning():
     assert not any("category" in w for w in warnings)
 
 
-def test_check_schema_hidden_fields_not_flagged():
+def test_check_schema_hidden_fields_not_flagged() -> None:
     """B6: relations excluded by Meta.fields are not flagged."""
 
     # ItemType excludes "category" from Meta.fields.
@@ -3129,11 +3161,11 @@ def test_check_schema_hidden_fields_not_flagged():
 
 
 # ---------------------------------------------------------------------------
-# B4: Meta.optimizer_hints
+# B4: the Meta.optimizer_hints option
 # ---------------------------------------------------------------------------
 
 
-def test_optimizer_hints_unknown_field_raises():
+def test_optimizer_hints_unknown_field_raises() -> None:
     """B4: unknown field name in optimizer_hints raises ConfigurationError."""
     from django_strawberry_framework import OptimizerHint
     from django_strawberry_framework.exceptions import ConfigurationError
@@ -3148,7 +3180,7 @@ def test_optimizer_hints_unknown_field_raises():
                 optimizer_hints = {"nonexistent": OptimizerHint.SKIP}
 
 
-def test_optimizer_hints_non_hint_value_raises():
+def test_optimizer_hints_non_hint_value_raises() -> None:
     """B4: non-OptimizerHint value in optimizer_hints raises ConfigurationError."""
     from django_strawberry_framework.exceptions import ConfigurationError
 
@@ -3162,7 +3194,7 @@ def test_optimizer_hints_non_hint_value_raises():
                 optimizer_hints = {"category": "skip"}  # string, not OptimizerHint
 
 
-def test_optimizer_hint_importable_from_top_level():
+def test_optimizer_hint_importable_from_top_level() -> None:
     """B4: OptimizerHint is importable from the top-level package."""
     from django_strawberry_framework import OptimizerHint
 
@@ -3177,7 +3209,7 @@ def test_optimizer_hint_importable_from_top_level():
 
 @pytest.mark.django_db
 @pytest.mark.usefixtures("django_assert_num_queries")
-def test_plan_stashed_with_select_related():
+def test_plan_stashed_with_select_related() -> None:
     """B5: the stashed plan contains the expected select_related entries."""
     services.seed_data(1)
 
@@ -3217,7 +3249,7 @@ def test_plan_stashed_with_select_related():
 
 @pytest.mark.django_db
 @pytest.mark.usefixtures("django_assert_num_queries")
-def test_plan_stashed_with_prefetch_related():
+def test_plan_stashed_with_prefetch_related() -> None:
     """B5: the stashed plan contains the expected prefetch_related entries."""
     services.seed_data(1)
 
@@ -3260,7 +3292,7 @@ def test_plan_stashed_with_prefetch_related():
     assert [lookup.prefetch_to for lookup in plan.prefetch_related] == ["items"]
 
 
-def test_publish_plan_to_context_reuses_finalized_metadata():
+def test_publish_plan_to_context_reuses_finalized_metadata() -> None:
     """B5: context publish reuses finalized frozensets instead of rebuilding them."""
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
@@ -3280,7 +3312,7 @@ def test_publish_plan_to_context_reuses_finalized_metadata():
     assert ctx.dst_optimizer_lookup_paths is plan.finalized_lookup_paths
 
 
-def test_publish_plan_to_context_rebuilds_metadata_for_unfinalized_plan():
+def test_publish_plan_to_context_rebuilds_metadata_for_unfinalized_plan() -> None:
     """B5: an unfinalized plan published under strictness rebuilds the sentinel sets.
 
     Production plans are always finalized, but the publish path keeps a
@@ -3306,7 +3338,7 @@ def test_publish_plan_to_context_rebuilds_metadata_for_unfinalized_plan():
     assert ctx.dst_optimizer_lookup_paths == frozenset({"category"})
 
 
-def test_named_children_skips_excluded_and_recurses_through_fragments():
+def test_named_children_skips_excluded_and_recurses_through_fragments() -> None:
     """Connection extraction: ``@skip`` children are dropped and fragments inlined."""
     skipped = SimpleNamespace(name="edges", directives={"skip": {"if": True}}, selections=[])
     inner_edges = SimpleNamespace(name="edges", alias=None, directives={}, selections=[])
@@ -3324,7 +3356,7 @@ def test_named_children_skips_excluded_and_recurses_through_fragments():
     assert result == [inner_edges, plain]
 
 
-def test_node_children_with_runtime_prefix_skips_excluded_and_clones_fragments():
+def test_node_children_with_runtime_prefix_skips_excluded_and_clones_fragments() -> None:
     """Connection extraction: node children honor ``@include`` and clone fragments."""
     skipped = SimpleNamespace(name="name", directives={"include": {"if": False}}, selections=[])
     fragment = SimpleNamespace(type_condition="ItemNode", directives={}, selections=[])
@@ -3341,7 +3373,7 @@ def test_node_children_with_runtime_prefix_skips_excluded_and_clones_fragments()
     assert result[1]._optimizer_runtime_prefixes == [("items", "edges", "node")]
 
 
-def test_plan_stashed_on_dict_context():
+def test_plan_stashed_on_dict_context() -> None:
     """B5: when context is a plain dict, plan is stashed via __setitem__."""
     from django_strawberry_framework.optimizer.extension import _stash_on_context
 
@@ -3353,7 +3385,7 @@ def test_plan_stashed_on_dict_context():
     assert ctx["dst_optimizer_plan"] is plan
 
 
-def test_stash_on_dict_subclass_writes_mapping_before_attributes():
+def test_stash_on_dict_subclass_writes_mapping_before_attributes() -> None:
     """rev-optimizer__context: dict-like contexts must use the mapping branch."""
     from django_strawberry_framework.optimizer._context import get_context_value, stash_on_context
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
@@ -3378,7 +3410,7 @@ def test_stash_on_dict_subclass_writes_mapping_before_attributes():
     assert get_context_value(ctx, "dst_optimizer_plan") is plan
 
 
-def test_stash_on_non_dict_mapping_reads_correctly():
+def test_stash_on_non_dict_mapping_reads_correctly() -> None:
     """get_context_value retrieves stashes from non-dict mappings via item access fallback."""
     from django_strawberry_framework.optimizer._context import get_context_value, stash_on_context
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
@@ -3386,10 +3418,10 @@ def test_stash_on_non_dict_mapping_reads_correctly():
     class NonDictMapping:
         __slots__ = ("_data",)
 
-        def __init__(self):
+        def __init__(self) -> None:
             self._data: dict[str, object] = {}
 
-        def __setitem__(self, key: str, value: object):
+        def __setitem__(self, key: str, value: object) -> None:
             self._data[key] = value
 
         def __getitem__(self, key: str) -> object:
@@ -3406,8 +3438,8 @@ def test_stash_on_non_dict_mapping_reads_correctly():
     assert get_context_value(ctx, "dst_optimizer_plan") is plan
 
 
-def test_get_context_value_swallows_attribute_error_from_getitem():
-    """rev-optimizer__context: ``__getitem__`` raising ``AttributeError`` on a missing key returns ``default``.
+def test_get_context_value_swallows_attribute_error_from_getitem() -> None:
+    """A ``__getitem__`` raising ``AttributeError`` on a missing key returns ``default``.
 
     ``strawberry-graphql-django``'s ``StrawberryDjangoContext`` bridges
     ``__getitem__`` to ``__getattribute__``, so reading a key that was never
@@ -3421,7 +3453,7 @@ def test_get_context_value_swallows_attribute_error_from_getitem():
     class BridgedItemAccess:
         """Mimics ``StrawberryDjangoContext.__getitem__`` shape."""
 
-        def __getitem__(self, key: str):
+        def __getitem__(self, key: str) -> NoReturn:
             raise AttributeError(f"missing attribute {key!r}")
 
     sentinel = object()
@@ -3429,7 +3461,7 @@ def test_get_context_value_swallows_attribute_error_from_getitem():
     assert get_context_value(ctx, "dst_optimizer_plan", sentinel) is sentinel
 
 
-def test_stash_on_none_context_is_silent():
+def test_stash_on_none_context_is_silent() -> None:
     """B5: when context is None (Strawberry default), stash is silently skipped."""
     from django_strawberry_framework.optimizer.extension import _stash_on_context
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
@@ -3439,7 +3471,7 @@ def test_stash_on_none_context_is_silent():
     _stash_on_context(None, "dst_optimizer_plan", plan)
 
 
-def test_plan_stashed_on_object_context_unit():
+def test_plan_stashed_on_object_context_unit() -> None:
     """B5: when context is an object, plan is stashed via setattr."""
     from django_strawberry_framework.optimizer.extension import _stash_on_context
 
@@ -3451,7 +3483,7 @@ def test_plan_stashed_on_object_context_unit():
     assert ctx.dst_optimizer_plan is plan
 
 
-def test_stash_on_read_only_mapping_is_silent():
+def test_stash_on_read_only_mapping_is_silent() -> None:
     """B5: a read-only ``MappingProxyType`` context must not abort the resolver chain.
 
     Pins the Medium fix from rev-optimizer__extension.md: ``setattr`` on a
@@ -3472,7 +3504,7 @@ def test_stash_on_read_only_mapping_is_silent():
     assert "dst_optimizer_plan" not in ctx
 
 
-def test_stash_falls_back_to_setitem_on_typeerror():
+def test_stash_falls_back_to_setitem_on_typeerror() -> None:
     """B5: a ``dict`` subclass is still stashed through ``__setitem__``.
 
     Dict-like context objects take the mapping branch before attribute
@@ -3493,7 +3525,7 @@ def test_stash_falls_back_to_setitem_on_typeerror():
     assert ctx["dst_optimizer_plan"] is plan
 
 
-def test_stash_on_immutable_dict_subclass_is_silent():
+def test_stash_on_immutable_dict_subclass_is_silent() -> None:
     """rev-optimizer__context: ``AttributeError`` from a frozen ``dict`` subclass is silently skipped.
 
     Django's ``QueryDict`` is a ``dict`` subclass that raises
@@ -3520,7 +3552,7 @@ def test_stash_on_immutable_dict_subclass_is_silent():
     assert "dst_optimizer_plan" not in ctx
 
 
-def test_stash_does_not_swallow_unexpected_exceptions_from_setitem():
+def test_stash_does_not_swallow_unexpected_exceptions_from_setitem() -> None:
     """rev-optimizer__context: keep the mapping-write ``except`` narrow.
 
     Read-only mapping failures are intentionally limited to ``TypeError``
@@ -3544,7 +3576,7 @@ def test_stash_does_not_swallow_unexpected_exceptions_from_setitem():
         stash_on_context(ctx, "dst_optimizer_plan", object())
 
 
-def test_clear_optimizer_context_removes_all_keys_from_object_and_dict():
+def test_clear_optimizer_context_removes_all_keys_from_object_and_dict() -> None:
     """Start-of-execution clear drops every DST_OPTIMIZER_* key on object and dict contexts."""
     from django_strawberry_framework.optimizer._context import (
         DST_OPTIMIZER_FK_ID_ELISIONS,
@@ -3572,7 +3604,7 @@ def test_clear_optimizer_context_removes_all_keys_from_object_and_dict():
         assert get_context_value(ctx, DST_OPTIMIZER_STRICTNESS) is None
 
 
-def test_clear_optimizer_context_clears_slots_mapping_via_item_delete():
+def test_clear_optimizer_context_clears_slots_mapping_via_item_delete() -> None:
     """``__slots__`` mapping stash (setattr fails -> ``__setitem__``) clears via ``del``."""
     from django_strawberry_framework.optimizer._context import (
         DST_OPTIMIZER_PLAN,
@@ -3605,7 +3637,7 @@ def test_clear_optimizer_context_clears_slots_mapping_via_item_delete():
     assert get_context_value(ctx, DST_OPTIMIZER_PLAN) is None
 
 
-def test_clear_optimizer_context_none_and_frozen_are_noops():
+def test_clear_optimizer_context_none_and_frozen_are_noops() -> None:
     """``None`` and frozen mappings skip clear without raising."""
     from types import MappingProxyType
 
@@ -3615,7 +3647,7 @@ def test_clear_optimizer_context_none_and_frozen_are_noops():
     clear_optimizer_context(MappingProxyType({"dst_optimizer_plan": object()}))
 
 
-def test_clear_optimizer_context_locked_querydict_is_noop():
+def test_clear_optimizer_context_locked_querydict_is_noop() -> None:
     """A locked ``QueryDict`` (immutable ``dict`` subclass) clears without raising.
 
     ``QueryDict`` subclasses ``dict``, so a ``.pop()``-based dict fast-path
@@ -3633,7 +3665,7 @@ def test_clear_optimizer_context_locked_querydict_is_noop():
     assert "dst_optimizer_plan" in locked  # untouched (read-only)
 
 
-def test_optimizer_context_all_exports():
+def test_optimizer_context_all_exports() -> None:
     """All public constants and functions in ``optimizer/_context.py`` are listed in ``__all__``."""
     import django_strawberry_framework.optimizer._context as ctx_mod
 
@@ -3668,7 +3700,9 @@ def test_optimizer_context_all_exports():
         assert hasattr(ctx_mod, name)
 
 
-def test_publish_scoped_relations_handles_empty_and_generator_keys_when_active_and_inactive():
+def test_publish_scoped_relations_handles_empty_and_generator_keys_when_active_and_inactive() -> (
+    None
+):
     """``publish_scoped_relations`` records nothing for empty keys and consumes generators."""
     from django_strawberry_framework.optimizer._context import (
         begin_execution_frame,
@@ -3697,7 +3731,7 @@ def test_publish_scoped_relations_handles_empty_and_generator_keys_when_active_a
         end_execution_frame(frame)
 
 
-def test_window_cursor_states_publish_read_and_clear_with_the_frame():
+def test_window_cursor_states_publish_read_and_clear_with_the_frame() -> None:
     """The frame carries each window's vocabulary by resolver key, for this execution only."""
     from apps.library.models import Issue
 
@@ -3733,7 +3767,7 @@ def test_window_cursor_states_publish_read_and_clear_with_the_frame():
     assert window_cursor_state("Root.kids@roots.kids") is None
 
 
-def test_relation_is_optimizer_scoped_unhashable_fail_closed():
+def test_relation_is_optimizer_scoped_unhashable_fail_closed() -> None:
     """``relation_is_optimizer_scoped`` fails closed (returns False) for unhashable objects."""
     from django_strawberry_framework.optimizer._context import (
         begin_execution_frame,
@@ -3761,7 +3795,7 @@ def test_relation_is_optimizer_scoped_unhashable_fail_closed():
         end_execution_frame(frame)
 
 
-def test_strictness_and_scoped_relations_reentrant_isolation():
+def test_strictness_and_scoped_relations_reentrant_isolation() -> None:
     """Re-entrant nested executions isolate strictness and scoped relations and restore cleanly."""
     from django_strawberry_framework.optimizer._context import (
         active_strictness,
@@ -3799,7 +3833,7 @@ def test_strictness_and_scoped_relations_reentrant_isolation():
 
 
 @pytest.mark.asyncio
-async def test_shared_singleton_answers_each_operation_with_its_own_context():
+async def test_shared_singleton_answers_each_operation_with_its_own_context() -> None:
     """Two overlapping operations on one shared instance each see their own context.
 
     The documented ``extensions=[lambda: ext]`` form returns ONE instance to
@@ -3855,7 +3889,7 @@ class _UnsettledOptimizer(DjangoOptimizerExtension):
         pass
 
 
-def test_a_resolver_cannot_rewrite_the_optimizer_configuration_for_a_later_request():
+def test_a_resolver_cannot_rewrite_the_optimizer_configuration_for_a_later_request() -> None:
     """Strictness and the fetch strategy are settled at construction, not per request.
 
     The documented shape is a module-level singleton behind a factory, so this
@@ -3880,7 +3914,7 @@ def test_a_resolver_cannot_rewrite_the_optimizer_configuration_for_a_later_reque
     assert extension.nested_connection_strategy is settled_strategy
 
 
-def test_an_optimizer_that_settled_no_configuration_reads_the_zero_argument_shape():
+def test_an_optimizer_that_settled_no_configuration_reads_the_zero_argument_shape() -> None:
     """A record that was never settled answers as the construction that settles none.
 
     The strictness and the nested-connection strategy are read at the start of
@@ -3910,7 +3944,7 @@ def _published_optimizer_keys(context: object) -> dict[str, object]:
 
 
 @pytest.mark.django_db
-def test_a_nested_operation_does_not_take_the_outer_operations_optimizer_state():
+def test_a_nested_operation_does_not_take_the_outer_operations_optimizer_state() -> None:
     """An inner execution through the documented singleton leaves the outer one intact.
 
     The optimizer publishes its plan, its FK-id elisions, its planned-relation
@@ -4012,8 +4046,9 @@ def test_a_nested_operation_does_not_take_the_outer_operations_optimizer_state()
     ids=["consumer-before-the-optimizer", "consumer-after-the-optimizer"],
 )
 def test_an_operation_started_from_a_consumer_teardown_leaves_the_request_its_plan(
+    *,
     consumer_first: bool,
-):
+) -> None:
     """Whether an operation is nested is the runner's answer, not the hook order's.
 
     A consumer extension may run its own operation from its ``on_operation``
@@ -4056,7 +4091,7 @@ def test_an_operation_started_from_a_consumer_teardown_leaves_the_request_its_pl
         """A consumer extension that runs its own operation once, at teardown."""
 
         @override
-        def on_operation(self):
+        def on_operation(self) -> Iterator[None]:
             yield
             if seen:
                 return
@@ -4095,7 +4130,7 @@ def test_an_operation_started_from_a_consumer_teardown_leaves_the_request_its_pl
 
 
 @pytest.mark.django_db
-def test_on_execute_clears_reused_context_fk_elisions_before_full_selection():
+def test_on_execute_clears_reused_context_fk_elisions_before_full_selection() -> None:
     """Reused ``context_value``: id-only elisions must not survive into a full selection.
 
     Without the ``on_execute`` clear, ``_stash_union`` retains the prior
@@ -4146,7 +4181,7 @@ def test_on_execute_clears_reused_context_fk_elisions_before_full_selection():
 
 
 @pytest.mark.django_db
-def test_on_execute_clears_reused_context_planned_keys_across_executions():
+def test_on_execute_clears_reused_context_planned_keys_across_executions() -> None:
     """Reused ``context_value``: planned-resolver keys must not leak into a later op."""
     services.seed_data(1)
 
@@ -4190,7 +4225,7 @@ def test_on_execute_clears_reused_context_planned_keys_across_executions():
 
 
 @pytest.mark.django_db
-def test_empty_plan_still_stashed():
+def test_empty_plan_still_stashed() -> None:
     """B5/O5: even when no relations are selected, the scalar-only plan is stashed."""
     services.seed_data(1)
 
@@ -4224,7 +4259,7 @@ def test_empty_plan_still_stashed():
 
 
 @pytest.mark.django_db
-def test_optimizer_applies_only_for_selected_scalars():
+def test_optimizer_applies_only_for_selected_scalars() -> None:
     """O5: selected scalar fields are collected into the stashed plan.
 
     Query count, JOIN-absence, and unused-column omission are live on
@@ -4265,7 +4300,7 @@ def test_optimizer_applies_only_for_selected_scalars():
 
 
 @pytest.mark.django_db
-def test_optimizer_downgrades_select_related_for_custom_get_queryset():
+def test_optimizer_downgrades_select_related_for_custom_get_queryset() -> None:
     """O6: custom target ``get_queryset`` downgrades forward FK traversal to ``Prefetch``.
 
     Two-query SQL is live in
@@ -4285,7 +4320,12 @@ def test_optimizer_downgrades_select_related_for_custom_get_queryset():
 
         @classmethod
         @override
-        def get_queryset(cls, queryset: QuerySet[Category], info: object, **kwargs: object):
+        def get_queryset(
+            cls,
+            queryset: QuerySet[Category],
+            info: object,
+            **kwargs: object,
+        ) -> QuerySet[Category]:
             calls.append(info)
             return queryset
 
@@ -4326,7 +4366,7 @@ def test_optimizer_downgrades_select_related_for_custom_get_queryset():
 
 
 @pytest.mark.django_db
-def test_optimizer_does_not_cache_custom_get_queryset_prefetch_plans():
+def test_optimizer_does_not_cache_custom_get_queryset_prefetch_plans() -> None:
     """O6: request-dependent ``Prefetch`` querysets are rebuilt instead of cached."""
     services.seed_data(1)
     calls: list[object] = []
@@ -4338,7 +4378,12 @@ def test_optimizer_does_not_cache_custom_get_queryset_prefetch_plans():
 
         @classmethod
         @override
-        def get_queryset(cls, queryset: QuerySet[Category], info: object, **kwargs: object):
+        def get_queryset(
+            cls,
+            queryset: QuerySet[Category],
+            info: object,
+            **kwargs: object,
+        ) -> QuerySet[Category]:
             calls.append(info)
             return queryset
 
@@ -4370,9 +4415,8 @@ def test_optimizer_does_not_cache_custom_get_queryset_prefetch_plans():
     assert ext.cache_info().size == 0
 
 
-def test_plan_relation_returns_prefetch_for_custom_get_queryset():
+def test_plan_relation_returns_prefetch_for_custom_get_queryset() -> None:
     """O6: the extension exposes the relation planner entry point."""
-
     field = FieldMeta.from_django_field(Item._meta.get_field("category"))
     info = SimpleNamespace()
 
@@ -4383,7 +4427,11 @@ def test_plan_relation_returns_prefetch_for_custom_get_queryset():
 
         @override
         @classmethod
-        def get_queryset(cls, queryset: QuerySet[Category], info: strawberry.Info):
+        def get_queryset(
+            cls,
+            queryset: QuerySet[Category],
+            info: strawberry.Info,
+        ) -> QuerySet[Category]:
             return queryset
 
     kind, reason = DjangoOptimizerExtension().plan_relation(field, FilteredCategoryType, info)
@@ -4397,7 +4445,7 @@ def test_plan_relation_returns_prefetch_for_custom_get_queryset():
 
 
 @pytest.mark.django_db
-def test_b8_consumer_select_related_does_not_mutate_cached_plan():
+def test_b8_consumer_select_related_does_not_mutate_cached_plan() -> None:
     """B8: a consumer's pre-applied ``select_related`` must not mutate B1's cached plan."""
     services.seed_data(1)
 
@@ -4456,7 +4504,7 @@ def test_b8_consumer_select_related_does_not_mutate_cached_plan():
 
 
 @pytest.mark.django_db
-def test_b8_consumer_prefetch_object_suppresses_optimizer_entry():
+def test_b8_consumer_prefetch_object_suppresses_optimizer_entry() -> None:
     """B8: a consumer ``Prefetch("items", queryset=Item.objects.all())`` keeps its slot."""
     from django.db.models import Prefetch
 
@@ -4479,7 +4527,7 @@ def test_b8_consumer_prefetch_object_suppresses_optimizer_entry():
 
     class _CaptureExt(DjangoOptimizerExtension):
         @override
-        def _optimize(self, result: object, info: GraphQLResolveInfo):
+        def _optimize(self, result: object, info: GraphQLResolveInfo) -> object:
             optimized = super()._optimize(result, info)
             captured.append(optimized)
             return optimized
@@ -4524,7 +4572,7 @@ def test_b8_consumer_prefetch_object_suppresses_optimizer_entry():
 
 
 @pytest.mark.django_db
-def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch():
+def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch() -> None:
     """B8: a consumer's plain ``"items"`` string is replaced by the optimizer's nested ``Prefetch``."""
     from django.db.models import Prefetch
 
@@ -4553,7 +4601,7 @@ def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch():
 
     class _CaptureExt(DjangoOptimizerExtension):
         @override
-        def _optimize(self, result: object, info: GraphQLResolveInfo):
+        def _optimize(self, result: object, info: GraphQLResolveInfo) -> object:
             optimized = super()._optimize(result, info)
             captured.append(optimized)
             return optimized
@@ -4591,14 +4639,14 @@ def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch():
 # ---------------------------------------------------------------------------
 
 
-def test_extension_rejects_unknown_kwargs_at_construction():
+def test_extension_rejects_unknown_kwargs_at_construction() -> None:
     """Misspelled config (e.g. ``strict=`` instead of ``strictness=``) raises TypeError."""
     with pytest.raises(TypeError):
         # basedpyright: a deliberately misspelled keyword; the test proves construction rejects it
         DjangoOptimizerExtension(strict=True)  # pyright: ignore[reportCallIssue]
 
 
-def test_extension_accepts_strawberry_execution_context_kwarg():
+def test_extension_accepts_strawberry_execution_context_kwarg() -> None:
     """Strawberry instantiates extension *classes* with ``execution_context=...``.
 
     When the *class* (not an instance) is registered, Strawberry calls
@@ -4609,7 +4657,7 @@ def test_extension_accepts_strawberry_execution_context_kwarg():
     assert ext.strictness == "off"
 
 
-def test_singleton_factory_extensions_form_emits_no_deprecation_warning():
+def test_singleton_factory_extensions_form_emits_no_deprecation_warning() -> None:
     """The migrated ``extensions=[lambda: _optimizer]`` form does not warn.
 
     Strawberry's ``Schema.__init__`` emits a ``DeprecationWarning``
@@ -4642,7 +4690,7 @@ def test_singleton_factory_extensions_form_emits_no_deprecation_warning():
 # ---------------------------------------------------------------------------
 
 
-def test_hint_is_skip_handles_sentinel_record_and_unknown_shapes():
+def test_hint_is_skip_handles_sentinel_record_and_unknown_shapes() -> None:
     """``hint_is_skip`` returns the documented bool for every supported shape."""
     from django_strawberry_framework.optimizer.hints import OptimizerHint, hint_is_skip
 
@@ -4663,7 +4711,7 @@ def test_hint_is_skip_handles_sentinel_record_and_unknown_shapes():
 
 
 @pytest.mark.django_db
-def test_plan_cache_keys_distinguish_primary_and_secondary_returns_for_same_model():
+def test_plan_cache_keys_distinguish_primary_and_secondary_returns_for_same_model() -> None:
     """A primary-return resolver and a secondary-return resolver do not collide.
 
     Two root fields on the same schema return ``list[ItemType]`` and
@@ -4710,7 +4758,7 @@ def test_plan_cache_keys_distinguish_primary_and_secondary_returns_for_same_mode
     assert ext.cache_info().size == 2
 
 
-def test_schema_audit_warns_on_relation_field_exposed_only_on_secondary_type():
+def test_schema_audit_warns_on_relation_field_exposed_only_on_secondary_type() -> None:
     """A relation field only present on a secondary still surfaces a warning.
 
     ``ItemType`` (primary) excludes ``category``; ``AdminItemType``
@@ -4754,7 +4802,7 @@ def test_schema_audit_warns_on_relation_field_exposed_only_on_secondary_type():
     assert any("Item.category" in w and "no registered target" in w for w in warnings)
 
 
-def test_schema_audit_dedupes_when_same_relation_field_visited_via_multiple_types():
+def test_schema_audit_dedupes_when_same_relation_field_visited_via_multiple_types() -> None:
     """Identical (source_model, field_name) warnings collapse to one.
 
     Both ``ItemType`` (primary) and ``AdminItemType`` (secondary) expose
@@ -4800,7 +4848,7 @@ def test_schema_audit_dedupes_when_same_relation_field_visited_via_multiple_type
     assert len(item_category_warnings) == 1
 
 
-def test_schema_audit_warning_names_the_source_type_for_multi_type_models():
+def test_schema_audit_warning_names_the_source_type_for_multi_type_models() -> None:
     """B6: the warning text includes ``type_cls.__name__`` for multi-type models.
 
     Per-source-model dedupe collapses warnings to one per ``(model, field_name)``
@@ -4850,7 +4898,7 @@ def test_schema_audit_warning_names_the_source_type_for_multi_type_models():
     assert "ItemType" in warning or "AdminItemType" in warning
 
 
-def test_model_for_type_reverse_lookup_works_for_secondary_type():
+def test_model_for_type_reverse_lookup_works_for_secondary_type() -> None:
     """Secondary types remain discoverable for the optimizer's reverse lookup.
 
     Both ``ItemType`` and ``AdminItemType`` are registered against
@@ -4898,7 +4946,7 @@ def test_model_for_type_reverse_lookup_works_for_secondary_type():
 
 
 @pytest.mark.django_db
-def test_optimizer_helper_extraction_no_regression():
+def test_optimizer_helper_extraction_no_regression() -> None:
     """Extracting ``apply_to`` from ``_optimize`` leaves the middleware path identical.
 
     Per spec-030 Decision 11 the plan-build-and-apply tail was extracted into
@@ -4931,7 +4979,7 @@ def test_optimizer_helper_extraction_no_regression():
         target_model: type[Model],
         queryset: QuerySet[Model],
         info: GraphQLResolveInfo,
-    ):
+    ) -> QuerySet[Model]:
         delegations.append((target_type, target_model))
         return real_apply_to(target_type, target_model, queryset, info)
 
@@ -4960,7 +5008,7 @@ def test_optimizer_helper_extraction_no_regression():
 
 
 @pytest.mark.django_db
-def test_apply_connection_optimization_uses_active_optimizer_cache():
+def test_apply_connection_optimization_uses_active_optimizer_cache() -> None:
     """``apply_connection_optimization`` shares the active extension's plan cache.
 
     spec-030 Decision 11 plan-cache-reuse route: ``on_execute`` publishes the
@@ -5013,7 +5061,7 @@ def test_apply_connection_optimization_uses_active_optimizer_cache():
     assert captured["active"] is ext
 
 
-def test_publish_plan_to_context_unions_parent_and_nested_sentinel_sets():
+def test_publish_plan_to_context_unions_parent_and_nested_sentinel_sets() -> None:
     """A nested fallback publish UNIONS the correctness sentinels, never overwrites them.
 
     spec-033 Decision 8 foundation: a nested fallback connection pipeline is a
@@ -5055,7 +5103,7 @@ def test_publish_plan_to_context_unions_parent_and_nested_sentinel_sets():
     assert ctx.dst_optimizer_plan is nested_plan
 
 
-def test_publish_plan_to_context_union_tolerates_non_set_existing_stash():
+def test_publish_plan_to_context_union_tolerates_non_set_existing_stash() -> None:
     """``_stash_union`` overwrites a non-set existing stash defensively (no crash)."""
     from django_strawberry_framework.optimizer._context import get_context_value
 
@@ -5077,7 +5125,7 @@ def _is_resolver_key_set(value: object) -> TypeGuard[frozenset[str]]:
 
 
 @pytest.mark.django_db
-def test_nested_connection_fallback_publish_unions_parent_planned_set_end_to_end():
+def test_nested_connection_fallback_publish_unions_parent_planned_set_end_to_end() -> None:
     """End-to-end: a real nested-connection fallback publish UNIONS, never clobbers.
 
     spec-033 Decision 8: the unit pin
@@ -5169,7 +5217,7 @@ def test_nested_connection_fallback_publish_unions_parent_planned_set_end_to_end
 
 
 @pytest.mark.django_db
-def test_cascading_target_downgrades_join_to_prefetch():
+def test_cascading_target_downgrades_join_to_prefetch() -> None:
     """A relation whose target hook cascades plans a ``Prefetch`` (not ``select_related``).
 
     The target reports ``has_custom_get_queryset() is True``, so the shipped
@@ -5206,7 +5254,7 @@ def test_cascading_target_downgrades_join_to_prefetch():
             queryset: QuerySet[Category],
             info: strawberry.Info,
             **kwargs: object,
-        ):
+        ) -> QuerySet[Category]:
             user = getattr(info.context, "user", None)
             seen_users.append(user)
             # Cascade AND narrow by a user-derived predicate so the live request
@@ -5263,7 +5311,7 @@ def test_cascading_target_downgrades_join_to_prefetch():
 
 
 @pytest.mark.django_db
-def test_plan_with_cascading_hook_uncacheable():
+def test_plan_with_cascading_hook_uncacheable() -> None:
     """A plan baking a cascading hook is ``cacheable = False``; B1 counters unaffected otherwise.
 
     The shipped rule marks ANY plan baking a custom ``get_queryset`` uncacheable
@@ -5297,7 +5345,7 @@ def test_plan_with_cascading_hook_uncacheable():
             queryset: QuerySet[Category],
             info: strawberry.Info,
             **kwargs: object,
-        ):
+        ) -> QuerySet[Category]:
             return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 
     assert registry.get(Category) is CascadingCategoryType
@@ -5378,7 +5426,7 @@ def test_plan_with_cascading_hook_uncacheable():
 
 
 @pytest.mark.django_db
-def test_consumer_projection_widens_to_the_selection_and_keeps_the_join():
+def test_consumer_projection_widens_to_the_selection_and_keeps_the_join() -> None:
     """A consumer ``.only()`` and the plan's projection load as one union.
 
     ``select_related("category")`` over a consumer ``.only("name")`` is
@@ -5436,7 +5484,7 @@ def test_consumer_projection_widens_to_the_selection_and_keeps_the_join():
 
 
 @pytest.mark.django_db
-def test_mutation_over_a_consumer_projection_prunes_the_join_it_cannot_traverse():
+def test_mutation_over_a_consumer_projection_prunes_the_join_it_cannot_traverse() -> None:
     """A non-``QUERY`` plan writes no projection, so it cannot widen the consumer's.
 
     G2 leaves the mutation's ``only_fields`` empty, so ``select_related("category")``
@@ -5494,7 +5542,7 @@ def test_mutation_over_a_consumer_projection_prunes_the_join_it_cannot_traverse(
 
 
 @pytest.mark.django_db
-def test_b8_consumer_wins_prefetch_nested_keys_stay_strictness_visible():
+def test_b8_consumer_wins_prefetch_nested_keys_stay_strictness_visible() -> None:
     """B8 + B3: consumer-wins Prefetch drop must not mask nested N+1 under raise.
 
     When the root resolver already carries ``Prefetch("items", queryset=...)``,
@@ -5561,7 +5609,7 @@ def test_b8_consumer_wins_prefetch_nested_keys_stay_strictness_visible():
 
 
 @pytest.mark.django_db
-def test_b8_consumer_wins_prefetch_preserves_nested_fk_id_elision():
+def test_b8_consumer_wins_prefetch_preserves_nested_fk_id_elision() -> None:
     """B8 + FK-id elision: a consumer-wins Prefetch drop must PRESERVE nested elisions.
 
     A nested ``{ category { id } }`` selection under a consumer-won ``items``
@@ -5619,7 +5667,7 @@ def test_b8_consumer_wins_prefetch_preserves_nested_fk_id_elision():
 
 
 @pytest.mark.django_db
-def test_strictness_reaches_an_execution_with_no_stashable_context():
+def test_strictness_reaches_an_execution_with_no_stashable_context() -> None:
     """B3: an armed guard fires without a ``context_value`` to stash on.
 
     The strictness sentinel rides a request-context stash, which an execution
@@ -5670,7 +5718,7 @@ def test_strictness_reaches_an_execution_with_no_stashable_context():
 
 
 @pytest.mark.django_db
-def test_strictness_flags_a_relation_under_an_unplannable_root():
+def test_strictness_flags_a_relation_under_an_unplannable_root() -> None:
     """B3: a root the walker cannot plan leaves every relation strictness-visible.
 
     A resolver returning a materialized ``list`` gives the walker no queryset to
@@ -5723,7 +5771,7 @@ def test_strictness_flags_a_relation_under_an_unplannable_root():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_strictness_flags_an_unplanned_relation_before_the_async_sync_gate():
+async def test_strictness_flags_an_unplanned_relation_before_the_async_sync_gate() -> None:
     """B3: the guard speaks before Django's ``SynchronousOnlyOperation``.
 
     A many-side lazy load inside an async execution trips Django's sync-only gate,
@@ -5770,7 +5818,7 @@ async def test_strictness_flags_an_unplanned_relation_before_the_async_sync_gate
     assert not any("async context" in message for message in messages)
 
 
-def test_optimizer_unadapted_non_queryset_passthrough():
+def test_optimizer_unadapted_non_queryset_passthrough() -> None:
     """Non-queryset results pass through ``_optimize`` unadapted.
 
     Wire cost of a list-returning root with the optimizer installed is
@@ -5784,7 +5832,7 @@ def test_optimizer_unadapted_non_queryset_passthrough():
     assert not unwrap_async_queryset_adapter(non_qs_result)[1]
 
 
-def test_optimizer_preserves_async_adapter_evaluated_cache():
+def test_optimizer_preserves_async_adapter_evaluated_cache() -> None:
     """Evaluated queryset with adapter returns re-wrapped adapter."""
     from django_strawberry_framework.utils.querysets import (
         unwrap_async_queryset_adapter,
@@ -5802,7 +5850,7 @@ def test_optimizer_preserves_async_adapter_evaluated_cache():
     assert eval_res._queryset is qs_eval
 
 
-def test_optimizer_preserves_async_adapter_unresolved_type():
+def test_optimizer_preserves_async_adapter_unresolved_type() -> None:
     """Unresolved return type with adapter returns re-wrapped adapter."""
     from django_strawberry_framework.utils.querysets import (
         unwrap_async_queryset_adapter,
@@ -5821,7 +5869,7 @@ def test_optimizer_preserves_async_adapter_unresolved_type():
     assert unresolved_res._queryset is qs_unresolved
 
 
-def test_optimizer_preserves_async_adapter_optimized_tail():
+def test_optimizer_preserves_async_adapter_optimized_tail() -> None:
     """Optimized tail with adapter returns re-wrapped adapter."""
     from django_strawberry_framework.utils.querysets import (
         unwrap_async_queryset_adapter,
@@ -5890,7 +5938,7 @@ def _read_optimizer_state_in_a_copied_context(copied: contextvars.Context) -> di
     return read
 
 
-def test_an_execution_frame_a_task_copied_answers_nothing_once_the_execution_ends():
+def test_an_execution_frame_a_task_copied_answers_nothing_once_the_execution_ends() -> None:
     """Every per-execution store ends with the execution, in every context at once.
 
     ``asyncio.create_task`` copies the whole context, and a token reset rewrites
@@ -5983,7 +6031,7 @@ def test_an_execution_frame_a_task_copied_answers_nothing_once_the_execution_end
 
 
 @pytest.mark.django_db
-def test_an_operation_in_a_context_that_outlived_a_request_publishes_as_its_own():
+def test_an_operation_in_a_context_that_outlived_a_request_publishes_as_its_own() -> None:
     """The second operation is top-level, clears its own context, and restores to none.
 
     A task that copied an execution's context and outlived the request is not
@@ -6077,7 +6125,10 @@ _HOOK_INFO_QUERIES = {
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("shape", sorted(_HOOK_INFO_QUERIES))
 @pytest.mark.parametrize("execution", ["sync", "async"])
-def test_get_queryset_receives_strawberry_info_on_every_optimizer_path(shape: str, execution: str):
+def test_get_queryset_receives_strawberry_info_on_every_optimizer_path(
+    shape: str,
+    execution: str,
+) -> None:
     """A consumer hook gets the schema's ``info_class`` instance on the root and plan-walk paths.
 
     The plan walk reads graphql-core's raw resolve info; the hook is typed and

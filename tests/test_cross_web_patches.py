@@ -53,14 +53,14 @@ class _MalformedAdapter:
     body = object()
 
 
-def test_apply_is_idempotent():
+def test_apply_is_idempotent() -> None:
     """Repeated ``apply()`` calls leave the patch installed (self-healing no-op)."""
     patches.apply()
     patches.apply()
     assert patches._patch_is_installed() is True
 
 
-def test_apply_reinstalls_when_property_reverted(monkeypatch: pytest.MonkeyPatch):
+def test_apply_reinstalls_when_property_reverted(monkeypatch: pytest.MonkeyPatch) -> None:
     """``apply()`` re-installs if a third party reverted ``adapter.body``."""
     patches.apply()
     assert patches._patch_is_installed() is True
@@ -72,14 +72,14 @@ def test_apply_reinstalls_when_property_reverted(monkeypatch: pytest.MonkeyPatch
     assert patches._patch_is_installed() is True
 
 
-def test_patch_is_installed_on_adapter():
+def test_patch_is_installed_on_adapter() -> None:
     """By the time pytest collects, ``AppConfig.ready()`` has installed the wrapper."""
     descriptor = DjangoHTTPRequestAdapter.__dict__["body"]
     assert isinstance(descriptor, property)
     assert descriptor.fget is patches._patched_body
 
 
-def test_body_returns_raw_bytes_for_valid_utf8():
+def test_body_returns_raw_bytes_for_valid_utf8() -> None:
     """Valid UTF-8 is returned as raw bytes (async parity), not decoded ``str``."""
     raw = b'{"a": 1}'
     adapter = DjangoHTTPRequestAdapter(_request(raw))
@@ -87,7 +87,7 @@ def test_body_returns_raw_bytes_for_valid_utf8():
     assert isinstance(adapter.body, bytes)
 
 
-def test_body_returns_raw_bytes_for_invalid_utf8():
+def test_body_returns_raw_bytes_for_invalid_utf8() -> None:
     """A non-UTF-8 body is returned as raw bytes, so the strict decode can 400 it.
 
     The adapter must not examine the bytes at all. Upstream's eager decode
@@ -104,7 +104,7 @@ def test_body_returns_raw_bytes_for_invalid_utf8():
     assert adapter.body == b"\xff\xfe\xfa"
 
 
-def test_body_returns_raw_bytes_for_utf8_bom():
+def test_body_returns_raw_bytes_for_utf8_bom() -> None:
     """UTF-8 BOM stays bytes here; the package view's parse is what rejects it.
 
     The adapter does not inspect the bytes. ``json.loads`` on ``bytes`` detects
@@ -118,7 +118,7 @@ def test_body_returns_raw_bytes_for_utf8_bom():
     assert isinstance(adapter.body, bytes)
 
 
-def test_body_returns_raw_bytes_for_utf16_le_without_bom():
+def test_body_returns_raw_bytes_for_utf16_le_without_bom() -> None:
     """BOM-less UTF-16-LE stays bytes here; upstream's getter still decodes to ``str``.
 
     ``encode("utf-16-le")`` is NUL-padded ASCII, hence UTF-8-decodable, so
@@ -140,7 +140,7 @@ def test_body_returns_raw_bytes_for_utf16_le_without_bom():
     assert isinstance(adapter.body, bytes)
 
 
-def test_patch_is_installed_false_when_symbol_missing():
+def test_patch_is_installed_false_when_symbol_missing() -> None:
     """``_patch_is_installed`` returns ``False`` when the adapter symbol moved."""
     with mock.patch.object(patches, "DjangoHTTPRequestAdapter", None):
         assert patches._patch_is_installed() is False
@@ -153,7 +153,7 @@ def test_patch_is_installed_false_when_symbol_missing():
         pytest.param(_MalformedAdapter, id="non-property-body"),
     ],
 )
-def test_capture_returns_none_for_missing_adapter_or_body_property(adapter: type | None):
+def test_capture_returns_none_for_missing_adapter_or_body_property(adapter: type | None) -> None:
     """Neither a missing adapter nor a non-property ``body`` may capture as a usable getter.
 
     The capture runs at module scope, before ``apply()`` can complain, so both
@@ -169,27 +169,31 @@ def test_capture_returns_none_for_missing_adapter_or_body_property(adapter: type
         assert patches._captured_upstream_body_getter() is None
 
 
-def test_apply_fails_loudly_when_symbol_missing():
+def test_apply_fails_loudly_when_symbol_missing() -> None:
     """A dependency-shape change cannot silently disable request hardening."""
-    with mock.patch.object(patches, "DjangoHTTPRequestAdapter", None):
-        with pytest.raises(RuntimeError, match="DjangoHTTPRequestAdapter"):
-            patches.apply()
+    with (
+        mock.patch.object(patches, "DjangoHTTPRequestAdapter", None),
+        pytest.raises(RuntimeError, match="DjangoHTTPRequestAdapter"),
+    ):
+        patches.apply()
 
 
-def test_apply_fails_loudly_when_body_getter_signature_changes():
+def test_apply_fails_loudly_when_body_getter_signature_changes() -> None:
     """The patch pins the getter arity it replaces."""
 
     def _two_argument_getter(_self: object, _extra: object) -> None:
         return None
 
-    with mock.patch.object(patches, "_original_body_fget", _two_argument_getter):
-        with pytest.raises(RuntimeError, match=r"expected \(self\) getter signature"):
-            patches.apply()
+    with (
+        mock.patch.object(patches, "_original_body_fget", _two_argument_getter),
+        pytest.raises(RuntimeError, match=r"expected \(self\) getter signature"),
+    ):
+        patches.apply()
 
 
 def test_apply_fails_loudly_when_original_getter_was_never_captured(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A valid-looking live ``body`` property cannot mask a missing capture.
 
     When the import-time capture never happened (``_original_body_fget`` is the
@@ -210,7 +214,7 @@ def test_apply_fails_loudly_when_original_getter_was_never_captured(
 def test_apply_no_ops_when_toggle_disabled(
     settings: pytest_django.Settings,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """``APPLY_UPSTREAM_PATCHES = False`` makes ``apply()`` decline to install."""
     monkeypatch.setattr(DjangoHTTPRequestAdapter, "body", property(patches._original_body_fget))
     assert patches._patch_is_installed() is False
@@ -227,7 +231,7 @@ def test_apply_no_ops_when_toggle_disabled(
 def test_apply_no_ops_when_cross_web_dependency_opted_out(
     settings: pytest_django.Settings,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """``{"cross_web": False}`` disables only this module; ``{"django": False}`` does not.
 
     The production half of the per-dependency opt-out contract: opting out of

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from typing import NoReturn
 
 import pytest
 from apps.library.models import Book, Genre
@@ -31,7 +32,7 @@ class _HostileNameMeta(type):
     @override
     # basedpyright: the hostile shape under test, a ``__name__`` property whose read raises; the
     # checker rejects any property overriding a base class attribute
-    def __name__(cls):  # pyright: ignore[reportIncompatibleVariableOverride]
+    def __name__(cls) -> NoReturn:  # pyright: ignore[reportIncompatibleVariableOverride]
         raise RuntimeError("hostile model name")
 
 
@@ -41,28 +42,28 @@ class _HostileName(metaclass=_HostileNameMeta):
 
 class _HostileString(str):
     @override
-    def __str__(self):
+    def __str__(self) -> str:
         raise RuntimeError("hostile field name")
 
 
 class _HostileAnnotations(Mapping[str, object]):
-    def __init__(self, values: Mapping[str, object]):
+    def __init__(self, values: Mapping[str, object]) -> None:
         self._values = dict(values)
 
     @override
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         return iter(self._values)
 
     @override
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._values)
 
     @override
-    def __getitem__(self, key: str):
+    def __getitem__(self, key: str) -> NoReturn:
         raise RuntimeError("hostile annotation lookup")
 
 
-def test_unresolved_relation_diagnostic_survives_hostile_model_name():
+def test_unresolved_relation_diagnostic_survives_hostile_model_name() -> None:
     """Malformed pending metadata remains a typed finalization failure."""
     registry.add_pending_relation(
         PendingRelation(
@@ -82,7 +83,7 @@ def test_unresolved_relation_diagnostic_survives_hostile_model_name():
         finalize_django_types()
 
 
-def test_malformed_annotation_key_is_rejected_before_graphql_conversion():
+def test_malformed_annotation_key_is_rejected_before_graphql_conversion() -> None:
     """A mutated annotation surface cannot leak a Strawberry AttributeError."""
 
     class BookType(DjangoType):
@@ -98,7 +99,7 @@ def test_malformed_annotation_key_is_rejected_before_graphql_conversion():
         finalize_django_types()
 
 
-def test_hostile_annotation_key_string_is_rejected_before_graphql_conversion():
+def test_hostile_annotation_key_string_is_rejected_before_graphql_conversion() -> None:
     """A string subclass cannot escape while the finalizer normalizes names."""
 
     class BookType(DjangoType):
@@ -112,7 +113,7 @@ def test_hostile_annotation_key_string_is_rejected_before_graphql_conversion():
         finalize_django_types()
 
 
-def test_hostile_annotation_mapping_cannot_escape_relation_rewrite():
+def test_hostile_annotation_mapping_cannot_escape_relation_rewrite() -> None:
     """A mapping that rejects relation assignment remains a typed failure."""
 
     class GenreType(DjangoType):
@@ -141,7 +142,7 @@ def test_hostile_annotation_mapping_cannot_escape_relation_rewrite():
         finalize_django_types()
 
 
-def test_malformed_pending_field_name_is_rejected_before_relation_lookup():
+def test_malformed_pending_field_name_is_rejected_before_relation_lookup() -> None:
     """A pending ``field_name`` outside the field map fails finalize as ``ConfigurationError``."""
 
     class BookType(DjangoType):
@@ -173,7 +174,7 @@ def test_malformed_pending_field_name_is_rejected_before_relation_lookup():
         finalize_django_types()
 
 
-def test_primary_ambiguity_diagnostic_survives_hostile_model_name():
+def test_primary_ambiguity_diagnostic_survives_hostile_model_name() -> None:
     """The ambiguity audit keeps malformed registry metadata typed."""
     # basedpyright: the class whose __name__ raises is the hostile input under test and the plain
     # classes stand in for DjangoTypes; TypeRegistry.register types the parameters as type[Model]
@@ -185,7 +186,7 @@ def test_primary_ambiguity_diagnostic_survives_hostile_model_name():
         finalize_django_types()
 
 
-def test_finalizer_diagnostic_renderers_survive_hostile_metadata():
+def test_finalizer_diagnostic_renderers_survive_hostile_metadata() -> None:
     """Every diagnostic renderer falls back to its documented placeholder label.
 
     Each assertion pins the exact fallback string, so a regression that swaps
@@ -195,12 +196,12 @@ def test_finalizer_diagnostic_renderers_survive_hostile_metadata():
 
     class _HostileText(str):
         @override
-        def __str__(self):
+        def __str__(self) -> str:
             raise RuntimeError("text exploded")
 
     class _HostileMeta(type):
         @override
-        def __getattribute__(cls, name: str):
+        def __getattribute__(cls, name: str) -> object:
             if name in {"__name__", "__qualname__", "__module__"}:
                 return _HostileText("Hostile")
             return super().__getattribute__(name)
@@ -221,7 +222,7 @@ def test_finalizer_diagnostic_renderers_survive_hostile_metadata():
 
     class _NonStringNameMeta(type):
         @override
-        def __getattribute__(cls, name: str):
+        def __getattribute__(cls, name: str) -> object:
             if name == "__name__":
                 return 123
             return super().__getattribute__(name)
@@ -231,7 +232,7 @@ def test_finalizer_diagnostic_renderers_survive_hostile_metadata():
 
     class _UnreadableModuleMeta(type):
         @override
-        def __getattribute__(cls, name: str):
+        def __getattribute__(cls, name: str) -> object:
             if name == "__module__":
                 raise RuntimeError("module exploded")
             return super().__getattribute__(name)
@@ -241,7 +242,7 @@ def test_finalizer_diagnostic_renderers_survive_hostile_metadata():
 
     class _NonStringModuleMeta(type):
         @override
-        def __getattribute__(cls, name: str):
+        def __getattribute__(cls, name: str) -> object:
             if name == "__module__":
                 return 123
             return super().__getattribute__(name)
@@ -257,20 +258,20 @@ def test_finalizer_diagnostic_renderers_survive_hostile_metadata():
     assert _safe_qualified_class_name(_NonStringModule) == f"123.{_NonStringModule.__qualname__}"
 
 
-def test_annotation_name_snapshot_wraps_unreadable_mapping():
+def test_annotation_name_snapshot_wraps_unreadable_mapping() -> None:
     """An annotation mapping that refuses enumeration is a typed failure."""
 
     class _UnreadableAnnotations(Mapping[str, object]):
         @override
-        def __iter__(self):
+        def __iter__(self) -> NoReturn:
             raise RuntimeError("annotation enumeration exploded")
 
         @override
-        def __len__(self):
+        def __len__(self) -> int:
             return 1
 
         @override
-        def __getitem__(self, key: str):
+        def __getitem__(self, key: str) -> NoReturn:
             raise KeyError(key)
 
     class _Type:
@@ -284,7 +285,7 @@ def test_annotation_name_snapshot_wraps_unreadable_mapping():
         _annotation_names(_Type)  # pyright: ignore[reportArgumentType]
 
 
-def test_pending_relation_without_source_definition_is_typed():
+def test_pending_relation_without_source_definition_is_typed() -> None:
     """A pending relation whose source type never registered a definition raises."""
 
     class GenreType(DjangoType):
@@ -314,7 +315,7 @@ def test_pending_relation_without_source_definition_is_typed():
 
 def test_model_label_routing_audit_rejects_a_missing_primary_definition(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The routing audit rejects a primary type carrying no registered definition."""
     primary = type("Primary", (), {})
     emitter = type("Emitter", (), {})
@@ -339,12 +340,12 @@ def test_model_label_routing_audit_rejects_a_missing_primary_definition(
 def test_secondary_collapse_warning_survives_unreadable_model_metadata(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """Unreadable model ``_meta`` still yields the identity-collapse warning."""
 
     class _UnreadableMeta:
         @property
-        def app_label(self):
+        def app_label(self) -> NoReturn:
             raise RuntimeError("app label exploded")
 
     class _Model:
@@ -374,7 +375,7 @@ def test_secondary_collapse_warning_survives_unreadable_model_metadata(
     assert "identity collapse" in caplog.text
 
 
-def test_incomplete_registry_registration_is_typed_at_finalize():
+def test_incomplete_registry_registration_is_typed_at_finalize() -> None:
     """A bare registry registration cannot leak an AttributeError from the model-label audit."""
 
     class BareModel:
@@ -392,7 +393,7 @@ def test_incomplete_registry_registration_is_typed_at_finalize():
         finalize_django_types()
 
 
-def test_owner_model_mismatch_formatters_ride_shared_template():
+def test_owner_model_mismatch_formatters_ride_shared_template() -> None:
     """FilterSet and OrderSet first-bind model-mismatch messages share one template."""
     from django_strawberry_framework.types.finalizer import (
         _format_owner_model_mismatch_error,
@@ -403,7 +404,7 @@ def test_owner_model_mismatch_formatters_ride_shared_template():
         assert "_format_owner_set_model_mismatch_error" in fn.__code__.co_names
 
 
-def test_field_surface_names_ignores_field_without_python_or_graphql_name():
+def test_field_surface_names_ignores_field_without_python_or_graphql_name() -> None:
     """An inherited strawberry field with no python or graphql name is skipped."""
     from django_strawberry_framework.types.finalizer import _field_surface_names
 
@@ -427,7 +428,7 @@ def test_field_surface_names_ignores_field_without_python_or_graphql_name():
     assert surface == {}
 
 
-def test_filterset_multi_owner_model_mismatch_raises_on_secondary_owner():
+def test_filterset_multi_owner_model_mismatch_raises_on_secondary_owner() -> None:
     """A secondary owner with an incompatible model is rejected during FilterSet binding."""
     from django_strawberry_framework.filters import FilterSet
 
@@ -459,7 +460,7 @@ def test_filterset_multi_owner_model_mismatch_raises_on_secondary_owner():
         finalize_django_types()
 
 
-def test_orderset_non_class_meta_model_is_typed_at_finalize():
+def test_orderset_non_class_meta_model_is_typed_at_finalize() -> None:
     """A non-class OrderSet ``Meta.model`` is a typed finalize failure, not a ``TypeError``.
 
     The order side reads the RAW ``Meta.model`` (no metaclass validation, unlike
@@ -492,7 +493,7 @@ def test_orderset_non_class_meta_model_is_typed_at_finalize():
     assert "'library.Genre'" in str(excinfo.value)
 
 
-def test_orderset_multi_owner_model_mismatch_raises_on_secondary_owner():
+def test_orderset_multi_owner_model_mismatch_raises_on_secondary_owner() -> None:
     """A secondary owner with an incompatible model is rejected during OrderSet binding."""
     from django_strawberry_framework.orders import OrderSet
 

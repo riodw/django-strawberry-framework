@@ -13,8 +13,9 @@ wire-visible wording end to end.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
+from typing import NoReturn
 
 import pytest
 from typing_extensions import override
@@ -47,7 +48,7 @@ def _resolve(
     )
 
 
-def test_an_explicit_instance_supplies_the_values_of_a_private_duplicate():
+def test_an_explicit_instance_supplies_the_values_of_a_private_duplicate() -> None:
     """The caller keeps their object; what a bound is read from is never it.
 
     A caller who kept the instance they passed - or left one in ``settings`` -
@@ -60,7 +61,7 @@ def test_an_explicit_instance_supplies_the_values_of_a_private_duplicate():
     assert resolved is not policy
 
 
-def test_no_source_at_all_resolves_to_a_duplicate_of_the_default():
+def test_no_source_at_all_resolves_to_a_duplicate_of_the_default() -> None:
     """The no-override path is canonicalized like every other one.
 
     The ``default`` is one module-level object shared by every schema in the
@@ -77,7 +78,7 @@ def test_no_source_at_all_resolves_to_a_duplicate_of_the_default():
     assert resolved is not _PROBE_DEFAULT
 
 
-def test_an_instance_through_the_setting_slot_is_taken_on_the_same_terms():
+def test_an_instance_through_the_setting_slot_is_taken_on_the_same_terms() -> None:
     """A validated instance behind the setting slot is the same trusted declaration.
 
     The explicit argument and the setting read are two spellings of one override
@@ -91,22 +92,22 @@ def test_an_instance_through_the_setting_slot_is_taken_on_the_same_terms():
     assert resolved is not policy
 
 
-def test_the_setting_supplies_overrides_when_the_argument_is_absent():
+def test_the_setting_supplies_overrides_when_the_argument_is_absent() -> None:
     assert _resolve(None, {"width": 4}) == _ProbePolicy(width=4)
 
 
-def test_an_explicit_mapping_outranks_the_setting():
+def test_an_explicit_mapping_outranks_the_setting() -> None:
     assert _resolve({"width": 9}, {"width": 4}) == _ProbePolicy(width=9)
 
 
-def test_a_non_mapping_override_is_rejected_with_the_derived_article():
+def test_a_non_mapping_override_is_rejected_with_the_derived_article() -> None:
     with pytest.raises(ConfigurationError, match="must be a _ProbePolicy or a mapping"):
         # basedpyright: the int policy is the hostile input under test; _resolve types the
         # parameter as resolve_policy does: a policy, a mapping or None
         _resolve(12)  # pyright: ignore[reportArgumentType]
 
 
-def test_unknown_keys_are_rejected_naming_the_valid_vocabulary():
+def test_unknown_keys_are_rejected_naming_the_valid_vocabulary() -> None:
     with pytest.raises(ConfigurationError, match=r"Unknown probe-policy bound\(s\): wirth"):
         _resolve({"wirth": 1})
 
@@ -124,44 +125,44 @@ class _DivergentMapping(Mapping[str, object]):
         self._current: dict[str, object] = {}
 
     @override
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         self._current = self._passes.pop(0) if self._passes else {}
         return iter(self._current)
 
     @override
-    def __getitem__(self, key: str):
+    def __getitem__(self, key: str) -> object:
         return self._current[key]
 
     @override
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._current)
 
 
 class _UnhashableKeyMapping(Mapping[list[str], object]):
     @override
-    def __iter__(self):
+    def __iter__(self) -> Iterator[list[str]]:
         return iter((["k"],))
 
     @override
-    def __getitem__(self, key: list[str]):
+    def __getitem__(self, key: list[str]) -> int:
         return 1
 
     @override
-    def __len__(self):
+    def __len__(self) -> int:
         return 1
 
 
 class _RaisingIterMapping(Mapping[str, object]):
     @override
-    def __iter__(self):
+    def __iter__(self) -> NoReturn:
         raise RuntimeError("hostile __iter__")
 
     @override
-    def __getitem__(self, key: str):
+    def __getitem__(self, key: str) -> int:
         return 1
 
     @override
-    def __len__(self):
+    def __len__(self) -> int:
         return 1
 
 
@@ -176,7 +177,7 @@ def test_a_divergent_one_shot_mapping_resolves_from_one_consumed_pass(
     resolver: Callable[[Mapping[str, object]], object],
     key: str,
     value: object,
-):
+) -> None:
     """The mapping is consumed ONCE: pass 2 can no longer smuggle unknown keys.
 
     The pre-fix resolver validated unknown keys over one iteration and then
@@ -196,8 +197,8 @@ def test_a_divergent_one_shot_mapping_resolves_from_one_consumed_pass(
 )
 def test_an_unhashable_key_is_typed_rejected_not_a_bare_typeerror(
     resolver: Callable[[Mapping[str, object]], object],
-):
-    with pytest.raises(ConfigurationError, match="must be strings|iteration failed"):
+) -> None:
+    with pytest.raises(ConfigurationError, match=r"must be strings|iteration failed"):
         # basedpyright: the mapping with an unhashable key is the hostile input under test; each
         # resolver types the parameter as Mapping[str, object]
         resolver(_UnhashableKeyMapping())  # pyright: ignore[reportArgumentType]
@@ -210,7 +211,7 @@ def test_an_unhashable_key_is_typed_rejected_not_a_bare_typeerror(
 )
 def test_a_raising_iterator_is_typed_rejected_not_leaked(
     resolver: Callable[[Mapping[str, object]], object],
-):
+) -> None:
     with pytest.raises(ConfigurationError, match="iteration failed"):
         resolver(_RaisingIterMapping())
 
@@ -219,15 +220,15 @@ class _TypedRaisingMapping(Mapping[str, object]):
     """A Mapping whose own materialization read fails with the typed error."""
 
     @override
-    def __iter__(self):
+    def __iter__(self) -> NoReturn:
         raise ConfigurationError("hostile keys read")
 
     @override
-    def __getitem__(self, key: str):
+    def __getitem__(self, key: str) -> int:
         return 1
 
     @override
-    def __len__(self):
+    def __len__(self) -> int:
         return 1
 
 
@@ -238,7 +239,7 @@ class _TypedRaisingMapping(Mapping[str, object]):
 )
 def test_a_configuration_error_from_materialization_propagates_unchanged(
     resolver: Callable[[Mapping[str, object]], object],
-):
+) -> None:
     """A ``ConfigurationError`` escaping ``dict(overrides)`` is re-raised verbatim.
 
     Materialization is a consumption point like any other: a typed rejection
@@ -257,7 +258,7 @@ def test_a_configuration_error_from_materialization_propagates_unchanged(
 )
 def test_a_hashable_non_string_key_is_typed_rejected_at_the_key_guard(
     resolver: Callable[[Mapping[str, object]], object],
-):
+) -> None:
     """A hashable non-string override key still reaches the key-type guard.
 
     An unhashable key dies inside ``dict()`` materialization (the "iteration

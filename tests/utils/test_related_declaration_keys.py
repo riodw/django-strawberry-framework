@@ -27,7 +27,7 @@ class _Declaration:
     target = _Target
 
 
-def test_non_string_related_declaration_key_is_refused():
+def test_non_string_related_declaration_key_is_refused() -> None:
     """A non-string key in the related collection raises the typed walk error."""
 
     class _Owner:
@@ -42,7 +42,7 @@ def test_non_string_related_declaration_key_is_refused():
         )
 
 
-def test_string_related_declaration_key_is_walked():
+def test_string_related_declaration_key_is_walked() -> None:
     """A string-keyed collection still walks to its declared hop."""
 
     class _Owner:

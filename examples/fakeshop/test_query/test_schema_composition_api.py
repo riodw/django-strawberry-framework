@@ -44,7 +44,7 @@ _APP_TYPE_CONTRACTS = (
 )
 
 
-def _schema_contributing_app_labels():
+def _schema_contributing_app_labels() -> set[str]:
     """Return the labels of the installed ``apps.*`` packages that ship a ``schema`` module."""
     return {
         config.label
@@ -54,7 +54,7 @@ def _schema_contributing_app_labels():
     }
 
 
-def test_the_manifest_covers_every_app_that_contributes_a_schema_module():
+def test_the_manifest_covers_every_app_that_contributes_a_schema_module() -> None:
     """Every installed app with a ``schema`` module has a row above, and no row names a phantom app.
 
     ``config/schema.py`` imports each contributor by hand, so the introspection
@@ -91,7 +91,9 @@ def test_the_composed_schema_publishes_each_apps_types(
 
 
 @pytest.mark.django_db
-def test_the_anonymous_category_page_lists_each_visible_category_with_its_own_visible_items():
+def test_the_anonymous_category_page_lists_each_visible_category_with_its_own_visible_items() -> (
+    None
+):
     """The composed endpoint resolves a reverse relation under the anonymous cascade.
 
     Both levels narrow, and the mapping is what pins them together: the page

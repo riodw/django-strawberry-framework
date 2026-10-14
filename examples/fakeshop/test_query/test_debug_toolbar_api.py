@@ -198,18 +198,20 @@ def toolbar_client(project_schema_override: Callable[[], None]) -> Iterator[Clie
     restores ``config.schema`` and ``config.urls`` under ambient ``DEBUG=False``
     after the settings context exits, so the ``djdt`` routes cannot leak.
     """
-    with override_settings(
-        DEBUG=True,
-        DEBUG_TOOLBAR_CONFIG={
-            "SHOW_TOOLBAR_CALLBACK": _show_toolbar_always,
-            # Default DISABLE_PANELS hides RedirectsPanel; enabling it is the live
-            # ``has_content``-false surface (ProfilingPanel stays off).
-            "DISABLE_PANELS": {"debug_toolbar.panels.profiling.ProfilingPanel"},
-        },
+    with (
+        override_settings(
+            DEBUG=True,
+            DEBUG_TOOLBAR_CONFIG={
+                "SHOW_TOOLBAR_CALLBACK": _show_toolbar_always,
+                # Default DISABLE_PANELS hides RedirectsPanel; enabling it is the live
+                # ``has_content``-false surface (ProfilingPanel stays off).
+                "DISABLE_PANELS": {"debug_toolbar.panels.profiling.ProfilingPanel"},
+            },
+        ),
+        _debug_toolbar_cache_state(),
     ):
-        with _debug_toolbar_cache_state():
-            project_schema_override()
-            yield Client()
+        project_schema_override()
+        yield Client()
 
 
 @pytest.fixture

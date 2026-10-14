@@ -19,9 +19,9 @@ import itertools
 import sqlite3
 import threading
 import time
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, SupportsIndex, TypeAlias
+from typing import TYPE_CHECKING, NoReturn, SupportsIndex, TypeAlias
 from unittest.mock import patch
 
 import pytest
@@ -109,7 +109,7 @@ class _AllowAll:
         _operation: str,
         _data: object,
         _instance: object = None,
-    ):
+    ) -> bool:
         return True
 
 
@@ -120,7 +120,7 @@ class _Query:
         return 1
 
 
-def _declare_item_types(*, item_get_queryset: object | None = None):
+def _declare_item_types(*, item_get_queryset: object | None = None) -> tuple[type, type]:
     """Declare the Item/Category primaries (optionally with an Item visibility hook)."""
 
     class CategoryT(DjangoType, relay.Node):
@@ -149,7 +149,7 @@ def _declare_update_mutation(
     *,
     permission_classes: list[type] | None = None,
     select_for_update: bool = True,
-):
+) -> type:
     meta_attrs = {
         "model": product_models.Item,
         "operation": "update",
@@ -165,7 +165,7 @@ def _declare_delete_mutation(
     *,
     permission_classes: list[type] | None = None,
     select_for_update: bool = True,
-):
+) -> type:
     meta_attrs = {
         "model": product_models.Item,
         "operation": "delete",
@@ -181,7 +181,7 @@ def _mutation_schema(
     *mutations: type[DjangoMutation],
     schema_cls: type[strawberry.Schema] = DjangoSchema,
     extra_fields: dict[str, object] | None = None,
-):
+) -> strawberry.Schema:
     """Build a probe schema over ``mutations``, with response-boundary masking OFF.
 
     The subject of this file is the WRITE pipeline - which alias a write is pinned
@@ -226,7 +226,7 @@ _UPDATE = (
 _DELETE = "mutation($id: ID!){ write0(id:$id){ node{ name } errors{ field messages } } }"
 
 
-def _seed_item(name: str = "Seeded"):
+def _seed_item(name: str = "Seeded") -> product_models.Item:
     category = product_models.Category.objects.create(name=_category_name())
     return product_models.Item.objects.create(name=name, category=category)
 
@@ -237,7 +237,7 @@ def _seed_item(name: str = "Seeded"):
 
 
 @pytest.mark.django_db
-def test_plain_strawberry_schema_refuses_generated_mutations_before_writing():
+def test_plain_strawberry_schema_refuses_generated_mutations_before_writing() -> None:
     """A generated mutation on a plain ``strawberry.Schema`` fails loudly, writing nothing."""
     _declare_item_types()
     UpdateItem = _declare_update_mutation()
@@ -270,7 +270,7 @@ def _window_observation() -> tuple[int, bool, int]:
 @pytest.mark.asyncio
 async def test_concurrent_async_windows_each_hold_an_outermost_transaction_of_their_own(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Two windows open at once on one loop never share a connection or a savepoint.
 
     Each window runs its thread-sensitive work on a thread of its own, so the
@@ -292,7 +292,7 @@ async def test_concurrent_async_windows_each_hold_an_outermost_transaction_of_th
         _source: object,
         _field_nodes: object,
         _path: object,
-    ):
+    ) -> None:
         observations.append(await sync_to_async(_window_observation, thread_sensitive=True)())
         if len(observations) == 2:
             both_open.set()
@@ -312,7 +312,7 @@ async def test_concurrent_async_windows_each_hold_an_outermost_transaction_of_th
 @pytest.mark.django_db(transaction=True)
 def test_concurrent_async_windows_on_two_event_loops_each_hold_their_own_transaction(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Windows on separate event loops open side by side, each outermost on its own thread."""
     from concurrent.futures import ThreadPoolExecutor
 
@@ -332,7 +332,7 @@ def test_concurrent_async_windows_on_two_event_loops_each_hold_their_own_transac
         _source: object,
         _field_nodes: object,
         _path: object,
-    ):
+    ) -> None:
         observation = await sync_to_async(_window_observation, thread_sensitive=True)()
         with observation_lock:
             observations.append(observation)
@@ -358,7 +358,7 @@ def test_concurrent_async_windows_on_two_event_loops_each_hold_their_own_transac
 @pytest.mark.asyncio
 async def test_async_execution_context_exits_transaction_on_raised_base_exception(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A non-GraphQL exception escaping the field still exits the worker transaction."""
     from asgiref.sync import sync_to_async
     from graphql.execution.execute import ExecutionContext as CoreExecutionContext
@@ -374,7 +374,7 @@ async def test_async_execution_context_exits_transaction_on_raised_base_exceptio
         _source: object,
         _field_nodes: object,
         _path: object,
-    ):
+    ) -> NoReturn:
         raise RuntimeError("execution exploded outside GraphQL error handling")
 
     monkeypatch.setattr(CoreExecutionContext, "execute_field", _boom)
@@ -394,7 +394,7 @@ async def test_async_execution_context_exits_transaction_on_raised_base_exceptio
 @pytest.mark.django_db(transaction=True)
 def test_sync_execution_context_exits_transaction_on_raised_base_exception(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The sync twin: a non-GraphQL exception escaping the field exits the transaction."""
     from graphql.execution.execute import ExecutionContext as CoreExecutionContext
 
@@ -409,7 +409,7 @@ def test_sync_execution_context_exits_transaction_on_raised_base_exception(
         _source: object,
         _field_nodes: object,
         _path: object,
-    ):
+    ) -> NoReturn:
         raise RuntimeError("execution exploded outside GraphQL error handling")
 
     monkeypatch.setattr(CoreExecutionContext, "execute_field", _boom)
@@ -467,7 +467,7 @@ def _close_old_connections_in_a_resolver(root: object) -> bool:
     return True
 
 
-def _category_create_schema(*, touched: Callable[..., object] | None = None):
+def _category_create_schema(*, touched: Callable[..., object] | None = None) -> strawberry.Schema:
     """A ``DjangoSchema`` exposing one generated Category create as ``write0``.
 
     ``touched`` becomes a consumer-authored ``touched`` field on the payload's node
@@ -501,7 +501,9 @@ def _create_variables(name: str) -> dict[str, object]:
 
 
 @contextlib.contextmanager
-def _held_in_the_pipeline(name: str):
+def _held_in_the_pipeline(
+    name: str,
+) -> Generator[tuple[asyncio.Event, threading.Event], None, None]:
     """Park the window whose create writes ``name`` inside its pipeline until released.
 
     A ``post_save`` receiver - consumer application code, running on the window's
@@ -514,7 +516,7 @@ def _held_in_the_pipeline(name: str):
     reached = asyncio.Event()
     release = threading.Event()
 
-    def _park(sender: object, instance: product_models.Category, **kwargs: object):
+    def _park(sender: object, instance: product_models.Category, **kwargs: object) -> None:
         del sender, kwargs
         if instance.name == name:
             loop.call_soon_threadsafe(reached.set)
@@ -557,7 +559,7 @@ async def _committed() -> set[str]:
 
 
 @contextlib.contextmanager
-def _connections_really_close():
+def _connections_really_close() -> Generator[None, None, None]:
     """Make a ``close()`` of the test database's connections actually close them.
 
     A no-op on the Postgres tier, where a close is always real. The default tier's
@@ -642,14 +644,16 @@ class _NoHttpApplication(ASGIHandler):
         raise AssertionError("the window rows serve no HTTP")
 
 
-def _window_router(schema: strawberry.Schema):
+def _window_router(schema: strawberry.Schema) -> DjangoGraphQLProtocolRouter:
     from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter
 
     return DjangoGraphQLProtocolRouter(schema, django_application=_NoHttpApplication())
 
 
 @contextlib.asynccontextmanager
-async def _socket(router: DjangoGraphQLProtocolRouter):
+async def _socket(
+    router: DjangoGraphQLProtocolRouter,
+) -> AsyncGenerator[_HygieneWebsocketCommunicator, None]:
     """One acknowledged ``graphql-transport-ws`` socket on ``router``."""
     communicator = _HygieneWebsocketCommunicator(
         router,
@@ -714,7 +718,7 @@ def _reported_name(frame: _JSONFrame) -> str | None:
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_another_sockets_message_mid_window_leaves_the_windows_write_committed():
+async def test_another_sockets_message_mid_window_leaves_the_windows_write_committed() -> None:
     """A message dispatched on an unrelated socket cannot close an open window's connection.
 
     Channels runs ``close_old_connections`` before dispatching every message, on
@@ -741,7 +745,7 @@ async def test_another_sockets_message_mid_window_leaves_the_windows_write_commi
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_client_complete_mid_window_never_strands_its_transaction():
+async def test_a_client_complete_mid_window_never_strands_its_transaction() -> None:
     """A client ``complete`` while the window is open cannot strand its transaction.
 
     Channels dispatches the ``complete`` frame only after the connection hygiene
@@ -789,7 +793,7 @@ async def test_a_client_complete_mid_window_never_strands_its_transaction():
 async def test_a_cancelled_window_ends_after_its_thread_and_the_next_mutation_commits(
     cancels: int,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A cancelled window's task ends only after its thread has left the window.
 
     Every cancellation lands while the window's thread is held in the pipeline,
@@ -836,7 +840,9 @@ async def test_a_cancelled_window_ends_after_its_thread_and_the_next_mutation_co
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_work_on_an_outer_thread_sensitive_contexts_thread_never_sees_the_window_open():
+async def test_work_on_an_outer_thread_sensitive_contexts_thread_never_sees_the_window_open() -> (
+    None
+):
     """An outer ``ThreadSensitiveContext`` does not put the window on its thread.
 
     Django's ASGI handler wraps each request in one, and a consumer may share one
@@ -864,7 +870,9 @@ async def test_work_on_an_outer_thread_sensitive_contexts_thread_never_sees_the_
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_connection_closed_inside_an_async_window_fails_the_field_and_writes_nothing():
+async def test_a_connection_closed_inside_an_async_window_fails_the_field_and_writes_nothing() -> (
+    None
+):
     """A window whose connection a node resolver closed reports an error, never the row.
 
     The consumer's ``touched`` field runs through Channels' ``database_sync_to_async``
@@ -888,7 +896,7 @@ async def test_a_connection_closed_inside_an_async_window_fails_the_field_and_wr
 
 
 @contextlib.contextmanager
-def _the_next_off_thread_connect(action: Callable[[], object]):
+def _the_next_off_thread_connect(action: Callable[[], object]) -> Generator[None, None, None]:
     """Run ``action`` inside the next connect a thread other than the loop's makes.
 
     Armed on entry, fired once. ``connection_created`` fires inside Django's
@@ -898,7 +906,7 @@ def _the_next_off_thread_connect(action: Callable[[], object]):
     """
     armed = [True]
 
-    def _on_connect(sender: object, connection: object, **kwargs: object):
+    def _on_connect(sender: object, connection: object, **kwargs: object) -> None:
         del sender, connection, kwargs
         if armed[0] and threading.current_thread() is not threading.main_thread():
             armed[0] = False
@@ -912,7 +920,7 @@ def _the_next_off_thread_connect(action: Callable[[], object]):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_window_cancelled_during_its_enter_still_exits_the_transaction_it_opened():
+async def test_a_window_cancelled_during_its_enter_still_exits_the_transaction_it_opened() -> None:
     """A cancellation landing while ``atomic.__enter__`` runs cannot leave that atomic open.
 
     The enter cannot be abandoned once its thread started it, so it completes
@@ -956,7 +964,9 @@ async def test_a_window_cancelled_during_its_enter_still_exits_the_transaction_i
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_window_whose_transaction_cannot_open_reports_the_failure_and_writes_nothing():
+async def test_a_window_whose_transaction_cannot_open_reports_the_failure_and_writes_nothing() -> (
+    None
+):
     """A failed enter leaves nothing to exit: the field reports the connect failure."""
     schema = _category_create_schema()
 
@@ -977,7 +987,7 @@ async def test_a_window_whose_transaction_cannot_open_reports_the_failure_and_wr
 
 
 @pytest.mark.django_db
-def test_an_async_window_under_a_blocked_sync_caller_nests_in_the_callers_transaction():
+def test_an_async_window_under_a_blocked_sync_caller_nests_in_the_callers_transaction() -> None:
     """Under ``async_to_sync`` the window runs on the waiting caller's thread and connection.
 
     asgiref sends thread-sensitive work to a sync caller blocked in
@@ -1000,7 +1010,7 @@ def test_an_async_window_under_a_blocked_sync_caller_nests_in_the_callers_transa
 
 
 @pytest.mark.django_db(transaction=True)
-def test_a_connection_closed_inside_a_sync_window_fails_the_field_and_writes_nothing():
+def test_a_connection_closed_inside_a_sync_window_fails_the_field_and_writes_nothing() -> None:
     """The sync mode applies the same closed-connection rule to its calling thread's window."""
     schema = _category_create_schema(touched=_close_old_connections_in_a_resolver)
     with _connections_really_close():
@@ -1020,7 +1030,7 @@ def test_a_connection_closed_inside_a_sync_window_fails_the_field_and_writes_not
 
 @pytest.mark.pg
 @pytest.mark.django_db(transaction=True)
-async def test_every_success_payload_under_steady_pings_is_a_committed_row():
+async def test_every_success_payload_under_steady_pings_is_a_committed_row() -> None:
     """Under a steady ping stream from another socket, no reported write is lost.
 
     No timing aid: one socket pings continuously while another runs ordinary
@@ -1051,7 +1061,7 @@ async def test_every_success_payload_under_steady_pings_is_a_committed_row():
     assert await _committed() == set(names)
 
 
-def test_execution_errors_reads_both_graphql_core_error_shapes():
+def test_execution_errors_reads_both_graphql_core_error_shapes() -> None:
     """``_execution_errors`` bridges the graphql-core 3.2.9 errors relocation.
 
     graphql-core < 3.2.9 exposes the located-error list as
@@ -1079,7 +1089,7 @@ def test_execution_errors_reads_both_graphql_core_error_shapes():
 
 
 @pytest.mark.django_db
-def test_unmarked_mutation_fields_and_introspection_execute_unwrapped():
+def test_unmarked_mutation_fields_and_introspection_execute_unwrapped() -> None:
     """Consumer-written mutation fields and ``__typename`` skip the transaction wrapper."""
     _declare_item_types()
     UpdateItem = _declare_update_mutation()
@@ -1119,7 +1129,7 @@ class _DeleteTargetOutFromUnder:
         _operation: str,
         _data: object,
         instance: product_models.Item | None = None,
-    ):
+    ) -> bool:
         if instance is not None:
             # Stand in for ANOTHER transaction's delete: the phased alias guard
             # polices consumer code (which is read-only pre-save), so the
@@ -1132,7 +1142,7 @@ class _DeleteTargetOutFromUnder:
 
 
 @pytest.mark.django_db
-def test_update_of_concurrently_deleted_row_returns_conflict_envelope():
+def test_update_of_concurrently_deleted_row_returns_conflict_envelope() -> None:
     """A forced update matching zero rows is the in-band ``conflict`` envelope, rolled back."""
     _declare_item_types()
     UpdateItem = _declare_update_mutation(permission_classes=[_DeleteTargetOutFromUnder])
@@ -1158,7 +1168,7 @@ def test_update_of_concurrently_deleted_row_returns_conflict_envelope():
 
 
 @pytest.mark.django_db
-def test_delete_of_concurrently_deleted_row_returns_conflict_envelope():
+def test_delete_of_concurrently_deleted_row_returns_conflict_envelope() -> None:
     """A delete whose target row vanished after locate is the ``conflict`` envelope."""
     _declare_item_types()
     DeleteItem = _declare_delete_mutation(permission_classes=[_DeleteTargetOutFromUnder])
@@ -1176,7 +1186,9 @@ def test_delete_of_concurrently_deleted_row_returns_conflict_envelope():
 
 
 @pytest.mark.django_db
-def test_missing_post_write_refetch_returns_conflict_envelope(monkeypatch: pytest.MonkeyPatch):
+def test_missing_post_write_refetch_returns_conflict_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A write whose pk re-fetch finds nothing returns ``conflict``, and rolls back."""
     from django_strawberry_framework.mutations import resolvers as mutation_resolvers
 
@@ -1208,7 +1220,7 @@ def test_missing_post_write_refetch_returns_conflict_envelope(monkeypatch: pytes
 # ===========================================================================
 
 
-def test_not_updated_exceptions_prefers_the_typed_signal(monkeypatch: pytest.MonkeyPatch):
+def test_not_updated_exceptions_prefers_the_typed_signal(monkeypatch: pytest.MonkeyPatch) -> None:
     """Django 6.0's per-model ``NotUpdated`` is caught by type; 5.2 falls back to DatabaseError."""
     typed_signal = getattr(product_models.Item, "NotUpdated", None)
     if typed_signal is not None:
@@ -1224,7 +1236,7 @@ def test_not_updated_exceptions_prefers_the_typed_signal(monkeypatch: pytest.Mon
 
 
 @pytest.mark.django_db
-def test_forced_update_conflict_requires_a_demonstrably_absent_row():
+def test_forced_update_conflict_requires_a_demonstrably_absent_row() -> None:
     """A zero-row signal with the row still present re-raises (not a conflict)."""
     item = _seed_item("StillThere")
     signal = DatabaseError("Forced update did not affect any rows.")
@@ -1233,7 +1245,7 @@ def test_forced_update_conflict_requires_a_demonstrably_absent_row():
 
 
 @pytest.mark.django_db
-def test_forced_update_conflict_maps_absent_row_to_conflict():
+def test_forced_update_conflict_maps_absent_row_to_conflict() -> None:
     """A zero-row signal with the row demonstrably gone is the ``conflict`` envelope."""
     item = _seed_item("Gone")
     product_models.Item._base_manager.filter(pk=item.pk).delete()
@@ -1244,7 +1256,7 @@ def test_forced_update_conflict_maps_absent_row_to_conflict():
 
 
 @pytest.mark.django_db
-def test_forced_update_conflict_requires_a_usable_transaction():
+def test_forced_update_conflict_requires_a_usable_transaction() -> None:
     """With the connection marked needs-rollback the original error propagates untouched."""
     item = _seed_item("Poisoned")
     signal = DatabaseError("some backend failure")
@@ -1260,7 +1272,7 @@ def test_forced_update_conflict_requires_a_usable_transaction():
 
 def test_forced_update_conflict_probe_failure_reraises_the_original(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The absence probe itself failing re-raises the ORIGINAL error, not the probe's."""
     signal = DatabaseError("the original failure")
 
@@ -1273,7 +1285,7 @@ def test_forced_update_conflict_probe_failure_reraises_the_original(
         forced_update_conflict_errors(product_models.Category(pk=1), "default", signal)
 
 
-def test_conflict_error_shape():
+def test_conflict_error_shape() -> None:
     error = conflict_error()
     assert error.field == "id"
     assert error.codes == ["conflict"]
@@ -1285,7 +1297,7 @@ def test_conflict_error_shape():
 
 
 @pytest.mark.django_db
-def test_visibility_hook_switching_aliases_fails_closed():
+def test_visibility_hook_switching_aliases_fails_closed() -> None:
     """A ``get_queryset`` hook re-routing to another alias is a loud refusal, not a write."""
 
     def _reroute(
@@ -1293,7 +1305,7 @@ def test_visibility_hook_switching_aliases_fails_closed():
         queryset: QuerySet[product_models.Item],
         _info: strawberry.Info,
         **_kwargs: object,
-    ):
+    ) -> QuerySet[product_models.Item]:
         return queryset.using("some_other_alias")
 
     _declare_item_types(item_get_queryset=classmethod(_reroute))
@@ -1312,20 +1324,22 @@ def test_visibility_hook_switching_aliases_fails_closed():
     assert item.name == "PinnedAlias"
 
 
-def test_pin_write_queryset_passes_unrouted_and_matching_querysets():
+def test_pin_write_queryset_passes_unrouted_and_matching_querysets() -> None:
     queryset = product_models.Item.objects.all()
     assert queryset_db(pin_write_queryset(queryset, "default")) == "default"
     routed = product_models.Item.objects.using("default")
     assert queryset_db(pin_write_queryset(routed, "default")) == "default"
 
 
-def test_pin_write_queryset_derives_the_owner_from_the_model():
+def test_pin_write_queryset_derives_the_owner_from_the_model() -> None:
     queryset = product_models.Item.objects.using("some_other_alias")
     with pytest.raises(ConfigurationError, match="Item get_queryset"):
         pin_write_queryset(queryset, "default")
 
 
-def test_check_instance_write_alias_fails_closed_on_divergence(monkeypatch: pytest.MonkeyPatch):
+def test_check_instance_write_alias_fails_closed_on_divergence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def _instance_sensitive(_model: object, **hints: object) -> str:
         return "shard_x" if hints.get("instance") is not None else "default"
 
@@ -1344,12 +1358,12 @@ def test_check_instance_write_alias_fails_closed_on_divergence(monkeypatch: pyte
     check_instance_write_alias(product_models.Item, "default", product_models.Item())
 
 
-def test_pipeline_scoped_queryset_is_a_passthrough_on_a_read_surface():
+def test_pipeline_scoped_queryset_is_a_passthrough_on_a_read_surface() -> None:
     queryset = product_models.Item.objects.all()
     assert pipeline_scoped_queryset(queryset, product_models.Item) is queryset
 
 
-def test_pipeline_scoped_queryset_pins_without_locking():
+def test_pipeline_scoped_queryset_pins_without_locking() -> None:
     with write_pipeline("default", lock=False):
         scoped = pipeline_scoped_queryset(
             product_models.Item.objects.all(),
@@ -1359,7 +1373,7 @@ def test_pipeline_scoped_queryset_pins_without_locking():
     assert scoped.query.select_for_update is False
 
 
-def test_pipeline_scoped_queryset_locks_through_the_base_manager():
+def test_pipeline_scoped_queryset_locks_through_the_base_manager() -> None:
     with write_pipeline("default", lock=True):
         scoped = pipeline_scoped_queryset(
             product_models.Item.objects.all(),
@@ -1371,7 +1385,7 @@ def test_pipeline_scoped_queryset_locks_through_the_base_manager():
     assert "In(Col(" in str(scoped.query.where)
 
 
-def test_pipeline_scoped_queryset_fails_closed_on_a_cross_alias_queryset():
+def test_pipeline_scoped_queryset_fails_closed_on_a_cross_alias_queryset() -> None:
     with (
         write_pipeline("default", lock=True),
         pytest.raises(ConfigurationError, match="pinned to alias"),
@@ -1382,18 +1396,18 @@ def test_pipeline_scoped_queryset_fails_closed_on_a_cross_alias_queryset():
         )
 
 
-def test_resolve_write_alias_model_less_default():
+def test_resolve_write_alias_model_less_default() -> None:
     assert resolve_write_alias(None) == "default"
 
 
-def test_require_write_pipeline_outside_the_pipeline_is_a_wiring_error():
+def test_require_write_pipeline_outside_the_pipeline_is_a_wiring_error() -> None:
     with pytest.raises(ConfigurationError, match="outside the write pipeline"):
         require_write_pipeline()
     with write_pipeline("default", lock=False):
         assert require_write_pipeline().alias == "default"
 
 
-def test_open_write_pipeline_nests_atomic_on_managed_alias():
+def test_open_write_pipeline_nests_atomic_on_managed_alias() -> None:
     """``open_write_pipeline`` opens ``transaction.atomic(using=<managed alias>)``."""
     from unittest.mock import patch
 
@@ -1405,13 +1419,13 @@ def test_open_write_pipeline_nests_atomic_on_managed_alias():
     captured: dict[str, object] = {}
 
     class _Atomic:
-        def __init__(self, using: str | None = None, **_kwargs: object):
+        def __init__(self, using: str | None = None, **_kwargs: object) -> None:
             captured["using"] = using
 
-        def __enter__(self):
+        def __enter__(self) -> Self:
             return self
 
-        def __exit__(self, *args: object):
+        def __exit__(self, *args: object) -> bool:
             return False
 
     class CreateItem(DjangoMutation):
@@ -1425,9 +1439,9 @@ def test_open_write_pipeline_nests_atomic_on_managed_alias():
             side_effect=_Atomic,
         ),
         managed_write_transaction("shard_b"),
+        open_write_pipeline(CreateItem) as using,
     ):
-        with open_write_pipeline(CreateItem) as using:
-            assert using == "shard_b"
+        assert using == "shard_b"
 
     assert captured["using"] == "shard_b"
 
@@ -1468,7 +1482,7 @@ class _FakeBarrierConnection:
         return _FakeBarrierCursor(self)
 
 
-def _with_fake_barrier_connection(alias: str, connection: object):
+def _with_fake_barrier_connection(alias: str, connection: object) -> None:
     connections.databases[alias] = dict(connections.databases["default"])
     # basedpyright: a stand-in connection carrying only the slots the code under test reads;
     # django-stubs types the connections values as BaseDatabaseWrapper
@@ -1481,7 +1495,7 @@ def _drop_fake_barrier_connection(alias: str) -> None:
     connections.databases.pop(alias, None)
 
 
-def test_enforce_read_only_barrier_postgresql_sets_transaction_read_only():
+def test_enforce_read_only_barrier_postgresql_sets_transaction_read_only() -> None:
     """PostgreSQL is armed with ``SET TRANSACTION READ ONLY``; the mode dies with the txn."""
     connection = _FakeBarrierConnection("postgresql")
     _with_fake_barrier_connection("ro_barrier_pg", connection)
@@ -1496,7 +1510,7 @@ def test_enforce_read_only_barrier_postgresql_sets_transaction_read_only():
         _drop_fake_barrier_connection("ro_barrier_pg")
 
 
-def test_enforce_read_only_barrier_sqlite_arms_and_restores_prior_query_only():
+def test_enforce_read_only_barrier_sqlite_arms_and_restores_prior_query_only() -> None:
     """SQLite reads the PRIOR ``query_only`` and restores exactly it (never a blind OFF)."""
     connection = _FakeBarrierConnection("sqlite", query_only=False)
     _with_fake_barrier_connection("ro_barrier_sqlite", connection)
@@ -1513,7 +1527,7 @@ def test_enforce_read_only_barrier_sqlite_arms_and_restores_prior_query_only():
         _drop_fake_barrier_connection("ro_barrier_sqlite")
 
 
-def test_enforce_read_only_barrier_sqlite_preserves_a_preexisting_read_only_flag():
+def test_enforce_read_only_barrier_sqlite_preserves_a_preexisting_read_only_flag() -> None:
     """A pre-existing ``query_only=ON`` (or an ENCLOSING barrier's arming) survives disarm.
 
     A blind ``PRAGMA query_only = OFF`` would clobber a pre-existing read-only setting and,
@@ -1533,7 +1547,7 @@ def test_enforce_read_only_barrier_sqlite_preserves_a_preexisting_read_only_flag
         _drop_fake_barrier_connection("ro_barrier_sqlite_nested")
 
 
-def test_enforce_read_only_barrier_fails_closed_on_unsupported_backend():
+def test_enforce_read_only_barrier_fails_closed_on_unsupported_backend() -> None:
     """A backend that cannot enforce read-only from an open atomic FAILS CLOSED (no arming)."""
     connection = _FakeBarrierConnection("mysql")
     _with_fake_barrier_connection("ro_barrier_mysql", connection)
@@ -1552,7 +1566,7 @@ def test_enforce_read_only_barrier_fails_closed_on_unsupported_backend():
 
 
 @pytest.mark.django_db
-def test_select_for_update_false_update_still_succeeds_unlocked():
+def test_select_for_update_false_update_still_succeeds_unlocked() -> None:
     """The explicit lock opt-out updates cleanly (weaker concurrency, same envelope contract)."""
     _declare_item_types()
     UpdateItem = _declare_update_mutation(select_for_update=False)
@@ -1570,7 +1584,7 @@ def test_select_for_update_false_update_still_succeeds_unlocked():
     assert item.name == "UnlockedUpdated"
 
 
-def test_model_flavor_meta_select_for_update_defaults_true_and_rejects_non_bool():
+def test_model_flavor_meta_select_for_update_defaults_true_and_rejects_non_bool() -> None:
     """The model flavor shares the row-lock validator: default True, non-bool refused."""
 
     class DefaultLocked(DjangoMutation):
@@ -1592,7 +1606,7 @@ def test_model_flavor_meta_select_for_update_defaults_true_and_rejects_non_bool(
                 select_for_update = "yes"
 
 
-def test_modelform_flavor_meta_select_for_update_defaults_true():
+def test_modelform_flavor_meta_select_for_update_defaults_true() -> None:
     from django import forms
 
     from django_strawberry_framework import DjangoModelFormMutation
@@ -1626,12 +1640,12 @@ class _TruthyNonBool:
         _operation: str,
         _data: object,
         _instance: object = None,
-    ):
+    ) -> str:
         return "yes"
 
 
 @pytest.mark.django_db
-def test_permission_class_returning_non_bool_is_a_configuration_error():
+def test_permission_class_returning_non_bool_is_a_configuration_error() -> None:
     _declare_item_types()
     UpdateItem = _declare_update_mutation(permission_classes=[_TruthyNonBool])
     schema = _mutation_schema(UpdateItem)
@@ -1649,7 +1663,7 @@ def test_permission_class_returning_non_bool_is_a_configuration_error():
 
 
 @pytest.mark.django_db
-def test_check_permission_override_returning_non_bool_is_a_configuration_error():
+def test_check_permission_override_returning_non_bool_is_a_configuration_error() -> None:
     _declare_item_types()
 
     class NonBoolCheck(DjangoMutation):
@@ -1666,7 +1680,7 @@ def test_check_permission_override_returning_non_bool_is_a_configuration_error()
             operation: str,
             data: object,
             instance: object = None,
-        ):
+        ) -> int:
             return 1  # truthy, not a bool
 
     schema = _mutation_schema(NonBoolCheck)
@@ -1683,7 +1697,7 @@ def test_check_permission_override_returning_non_bool_is_a_configuration_error()
     assert item.name == "StrictCheck"
 
 
-def test_has_perm_returning_non_bool_is_a_configuration_error():
+def test_has_perm_returning_non_bool_is_a_configuration_error() -> None:
     from types import SimpleNamespace
 
     from django_strawberry_framework.mutations.permissions import DjangoModelPermission
@@ -1691,7 +1705,7 @@ def test_has_perm_returning_non_bool_is_a_configuration_error():
     class _WeirdUser:
         is_authenticated = True
 
-        def has_perm(self, _codename: str):
+        def has_perm(self, _codename: str) -> str:
             return "granted"  # truthy, not a bool
 
     class UpdateItem(DjangoMutation):
@@ -1707,7 +1721,7 @@ def test_has_perm_returning_non_bool_is_a_configuration_error():
 
 
 @pytest.mark.django_db
-def test_forced_update_integrity_error_race_maps_to_the_constraint_envelope():
+def test_forced_update_integrity_error_race_maps_to_the_constraint_envelope() -> None:
     """A forced-update ``IntegrityError`` race is the ``"__all__"`` envelope on update.
 
     ``IntegrityError`` subclasses ``DatabaseError``, so under the Django 5.2
@@ -1748,7 +1762,7 @@ def test_forced_update_integrity_error_race_maps_to_the_constraint_envelope():
 # ---------------------------------------------------------------------------
 
 
-def test_is_read_only_sql_uses_a_comment_stripped_allow_list():
+def test_is_read_only_sql_uses_a_comment_stripped_allow_list() -> None:
     """Read-only classification is an ALLOW-list over the first comment-stripped token."""
     from django_strawberry_framework.utils.write_transaction import is_read_only_sql
 
@@ -1775,13 +1789,13 @@ def test_is_read_only_sql_uses_a_comment_stripped_allow_list():
     assert not is_read_only_sql("")
 
 
-def test_is_read_only_sql_uses_base_string_content_for_subclasses():
+def test_is_read_only_sql_uses_base_string_content_for_subclasses() -> None:
     """A string subclass cannot disguise write SQL as an allowed read token."""
     from django_strawberry_framework.utils.write_transaction import is_read_only_sql
 
     class DisguisedWriteSQL(str):
         @override
-        def __getitem__(self, key: SupportsIndex | slice):
+        def __getitem__(self, key: SupportsIndex | slice) -> str:
             if isinstance(key, slice):
                 return "SELECT 1"
             return str.__getitem__("SELECT 1", key)
@@ -1790,7 +1804,7 @@ def test_is_read_only_sql_uses_base_string_content_for_subclasses():
     assert not is_read_only_sql(sql)
 
 
-def test_is_read_only_sql_fails_closed_on_a_non_string_statement():
+def test_is_read_only_sql_fails_closed_on_a_non_string_statement() -> None:
     """A statement the classifier cannot read is never read-only, and reading it raises nothing.
 
     ``cursor.execute`` hands the guard whatever object the caller passed. A non-string
@@ -1802,7 +1816,7 @@ def test_is_read_only_sql_fails_closed_on_a_non_string_statement():
 
     class _HostileStr:
         @override
-        def __str__(self):
+        def __str__(self) -> str:
             raise RuntimeError("hostile __str__")
 
     assert is_read_only_sql(_HostileStr()) is False
@@ -1811,7 +1825,7 @@ def test_is_read_only_sql_fails_closed_on_a_non_string_statement():
 
 
 @pytest.mark.django_db
-def test_pinned_alias_guard_rejects_writes_outside_the_write_phase():
+def test_pinned_alias_guard_rejects_writes_outside_the_write_phase() -> None:
     """On the PINNED alias, write SQL is rejected in the read-only phase and allowed inside it."""
     from django.db import connection
 
@@ -1828,9 +1842,11 @@ def test_pinned_alias_guard_rejects_writes_outside_the_write_phase():
         # Write SQL outside the write phase fails closed. (Contained in a
         # savepoint so the rejection does not mark the TEST transaction broken -
         # in the real pipeline the error propagates and rolls the mutation back.)
-        with pytest.raises(ConfigurationError, match="OUTSIDE the mutation's write phase"):
-            with transaction.atomic():
-                product_models.Category.objects.create(name="PhaseCat")
+        with (
+            pytest.raises(ConfigurationError, match="OUTSIDE the mutation's write phase"),
+            transaction.atomic(),
+        ):
+            product_models.Category.objects.create(name="PhaseCat")
         assert not product_models.Category.objects.filter(name="PhaseCat").exists()
         # The SAME statement inside the write phase succeeds.
         with pipeline_write_phase():
@@ -1838,8 +1854,8 @@ def test_pinned_alias_guard_rejects_writes_outside_the_write_phase():
         assert product_models.Category.objects.filter(name="PhaseCat").exists()
 
 
-def test_pks_match_canonicalizes_through_the_pk_field():
-    """pk equality goes through the model pk field's ``to_python``, failing closed on garbage."""
+def test_pks_match_canonicalizes_through_the_pk_field() -> None:
+    """The ``pk`` equality goes through the model pk field's ``to_python``, failing closed on garbage."""
     import uuid
 
     from apps.kanban.models import UUIDModel
@@ -1860,13 +1876,13 @@ def test_pks_match_canonicalizes_through_the_pk_field():
     assert not pks_match(int_model, 5, 7)
 
 
-def test_reject_substituted_row_is_silent_when_pks_match():
+def test_reject_substituted_row_is_silent_when_pks_match() -> None:
     from django_strawberry_framework.utils.write_transaction import reject_substituted_row
 
     reject_substituted_row(product_models.Category, 5, "5", message="unused")
 
 
-def test_reject_substituted_row_raises_the_caller_message():
+def test_reject_substituted_row_raises_the_caller_message() -> None:
     from django_strawberry_framework.utils.write_transaction import reject_substituted_row
 
     with pytest.raises(ConfigurationError, match="never a substituted one"):
@@ -1879,7 +1895,7 @@ def test_reject_substituted_row_raises_the_caller_message():
 
 
 @pytest.mark.django_db
-def test_target_state_snapshot_and_drift_rejection():
+def test_target_state_snapshot_and_drift_rejection() -> None:
     """``assert_no_target_drift`` rejects mutated loaded fields; deferred fields never read as drift."""
     from django_strawberry_framework.utils.write_transaction import (
         assert_no_target_drift,
@@ -1920,7 +1936,7 @@ def test_target_state_snapshot_and_drift_rejection():
 
 
 @pytest.mark.django_db
-def test_snapshot_target_state_fingerprints_mutable_container_values():
+def test_snapshot_target_state_fingerprints_mutable_container_values() -> None:
     """A JSONField / ArrayField value is fingerprinted, so in-place mutation reads as drift."""
     from apps.scalars.models import ScalarSpecimen
 
@@ -1957,7 +1973,7 @@ def test_snapshot_target_state_fingerprints_mutable_container_values():
             assert_no_target_drift("JsonCycleMut", instance)
 
 
-def test_snapshot_target_state_captures_filefield_name_not_the_mutable_descriptor():
+def test_snapshot_target_state_captures_filefield_name_not_the_mutable_descriptor() -> None:
     """A FieldFile is snapshotted by its ``name``: an in-place name re-point reads as drift.
 
     ``FieldFile`` is a MUTABLE descriptor - a hook can assign ``instance.<file>.name`` on the
@@ -1990,7 +2006,7 @@ def test_snapshot_target_state_captures_filefield_name_not_the_mutable_descripto
 
 
 @pytest.mark.django_db
-def test_assert_no_target_drift_fails_closed_on_a_hostile_eq():
+def test_assert_no_target_drift_fails_closed_on_a_hostile_eq() -> None:
     """A planted value whose equality read detonates is the typed envelope, never raw.
 
     The code the drift check polices (a permission method / hook / validator) can
@@ -2008,11 +2024,11 @@ def test_assert_no_target_drift_fails_closed_on_a_hostile_eq():
 
     class _RaisingEq:
         @override
-        def __eq__(self, other: object):
+        def __eq__(self, other: object) -> NoReturn:
             raise RuntimeError("hostile __eq__")
 
         @override
-        def __hash__(self):
+        def __hash__(self) -> int:
             return 0
 
     category = product_models.Category.objects.create(name=_category_name())
@@ -2026,7 +2042,7 @@ def test_assert_no_target_drift_fails_closed_on_a_hostile_eq():
             assert_no_target_drift("GuardEqMut", item)
 
 
-def test_file_name_snapshot_fails_closed_on_a_hostile_replacement():
+def test_file_name_snapshot_fails_closed_on_a_hostile_replacement() -> None:
     """A non-``FieldFile`` replacement with a hostile ``__eq__`` reads as drift, not a raw escape.
 
     The name snapshot compares the replaced value raw when it is not a
@@ -2043,11 +2059,11 @@ def test_file_name_snapshot_fails_closed_on_a_hostile_replacement():
 
     class _RaisingEq:
         @override
-        def __eq__(self, other: object):
+        def __eq__(self, other: object) -> NoReturn:
             raise RuntimeError("hostile __eq__")
 
         @override
-        def __hash__(self):
+        def __hash__(self) -> int:
             return 0
 
     instance = product_models.Item(attachment="orig.png")
@@ -2064,7 +2080,7 @@ def test_file_name_snapshot_fails_closed_on_a_hostile_replacement():
 
 
 @pytest.mark.django_db
-def test_snapshot_fingerprint_is_iterative_and_budgeted():
+def test_snapshot_fingerprint_is_iterative_and_budgeted() -> None:
     """A pathologically DEEP field value fingerprints without RecursionError (iterative)."""
     from apps.scalars.models import ScalarSpecimen
 
@@ -2101,7 +2117,7 @@ def test_snapshot_fingerprint_is_iterative_and_budgeted():
         _field_fingerprint(list(range(_SNAPSHOT_NODE_BUDGET + 2)))
 
 
-def test_field_fingerprint_covers_container_kinds_and_is_deterministic():
+def test_field_fingerprint_covers_container_kinds_and_is_deterministic() -> None:
     """The fingerprint handles set / frozenset / bytes / tuple and is order-stable per structure."""
     from django_strawberry_framework.utils.write_transaction import _field_fingerprint
 
@@ -2122,7 +2138,7 @@ def test_field_fingerprint_covers_container_kinds_and_is_deterministic():
     assert _field_fingerprint(value) == _field_fingerprint(dict(value))
 
 
-def test_field_fingerprint_reads_hostile_containers_through_their_base_slots():
+def test_field_fingerprint_reads_hostile_containers_through_their_base_slots() -> None:
     """A container SUBCLASS cannot decide what the drift fingerprint sees.
 
     The fingerprint is one half of a security check whose other half recomputes
@@ -2135,29 +2151,29 @@ def test_field_fingerprint_reads_hostile_containers_through_their_base_slots():
 
     class _LyingList(list[object]):
         @override
-        def __iter__(self):
+        def __iter__(self) -> Iterator[int]:
             return iter([999])
 
         @override
-        def __reversed__(self):
+        def __reversed__(self) -> Iterator[int]:
             return iter([999])
 
     class _LyingDict(dict[str, object]):
         @override
         # basedpyright: deliberately lying views, the hooks the fingerprint must not dispatch through
-        def items(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+        def items(self) -> Iterator[tuple[str, int]]:  # pyright: ignore[reportIncompatibleMethodOverride]
             return iter([("spoofed", 999)])
 
         @override
         # basedpyright: deliberately lying views, the hooks the fingerprint must not dispatch through
-        def keys(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+        def keys(self) -> Iterator[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
             return iter(["spoofed"])
 
     assert _field_fingerprint(_LyingList([1, 2, 3])) == _field_fingerprint([1, 2, 3])
     assert _field_fingerprint(_LyingDict({"a": 1})) == _field_fingerprint({"a": 1})
 
 
-def test_field_fingerprint_orders_by_a_guarded_key_not_a_bare_repr():
+def test_field_fingerprint_orders_by_a_guarded_key_not_a_bare_repr() -> None:
     """A constant or raising ``__repr__`` cannot collapse or break the ordering.
 
     A bare ``repr`` sort key is two failures in one: a ``__repr__`` that raises
@@ -2169,16 +2185,16 @@ def test_field_fingerprint_orders_by_a_guarded_key_not_a_bare_repr():
     from django_strawberry_framework.utils.write_transaction import _field_fingerprint
 
     class _ConstantRepr:
-        def __init__(self, value: object):
+        def __init__(self, value: object) -> None:
             self.value = value
 
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             return "SAME"
 
     class _RaisingRepr:
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("hostile repr")
 
     # No raise, and the guarded placeholder still names the type.
@@ -2193,7 +2209,7 @@ def test_field_fingerprint_orders_by_a_guarded_key_not_a_bare_repr():
     )
 
 
-def test_field_fingerprint_rejects_a_reference_cycle():
+def test_field_fingerprint_rejects_a_reference_cycle() -> None:
     """A self-referential value is rejected by name, not by exhausting the node budget.
 
     Consumer code between the locate and the save can make a JSONField value
@@ -2214,7 +2230,7 @@ def test_field_fingerprint_rejects_a_reference_cycle():
         _field_fingerprint(nested)
 
 
-def test_field_fingerprint_admits_a_repeated_sibling_that_is_not_a_cycle():
+def test_field_fingerprint_admits_a_repeated_sibling_that_is_not_a_cycle() -> None:
     """The guard tracks the ACTIVE PATH, so a diamond is fine and only a cycle raises."""
     from django_strawberry_framework.utils.write_transaction import _field_fingerprint
 
@@ -2222,7 +2238,7 @@ def test_field_fingerprint_admits_a_repeated_sibling_that_is_not_a_cycle():
     assert _field_fingerprint([shared, shared]) == _field_fingerprint([{"a": 1}, {"a": 1}])
 
 
-def test_field_fingerprint_reads_atom_leaves_through_base_slots():
+def test_field_fingerprint_reads_atom_leaves_through_base_slots() -> None:
     """A scalar subclass's lying ``__repr__`` cannot forge another value's leaf.
 
     The write persists a leaf's BASE content (``json.dumps`` serializes the base
@@ -2251,7 +2267,7 @@ def test_field_fingerprint_reads_atom_leaves_through_base_slots():
     assert _field_fingerprint(["gold"]) == _field_fingerprint([shadow_str("gold")])
 
 
-def test_field_fingerprint_reads_bytes_through_their_base_buffer():
+def test_field_fingerprint_reads_bytes_through_their_base_buffer() -> None:
     """A ``bytes`` / ``bytearray`` subclass's raising ``__bytes__`` never runs.
 
     The byte-string leaf is read through the base buffer, never ``bytes(item)``
@@ -2262,11 +2278,11 @@ def test_field_fingerprint_reads_bytes_through_their_base_buffer():
 
     class _RaisingBytes(bytes):
         # basedpyright: bytes.__bytes__ exists from 3.11; @override fails the 3.10 floor pass
-        def __bytes__(self):  # pyright: ignore[reportImplicitOverride]
+        def __bytes__(self) -> bytes:  # pyright: ignore[reportImplicitOverride]
             raise RuntimeError("hostile __bytes__")
 
     class _RaisingBytearray(bytearray):
-        def __bytes__(self):
+        def __bytes__(self) -> bytes:
             raise RuntimeError("hostile bytearray __bytes__")
 
     assert _field_fingerprint([_RaisingBytes(b"secret")]) == _field_fingerprint([b"secret"])
@@ -2274,7 +2290,7 @@ def test_field_fingerprint_reads_bytes_through_their_base_buffer():
     assert _field_fingerprint([b"secret"]) != _field_fingerprint([b"tampered"])
 
 
-def test_field_fingerprint_distinguishes_opaque_objects_a_constant_repr_cannot_collapse():
+def test_field_fingerprint_distinguishes_opaque_objects_a_constant_repr_cannot_collapse() -> None:
     """Two distinct opaque objects with one constant ``__repr__`` fingerprint apart.
 
     A total ORDERING key alone is not enough: the LEAF must not render two
@@ -2287,11 +2303,11 @@ def test_field_fingerprint_distinguishes_opaque_objects_a_constant_repr_cannot_c
     from django_strawberry_framework.utils.write_transaction import _field_fingerprint
 
     class _ConstantRepr:
-        def __init__(self, value: object):
+        def __init__(self, value: object) -> None:
             self.value = value
 
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             return "SAME"
 
     first, second = _ConstantRepr(1), _ConstantRepr(2)
@@ -2300,7 +2316,7 @@ def test_field_fingerprint_distinguishes_opaque_objects_a_constant_repr_cannot_c
     assert _field_fingerprint([first, "x"]) == _field_fingerprint([first, "x"])
 
 
-def test_field_fingerprint_walks_dict_keys_as_nodes():
+def test_field_fingerprint_walks_dict_keys_as_nodes() -> None:
     """A dict key gets the same hostile-safe walk as a value, never a ``repr`` label.
 
     A ``repr`` key label is a second place a lying ``__repr__`` could forge the
@@ -2317,7 +2333,7 @@ def test_field_fingerprint_walks_dict_keys_as_nodes():
     assert _field_fingerprint({10: "x"}) != _field_fingerprint({"x": 10})
 
 
-def test_field_fingerprint_leaf_tokens_stay_type_tagged():
+def test_field_fingerprint_leaf_tokens_stay_type_tagged() -> None:
     """None / bool / float leaves keep their own type tags - 1, True, 1.0, and '1' never collide.
 
     The atom tags come from the base type that performed the content read, so a

@@ -154,7 +154,7 @@ async def _post_async_holder(
         clear_url_caches()
 
 
-def _seed_three_issues():
+def _seed_three_issues() -> None:
     periodical = models.Periodical.objects.create(name="Holder Journal")
     for number in (1, 2, 3):
         models.Issue.objects.create(
@@ -164,7 +164,7 @@ def _seed_three_issues():
         )
 
 
-def _seed_periodicals():
+def _seed_periodicals() -> tuple[models.Periodical, models.Periodical, models.Periodical]:
     """Two populated periodicals plus one empty; issue numbers repeat across them.
 
     Under the declared ``("-number", "id")`` order the root connection
@@ -203,7 +203,7 @@ def _titles(connection_payload: JSONObject) -> list[str]:
 
 
 @pytest.mark.django_db
-def test_root_keyset_first_page_orders_by_cursor_field():
+def test_root_keyset_first_page_orders_by_cursor_field() -> None:
     """The declared ``cursor_field`` IS the connection's default order (newest-first)."""
     _seed_periodicals()
     page = _root_page(first=3)
@@ -218,7 +218,7 @@ def test_root_keyset_first_page_orders_by_cursor_field():
 
 
 @pytest.mark.django_db
-def test_root_keyset_total_count_only_does_not_fetch_edges():
+def test_root_keyset_total_count_only_does_not_fetch_edges() -> None:
     """A ``totalCount``-only document counts the pre-pagination set and fetches no page rows."""
     _seed_periodicals()
     with CaptureQueriesContext(connection) as ctx:
@@ -233,7 +233,7 @@ def test_root_keyset_total_count_only_does_not_fetch_edges():
 
 
 @pytest.mark.django_db
-def test_root_keyset_cursors_are_deterministic():
+def test_root_keyset_cursors_are_deterministic() -> None:
     """Identical values under the same order mint identical cursor bytes across requests."""
     _seed_periodicals()
     first = _root_page(first=1)
@@ -247,7 +247,7 @@ def test_root_keyset_cursors_are_deterministic():
 
 
 @pytest.mark.django_db
-def test_root_keyset_round_trip_and_pre_seek_total_count():
+def test_root_keyset_round_trip_and_pre_seek_total_count() -> None:
     """``endCursor`` -> ``after:`` continues exactly; ``totalCount`` stays pre-seek."""
     _seed_periodicals()
     first_page = _root_page(first=3)
@@ -262,7 +262,7 @@ def test_root_keyset_round_trip_and_pre_seek_total_count():
 
 
 @pytest.mark.django_db
-def test_root_keyset_page_survives_inserts_and_deletes_before_cursor():
+def test_root_keyset_page_survives_inserts_and_deletes_before_cursor() -> None:
     """The motivating stability pin: mutations before the cursor cannot drift the page."""
     astronomy, _botany, _empty = _seed_periodicals()
     cursor = _root_page(first=3)["pageInfo"]["endCursor"]
@@ -295,7 +295,7 @@ def test_root_keyset_rejects_tampered_and_offset_cursors(kind: str) -> None:
 
 
 @pytest.mark.django_db
-def test_root_keyset_cursor_survives_a_secret_key_rotation_that_keeps_the_fallback():
+def test_root_keyset_cursor_survives_a_secret_key_rotation_that_keeps_the_fallback() -> None:
     """A live cursor keeps working across a ``SECRET_KEY`` rotation that declares the old key.
 
     Cursors are authenticated-encrypted with the deployment's ``SECRET_KEY``, so a
@@ -325,7 +325,7 @@ def test_root_keyset_cursor_survives_a_secret_key_rotation_that_keeps_the_fallba
 
 
 @pytest.mark.django_db
-def test_root_keyset_backward_pagination():
+def test_root_keyset_backward_pagination() -> None:
     """``last:`` and ``last:``+``before:`` page backward through the value order."""
     _seed_periodicals()
     tail = _root_page(last=2)
@@ -349,7 +349,7 @@ _ZERO_PAGE_INFO = {"hasNextPage": True, "startCursor": None, "endCursor": None}
 
 
 @pytest.mark.django_db
-def test_root_keyset_last_zero_serves_the_first_zero_page():
+def test_root_keyset_last_zero_serves_the_first_zero_page() -> None:
     """``last: 0`` is the ``first: 0`` page: no edges, ``first: 0``'s ``pageInfo``.
 
     Seeded past the Relay cap, so a page serving every row cannot pass.
@@ -373,7 +373,7 @@ def test_root_keyset_last_zero_serves_the_first_zero_page():
 
 
 @pytest.mark.django_db
-def test_root_keyset_last_zero_with_after_serves_the_first_zero_page():
+def test_root_keyset_last_zero_with_after_serves_the_first_zero_page() -> None:
     """``last: 0`` + ``after:`` is ``first: 0`` + the same ``after:``.
 
     No edges, the pre-seek ``totalCount``, and the value-domain flags ``first: 0``
@@ -408,7 +408,7 @@ query ($first: Int, $last: Int, $after: String) {
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("with_after", [False, True], ids=["no-cursor", "after"])
-def test_nested_keyset_last_zero_serves_the_first_zero_window(with_after: bool) -> None:
+def test_nested_keyset_last_zero_serves_the_first_zero_window(*, with_after: bool) -> None:
     """Nested ``last: 0`` is the planned ``first: 0`` keyset window over the same cursor.
 
     The same payload ``first: 0`` returns, served by the one batched window
@@ -440,7 +440,7 @@ def test_nested_keyset_last_zero_serves_the_first_zero_window(with_after: bool) 
 
 
 @pytest.mark.django_db
-def test_root_keyset_first_and_last_guard_still_applies():
+def test_root_keyset_first_and_last_guard_still_applies() -> None:
     """The package's first+last mutual-exclusivity guard precedes any slicing."""
     _seed_periodicals()
     response = _post_graphql(ROOT_PAGE_QUERY, variables={"first": 1, "last": 1})
@@ -461,7 +461,7 @@ query ($first: Int, $after: String) {
 
 
 @pytest.mark.django_db
-def test_root_keyset_order_by_mints_order_fingerprinted_cursors():
+def test_root_keyset_order_by_mints_order_fingerprinted_cursors() -> None:
     """An ``orderBy:`` page mints cursors bound to THAT order; replay elsewhere is rejected."""
     _seed_periodicals()
     data = _assert_graphql_success(ROOT_ORDERED_QUERY, variables={"first": 2})
@@ -488,8 +488,8 @@ def test_root_keyset_order_by_mints_order_fingerprinted_cursors():
 
 
 @pytest.mark.django_db
-def test_root_keyset_order_by_literal_string_none_title_round_trips():
-    """A real ``title == \"None\"`` row mints and seeks correctly (null is not encoded)."""
+def test_root_keyset_order_by_literal_string_none_title_round_trips() -> None:
+    """A real ``title == "None"`` row mints and seeks correctly (null is not encoded)."""
     astronomy, _botany, _empty = _seed_periodicals()
     models.Issue.objects.create(periodical=astronomy, number=80, title="None")
     models.Issue.objects.create(periodical=astronomy, number=81, title="None2")
@@ -515,7 +515,7 @@ def test_root_keyset_order_by_literal_string_none_title_round_trips():
 
 
 @pytest.mark.django_db
-def test_root_keyset_cursors_do_not_disclose_ordering_values():
+def test_root_keyset_cursors_do_not_disclose_ordering_values() -> None:
     """An ``orderBy:`` cursor's encrypted payload does not contain the ordering value."""
     astronomy, _botany, _empty = _seed_periodicals()
     sentinel = "cursor-secret-value"
@@ -560,7 +560,7 @@ def _nested_by_periodical(**variables: object) -> dict[str, JSONObject]:
 
 
 @pytest.mark.django_db
-def test_nested_keyset_window_is_one_batched_query():
+def test_nested_keyset_window_is_one_batched_query() -> None:
     """The counted keyset window stays a single batched prefetch (no per-parent N+1)."""
     _seed_periodicals()
     with CaptureQueriesContext(connection) as ctx:
@@ -577,7 +577,7 @@ def test_nested_keyset_window_is_one_batched_query():
 
 
 @pytest.mark.django_db
-def test_nested_keyset_after_uniform_value_position_and_pre_seek_totals():
+def test_nested_keyset_after_uniform_value_position_and_pre_seek_totals() -> None:
     """One ``after:`` cursor re-positions EVERY partition by value; totals stay pre-seek."""
     _seed_periodicals()
     astro_cursor = _nested_by_periodical(first=2)["Astronomy Weekly"]["pageInfo"]["endCursor"]
@@ -605,7 +605,7 @@ def test_nested_keyset_after_uniform_value_position_and_pre_seek_totals():
 
 
 @pytest.mark.django_db
-def test_nested_keyset_marker_distinguishes_pre_cursor_only_parents():
+def test_nested_keyset_marker_distinguishes_pre_cursor_only_parents() -> None:
     """A parent whose rows ALL precede the cursor serves an empty page with its true count."""
     _seed_periodicals()
     # Cursor past astro#2 (deep page): botany's numbers 3..1 all precede it? No -
@@ -623,7 +623,7 @@ def test_nested_keyset_marker_distinguishes_pre_cursor_only_parents():
 
 
 @pytest.mark.django_db
-def test_nested_keyset_count_free_page_uses_probe_not_partition_count():
+def test_nested_keyset_count_free_page_uses_probe_not_partition_count() -> None:
     """A ``hasNextPage``-only nested page runs count-free (seek in WHERE + n+1 probe)."""
     _seed_periodicals()
     astro_cursor = _nested_by_periodical(first=2)["Astronomy Weekly"]["pageInfo"]["endCursor"]
@@ -657,7 +657,7 @@ def test_nested_keyset_count_free_page_uses_probe_not_partition_count():
 
 
 @pytest.mark.django_db
-def test_nested_keyset_unselected_cursor_column_is_not_lazy_loaded_per_edge():
+def test_nested_keyset_unselected_cursor_column_is_not_lazy_loaded_per_edge() -> None:
     """A node selection omitting the cursor columns still mints cursors in ONE query.
 
     ``IssueType.cursor_field = ("-number", "id")``. When the node selection does
@@ -697,7 +697,7 @@ def test_nested_keyset_unselected_cursor_column_is_not_lazy_loaded_per_edge():
 
 
 @pytest.mark.django_db
-def test_nested_keyset_first_zero_serves_flags_from_markers():
+def test_nested_keyset_first_zero_serves_flags_from_markers() -> None:
     """``first: 0`` with a cursor: empty edges, true pre-seek count, value-domain flags."""
     _seed_periodicals()
     astro_cursor = _nested_by_periodical(first=2)["Astronomy Weekly"]["pageInfo"]["endCursor"]
@@ -713,7 +713,7 @@ def test_nested_keyset_first_zero_serves_flags_from_markers():
 
 
 @pytest.mark.django_db
-def test_nested_keyset_backward_falls_back_per_parent_with_same_cursors():
+def test_nested_keyset_backward_falls_back_per_parent_with_same_cursors() -> None:
     """``last:`` nested pages resolve per-parent through the SAME codec (parity)."""
     _seed_periodicals()
     query = """
@@ -754,7 +754,7 @@ query ($last: Int, $before: String) {
 
 
 @pytest.mark.django_db
-def test_nested_keyset_before_pages_backward_per_parent():
+def test_nested_keyset_before_pages_backward_per_parent() -> None:
     """Nested ``before:`` (head + interior) rides the per-parent fallback with root parity.
 
     Nested ``before:`` is unwindowable, so it falls back to the same
@@ -795,7 +795,7 @@ def test_nested_keyset_before_pages_backward_per_parent():
 
 
 @pytest.mark.django_db
-def test_nested_keyset_divergent_aliases_each_decode_their_own_cursor():
+def test_nested_keyset_divergent_aliases_each_decode_their_own_cursor() -> None:
     """Divergent aliased ``after:`` payloads window independently (per-key scheme)."""
     _seed_periodicals()
     first_pages = _nested_by_periodical(first=2)
@@ -821,7 +821,7 @@ def test_nested_keyset_divergent_aliases_each_decode_their_own_cursor():
 
 
 @pytest.mark.django_db
-def test_keyset_cursor_decode_is_permission_aware():
+def test_keyset_cursor_decode_is_permission_aware() -> None:
     """A staff-minted cursor replays for anonymous viewers over ONLY their rows."""
     astronomy, _botany, _empty = _seed_periodicals()
     models.Issue.objects.create(
@@ -850,7 +850,7 @@ def test_keyset_cursor_decode_is_permission_aware():
 
 
 @pytest.mark.django_db
-def test_root_keyset_order_by_related_path_seeks_via_annotation():
+def test_root_keyset_order_by_related_path_seeks_via_annotation() -> None:
     """A related-path ``orderBy:`` mints/seeks through the annotated join column."""
     _seed_periodicals()
     query = """
@@ -874,7 +874,7 @@ def test_root_keyset_order_by_related_path_seeks_via_annotation():
 
 
 @pytest.mark.django_db
-def test_root_keyset_unbounded_after_caps_at_relay_max_results():
+def test_root_keyset_unbounded_after_caps_at_relay_max_results() -> None:
     """``after:`` with no ``first`` mirrors ``ListConnection``'s max-results cap."""
     _seed_periodicals()
     cursor = _root_page(first=1)["pageInfo"]["endCursor"]
@@ -886,7 +886,7 @@ def test_root_keyset_unbounded_after_caps_at_relay_max_results():
 
 
 @pytest.mark.django_db
-def test_root_keyset_omitted_pagination_returns_the_full_set_under_the_cap():
+def test_root_keyset_omitted_pagination_returns_the_full_set_under_the_cap() -> None:
     """Omitting ``first`` / ``last`` / ``after`` / ``before`` serves every row under the Relay cap."""
     _seed_periodicals()
     data = _assert_graphql_success(
@@ -914,7 +914,7 @@ def test_root_keyset_omitted_pagination_returns_the_full_set_under_the_cap():
 
 
 @pytest.mark.django_db
-def test_nested_keyset_omitted_first_caps_at_relay_max_results():
+def test_nested_keyset_omitted_first_caps_at_relay_max_results() -> None:
     """Optimized nested pages apply the same default cap as the root slicer."""
     periodical = models.Periodical.objects.create(name="Large Periodical")
     for number in range(1, 106):
@@ -936,7 +936,7 @@ def test_nested_keyset_omitted_first_caps_at_relay_max_results():
 
 
 @pytest.mark.django_db
-def test_nested_keyset_window_hides_embargoed_rows_and_counts_them_out():
+def test_nested_keyset_window_hides_embargoed_rows_and_counts_them_out() -> None:
     """The keyset window is built from the SAME definition that answered the hook.
 
     ``PeriodicalType.issuesConnection`` is a synthesized relation connection in
@@ -973,7 +973,7 @@ def test_nested_keyset_window_hides_embargoed_rows_and_counts_them_out():
 
 
 @pytest.mark.django_db
-def test_nested_keyset_window_keeps_embargoed_rows_for_staff():
+def test_nested_keyset_window_keeps_embargoed_rows_for_staff() -> None:
     """The same window returns the embargoed issue first once the viewer is staff.
 
     The absence above is ``IssueType.get_queryset``'s non-staff branch running
@@ -990,9 +990,8 @@ def test_nested_keyset_window_keeps_embargoed_rows_for_staff():
     )
     staff = User.objects.create_user(username="nested-staff", password="pw", is_staff=True)
     client = TestClient()
-    with client.login(staff):
-        with CaptureQueriesContext(connection) as ctx:
-            payload = client.query(NESTED_QUERY, variables={"first": 2}).response.json()
+    with client.login(staff), CaptureQueriesContext(connection) as ctx:
+        payload = client.query(NESTED_QUERY, variables={"first": 2}).response.json()
     assert payload.get("errors") is None, payload
     by_name = {
         edge["node"]["name"]: edge["node"]["issuesConnection"]
@@ -1018,10 +1017,13 @@ query ($first: Int, $after: String) {
 
 
 @pytest.mark.django_db
-def test_keyset_list_source_is_rejected_over_http():
+def test_keyset_list_source_is_rejected_over_http() -> None:
     """A keyset connection resolver that returns a list is refused on the wire."""
 
-    def _list_resolver(_root: object, _info: strawberry.Info[object, object]):
+    def _list_resolver(
+        _root: object,
+        _info: strawberry.Info[object, object],
+    ) -> list[models.Issue]:
         return list(models.Issue.objects.all())
 
     _seed_three_issues()
@@ -1035,10 +1037,13 @@ def test_keyset_list_source_is_rejected_over_http():
 
 
 @pytest.mark.django_db
-def test_keyset_pre_sliced_source_is_rejected_over_http():
+def test_keyset_pre_sliced_source_is_rejected_over_http() -> None:
     """A keyset connection resolver that returns an already-sliced QuerySet is refused."""
 
-    def _sliced_resolver(_root: object, _info: strawberry.Info[object, object]):
+    def _sliced_resolver(
+        _root: object,
+        _info: strawberry.Info[object, object],
+    ) -> QuerySet[models.Issue]:
         return models.Issue.objects.all()[:5]
 
     payload = _post_holder(
@@ -1051,10 +1056,13 @@ def test_keyset_pre_sliced_source_is_rejected_over_http():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_keyset_first_page_slices_and_counts():
+async def test_async_keyset_first_page_slices_and_counts() -> None:
     """An async keyset field slices the first page through the async engine and ``acount``."""
 
-    async def _async_resolver(_root: object, _info: strawberry.Info[object, object]):
+    async def _async_resolver(
+        _root: object,
+        _info: strawberry.Info[object, object],
+    ) -> QuerySet[models.Issue]:
         return models.Issue.objects.all()
 
     await sync_to_async(_seed_three_issues)()
@@ -1071,10 +1079,13 @@ async def test_async_keyset_first_page_slices_and_counts():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_keyset_after_cursor_continues_the_page():
+async def test_async_keyset_after_cursor_continues_the_page() -> None:
     """A minted async keyset cursor round-trips on the same async field."""
 
-    async def _async_resolver(_root: object, _info: strawberry.Info[object, object]):
+    async def _async_resolver(
+        _root: object,
+        _info: strawberry.Info[object, object],
+    ) -> QuerySet[models.Issue]:
         return models.Issue.objects.all()
 
     await sync_to_async(_seed_three_issues)()
@@ -1092,10 +1103,13 @@ async def test_async_keyset_after_cursor_continues_the_page():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_keyset_total_count_only():
+async def test_async_keyset_total_count_only() -> None:
     """A totalCount-only async keyset query counts via ``acount`` and fetches no edges."""
 
-    async def _async_resolver(_root: object, _info: strawberry.Info[object, object]):
+    async def _async_resolver(
+        _root: object,
+        _info: strawberry.Info[object, object],
+    ) -> QuerySet[models.Issue]:
         return models.Issue.objects.all()
 
     await sync_to_async(_seed_three_issues)()
@@ -1108,10 +1122,13 @@ async def test_async_keyset_total_count_only():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_keyset_deferred_cursor_column_is_loaded():
+async def test_async_keyset_deferred_cursor_column_is_loaded() -> None:
     """Cursor minting on an async keyset field must not lazy-load a deferred order column."""
 
-    async def _async_resolver(_root: object, _info: strawberry.Info[object, object]):
+    async def _async_resolver(
+        _root: object,
+        _info: strawberry.Info[object, object],
+    ) -> QuerySet[models.Issue]:
         return models.Issue.objects.defer("number", "title")
 
     await sync_to_async(_seed_three_issues)()
@@ -1497,6 +1514,7 @@ def test_hook_ordered_single_parent_fast_path_pages_on() -> None:
 @pytest.mark.parametrize("shape", ["fk", "m2m"])
 def test_unanchorable_hook_order_raises_the_root_keyset_error_nested(
     shape: str,
+    *,
     optimizer: bool,
     strictness: str,
 ) -> None:
@@ -2148,6 +2166,7 @@ def test_one_relation_name_windowed_twice_keeps_each_windows_cursor_vocabulary()
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("desks_first", [True, False], ids=["desks-first", "specimens-first"])
 async def test_async_one_relation_name_windowed_twice_keeps_each_windows_cursor_vocabulary(
+    *,
     desks_first: bool,
 ) -> None:
     """The async twin: two concurrently planned root fields, each window paged by its own cursor.

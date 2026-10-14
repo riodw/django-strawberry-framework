@@ -25,6 +25,7 @@ registry-resolved ``DjangoTypeDefinition``:
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import NoReturn
 
 import pytest
 from apps.library.models import Book, Genre, Loan, Shelf
@@ -43,7 +44,7 @@ from django_strawberry_framework.types.definition import (
 pytestmark = pytest.mark.usefixtures("isolate_global_registry")
 
 
-def test_related_target_for_resolves_fk_m2m_and_reverse():
+def test_related_target_for_resolves_fk_m2m_and_reverse() -> None:
     """Forward FK, forward M2M, reverse FK, scalar, and missing-field cases."""
 
     class ShelfType(DjangoType):
@@ -109,7 +110,7 @@ def test_related_target_for_resolves_fk_m2m_and_reverse():
     assert book_definition.related_target_for("nonexistent_field") is None
 
 
-def test_related_target_for_resolves_one_to_one_relation():
+def test_related_target_for_resolves_one_to_one_relation() -> None:
     """Forward + reverse OneToOne both resolve via ``related_target_for``.
 
     Covers the canonical OneToOne pair declared in the fakeshop library
@@ -148,7 +149,7 @@ def test_related_target_for_resolves_one_to_one_relation():
     assert reverse_field.related_model is MembershipCard
 
 
-def test_related_target_for_returns_none_when_target_unregistered():
+def test_related_target_for_returns_none_when_target_unregistered() -> None:
     """A relation whose target ``DjangoType`` was never registered resolves to ``None``."""
 
     class BookType(DjangoType):
@@ -163,7 +164,12 @@ def test_related_target_for_returns_none_when_target_unregistered():
     assert definition.related_target_for("shelf") is None
 
 
-def _malformed_definition(*, origin: type = object, model: object = Book, name: object = None):
+def _malformed_definition(
+    *,
+    origin: type = object,
+    model: object = Book,
+    name: object = None,
+) -> DjangoTypeDefinition:
     """Build a directly constructed definition carrying malformed metadata.
 
     The constructor takes eleven arguments of which only three vary across
@@ -186,12 +192,12 @@ def _malformed_definition(*, origin: type = object, model: object = Book, name: 
     )
 
 
-def test_graphql_type_name_wraps_unreadable_origin_and_rejects_empty_name():
+def test_graphql_type_name_wraps_unreadable_origin_and_rejects_empty_name() -> None:
     """An unreadable origin name and an empty ``name`` are both typed failures."""
 
     class _HostileMeta(type):
         @override
-        def __getattribute__(cls, name: str):
+        def __getattribute__(cls, name: str) -> object:
             if name == "__name__":
                 raise RuntimeError("name exploded")
             return super().__getattribute__(name)
@@ -207,19 +213,19 @@ def test_graphql_type_name_wraps_unreadable_origin_and_rejects_empty_name():
 
 def test_related_target_lookup_degrades_malformed_model_and_relation_metadata(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Every unreadable step of the target walk degrades to ``None``, never an exception."""
 
     class _UnreadableRelationFlag:
         @property
-        def is_relation(self):
+        def is_relation(self) -> NoReturn:
             raise RuntimeError("relation flag exploded")
 
     class _UnreadableTarget:
         is_relation = True
 
         @property
-        def related_model(self):
+        def related_model(self) -> NoReturn:
             raise RuntimeError("target exploded")
 
     def _exploding_field(_name: str) -> object:
@@ -268,12 +274,12 @@ def test_related_target_lookup_degrades_malformed_model_and_relation_metadata(
     assert definition.related_target_for("relation") is None
 
 
-def test_custom_id_detection_fails_closed_for_hostile_class_metadata():
+def test_custom_id_detection_fails_closed_for_hostile_class_metadata() -> None:
     """Unreadable ``__mro__`` / ``__dict__`` metadata counts as a custom resolver."""
 
     class _HostileMroMeta(type):
         @override
-        def __getattribute__(cls, name: str):
+        def __getattribute__(cls, name: str) -> object:
             if name == "__mro__":
                 raise RuntimeError("mro exploded")
             return super().__getattribute__(name)
@@ -283,7 +289,7 @@ def test_custom_id_detection_fails_closed_for_hostile_class_metadata():
 
     class _HostileDictMeta(type):
         @override
-        def __getattribute__(cls, name: str):
+        def __getattribute__(cls, name: str) -> object:
             if name == "__dict__":
                 raise RuntimeError("dict exploded")
             return super().__getattribute__(name)
@@ -292,12 +298,12 @@ def test_custom_id_detection_fails_closed_for_hostile_class_metadata():
         pass
 
     class _UnreadableMro:
-        def __iter__(self):
+        def __iter__(self) -> NoReturn:
             raise RuntimeError("mro iteration exploded")
 
     class _UnreadableMroMeta(type):
         @override
-        def __getattribute__(cls, name: str):
+        def __getattribute__(cls, name: str) -> object:
             if name == "__mro__":
                 return _UnreadableMro()
             return super().__getattribute__(name)
@@ -308,8 +314,9 @@ def test_custom_id_detection_fails_closed_for_hostile_class_metadata():
     class _HostileClassProperty:
         @property
         @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is the guard's input
-        def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object
+        # is the guard's input
+        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
             raise RuntimeError("class exploded")
 
     assert origin_has_custom_id_resolver(_HostileMro, "id") is True
@@ -320,27 +327,27 @@ def test_custom_id_detection_fails_closed_for_hostile_class_metadata():
     assert origin_has_custom_id_resolver(_HostileClassProperty(), "id") is True  # pyright: ignore[reportArgumentType]
 
 
-def test_custom_id_detection_fails_closed_for_hostile_relay_resolver():
+def test_custom_id_detection_fails_closed_for_hostile_relay_resolver() -> None:
     """A ``resolve_id_attr`` that raises or returns a non-string counts as custom."""
 
     class _RaisingNode(relay.Node):
         @classmethod
         @override
-        def resolve_id_attr(cls):
+        def resolve_id_attr(cls) -> NoReturn:
             raise RuntimeError("resolver exploded")
 
     class _NonStringNode(relay.Node):
         @classmethod
         @override
         # basedpyright: deliberately a non-str id attribute, the hook result the resolver check refuses
-        def resolve_id_attr(cls):  # pyright: ignore[reportIncompatibleMethodOverride]
+        def resolve_id_attr(cls) -> int:  # pyright: ignore[reportIncompatibleMethodOverride]
             return 123
 
     assert origin_has_custom_id_resolver(_RaisingNode, "id") is True
     assert origin_has_custom_id_resolver(_NonStringNode, "id") is True
 
 
-def test_related_target_for_caches_resolved_pair_after_finalize():
+def test_related_target_for_caches_resolved_pair_after_finalize() -> None:
     """A second post-finalize lookup for the same field hits the memo cache."""
 
     class ShelfType(DjangoType):
@@ -365,11 +372,11 @@ def test_related_target_for_caches_resolved_pair_after_finalize():
     assert first is not None
 
 
-def test_has_custom_id_resolver_for_caches_mro_result():
+def test_has_custom_id_resolver_for_caches_mro_result() -> None:
     """Custom id resolver detection is memoized on the definition."""
 
     class BaseType:
-        def resolve_id(self):
+        def resolve_id(self) -> str:
             return "custom"
 
     class BookType(DjangoType, BaseType):
@@ -384,7 +391,7 @@ def test_has_custom_id_resolver_for_caches_mro_result():
     assert definition._custom_id_resolver_cache == {"id": True, "uuid": False}
 
 
-def test_has_custom_id_resolver_for_ignores_framework_relay_default():
+def test_has_custom_id_resolver_for_ignores_framework_relay_default() -> None:
     """Framework-installed Relay ``resolve_id`` does not count as consumer custom."""
 
     class BookType(DjangoType):
@@ -400,7 +407,7 @@ def test_has_custom_id_resolver_for_ignores_framework_relay_default():
     assert definition._custom_id_resolver_cache == {"id": False}
 
 
-def test_has_custom_id_resolver_for_ignores_inherited_relay_default():
+def test_has_custom_id_resolver_for_ignores_inherited_relay_default() -> None:
     """Inherited Strawberry Relay ``resolve_id`` does not count as consumer custom."""
 
     class BookType(DjangoType):
@@ -416,7 +423,7 @@ def test_has_custom_id_resolver_for_ignores_inherited_relay_default():
     assert definition._custom_id_resolver_cache == {"id": False}
 
 
-def test_has_custom_id_resolver_for_detects_non_id_pk_resolver():
+def test_has_custom_id_resolver_for_detects_non_id_pk_resolver() -> None:
     """A ``resolve_<pk>`` override for a non-``id`` pk column counts as custom.
 
     Exercises the ``name != "resolve_id"`` short-circuit: any consumer marker
@@ -428,7 +435,7 @@ def test_has_custom_id_resolver_for_detects_non_id_pk_resolver():
             model = Book
             fields = ("id", "title")
 
-        def resolve_uuid(self):
+        def resolve_uuid(self) -> str:
             return "custom"
 
     definition = BookType.__django_strawberry_definition__
@@ -437,7 +444,7 @@ def test_has_custom_id_resolver_for_detects_non_id_pk_resolver():
     assert definition._custom_id_resolver_cache == {"uuid": True}
 
 
-def test_has_custom_id_resolver_for_flags_non_pk_node_id():
+def test_has_custom_id_resolver_for_flags_non_pk_node_id() -> None:
     """A ``relay.NodeID`` on a non-pk column makes pk-only FK-id elision unsafe.
 
     The GlobalID derives from the annotated column (``code``), which the FK-id
@@ -460,7 +467,7 @@ def test_has_custom_id_resolver_for_flags_non_pk_node_id():
     assert definition._custom_id_resolver_cache == {"id": True}
 
 
-def test_has_custom_id_resolver_for_allows_pk_node_id():
+def test_has_custom_id_resolver_for_allows_pk_node_id() -> None:
     """A ``relay.NodeID`` on the pk column itself stays elision-eligible."""
 
     class BookType(DjangoType):
@@ -478,7 +485,7 @@ def test_has_custom_id_resolver_for_allows_pk_node_id():
     assert definition._custom_id_resolver_cache == {"id": False}
 
 
-def test_related_target_for_resolves_to_primary_when_two_types_share_target_model():
+def test_related_target_for_resolves_to_primary_when_two_types_share_target_model() -> None:
     """Two ``DjangoType``s registered for the same target model: the primary wins.
 
     Pins the consolidation contract relied upon at
@@ -523,7 +530,7 @@ def test_related_target_for_resolves_to_primary_when_two_types_share_target_mode
     assert shelf_definition is AdminShelfType.__django_strawberry_definition__
 
 
-def test_related_target_for_returns_none_for_generic_foreign_key():
+def test_related_target_for_returns_none_for_generic_foreign_key() -> None:
     """A ``GenericForeignKey`` is a relation with no ``related_model`` -> ``None``."""
     from apps.library.models import TaggedItem
 
@@ -539,7 +546,7 @@ def test_related_target_for_returns_none_for_generic_foreign_key():
     assert definition.related_target_for("content_object") is None
 
 
-def test_related_target_for_rejects_unhashable_field_names():
+def test_related_target_for_rejects_unhashable_field_names() -> None:
     """Malformed lookup names fail closed instead of leaking a dict-key TypeError."""
 
     class BookType(DjangoType):
@@ -551,16 +558,16 @@ def test_related_target_for_rejects_unhashable_field_names():
     assert BookType.__django_strawberry_definition__.related_target_for([]) is None
 
 
-def test_graphql_type_name_rejects_hostile_metadata():
+def test_graphql_type_name_rejects_hostile_metadata() -> None:
     """A malformed definition name raises a typed error with safe diagnostics."""
 
     class HostileName:
         @override
-        def __str__(self):
+        def __str__(self) -> str:
             raise RuntimeError("str should not escape")
 
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr should not escape")
 
     definition = _malformed_definition(origin=Book, name=HostileName())
@@ -571,14 +578,14 @@ def test_graphql_type_name_rejects_hostile_metadata():
         _ = definition.graphql_type_name
 
 
-def test_graphql_type_name_rejects_invalid_graphql_names():
+def test_graphql_type_name_rejects_invalid_graphql_names() -> None:
     """Directly constructed definitions preserve the GraphQL name contract."""
     definition = _malformed_definition(origin=Book, name="bad-name")
     with pytest.raises(ConfigurationError, match="valid GraphQL name"):
         _ = definition.graphql_type_name
 
 
-def test_custom_id_resolver_guards_reject_malformed_pk_names():
+def test_custom_id_resolver_guards_reject_malformed_pk_names() -> None:
     """Unhashable primary-key names cannot escape the FK-id safety checks."""
     definition = _malformed_definition(origin=Book)
     # basedpyright: the unhashable pk name is the hostile input under test;
@@ -589,18 +596,18 @@ def test_custom_id_resolver_guards_reject_malformed_pk_names():
     assert origin_has_custom_id_resolver(Book, []) is False  # pyright: ignore[reportArgumentType]
 
 
-def test_framework_id_resolver_guard_survives_hostile_descriptor():
+def test_framework_id_resolver_guard_survives_hostile_descriptor() -> None:
     """A broken ``__func__`` descriptor is treated as consumer-owned."""
 
     class HostileResolver:
         @property
-        def __func__(self):
+        def __func__(self) -> NoReturn:
             raise RuntimeError("descriptor should not escape")
 
     assert _is_framework_relay_id_resolver(HostileResolver()) is False
 
 
-def test_definition_equality_ignores_memoization_caches():
+def test_definition_equality_ignores_memoization_caches() -> None:
     """Internal memoization caches do not participate in dataclass equality."""
 
     class DummyType:
@@ -626,7 +633,7 @@ def test_definition_equality_ignores_memoization_caches():
     assert d1 == d2
 
 
-def test_custom_id_resolver_guards_reject_empty_pk_names():
+def test_custom_id_resolver_guards_reject_empty_pk_names() -> None:
     """Empty primary-key names fail closed without polluting cache."""
     definition = _malformed_definition(origin=Book)
     assert definition.has_custom_id_resolver_for("") is False

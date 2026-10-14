@@ -136,7 +136,7 @@ def _png_bytes() -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def test_assert_no_errors_default_raises_with_the_errors_list():
+def test_assert_no_errors_default_raises_with_the_errors_list() -> None:
     """The default gate raises on a real errors response; the message carries the errors.
 
     A real fakeshop request (an invalid selection is a validation error - no DB
@@ -152,7 +152,7 @@ def test_assert_no_errors_default_raises_with_the_errors_list():
     assert "nope" in str(excinfo.value)
 
 
-def test_wrong_configured_endpoint_surfaces_django_non_json_decode_error():
+def test_wrong_configured_endpoint_surfaces_django_non_json_decode_error() -> None:
     """A ``TESTING_ENDPOINT`` typo stays Django's source-level non-JSON ``ValueError``.
 
     The client deliberately does not replace the transport failure with a
@@ -160,18 +160,20 @@ def test_wrong_configured_endpoint_surfaces_django_non_json_decode_error():
     ``HttpResponse.json()`` names its ``text/html`` content type. This pins the
     public troubleshooting contract against the live URLconf.
     """
-    with override_settings(
-        DJANGO_STRAWBERRY_FRAMEWORK={"TESTING_ENDPOINT": "/missing-graphql-endpoint/"},
+    with (
+        override_settings(
+            DJANGO_STRAWBERRY_FRAMEWORK={"TESTING_ENDPOINT": "/missing-graphql-endpoint/"},
+        ),
+        pytest.raises(ValueError, match=r"Content-Type.*text/html"),
     ):
-        with pytest.raises(ValueError, match="Content-Type.*text/html"):
-            TestClient().query("{ __typename }")
+        TestClient().query("{ __typename }")
 
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("wrap", [MappingProxyType, UserDict], ids=["mappingproxy", "userdict"])
 def test_query_sends_a_non_dict_variables_mapping(
     wrap: Callable[[dict[str, object]], Mapping[str, object]],
-):
+) -> None:
     """A ``MappingProxyType`` / ``UserDict`` for ``variables=`` reaches the server as JSON.
 
     ``query()`` accepts any ``Mapping[str, object]``; the builder copies it to a
@@ -248,9 +250,9 @@ async def test_async_query_happy_path_and_raise_direction() -> None:
     assert "nope" in str(excinfo.value)
 
 
-async def test_async_wrong_endpoint_surfaces_the_same_non_json_decode_error():
+async def test_async_wrong_endpoint_surfaces_the_same_non_json_decode_error() -> None:
     """The async color preserves the sync client's source-level transport failure shape."""
-    with pytest.raises(ValueError, match="Content-Type.*text/html"):
+    with pytest.raises(ValueError, match=r"Content-Type.*text/html"):
         await AsyncTestClient("/missing-graphql-endpoint/").query("{ __typename }")
 
 
@@ -290,7 +292,7 @@ async def test_async_login_brackets_the_write_authorized_mutation(
 
 
 @pytest.mark.django_db
-def test_sync_login_bracket_logs_out_when_the_block_raises():
+def test_sync_login_bracket_logs_out_when_the_block_raises() -> None:
     """A raise inside ``with client.login(user)`` still clears the session on the wire.
 
     The clean-exit sync bracket lives in ``test_products_api.py``. This row is
@@ -446,11 +448,11 @@ class GraphQLTestCaseEndToEndTests(GraphQLTestCase):
     """``self.query(...)`` + both helpers + the per-call rung, end to end."""
 
     @override
-    def setUp(self):
+    def setUp(self) -> None:
         super().setUp()
         seed_data(1)
 
-    def test_seeded_query_via_self_client_passes_no_errors(self):
+    def test_seeded_query_via_self_client_passes_no_errors(self) -> None:
         res = self.query(
             "query Items { allItems(first: 1) { edges { node { name } } } }",
             operation_name="Items",
@@ -459,7 +461,7 @@ class GraphQLTestCaseEndToEndTests(GraphQLTestCase):
         assert res.data is not None
         assert len(res.data["allItems"]["edges"]) == 1
 
-    def test_invalid_query_returns_instead_of_raising_then_has_errors(self):
+    def test_invalid_query_returns_instead_of_raising_then_has_errors(self) -> None:
         # The mixin's flipped ``assert_no_errors=False`` default (graphene
         # parity): the errors response RETURNS for the helper to assert on.
         res = self.query("{ nope }")
@@ -467,7 +469,7 @@ class GraphQLTestCaseEndToEndTests(GraphQLTestCase):
         assert res.data is None
 
     @override_settings(ROOT_URLCONF=__name__)
-    def test_per_call_url_routes_to_the_probe_endpoint(self):
+    def test_per_call_url_routes_to_the_probe_endpoint(self) -> None:
         # Rung 1 end-to-end: a positive hit on the real schema view mounted at
         # the probe URLconf's ``/alt/``, not an exception shape. The marker
         # header is what makes the routing observable - ``/graphql/`` answers
@@ -490,11 +492,11 @@ class GraphQLTestCaseClassAttrEndpointTests(GraphQLTestCase):
     GRAPHQL_URL: str | None = "/alt/"
 
     @override
-    def setUp(self):
+    def setUp(self) -> None:
         super().setUp()
         seed_data(1)
 
-    def test_class_attr_endpoint_hits_the_real_view(self):
+    def test_class_attr_endpoint_hits_the_real_view(self) -> None:
         # Rung 3: the positive hit plus the marker header, which is what
         # distinguishes the class attribute having routed the request to
         # ``/alt/`` from a fall-back to ``/graphql/`` under the same URLconf.
@@ -509,11 +511,11 @@ class GraphQLTransactionTestCaseSmokeTests(GraphQLTransactionTestCase):
     """The ``(Mixin, TransactionTestCase)`` combination is wired end to end."""
 
     @override
-    def setUp(self):
+    def setUp(self) -> None:
         super().setUp()
         seed_data(1)
 
-    def test_one_clean_seeded_query_round_trips(self):
+    def test_one_clean_seeded_query_round_trips(self) -> None:
         res = self.query("query Items { allItems(first: 1) { edges { node { name } } } }")
         self.assertResponseNoErrors(res)
         assert res.data is not None

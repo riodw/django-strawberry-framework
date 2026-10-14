@@ -16,6 +16,7 @@ is earned in
 from __future__ import annotations
 
 from collections.abc import Callable, Coroutine, Iterable, Iterator
+from contextlib import AbstractContextManager
 from typing import NoReturn
 from unittest import mock
 
@@ -61,11 +62,11 @@ class _IsAuthenticated:
         _operation: str,
         _data: object,
         instance: object = None,
-    ):
+    ) -> bool:
         return instance is not None
 
 
-def _declare_user_type():
+def _declare_user_type() -> type:
     """Register a fresh Relay-backed primary ``DjangoType`` over the user model."""
     return type(
         "UserT",
@@ -103,20 +104,20 @@ def _me_schema(
 class _FakeConsumer:
     """The ``consumer`` half of Strawberry's ``ChannelsRequest`` duck shape."""
 
-    def __init__(self, scope: dict[str, object]):
+    def __init__(self, scope: dict[str, object]) -> None:
         self.scope = scope
 
 
 class _FakeChannelsRequest:
     """A ``ChannelsRequest``-shaped object: ``consumer.scope`` + request attrs."""
 
-    def __init__(self, scope: dict[str, object]):
+    def __init__(self, scope: dict[str, object]) -> None:
         self.consumer = _FakeConsumer(scope)
         self.headers = {}
         self.method = "POST"
 
 
-def _channels_context(scope: dict[str, object]):
+def _channels_context(scope: dict[str, object]) -> dict[str, _FakeChannelsRequest]:
     """A Strawberry-Channels mapping context (spec-041) that resolves to the adapter."""
     return {"request": _FakeChannelsRequest(scope)}
 
@@ -124,7 +125,7 @@ def _channels_context(scope: dict[str, object]):
 _ME_Q = "{ me { username } }"
 
 
-def test_alias_namespace_rides_make_input_namespace_and_the_pre_bind_row():
+def test_alias_namespace_rides_make_input_namespace_and_the_pre_bind_row() -> None:
     """The alias is a ``make_input_namespace``-owned emit artifact with a pre-bind row."""
     assert clear_current_user_alias_namespace in iter_subsystem_clears(before_bind=True)
 
@@ -141,7 +142,7 @@ def test_alias_namespace_rides_make_input_namespace_and_the_pre_bind_row():
     assert _current_user_alias_names == {CURRENT_USER_ALIAS_NAME: user_type}
 
 
-def test_current_user_only_bind_emits_no_login_logout_payloads():
+def test_current_user_only_bind_emits_no_login_logout_payloads() -> None:
     """The surface-keyed bind: a me-only schema materializes the alias and nothing else."""
     _me_schema()
     assert "LoginPayload" not in _materialized_names
@@ -149,7 +150,7 @@ def test_current_user_only_bind_emits_no_login_logout_payloads():
     assert CURRENT_USER_ALIAS_NAME in _current_user_alias_names
 
 
-def test_current_user_only_schema_without_user_type_raises_its_own_arm():
+def test_current_user_only_schema_without_user_type_raises_its_own_arm() -> None:
     """The current-user arm's auth-specific message, distinct from login's."""
 
     @strawberry.type
@@ -163,7 +164,7 @@ def test_current_user_only_schema_without_user_type_raises_its_own_arm():
         finalize_django_types()
 
 
-def test_conflicting_current_user_gates_raise_the_one_declaration_error():
+def test_conflicting_current_user_gates_raise_the_one_declaration_error() -> None:
     current_user()
     with pytest.raises(ConfigurationError, match=r"auth current_user\(\) is already declared"):
         current_user(permission_classes=[_IsAuthenticated])
@@ -172,7 +173,7 @@ def test_conflicting_current_user_gates_raise_the_one_declaration_error():
 @pytest.mark.django_db
 def test_sync_me_dispatch_never_enters_the_async_boundary(
     sync_boundary_spy: list[Callable[..., object]],
-):
+) -> None:
     """``execute_sync`` ``me`` runs the native sync body with no event-loop bridge."""
     schema = _me_schema()
     user = User.objects.create_user(username="me_sync", password="pw-9x-strong")
@@ -186,7 +187,7 @@ def test_sync_me_dispatch_never_enters_the_async_boundary(
 @pytest.mark.django_db(transaction=True)
 async def test_async_me_dispatch_awaits_the_native_async_body_exactly_once(
     sync_boundary_spy: list[Callable[..., object]],
-):
+) -> None:
     """``await schema.execute`` ``me`` awaits the native async body exactly once."""
     schema = _me_schema()
     user = await User.objects.acreate_user(username="me_async", password="pw-9x-strong")
@@ -198,7 +199,7 @@ async def test_async_me_dispatch_awaits_the_native_async_body_exactly_once(
 
 
 @pytest.mark.django_db
-def test_me_accepts_a_regular_mapping_context_with_a_django_request():
+def test_me_accepts_a_regular_mapping_context_with_a_django_request() -> None:
     """A direct ``Schema.execute`` mapping context carries its Django request to ``me``."""
     schema = _me_schema()
     user = User.objects.create_user(username="mapping_me", password="pw-9x-strong")
@@ -211,7 +212,7 @@ def test_me_accepts_a_regular_mapping_context_with_a_django_request():
 
 
 @pytest.mark.django_db
-def test_me_is_null_not_a_crash_when_the_request_user_is_absent():
+def test_me_is_null_not_a_crash_when_the_request_user_is_absent() -> None:
     """An absent request user is anonymous -> ``null``, never a ``'NoneType'`` crash.
 
     ``request.user`` is ``None`` for a Strawberry-Channels
@@ -256,7 +257,7 @@ def test_me_is_null_not_a_crash_when_the_request_user_is_absent():
 
 
 @pytest.mark.django_db
-def test_hostile_user_descriptor_raising_collapses_to_anonymous_null():
+def test_hostile_user_descriptor_raising_collapses_to_anonymous_null() -> None:
     """Hostile ``request.user`` / ``is_authenticated`` raising TypeError/ValueError collapses to ``null``.
 
     Exception containment (hunt 0.0.14): a hostile descriptor or a hostile
@@ -274,7 +275,7 @@ def test_hostile_user_descriptor_raising_collapses_to_anonymous_null():
         @override
         # basedpyright: the hostile shape under test, a ``user`` property whose read raises; the
         # checker rejects any property overriding a base class attribute
-        def user(self):  # pyright: ignore[reportIncompatibleVariableOverride]
+        def user(self) -> NoReturn:  # pyright: ignore[reportIncompatibleVariableOverride]
             raise TypeError("hostile user getter")
 
     schema = _me_schema()
@@ -287,7 +288,7 @@ def test_hostile_user_descriptor_raising_collapses_to_anonymous_null():
 
     class HostileIsAuth:
         @property
-        def is_authenticated(self):
+        def is_authenticated(self) -> NoReturn:
             raise ValueError("hostile is_authenticated")
 
     req = RequestFactory().post("/graphql/")
@@ -303,19 +304,19 @@ def test_hostile_user_descriptor_raising_collapses_to_anonymous_null():
     # / ``__len__`` raises is the fourth contained shape (the read succeeds;
     # the classification's ``if is_authenticated:`` evaluation raises).
     class _BoolRaisingValue:
-        def __bool__(self):
+        def __bool__(self) -> bool:
             raise ValueError("hostile truthiness")
 
     class _LenOnlyRaiser:
-        def __len__(self):
+        def __len__(self) -> int:
             raise TypeError("hostile len truthiness")
 
     class HostileBoolValueUser:
-        def __init__(self):
+        def __init__(self) -> None:
             self.is_authenticated = _BoolRaisingValue()
 
     class HostileLenValueUser:
-        def __init__(self):
+        def __init__(self) -> None:
             self.is_authenticated = _LenOnlyRaiser()
 
     bool_req = RequestFactory().post("/graphql/")
@@ -338,7 +339,7 @@ def test_hostile_user_descriptor_raising_collapses_to_anonymous_null():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_hostile_truthiness_collapses_to_anonymous_null():
+async def test_async_hostile_truthiness_collapses_to_anonymous_null() -> None:
     """Async parity for the fourth contained shape (hunt 0.0.15).
 
     The async body bridges to the SAME sync body inside the ONE
@@ -349,11 +350,11 @@ async def test_async_hostile_truthiness_collapses_to_anonymous_null():
     """
 
     class _BoolRaisingValue:
-        def __bool__(self):
+        def __bool__(self) -> bool:
             raise TypeError("hostile async truthiness")
 
     class _LenOnlyRaiser:
-        def __len__(self):
+        def __len__(self) -> int:
             raise ValueError("hostile async len truthiness")
 
     schema = _me_schema()
@@ -377,7 +378,7 @@ async def test_async_hostile_truthiness_collapses_to_anonymous_null():
     assert res2.data["me"] is None
 
 
-def test_current_user_hostile_directives_raise_configuration_error():
+def test_current_user_hostile_directives_raise_configuration_error() -> None:
     """A hostile ``directives`` iterable or a bare string must raise ``ConfigurationError``."""
 
     class HostileIter(tuple[object, ...]):
@@ -392,7 +393,7 @@ def test_current_user_hostile_directives_raise_configuration_error():
         current_user(directives="oops")
 
 
-def _legacy_callable_user(outcome: Callable[[], object]):
+def _legacy_callable_user(outcome: Callable[[], object]) -> AbstractContextManager[object]:
     """Patch the concrete user model's ``is_authenticated`` into a pre-1.10 CALLABLE.
 
     ``mock.patch.object`` deletes the shadowing attribute on exit because the
@@ -402,14 +403,14 @@ def _legacy_callable_user(outcome: Callable[[], object]):
     return type is the concrete ``UserT``, and GraphQL rejects anything else.
     """
 
-    def _is_authenticated(_self: object):
+    def _is_authenticated(_self: object) -> object:
         return outcome()
 
     return mock.patch.object(User, "is_authenticated", _is_authenticated)
 
 
 @pytest.mark.django_db
-def test_legacy_callable_is_authenticated_is_called_and_authenticates():
+def test_legacy_callable_is_authenticated_is_called_and_authenticates() -> None:
     """A legacy ``is_authenticated()`` returning true resolves to the actor, not ``null``."""
     User.objects.create_user(username="legacy", password="pw")
     schema = _me_schema()
@@ -425,7 +426,7 @@ def test_legacy_callable_is_authenticated_is_called_and_authenticates():
 
 
 @pytest.mark.django_db
-def test_legacy_callable_is_authenticated_returning_false_is_anonymous():
+def test_legacy_callable_is_authenticated_returning_false_is_anonymous() -> None:
     """A legacy ``is_authenticated()`` returning false is the anonymous ``null``."""
     User.objects.create_user(username="legacy-off", password="pw")
     schema = _me_schema()
@@ -460,7 +461,7 @@ def test_legacy_callable_is_authenticated_returning_false_is_anonymous():
 )
 def test_legacy_callable_is_authenticated_raising_collapses_to_anonymous_null(
     raised: type[Exception],
-):
+) -> None:
     """A legacy ``is_authenticated()`` raising any of the five shapes collapses to ``null``.
 
     The CALL is a third hostile surface alongside the ``request.user`` and
@@ -472,7 +473,7 @@ def test_legacy_callable_is_authenticated_raising_collapses_to_anonymous_null(
     req = RequestFactory().post("/graphql/")
     req.user = User.objects.get(username="legacy-hostile")
 
-    def _raise():
+    def _raise() -> NoReturn:
         raise raised("hostile is_authenticated()")
 
     with _legacy_callable_user(_raise):
@@ -484,7 +485,7 @@ def test_legacy_callable_is_authenticated_raising_collapses_to_anonymous_null(
 
 
 @pytest.mark.django_db
-def test_awaitable_is_authenticated_is_closed_and_read_as_anonymous():
+def test_awaitable_is_authenticated_is_closed_and_read_as_anonymous() -> None:
     """A NON-callable awaitable ``is_authenticated`` is closed and read as anonymous.
 
     A pending coroutine is neither true nor false; leaving it unawaited would
@@ -492,7 +493,7 @@ def test_awaitable_is_authenticated_is_closed_and_read_as_anonymous():
     it and classifies the request as anonymous.
     """
 
-    async def _pending():  # closed, never awaited
+    async def _pending() -> bool:  # closed, never awaited
         return True
 
     coro = _pending()
@@ -515,7 +516,7 @@ def test_awaitable_is_authenticated_is_closed_and_read_as_anonymous():
 
 
 @pytest.mark.django_db
-def test_legacy_callable_returning_an_awaitable_is_closed_and_read_as_anonymous():
+def test_legacy_callable_returning_an_awaitable_is_closed_and_read_as_anonymous() -> None:
     """A legacy ``is_authenticated()`` returning a coroutine is closed, not awaited."""
     captured: list[Coroutine[object, object, bool]] = []
 
@@ -543,7 +544,7 @@ def test_legacy_callable_returning_an_awaitable_is_closed_and_read_as_anonymous(
 
 
 @pytest.mark.django_db
-def test_gated_me_denies_the_anonymous_caller_with_the_exact_pinned_string():
+def test_gated_me_denies_the_anonymous_caller_with_the_exact_pinned_string() -> None:
     """An ``IsAuthenticated``-style gate turns anonymous ``null`` into the ``GraphQLError``."""
     schema = _me_schema(permission_classes=[_IsAuthenticated])
     denied = schema.execute_sync(_ME_Q, context_value=_session_request())
@@ -558,7 +559,7 @@ def test_gated_me_denies_the_anonymous_caller_with_the_exact_pinned_string():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_gated_me_forces_the_lazy_user_inside_the_one_sync_boundary():
+async def test_async_gated_me_forces_the_lazy_user_inside_the_one_sync_boundary() -> None:
     """The gate's ``instance=request.user`` forces the ``SimpleLazyObject`` in-boundary.
 
     The spec-040 Decision 10 async gate: computing the gate argument forces the lazy

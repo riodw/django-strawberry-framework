@@ -7,6 +7,8 @@ from apps.products.services import delete_data
 
 
 class Command(BaseCommand):
+    """Delete seeded catalog rows by count, ``all``, or ``everything``."""
+
     help = (
         "Delete data from the database. "
         "Pass an integer to delete the first N items, "

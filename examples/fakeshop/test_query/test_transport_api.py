@@ -73,7 +73,7 @@ go through the shared helpers.
 import asyncio
 import contextlib
 import json
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, ParamSpec, TypeVar, overload
 
 import pytest
@@ -164,7 +164,7 @@ class _SentinelMiddleware:
     def __init__(self, get_response: Callable[[HttpRequest], HttpResponseBase]) -> None:
         self.get_response = get_response
 
-    def __call__(self, request: HttpRequest):
+    def __call__(self, request: HttpRequest) -> HttpResponseBase:
         _MIDDLEWARE_PATHS.append(request.path)
         response = self.get_response(request)
         response[_SENTINEL_HEADER] = "1"
@@ -194,12 +194,12 @@ class _LatinOneEncodingMiddleware:
     def __init__(self, get_response: Callable[[HttpRequest], HttpResponseBase]) -> None:
         self.get_response = get_response
 
-    def __call__(self, request: HttpRequest):
+    def __call__(self, request: HttpRequest) -> HttpResponseBase:
         request.encoding = self.encoding
         return self.get_response(request)
 
 
-def _with_a_middleware_that_sets_the_encoding():
+def _with_a_middleware_that_sets_the_encoding() -> override_settings:
     """``override_settings`` adding :class:`_LatinOneEncodingMiddleware` innermost.
 
     Derived from the project's real ``MIDDLEWARE`` rather than a hand-written list,
@@ -223,7 +223,7 @@ def _with_a_middleware_that_sets_the_encoding():
 # ---------------------------------------------------------------------------
 
 
-def _ide_off_view(request: HttpRequest, *args: object, **kwargs: object):
+def _ide_off_view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
     """The package view with the IDE and GET queries both turned off (row 7)."""
     from config.schema import schema
 
@@ -235,7 +235,11 @@ def _ide_off_view(request: HttpRequest, *args: object, **kwargs: object):
     return view(request, *args, **kwargs)
 
 
-def _production_profile_view(request: HttpRequest, *args: object, **kwargs: object):
+def _production_profile_view(
+    request: HttpRequest,
+    *args: object,
+    **kwargs: object,
+) -> HttpResponseBase:
     """The documented production mount, assembled exactly as the guide's recipe.
 
     ``docs/README.md``'s "Production security profile" section tells a deployment
@@ -263,7 +267,11 @@ def _production_profile_view(request: HttpRequest, *args: object, **kwargs: obje
     return view(request, *args, **kwargs)
 
 
-async def _async_graphql_view(request: HttpRequest, *args: object, **kwargs: object):
+async def _async_graphql_view(
+    request: HttpRequest,
+    *args: object,
+    **kwargs: object,
+) -> HttpResponseBase:
     """The async twin, mounted so Django dispatches it on the event loop."""
     from config.schema import schema
 
@@ -308,7 +316,7 @@ class _ParseSpyView(DjangoGraphQLView):
     """
 
     @override
-    def parse_json(self, data: str | bytes):
+    def parse_json(self, data: str | bytes) -> object:
         _PARSE_CALLS.append(data)
         return super().parse_json(data)
 
@@ -330,7 +338,7 @@ class _SetupLimitedView(DjangoGraphQLView):
     """Derive the mount's request cap from Django's per-request setup lifecycle."""
 
     @override
-    def setup(self, request: HttpRequest, *args: object, **kwargs: int):
+    def setup(self, request: HttpRequest, *args: object, **kwargs: int) -> None:
         super().setup(request, *args, **kwargs)
         _SETUP_CALLS.append(request.path)
         self.max_request_body_bytes = kwargs["limit"]
@@ -379,7 +387,12 @@ def _carrying_the_packages_csrf_mark(
     return decorate
 
 
-def _capped_view(view_class: type[DjangoGraphQLView], limit: int, *, uploads: bool = False):
+def _capped_view(
+    view_class: type[DjangoGraphQLView],
+    limit: int,
+    *,
+    uploads: bool = False,
+) -> Callable[..., HttpResponseBase]:
     """A request-time-resolving mount of ``view_class`` with the cap pinned.
 
     Resolving the schema per request mirrors ``_ide_off_view`` above: it keeps
@@ -394,7 +407,7 @@ def _capped_view(view_class: type[DjangoGraphQLView], limit: int, *, uploads: bo
     """
 
     @_carrying_the_packages_csrf_mark(view_class)
-    def view(request: HttpRequest, *args: object, **kwargs: object):
+    def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         from config.schema import schema
 
         built = view_class.as_view(
@@ -408,7 +421,11 @@ def _capped_view(view_class: type[DjangoGraphQLView], limit: int, *, uploads: bo
 
 
 @_carrying_the_packages_csrf_mark(AsyncDjangoGraphQLView)
-async def _async_capped_multipart_view(request: HttpRequest, *args: object, **kwargs: object):
+async def _async_capped_multipart_view(
+    request: HttpRequest,
+    *args: object,
+    **kwargs: object,
+) -> HttpResponseBase:
     """The async view with uploads on and a roomy cap, for the async wire rows.
 
     Spelled out rather than produced by ``_capped_view`` for the same reason
@@ -428,7 +445,11 @@ async def _async_capped_multipart_view(request: HttpRequest, *args: object, **kw
 
 
 @_carrying_the_packages_csrf_mark(AsyncDjangoGraphQLView)
-async def _async_cap_misconfigured_view(request: HttpRequest, *args: object, **kwargs: object):
+async def _async_cap_misconfigured_view(
+    request: HttpRequest,
+    *args: object,
+    **kwargs: object,
+) -> HttpResponseBase:
     """The async twin of ``cap-misconfigured/``: a cap value the resolver refuses.
 
     Spelled out rather than produced by ``_capped_view`` for the same reason
@@ -441,7 +462,11 @@ async def _async_cap_misconfigured_view(request: HttpRequest, *args: object, **k
     return await view(request, *args, **kwargs)
 
 
-async def _async_cap_tiny_view(request: HttpRequest, *args: object, **kwargs: object):
+async def _async_cap_tiny_view(
+    request: HttpRequest,
+    *args: object,
+    **kwargs: object,
+) -> HttpResponseBase:
     """The async twin under the tiny cap, so the ``async def run`` override is proven live.
 
     Spelled out rather than produced by ``_capped_view`` for the same reason
@@ -455,7 +480,11 @@ async def _async_cap_tiny_view(request: HttpRequest, *args: object, **kwargs: ob
 
 
 @_carrying_the_packages_csrf_mark(AsyncDjangoGraphQLView)
-async def _async_cap_tiny_multipart_view(request: HttpRequest, *args: object, **kwargs: object):
+async def _async_cap_tiny_multipart_view(
+    request: HttpRequest,
+    *args: object,
+    **kwargs: object,
+) -> HttpResponseBase:
     """The async twin under the tiny cap with uploads on, for the ordering rows.
 
     The async colour of ``multipart-tiny/``: an over-cap multipart request has to
@@ -472,7 +501,11 @@ async def _async_cap_tiny_multipart_view(request: HttpRequest, *args: object, **
     return await view(request, *args, **kwargs)
 
 
-def _upstream_graphql_view(request: HttpRequest, *args: object, **kwargs: object):
+def _upstream_graphql_view(
+    request: HttpRequest,
+    *args: object,
+    **kwargs: object,
+) -> HttpResponseBase:
     """Strawberry's OWN sync view, mounted as the negative witness for the patch gate.
 
     Not a package surface and never recommended - it exists so one row can show
@@ -547,7 +580,7 @@ def _post(
     path: str = "/graphql/",
     variables: Mapping[str, object] | None = None,
     **extra: Unpack[_PostExtra],
-):
+) -> "_MonkeyPatchedWSGIResponse":
     """Raw JSON GraphQL POST, so a row can own the client, the host, or the scheme."""
     body: dict[str, object] = {"query": query}
     if variables is not None:
@@ -555,7 +588,11 @@ def _post(
     return _post_bytes(client, json.dumps(body), path=path, **extra)
 
 
-def _sized_body(size: int, query: str = _TYPENAME, variables: Mapping[str, object] | None = None):
+def _sized_body(
+    size: int,
+    query: str = _TYPENAME,
+    variables: Mapping[str, object] | None = None,
+) -> str:
     """A valid GraphQL request body of EXACTLY ``size`` bytes.
 
     The padding key is inert - Strawberry ignores unknown top-level members - so
@@ -574,7 +611,7 @@ def _sized_body(size: int, query: str = _TYPENAME, variables: Mapping[str, objec
     return raw
 
 
-def _user_who_can_add_categories():
+def _user_who_can_add_categories() -> User:
     """A ``view_category_1`` actor holding ``add_category``, ready to authorize a write.
 
     No ``create_users`` user holds a write permission by default and ``staff_1``
@@ -592,7 +629,7 @@ def _user_who_can_add_categories():
     return User.objects.get(pk=user.pk)  # drop the stale per-request perm cache
 
 
-def _assert_body_limit_response(response: "_TestResponse"):
+def _assert_body_limit_response(response: "_TestResponse") -> None:
     """The package's own ``413``: the exact reason, ``text/plain``, no envelope.
 
     Pinning the literal reason is what distinguishes the package's ceiling from
@@ -661,16 +698,16 @@ def _asgi_post(
     ]
     sent: list[Mapping[str, object]] = []
 
-    async def receive():
+    async def receive() -> Mapping[str, object]:
         if pending:
             return pending.pop(0)
         await asyncio.Event().wait()
         raise AssertionError("unreachable: the handler cancels this await")
 
-    async def send(message: Mapping[str, object]):
+    async def send(message: Mapping[str, object]) -> None:
         sent.append(message)
 
-    async def drive():
+    async def drive() -> None:
         await handler(scope, receive, send)
 
     asyncio.run(drive())
@@ -769,7 +806,7 @@ class _RecordingUploadHandler(MemoryFileUploadHandler):
     )
 
 
-def _recording_upload_handlers():
+def _recording_upload_handlers() -> override_settings:
     """``override_settings`` for the sentinel handler, by dotted path.
 
     The path resolves because pytest has already put this module in
@@ -782,12 +819,13 @@ def _recording_upload_handlers():
 
 
 # basedpyright: Django calls CSRF_FAILURE_VIEW with reason= by keyword
-def _csrf_failure_probe(_request: HttpRequest, reason: str = ""):  # pyright: ignore[reportUnusedParameter]
+def _csrf_failure_probe(_request: HttpRequest, reason: str = "") -> HttpResponseForbidden:
     """A custom ``CSRF_FAILURE_VIEW``, so one row can prove the setting still fires."""
+    del reason  # Django passes it by keyword; the probe answers every failure the same way
     return HttpResponseForbidden(b"probe-csrf-failure")
 
 
-def _csrf_token(path: str = "/graphql/"):
+def _csrf_token(path: str = "/graphql/") -> str:
     """A usable CSRF token, minted the way Django mints one for a real client.
 
     The same round trip ``_asgi_post`` performs: the value goes into the
@@ -797,7 +835,7 @@ def _csrf_token(path: str = "/graphql/"):
     return get_token(RequestFactory().get(path))
 
 
-def _multipart_content_type(charset: str | None = None):
+def _multipart_content_type(charset: str | None = None) -> str:
     """The declared ``Content-Type`` for a hand-built multipart body."""
     content_type = f"multipart/form-data; boundary={_MULTIPART_BOUNDARY}"
     if charset is not None:
@@ -808,7 +846,7 @@ def _multipart_content_type(charset: str | None = None):
 def _multipart_bytes(
     fields: Iterable[tuple[str, bytes]],
     files: Iterable[tuple[str, str, bytes]] = (),
-):
+) -> bytes:
     """A multipart body over exactly the given raw bytes.
 
     ``fields`` and ``files`` are ``(name, raw)`` / ``(name, filename, raw)``
@@ -913,7 +951,7 @@ def _post_multipart(
     )
 
 
-def _operations_bytes(*, note: bytes = b"plain", operation_name: bytes | None = None):
+def _operations_bytes(*, note: bytes = b"plain", operation_name: bytes | None = None) -> bytes:
     """A serialized ``operations`` control document with two byte-exact slots.
 
     ``note`` is an inert top-level member - Strawberry ignores unknown members,
@@ -930,7 +968,7 @@ def _operations_bytes(*, note: bytes = b"plain", operation_name: bytes | None = 
     return document + b"}"
 
 
-def _assert_multipart_control_document_refused(response: "_TestResponse"):
+def _assert_multipart_control_document_refused(response: "_TestResponse") -> None:
     """The package's refusal for a control document it will not read as JSON.
 
     Pinning the reason is what makes the row a statement about the wire contract:
@@ -945,7 +983,7 @@ def _assert_multipart_control_document_refused(response: "_TestResponse"):
     _assert_no_graphql_envelope(response)
 
 
-def _assert_no_graphql_envelope(response: "_TestResponse"):
+def _assert_no_graphql_envelope(response: "_TestResponse") -> None:
     """The response is Django's own, produced BEFORE the schema ever ran.
 
     The load-bearing half of every row whose subject is a boundary Django owns -
@@ -964,7 +1002,7 @@ def _assert_no_graphql_envelope(response: "_TestResponse"):
 
 
 @pytest.mark.django_db
-def test_project_middleware_executes_on_the_graphql_http_route():
+def test_project_middleware_executes_on_the_graphql_http_route() -> None:
     """Row 1: a consumer middleware sees the GraphQL request and shapes its response.
 
     Asserting the recorded PATH is what makes this a proof about the GraphQL
@@ -992,7 +1030,7 @@ def test_project_middleware_executes_on_the_graphql_http_route():
 
 
 @pytest.mark.django_db
-def test_security_middleware_headers_ride_the_graphql_response():
+def test_security_middleware_headers_ride_the_graphql_response() -> None:
     """Row 2: ``SecurityMiddleware`` decorates the GraphQL response like any other.
 
     Nosniff and the referrer policy are Django's defaults under fakeshop's
@@ -1021,7 +1059,7 @@ def test_security_middleware_headers_ride_the_graphql_response():
 
 
 @pytest.mark.django_db
-def test_a_hostile_host_header_is_rejected_before_the_schema_runs():
+def test_a_hostile_host_header_is_rejected_before_the_schema_runs() -> None:
     """Row 3: a hostile ``Host`` gets Django's ``400``, not a GraphQL envelope.
 
     ``ALLOWED_HOSTS`` is set explicitly so the row never depends on fakeshop's
@@ -1056,7 +1094,7 @@ def test_a_hostile_host_header_is_rejected_before_the_schema_runs():
 def test_csrf_is_enforced_on_a_cookie_authenticated_graphql_mutation(
     token_mode: str,
     expected_status: int,
-):
+) -> None:
     """Row 4: all three CSRF directions on a real write, under a cookie session.
 
     ``Client(enforce_csrf_checks=True)`` turns off the test client's usual CSRF
@@ -1099,7 +1137,7 @@ def test_csrf_is_enforced_on_a_cookie_authenticated_graphql_mutation(
 
 
 @pytest.mark.django_db
-def test_an_authenticated_get_varies_on_cookie():
+def test_an_authenticated_get_varies_on_cookie() -> None:
     """Row 5: an authenticated GraphQL GET is not blindly cacheable.
 
     ``Vary: Cookie`` is deterministic on this mount from two directions:
@@ -1126,7 +1164,7 @@ def test_an_authenticated_get_varies_on_cookie():
 
 
 @pytest.mark.django_db
-def test_routing_policy_is_djangos_urlconf_not_the_routers():
+def test_routing_policy_is_djangos_urlconf_not_the_routers() -> None:
     """Row 6: exact match at ``/graphql/``, ``APPEND_SLASH`` at ``/graphql``, ``404`` beyond.
 
     The ``301`` on a POST to ``/graphql`` is the documented policy the migration
@@ -1160,7 +1198,7 @@ def test_routing_policy_is_djangos_urlconf_not_the_routers():
 
 
 @pytest.mark.django_db
-def test_graphql_ide_and_get_queries_can_be_turned_off_on_the_package_view():
+def test_graphql_ide_and_get_queries_can_be_turned_off_on_the_package_view() -> None:
     """Row 7: ``graphql_ide=None`` and ``allow_queries_via_get=False`` are supported.
 
     Proven against a second mount of the package view through the Probe URLconf,
@@ -1203,7 +1241,7 @@ def test_graphql_ide_and_get_queries_can_be_turned_off_on_the_package_view():
 
 
 @pytest.mark.django_db
-def test_the_production_profile_mount_refuses_introspection_and_still_serves_operations():
+def test_the_production_profile_mount_refuses_introspection_and_still_serves_operations() -> None:
     """The documented production mount works as one unit, not only knob by knob.
 
     ``graphql_ide=None`` and ``allow_queries_via_get=False`` are proven
@@ -1260,7 +1298,7 @@ def test_the_production_profile_mount_refuses_introspection_and_still_serves_ope
 # ---------------------------------------------------------------------------
 
 
-async def test_the_async_package_view_runs_inside_djangos_middleware_chain():
+async def test_the_async_package_view_runs_inside_djangos_middleware_chain() -> None:
     """``AsyncDjangoGraphQLView`` answers a real request with the security headers on.
 
     The async colour of rows 1-2: Django dispatches the coroutine view directly
@@ -1282,7 +1320,7 @@ async def test_the_async_package_view_runs_inside_djangos_middleware_chain():
     assert response.headers["X-Content-Type-Options"] == "nosniff"
 
 
-async def test_the_async_package_view_enforces_the_same_utf8_wire_contract():
+async def test_the_async_package_view_enforces_the_same_utf8_wire_contract() -> None:
     """The async colour of rows 19 / 22 / 23: non-UTF-8 request JSON is a 400 here too.
 
     The sync half of this contract runs over ``/graphql/`` in
@@ -1322,12 +1360,12 @@ async def test_the_async_package_view_enforces_the_same_utf8_wire_contract():
     assert control.json()["data"] == {"__typename": "Query"}
 
 
-async def test_the_async_package_view_parses_a_multibyte_utf8_body_unchanged():
-    """The contract is UTF-8, not ASCII: a multi-byte body reaches the schema intact.
+async def test_the_async_package_view_parses_a_multibyte_utf8_body_unchanged() -> None:
+    r"""The contract is UTF-8, not ASCII: a multi-byte body reaches the schema intact.
 
     The positive control the rejection rows above need, and it has to be built
     deliberately: ``json.dumps``'s default ``ensure_ascii=True`` emits
-    ``\\u00e9`` escapes, so an ordinary body is pure ASCII and would round-trip
+    ``\u00e9`` escapes, so an ordinary body is pure ASCII and would round-trip
     even under a decoder that only understood ASCII. This one carries a genuine
     ``C3 A9`` on the wire - asserted before the post - and the value comes back
     out of the response, so the bytes were neither mangled at the decode nor
@@ -1368,7 +1406,7 @@ async def test_the_async_package_view_parses_a_multibyte_utf8_body_unchanged():
 async def test_the_async_package_view_hands_sync_hooks_an_evaluated_session_actor(
     username: str | None,
     expected_cities: list[str],
-):
+) -> None:
     """A sync ``get_queryset`` reading ``request.user`` sees the session actor on the async view.
 
     ``BranchType.get_queryset`` is a plain sync hook whose staff split reads
@@ -1408,7 +1446,7 @@ async def test_the_async_package_view_hands_sync_hooks_an_evaluated_session_acto
 
 
 @pytest.mark.django_db
-def test_the_package_view_serves_an_ordinary_graphql_response():
+def test_the_package_view_serves_an_ordinary_graphql_response() -> None:
     """The mounted package view is a drop-in: the shared live helpers work unchanged.
 
     Guards the swap in ``config/urls.py`` itself - every sibling live suite posts
@@ -1440,7 +1478,10 @@ def test_the_package_view_serves_an_ordinary_graphql_response():
     ],
 )
 @pytest.mark.django_db
-def test_a_declared_body_is_capped_at_the_configured_limit(size: int, expected_status: int):
+def test_a_declared_body_is_capped_at_the_configured_limit(
+    size: int,
+    expected_status: int,
+) -> None:
     """Row 13/14: a valid JSON operation below and AT the cap runs; above it gets ``413``.
 
     The ``at`` and ``one-byte-above`` rows are the pair that pins the comparison
@@ -1472,7 +1513,7 @@ def test_a_declared_body_is_capped_at_the_configured_limit(size: int, expected_s
 @pytest.mark.django_db
 def test_on_wsgi_a_missing_or_understated_content_length_shrinks_the_body_it_cannot_grow_it(
     content_length: str,
-):
+) -> None:
     """Row 13, WSGI colour: the declared length cannot UNDERSTATE what the app receives.
 
     Django's ``LimitedStream`` truncates reads at the declared length, so an
@@ -1508,7 +1549,7 @@ def test_on_wsgi_a_missing_or_understated_content_length_shrinks_the_body_it_can
 def test_on_asgi_an_absent_or_lying_content_length_cannot_buy_a_larger_body(
     extra_headers: tuple[tuple[bytes, bytes], ...],
     case_id: str,
-):
+) -> None:
     """Row 13, ASGI colour: the COUNTED check is what bounds an undeclared body.
 
     This is the shape the declared gate structurally cannot see. Django's ASGI
@@ -1542,7 +1583,7 @@ def test_on_asgi_an_absent_or_lying_content_length_cannot_buy_a_larger_body(
     assert body == _BODY_LIMIT_REASON.encode()
 
 
-def test_a_body_arriving_in_several_asgi_fragments_is_capped_on_the_cumulative_total():
+def test_a_body_arriving_in_several_asgi_fragments_is_capped_on_the_cumulative_total() -> None:
     """Row 13: *cumulative* - three individually-legal fragments that together are not.
 
     Each fragment is comfortably under the cap; only their sum crosses it. The
@@ -1580,7 +1621,7 @@ def test_a_body_arriving_in_several_asgi_fragments_is_capped_on_the_cumulative_t
 
 
 @pytest.mark.django_db
-def test_malformed_json_over_the_cap_gets_413_and_under_it_still_gets_400():
+def test_malformed_json_over_the_cap_gets_413_and_under_it_still_gets_400() -> None:
     """Row 14/15: the cap outranks the parse, and the discrimination proves it ran.
 
     The same malformed bytes produce two different failures depending only on
@@ -1605,7 +1646,7 @@ def test_malformed_json_over_the_cap_gets_413_and_under_it_still_gets_400():
 
 
 @pytest.mark.django_db
-def test_post_not_json_body_is_upstreams_malformed_json_400():
+def test_post_not_json_body_is_upstreams_malformed_json_400() -> None:
     """POST `{not json` to `/graphql/` is upstream's parse 400, byte for byte.
 
     The GET `?variables={not json` twin lives in ``test_products_api.py``; this
@@ -1625,7 +1666,7 @@ def test_post_not_json_body_is_upstreams_malformed_json_400():
 
 
 @pytest.mark.django_db
-def test_a_multipart_request_over_the_declared_cap_is_refused():
+def test_a_multipart_request_over_the_declared_cap_is_refused() -> None:
     """Row 14: multipart gets the declared-size gate (Decision 7 step 3).
 
     The declared gate is the whole of this card's multipart contract: per-file
@@ -1650,7 +1691,7 @@ def test_a_multipart_request_over_the_declared_cap_is_refused():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_an_over_cap_mutation_is_rejected_before_any_parse_or_schema_execution():
+def test_an_over_cap_mutation_is_rejected_before_any_parse_or_schema_execution() -> None:
     """Row 15: two negative witnesses, made meaningful by an under-cap control.
 
     The rejected request is a **valid** ``createCategory`` mutation - it would
@@ -1709,7 +1750,7 @@ def test_an_over_cap_mutation_is_rejected_before_any_parse_or_schema_execution()
 
 
 @pytest.mark.django_db
-def test_the_two_body_ceilings_are_distinguishable_by_the_response_they_produce():
+def test_the_two_body_ceilings_are_distinguishable_by_the_response_they_produce() -> None:
     """Row 16: the package cap vs Django's ``DATA_UPLOAD_MAX_MEMORY_SIZE``, both directions.
 
     Package direction: the tiny mount rejects with the package's own ``413`` and
@@ -1747,7 +1788,7 @@ def test_the_two_body_ceilings_are_distinguishable_by_the_response_they_produce(
 
 
 @pytest.mark.django_db
-def test_the_view_kwarg_beats_the_setting_on_a_real_request():
+def test_the_view_kwarg_beats_the_setting_on_a_real_request() -> None:
     """Row 17: two mounts, one setting, one body - only the kwarg differs.
 
     A generous project-wide setting does not loosen a mount that pinned its own
@@ -1773,7 +1814,7 @@ def test_the_view_kwarg_beats_the_setting_on_a_real_request():
 
 
 @pytest.mark.django_db
-def test_the_setting_beats_the_default_on_a_real_request():
+def test_the_setting_beats_the_default_on_a_real_request() -> None:
     """Row 17: a small setting caps fakeshop's own mount, which declares no kwarg.
 
     The default is 1 MiB, so this body would sail through without the setting -
@@ -1790,7 +1831,7 @@ def test_the_setting_beats_the_default_on_a_real_request():
 
 
 @pytest.mark.django_db
-def test_a_none_setting_disables_the_package_cap_that_the_default_would_apply():
+def test_a_none_setting_disables_the_package_cap_that_the_default_would_apply() -> None:
     """Row 17: ``MAX_REQUEST_BODY_BYTES = None`` disables the package cap.
 
     The only row that needs a megabyte-scale payload, because "disabled" is only
@@ -1822,7 +1863,7 @@ def test_a_none_setting_disables_the_package_cap_that_the_default_would_apply():
 
 
 @pytest.mark.django_db
-def test_a_misconfigured_mount_fails_loud_on_every_request_including_get():
+def test_a_misconfigured_mount_fails_loud_on_every_request_including_get() -> None:
     """Resolution runs first, so a nonsense cap cannot hide behind a bodyless request.
 
     If the GET no-op were checked before the cap is resolved, a mount configured
@@ -1848,7 +1889,7 @@ def test_a_misconfigured_mount_fails_loud_on_every_request_including_get():
 
 
 @pytest.mark.django_db
-def test_a_non_mapping_framework_dict_fails_loud_on_get():
+def test_a_non_mapping_framework_dict_fails_loud_on_get() -> None:
     """A list-shaped ``DJANGO_STRAWBERRY_FRAMEWORK`` is a ``ConfigurationError`` on GET.
 
     The package view reads the body-cap setting on every request, so a non-mapping
@@ -1865,14 +1906,14 @@ def test_a_non_mapping_framework_dict_fails_loud_on_get():
     previous = settings.DJANGO_STRAWBERRY_FRAMEWORK
     try:
         settings.DJANGO_STRAWBERRY_FRAMEWORK = ["not", "a", "mapping"]
-        with pytest.raises(ConfigurationError, match="DJANGO_STRAWBERRY_FRAMEWORK.*list"):
+        with pytest.raises(ConfigurationError, match=r"DJANGO_STRAWBERRY_FRAMEWORK.*list"):
             Client().get("/graphql/")
     finally:
         settings.DJANGO_STRAWBERRY_FRAMEWORK = previous
 
 
 @pytest.mark.django_db
-def test_a_none_framework_dict_still_serves_on_get():
+def test_a_none_framework_dict_still_serves_on_get() -> None:
     """``DJANGO_STRAWBERRY_FRAMEWORK = None`` is empty settings: GET still serves.
 
     ``None`` is the documented "no settings configured" shape, identical to a
@@ -1887,7 +1928,7 @@ def test_a_none_framework_dict_still_serves_on_get():
     assert response.status_code == 200
 
 
-async def test_the_async_mount_fails_loud_on_a_bodyless_request_too():
+async def test_the_async_mount_fails_loud_on_a_bodyless_request_too() -> None:
     """The async colour: the shared cap resolution runs ahead of the GET no-op there too.
 
     Both transports resolve the cap in the one mixin method, so a divergence here
@@ -1916,8 +1957,9 @@ async def test_the_async_mount_fails_loud_on_a_bodyless_request_too():
 )
 async def test_the_cap_is_a_no_op_on_get_even_with_a_hostile_content_length(
     path: str,
+    *,
     is_async: bool,
-):
+) -> None:
     """GET carries no body the view reads, so a lying ``Content-Length`` cannot ``413`` it.
 
     The declared gate would otherwise fire on a header that describes nothing and
@@ -1943,7 +1985,7 @@ async def test_the_cap_is_a_no_op_on_get_even_with_a_hostile_content_length(
 # ---------------------------------------------------------------------------
 
 
-async def test_the_async_package_view_enforces_the_same_body_cap():
+async def test_the_async_package_view_enforces_the_same_body_cap() -> None:
     """The async colour of rows 13-14: the same ``413``, from the ``async def run``.
 
     The two ``run`` overrides differ only in ``async`` / ``await``, which is the
@@ -1984,7 +2026,7 @@ _NON_UTF8_BODIES = (
 
 
 @contextlib.contextmanager
-def _strawberry_patch_opted_out():
+def _strawberry_patch_opted_out() -> Generator[None, None, None]:
     """Run the block in the state ``APPLY_UPSTREAM_PATCHES = {"strawberry": False}`` produces.
 
     The patch installs from ``AppConfig.ready()``, long before any test runs, so
@@ -2017,7 +2059,7 @@ def _strawberry_patch_opted_out():
 
 @pytest.mark.parametrize("body", _NON_UTF8_BODIES)
 @pytest.mark.django_db
-def test_the_utf8_wire_contract_survives_the_upstream_patch_kill_switch(body: bytes):
+def test_the_utf8_wire_contract_survives_the_upstream_patch_kill_switch(body: bytes) -> None:
     """The finding, over the wire: a non-UTF-8 body still 400s with the patch opted out.
 
     Before this change the strict decode lived inside
@@ -2047,7 +2089,9 @@ def test_the_utf8_wire_contract_survives_the_upstream_patch_kill_switch(body: by
 
 
 @pytest.mark.parametrize("body", _NON_UTF8_BODIES)
-async def test_the_async_view_keeps_the_utf8_wire_contract_with_the_patch_opted_out(body: bytes):
+async def test_the_async_view_keeps_the_utf8_wire_contract_with_the_patch_opted_out(
+    body: bytes,
+) -> None:
     """The async colour: one shared mixin method, so neither transport can drift.
 
     Worth its own row for the same reason the patch-on async row is: the
@@ -2074,7 +2118,7 @@ async def test_the_async_view_keeps_the_utf8_wire_contract_with_the_patch_opted_
 
 
 @contextlib.contextmanager
-def _every_upstream_patch_opted_out():
+def _every_upstream_patch_opted_out() -> Generator[None, None, None]:
     """Run the block in the state the BROAD ``APPLY_UPSTREAM_PATCHES = False`` produces.
 
     The sibling helper simulates ``{"strawberry": False}`` and deliberately leaves
@@ -2121,7 +2165,7 @@ def _every_upstream_patch_opted_out():
 
 @pytest.mark.parametrize("body", _NON_UTF8_BODIES)
 @pytest.mark.django_db
-def test_the_sync_wire_contract_holds_with_every_upstream_patch_opted_out(body: bytes):
+def test_the_sync_wire_contract_holds_with_every_upstream_patch_opted_out(body: bytes) -> None:
     """The wire contract on the sync transport with the WHOLE kill switch thrown.
 
     ``{"strawberry": False}`` leaves the ``cross_web`` half routing the sync
@@ -2156,7 +2200,7 @@ def test_the_sync_wire_contract_holds_with_every_upstream_patch_opted_out(body: 
 
 
 @pytest.mark.django_db
-def test_only_the_package_mount_answers_the_same_way_in_both_patch_states():
+def test_only_the_package_mount_answers_the_same_way_in_both_patch_states() -> None:
     """Attribution: the package mount's ``400`` is the VIEW's, not a leftover patch.
 
     The row above would also pass if the ``cross_web`` patch had merely failed to
@@ -2205,7 +2249,7 @@ def test_only_the_package_mount_answers_the_same_way_in_both_patch_states():
 
 
 @contextlib.contextmanager
-def _cross_web_patch_opted_out():
+def _cross_web_patch_opted_out() -> Generator[None, None, None]:
     """Run the block in the state ``{"cross_web": False}`` produces - that half alone.
 
     The mirror image of :func:`_strawberry_patch_opted_out`: this one takes the
@@ -2258,7 +2302,7 @@ _UNDECODABLE_BODIES = (
 
 @pytest.mark.parametrize("body", _UNDECODABLE_BODIES)
 @pytest.mark.django_db
-def test_the_cross_web_half_turns_upstreams_own_500_into_a_400(body: bytes):
+def test_the_cross_web_half_turns_upstreams_own_500_into_a_400(body: bytes) -> None:
     """What the ``cross_web`` patch buys, on the only mount that can show it.
 
     The rows above prove the package mount is indifferent to this switch, which is
@@ -2318,7 +2362,7 @@ def test_the_cross_web_half_turns_upstreams_own_500_into_a_400(body: bytes):
 
 
 @pytest.mark.django_db
-def test_the_upstream_bug_workaround_still_respects_its_own_opt_out():
+def test_the_upstream_bug_workaround_still_respects_its_own_opt_out() -> None:
     """The other half of the ownership split: what the switch DOES still turn off.
 
     The two rows above would be satisfiable by a bad fix - moving everything
@@ -2371,7 +2415,7 @@ _NON_ASCII_JSON_BODY = json.dumps(
 ).encode("utf-8")
 
 
-async def _declared_json_response(charset: str | None, is_async: bool):
+async def _declared_json_response(charset: str | None, *, is_async: bool) -> "_TestResponse":
     """POST the non-ASCII document with ``charset`` declared, over the real endpoint.
 
     The bytes go on the wire untouched, which is the only way to express the shape
@@ -2406,10 +2450,11 @@ async def _declared_json_response(charset: str | None, is_async: bool):
     [pytest.param(False, id="sync"), pytest.param(True, id="async")],
 )
 async def test_the_endpoint_refuses_a_json_charset_it_will_not_decode_with(
+    *,
     is_async: bool,
     charset: str | None,
     status: int,
-):
+) -> None:
     """A declared charset is part of the wire boundary, not decoration.
 
     The strict decode alone accepts ``Content-Type: application/json;
@@ -2424,7 +2469,7 @@ async def test_the_endpoint_refuses_a_json_charset_it_will_not_decode_with(
     ``_enforce_request_boundary``. The accepted rows also assert the non-ASCII
     document really executed.
     """
-    response = await _declared_json_response(charset, is_async)
+    response = await _declared_json_response(charset, is_async=is_async)
 
     assert response.status_code == status
     if status == 200:
@@ -2462,7 +2507,7 @@ _LOSSY_CONTROL_DOCUMENTS = (
 )
 
 
-def _multipart_fields(field: str, raw: bytes):
+def _multipart_fields(field: str, raw: bytes) -> list[tuple[str, bytes]]:
     """The two control fields, with ``field`` replaced by ``raw`` bytes."""
     documents = {"operations": _operations_bytes(), "map": b"{}"}
     documents[field] = raw
@@ -2470,7 +2515,7 @@ def _multipart_fields(field: str, raw: bytes):
 
 
 @pytest.mark.django_db
-def test_a_multipart_map_must_be_an_object_not_a_batched_body():
+def test_a_multipart_map_must_be_an_object_not_a_batched_body() -> None:
     """A JSON list in ``map`` is a controlled 400 rather than an unhandled 500.
 
     The general JSON guard permits a list of objects because an HTTP request body
@@ -2494,7 +2539,7 @@ def test_a_multipart_map_must_be_an_object_not_a_batched_body():
     _assert_no_graphql_envelope(response)
 
 
-async def test_the_async_view_rejects_the_same_multipart_map_shape():
+async def test_the_async_view_rejects_the_same_multipart_map_shape() -> None:
     """The async multipart parser gets the same malformed-map boundary."""
     with override_settings(ROOT_URLCONF=__name__):
         response = await _post_multipart(
@@ -2511,7 +2556,7 @@ async def test_the_async_view_rejects_the_same_multipart_map_shape():
 @pytest.mark.django_db(transaction=True)
 async def test_post_pathologically_nested_body_returns_400_on_the_async_view_too(
     pathological_json_body: bytes,
-):
+) -> None:
     """Async transport: a body nested past the parser's C stack -> controlled 400.
 
     Both views inherit the one patched ``BaseView.parse_json``, but the wire
@@ -2532,7 +2577,7 @@ async def test_post_pathologically_nested_body_returns_400_on_the_async_view_too
 @pytest.mark.django_db(transaction=True)
 def test_a_multipart_operations_document_nested_past_the_c_stack_is_refused(
     deepcopy_overflow_operations_text: str,
-):
+) -> None:
     """Valid-JSON ``operations`` whose depth overflows the upload utility.
 
     ``json.loads`` survives this document, so the generic guard passes
@@ -2557,7 +2602,7 @@ def test_a_multipart_operations_document_nested_past_the_c_stack_is_refused(
 
 async def test_the_async_view_refuses_the_same_deep_operations_document(
     deepcopy_overflow_operations_text: str,
-):
+) -> None:
     """The async delegate scopes the deepcopy recursion identically."""
     with override_settings(ROOT_URLCONF=__name__):
         response = await _post_multipart(
@@ -2576,7 +2621,7 @@ async def test_the_async_view_refuses_the_same_deep_operations_document(
 def test_a_multipart_control_document_that_lost_bytes_to_djangos_decode_is_refused(
     field: str,
     raw: bytes,
-):
+) -> None:
     """The bodies that used to answer ``200`` now answer ``400``.
 
     An ``operations`` field carrying a malformed UTF-8 byte used to be
@@ -2602,7 +2647,10 @@ def test_a_multipart_control_document_that_lost_bytes_to_djangos_decode_is_refus
 
 
 @pytest.mark.parametrize(("field", "raw"), _LOSSY_CONTROL_DOCUMENTS)
-async def test_the_async_view_refuses_the_same_lossy_control_documents(field: str, raw: bytes):
+async def test_the_async_view_refuses_the_same_lossy_control_documents(
+    field: str,
+    raw: bytes,
+) -> None:
     """The async colour: one shared mixin method, two ``parse_multipart`` overrides.
 
     Upstream's ``parse_multipart`` is a coroutine on the async base view and a plain
@@ -2631,7 +2679,7 @@ _NON_UTF8_FORM_CHARSETS = (
 
 @pytest.mark.parametrize("charset", _NON_UTF8_FORM_CHARSETS)
 @pytest.mark.django_db
-def test_a_multipart_request_declaring_a_non_utf8_form_encoding_is_refused(charset: str):
+def test_a_multipart_request_declaring_a_non_utf8_form_encoding_is_refused(charset: str) -> None:
     """An explicit ``charset`` the package will not honour.
 
     A Latin-1 form declaration used to execute with ``200``, and Django's behaviour is why:
@@ -2664,7 +2712,7 @@ def test_a_multipart_request_declaring_a_non_utf8_form_encoding_is_refused(chars
 
 
 @pytest.mark.parametrize("charset", _NON_UTF8_FORM_CHARSETS)
-async def test_the_async_view_refuses_the_same_non_utf8_form_encodings(charset: str):
+async def test_the_async_view_refuses_the_same_non_utf8_form_encodings(charset: str) -> None:
     """The async colour of the declared-charset refusal, from the shared boundary."""
     with override_settings(ROOT_URLCONF=__name__):
         response = await _post_multipart(
@@ -2678,7 +2726,7 @@ async def test_the_async_view_refuses_the_same_non_utf8_form_encodings(charset: 
 
 
 @pytest.mark.django_db
-def test_genuine_utf8_and_escaped_unicode_survive_the_multipart_boundary_intact():
+def test_genuine_utf8_and_escaped_unicode_survive_the_multipart_boundary_intact() -> None:
     """The contract is UTF-8, not ASCII - and the accepted bytes arrive unchanged.
 
     Four directions, because "rejects the bad shapes" is only half a contract:
@@ -2737,7 +2785,7 @@ def test_genuine_utf8_and_escaped_unicode_survive_the_multipart_boundary_intact(
 
 
 @pytest.mark.django_db
-def test_the_marker_check_is_scoped_to_the_two_control_documents():
+def test_the_marker_check_is_scoped_to_the_two_control_documents() -> None:
     """A replacement marker outside ``operations`` / ``map`` is none of the package's business.
 
     The check exists because those two fields are JSON documents the package
@@ -2768,7 +2816,7 @@ _LATIN1_CONTROL_DOCUMENT = _operations_bytes(note=b"\xe9")
 
 
 @pytest.mark.django_db
-def test_a_middleware_set_request_encoding_is_not_masked_by_a_declared_utf8_charset():
+def test_a_middleware_set_request_encoding_is_not_masked_by_a_declared_utf8_charset() -> None:
     """The deployment the gate exists for, on the shipped mount.
 
     The wire contract is re-breakable behind one line of consumer
@@ -2811,7 +2859,7 @@ def test_a_middleware_set_request_encoding_is_not_masked_by_a_declared_utf8_char
     assert control.json()["data"] == {"__typename": "Query"}
 
 
-async def test_the_async_view_is_not_masked_by_a_declared_utf8_charset_either():
+async def test_the_async_view_is_not_masked_by_a_declared_utf8_charset_either() -> None:
     """The async colour of the encoding gate, from the one shared mixin method.
 
     The gate lives on ``_RequestBodyBoundaryMixin`` and is called from each
@@ -2844,7 +2892,9 @@ async def test_the_async_view_is_not_masked_by_a_declared_utf8_charset_either():
 
 
 @pytest.mark.django_db
-def test_a_project_that_reconfigured_default_charset_is_refused_unless_the_client_declares_utf8():
+def test_a_project_that_reconfigured_default_charset_is_refused_unless_the_client_declares_utf8() -> (
+    None
+):
     """The third rung of the effective encoding, live, and its exact boundary.
 
     ``MultiPartParser.__init__`` resolves ``encoding or
@@ -2879,7 +2929,7 @@ def test_a_project_that_reconfigured_default_charset_is_refused_unless_the_clien
 
 
 @pytest.mark.django_db
-def test_a_get_carrying_a_stray_multipart_content_type_still_serves_the_query():
+def test_a_get_carrying_a_stray_multipart_content_type_still_serves_the_query() -> None:
     """The encoding gate is scoped to the forms Django decodes.
 
     ``HttpRequest._load_post_and_files`` installs an empty ``QueryDict`` without
@@ -2916,7 +2966,7 @@ def test_a_get_carrying_a_stray_multipart_content_type_still_serves_the_query():
 
 
 @pytest.mark.django_db
-def test_an_over_cap_multipart_request_is_refused_before_djangos_parser_runs():
+def test_an_over_cap_multipart_request_is_refused_before_djangos_parser_runs() -> None:
     """The ``413`` precedes ``MultiPartParser`` and every upload handler.
 
     The defect this closes is an ordering one, not a status one.
@@ -2976,7 +3026,7 @@ def test_an_over_cap_multipart_request_is_refused_before_djangos_parser_runs():
     _UPLOAD_EVENTS.clear()
 
 
-async def test_the_async_view_also_refuses_before_djangos_parser_runs():
+async def test_the_async_view_also_refuses_before_djangos_parser_runs() -> None:
     """The async colour of the ordering guarantee, including the ``csrf_protect`` await.
 
     ``csrf_protect`` is ``decorator_from_middleware(CsrfViewMiddleware)``, and it
@@ -3073,7 +3123,10 @@ def _csrf_matrix_paths(
     )
 
 
-def _assert_csrf_matrix(answers: Mapping[str, "_TestResponse"], custom_failure: "_TestResponse"):
+def _assert_csrf_matrix(
+    answers: Mapping[str, "_TestResponse"],
+    custom_failure: "_TestResponse",
+) -> None:
     """The one set of assertions both transports' rows make."""
     for name in (
         "untokened",
@@ -3093,7 +3146,7 @@ def _assert_csrf_matrix(answers: Mapping[str, "_TestResponse"], custom_failure: 
 
 
 @pytest.mark.django_db
-def test_a_within_cap_request_still_faces_djangos_complete_csrf_check():
+def test_a_within_cap_request_still_faces_djangos_complete_csrf_check() -> None:
     """The exemption is an ordering mechanism: everything past the gate still gets CSRF.
 
     Six directions plus the failure-view override, all of them Django's own
@@ -3137,7 +3190,7 @@ def test_a_within_cap_request_still_faces_djangos_complete_csrf_check():
     _assert_csrf_matrix(answers, custom_failure)
 
 
-async def test_the_async_view_faces_the_same_complete_csrf_check():
+async def test_the_async_view_faces_the_same_complete_csrf_check() -> None:
     """The async colour of the whole CSRF matrix, through the awaited continuation.
 
     The two ``run`` overrides differ only in ``async`` / ``await``, and the CSRF
@@ -3168,7 +3221,7 @@ async def test_the_async_view_faces_the_same_complete_csrf_check():
     _assert_csrf_matrix(answers, custom_failure)
 
 
-def _without_the_global_csrf_middleware():
+def _without_the_global_csrf_middleware() -> override_settings:
     """``override_settings`` with ``CsrfViewMiddleware`` taken out of ``MIDDLEWARE``.
 
     Derived from the project's real ``MIDDLEWARE`` rather than a hand-written list,
@@ -3181,7 +3234,7 @@ def _without_the_global_csrf_middleware():
 
 
 @pytest.mark.django_db
-def test_the_endpoint_stays_csrf_protected_with_the_global_middleware_removed():
+def test_the_endpoint_stays_csrf_protected_with_the_global_middleware_removed() -> None:
     """The invariant the re-entry buys: protection that does not depend on ``MIDDLEWARE``.
 
     This is the row that distinguishes the fix from a bypass in the one direction
@@ -3201,7 +3254,7 @@ def test_the_endpoint_stays_csrf_protected_with_the_global_middleware_removed():
     fields = _multipart_fields("operations", _operations_bytes())
     wrong = "n0tth3r1ghtt0k3n" * 4
 
-    async def async_answers():
+    async def async_answers() -> dict[str, "_MonkeyPatchedASGIResponse"]:
         answers: dict[str, _MonkeyPatchedASGIResponse] = {}
         directions: tuple[tuple[str, _MultipartKeywords], ...] = (
             ("untokened", {}),
@@ -3249,7 +3302,7 @@ def test_the_endpoint_stays_csrf_protected_with_the_global_middleware_removed():
         assert answers["headered"].json()["data"] == {"__typename": "Query"}
 
 
-def test_the_shipped_chain_supplies_the_ordering_for_fakeshops_real_mount():
+def test_the_shipped_chain_supplies_the_ordering_for_fakeshops_real_mount() -> None:
     """The deployed arrangement is the chain one, and this row is what says so.
 
     Every other ordering row in this file runs against a probe mount, and a probe
@@ -3291,7 +3344,7 @@ def test_the_shipped_chain_supplies_the_ordering_for_fakeshops_real_mount():
 
 
 @pytest.mark.django_db
-def test_the_chain_applies_boundary_state_derived_during_view_setup():
+def test_the_chain_applies_boundary_state_derived_during_view_setup() -> None:
     """The middleware instance follows the same setup lifecycle as the real view.
 
     ``View.as_view`` calls ``setup(request, *args, **kwargs)`` before dispatch, and
@@ -3354,14 +3407,14 @@ class _RecordingCsrfMiddleware(CsrfViewMiddleware):
         callback: Callable[..., HttpResponseBase],
         callback_args: tuple[object, ...],
         callback_kwargs: dict[str, object],
-    ):
+    ) -> HttpResponseForbidden | None:
         """Record a checkable callback, then let the base class decide the request."""
         if request.method not in _SAFE_METHODS and not getattr(callback, "csrf_exempt", False):
             type(self).calls.append(request.path)
         return super().process_view(request, callback, callback_args, callback_kwargs)
 
 
-def _with_the_projects_own_csrf_class():
+def _with_the_projects_own_csrf_class() -> override_settings:
     """``override_settings`` swapping fakeshop's CSRF entry for the recording subclass.
 
     Derived from the project's real ``MIDDLEWARE`` the same way
@@ -3379,7 +3432,7 @@ def _with_the_projects_own_csrf_class():
 
 
 @pytest.mark.django_db
-def test_the_configured_csrf_class_checks_fakeshops_real_mount_behind_the_boundary():
+def test_the_configured_csrf_class_checks_fakeshops_real_mount_behind_the_boundary() -> None:
     """The behavioral half of the row above: the exemption really does withdraw itself.
 
     ``test_the_shipped_chain_supplies_the_ordering_for_fakeshops_real_mount`` proves
@@ -3411,7 +3464,7 @@ def test_the_configured_csrf_class_checks_fakeshops_real_mount_behind_the_bounda
 
 
 @pytest.mark.django_db
-def test_the_csrf_cookie_and_vary_header_survive_the_outer_exemption():
+def test_the_csrf_cookie_and_vary_header_survive_the_outer_exemption() -> None:
     """``csrf_exempt`` skips ``process_view`` only - the cookie machinery is untouched.
 
     Worth its own row because the exemption sounds like it should break exactly
@@ -3432,7 +3485,7 @@ def test_the_csrf_cookie_and_vary_header_survive_the_outer_exemption():
 
 
 @pytest.mark.django_db
-def test_an_accepted_file_upload_still_streams_through_djangos_upload_handlers():
+def test_an_accepted_file_upload_still_streams_through_djangos_upload_handlers() -> None:
     """The un-broken direction: Django keeps owning multipart framing and files.
 
     The whole design constraint on both fixes was that Django's parser, limits and

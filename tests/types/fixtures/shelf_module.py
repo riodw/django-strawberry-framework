@@ -13,12 +13,16 @@ from django_strawberry_framework.filters import FilterSet
 
 
 class ShelfFilter(FilterSet):
+    """Filters ``Shelf`` rows by exact ``code``."""
+
     class Meta:
         model = models.Shelf
         fields = {"code": ["exact"]}
 
 
 class ShelfType(DjangoType):
+    """``DjangoType`` over ``Shelf`` wired to ``ShelfFilter`` from the same module."""
+
     class Meta:
         model = models.Shelf
         fields = ("id", "code")

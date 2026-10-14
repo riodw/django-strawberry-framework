@@ -154,7 +154,7 @@ def install_hashable_scalar_cache_schema(
 
     class EqualityBomb:
         @override
-        def __hash__(self):
+        def __hash__(self) -> int:
             return 1
 
         @override
@@ -332,7 +332,7 @@ _HINT_PAGE_DATA: dict[str, list[dict[str, str | _HintPage]]] = {
 }
 
 
-def _seed_hint_shelf():
+def _seed_hint_shelf() -> None:
     """Three shelves with 5, 1 and 0 books.
 
     More than one parent keeps the nested page off the single-parent fetch

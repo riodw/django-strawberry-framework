@@ -123,9 +123,10 @@ def _names(
 
 
 def _branch_world() -> None:
-    """Branches ``A``/``B``/``X``/``P`` (city = lowercase name); a shelf on ``A`` alt-lists ``P``, one on ``B`` ``X``.
+    """Branches ``A``/``B``/``X``/``P`` (city = lowercase name), with two shelves alt-listing others.
 
-    Each of ``A`` and ``B`` carries a ``BranchNote`` named after it.
+    A shelf on ``A`` alt-lists ``P``, one on ``B`` ``X``. Each of ``A`` and ``B`` carries a
+    ``BranchNote`` named after it.
     """
     rows = {city: Branch.objects.create(name=city.upper(), city=city) for city in "abxp"}
     for owner, alternate in (("a", "p"), ("b", "x")):
@@ -225,10 +226,11 @@ _MODES = pytest.mark.parametrize("mode", ["sync", "async"])
 )
 def test_a_proxy_root_reads_its_own_visibility_on_a_path_re_entering_its_table(
     set_model: type[Branch],
+    *,
     hooked: bool,
     surface: str,
     mode: str,
-):
+) -> None:
     """A set bound to a ``ProxyBranch`` type reads that type, not ``Branch``'s primary, on re-entry.
 
     The proxy reads the ``Branch`` table, so ``shelves__alt_branches`` re-enters
@@ -253,7 +255,7 @@ def test_a_proxy_root_reads_its_own_visibility_on_a_path_re_entering_its_table(
 def test_a_relation_declared_to_a_proxy_of_the_roots_table_answers_with_the_root(
     root_model: type[Branch],
     mode: str,
-):
+) -> None:
     """``notes__branch`` reaches ``ProxyBranch``, which reads the root's table: the root answers.
 
     ``BranchNote.branch`` is declared to ``ProxyBranch``, whose registered type
@@ -321,7 +323,7 @@ def test_a_multi_table_child_root_reads_the_parents_type_for_parent_rows(
     argument: str,
     name: str,
     expected: list[str],
-):
+) -> None:
     """MTI parent and child are different tables: only a path reaching the child's own answers with the root.
 
     The set is keyed on ``Venue`` and bound to a ``LendingDesk`` type hiding desk
@@ -445,12 +447,13 @@ def _shared_set_schema(family: str, *, proxy_first: bool) -> DjangoSchema:
     ids=["filter", "order-through-proxy-owner", "order-through-concrete-owner"],
 )
 def test_two_plain_owners_on_one_table_share_a_set_in_either_declaration_order(
+    *,
     proxy_first: bool,
     family: str,
     field: str,
     arguments: str,
     expected: list[str],
-):
+) -> None:
     """A plain ``Branch`` owner and a plain proxy owner both answer re-entry with the bound type.
 
     Each reads the ``Branch`` table, so whichever owner binds first, a re-entered

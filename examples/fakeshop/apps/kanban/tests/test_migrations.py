@@ -20,7 +20,7 @@ def _remove_other_section() -> None:
     migration._remove(apps, schema_editor)
 
 
-def test_remove_other_section_fails_loudly_while_items_remain():
+def test_remove_other_section_fails_loudly_while_items_remain() -> None:
     other = kf.make_section("other")
     kf.make_card_item(section=other)
 
@@ -30,7 +30,7 @@ def test_remove_other_section_fails_loudly_while_items_remain():
     assert models.Section.objects.filter(pk=other.pk).exists()
 
 
-def test_remove_other_section_deletes_empty_lookup_and_is_idempotent():
+def test_remove_other_section_deletes_empty_lookup_and_is_idempotent() -> None:
     other = kf.make_section("other")
 
     _remove_other_section()

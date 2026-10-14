@@ -36,19 +36,19 @@ class _NoteSerializer(serializers.Serializer[object]):
     ids = serializers.PrimaryKeyRelatedField(many=True, read_only=True)  # pyright: ignore[reportUnknownVariableType]
 
 
-def test_bound_fields_are_the_serializer_fields():
+def test_bound_fields_are_the_serializer_fields() -> None:
     """``bound_fields`` is ``serializer.fields``, keyed by field name."""
     serializer = _NoteSerializer()
 
     assert list(bound_fields(serializer)) == ["title", "tags", "ids"]
 
 
-def test_declared_fields_are_the_class_body_fields():
+def test_declared_fields_are_the_class_body_fields() -> None:
     """``declared_fields_of`` is the class's ``_declared_fields``."""
     assert list(declared_fields_of(_NoteSerializer)) == ["title", "tags", "ids"]
 
 
-def test_list_child_is_the_element_field():
+def test_list_child_is_the_element_field() -> None:
     """``list_child_of`` is the ``ListField``'s element field."""
     field = bound_fields(_NoteSerializer())["tags"]
 
@@ -56,7 +56,7 @@ def test_list_child_is_the_element_field():
     assert isinstance(list_child_of(field), serializers.IntegerField)
 
 
-def test_child_relation_is_the_wrapped_relation():
+def test_child_relation_is_the_wrapped_relation() -> None:
     """``child_relation_of`` is the single relation a ``many=True`` field wraps."""
     many = bound_fields(_NoteSerializer())["ids"]
 
@@ -64,7 +64,7 @@ def test_child_relation_is_the_wrapped_relation():
     assert isinstance(child_relation_of(many), serializers.PrimaryKeyRelatedField)
 
 
-def test_serializer_errors_are_the_validation_errors():
+def test_serializer_errors_are_the_validation_errors() -> None:
     """``serializer_errors`` is the serializer's error tree after validation."""
     serializer = _NoteSerializer(data={})
     serializer.is_valid()
@@ -74,7 +74,7 @@ def test_serializer_errors_are_the_validation_errors():
     assert set(errors) == {"title", "tags"}
 
 
-def test_predicates_tell_serializers_and_fields_apart():
+def test_predicates_tell_serializers_and_fields_apart() -> None:
     """``is_serializer`` admits a serializer only; ``is_drf_field`` admits any field."""
     serializer = _NoteSerializer()
     field = serializers.CharField()
@@ -94,7 +94,7 @@ class _TaggedNoteSerializer(_NoteSerializer):
         return fields
 
 
-def test_base_fields_of_super_skips_the_running_override():
+def test_base_fields_of_super_skips_the_running_override() -> None:
     """Through ``super()``, ``base_fields`` is the next class's ``get_fields`` in the MRO."""
     serializer = _TaggedNoteSerializer()
 
@@ -113,7 +113,7 @@ def test_base_fields_of_super_skips_the_running_override():
     ]
 
 
-def test_base_fields_returns_a_fresh_dict_per_call():
+def test_base_fields_returns_a_fresh_dict_per_call() -> None:
     """Each read is DRF's freshly built dict, so an override's additions never leak back."""
     serializer = _TaggedNoteSerializer()
     first = base_fields(super(_TaggedNoteSerializer, serializer))

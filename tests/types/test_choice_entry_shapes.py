@@ -14,13 +14,13 @@ from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.types.converters import build_enum_from_choices
 
 
-def test_non_iterable_choice_entry_is_a_malformed_choice():
+def test_non_iterable_choice_entry_is_a_malformed_choice() -> None:
     """A bare integer entry is refused as a malformed choice."""
     with pytest.raises(ConfigurationError, match="declares a malformed choice 1;"):
         build_enum_from_choices([1], "ChoiceEntryShapeEnum", source_label="probe")
 
 
-def test_pair_choice_entry_builds_its_member():
+def test_pair_choice_entry_builds_its_member() -> None:
     """A ``(value, label)`` pair still builds the enum member it declares."""
     enum_cls = build_enum_from_choices([("a", "A")], "ChoiceEntryShapeEnum", source_label="probe")
 

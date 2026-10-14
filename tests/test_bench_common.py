@@ -12,7 +12,7 @@ that measures the package, so there is no live sibling in
 
 import json
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType
 
@@ -54,7 +54,7 @@ def importtime_report(scripts_module: Callable[[str], ModuleType]) -> ModuleType
     return scripts_module("importtime_report")
 
 
-def test_summarize_rounds_reports_fastest_sample_median_of_medians_and_spread():
+def test_summarize_rounds_reports_fastest_sample_median_of_medians_and_spread() -> None:
     """``min`` is the fastest sample, ``median`` the median of round medians, ``spread`` their range."""
     summary = _bench_common.summarize_rounds([[1, 2, 3], [4, 5, 6], [2, 3, 4]])
 
@@ -67,13 +67,13 @@ def test_summarize_rounds_reports_fastest_sample_median_of_medians_and_spread():
 
 
 @pytest.mark.parametrize("rounds", [[], [[1, 2], []]])
-def test_summarize_rounds_refuses_an_empty_round(rounds: list[list[float]]):
+def test_summarize_rounds_refuses_an_empty_round(rounds: list[list[float]]) -> None:
     """A missing round has no median, so the summary refuses instead of reporting zero."""
     with pytest.raises(ValueError, match="non-empty round"):
         _bench_common.summarize_rounds(rounds)
 
 
-def test_report_json_carries_header_rows_and_status_with_sorted_keys(tmp_path: Path):
+def test_report_json_carries_header_rows_and_status_with_sorted_keys(tmp_path: Path) -> None:
     """The written report has one fixed shape and sorted keys, so two runs diff line by line."""
     report = _bench_common.build_report(
         tool="bench_x",
@@ -101,14 +101,14 @@ def test_report_json_carries_header_rows_and_status_with_sorted_keys(tmp_path: P
     assert text == json.dumps(loaded, indent=2, sort_keys=True) + "\n"
 
 
-def test_report_status_is_ok_without_failures():
+def test_report_status_is_ok_without_failures() -> None:
     """A run with no errored or skipped row reports ``ok``."""
     report = _bench_common.build_report(tool="t", provenance={}, params={}, rows=[], failures=[])
 
     assert report["status"] == "ok"
 
 
-def test_memory_db_name_is_a_shared_cache_uri_per_alias(tmp_path: Path):
+def test_memory_db_name_is_a_shared_cache_uri_per_alias(tmp_path: Path) -> None:
     """Every alias gets its own named shared-cache in-memory database."""
     name = _bench_common.memory_db_name("default")
 
@@ -119,7 +119,7 @@ def test_memory_db_name_is_a_shared_cache_uri_per_alias(tmp_path: Path):
     assert name != _bench_common.memory_db_name("shard_b")
 
 
-def test_tracked_database_is_refused_and_other_names_pass(tmp_path: Path):
+def test_tracked_database_is_refused_and_other_names_pass(tmp_path: Path) -> None:
     """Only a NAME resolving to the tracked fixture raises."""
     with pytest.raises(RuntimeError, match="tracked fixture"):
         _bench_common.assert_not_tracked_db(_bench_common.TRACKED_DB)
@@ -129,7 +129,7 @@ def test_tracked_database_is_refused_and_other_names_pass(tmp_path: Path):
     _bench_common.assert_not_tracked_db("fakeshop")
 
 
-def test_package_outside_the_running_tree_is_refused(tmp_path: Path):
+def test_package_outside_the_running_tree_is_refused(tmp_path: Path) -> None:
     """A package file outside the script's tree raises; one inside passes."""
     with pytest.raises(RuntimeError, match="outside the running tree"):
         _bench_common.assert_package_in_tree(tmp_path / "pkg" / "__init__.py")
@@ -137,7 +137,7 @@ def test_package_outside_the_running_tree_is_refused(tmp_path: Path):
     _bench_common.assert_package_in_tree(_bench_common.REPO_ROOT / "pkg" / "__init__.py")
 
 
-def test_package_digest_is_stable_and_ignores_non_python_files(package_tree: Path):
+def test_package_digest_is_stable_and_ignores_non_python_files(package_tree: Path) -> None:
     """Hashing one tree twice gives one digest; a non-``.py`` file is outside it."""
     first = _bench_common.package_digest(package_tree)
 
@@ -170,7 +170,7 @@ def _add_a_file(root: Path) -> int:
 def test_package_digest_changes_when_a_package_file_changes(
     package_tree: Path,
     mutate: Callable[[Path], object],
-):
+) -> None:
     """Changing any ``.py`` file's bytes, path or presence moves the digest."""
     before = _bench_common.package_digest(package_tree)
 
@@ -182,13 +182,13 @@ def test_package_digest_changes_when_a_package_file_changes(
 def test_package_digest_is_independent_of_file_system_order(
     package_tree: Path,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Files enumerated in the reverse order hash to the same digest."""
     forward = _bench_common.package_digest(package_tree)
     original_rglob = Path.rglob
     seen: list[list[str]] = []
 
-    def reversed_rglob(self: Path, pattern: str):
+    def reversed_rglob(self: Path, pattern: str) -> Iterator[Path]:
         paths = sorted(original_rglob(self, pattern), reverse=True)
         seen.append([path.name for path in paths])
         return iter(paths)
@@ -206,13 +206,13 @@ def test_package_digest_is_independent_of_file_system_order(
     ]
 
 
-def test_package_digest_refuses_a_tree_without_python_files(tmp_path: Path):
+def test_package_digest_refuses_a_tree_without_python_files(tmp_path: Path) -> None:
     """An empty population raises instead of fingerprinting nothing."""
-    with pytest.raises(ValueError, match="no .py file"):
+    with pytest.raises(ValueError, match=r"no \.py file"):
         _bench_common.package_digest(tmp_path)
 
 
-def test_git_blob_id_matches_git_hash_object(tmp_path: Path):
+def test_git_blob_id_matches_git_hash_object(tmp_path: Path) -> None:
     """The blob id computed without a repository equals ``git hash-object``."""
     path = tmp_path / "script.py"
     path.write_bytes(b"print('bench')\n\x00binary tail")
@@ -226,7 +226,7 @@ def test_git_blob_id_matches_git_hash_object(tmp_path: Path):
     assert _bench_common.git_blob_id(path) == completed.stdout.strip()
 
 
-def test_instrument_ids_name_the_script_and_the_shared_module_by_tree_path():
+def test_instrument_ids_name_the_script_and_the_shared_module_by_tree_path() -> None:
     """Both instrument files are keyed by path relative to the tree, sorted."""
     script = SCRIPTS / "bench_plan_cache.py"
 
@@ -239,7 +239,7 @@ def test_instrument_ids_name_the_script_and_the_shared_module_by_tree_path():
     assert _bench_common.instrument_ids(None)["__main__"] == "unavailable"
 
 
-def test_provenance_dict_carries_the_digest_and_instrument_ids_as_a_mapping():
+def test_provenance_dict_carries_the_digest_and_instrument_ids_as_a_mapping() -> None:
     """The ``--json`` provenance adds ``package_digest`` and an ``instrument_ids`` object."""
     provenance = _bench_common.BenchProvenance(
         package_file="/tree/django_strawberry_framework/__init__.py",
@@ -270,7 +270,7 @@ def test_provenance_dict_carries_the_digest_and_instrument_ids_as_a_mapping():
     assert f"  script    scripts/x.py blob {'2' * 40}" in lines
 
 
-def test_bootstrap_refuses_an_unknown_mode_before_touching_django():
+def test_bootstrap_refuses_an_unknown_mode_before_touching_django() -> None:
     """A mistyped mode raises ``ValueError`` naming the real modes."""
     with pytest.raises(ValueError, match="sqlite-memory"):
         # basedpyright: the mistyped mode is the hostile input under test;
@@ -280,7 +280,7 @@ def test_bootstrap_refuses_an_unknown_mode_before_touching_django():
 
 def test_reset_plan_cache_clears_the_plan_cache_and_the_document_key_cache(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The reset leaves both optimizer caches empty and the counters zeroed."""
     from collections import OrderedDict
 
@@ -315,12 +315,15 @@ def test_reset_plan_cache_clears_the_plan_cache_and_the_document_key_cache(
         (None, None),
     ],
 )
-def test_root_row_count_reads_the_first_list_or_connection(data: object, expected: int | None):
+def test_root_row_count_reads_the_first_list_or_connection(
+    data: object,
+    expected: int | None,
+) -> None:
     """Root rows come from the first list field or a connection's ``edges``."""
     assert _bench_common.root_row_count(data) == expected
 
 
-def test_parse_variables_accepts_an_object_and_refuses_other_json():
+def test_parse_variables_accepts_an_object_and_refuses_other_json() -> None:
     """``--variables`` must be a JSON object."""
     assert _bench_common.parse_variables('{"first": 2}') == {"first": 2}
     assert _bench_common.parse_variables(None) is None
@@ -328,7 +331,7 @@ def test_parse_variables_accepts_an_object_and_refuses_other_json():
         _bench_common.parse_variables("[1, 2]")
 
 
-def test_importtime_parser_reads_times_names_and_depth(importtime_report: ModuleType):
+def test_importtime_parser_reads_times_names_and_depth(importtime_report: ModuleType) -> None:
     """Each ``import time`` line becomes a row; the header and other output are skipped."""
     rows = importtime_report.parse_importtime(IMPORTTIME_FIXTURE)
 
@@ -350,7 +353,7 @@ def test_importtime_parser_reads_times_names_and_depth(importtime_report: Module
 
 def test_importtime_summary_takes_per_module_minimum_and_groups_by_top_level(
     importtime_report: ModuleType,
-):
+) -> None:
     """Figures are per-module minima; non-package imports are summed per top-level name."""
     rounds = [
         importtime_report.parse_importtime(IMPORTTIME_FIXTURE),

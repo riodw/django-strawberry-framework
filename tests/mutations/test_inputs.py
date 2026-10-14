@@ -64,6 +64,7 @@ from strawberry import UNSET, relay
 from strawberry.types.base import (
     StrawberryList,
     StrawberryOptional,
+    StrawberryType,
     get_object_definition,
     has_object_definition,
 )
@@ -165,7 +166,7 @@ def _is_optional(field: StrawberryField) -> bool:
     return isinstance(field.type, StrawberryOptional)
 
 
-def _inner_type(field: StrawberryField):
+def _inner_type(field: StrawberryField) -> StrawberryType | type:
     """Return the inner type of a ``StrawberryOptional`` field, else the type itself."""
     return field.type.of_type if isinstance(field.type, StrawberryOptional) else field.type
 
@@ -175,12 +176,12 @@ def _inner_type(field: StrawberryField):
 # ---------------------------------------------------------------------------
 
 
-def test_inputs_module_path_constant():
+def test_inputs_module_path_constant() -> None:
     """The hoisted constant matches the actual dotted path of ``inputs.py``."""
     assert INPUTS_MODULE_PATH == "django_strawberry_framework.mutations.inputs"
 
 
-def test_non_field_error_key_is_django_all_sentinel():
+def test_non_field_error_key_is_django_all_sentinel() -> None:
     """The non-field error key is pinned to Django's ``"__all__"`` sentinel."""
     assert NON_FIELD_ERROR_KEY == "__all__"
 
@@ -190,7 +191,7 @@ def test_non_field_error_key_is_django_all_sentinel():
 # ---------------------------------------------------------------------------
 
 
-def test_editable_fields_exclude_pk_auto_timestamps_and_reverse_relations():
+def test_editable_fields_exclude_pk_auto_timestamps_and_reverse_relations() -> None:
     """pk, ``auto_now`` / ``auto_now_add`` (``editable=False``), and reverse FKs are dropped."""
     names = [f.name for f in editable_input_fields(product_models.Item)]
     # Kept: editable columns + the forward FK.
@@ -208,7 +209,7 @@ def test_editable_fields_exclude_pk_auto_timestamps_and_reverse_relations():
     assert "entries" not in names  # reverse FK
 
 
-def test_editable_fields_narrow_by_fields():
+def test_editable_fields_narrow_by_fields() -> None:
     """``fields`` narrows to the named columns in the given order."""
     names = [
         f.name for f in editable_input_fields(product_models.Item, fields=("name", "category"))
@@ -216,7 +217,7 @@ def test_editable_fields_narrow_by_fields():
     assert names == ["name", "category"]
 
 
-def test_editable_fields_freezes_one_shot_sequences():
+def test_editable_fields_freezes_one_shot_sequences() -> None:
     """One-shot ``fields`` / ``exclude`` iterables survive validation and narrowing."""
     selected = editable_input_fields(
         product_models.Item,
@@ -230,7 +231,7 @@ def test_editable_fields_freezes_one_shot_sequences():
     assert [field.name for field in excluded] == ["name", "category", "attachment"]
 
 
-def test_editable_fields_narrow_by_exclude():
+def test_editable_fields_narrow_by_exclude() -> None:
     """``exclude`` drops the named columns, preserving declaration order."""
     names = [
         f.name
@@ -239,25 +240,25 @@ def test_editable_fields_narrow_by_exclude():
     assert names == ["name", "category", "attachment"]
 
 
-def test_editable_fields_rejects_fields_and_exclude_together():
+def test_editable_fields_rejects_fields_and_exclude_together() -> None:
     """Declaring both ``fields`` and ``exclude`` raises ``ConfigurationError``."""
     with pytest.raises(ConfigurationError, match="both `fields` and `exclude`"):
         editable_input_fields(product_models.Item, fields=("name",), exclude=("description",))
 
 
-def test_editable_fields_rejects_unknown_fields_name():
+def test_editable_fields_rejects_unknown_fields_name() -> None:
     """An unknown / non-editable name in ``fields`` raises ``ConfigurationError``."""
     with pytest.raises(ConfigurationError, match="unknown field"):
         editable_input_fields(product_models.Item, fields=("name", "created_date"))
 
 
-def test_editable_fields_rejects_unknown_exclude_name():
+def test_editable_fields_rejects_unknown_exclude_name() -> None:
     """An unknown / non-editable name in ``exclude`` raises ``ConfigurationError``."""
     with pytest.raises(ConfigurationError, match="unknown field"):
         editable_input_fields(product_models.Item, exclude=("nope",))
 
 
-def test_editable_fields_reject_naming_a_non_editable_many_to_many():
+def test_editable_fields_reject_naming_a_non_editable_many_to_many() -> None:
     """Naming ``Book.archive_genres`` (``editable=False``) in ``fields`` or ``exclude`` raises.
 
     Its absence from the generated ``Book`` inputs is live in
@@ -276,7 +277,7 @@ def test_editable_fields_reject_naming_a_non_editable_many_to_many():
 # ---------------------------------------------------------------------------
 
 
-def test_input_field_required_rule():
+def test_input_field_required_rule() -> None:
     """Required only with no usable default: no ``default`` / ``blank`` / ``null``."""
     by_name = {f.name: f for f in editable_input_fields(product_models.Item)}
     assert input_field_required(by_name["name"]) is True  # TextField, no default
@@ -289,7 +290,7 @@ def test_input_field_required_rule():
 # ---------------------------------------------------------------------------
 
 
-def test_create_input_required_and_optional_shapes():
+def test_create_input_required_and_optional_shapes() -> None:
     """ItemInput: name + categoryId required; description / isPrivate optional + UNSET.
 
     The FK ``category_id`` is required (no usable default) and camelCases to
@@ -322,7 +323,7 @@ def test_create_input_required_and_optional_shapes():
     assert "updated_date" not in fields
 
 
-def test_partial_input_all_fields_optional_and_unset():
+def test_partial_input_all_fields_optional_and_unset() -> None:
     """ItemPartialInput: every field optional + UNSET-defaulted, incl. name / categoryId."""
     cls = build_mutation_input(product_models.Item, operation_kind=PARTIAL, primary_type=ItemType)
     fields = _field_map(cls)
@@ -336,13 +337,13 @@ def test_partial_input_all_fields_optional_and_unset():
         assert _default_of(fields[name]) is UNSET, name
 
 
-def test_create_input_name_is_canonical_model_input():
+def test_create_input_name_is_canonical_model_input() -> None:
     """The full editable shape takes the stable ``<Model>Input`` name."""
     cls = build_mutation_input(product_models.Item, operation_kind=CREATE, primary_type=ItemType)
     assert cls.__name__ == "ItemInput"
 
 
-def test_partial_input_name_is_canonical_model_partial_input():
+def test_partial_input_name_is_canonical_model_partial_input() -> None:
     """The full editable shape takes the stable ``<Model>PartialInput`` name."""
     cls = build_mutation_input(product_models.Item, operation_kind=PARTIAL, primary_type=ItemType)
     assert cls.__name__ == "ItemPartialInput"
@@ -353,7 +354,7 @@ def test_partial_input_name_is_canonical_model_partial_input():
 # ---------------------------------------------------------------------------
 
 
-def test_relation_id_scalar_without_a_primary_is_the_raw_pk_scalar():
+def test_relation_id_scalar_without_a_primary_is_the_raw_pk_scalar() -> None:
     """A related model with no registered primary type takes its raw pk scalar.
 
     The Relay and plain-primary arms are live in
@@ -363,7 +364,7 @@ def test_relation_id_scalar_without_a_primary_is_the_raw_pk_scalar():
     assert relation_id_scalar(library_models.Branch, None) is int
 
 
-def test_relation_id_annotation_wraps_multi_as_list_of_the_same_scalar():
+def test_relation_id_annotation_wraps_multi_as_list_of_the_same_scalar() -> None:
     """Cardinality wrap is the only extra axis on top of ``relation_id_scalar``."""
     relay_model, relay_type = _make_relay_target()
     assert relation_id_annotation(relay_model, relay_type, many=False) is relay.GlobalID
@@ -380,7 +381,7 @@ class _QuerySet:
         self.model = model
 
 
-def test_related_model_of_queryset_reads_model_or_none():
+def test_related_model_of_queryset_reads_model_or_none() -> None:
     """``queryset.model`` is the column-less related-model basis; missing stays ``None``."""
 
     class Target:
@@ -391,7 +392,7 @@ def test_related_model_of_queryset_reads_model_or_none():
     assert related_model_of_queryset(_QuerySet(None)) is None
 
 
-def test_require_queryset_related_model_raises_flavor_error_when_untyped():
+def test_require_queryset_related_model_raises_flavor_error_when_untyped() -> None:
     """Missing ``queryset.model`` raises the caller's configuration error, not AttributeError."""
     with pytest.raises(ConfigurationError, match="missing qs"):
         require_queryset_related_model(
@@ -400,7 +401,7 @@ def test_require_queryset_related_model_raises_flavor_error_when_untyped():
         )
 
 
-def test_annotate_queryset_relation_packages_id_type_and_related_model():
+def test_annotate_queryset_relation_packages_id_type_and_related_model() -> None:
     """Column-less wrap returns ``(python_attr, annotation, related_model)`` over the shared id type."""
     relay_model, relay_type = _make_relay_target()
     python_attr, annotation, related_model = annotate_queryset_relation(
@@ -426,7 +427,7 @@ def test_annotate_queryset_relation_packages_id_type_and_related_model():
     assert related_model is relay_model
 
 
-def test_form_and_serializer_column_less_relation_share_queryset_annotation():
+def test_form_and_serializer_column_less_relation_share_queryset_annotation() -> None:
     """Form and serializer column-less relation helpers import the same owner."""
     from django_strawberry_framework.forms import inputs as form_inputs
     from django_strawberry_framework.rest_framework import (
@@ -444,7 +445,7 @@ def test_form_and_serializer_column_less_relation_share_queryset_annotation():
 # ---------------------------------------------------------------------------
 
 
-def test_model_column_input_annotation_maps_file_and_scalar_columns():
+def test_model_column_input_annotation_maps_file_and_scalar_columns() -> None:
     """A non-relation column types as ``Upload`` when it is a file, else ``convert_scalar``."""
     from django_strawberry_framework.types.converters import convert_scalar
 
@@ -468,7 +469,7 @@ def test_model_column_input_annotation_maps_file_and_scalar_columns():
     assert annotation == convert_scalar(label_field, "MediaSpecimenInput", force_nullable=False)
 
 
-def test_model_column_write_kind_classifies_relation_file_and_scalar():
+def test_model_column_write_kind_classifies_relation_file_and_scalar() -> None:
     """A backing column is relation / file / scalar by the one shared classifier."""
     from django_strawberry_framework.utils.inputs import (
         FILE,
@@ -484,7 +485,7 @@ def test_model_column_write_kind_classifies_relation_file_and_scalar():
     assert model_column_write_kind(book._meta.get_field("genres")) == RELATION_MULTI
 
 
-def test_model_column_write_annotation_maps_file_and_scalar():
+def test_model_column_write_annotation_maps_file_and_scalar() -> None:
     """Annotation-only mapping is Upload for a file column, else convert_scalar."""
     from django_strawberry_framework.types.converters import convert_scalar
 
@@ -505,7 +506,7 @@ def test_model_column_write_annotation_maps_file_and_scalar():
     ) == convert_scalar(label_field, "MediaSpecimenInput", force_nullable=False)
 
 
-def test_form_and_serializer_column_kind_share_model_column_owner():
+def test_form_and_serializer_column_kind_share_model_column_owner() -> None:
     """Form reverse-map kind and serializer column resolve import the same owners."""
     from django_strawberry_framework.forms import inputs as form_inputs
     from django_strawberry_framework.rest_framework import (
@@ -528,7 +529,7 @@ def test_form_and_serializer_column_kind_share_model_column_owner():
 # ---------------------------------------------------------------------------
 
 
-def _make_relay_target():
+def _make_relay_target() -> tuple[type[library_models.Genre], type[DjangoType]]:
     """Register a Relay-Node ``DjangoType`` over ``library.Genre`` and return both."""
 
     class GenreNode(DjangoType, relay.Node):
@@ -539,7 +540,7 @@ def _make_relay_target():
     return library_models.Genre, GenreNode
 
 
-def _make_non_relay_target():
+def _make_non_relay_target() -> tuple[type[library_models.Branch], type[DjangoType]]:
     """Register a non-Relay ``DjangoType`` over ``library.Branch`` (raw int pk) and return both."""
 
     class BranchPlainType(DjangoType):
@@ -550,7 +551,7 @@ def _make_non_relay_target():
     return library_models.Branch, BranchPlainType
 
 
-def test_o2o_to_relay_target_uses_globalid_id():
+def test_o2o_to_relay_target_uses_globalid_id() -> None:
     """A forward OneToOne to a Relay-Node primary also becomes ``<field>_id: GlobalID``.
 
     ``MembershipCard.patron`` carries the shape; no fakeshop mutation writes a
@@ -583,7 +584,7 @@ def test_o2o_to_relay_target_uses_globalid_id():
 # ---------------------------------------------------------------------------
 
 
-def test_consumer_override_skips_generated_field():
+def test_consumer_override_skips_generated_field() -> None:
     """A python attr in ``overrides`` is skipped so a consumer field is not clobbered."""
     cls = build_mutation_input(
         product_models.Item,
@@ -597,7 +598,7 @@ def test_consumer_override_skips_generated_field():
     assert "name" in fields
 
 
-def test_consumer_override_freezes_one_shot_iterable():
+def test_consumer_override_freezes_one_shot_iterable() -> None:
     """Every attr in a direct iterable override is skipped from the generated remainder."""
     cls = build_mutation_input(
         product_models.Item,
@@ -654,7 +655,7 @@ def test_build_input_narrowing_accepts_any_iterable(
     key: str,
     names: tuple[str, ...],
     wrap: Callable[[tuple[str, ...]], Iterable[str]],
-):
+) -> None:
     """A list or one-shot generator narrows the input exactly as the equivalent tuple."""
     expected = _input_signature(_build_item_input(key, names))
     assert expected != _input_signature(_build_item_input(key, None))
@@ -666,9 +667,10 @@ def test_build_input_narrowing_accepts_any_iterable(
 # ---------------------------------------------------------------------------
 
 
-def test_fk_id_attr_collision_with_m2m_is_fail_loud():
-    """A forward FK ``category`` (-> ``category_id``) colliding with a forward M2M literally
-    named ``category_id`` raises ``ConfigurationError`` rather than silently dropping one input.
+def test_fk_id_attr_collision_with_m2m_is_fail_loud() -> None:
+    """A forward FK colliding with a forward M2M named ``category_id`` raises ``ConfigurationError``.
+
+    The FK ``category`` remaps to ``category_id``; raising beats silently dropping one input.
 
     Both generate the input attr ``category_id`` (the FK remaps to ``<field>_id``; the M2M
     keeps its plain field name), so ``build_strawberry_input_class`` would write the second
@@ -717,9 +719,10 @@ def test_fk_id_attr_collision_with_m2m_is_fail_loud():
         )
 
 
-def test_camel_case_graphql_name_collision_is_fail_loud():
-    """Two columns whose names default-camel-case to ONE GraphQL name raise rather than
-    silently dropping one input.
+def test_camel_case_graphql_name_collision_is_fail_loud() -> None:
+    """Two columns whose names default-camel-case to ONE GraphQL name raise.
+
+    Raising beats silently dropping one input.
 
     ``foo_bar`` and ``fooBar`` produce DISTINCT input attrs (the input-attr arm passes) but
     the SAME ``graphql_name`` ``fooBar``; Strawberry would collapse the two onto one schema
@@ -767,7 +770,7 @@ def test_camel_case_graphql_name_collision_is_fail_loud():
     materialize_mutation_input_class("ResolvedCamelInput", merged)
 
 
-def test_no_false_positive_collision_on_ordinary_model():
+def test_no_false_positive_collision_on_ordinary_model() -> None:
     """The collision guard does not false-positive on a normal model (products ``Item``).
 
     ``Item`` (name / description / category FK / attachment / is_private) has no colliding
@@ -783,7 +786,7 @@ def test_no_false_positive_collision_on_ordinary_model():
     }
 
 
-def test_digit_boundary_columns_do_not_silently_collide_in_generated_input():
+def test_digit_boundary_columns_do_not_silently_collide_in_generated_input() -> None:
     """Two editable columns differing only by an underscore-adjacent digit survive distinctly.
 
     ``field_2`` and ``field2`` produce DISTINCT ``graphql_camel_name`` values
@@ -846,7 +849,7 @@ def test_digit_boundary_columns_do_not_silently_collide_in_generated_input():
 # ---------------------------------------------------------------------------
 
 
-def test_type_name_full_shape_is_canonical():
+def test_type_name_full_shape_is_canonical() -> None:
     """The full editable shape resolves to ``<Model>Input`` / ``<Model>PartialInput``."""
     full = tuple(f.name for f in editable_input_fields(product_models.Item))
     assert (
@@ -859,7 +862,7 @@ def test_type_name_full_shape_is_canonical():
     )
 
 
-def test_type_name_narrowed_shape_is_deterministic_and_distinct():
+def test_type_name_narrowed_shape_is_deterministic_and_distinct() -> None:
     """A narrowed shape gets a deterministic, non-canonical, set-derived name."""
     full = tuple(f.name for f in editable_input_fields(product_models.Item))
     narrowed = ("name", "category")
@@ -877,7 +880,7 @@ def test_type_name_narrowed_shape_is_deterministic_and_distinct():
     assert name_a.endswith("Input")
 
 
-def test_type_name_token_boundaries_do_not_collide():
+def test_type_name_token_boundaries_do_not_collide() -> None:
     """Different field sets that share a pascalized token stream get distinct names.
 
     A per-segment-capitalize token (``IsPrivate``) keeps interior capitals, so a bare
@@ -907,7 +910,7 @@ def test_type_name_token_boundaries_do_not_collide():
     assert right == "ItemAB_ucInput"
 
 
-def test_type_name_digit_boundary_narrowings_stay_distinct():
+def test_type_name_digit_boundary_narrowings_stay_distinct() -> None:
     """``field_2`` / ``field2`` Meta.fields narrowings mint distinct input type names.
 
     ``pascalize_token`` used to strip every underscore (``field_2`` / ``field2`` both
@@ -984,7 +987,7 @@ def test_type_name_digit_boundary_narrowings_stay_distinct():
     assert "input DigitBoundaryField2Input" in sdl
 
 
-def test_type_name_other_legal_boundaries_do_not_collide():
+def test_type_name_other_legal_boundaries_do_not_collide() -> None:
     """Underscores after digits, collapsed letters, and capitals remain injective."""
     full = ("not_the_narrowed_set",)
 
@@ -1004,7 +1007,7 @@ def test_type_name_other_legal_boundaries_do_not_collide():
         assert left != right
 
 
-def test_build_empty_field_set_raises_configuration_error():
+def test_build_empty_field_set_raises_configuration_error() -> None:
     """An empty effective field set fails loud as ``ConfigurationError`` (bug 6).
 
     ``Meta.fields = ()`` (or an ``exclude`` covering every editable column) would
@@ -1027,7 +1030,7 @@ def test_build_empty_field_set_raises_configuration_error():
 # ---------------------------------------------------------------------------
 
 
-def test_identical_shape_dedupes_via_ledger():
+def test_identical_shape_dedupes_via_ledger() -> None:
     """Materializing the same class twice under one name is a no-op (identical shapes dedupe)."""
     cls = build_mutation_input(product_models.Item, operation_kind=CREATE, primary_type=ItemType)
     materialize_mutation_input_class("ItemInput", cls)
@@ -1038,7 +1041,7 @@ def test_identical_shape_dedupes_via_ledger():
     assert sys.modules[INPUTS_MODULE_PATH].ItemInput is cls
 
 
-def test_distinct_shapes_colliding_on_one_name_raise_configuration_error():
+def test_distinct_shapes_colliding_on_one_name_raise_configuration_error() -> None:
     """Two DISTINCT classes under one name raise ``ConfigurationError``."""
     cls_a = build_mutation_input(product_models.Item, operation_kind=CREATE, primary_type=ItemType)
     cls_b = build_mutation_input(
@@ -1051,7 +1054,7 @@ def test_distinct_shapes_colliding_on_one_name_raise_configuration_error():
         materialize_mutation_input_class("CollidingInput", cls_b)
 
 
-def test_materializer_rejects_consumer_alias_colliding_with_generated_remainder():
+def test_materializer_rejects_consumer_alias_colliding_with_generated_remainder() -> None:
     """A merged input is audited after inheritance combines both field surfaces."""
 
     @strawberry.input
@@ -1074,7 +1077,7 @@ def test_materializer_rejects_consumer_alias_colliding_with_generated_remainder(
 # ---------------------------------------------------------------------------
 
 
-def _media_specimen_node():
+def _media_specimen_node() -> type[DjangoType]:
     """Register a Relay-Node ``DjangoType`` over ``scalars.MediaSpecimen`` and return it."""
 
     class MediaSpecimenNode(DjangoType, relay.Node):
@@ -1090,7 +1093,7 @@ def _media_specimen_node():
     ["optional_attachment", "spare_image"],
     ids=["blank", "null"],
 )
-def test_optional_file_column_defaults_to_unset(column: str):
+def test_optional_file_column_defaults_to_unset(column: str) -> None:
     """An optional file column on the create input defaults to ``UNSET``, not ``None``.
 
     ``optional_attachment`` is optional through ``blank=True`` and
@@ -1106,7 +1109,7 @@ def test_optional_file_column_defaults_to_unset(column: str):
     assert _default_of(_field_map(cls)[column]) is UNSET
 
 
-def test_file_field_narrowed_by_meta_fields_and_exclude():
+def test_file_field_narrowed_by_meta_fields_and_exclude() -> None:
     """A file column is included / excluded by model field name via ``fields`` / ``exclude``."""
     primary_type = _media_specimen_node()
 
@@ -1138,14 +1141,13 @@ def test_file_field_narrowed_by_meta_fields_and_exclude():
     assert "attachment" not in _field_map(excluded)
 
 
-def test_file_field_consumer_override_skips_generated_upload_field():
+def test_file_field_consumer_override_skips_generated_upload_field() -> None:
     """A file column in ``overrides`` is SKIPPED, exactly like a scalar column.
 
     The file column participates in the ``Meta.input_class`` merge override: the
     override skip runs for it as for any scalar, so the generator emits no
     ``Upload`` field for it and the consumer's own definition stands.
     """
-
     cls = build_mutation_input(
         MediaSpecimen,
         operation_kind=CREATE,
@@ -1162,7 +1164,7 @@ def test_file_field_consumer_override_skips_generated_upload_field():
 # ---------------------------------------------------------------------------
 
 
-def test_field_error_envelope_shape():
+def test_field_error_envelope_shape() -> None:
     """``FieldError`` has ``field: str`` (non-null) + ``messages: list[str]`` (non-null list)."""
     definition = get_object_definition(FieldError, strict=True)
     fields = {f.python_name: f for f in definition.fields}
@@ -1171,7 +1173,7 @@ def test_field_error_envelope_shape():
     assert fields["messages"].type.of_type is str
 
 
-def test_field_error_field_set_is_frozen():
+def test_field_error_field_set_is_frozen() -> None:
     """``FieldError``'s field SET is pinned, so widening the shared envelope is deliberate.
 
     Every write flavor returns ``errors: list[FieldError]`` off the SAME class
@@ -1192,7 +1194,7 @@ def test_field_error_field_set_is_frozen():
     }
 
 
-def test_field_error_wire_name_set_on_a_generated_payload_is_frozen():
+def test_field_error_wire_name_set_on_a_generated_payload_is_frozen() -> None:
     """The WIRE name set a payload's ``errors`` exposes is pinned, not only the Python set.
 
     The row above pins the Python attribute set; a consumer selects wire names, so
@@ -1223,7 +1225,7 @@ def test_field_error_wire_name_set_on_a_generated_payload_is_frozen():
     }
 
 
-def test_payload_slot_never_model_derived_for_property_like_model():
+def test_payload_slot_never_model_derived_for_property_like_model() -> None:
     """A model whose name would collide with a builtin uses the uniform slot, not its name.
 
     The payload slot is uniform: a ``Property``-shaped payload exposes ``node``
@@ -1235,7 +1237,7 @@ def test_payload_slot_never_model_derived_for_property_like_model():
     assert "node" in fields
 
 
-def test_payload_model_less_shape():
+def test_payload_model_less_shape() -> None:
     """A model-less payload (object_type=None) yields ``ok: bool`` + ``errors`` with no object slot."""
     payload = build_payload_type("DoAction", object_type=None)
     assert payload.__name__ == "DoActionPayload"
@@ -1249,7 +1251,7 @@ def test_payload_model_less_shape():
     assert "result" not in fields
 
 
-def test_payload_slot_defaults_from_object_type():
+def test_payload_slot_defaults_from_object_type() -> None:
     """When object_slot is omitted, it defaults to the uniform slot via payload_object_slot."""
     _, relay_type = _make_relay_target()
     payload_relay = build_payload_type("CreateRelayAuto", object_type=relay_type)
@@ -1287,7 +1289,7 @@ def test_payload_slot_defaults_from_object_type():
 def test_editable_fields_keep_foreign_object_carriers_not_the_relation(
     child_name: str,
     names: list[str],
-):
+) -> None:
     """A forward ``ForeignObject`` is left out of the basis; its carrier columns stay in it.
 
     The relation stores no column of its own (its value is the carriers), the
@@ -1324,7 +1326,7 @@ def test_editable_fields_reject_naming_a_foreign_object(
     targets: str,
     carriers: str,
     key: str,
-):
+) -> None:
     """Naming a forward ``ForeignObject`` in ``fields`` or ``exclude`` names its link columns.
 
     It is never part of the basis, so naming it is the unknown-name rejection
@@ -1384,7 +1386,7 @@ def test_editable_fields_offer_only_carriers_that_are_inputs(
     to_fields: list[str],
     carriers: str,
     remedy: str,
-):
+) -> None:
     """The ``fields`` remedy names carrier FIELDS the input carries, and only those.
 
     ``Meta.fields`` takes field names, so a ``ForeignKey`` carrier is offered as
@@ -1423,14 +1425,14 @@ def test_editable_fields_offer_only_carriers_that_are_inputs(
     assert [field.name for field in editable_input_fields(model, fields=tuple(offered))] == offered
 
 
-def test_editable_fields_report_fields_and_exclude_together_before_a_foreign_object():
+def test_editable_fields_report_fields_and_exclude_together_before_a_foreign_object() -> None:
     """``fields`` beside ``exclude`` is the mutual-exclusion error, whichever names the link."""
     with pytest.raises(ConfigurationError, match="both `fields` and `exclude`"):
         editable_input_fields(_link_models.LnkPairChild, fields=("parent",), exclude=("name",))
 
 
 @pytest.mark.parametrize("key", ["fields", "exclude"])
-def test_editable_fields_reject_a_reverse_generic_relation_as_an_unknown_name(key: str):
+def test_editable_fields_reject_a_reverse_generic_relation_as_an_unknown_name(key: str) -> None:
     """A reverse ``GenericRel`` is a reverse relation, not a carrier-backed link.
 
     A ``GenericRelation`` with a ``related_query_name`` adds that reverse
@@ -1482,7 +1484,7 @@ def test_editable_fields_reject_a_reverse_generic_relation_as_an_unknown_name(ke
         editable_input_fields(tag, **{key: ("name", "holder")})
 
 
-def test_generated_input_over_a_foreign_object_model_binds_its_carriers():
+def test_generated_input_over_a_foreign_object_model_binds_its_carriers() -> None:
     """The full-shape input over a ``ForeignObject`` child binds: carriers are scalar inputs.
 
     The relation contributes no ``parent_id`` attr, so the bind-time reverse map
@@ -1513,7 +1515,7 @@ def test_generated_input_over_a_foreign_object_model_binds_its_carriers():
 # ---------------------------------------------------------------------------
 
 
-def test_mutation_input_field_specs_covers_generated_input():
+def test_mutation_input_field_specs_covers_generated_input() -> None:
     """Specs cover every generated input attr; FK target_name is ``<field>_id``."""
     from django_strawberry_framework.utils.inputs import RELATION_SINGLE, SCALAR
 
@@ -1534,7 +1536,7 @@ def test_mutation_input_field_specs_covers_generated_input():
     assert model_fields["name"] is product_models.Item._meta.get_field("name")
 
 
-def test_mutation_input_field_specs_rejects_non_column_attr():
+def test_mutation_input_field_specs_rejects_non_column_attr() -> None:
     """A merged-input attr that is not a concrete column fails at spec synthesis."""
 
     @strawberry.input
@@ -1546,7 +1548,7 @@ def test_mutation_input_field_specs_rejects_non_column_attr():
         mutation_input_field_specs(product_models.Item, Rogue)
 
 
-def test_mutation_input_field_specs_rejects_generic_foreign_key_attr():
+def test_mutation_input_field_specs_rejects_generic_foreign_key_attr() -> None:
     """A virtual relation (GFK) is not a concrete column, even if ``get_field`` finds it."""
     from apps.library import models as library_models
 
@@ -1559,7 +1561,7 @@ def test_mutation_input_field_specs_rejects_generic_foreign_key_attr():
         mutation_input_field_specs(library_models.TaggedItem, Rogue)
 
 
-def test_mutation_input_field_specs_classifies_m2m():
+def test_mutation_input_field_specs_classifies_m2m() -> None:
     """Forward M2M is ``RELATION_MULTI`` keyed by the field name, not ``<name>_id``."""
     from apps.library import models as library_models
 
@@ -1576,7 +1578,7 @@ def test_mutation_input_field_specs_classifies_m2m():
     assert model_fields["genres"] is library_models.Book._meta.get_field("genres")
 
 
-def test_mutation_input_field_specs_marks_excluded_kind():
+def test_mutation_input_field_specs_marks_excluded_kind() -> None:
     """``excluded_attrs`` records kind ``EXCLUDED`` without changing target_name."""
 
     @strawberry.input
@@ -1598,14 +1600,14 @@ def test_mutation_input_field_specs_marks_excluded_kind():
 # ---------------------------------------------------------------------------
 
 
-def test_field_error_is_public_export():
+def test_field_error_is_public_export() -> None:
     """``FieldError`` is exported from the package root and listed in ``__all__``."""
     assert django_strawberry_framework.FieldError is FieldError
     assert FieldErrorFromPackage is FieldError
     assert "FieldError" in django_strawberry_framework.__all__
 
 
-def test_field_error_payload_uses_a_strawberry_type():
+def test_field_error_payload_uses_a_strawberry_type() -> None:
     """Sanity: the payload + FieldError are real ``@strawberry.type`` classes."""
     assert hasattr(FieldError, "__strawberry_definition__")
     payload = build_payload_type("X", object_type=ItemType, object_slot="node")
@@ -1615,7 +1617,7 @@ def test_field_error_payload_uses_a_strawberry_type():
     assert not strawberry.type(payload).__strawberry_definition__.is_input
 
 
-def test_editable_input_fields_normalizes_its_declared_sequences():
+def test_editable_input_fields_normalizes_its_declared_sequences() -> None:
     """A bare string or a duplicate name is rejected here too, not only at the metaclass.
 
     ``editable_input_fields`` is a PUBLIC generator the auth and form adapters
@@ -1636,7 +1638,7 @@ def test_editable_input_fields_normalizes_its_declared_sequences():
 # ---------------------------------------------------------------------------
 
 
-def test_build_mutation_input_rejects_bare_string_overrides():
+def test_build_mutation_input_rejects_bare_string_overrides() -> None:
     """A bare ``str`` / ``bytes`` ``overrides`` fails loud instead of char-splitting.
 
     ``overrides`` freezes through ``frozenset``, so a bare string used to iterate
@@ -1665,7 +1667,7 @@ def test_build_mutation_input_rejects_bare_string_overrides():
         )
 
 
-def test_mutation_input_field_specs_rejects_bare_string_excluded_attrs():
+def test_mutation_input_field_specs_rejects_bare_string_excluded_attrs() -> None:
     """A bare ``str`` / ``bytes`` ``excluded_attrs`` fails loud, keeping the D6 seam honest.
 
     ``excluded_attrs`` records the spec-040 D6 capture attrs; frozen through
@@ -1696,9 +1698,10 @@ def test_mutation_input_field_specs_rejects_bare_string_excluded_attrs():
         )
 
 
-def test_build_payload_type_rejects_reserved_or_invalid_object_slot():
-    """A payload ``object_slot`` colliding with ``ok`` / ``errors`` (or not an identifier)
-    fails loud.
+def test_build_payload_type_rejects_reserved_or_invalid_object_slot() -> None:
+    """A payload ``object_slot`` colliding with ``ok`` / ``errors`` fails loud.
+
+    A slot that is not an identifier fails loud as well.
 
     The payload namespace dict keys the object slot beside ``errors`` (and the
     model-less ``ok``), so a slot named ``errors`` used to collapse onto the

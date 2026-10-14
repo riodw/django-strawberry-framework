@@ -40,12 +40,12 @@ def test_counts_classify_by_shape_across_cardinalities(
     count_queries: ModuleType,
     counts: list[int],
     verdict: str,
-):
+) -> None:
     """Equal counts are batched, a rise at every step scales, anything else is mixed."""
     assert count_queries.classify_counts(counts) == verdict
 
 
-def test_one_count_has_no_verdict(count_queries: ModuleType):
+def test_one_count_has_no_verdict(count_queries: ModuleType) -> None:
     """A single cardinality cannot show a shape, so classification refuses."""
     with pytest.raises(ValueError, match="two or more"):
         count_queries.classify_counts([4])
@@ -63,13 +63,14 @@ def test_one_count_has_no_verdict(count_queries: ModuleType):
 def test_verdict_is_evidence_only_when_root_rows_grew(
     count_queries: ModuleType,
     root_rows: list[int | None],
+    *,
     grew: bool,
-):
+) -> None:
     """Flat or unknown root rows mean the added parents never reached a resolver."""
     assert count_queries.rows_grew(root_rows) is grew
 
 
-def test_cardinalities_parse_sorted_and_refuse_zero_or_repeats(count_queries: ModuleType):
+def test_cardinalities_parse_sorted_and_refuse_zero_or_repeats(count_queries: ModuleType) -> None:
     """Cells run ascending; 0 fakes a slope and a repeat measures nothing new."""
     assert count_queries.parse_cardinalities("30,2,10") == [2, 10, 30]
     with pytest.raises(ValueError, match="positive"):
@@ -84,7 +85,7 @@ def _report(
     sha1: str = "abc",
     name: str | None = None,
     verdict: str = "batched",
-):
+) -> dict[str, object]:
     report = _bench_common.build_report(
         tool="count_queries",
         provenance={"package_file": "/tree/pkg/__init__.py"},
@@ -104,7 +105,9 @@ def _report(
     return report
 
 
-def test_compare_prints_per_cardinality_deltas_and_both_verdicts(count_queries: ModuleType):
+def test_compare_prints_per_cardinality_deltas_and_both_verdicts(
+    count_queries: ModuleType,
+) -> None:
     """Each cardinality shows before, after and signed delta, then the verdict change."""
     before = _report([4, 4, 4])
     after = _report([4, 13, 33], verdict="scales with cardinality")
@@ -133,7 +136,7 @@ def test_compare_refuses_a_different_operation(
     before: tuple[str, str | None],
     after: tuple[str, str | None],
     key: str,
-):
+) -> None:
     """Deltas between two operations mean nothing, so the comparison refuses.
 
     One document can hold several operations, so the same fingerprint run
@@ -163,12 +166,12 @@ def test_effective_operation_name_is_the_one_executed(
     document: str,
     operation_name: str | None,
     effective: str | None,
-):
+) -> None:
     """A missing name runs the first operation, so a named single operation compares alike."""
     assert count_queries.effective_operation_name(document, operation_name) == effective
 
 
-def test_builtin_operations_name_a_known_seeder(count_queries: ModuleType):
+def test_builtin_operations_name_a_known_seeder(count_queries: ModuleType) -> None:
     """Every built-in operation seeds rows its root field reads."""
     assert {op.seeder for op in count_queries.BUILTIN_OPERATIONS.values()} <= {
         "products",

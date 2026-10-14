@@ -14,10 +14,10 @@ import asyncio
 import gc
 import inspect
 import weakref
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from functools import partial
 from types import SimpleNamespace
-from typing import Any, TypedDict
+from typing import Any, NoReturn, TypedDict
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -101,7 +101,7 @@ class _ClassClaimingResourcePolicy(DjangoResourcePolicyExtension):
     @property
     @override
     # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def __class__(self) -> type:  # pyright: ignore[reportIncompatibleMethodOverride]
         """Claim ``type``, so an ``isinstance`` classifier sees a class entry."""
         return type
 
@@ -112,7 +112,7 @@ class _ClassClaimingErrorPolicy(DjangoErrorPolicyExtension):
     @property
     @override
     # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def __class__(self) -> type:  # pyright: ignore[reportIncompatibleMethodOverride]
         """Claim ``type``, so an ``isinstance`` classifier sees a class entry."""
         return type
 
@@ -132,7 +132,7 @@ class _MarkerExtension(SchemaExtension):
     mark = "accepted"
 
     @override
-    def on_operation(self):
+    def on_operation(self) -> Iterator[None]:
         """Record that this entry ran the operation."""
         _MARKS.append(self.mark)
         yield
@@ -154,6 +154,8 @@ def _clear_marks() -> Iterator[None]:
 
 @strawberry.type
 class DummyQuery:
+    """A one-field root query the schema tests build their schemas around."""
+
     @strawberry.field
     def hello(self) -> str:
         return "world"
@@ -168,31 +170,33 @@ class _RowQuery:
 
 @strawberry.type
 class DummyMutation:
+    """A one-field root mutation, for schemas that need a mutation type."""
+
     @strawberry.mutation
     def plain_mutation(self) -> str:
         return "plain"
 
 
-def test_schema_init_with_none_and_iterable_extensions():
+def test_schema_init_with_none_and_iterable_extensions() -> None:
     schema_none = DjangoSchema(query=DummyQuery, extensions=None)
     assert schema_none.extensions == ()
 
     schema_tuple = DjangoSchema(query=DummyQuery, extensions=(_MarkerExtension,))
     assert schema_tuple.extensions == (_MarkerExtension,)
 
-    def ext_gen():
+    def ext_gen() -> Iterator[type[_MarkerExtension]]:
         yield _MarkerExtension
 
     schema_gen = DjangoSchema(query=DummyQuery, extensions=ext_gen())
     assert schema_gen.extensions == (_MarkerExtension,)
 
 
-def test_schema_init_with_none_execution_context_class_falls_back():
+def test_schema_init_with_none_execution_context_class_falls_back() -> None:
     schema = DjangoSchema(query=DummyQuery, execution_context_class=None)
     assert schema.execution_context_class is DjangoMutationExecutionContext
 
 
-def test_consumer_extension_entries_shapes():
+def test_consumer_extension_entries_shapes() -> None:
     """What travels as configuration, and what is read once and folded into the record."""
     assert _consumer_extension_entries(None) == ([], None)
     assert _consumer_extension_entries([]) == ([], None)
@@ -208,7 +212,7 @@ def test_consumer_extension_entries_shapes():
     assert declared == ResourcePolicy(max_list_rows=4)
 
 
-def test_an_entry_is_classified_by_its_real_type_whatever_its_class_property_says():
+def test_an_entry_is_classified_by_its_real_type_whatever_its_class_property_says() -> None:
     """A consumer object decides what ``isinstance`` sees, and ``type()`` ignores it.
 
     A ``__class__`` that raises, and one that claims to be a class, both come
@@ -218,8 +222,9 @@ def test_an_entry_is_classified_by_its_real_type_whatever_its_class_property_say
     class _HostileClass:
         @property
         @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is the guard's input
-        def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is
+        # the guard's input
+        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
             raise TypeError("hostile __class__")
 
     assert _entry_type(_HostileClass()) is _HostileClass
@@ -227,7 +232,7 @@ def test_an_entry_is_classified_by_its_real_type_whatever_its_class_property_say
     assert _entry_type(DjangoResourcePolicyExtension) is DjangoResourcePolicyExtension
 
 
-def test_extension_entry_matches_adversarial():
+def test_extension_entry_matches_adversarial() -> None:
     assert _extension_entry_matches(DjangoErrorPolicyExtension(), DjangoErrorPolicyExtension)
     assert not _extension_entry_matches(
         DjangoResourcePolicyExtension(),
@@ -262,7 +267,7 @@ def test_extension_entry_matches_adversarial():
         "error-subclass-instance-claiming-a-class",
     ],
 )
-def test_a_subclass_of_an_enforcement_extension_is_refused_at_construction(entry: object):
+def test_a_subclass_of_an_enforcement_extension_is_refused_at_construction(entry: object) -> None:
     """Inheriting an authority is not being one, and the census cannot tell them apart.
 
     A subclass overriding the single hook that charges a document or masks a
@@ -280,7 +285,7 @@ def _field_node(name: str) -> FieldNode:
     return FieldNode(name=NameNode(value=name))
 
 
-def test_marked_mutation_class_safe_on_none_parent_and_malformed_nodes():
+def test_marked_mutation_class_safe_on_none_parent_and_malformed_nodes() -> None:
     schema = DjangoSchema(query=DummyQuery)
     graphql_schema = schema._schema
 
@@ -326,7 +331,7 @@ def test_marked_mutation_class_safe_on_none_parent_and_malformed_nodes():
     assert ctx_mut._marked_mutation_class(mut_type, [named_node]) is None
 
 
-def test_execution_errors_fallback():
+def test_execution_errors_fallback() -> None:
     ctx = DjangoMutationExecutionContext.__new__(DjangoMutationExecutionContext)
     assert ctx._execution_errors() == []
 
@@ -336,7 +341,7 @@ def test_execution_errors_fallback():
     assert ctx._execution_errors() == []
 
 
-def test_schema_policy_resolution_and_validation():
+def test_schema_policy_resolution_and_validation() -> None:
     s1 = DjangoSchema(
         query=DummyQuery,
         resource_policy={"max_depth": 10},
@@ -363,7 +368,7 @@ _MUTATION_ROOT_PATH = Path(None, "mutation", "Mutation")
 
 
 @pytest.mark.django_db
-def test_execute_mutation_field_sync_exception_rolls_back():
+def test_execute_mutation_field_sync_exception_rolls_back() -> None:
     class DummyMutationCls:
         _mutation_meta = MagicMock(model=None)
 
@@ -384,14 +389,19 @@ def test_execute_mutation_field_sync_exception_rolls_back():
 
 
 class FlipFlopErrorList:
-    """Friendly on the first ``len`` (the window opens), hostile on the second
-    (the rollback decision) - the shape that reaches past ``errors_before``."""
+    """An error list that answers its first ``len`` and raises on the second.
+
+    The first read is the window opening, the second the rollback decision: the
+    shape that reaches past ``errors_before``.
+    """
 
     def __init__(self) -> None:
+        """Start with no ``len`` reads recorded."""
         super().__init__()
         self.calls = 0
 
     def __len__(self) -> int:
+        """Answer the first read with zero and raise on the next."""
         self.calls += 1
         if self.calls == 1:
             return 0
@@ -410,7 +420,7 @@ class _ModelLessMutationMeta:
 _ROLLBACK_PROBE_NAME = "hostile-error-container-rollback-probe"
 
 
-def _write_the_rollback_probe_row(*args: object, **kwargs: object):
+def _write_the_rollback_probe_row(*args: object, **kwargs: object) -> str:
     """Write inside the window, then return cleanly - a resolver that already wrote."""
     del args, kwargs
     Branch.objects.create(name=_ROLLBACK_PROBE_NAME)
@@ -423,7 +433,7 @@ def _rollback_probe_row_exists() -> bool:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_sync_window_hostile_error_container_rolls_back_and_leaks_no_transaction():
+def test_sync_window_hostile_error_container_rolls_back_and_leaks_no_transaction() -> None:
     """A hostile error container rolls the window back; it cannot abandon it either.
 
     ``_rollback_for_new_errors`` runs between the atomic enter and exit, so a
@@ -461,7 +471,7 @@ def test_sync_window_hostile_error_container_rolls_back_and_leaks_no_transaction
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
-async def test_async_window_hostile_error_container_rolls_back_and_leaks_no_transaction():
+async def test_async_window_hostile_error_container_rolls_back_and_leaks_no_transaction() -> None:
     """The async window's clean exit obeys the same containment, rollback included.
 
     The rollback decision raising must not skip the atomic exit, which would
@@ -488,7 +498,7 @@ async def test_async_window_hostile_error_container_rolls_back_and_leaks_no_tran
     # installed release declares only one of them
     ctx.collected_errors = SimpleNamespace(errors=FlipFlopErrorList())  # pyright: ignore[reportAttributeAccessIssue]
 
-    def _write_in_the_window_worker(*args: object, **kwargs: object):
+    def _write_in_the_window_worker(*args: object, **kwargs: object) -> Awaitable[object]:
         return run_in_one_sync_boundary(_write_the_rollback_probe_row, *args, **kwargs)
 
     with (
@@ -511,7 +521,7 @@ async def test_async_window_hostile_error_container_rolls_back_and_leaks_no_tran
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
-async def test_execute_mutation_field_async_exception_rolls_back():
+async def test_execute_mutation_field_async_exception_rolls_back() -> None:
     class DummyMutationCls:
         _mutation_meta = MagicMock(model=None)
 
@@ -524,7 +534,7 @@ async def test_execute_mutation_field_async_exception_rolls_back():
 
     ctx.is_awaitable = _is_awaitable
 
-    async def async_failing_resolve(*_args: object, **_kwargs: object):
+    async def async_failing_resolve(*_args: object, **_kwargs: object) -> NoReturn:
         raise RuntimeError("async field crash")
 
     with (
@@ -546,7 +556,7 @@ async def test_execute_mutation_field_async_exception_rolls_back():
             await pending
 
 
-def test_get_extensions_refuses_a_factory_that_resolves_to_an_authority():
+def test_get_extensions_refuses_a_factory_that_resolves_to_an_authority() -> None:
     """A factory cannot be classified at construction, so its product is typed here.
 
     The entry is accepted - a callable is a callable - and what it returns is
@@ -555,7 +565,7 @@ def test_get_extensions_refuses_a_factory_that_resolves_to_an_authority():
     what the same callable will hand back next request.
     """
 
-    def resource_factory():
+    def resource_factory() -> CustomResourcePolicyExtension:
         return CustomResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))
 
     schema = DjangoSchema(query=DummyQuery, extensions=[resource_factory])
@@ -563,10 +573,10 @@ def test_get_extensions_refuses_a_factory_that_resolves_to_an_authority():
     _assert_configuration_refusal(schema.execute_sync("{ hello }"))
 
 
-def test_get_extensions_gives_an_unrelated_factory_both_package_authorities():
+def test_get_extensions_gives_an_unrelated_factory_both_package_authorities() -> None:
     """The control: an ordinary consumer factory runs between the two authorities."""
 
-    def unrelated_factory():
+    def unrelated_factory() -> _MarkerExtension:
         return _MarkerExtension()
 
     schema = DjangoSchema(query=DummyQuery, extensions=[unrelated_factory])
@@ -581,7 +591,7 @@ def test_get_extensions_gives_an_unrelated_factory_both_package_authorities():
     ]
 
 
-def test_get_extensions_resolves_one_authority_of_each_kind_for_a_bare_class_entry():
+def test_get_extensions_resolves_one_authority_of_each_kind_for_a_bare_class_entry() -> None:
     """A bare class entry declares the automatic extension, so it is not a second one."""
     schema = DjangoSchema(query=DummyQuery, extensions=[DjangoResourcePolicyExtension])
     resolved = schema.get_extensions(sync=True)
@@ -591,7 +601,7 @@ def test_get_extensions_resolves_one_authority_of_each_kind_for_a_bare_class_ent
     assert sum(_is_extension(e, DjangoErrorPolicyExtension) for e in resolved) == 1
 
 
-def test_get_extensions_sync_and_async():
+def test_get_extensions_sync_and_async() -> None:
     schema = DjangoSchema(query=DummyQuery)
     sync_exts = schema.get_extensions(sync=True)
     async_exts = schema.get_extensions(sync=False)
@@ -616,7 +626,7 @@ class _PolicyKeyword(TypedDict, total=False):
     ],
     ids=["resource", "error"],
 )
-def test_a_schema_policy_attribute_answers_with_a_copy(row: _PolicyKeyword):
+def test_a_schema_policy_attribute_answers_with_a_copy(row: _PolicyKeyword) -> None:
     """``info.schema`` reaches this attribute from every resolver in every request.
 
     A frozen dataclass refuses ``setattr`` and accepts ``policy.__dict__[name] =
@@ -640,7 +650,7 @@ def test_a_schema_policy_attribute_answers_with_a_copy(row: _PolicyKeyword):
     ["resource_policy", "error_policy"],
     ids=["resource", "error"],
 )
-def test_a_resolver_cannot_install_a_policy_by_writing_the_schema(attribute: str):
+def test_a_resolver_cannot_install_a_policy_by_writing_the_schema(attribute: str) -> None:
     """``info.schema`` is not a seam onto what the next request is held to.
 
     The property answers with a copy, which settles what a WRITE THROUGH it can
@@ -667,7 +677,7 @@ def test_a_resolver_cannot_install_a_policy_by_writing_the_schema(attribute: str
         setattr(schema, attribute, ResourcePolicy(max_list_rows=999))
 
 
-def test_a_resolver_cannot_disarm_enforcement_by_emptying_the_extension_list():
+def test_a_resolver_cannot_disarm_enforcement_by_emptying_the_extension_list() -> None:
     """A ``DjangoSchema`` enforces because it is one, not because a list still says so.
 
     Emptying ``schema.extensions`` would remove the budget and the masking from
@@ -704,7 +714,7 @@ class _BoundedRowQuery:
         return list(bounded_rows(["a", "b", "c"], info, None))
 
 
-def _assert_entry_survives_a_replacement_attempt(schema: DjangoSchema):
+def _assert_entry_survives_a_replacement_attempt(schema: DjangoSchema) -> None:
     """One accepted configuration keeps running, and keeps bounding, afterwards."""
     assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
     assert _MARKS == ["accepted"]
@@ -723,7 +733,7 @@ def _assert_entry_survives_a_replacement_attempt(schema: DjangoSchema):
     [_MarkerExtension, partial(_MarkerExtension)],
     ids=["class", "factory"],
 )
-def test_an_accepted_extension_entry_still_runs_after_a_replacement_attempt(entry: object):
+def test_an_accepted_extension_entry_still_runs_after_a_replacement_attempt(entry: object) -> None:
     """Two configuration spellings, one thing to protect.
 
     A class and a factory are different things to resolve - one is constructed
@@ -739,7 +749,7 @@ def test_an_accepted_extension_entry_still_runs_after_a_replacement_attempt(entr
     _assert_entry_survives_a_replacement_attempt(schema)
 
 
-def test_an_accepted_extension_instance_still_runs_after_a_replacement_attempt():
+def test_an_accepted_extension_instance_still_runs_after_a_replacement_attempt() -> None:
     """The third configuration spelling, which Strawberry itself deprecates.
 
     An instance entry shares one object across every request, so Strawberry
@@ -755,7 +765,7 @@ def test_an_accepted_extension_instance_still_runs_after_a_replacement_attempt()
     _assert_entry_survives_a_replacement_attempt(schema)
 
 
-def test_a_policy_declared_by_an_entry_and_by_the_argument_is_refused():
+def test_a_policy_declared_by_an_entry_and_by_the_argument_is_refused() -> None:
     """Two declarations of one ceiling are a configuration with two answers."""
     with pytest.raises(ConfigurationError, match="declared twice"):
         DjangoSchema(
@@ -765,7 +775,7 @@ def test_a_policy_declared_by_an_entry_and_by_the_argument_is_refused():
         )
 
 
-def test_two_entries_declaring_a_policy_of_their_own_are_refused():
+def test_two_entries_declaring_a_policy_of_their_own_are_refused() -> None:
     """Two entries carrying a policy are the same two answers, spelled differently."""
     with pytest.raises(ConfigurationError, match="two resource-policy"):
         DjangoSchema(
@@ -785,8 +795,9 @@ def test_two_entries_declaring_a_policy_of_their_own_are_refused():
 @pytest.mark.parametrize("with_mutation", [False, True], ids=["query-only", "with-mutation"])
 def test_incremental_execution_is_refused_at_construction(
     config_factory: Callable[..., StrawberryConfig],
+    *,
     with_mutation: bool,
-):
+) -> None:
     """Incremental delivery serves frames outside the one response every guarantee holds for.
 
     Refused for every schema shape, not only one exposing mutations: a deferred
@@ -808,14 +819,16 @@ def test_incremental_execution_is_refused_at_construction(
     [None, strawberry_config(), StrawberryConfig(enable_experimental_incremental_execution=False)],
     ids=["no-config", "strawberry_config", "flag-off"],
 )
-def test_a_config_without_incremental_execution_constructs(config: StrawberryConfig | None):
+def test_a_config_without_incremental_execution_constructs(
+    config: StrawberryConfig | None,
+) -> None:
     """The refusal reads the flag alone: an omitted config or one with the flag off is accepted."""
     schema = DjangoSchema(query=DummyQuery, config=config)
 
     assert not schema.config.enable_experimental_incremental_execution
 
 
-def test_a_policy_declared_by_an_entry_becomes_the_schemas_own():
+def test_a_policy_declared_by_an_entry_becomes_the_schemas_own() -> None:
     """An entry declaring a policy is read once, where it is accepted, and folded in.
 
     Keeping the entry would leave the object a resolver reaches through
@@ -833,7 +846,7 @@ def test_a_policy_declared_by_an_entry_becomes_the_schemas_own():
     assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
 
 
-def test_a_schema_with_no_enforcement_record_is_bounded_by_the_package_defaults():
+def test_a_schema_with_no_enforcement_record_is_bounded_by_the_package_defaults() -> None:
     """The fail-closed miss path: no record means the package defaults, never none.
 
     Reachable through a subclass that never completes ``DjangoSchema.__init__``.
@@ -845,7 +858,7 @@ def test_a_schema_with_no_enforcement_record_is_bounded_by_the_package_defaults(
     class _Unregistered(DjangoSchema):
         # basedpyright: the stand-in skips DjangoSchema's constructor on purpose: the test
         # proves a schema with no enforcement record falls back to the package defaults
-        def __init__(self):  # pyright: ignore[reportMissingSuperCall]
+        def __init__(self) -> None:  # pyright: ignore[reportMissingSuperCall]
             pass
 
     schema = _Unregistered()
@@ -855,7 +868,7 @@ def test_a_schema_with_no_enforcement_record_is_bounded_by_the_package_defaults(
     assert schema.extensions == ()
 
 
-def test_two_schemas_that_compare_equal_keep_their_own_enforcement():
+def test_two_schemas_that_compare_equal_keep_their_own_enforcement() -> None:
     """An enforcement record belongs to one object, not to everything equal to it.
 
     A registry that finds its entries by hash and equality hands a consumer
@@ -866,11 +879,11 @@ def test_two_schemas_that_compare_equal_keep_their_own_enforcement():
 
     class _EqualSchema(DjangoSchema):
         @override
-        def __hash__(self):
+        def __hash__(self) -> int:
             return 1
 
         @override
-        def __eq__(self, other: object):
+        def __eq__(self, other: object) -> bool:
             return isinstance(other, _EqualSchema)
 
     narrow = _EqualSchema(query=DummyQuery, resource_policy=ResourcePolicy(max_list_rows=1))
@@ -885,12 +898,12 @@ def test_two_schemas_that_compare_equal_keep_their_own_enforcement():
     assert wide.resource_policy.max_list_rows == 999
 
 
-def test_a_schema_that_cannot_be_hashed_is_still_constructible_and_bounded():
+def test_a_schema_that_cannot_be_hashed_is_still_constructible_and_bounded() -> None:
     """Identity needs no hash, so declaring ``__eq__`` cannot cost a schema its record."""
 
     class _UnhashableSchema(DjangoSchema):
         @override
-        def __eq__(self, other: object):
+        def __eq__(self, other: object) -> bool:
             return self is other
 
         # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
@@ -908,16 +921,20 @@ class _ContextSentinel:
 class _FactorySchema(DjangoSchema):
     """A schema configured with a BOUND METHOD, which is the non-deprecated factory."""
 
-    def make_extension(self):
+    def make_extension(self) -> _MarkerExtension:
         """Build this schema's consumer extension, fresh per operation."""
         return _MarkerExtension()
 
     # basedpyright: verbatim forward to DjangoSchema.__init__; object fails its typed params
-    def __init__(self, **kwargs: Any):  # pyright: ignore[reportExplicitAny]
+    def __init__(self, **kwargs: Any) -> None:  # pyright: ignore[reportExplicitAny]
         super().__init__(extensions=[self.make_extension], **kwargs)
 
 
-def _reachability_after_dropping(make_schema: Callable[[], DjangoSchema], *, execute: bool):
+def _reachability_after_dropping(
+    make_schema: Callable[[], DjangoSchema],
+    *,
+    execute: bool,
+) -> tuple[DjangoSchema | None, object | None, _ContextSentinel | None]:
     """Whether the schema, its record, and one request's context survive collection."""
     schema = make_schema()
     record = _SCHEMA_ENFORCEMENT.recall(schema)
@@ -947,8 +964,9 @@ def _reachability_after_dropping(make_schema: Callable[[], DjangoSchema], *, exe
 )
 def test_a_schema_stays_collectable_whatever_configured_it(
     configure: Callable[[], DjangoSchema],
+    *,
     execute: bool,
-):
+) -> None:
     """Holding a schema's configuration must not hold the schema.
 
     An extension instance acquires its execution context when the operation
@@ -962,7 +980,7 @@ def test_a_schema_stays_collectable_whatever_configured_it(
     assert _reachability_after_dropping(configure, execute=execute) == (None, None, None)
 
 
-def test_an_accepted_extension_instance_does_not_outlive_its_schema():
+def test_an_accepted_extension_instance_does_not_outlive_its_schema() -> None:
     """The instance spelling, whose extension holds the execution context it ran under."""
     with pytest.warns(DeprecationWarning, match="Passing an extension instance"):
         alive = _reachability_after_dropping(
@@ -990,7 +1008,7 @@ _POLICY_WRITE_ATTACKS: list[Callable[[DjangoSchema], object]] = [
 )
 def test_the_accepted_policies_survive_every_write_to_the_schema(
     attack: Callable[[DjangoSchema], object],
-):
+) -> None:
     """No name on a schema answers with the policies it was accepted with.
 
     ``info.schema`` is handed to every resolver, so anything the schema holds a
@@ -1009,7 +1027,7 @@ def test_the_accepted_policies_survive_every_write_to_the_schema(
     assert schema.error_policy.enabled is True
 
 
-def test_no_name_on_a_schema_answers_with_a_policy():
+def test_no_name_on_a_schema_answers_with_a_policy() -> None:
     """The census behind the row above, quantified over what the schema carries.
 
     A row that names the attribute it expects to be absent passes once the
@@ -1026,7 +1044,7 @@ def test_no_name_on_a_schema_answers_with_a_policy():
         assert not isinstance(getattr(value, "error_policy", None), ErrorPolicy)
 
 
-def test_a_schema_cannot_be_reconfigured_by_running_its_constructor():
+def test_a_schema_cannot_be_reconfigured_by_running_its_constructor() -> None:
     """A constructed schema is reachable from every resolver, and so is its ``__init__``.
 
     Re-running it would settle new policies for every later request the process
@@ -1042,7 +1060,7 @@ def test_a_schema_cannot_be_reconfigured_by_running_its_constructor():
     assert schema.execute_sync("{ hello }").errors is None
 
 
-def _schema_holding_an_unnamed_entry(rows: int = 1):
+def _schema_holding_an_unnamed_entry(rows: int = 1) -> DjangoSchema:
     """A schema whose accepted entries include one the attribute is the last hold on.
 
     An entry that is a module-level class outlives any write to the attribute,
@@ -1054,7 +1072,7 @@ def _schema_holding_an_unnamed_entry(rows: int = 1):
     called once per operation, and what it returns is the consumer's.
     """
 
-    def marking_extension():
+    def marking_extension() -> _MarkerExtension:
         return _MarkerExtension()
 
     return DjangoSchema(
@@ -1064,7 +1082,7 @@ def _schema_holding_an_unnamed_entry(rows: int = 1):
     )
 
 
-def _widening_factory():
+def _widening_factory() -> _ForgedMarkerExtension:
     """An extension entry a resolver would rather the next operation resolved."""
     return _ForgedMarkerExtension()
 
@@ -1083,7 +1101,7 @@ _EXTENSION_ENTRY_ATTACKS: list[Callable[[DjangoSchema], object]] = [
 )
 def test_the_accepted_extensions_are_answered_for_entry_by_entry(
     attack: Callable[[DjangoSchema], object],
-):
+) -> None:
     """What runs the next operation is a membership, not the identity of a carrier.
 
     A carrier holding the entries is one whose identity a write to its contents
@@ -1123,7 +1141,7 @@ _UNREADABLE_EXTENSION_ATTACKS: list[Callable[[DjangoSchema], object]] = [
 )
 def test_an_operation_is_refused_when_the_accepted_extensions_cannot_be_read_back(
     attack: Callable[[DjangoSchema], object],
-):
+) -> None:
     """The accepted entries are the only record of what the consumer asked to run.
 
     A factory's extension is built per operation and named by nothing else, so
@@ -1153,7 +1171,7 @@ def test_an_operation_is_refused_when_the_accepted_extensions_cannot_be_read_bac
     assert _MARKS == ["accepted"]
 
 
-def test_a_refused_schema_does_not_begin_executing_either():
+def test_a_refused_schema_does_not_begin_executing_either() -> None:
     """The refusal is restated where execution starts, for a path that got that far."""
     schema = _schema_holding_an_unnamed_entry()
     schema.__dict__.pop("_django_extensions")
@@ -1163,7 +1181,7 @@ def test_a_refused_schema_does_not_begin_executing_either():
         refusal.on_execute()
 
 
-def test_replacing_the_accepted_extensions_does_not_make_a_schema_unconstructed():
+def test_replacing_the_accepted_extensions_does_not_make_a_schema_unconstructed() -> None:
     """Losing an entry must not reopen the one write the setter admits."""
     schema = _schema_holding_an_unnamed_entry()
     schema.__dict__.pop("_django_extensions")
@@ -1184,7 +1202,7 @@ class _SlottedFactory:
 
     __slots__ = ()
 
-    def __call__(self):
+    def __call__(self) -> _MarkerExtension:
         return _MarkerExtension()
 
 
@@ -1195,7 +1213,7 @@ class _InertExtension(SchemaExtension):
 class _WeakReferenceableFactory:
     """The control: the same factory, with the layout a weak reference can be taken of."""
 
-    def __call__(self):
+    def __call__(self) -> _MarkerExtension:
         return _MarkerExtension()
 
 
@@ -1204,7 +1222,7 @@ class _WideningSlottedFactory:
 
     __slots__ = ()
 
-    def __call__(self):
+    def __call__(self) -> _ForgedMarkerExtension:
         return _ForgedMarkerExtension()
 
 
@@ -1215,7 +1233,7 @@ class _WideningSlottedFactory:
 )
 def test_a_slotted_callable_factory_is_accepted_and_runs(
     factory: type[_SlottedFactory | _WeakReferenceableFactory],
-):
+) -> None:
     """A callable factory works whatever its object layout is.
 
     Strawberry accepts either one, so a schema that refused the slotted form
@@ -1233,7 +1251,7 @@ def test_a_slotted_callable_factory_is_accepted_and_runs(
     assert _MARKS == ["accepted"]
 
 
-def test_a_slotted_entry_does_not_root_the_schema_that_holds_it():
+def test_a_slotted_entry_does_not_root_the_schema_that_holds_it() -> None:
     """The entry a global table could most easily have ended up holding strongly.
 
     A slotted entry is the one whose evidence is not a weak reference to itself,
@@ -1250,7 +1268,7 @@ def test_a_slotted_entry_does_not_root_the_schema_that_holds_it():
     assert alive == (None, None, None)
 
 
-def test_a_mixed_entry_list_answers_each_entry_from_its_own_evidence():
+def test_a_mixed_entry_list_answers_each_entry_from_its_own_evidence() -> None:
     """A rewritten attribute runs nothing it nominated, whichever form an entry takes.
 
     The weak-referenceable entry here is a module-level class, which the module
@@ -1278,7 +1296,7 @@ def test_a_mixed_entry_list_answers_each_entry_from_its_own_evidence():
     assert refused.errors[0].extensions == {"code": SCHEMA_CONFIGURATION_ERROR_CODE}
 
 
-def test_a_weak_only_entry_list_survives_the_same_write():
+def test_a_weak_only_entry_list_survives_the_same_write() -> None:
     """The control that keeps the mixed row honest: nothing here needs the holder.
 
     Every entry is a class the module still names, so every piece of evidence
@@ -1303,7 +1321,7 @@ def test_a_weak_only_entry_list_survives_the_same_write():
 _BOX_TAMPERS: list[Callable[[object, object], object]] = [
     lambda box, replacement: setattr(box, "__self__", replacement),
     lambda box, replacement: object.__setattr__(box, "__self__", replacement),
-    lambda box, replacement: delattr(box, "__self__"),
+    lambda box, _replacement: delattr(box, "__self__"),
 ]
 
 
@@ -1314,7 +1332,7 @@ _BOX_TAMPERS: list[Callable[[object, object], object]] = [
 )
 def test_the_box_a_slotted_entry_is_answered_through_cannot_be_rebound(
     tamper: Callable[[object, object], object],
-):
+) -> None:
     """Evidence about a carrier certifies nothing if the carrier can be rewritten.
 
     A slotted entry has no weak reference of its own, so it is answered through
@@ -1350,7 +1368,7 @@ def test_the_box_a_slotted_entry_is_answered_through_cannot_be_rebound(
     assert _MARKS == ["accepted"]
 
 
-def test_rebuilding_the_box_a_slotted_entry_is_answered_through_changes_nothing():
+def test_rebuilding_the_box_a_slotted_entry_is_answered_through_changes_nothing() -> None:
     """The second constructor call, which is not an attribute write and is refused anyway.
 
     ``__init__`` on an already-built binding is the one spelling that raises
@@ -1380,7 +1398,7 @@ def test_rebuilding_the_box_a_slotted_entry_is_answered_through_changes_nothing(
     [(), "DjangoResourcePolicyExtension", 7],
     ids=["a-tuple", "a-name", "a-number"],
 )
-def test_an_extension_entry_strawberry_could_not_resolve_is_refused(entry: object):
+def test_an_extension_entry_strawberry_could_not_resolve_is_refused(entry: object) -> None:
     """Acceptance is per entry, and the one reason to refuse one is resolution.
 
     Strawberry resolves an entry as itself when it is an extension instance and
@@ -1407,7 +1425,7 @@ def test_a_retained_policy_argument_is_not_the_one_the_schema_enforces(
     row: _PolicyKeyword,
     field: str,
     widened: object,
-):
+) -> None:
     """The caller keeps their object; the schema keeps a duplicate of its values.
 
     An exact instance used to pass through configuration intake unchanged, so a
@@ -1426,7 +1444,7 @@ def test_a_retained_policy_argument_is_not_the_one_the_schema_enforces(
 
 def test_a_policy_behind_the_setting_is_snapshotted_like_an_explicit_one(
     settings: pytest_django.Settings,
-):
+) -> None:
     """The two override slots are one ladder, so they detach on the same terms.
 
     A settings-supplied instance is the one a deployment is most likely to keep
@@ -1441,7 +1459,7 @@ def test_a_policy_behind_the_setting_is_snapshotted_like_an_explicit_one(
     assert schema.resource_policy.max_list_rows == 2
 
 
-def test_an_exact_policy_corrupted_before_intake_is_rejected_at_construction():
+def test_an_exact_policy_corrupted_before_intake_is_rejected_at_construction() -> None:
     """``__post_init__`` spoke for the values an instance was BUILT with.
 
     Admitting an exact instance without re-reading it made the type the evidence
@@ -1455,7 +1473,7 @@ def test_an_exact_policy_corrupted_before_intake_is_rejected_at_construction():
         DjangoSchema(query=DummyQuery, resource_policy=policy)
 
 
-def test_widening_a_schema_policy_copy_leaves_the_schemas_own_bound():
+def test_widening_a_schema_policy_copy_leaves_the_schemas_own_bound() -> None:
     """The write lands on the reader's duplicate and nowhere a bound is read from."""
     schema = DjangoSchema(query=DummyQuery, resource_policy=ResourcePolicy(max_list_rows=7))
 
@@ -1476,40 +1494,40 @@ class _SlottedConsumerFactory:
 
     __slots__ = ()
 
-    def __call__(self):
+    def __call__(self) -> _MarkerExtension:
         return _MarkerExtension()
 
 
 class _MutableResourceFactory:
     """A stateful factory whose returned bound is decided after it was accepted."""
 
-    def __init__(self, rows: int = 1):
+    def __init__(self, rows: int = 1) -> None:
         super().__init__()
         self.rows = rows
 
-    def __call__(self):
+    def __call__(self) -> DjangoResourcePolicyExtension:
         return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=self.rows))
 
 
 class _SelectingErrorFactory:
     """A factory choosing between two masking extensions, after it was accepted."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.chosen = DjangoErrorPolicyExtension()
 
-    def __call__(self):
+    def __call__(self) -> DjangoErrorPolicyExtension:
         return self.chosen
 
 
 class _BoundMethodResourceFactory:
     """A bound method, which is a factory whose owner decides what it returns."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.rows = 1
 
-    def build(self):
+    def build(self) -> DjangoResourcePolicyExtension:
         """Build the resource extension this owner currently wants."""
         return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=self.rows))
 
@@ -1517,11 +1535,11 @@ class _BoundMethodResourceFactory:
 class _CountingAuthorityFactory:
     """A factory that records how many times the package called it."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.calls = 0
 
-    def __call__(self):
+    def __call__(self) -> DjangoResourcePolicyExtension:
         self.calls += 1
         return DjangoResourcePolicyExtension()
 
@@ -1529,41 +1547,47 @@ class _CountingAuthorityFactory:
 class _HybridFactory:
     """A factory returning one object that answers to both authorities."""
 
-    def __init__(self, hybrid_type: type[HybridPolicyExtension | ReversedHybridPolicyExtension]):
+    def __init__(
+        self,
+        hybrid_type: type[HybridPolicyExtension | ReversedHybridPolicyExtension],
+    ) -> None:
         super().__init__()
         self._hybrid_type = hybrid_type
 
-    def __call__(self):
+    def __call__(self) -> HybridPolicyExtension | ReversedHybridPolicyExtension:
         return self._hybrid_type()
 
 
 class _SingletonHybridFactory:
     """The same, handing back one shared object every time."""
 
-    def __init__(self, hybrid_type: type[HybridPolicyExtension | ReversedHybridPolicyExtension]):
+    def __init__(
+        self,
+        hybrid_type: type[HybridPolicyExtension | ReversedHybridPolicyExtension],
+    ) -> None:
         super().__init__()
         self._hybrid = hybrid_type()
 
-    def __call__(self):
+    def __call__(self) -> HybridPolicyExtension | ReversedHybridPolicyExtension:
         return self._hybrid
 
 
-def _closure_resource_factory():
+def _closure_resource_factory() -> Callable[[], DjangoResourcePolicyExtension]:
     """A closure over a mutable cell, which is the same defect without an attribute."""
     cell = {"rows": 1}
 
-    def factory():
+    def factory() -> DjangoResourcePolicyExtension:
         return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=cell["rows"]))
 
     return factory
 
 
-def _narrow_resource_factory():
+def _narrow_resource_factory() -> DjangoResourcePolicyExtension:
     """A factory producing a resource extension with a bound of its own."""
     return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_aliases=1))
 
 
-def _wide_resource_factory():
+def _wide_resource_factory() -> DjangoResourcePolicyExtension:
     """The same, with a bound wide enough to admit what the narrow one refuses."""
     return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_aliases=999))
 
@@ -1573,22 +1597,22 @@ _SHARED_ERROR_EXTENSION = DjangoErrorPolicyExtension()
 _SHARED_MARKER_EXTENSION = _MarkerExtension()
 
 
-def _first_error_factory():
+def _first_error_factory() -> DjangoErrorPolicyExtension:
     """A factory producing a masking extension for the operation."""
     return DjangoErrorPolicyExtension()
 
 
-def _singleton_error_factory():
+def _singleton_error_factory() -> DjangoErrorPolicyExtension:
     """One masking extension, returned every time."""
     return _SHARED_ERROR_EXTENSION
 
 
-def _fresh_marker_factory():
+def _fresh_marker_factory() -> _MarkerExtension:
     """The supported consumer spelling: a new extension per operation."""
     return _MarkerExtension()
 
 
-def _singleton_marker_factory():
+def _singleton_marker_factory() -> _MarkerExtension:
     """The documented shared-instance spelling: one object, returned every time."""
     return _SHARED_MARKER_EXTENSION
 
@@ -1596,7 +1620,7 @@ def _singleton_marker_factory():
 class _BoundMethodMarkerFactory:
     """The bound-method spelling, for an extension that is not an authority."""
 
-    def build(self):
+    def build(self) -> _MarkerExtension:
         """Build this owner's consumer extension, fresh per operation."""
         return _MarkerExtension()
 
@@ -1604,12 +1628,12 @@ class _BoundMethodMarkerFactory:
 _SHARED_OPTIMIZER_EXTENSION = DjangoOptimizerExtension()
 
 
-def _optimizer_singleton_factory():
+def _optimizer_singleton_factory() -> DjangoOptimizerExtension:
     """The optimizer's own documented spelling, whose cache is deliberately shared."""
     return _SHARED_OPTIMIZER_EXTENSION
 
 
-def _assert_configuration_refusal(result: ExecutionResult):
+def _assert_configuration_refusal(result: ExecutionResult) -> None:
     """The operation ran nothing and said so with the stable code."""
     assert result.data is None
     assert result.errors is not None
@@ -1649,7 +1673,7 @@ def _assert_configuration_refusal(result: ExecutionResult):
         "hybrid-singleton-factory-reversed-bases",
     ],
 )
-def test_a_factory_producing_an_enforcement_authority_refuses_the_operation(entry: object):
+def test_a_factory_producing_an_enforcement_authority_refuses_the_operation(entry: object) -> None:
     """A factory is opaque until it runs, so what it produces is typed at resolution.
 
     Accepting the callable proves which object this schema was configured with,
@@ -1664,7 +1688,7 @@ def test_a_factory_producing_an_enforcement_authority_refuses_the_operation(entr
     _assert_configuration_refusal(schema.execute_sync("{ hello }"))
 
 
-def test_a_refused_factory_is_called_once_and_never_inspected_again():
+def test_a_refused_factory_is_called_once_and_never_inspected_again() -> None:
     """Resolution calls the entries once, and every check reads what came back.
 
     Calling a factory a second time to find out what it is would run consumer
@@ -1678,7 +1702,7 @@ def test_a_refused_factory_is_called_once_and_never_inspected_again():
     assert factory.calls == 1
 
 
-def test_a_refusal_carries_no_representation_of_the_member_that_caused_it():
+def test_a_refusal_carries_no_representation_of_the_member_that_caused_it() -> None:
     """The wire gets the stable code; the object stays in the deployment's own log."""
     schema = DjangoSchema(query=DummyQuery, extensions=[_HybridFactory(HybridPolicyExtension)])
 
@@ -1695,7 +1719,7 @@ def test_a_refusal_carries_no_representation_of_the_member_that_caused_it():
         assert fragment not in result.errors[0].message
 
 
-def test_a_resolver_cannot_widen_a_later_request_through_an_accepted_factory():
+def test_a_resolver_cannot_widen_a_later_request_through_an_accepted_factory() -> None:
     """The attack the refusal exists for, made from inside a resolver.
 
     The factory is reachable through ``info.schema.extensions`` and its
@@ -1746,7 +1770,7 @@ def test_a_resolver_cannot_widen_a_later_request_through_an_accepted_factory():
         "optimizer-singleton-factory",
     ],
 )
-def test_every_supported_entry_spelling_still_resolves_into_one_chain(entry: object):
+def test_every_supported_entry_spelling_still_resolves_into_one_chain(entry: object) -> None:
     """The controls that keep the refusals honest: every consumer spelling still runs.
 
     A memory layout that takes no weak reference, a class, a module-level
@@ -1782,7 +1806,7 @@ def test_every_supported_entry_spelling_still_resolves_into_one_chain(entry: obj
 def test_a_refused_schema_answers_every_document_with_the_configuration_code(
     document: str,
     code: str,
-):
+) -> None:
     """Refusing every operation includes the ones that would not have parsed.
 
     Publishing after the parse would make the claim true only of well-formed
@@ -1800,7 +1824,7 @@ def test_a_refused_schema_answers_every_document_with_the_configuration_code(
     assert [error.extensions for error in result.errors] == [{"code": code}]
 
 
-def test_a_refused_schema_still_bounds_the_document_it_is_refusing():
+def test_a_refused_schema_still_bounds_the_document_it_is_refusing() -> None:
     """A broken configuration must not be the one shape with no parsing ceiling.
 
     The refusal chain keeps the package's own resource extension, reading this
@@ -1836,7 +1860,7 @@ def test_a_refused_schema_still_bounds_the_document_it_is_refusing():
     ],
     ids=["refused", "over-budget"],
 )
-def test_a_refused_request_runs_no_parser_at_all(document: str, code: str):
+def test_a_refused_request_runs_no_parser_at_all(document: str, code: str) -> None:
     """Neither answer a refused schema gives is one a parser had to produce.
 
     The refusal is published at a pre-parse seam and the over-budget rejection
@@ -1858,7 +1882,7 @@ def test_a_refused_request_runs_no_parser_at_all(document: str, code: str):
     )
     parsed: list[str] = []
 
-    def _record(source: object, **_kwargs: object):
+    def _record(source: object, **_kwargs: object) -> NoReturn:
         parsed.append(str(source))
         raise AssertionError("a refused configuration must not reach a parser")
 
@@ -1901,7 +1925,9 @@ _REFUSED_OPERATION_NAME_IDS = [
     _REFUSED_OPERATION_NAMES,
     ids=_REFUSED_OPERATION_NAME_IDS,
 )
-def test_a_refused_schema_answers_every_operation_name_the_same_way(operation_name: object):
+def test_a_refused_schema_answers_every_operation_name_the_same_way(
+    operation_name: object,
+) -> None:
     """The name a request asked for selects nothing once the document is the package's.
 
     Upstream picks the operation to run by looking the requested name up in
@@ -1929,7 +1955,7 @@ def test_a_refused_schema_answers_every_operation_name_the_same_way(operation_na
 )
 async def test_a_refused_schema_answers_an_awaited_operation_name_the_same_way(
     operation_name: object,
-):
+) -> None:
     """The asynchronous API refuses the same names, and raises out of none of them."""
     schema = DjangoSchema(query=DummyQuery, extensions=[lambda: 7])
 
@@ -1950,7 +1976,7 @@ async def test_a_refused_schema_answers_an_awaited_operation_name_the_same_way(
 )
 async def test_a_refused_schema_streams_one_refusal_for_every_operation_name(
     operation_name: object,
-):
+) -> None:
     """A stream owes a FRAME for each of these, not an exception and not a lookup error.
 
     The stream is the path where the escaped lookup was quietest: upstream
@@ -1988,7 +2014,7 @@ class _OneShotPolicy:
         self._operation_types = operation_types
         self.traversals = 0
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[OperationType]:
         self.traversals += 1
         if self.traversals > 1:
             raise AssertionError("the transport policy was traversed twice")
@@ -2007,14 +2033,14 @@ class _HostileBoolPolicy:
         super().__init__()
         self._operation_types = operation_types
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[OperationType]:
         return iter(self._operation_types)
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         raise AssertionError("the transport policy was truth-tested")
 
 
-def test_a_refused_schema_answers_a_one_shot_transport_policy_synchronously():
+def test_a_refused_schema_answers_a_one_shot_transport_policy_synchronously() -> None:
     """The refusal reads the caller's policy once, so upstream still reads it too.
 
     ``execute_sync`` settles the operation type from the policy AFTER the parse
@@ -2039,7 +2065,7 @@ def test_a_refused_schema_answers_a_one_shot_transport_policy_synchronously():
 
 
 @pytest.mark.asyncio
-async def test_a_refused_schema_answers_a_one_shot_transport_policy_when_awaited():
+async def test_a_refused_schema_answers_a_one_shot_transport_policy_when_awaited() -> None:
     """The asynchronous API reads the same snapshot, and raises out of nothing."""
     schema = DjangoSchema(query=DummyQuery, extensions=[lambda: 7])
 
@@ -2056,7 +2082,7 @@ async def test_a_refused_schema_answers_a_one_shot_transport_policy_when_awaited
 
 
 @pytest.mark.asyncio
-async def test_a_refused_schema_streams_a_refusal_under_a_one_shot_transport_policy():
+async def test_a_refused_schema_streams_a_refusal_under_a_one_shot_transport_policy() -> None:
     """The stream is where an exhausted policy was quietest.
 
     Upstream renders its own "queries are not allowed" into the first frame
@@ -2092,7 +2118,7 @@ async def test_a_refused_schema_streams_a_refusal_under_a_one_shot_transport_pol
 def test_the_substitute_document_is_selected_from_a_one_shot_policy_too(
     allowed: tuple[OperationType, ...],
     expected: str,
-):
+) -> None:
     """Selection reads the snapshot, so it is not accidentally query-only.
 
     A mutation or subscription transport that arrived with a one-shot policy
@@ -2112,7 +2138,7 @@ def test_the_substitute_document_is_selected_from_a_one_shot_policy_too(
     assert print_ast(context.graphql_document) == expected
 
 
-def test_a_refused_request_snapshots_the_transport_policy_exactly_once():
+def test_a_refused_request_snapshots_the_transport_policy_exactly_once() -> None:
     """One traversal, and what upstream reads back is an exact built-in tuple.
 
     The snapshot is the whole fix: package selection and upstream authorization
@@ -2136,7 +2162,7 @@ def test_a_refused_request_snapshots_the_transport_policy_exactly_once():
     assert type(context.allowed_operations) is tuple
 
 
-def test_a_refused_request_never_asks_a_transport_policy_whether_it_is_empty():
+def test_a_refused_request_never_asks_a_transport_policy_whether_it_is_empty() -> None:
     """Emptiness is consumer code, and the refusal path is the wrong place to run it.
 
     The same posture the accepted-entry reader takes one function away: a
@@ -2167,7 +2193,7 @@ def test_a_refused_request_never_asks_a_transport_policy_whether_it_is_empty():
 )
 def test_a_transport_policy_that_allows_nothing_stays_a_policy_that_allows_nothing(
     schema_factory: Callable[[], DjangoSchema],
-):
+) -> None:
     """A refusal owns what the caller supplied; it never widens it.
 
     A transport that allows no operation type is a deployment decision, and
@@ -2181,7 +2207,7 @@ def test_a_transport_policy_that_allows_nothing_stays_a_policy_that_allows_nothi
         schema.execute_sync("{ hello }", allowed_operation_types=_OneShotPolicy())
 
 
-def test_a_refused_request_keeps_the_text_it_arrived_with_and_selects_by_nothing():
+def test_a_refused_request_keeps_the_text_it_arrived_with_and_selects_by_nothing() -> None:
     """What arrived stays readable; what upstream reads is the package's own.
 
     A transport that logs the document it received still has it. The pair
@@ -2223,7 +2249,7 @@ def test_a_refused_request_keeps_the_text_it_arrived_with_and_selects_by_nothing
 def test_the_substitute_document_is_of_a_type_the_transport_allows(
     allowed: tuple[OperationType, ...],
     expected: str,
-):
+) -> None:
     """Upstream refuses a type the caller did not allow before it can read the refusal.
 
     A subscription transport allows exactly one type, so a refusal answered with
@@ -2245,7 +2271,7 @@ def test_the_substitute_document_is_of_a_type_the_transport_allows(
 
 
 @pytest.mark.asyncio
-async def test_a_refused_schema_answers_a_streamed_operation_with_one_frame():
+async def test_a_refused_schema_answers_a_streamed_operation_with_one_frame() -> None:
     """The streaming transport gets the refusal as a frame, not as an exception.
 
     An exception out of a hook leaves a streamed operation with no frame at all,
@@ -2271,12 +2297,12 @@ class _HostileReprError(Exception):
     """A consumer exception whose display is as much consumer code as the factory."""
 
     @override
-    def __repr__(self):
+    def __repr__(self) -> str:
         """Raise while the containment result is being built."""
         raise RuntimeError("repr bomb")
 
     @override
-    def __str__(self):
+    def __str__(self) -> str:
         """Raise on the other rendering path too."""
         raise RuntimeError("str bomb")
 
@@ -2285,7 +2311,7 @@ class _HostileArg:
     """An exception argument whose own representation raises."""
 
     @override
-    def __repr__(self):
+    def __repr__(self) -> str:
         """Raise while the exception carrying this is being rendered."""
         raise RuntimeError("arg bomb")
 
@@ -2299,7 +2325,7 @@ class _HostileTypeMeta(type):
     @override
     # basedpyright: the hostile shape under test, a ``__name__`` property whose read raises; the
     # checker rejects any property overriding a base class attribute
-    def __name__(cls):  # pyright: ignore[reportIncompatibleVariableOverride]
+    def __name__(cls) -> NoReturn:  # pyright: ignore[reportIncompatibleVariableOverride]
         """Raise when the safe renderer asks the type for its name."""
         raise RuntimeError("name bomb")
 
@@ -2323,7 +2349,9 @@ class _HostileNameError(Exception, metaclass=_HostileTypeMeta):
         "raising-type-name",
     ],
 )
-def test_a_factory_exception_cannot_escape_while_the_refusal_is_being_built(raised: Exception):
+def test_a_factory_exception_cannot_escape_while_the_refusal_is_being_built(
+    raised: Exception,
+) -> None:
     """The diagnostic is assembled from a consumer exception, so it is rendered safely.
 
     Interpolating the exception into the private reason runs its ``__repr__``
@@ -2332,7 +2360,7 @@ def test_a_factory_exception_cannot_escape_while_the_refusal_is_being_built(rais
     exists to keep off the wire. The wire message is the constant either way.
     """
 
-    def factory():
+    def factory() -> NoReturn:
         raise raised
 
     schema = DjangoSchema(query=DummyQuery, extensions=[factory])
@@ -2340,7 +2368,7 @@ def test_a_factory_exception_cannot_escape_while_the_refusal_is_being_built(rais
     _assert_configuration_refusal(schema.execute_sync("{ hello }"))
 
 
-def test_a_refused_chain_runs_no_consumer_hook_and_no_resolver():
+def test_a_refused_chain_runs_no_consumer_hook_and_no_resolver() -> None:
     """Refusing means nothing runs, which is the whole difference from reporting.
 
     What could not be established is what a consumer entry would enforce, so
@@ -2353,7 +2381,7 @@ def test_a_refused_chain_runs_no_consumer_hook_and_no_resolver():
         """A consumer entry that records every hook it is given."""
 
         @override
-        def on_operation(self):
+        def on_operation(self) -> Iterator[None]:
             """Record that a consumer hook ran, which a refusal must not allow."""
             seen.append("on_operation")
             yield
@@ -2387,7 +2415,7 @@ class _UpstreamRunnerSchema(DjangoSchema):
         self,
         execution_context: StrawberryExecutionContext,
         extensions: list[SchemaExtension],
-    ):
+    ) -> SchemaExtensionsRunner:
         """Build the plain upstream runner, as such a subclass may."""
         return SchemaExtensionsRunner(
             execution_context=execution_context,
@@ -2401,7 +2429,7 @@ class _UpstreamRunnerSchema(DjangoSchema):
 
 
 @pytest.mark.asyncio
-async def test_a_stream_whose_runner_is_not_the_packages_is_handed_back_untouched():
+async def test_a_stream_whose_runner_is_not_the_packages_is_handed_back_untouched() -> None:
     """The resume wrapper binds what a ``DjangoExtensionsRunner`` owns, and nothing else.
 
     A subclass may build its own runner, and upstream's holds no per-task state:

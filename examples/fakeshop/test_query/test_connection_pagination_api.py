@@ -118,8 +118,8 @@ import json
 import logging
 import re
 import sys
-from collections.abc import Callable, Coroutine, Iterator
-from typing import TypeAlias
+from collections.abc import Callable, Coroutine, Generator, Iterator
+from typing import NoReturn, TypeAlias
 
 import pytest
 import strawberry
@@ -130,7 +130,7 @@ from apps.products.services import seed_data
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.db import connection, models
-from django.http import HttpRequest
+from django.http import HttpRequest, HttpResponseBase
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches, path
@@ -192,7 +192,7 @@ _ERROR_POLICY_PASS_THROUGH = {
 
 
 @pytest.mark.django_db
-def test_live_negative_first_is_graphql_error():
+def test_live_negative_first_is_graphql_error() -> None:
     """``first: -1`` via live HTTP is a GraphQLError (not a raw ValueError)."""
     seed_data(1)
     payload = graphql_payload("{ allItems(first: -1) { edges { node { id } } } }")
@@ -206,7 +206,7 @@ def test_live_negative_first_is_graphql_error():
 
 
 @pytest.mark.django_db
-def test_live_over_cap_first_is_graphql_error():
+def test_live_over_cap_first_is_graphql_error() -> None:
     """``first`` over the configured ``relay_max_results`` is a GraphQLError."""
     seed_data(1)
     # Default relay_max_results is 100 (strawberry default)
@@ -217,7 +217,7 @@ def test_live_over_cap_first_is_graphql_error():
 
 
 @pytest.mark.django_db
-def test_live_malformed_after_cursor_is_graphql_error():
+def test_live_malformed_after_cursor_is_graphql_error() -> None:
     """A malformed ``after:`` cursor is a GraphQLError (not ValueError/TypeError)."""
     seed_data(1)
     payload = graphql_payload(
@@ -234,7 +234,7 @@ def test_live_malformed_after_cursor_is_graphql_error():
 
 
 @pytest.mark.django_db
-def test_live_malformed_before_cursor_is_graphql_error():
+def test_live_malformed_before_cursor_is_graphql_error() -> None:
     """A malformed ``before:`` cursor is a GraphQLError."""
     seed_data(1)
     payload = graphql_payload(
@@ -246,7 +246,7 @@ def test_live_malformed_before_cursor_is_graphql_error():
 
 
 @pytest.mark.django_db
-def test_live_first_and_last_together_is_graphql_error():
+def test_live_first_and_last_together_is_graphql_error() -> None:
     """``first`` + ``last`` together is the package's mutual-exclusivity GraphQLError."""
     seed_data(1)
     payload = graphql_payload("{ allItems(first: 1, last: 1) { edges { node { id } } } }")
@@ -256,7 +256,7 @@ def test_live_first_and_last_together_is_graphql_error():
 
 
 @pytest.mark.django_db
-def test_live_keyset_negative_first_is_graphql_error():
+def test_live_keyset_negative_first_is_graphql_error() -> None:
     """Keyset ``first: -5`` is a GraphQLError on the declared-cursor connection too.
 
     ``allLibraryIssuesConnection`` resolves ``IssueType``, whose
@@ -276,7 +276,7 @@ def test_live_keyset_negative_first_is_graphql_error():
 
 
 @pytest.mark.django_db
-def test_live_keyset_over_cap_first_is_graphql_error():
+def test_live_keyset_over_cap_first_is_graphql_error() -> None:
     """Keyset ``first: 101`` is a GraphQLError on the declared-cursor connection too.
 
     Offset over-cap is pinned on ``allItems``. The keyset slicer re-spells the
@@ -292,7 +292,7 @@ def test_live_keyset_over_cap_first_is_graphql_error():
 
 
 @pytest.mark.django_db
-def test_total_count_is_a_field_only_on_the_connection_that_opted_in():
+def test_total_count_is_a_field_only_on_the_connection_that_opted_in() -> None:
     """``Meta.connection = {"total_count": True}`` is what puts ``totalCount`` in the schema.
 
     Both shipped shapes are read in one request each, because the claim is the
@@ -323,7 +323,7 @@ def test_total_count_is_a_field_only_on_the_connection_that_opted_in():
 
 
 @pytest.mark.django_db
-def test_the_non_opted_connection_type_keeps_the_inherited_sdl_description():
+def test_the_non_opted_connection_type_keeps_the_inherited_sdl_description() -> None:
     """The always-concrete generated connection still describes itself to a client.
 
     A non-opted type gets a generated ``<TypeName>Connection`` subclass rather
@@ -383,7 +383,7 @@ def test_root_connection_arguments_follow_declared_sidecars(
     field_name: str,
     required: tuple[str, ...],
     forbidden: tuple[str, ...],
-):
+) -> None:
     """``filter:`` / ``orderBy:`` are published exactly when the node type declared those sidecars."""
     data = assert_graphql_success(_QUERY_FIELD_ARGS)
     fields = {field["name"]: field for field in data["__type"]["fields"]}
@@ -442,7 +442,7 @@ query {
 
 
 @pytest.mark.django_db
-def test_nested_connection_arguments_follow_declared_sidecars():
+def test_nested_connection_arguments_follow_declared_sidecars() -> None:
     """Nested connection fields expose ``filter`` and ``orderBy`` only when target declared them.
 
     Target-driven contract: ``GenreType.booksConnection`` targets ``BookType`` which declares
@@ -533,12 +533,12 @@ def _override_evaluated(
     _order_input: object,
     queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> models.QuerySet[library_models.Genre]:
     list(queryset)
     return queryset
 
 
-def _untrusted_genre_queryset():
+def _untrusted_genre_queryset() -> _DeferredFilterQuerySet:
     """Build the deferred-filter state Django never writes, for the untrusted rows.
 
     Both the sync and the async arms plant the same shape, so the state lives
@@ -556,7 +556,7 @@ def _override_untrusted(
     _order_input: object,
     _queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> _DeferredFilterQuerySet:
     return _untrusted_genre_queryset()
 
 
@@ -565,7 +565,7 @@ def _override_in_place_routing(
     _order_input: object,
     queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> models.QuerySet[library_models.Genre]:
     set_queryset_hints(queryset, {"tenant": 2})
     return queryset
 
@@ -575,7 +575,7 @@ def _override_passthrough(
     order_input: object,
     queryset: models.QuerySet[library_models.Genre],
     info: object,
-):
+) -> models.QuerySet[library_models.Genre]:
     return super(GenreOrder, cls).apply_sync(order_input, queryset, info)
 
 
@@ -638,42 +638,42 @@ _CONNECTION_MALFORMED_APPLY_SYNC_ROWS: tuple[
     ),
     (
         "materialized-list",
-        lambda cls, order_input, queryset, info: list(queryset),
+        lambda _cls, _order_input, queryset, _info: list(queryset),
         _GENRE_ORDER_SHAPE_PREFIX + "type defect",
         (),
         1,
     ),
     (
         "none",
-        lambda cls, order_input, queryset, info: None,
+        lambda _cls, _order_input, _queryset, _info: None,
         _GENRE_ORDER_SHAPE_PREFIX + "type defect",
         (),
         0,
     ),
     (
         "projection",
-        lambda cls, order_input, queryset, info: queryset.values("name"),
+        lambda _cls, _order_input, queryset, _info: queryset.values("name"),
         _GENRE_ORDER_SHAPE_PREFIX + "projection defect",
         (),
         0,
     ),
     (
         "wrong-model",
-        lambda cls, order_input, queryset, info: library_models.Book.objects.all(),
+        lambda _cls, _order_input, _queryset, _info: library_models.Book.objects.all(),
         _GENRE_ORDER_SHAPE_PREFIX + "table defect",
         (),
         0,
     ),
     (
         "sliced",
-        lambda cls, order_input, queryset, info: queryset.order_by("name")[:1],
+        lambda _cls, _order_input, queryset, _info: queryset.order_by("name")[:1],
         _GENRE_ORDER_SHAPE_PREFIX + "sliced defect",
         (),
         0,
     ),
     (
         "combined-duplicates",
-        lambda cls, order_input, queryset, info: queryset.union(queryset, all=True),
+        lambda _cls, _order_input, queryset, _info: queryset.union(queryset, all=True),
         (
             "GenreOrder.apply_sync returned a combined queryset; the visibility boundary serves "
             "a combined queryset as the set of Genre primary keys it selects"
@@ -683,7 +683,7 @@ _CONNECTION_MALFORMED_APPLY_SYNC_ROWS: tuple[
     ),
     (
         "awaitable-in-sync",
-        lambda cls, order_input, queryset, info: _awaitable_queryset(queryset),
+        lambda _cls, _order_input, queryset, _info: _awaitable_queryset(queryset),
         "GenreOrder.apply_sync returned an awaitable in a sync resolver context.",
         (),
         0,
@@ -722,7 +722,7 @@ def test_connection_branches_a_malformed_apply_sync_result_names_its_own_defect(
     message_start: str,
     substrings: tuple[str, ...],
     genre_queries: int,
-):
+) -> None:
     """Each malformed ``apply_sync`` result names its exact defect on the shipped connection.
 
     The connection field runs the same post-``OrderSet`` seal the list field
@@ -750,7 +750,7 @@ def test_connection_branches_a_malformed_apply_sync_result_names_its_own_defect(
 @pytest.mark.django_db
 def test_connection_healthy_apply_sync_override_still_returns_ordered_edges(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A ``super()`` pass-through override is ACCEPTED and the ordered page is served.
 
     The seal's positive control on the shipped connection: it rejects malformed
@@ -776,12 +776,15 @@ def test_connection_healthy_apply_sync_override_still_returns_ordered_edges(
 _ASYNC_CURRENT: dict[str, DjangoSchema | None] = {"schema": None}
 
 
-async def _async_genres_resolver(_root: object, _info: strawberry.Info[object, object]):
+async def _async_genres_resolver(
+    _root: object,
+    _info: strawberry.Info[object, object],
+) -> models.QuerySet[library_models.Genre]:
     """An ``async def`` consumer resolver - the shape that selects ``_pipeline_async``."""
     return library_models.Genre.objects.all()
 
 
-def _async_genre_connection_schema():
+def _async_genre_connection_schema() -> DjangoSchema:
     """Build a schema whose genre connection runs the ASYNC pipeline.
 
     ``connection.py::_build_connection_resolver`` commits sync-vs-async dispatch
@@ -807,7 +810,7 @@ def _async_genre_connection_schema():
     return DjangoSchema(query=Query, config=strawberry_config())
 
 
-async def _async_genre_graphql_view(request: HttpRequest):
+async def _async_genre_graphql_view(request: HttpRequest) -> HttpResponseBase:
     """The test-local async-resolver schema on an async view."""
     schema = _ASYNC_CURRENT["schema"]
     assert schema is not None
@@ -880,7 +883,7 @@ async def _override_async_evaluated(
     _order_input: object,
     queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> models.QuerySet[library_models.Genre]:
     [genre async for genre in queryset]
     _ASYNC_APPLY_CALLS.append("evaluated")
     return queryset
@@ -891,7 +894,7 @@ async def _override_async_sliced(
     _order_input: object,
     queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> models.QuerySet[library_models.Genre]:
     _ASYNC_APPLY_CALLS.append("sliced")
     return queryset.order_by("name")[:1]
 
@@ -901,7 +904,7 @@ async def _override_async_combined_duplicates(
     _order_input: object,
     queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> models.QuerySet[library_models.Genre]:
     _ASYNC_APPLY_CALLS.append("combined-duplicates")
     return queryset.union(queryset, all=True)
 
@@ -911,7 +914,7 @@ async def _override_async_wrong_model(
     _order_input: object,
     _queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> models.QuerySet[library_models.Book]:
     _ASYNC_APPLY_CALLS.append("wrong-model")
     return library_models.Book.objects.all()
 
@@ -921,7 +924,7 @@ async def _override_async_in_place_routing(
     _order_input: object,
     queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> models.QuerySet[library_models.Genre]:
     set_queryset_hints(queryset, {"tenant": 2})
     _ASYNC_APPLY_CALLS.append("routing-rewritten-in-place")
     return queryset
@@ -932,7 +935,7 @@ async def _override_async_materialized_list(
     _order_input: object,
     queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> list[library_models.Genre]:
     rows = [genre async for genre in queryset]
     _ASYNC_APPLY_CALLS.append("materialized-list")
     return rows
@@ -943,7 +946,7 @@ async def _override_async_none(
     _order_input: object,
     _queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> None:
     _ASYNC_APPLY_CALLS.append("none")
 
 
@@ -952,7 +955,7 @@ async def _override_async_projection(
     _order_input: object,
     queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> models.QuerySet[library_models.Genre, dict[str, object]]:
     _ASYNC_APPLY_CALLS.append("projection")
     return queryset.values("name")
 
@@ -962,7 +965,7 @@ async def _override_async_untrusted(
     _order_input: object,
     _queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> _DeferredFilterQuerySet:
     _ASYNC_APPLY_CALLS.append("malformed-deferred-filter")
     return _untrusted_genre_queryset()
 
@@ -972,7 +975,7 @@ def _override_async_non_awaitable(
     _order_input: object,
     queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> models.QuerySet[library_models.Genre]:
     _ASYNC_APPLY_CALLS.append("non-awaitable")
     return queryset
 
@@ -986,7 +989,7 @@ _ORDER_RESIDUAL_AWAITABLE: _ResidualHolder = {"coro": None}
 _ORDER_RESIDUAL_BODY_RAN: list[str] = []
 
 
-async def _order_residual_inner():
+async def _order_residual_inner() -> None:
     _ORDER_RESIDUAL_BODY_RAN.append("ran")
 
 
@@ -995,7 +998,7 @@ async def _override_async_residual_awaitable(
     _order_input: object,
     _queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> Coroutine[object, object, None]:
     _ORDER_RESIDUAL_BODY_RAN.clear()
     coro = _order_residual_inner()
     _ORDER_RESIDUAL_AWAITABLE["coro"] = coro
@@ -1008,7 +1011,7 @@ async def _override_async_passthrough(
     order_input: object,
     queryset: models.QuerySet[library_models.Genre],
     info: object,
-):
+) -> models.QuerySet[library_models.Genre]:
     _ASYNC_APPLY_CALLS.append("passthrough")
     return await super(GenreOrder, cls).apply_async(order_input, queryset, info)
 
@@ -1128,7 +1131,7 @@ async def test_connection_async_branches_a_malformed_apply_async_result_names_it
     message_start: str,
     substrings: tuple[str, ...],
     residual: _ResidualHolders | None,
-):
+) -> None:
     """Each malformed ``apply_async`` result names its exact defect over ``/graphql-async/``.
 
     The async pipeline awaits the SAME post-``OrderSet`` seal the sync one
@@ -1159,7 +1162,7 @@ async def test_connection_async_branches_a_malformed_apply_async_result_names_it
 @pytest.mark.django_db(transaction=True)
 async def test_connection_async_healthy_apply_async_override_still_returns_ordered_edges(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A ``super()`` pass-through ``apply_async`` is ACCEPTED and the ordered page is served.
 
     The async seal's positive control on the async-resolver connection: it
@@ -1183,7 +1186,7 @@ async def test_connection_async_healthy_apply_async_override_still_returns_order
 @pytest.mark.django_db(transaction=True)
 async def test_connection_async_serves_a_combined_apply_async_result_as_its_primary_key_set(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """An ``apply_async`` returning an ordered union is served as the rows it selects, in order."""
 
     async def _combined(
@@ -1191,7 +1194,7 @@ async def test_connection_async_serves_a_combined_apply_async_result_as_its_prim
         _order_input: object,
         queryset: models.QuerySet[library_models.Genre],
         _info: object,
-    ):
+    ) -> models.QuerySet[library_models.Genre]:
         _ASYNC_APPLY_CALLS.append("combined")
         return queryset.filter(name="C").union(queryset.filter(name="A")).order_by("-name")
 
@@ -1222,7 +1225,7 @@ async def _filter_override_async_evaluated(
     _filter_input: object,
     queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> models.QuerySet[library_models.Genre]:
     [genre async for genre in queryset]
     _ASYNC_APPLY_CALLS.append("filter-evaluated")
     return queryset
@@ -1233,7 +1236,7 @@ async def _filter_override_async_sliced(
     _filter_input: object,
     queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> models.QuerySet[library_models.Genre]:
     _ASYNC_APPLY_CALLS.append("filter-sliced")
     return queryset.order_by("name")[:1]
 
@@ -1243,7 +1246,7 @@ async def _filter_override_async_combined_duplicates(
     _filter_input: object,
     queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> models.QuerySet[library_models.Genre]:
     _ASYNC_APPLY_CALLS.append("filter-combined-duplicates")
     return queryset.union(queryset, all=True)
 
@@ -1253,7 +1256,7 @@ async def _filter_override_async_wrong_model(
     _filter_input: object,
     _queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> models.QuerySet[library_models.Book]:
     _ASYNC_APPLY_CALLS.append("filter-wrong-model")
     return library_models.Book.objects.all()
 
@@ -1263,7 +1266,7 @@ async def _filter_override_async_in_place_routing(
     _filter_input: object,
     queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> models.QuerySet[library_models.Genre]:
     set_queryset_hints(queryset, {"tenant": 2})
     _ASYNC_APPLY_CALLS.append("filter-routing-rewritten-in-place")
     return queryset
@@ -1274,7 +1277,7 @@ async def _filter_override_async_materialized_list(
     _filter_input: object,
     queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> list[library_models.Genre]:
     rows = [genre async for genre in queryset]
     _ASYNC_APPLY_CALLS.append("filter-materialized-list")
     return rows
@@ -1285,7 +1288,7 @@ async def _filter_override_async_none(
     _filter_input: object,
     _queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> None:
     _ASYNC_APPLY_CALLS.append("filter-none")
 
 
@@ -1294,7 +1297,7 @@ async def _filter_override_async_projection(
     _filter_input: object,
     queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> models.QuerySet[library_models.Genre, dict[str, object]]:
     _ASYNC_APPLY_CALLS.append("filter-projection")
     return queryset.values("name")
 
@@ -1304,7 +1307,7 @@ async def _filter_override_async_untrusted(
     _filter_input: object,
     _queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> _DeferredFilterQuerySet:
     _ASYNC_APPLY_CALLS.append("filter-malformed-deferred-filter")
     return _untrusted_genre_queryset()
 
@@ -1314,7 +1317,7 @@ def _filter_override_async_non_awaitable(
     _filter_input: object,
     queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> models.QuerySet[library_models.Genre]:
     _ASYNC_APPLY_CALLS.append("filter-non-awaitable")
     return queryset
 
@@ -1325,7 +1328,7 @@ _FILTER_RESIDUAL_AWAITABLE: _ResidualHolder = {"coro": None}
 _FILTER_RESIDUAL_BODY_RAN: list[str] = []
 
 
-async def _filter_residual_inner():
+async def _filter_residual_inner() -> None:
     _FILTER_RESIDUAL_BODY_RAN.append("ran")
 
 
@@ -1334,7 +1337,7 @@ async def _filter_override_async_residual_awaitable(
     _filter_input: object,
     _queryset: models.QuerySet[library_models.Genre],
     _info: object,
-):
+) -> Coroutine[object, object, None]:
     _FILTER_RESIDUAL_BODY_RAN.clear()
     coro = _filter_residual_inner()
     _FILTER_RESIDUAL_AWAITABLE["coro"] = coro
@@ -1347,7 +1350,7 @@ async def _filter_override_async_passthrough(
     filter_input: object,
     queryset: models.QuerySet[library_models.Genre],
     info: object,
-):
+) -> models.QuerySet[library_models.Genre]:
     _ASYNC_APPLY_CALLS.append("filter-passthrough")
     return await super(GenreFilter, cls).apply_async(filter_input, queryset, info)
 
@@ -1466,7 +1469,7 @@ async def test_connection_async_branches_a_malformed_filter_apply_async_result_n
     message_start: str,
     substrings: tuple[str, ...],
     residual: _ResidualHolders | None,
-):
+) -> None:
     """Each malformed ``FilterSet.apply_async`` result names its defect over ``/graphql-async/``.
 
     The filter arm of the async pipeline awaits the SAME post-sidecar seal the
@@ -1494,7 +1497,7 @@ async def test_connection_async_branches_a_malformed_filter_apply_async_result_n
 @pytest.mark.django_db(transaction=True)
 async def test_connection_async_healthy_filter_apply_async_override_still_filters(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A ``super()`` pass-through ``apply_async`` is ACCEPTED and the filtered page is served.
 
     The filter seal's positive control on the async-resolver connection: it
@@ -1545,15 +1548,24 @@ def _cursor_rows() -> list[library_models.Genre]:
     return list(library_models.Genre.objects.order_by("pk"))
 
 
-def _list_genres(_root: object, _info: strawberry.Info[object, object]):
+def _list_genres(
+    _root: object,
+    _info: strawberry.Info[object, object],
+) -> list[library_models.Genre]:
     return _cursor_rows()
 
 
-def _tuple_genres(_root: object, _info: strawberry.Info[object, object]):
+def _tuple_genres(
+    _root: object,
+    _info: strawberry.Info[object, object],
+) -> tuple[library_models.Genre, ...]:
     return tuple(_cursor_rows())
 
 
-def _generator_genres(_root: object, _info: strawberry.Info[object, object]):
+def _generator_genres(
+    _root: object,
+    _info: strawberry.Info[object, object],
+) -> Generator[library_models.Genre, None, None]:
     return (genre for genre in _cursor_rows())
 
 
@@ -1569,11 +1581,17 @@ def _failing_genres(error: Exception) -> Iterator[library_models.Genre]:
     raise error
 
 
-def _key_error_genres(_root: object, _info: strawberry.Info[object, object]):
+def _key_error_genres(
+    _root: object,
+    _info: strawberry.Info[object, object],
+) -> Iterator[library_models.Genre]:
     return _failing_genres(KeyError(_SOURCE_SECRET))
 
 
-def _value_error_genres(_root: object, _info: strawberry.Info[object, object]):
+def _value_error_genres(
+    _root: object,
+    _info: strawberry.Info[object, object],
+) -> Iterator[library_models.Genre]:
     return _failing_genres(ValueError(_SOURCE_SECRET))
 
 
@@ -1588,30 +1606,45 @@ class _TenantScopedGenreQuerySet(models.QuerySet[library_models.Genre]):
     @override
     # basedpyright: the project shape under test, a ``query`` property that raises; the
     # checker rejects any property overriding a base class attribute
-    def query(self):  # pyright: ignore[reportIncompatibleVariableOverride]
+    def query(self) -> NoReturn:  # pyright: ignore[reportIncompatibleVariableOverride]
         raise _TenantScopeMissingError(_SOURCE_SECRET)
 
 
-def _tenant_scoped_genres(_root: object, _info: strawberry.Info[object, object]):
+def _tenant_scoped_genres(
+    _root: object,
+    _info: strawberry.Info[object, object],
+) -> _TenantScopedGenreQuerySet:
     return _TenantScopedGenreQuerySet(model=library_models.Genre)
 
 
-def _unusable_id_book_genres(_root: object, _info: strawberry.Info[object, object]):
+def _unusable_id_book_genres(
+    _root: object,
+    _info: strawberry.Info[object, object],
+) -> models.Manager[library_models.Genre]:
     # The idiom that skips reading the parent row: an unsaved instance carrying an id.
     # This one is not an integer, so the relation filter Django defers to the queryset's
     # first ``query`` read cannot be built.
     return library_models.Book(pk=_SOURCE_SECRET).genres
 
 
-async def _async_list_genres(_root: object, _info: strawberry.Info[object, object]):
+async def _async_list_genres(
+    _root: object,
+    _info: strawberry.Info[object, object],
+) -> list[library_models.Genre]:
     return await sync_to_async(_cursor_rows)()
 
 
-async def _async_tuple_genres(_root: object, _info: strawberry.Info[object, object]):
+async def _async_tuple_genres(
+    _root: object,
+    _info: strawberry.Info[object, object],
+) -> tuple[library_models.Genre, ...]:
     return tuple(await sync_to_async(_cursor_rows)())
 
 
-async def _async_queryset_genres(_root: object, _info: strawberry.Info[object, object]):
+async def _async_queryset_genres(
+    _root: object,
+    _info: strawberry.Info[object, object],
+) -> models.QuerySet[library_models.Genre]:
     return library_models.Genre.objects.all()
 
 
@@ -1651,13 +1684,13 @@ def _cursor_schema() -> DjangoSchema:
     )
 
 
-def _cursor_graphql_view(request: HttpRequest):
+def _cursor_graphql_view(request: HttpRequest) -> HttpResponseBase:
     schema = _CURSOR_CURRENT["schema"]
     assert schema is not None
     return DjangoGraphQLView.as_view(schema=schema)(request)
 
 
-async def _async_cursor_graphql_view(request: HttpRequest):
+async def _async_cursor_graphql_view(request: HttpRequest) -> HttpResponseBase:
     schema = _CURSOR_CURRENT["schema"]
     assert schema is not None
     return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
@@ -1744,7 +1777,7 @@ def test_negative_offset_cursor_on_a_sequence_resolver_is_a_cursor_error(
     field: str,
     argument: str,
     variables: JSONObject,
-):
+) -> None:
     """A list or tuple consumer resolver never serves a negative cursor as a wrapped slice."""
     library_models.Genre.objects.bulk_create(
         [library_models.Genre(name=f"g{index:02d}") for index in range(_CURSOR_ROW_COUNT)],
@@ -1764,7 +1797,7 @@ async def test_negative_offset_cursor_on_an_async_sequence_resolver_is_a_cursor_
     field: str,
     argument: str,
     variables: JSONObject,
-):
+) -> None:
     """The async colour of the sequence-resolver rows, over ``/graphql-cursor-async/``."""
     await library_models.Genre.objects.abulk_create(
         [library_models.Genre(name=f"g{index:02d}") for index in range(_CURSOR_ROW_COUNT)],
@@ -1774,7 +1807,7 @@ async def test_negative_offset_cursor_on_an_async_sequence_resolver_is_a_cursor_
 
 
 @pytest.mark.django_db
-def test_negative_offset_cursor_on_a_generator_resolver_is_a_cursor_error():
+def test_negative_offset_cursor_on_a_generator_resolver_is_a_cursor_error() -> None:
     """A generator source is rejected with the package message, not ``islice``'s text."""
     library_models.Genre.objects.create(name="g00")
 
@@ -1787,7 +1820,7 @@ def test_negative_offset_cursor_on_a_generator_resolver_is_a_cursor_error():
 @pytest.mark.parametrize("argument", ["after", "before"])
 async def test_negative_offset_cursor_on_an_async_queryset_resolver_is_a_cursor_error(
     argument: str,
-):
+) -> None:
     """A ``QuerySet`` from an async resolver gets the same message as the sync path.
 
     ``ListConnection`` slices an async-iterable source inside the coroutine it
@@ -1811,7 +1844,7 @@ _ROOT_GENRE_PAGE_QUERY = (
 
 
 @pytest.mark.django_db
-def test_after_minus_one_on_the_root_connection_is_a_cursor_error():
+def test_after_minus_one_on_the_root_connection_is_a_cursor_error() -> None:
     """``after:-1`` decodes to start 0; it is still a cursor no connection minted.
 
     The shipped root ``allLibraryGenresConnection`` (default resolver, ``QuerySet``
@@ -1851,7 +1884,7 @@ _MALFORMED_CURSOR_ROWS = [
     [row[1] for row in _MALFORMED_CURSOR_ROWS],
     ids=[row[0] for row in _MALFORMED_CURSOR_ROWS],
 )
-def test_malformed_offset_cursor_is_a_cursor_error(argument: str, cursor: str):
+def test_malformed_offset_cursor_is_a_cursor_error(argument: str, cursor: str) -> None:
     """Only the minted form decodes; every other cursor is one message, no parser text."""
     library_models.Genre.objects.create(name="g00")
 
@@ -1880,7 +1913,7 @@ _BOUND_SOURCES: dict[str, Callable[[JSONObject], JSONObject]] = {
 @pytest.mark.django_db
 @pytest.mark.parametrize("argument", ["after", "before"])
 @pytest.mark.parametrize("source", list(_BOUND_SOURCES))
-def test_offset_cursor_index_sys_maxsize_is_a_cursor_error(source: str, argument: str):
+def test_offset_cursor_index_sys_maxsize_is_a_cursor_error(source: str, argument: str) -> None:
     """``sys.maxsize`` is past the largest index a row can have, so it is no cursor.
 
     ``SliceMetadata`` reserves ``sys.maxsize`` as its unbounded-end sentinel and
@@ -1896,7 +1929,7 @@ def test_offset_cursor_index_sys_maxsize_is_a_cursor_error(source: str, argument
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("source", list(_BOUND_SOURCES))
-def test_offset_cursor_index_below_sys_maxsize_is_an_ordinary_cursor(source: str):
+def test_offset_cursor_index_below_sys_maxsize_is_an_ordinary_cursor(source: str) -> None:
     """The largest accepted index pages like any cursor past the last row.
 
     ``after: sys.maxsize - 1`` is an empty past-the-end page and
@@ -1984,7 +2017,7 @@ def test_offset_cursor_near_sys_maxsize_serves_the_past_the_end_page(
     size: Callable[[int], int],
     cursor: str,
     before: str | None,
-):
+) -> None:
     """Each index past the last row is the empty page under ``first``, ``last: 0`` or none.
 
     The cursor whose page would end on ``sys.maxsize`` (``SliceMetadata``'s
@@ -2014,7 +2047,7 @@ def test_offset_cursor_near_sys_maxsize_serves_the_past_the_end_page(
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("source", list(_PAST_END_SOURCES))
-def test_offset_cursor_interval_near_sys_maxsize_pages_like_any_interval(source: str):
+def test_offset_cursor_interval_near_sys_maxsize_pages_like_any_interval(source: str) -> None:
     """An ``after`` + ``before`` interval near ``sys.maxsize`` slices from the client's own start.
 
     ``after: sys.maxsize - 1, before: sys.maxsize - 1`` is the same empty
@@ -2045,7 +2078,7 @@ async def test_async_offset_cursor_near_sys_maxsize_serves_the_past_the_end_page
     variables: Callable[[int], JSONObject],
     size: Callable[[int], int],
     cursor: str,
-):
+) -> None:
     """The async colour of the past-the-end rows, over ``/graphql-cursor-async/``.
 
     The page is read without a statement count: the async resolvers query on an
@@ -2084,7 +2117,7 @@ def test_nested_per_parent_offset_cursor_near_sys_maxsize_serves_the_past_the_en
     variables: Callable[[int], JSONObject],
     size: Callable[[int], int],
     cursor: str,
-):
+) -> None:
     """A nested connection under a list resolver pages each parent per parent, past the end too.
 
     The parents come from a consumer list, so no window is planned and each
@@ -2144,7 +2177,7 @@ def _unbounded_cap_schema() -> DjangoSchema:
     )
 
 
-def _unbounded_graphql_view(request: HttpRequest):
+def _unbounded_graphql_view(request: HttpRequest) -> HttpResponseBase:
     schema = _UNBOUNDED_CURRENT["schema"]
     assert schema is not None
     return DjangoGraphQLView.as_view(schema=schema)(request)
@@ -2156,7 +2189,7 @@ urlpatterns += [path("graphql-cursor-unbounded/", _unbounded_graphql_view)]
 @pytest.mark.django_db
 @pytest.mark.parametrize("after", [None, "0"], ids=["no-cursor", "after-first-row"])
 @pytest.mark.parametrize("field", ["genres", "generatorGenres"])
-def test_page_bound_of_sys_maxsize_serves_every_row(field: str, after: str | None):
+def test_page_bound_of_sys_maxsize_serves_every_row(field: str, after: str | None) -> None:
     """A page bounded only by ``sys.maxsize`` serves every remaining row and ends there.
 
     With no page argument the page is ``first: sys.maxsize``: from the first
@@ -2204,7 +2237,7 @@ def _root_genre_page(variables: JSONObject) -> JSONObject:
 
 
 @pytest.mark.django_db
-def test_minted_offset_cursors_still_page():
+def test_minted_offset_cursors_still_page() -> None:
     """The positive controls: index 0, a cursor the connection minted, and an empty cursor.
 
     ``arrayconnection:0`` is canonical and pages past the first row; the
@@ -2254,7 +2287,10 @@ def _assert_rejected_with(payload: JSONObject, message: str) -> None:
     [row[1:] for row in _PAGE_BOUND_ROWS],
     ids=[row[0] for row in _PAGE_BOUND_ROWS],
 )
-def test_offset_page_bound_is_the_exact_pagination_message(variables: JSONObject, message: str):
+def test_offset_page_bound_is_the_exact_pagination_message(
+    variables: JSONObject,
+    message: str,
+) -> None:
     """Each page-size rejection reaches a ``DEBUG=False`` client as its own exact message."""
     library_models.Genre.objects.create(name="g00")
 
@@ -2270,7 +2306,7 @@ def test_offset_page_bound_is_the_exact_pagination_message(variables: JSONObject
 async def test_async_offset_page_bound_is_the_exact_pagination_message(
     variables: JSONObject,
     message: str,
-):
+) -> None:
     """The async colour of the page-size rows, over ``/graphql-cursor-async/``."""
     await library_models.Genre.objects.acreate(name="g00")
 
@@ -2355,7 +2391,7 @@ _ROOT_HYDRATION_QUERY = "{ allLibraryGenresConnection(first: 2) { edges { node {
 
 
 @pytest.mark.django_db
-def test_a_root_row_that_fails_to_hydrate_is_masked():
+def test_a_root_row_that_fails_to_hydrate_is_masked() -> None:
     """A row failing to hydrate on the shipped root connection is masked over ``/graphql/``.
 
     The failure is raised inside Strawberry's ``ListConnection`` slicer; it is
@@ -2372,7 +2408,7 @@ def test_a_root_row_that_fails_to_hydrate_is_masked():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_an_async_root_row_that_fails_to_hydrate_is_masked():
+async def test_an_async_root_row_that_fails_to_hydrate_is_masked() -> None:
     """The async colour: a ``QuerySet`` from an async resolver, iterated in the slicer's coroutine."""
     await library_models.Genre.objects.acreate(name="g00")
     query = "{ asyncQuerysetGenres(first: 2) { edges { node { name } } } }"
@@ -2416,7 +2452,7 @@ _NESTED_SOURCES: dict[str, tuple[Callable[[], JSONObject], int]] = {
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("source", list(_NESTED_SOURCES))
-def test_a_nested_connection_row_that_fails_to_hydrate_is_masked(source: str):
+def test_a_nested_connection_row_that_fails_to_hydrate_is_masked(source: str) -> None:
     """A nested connection's row failing to hydrate under an offset root is masked."""
     _shelve_nested_rows()
     request, book_statements = _NESTED_SOURCES[source]
@@ -2435,7 +2471,7 @@ def test_a_nested_connection_row_that_fails_to_hydrate_is_masked(source: str):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_an_async_nested_connection_row_that_fails_to_hydrate_is_masked():
+async def test_an_async_nested_connection_row_that_fails_to_hydrate_is_masked() -> None:
     """The async colour of the nested row, under a ``QuerySet`` from an async resolver."""
     await sync_to_async(_shelve_nested_rows)()
     query = f"{{ asyncQuerysetGenres(first: 2) {{ {_NESTED_SELECTION} }} }}"
@@ -2492,7 +2528,10 @@ def _assert_source_failure_masked(
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("field", list(_FAILING_SOURCES))
-def test_a_consumer_source_that_raises_is_masked(caplog: pytest.LogCaptureFixture, field: str):
+def test_a_consumer_source_that_raises_is_masked(
+    caplog: pytest.LogCaptureFixture,
+    field: str,
+) -> None:
     """A consumer source raising while the connection reads or slices it is masked.
 
     Nothing between the resolver's return and the client catches the
@@ -2512,7 +2551,7 @@ def test_a_consumer_source_that_raises_is_masked(caplog: pytest.LogCaptureFixtur
 async def test_an_async_view_consumer_source_that_raises_is_masked(
     caplog: pytest.LogCaptureFixture,
     field: str,
-):
+) -> None:
     """The same failing sources over ``/graphql-cursor-async/``."""
     caplog.set_level(logging.ERROR, logger=_PACKAGE_LOGGER)
 

@@ -172,6 +172,9 @@ select = [
     "D",      # pydocstyle (Google convention)
     "D204",   # blank line after a class docstring (outside the Google convention)
     "D215",   # over-indented section underline (ditto)
+    "D400",   # summary ends with a period (the Google convention drops it from a `D` prefix select)
+    "D401",   # summary in the imperative mood (ditto)
+    "D404",   # summary does not start with "This" (ditto)
     "D406",   # section name ends with a newline (ditto)
     "D407",   # dashed section underline (ditto)
     "D408",   # section underline on the line after the name (ditto)
@@ -299,20 +302,11 @@ classmethod-decorators = ["django.utils.decorators.classonlymethod"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = [
-    "D",      # docstrings not required in test code
-    "ANN",    # annotations not required in test code
-    "ERA001", # commented-out code
-    "SIM117", # nested with statements
-    "E501",   # line too long
-    "N802",   # function name not lowercase
-    "N806",   # variable in function not lowercase
-    "B018",   # bare `factory.arguments` triggers the lazy build under test
-    "RUF012", # fixture classes use mutable attrs idiomatically
-    "PERF",   # not a performance surface
-    "RUF043", # plain `match="..."` substrings are the convention
-    "ARG",    # an unused arg is an injected fixture or a framework-fixed signature; enforced on the package
+    "D106",   # `class Meta:` is the documented DRF-style idiom; a docstring on each would be noise
+    "D401",   # a test docstring states the contract declaratively ("A two-bound range applies ...")
+    "N806",   # a class built by `type(...)` or a factory binds to a PascalCase local, like a class statement
+    "RUF012", # Meta `fields = {...}` / `[...]` is the consumer idiom; `ClassVar` is not what a consumer writes
     "S101",   # assert is the pytest idiom
-    "FBT",    # parametrized `flag: bool` arguments and helper calls; enforced on the package and scripts
     "DJ008",  # throwaway test models never reach the admin or a shell; a `__str__` on each would be unread code
     "SLOT000", # hostile `str`-subclass fixtures model consumer values, which carry an instance `__dict__`
     "SLOT001", # hostile `tuple`-subclass fixtures, same reason
@@ -322,21 +316,19 @@ classmethod-decorators = ["django.utils.decorators.classonlymethod"]
     "S607",   # same
 ]
 "examples/**/*.py" = [
-    "D",      # docstrings not required in example code
-    "ANN",    # annotations not required in example code
-    "ERA001", # commented-out code
-    "SIM117", # nested with statements
-    "E501",   # line too long
-    "UP031",  # printf-style string formatting
-    "RUF012", # fixture classes use mutable attrs idiomatically
-    "RUF043", # plain `match="..."` substrings are the convention
-    "ARG",    # an unused arg is an injected fixture or a framework-fixed signature; enforced on the package
+    "D106",   # as in tests/
+    "D401",   # as in tests/
+    "RUF012", # as in tests/
     "S101",   # assert is the pytest idiom
-    "FBT",    # parametrized `flag: bool` arguments and helper calls; enforced on the package and scripts
     "SLOT000", # fakeshop's hostile `str`-subclass fixtures, as in tests/
     "S105",   # the never-deployed example's dev SECRET_KEY, seed password and fixture credentials
     "S106",   # same
 ]
+# A test function's name is its summary; the contract docstring most tests carry is not required.
+"tests/**/test_*.py" = ["D102", "D103"]
+"examples/**/test_*.py" = ["D102", "D103"]
+# makemigrations writes these files; a hand-added docstring is lost on the next regeneration.
+"examples/**/migrations/*.py" = ["D"]
 # PERF: one-shot build/maintenance scripts are not a performance surface.
 # T201: print is the CLI output of scripts and the root tools.
 # S603/S607: dev tooling runs the maintainer's own git/uv/ruff/docker/sys.executable by name, with no
@@ -348,7 +340,9 @@ classmethod-decorators = ["django.utils.decorators.classonlymethod"]
 "docs/dry/export_dry_review.py" = ["T201", "INP001"]
 "examples/fakeshop/*.py" = ["INP001"]
 "examples/fakeshop/tests/*.py" = ["INP001"]
-"examples/fakeshop/test_query/**/*.py" = ["INP001"]
+# UP031: GraphQL query text is all braces; `%s` keeps it readable where `str.format` / f-strings
+# double them.
+"examples/fakeshop/test_query/**/*.py" = ["INP001", "UP031"]
 
 [tool.ruff.lint.pycodestyle]
 # The formatter wraps code at line-length (99); E501 only flags lines past 110

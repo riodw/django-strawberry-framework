@@ -19,11 +19,14 @@ content-type negotiation), which ``TestClient`` exists to abstract away.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from django.test import Client
 
 from django_strawberry_framework.testing import TestClient
+
+if TYPE_CHECKING:
+    from django.test.client import _MonkeyPatchedWSGIResponse
 
 #: A parsed GraphQL JSON object (response envelope, ``data``, or variables).
 # basedpyright: live suites chain subscripts into a parsed response (``data["a"]["b"][0]``);
@@ -43,7 +46,7 @@ def post_graphql(
     client: Client | None = None,
     variables: Mapping[str, object] | None = None,
     url: str | None = None,
-):
+) -> _MonkeyPatchedWSGIResponse:
     """POST one GraphQL document through the shared package ``TestClient``.
 
     Routes through the package client's body-build + decode path;
@@ -62,7 +65,11 @@ def post_graphql(
     return result.response
 
 
-def post_graphql_raw(body: str | bytes, *, client: Client | None = None):
+def post_graphql_raw(
+    body: str | bytes,
+    *,
+    client: Client | None = None,
+) -> _MonkeyPatchedWSGIResponse:
     """POST a raw JSON body to the live ``/graphql/`` endpoint.
 
     Deliberately a raw ``client.post`` (not ``TestClient``): the subject is the
@@ -111,7 +118,7 @@ def assert_graphql_data(
     client: Client | None = None,
     variables: Mapping[str, object] | None = None,
     url: str | None = None,
-):
+) -> _MonkeyPatchedWSGIResponse:
     """POST ``query`` and assert a 200, no ``errors``, and exact ``data`` equality.
 
     Returns the response so callers can layer extra asserts (headers, query

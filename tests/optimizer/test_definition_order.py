@@ -9,6 +9,7 @@ hooked-target Prefetch SQL is
 """
 
 from collections.abc import Iterator
+from types import SimpleNamespace
 
 import pytest
 import strawberry
@@ -30,10 +31,8 @@ def _isolate_registry() -> Iterator[None]:
     registry.clear()
 
 
-def _sel(name: str, selections: list[object] | None = None):
+def _sel(name: str, selections: list[object] | None = None) -> SimpleNamespace:
     """Build a synthetic selected field."""
-    from types import SimpleNamespace
-
     return SimpleNamespace(
         name=name,
         alias=None,
@@ -50,7 +49,7 @@ def _model_field(model: type[Model], name: str) -> FieldMeta:
     )
 
 
-def test_plan_relation_decisions_match_cardinality_after_finalization():
+def test_plan_relation_decisions_match_cardinality_after_finalization() -> None:
     """Cyclic finalization still returns the cardinality ``plan_relation`` tuples.
 
     The callable's return pair is not a wire value. Reverse-O2O JOIN SQL is
@@ -115,7 +114,7 @@ def test_plan_relation_decisions_match_cardinality_after_finalization():
     )
 
 
-def test_check_schema_returns_no_warnings_for_registered_cyclic_targets():
+def test_check_schema_returns_no_warnings_for_registered_cyclic_targets() -> None:
     """The schema audit accepts reachable cyclic relations when every target is registered."""
 
     class ItemType(DjangoType):
@@ -142,7 +141,7 @@ def test_check_schema_returns_no_warnings_for_registered_cyclic_targets():
     assert DjangoOptimizerExtension.check_schema(schema) == []
 
 
-def test_definition_field_map_carries_optimizer_metadata():
+def test_definition_field_map_carries_optimizer_metadata() -> None:
     """Definition-owned field metadata is the optimizer's canonical source."""
 
     class CategoryType(DjangoType):
@@ -156,7 +155,7 @@ def test_definition_field_map_carries_optimizer_metadata():
     assert sorted(definition.field_map) == ["id", "items", "name"]
 
 
-def test_annotation_only_relation_override_still_plans_prefetch():
+def test_annotation_only_relation_override_still_plans_prefetch() -> None:
     """Annotation-only relation overrides keep optimizer-visible relation metadata."""
 
     class ItemType(DjangoType):

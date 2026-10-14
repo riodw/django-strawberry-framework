@@ -111,7 +111,7 @@ def _seed_publishing_graph() -> tuple[models.Publisher, models.Publisher]:
 
 
 @pytest.mark.django_db
-def test_patron_profile_relay_id_is_built_from_the_relation_primary_key_column():
+def test_patron_profile_relay_id_is_built_from_the_relation_primary_key_column() -> None:
     """A model whose primary key IS a relation mints its Relay id from the key column.
 
     ``PatronProfile.patron`` is a ``OneToOneField(primary_key=True)``, so the
@@ -140,7 +140,7 @@ def test_patron_profile_relay_id_is_built_from_the_relation_primary_key_column()
 
 
 @pytest.mark.django_db
-def test_edition_digit_boundary_names_project_their_own_django_columns():
+def test_edition_digit_boundary_names_project_their_own_django_columns() -> None:
     """``isbn10`` and ``publisher2`` resolve to the ``isbn_10`` / ``publisher_2_id`` columns.
 
     Both published names lose their ``<word>_<digit>`` boundary on the way to
@@ -166,7 +166,7 @@ def test_edition_digit_boundary_names_project_their_own_django_columns():
 
 
 @pytest.mark.django_db
-def test_patron_profile_explicitly_named_fields_each_return_their_own_column():
+def test_patron_profile_explicitly_named_fields_each_return_their_own_column() -> None:
     """``secondaryAddress`` and ``secondary_address`` are two columns, not one.
 
     ``PatronProfileType`` names ``address_2`` and ``postal_code`` with
@@ -194,7 +194,7 @@ def test_patron_profile_explicitly_named_fields_each_return_their_own_column():
 
 
 @pytest.mark.django_db
-def test_printing_edition_key_only_selection_is_answered_from_the_stored_key_column():
+def test_printing_edition_key_only_selection_is_answered_from_the_stored_key_column() -> None:
     """``edition { isbn13 }`` is served from ``printing.edition_id`` alone.
 
     ``Edition``'s primary key is the text column ``isbn_13`` - not named ``id``
@@ -230,7 +230,7 @@ def test_printing_edition_key_only_selection_is_answered_from_the_stored_key_col
 
 
 @pytest.mark.django_db
-def test_printing_edition_non_key_selection_reads_the_edition_table():
+def test_printing_edition_non_key_selection_reads_the_edition_table() -> None:
     """The same relation joins the moment a non-key edition column is selected.
 
     The elision is scoped to a selection the source row can answer; ``imprint``
@@ -258,7 +258,7 @@ def test_printing_edition_non_key_selection_reads_the_edition_table():
 
 
 @pytest.mark.django_db
-def test_patron_profile_favorite_genre_id_still_reads_the_genre_table():
+def test_patron_profile_favorite_genre_id_still_reads_the_genre_table() -> None:
     """A ``to_field`` key cannot answer ``favoriteGenre { id }`` from the source row.
 
     ``PatronProfile.favorite_genre`` is declared ``to_field="name"``, so the
@@ -290,7 +290,7 @@ def test_patron_profile_favorite_genre_id_still_reads_the_genre_table():
 
 
 @pytest.mark.django_db
-def test_edition_publisher_id_still_reads_the_publisher_table_for_its_node_id():
+def test_edition_publisher_id_still_reads_the_publisher_table_for_its_node_id() -> None:
     """A custom ``relay.NodeID`` moves the id payload off the stored key column.
 
     ``PublisherType`` declares ``house_code: relay.NodeID[str]``, so the id a
@@ -315,7 +315,7 @@ def test_edition_publisher_id_still_reads_the_publisher_table_for_its_node_id():
 
 
 @pytest.mark.django_db
-def test_publisher_printings_2_connection_pages_from_one_partitioned_window():
+def test_publisher_printings_2_connection_pages_from_one_partitioned_window() -> None:
     """The ``<word>_<digit>`` reverse accessor pages off ONE window statement.
 
     ``Publisher.printings_2`` publishes as ``printings2Connection``; the nested
@@ -365,7 +365,7 @@ def test_publisher_printings_2_connection_pages_from_one_partitioned_window():
 
 
 @pytest.mark.django_db
-def test_patron_profile_annotations_connection_is_left_unplanned_and_fetched_per_parent():
+def test_patron_profile_annotations_connection_is_left_unplanned_and_fetched_per_parent() -> None:
     """A distinct default manager leaves the whole nested relation unplanned.
 
     ``AnnotationManager.get_queryset`` returns ``.distinct()``, which
@@ -424,7 +424,7 @@ def _seed_distributors(count: int) -> list[models.Distributor]:
 
 
 @pytest.mark.django_db
-def test_distributor_mixed_case_scalar_projects_its_own_column():
+def test_distributor_mixed_case_scalar_projects_its_own_column() -> None:
     """``displayName`` is served by one statement projecting the ``displayName`` column.
 
     Strawberry publishes the Django name unchanged; reversing it gives
@@ -513,7 +513,7 @@ def _seed_reading_lists() -> tuple[models.ReadingList, models.ReadingList]:
 
 
 @pytest.mark.django_db
-def test_reading_list_entries_connection_pages_in_primary_key_order_with_ordering_none():
+def test_reading_list_entries_connection_pages_in_primary_key_order_with_ordering_none() -> None:
     """A root connection over an ``ordering = None`` model pages in primary-key order.
 
     ``ReadingListEntry`` clears its abstract parent's ``Meta.ordering`` with
@@ -546,7 +546,7 @@ def test_reading_list_entries_connection_pages_in_primary_key_order_with_orderin
 
 
 @pytest.mark.django_db
-def test_reading_list_entries_nested_connection_windows_in_primary_key_order():
+def test_reading_list_entries_nested_connection_windows_in_primary_key_order() -> None:
     """The nested window over an ``ordering = None`` child orders each partition by pk.
 
     Two parents so the nested planner builds its ``ROW_NUMBER() OVER (PARTITION
@@ -598,7 +598,7 @@ def test_reading_list_entries_nested_connection_windows_in_primary_key_order():
 
 
 @pytest.mark.django_db
-def test_reading_lists_connection_honors_a_cleared_default_ordering():
+def test_reading_lists_connection_honors_a_cleared_default_ordering() -> None:
     """A source whose ``.order_by()`` cleared ``Meta.ordering`` pages in primary-key order.
 
     Django compiles no ``Meta.ordering`` once ``query.default_ordering`` is off,

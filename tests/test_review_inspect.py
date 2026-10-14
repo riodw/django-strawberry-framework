@@ -10,7 +10,7 @@ fixture package under ``tmp_path``.
 import json
 import subprocess
 from pathlib import Path
-from typing import TypeAlias
+from typing import NoReturn, TypeAlias
 
 import pytest
 from graphql_client import JSONObject
@@ -228,6 +228,7 @@ def test_meta_call_filter_matches_attribute_access_not_substring(
 def test_capped_sections_print_the_total_and_no_cap_lists_every_row(
     tmp_path: Path,
     extra: tuple[str, ...],
+    *,
     expect_notice: bool,
 ) -> None:
     source = "".join(f"value_{index} = model._meta\n" for index in range(60))
@@ -264,7 +265,7 @@ def test_json_blob_id_falls_back_to_the_same_sha1_without_git(
     target = _write(tmp_path / REL_PATH, SAMPLE)
     expected = review_inspect._blob_id(target)
 
-    def _no_git(*_args: object, **_kwargs: object):
+    def _no_git(*_args: object, **_kwargs: object) -> NoReturn:
         raise OSError("git unavailable")
 
     monkeypatch.setattr(subprocess, "run", _no_git)

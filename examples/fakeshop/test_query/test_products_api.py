@@ -54,6 +54,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.db.models import QuerySet
 from django.http import HttpRequest
+from django.http.response import HttpResponseBase
 from django.test import AsyncClient, Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import path
@@ -170,7 +171,7 @@ _CREATE_ITEM_VIA_RENAMED_SERIALIZER = (
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_happy_path():
+def test_create_item_happy_path() -> None:
     """``createItem`` with a permitted caller returns the optimizer-refetched node, no errors.
 
     Permitted-caller success on the codename path: ``view_item_1`` is granted
@@ -202,7 +203,7 @@ def test_create_item_happy_path():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_private_row_is_refetched_for_its_author_but_stays_hidden_from_reads():
+def test_create_item_private_row_is_refetched_for_its_author_but_stays_hidden_from_reads() -> None:
     """A permitted caller writing a row their own reads hide still gets it back in the payload.
 
     `ItemType.get_queryset` hides `is_private` rows from a non-staff viewer, and
@@ -246,7 +247,7 @@ def test_create_item_private_row_is_refetched_for_its_author_but_stays_hidden_fr
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_non_colliding_partial_update():
+def test_update_item_non_colliding_partial_update() -> None:
     """A partial update changing only ``name`` to a fresh value persists, leaving other fields.
 
     The spec's non-colliding partial-update case: ``ItemPartialInput`` provides
@@ -285,7 +286,7 @@ def test_update_item_non_colliding_partial_update():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_omitting_attachment_leaves_stored_file_unchanged(tmp_path: Path):
+def test_update_item_omitting_attachment_leaves_stored_file_unchanged(tmp_path: Path) -> None:
     """A description-only ``updateItem`` leaves the stored ``attachment`` byte-identical.
 
     Model-flavor counterpart of the form omit row: ``UNSET`` is stripped before
@@ -327,7 +328,7 @@ def test_update_item_omitting_attachment_leaves_stored_file_unchanged(tmp_path: 
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_with_new_upload_replaces_attachment(tmp_path: Path):
+def test_update_item_with_new_upload_replaces_attachment(tmp_path: Path) -> None:
     """A multipart ``updateItem`` providing ``attachment`` replaces the stored file through ``setattr``.
 
     The generic update loop carries the upload; there is no file-specific write branch.
@@ -379,7 +380,7 @@ def test_update_item_with_new_upload_replaces_attachment(tmp_path: Path):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_delete_item_happy_path():
+def test_delete_item_happy_path() -> None:
     """``deleteItem`` returns the pre-deletion snapshot (id + relation) and removes the row.
 
     The delete payload selects ``node { id name category { name } }`` - the
@@ -418,7 +419,7 @@ _CREATE_ITEM_HOLD = (
     ["item", "substitute"],
     ids=["protect", "restrict"],
 )
-def test_delete_item_refused_by_a_hold_returns_the_protected_envelope(reference: str):
+def test_delete_item_refused_by_a_hold_returns_the_protected_envelope(reference: str) -> None:
     """``deleteItem`` on an item an ``ItemHold`` references returns the envelope; the row survives.
 
     ``ItemHold.item`` is ``on_delete=PROTECT`` and ``ItemHold.substitute`` is
@@ -457,7 +458,7 @@ def test_delete_item_refused_by_a_hold_returns_the_protected_envelope(reference:
 
 
 @pytest.mark.django_db
-def test_create_item_hold_explicit_null_item_is_a_field_error():
+def test_create_item_hold_explicit_null_item_is_a_field_error() -> None:
     """An explicit ``itemId: null`` on the ``blank=True, null=False`` FK is keyed to ``itemId``.
 
     ``full_clean`` skips a ``blank=True`` empty value, so without the decode-time
@@ -490,7 +491,7 @@ _DELETE_ITEM_WITH_CONNECTION = (
 
 
 @pytest.mark.django_db(transaction=True)
-def test_delete_item_snapshot_carries_connection_child_edges():
+def test_delete_item_snapshot_carries_connection_child_edges() -> None:
     """``deleteItem`` selecting ``entriesConnection`` returns its edges after the row is gone.
 
     The connection-child half of the delete snapshot (spec-036 Decision 8 step 6):
@@ -536,7 +537,7 @@ def test_delete_item_snapshot_carries_connection_child_edges():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_category_happy_path():
+def test_create_category_happy_path() -> None:
     """``createCategory`` (the >=1 Category write) creates a fresh-named row end to end.
 
     Exercises a second model through the pipeline. ``Category.name`` is
@@ -569,7 +570,7 @@ _LONE_SURROGATE = "\ud800"
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_category_surrogate_in_unique_name_is_field_error_no_crash():
+def test_create_category_surrogate_in_unique_name_is_field_error_no_crash() -> None:
     """An unpaired surrogate in the unique ``name`` -> in-band ``FieldError`` on ``name``, no 500.
 
     The unique-field path: ``name`` is ``unique=True``, so an unstorable value would
@@ -597,7 +598,7 @@ def test_create_category_surrogate_in_unique_name_is_field_error_no_crash():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_category_surrogate_in_nonunique_description_is_field_error_no_crash():
+def test_create_category_surrogate_in_nonunique_description_is_field_error_no_crash() -> None:
     """An unpaired surrogate in the non-unique ``description`` -> ``FieldError`` on ``description``, no 500.
 
     The non-unique-field path: a clean ``name`` passes ``validate_unique()``, so the
@@ -622,7 +623,7 @@ def test_create_category_surrogate_in_nonunique_description_is_field_error_no_cr
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_category_explicit_null_on_nonnullable_description_is_field_error():
+def test_create_category_explicit_null_on_nonnullable_description_is_field_error() -> None:
     """An explicit ``null`` on the non-nullable ``description`` -> ``FieldError``, not a vague ``__all__``.
 
     ``Category.description`` is ``blank=True, null=False``. An explicit ``null`` slips
@@ -651,7 +652,7 @@ def test_create_category_explicit_null_on_nonnullable_description_is_field_error
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_unique_constraint_envelope_uses_all_sentinel():
+def test_create_item_unique_constraint_envelope_uses_all_sentinel() -> None:
     """A duplicate ``(category, name)`` create returns a ``"__all__"``-keyed ``FieldError``.
 
     The multi-field ``unique_item_per_category`` constraint is caught by
@@ -688,7 +689,7 @@ def test_create_item_unique_constraint_envelope_uses_all_sentinel():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_empty_name_is_field_error_no_write():
+def test_create_item_empty_name_is_field_error_no_write() -> None:
     """An empty ``name`` on ``createItem`` is an in-band ``FieldError`` on ``name``, no row.
 
     ``Item.name`` is required (``blank=False``). A provided empty string reaches
@@ -718,7 +719,7 @@ def test_create_item_empty_name_is_field_error_no_write():
 
 
 @pytest.mark.django_db
-def test_create_update_delete_item_argument_signatures_over_http():
+def test_create_update_delete_item_argument_signatures_over_http() -> None:
     """The shipped Mutation publishes create ``data``, update ``id``+``data``, delete ``id``.
 
     Introspection of the composed schema is the consumer contract for the
@@ -757,7 +758,7 @@ def test_create_update_delete_item_argument_signatures_over_http():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_partial_collision_on_unique_constraint_changing_only_name():
+def test_update_item_partial_collision_on_unique_constraint_changing_only_name() -> None:
     """A ``name``-only update colliding on ``unique_item_per_category`` -> ``"__all__"``.
 
     Two ``Item``s ``A`` / ``B`` under the SAME category; ``updateItem`` on ``A``
@@ -791,7 +792,7 @@ def test_update_item_partial_collision_on_unique_constraint_changing_only_name()
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_anonymous_is_denied_top_level_error_no_write():
+def test_create_item_anonymous_is_denied_top_level_error_no_write() -> None:
     """An anonymous ``createItem`` is denied with a top-level error and no write.
 
     The default ``DjangoModelPermission`` denies a caller with no authenticated
@@ -826,7 +827,7 @@ def test_create_item_anonymous_is_denied_top_level_error_no_write():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_missing_model_perm_is_denied_no_write():
+def test_create_item_missing_model_perm_is_denied_no_write() -> None:
     """A caller lacking ``add_item`` is denied with a top-level error, no write.
 
     ``view_item_1`` holds only ``products.view_item`` (``create_users`` grants each
@@ -861,7 +862,7 @@ def test_create_item_missing_model_perm_is_denied_no_write():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_missing_change_perm_is_denied_no_write():
+def test_update_item_missing_change_perm_is_denied_no_write() -> None:
     """A caller holding ``add_item`` but lacking ``change_item`` is denied ``updateItem``, no write.
 
     The live half of the per-operation codename matrix (spec-036 Decision 15 /
@@ -896,7 +897,7 @@ def test_update_item_missing_change_perm_is_denied_no_write():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_delete_item_missing_delete_perm_is_denied_no_write():
+def test_delete_item_missing_delete_perm_is_denied_no_write() -> None:
     """A caller holding ``add_item`` but lacking ``delete_item`` is denied ``deleteItem``, no write.
 
     The ``delete`` cell of the same per-operation matrix, distinguishing for the
@@ -926,7 +927,7 @@ def test_delete_item_missing_delete_perm_is_denied_no_write():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_login_bracket_via_test_client():
+def test_create_item_login_bracket_via_test_client() -> None:
     """spec-043 scenario 4: ``TestClient.login()`` scopes write auth to the bracket.
 
     The write-auth-gated ``createItem`` on ONE client instance: denied anonymous
@@ -977,7 +978,7 @@ def test_create_item_login_bracket_via_test_client():
 
 
 @pytest.mark.django_db
-def test_operation_name_dispatch_via_test_client():
+def test_operation_name_dispatch_via_test_client() -> None:
     """spec-043 scenarios 1 + 3: the typed ``Response`` and ``operationName`` dispatch.
 
     A two-operation document with ``operation_name="ItemNames"`` executes ONLY
@@ -1011,7 +1012,7 @@ def test_operation_name_dispatch_via_test_client():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_visibility_scoped_update_delete_hidden_private_row_is_not_found():
+def test_visibility_scoped_update_delete_hidden_private_row_is_not_found() -> None:
     """Decision 10: a caller who holds the write perm but cannot SEE a private row gets not-found.
 
     ``seed_cascade_split`` gives ``item_under_private`` (a public Item under a
@@ -1069,7 +1070,7 @@ def test_visibility_scoped_update_delete_hidden_private_row_is_not_found():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_anonymous_on_hidden_private_row_is_not_found_before_any_auth_signal():
+def test_update_item_anonymous_on_hidden_private_row_is_not_found_before_any_auth_signal() -> None:
     """An anonymous update of an invisible row answers not-found, never "not authorized".
 
     The anonymous arm of the ordering
@@ -1100,7 +1101,7 @@ def test_update_item_anonymous_on_hidden_private_row_is_not_found_before_any_aut
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_wrong_type_global_id_on_category_id_is_field_error():
+def test_create_item_wrong_type_global_id_on_category_id_is_field_error() -> None:
     """A wrong-type ``GlobalID`` on ``categoryId`` -> ``FieldError`` on ``categoryId``.
 
     ``categoryId`` is fed a well-formed ``Item`` GlobalID (the wrong target model).
@@ -1133,7 +1134,7 @@ def test_create_item_wrong_type_global_id_on_category_id_is_field_error():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_unresolvable_type_category_id_is_field_error():
+def test_create_item_unresolvable_type_category_id_is_field_error() -> None:
     """A well-formed ``GlobalID`` naming an unregistered type on ``categoryId`` is in-band.
 
     Distinct from the wrong-model case: decode itself fails (no installed Relay
@@ -1164,7 +1165,7 @@ def test_create_item_unresolvable_type_category_id_is_field_error():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_wrong_type_global_id_on_id_is_field_error():
+def test_update_item_wrong_type_global_id_on_id_is_field_error() -> None:
     """A wrong-type / unresolvable ``GlobalID`` on the ``updateItem`` ``id:`` -> ``FieldError`` on ``id``.
 
     The top-level ``id:`` is type-checked against the mutation's target model
@@ -1213,7 +1214,7 @@ def test_update_item_wrong_type_global_id_on_id_is_field_error():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_delete_item_wrong_type_global_id_on_id_is_field_error():
+def test_delete_item_wrong_type_global_id_on_id_is_field_error() -> None:
     """A wrong-type ``GlobalID`` on the ``deleteItem`` ``id:`` -> ``FieldError`` on ``id``, no deletion.
 
     The same top-level ``id:`` type-check guards ``delete``: a ``Category``
@@ -1240,7 +1241,7 @@ def test_delete_item_wrong_type_global_id_on_id_is_field_error():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_relation_id_for_hidden_category_is_field_error():
+def test_create_item_relation_id_for_hidden_category_is_field_error() -> None:
     """A permitted writer cannot attach a `Category` they cannot SEE.
 
     `seed_cascade_split` gives a PRIVATE category. A non-staff `view_item_1` user
@@ -1319,7 +1320,7 @@ def test_create_item_relation_id_for_hidden_category_is_field_error():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_explicit_null_category_id_is_field_error():
+def test_update_item_explicit_null_category_id_is_field_error() -> None:
     """Explicit ``categoryId: null`` is a field-keyed null error, not an IntegrityError leak.
 
     Live ``/graphql`` acceptance for the FK decode null guard. Create ``ItemInput``
@@ -1351,7 +1352,7 @@ def test_update_item_explicit_null_category_id_is_field_error():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_explicit_null_scalar_name_is_field_error():
+def test_update_item_explicit_null_scalar_name_is_field_error() -> None:
     """Explicit ``name: null`` on a non-nullable scalar field returns a field-keyed null error.
 
     Live ``/graphql`` acceptance for ``_explicit_null_error``. ``ItemPartialInput.name``
@@ -1382,7 +1383,7 @@ def test_update_item_explicit_null_scalar_name_is_field_error():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_malformed_id_is_field_error_no_coercion_crash():
+def test_update_item_malformed_id_is_field_error_no_coercion_crash() -> None:
     """A malformed / raw-pk ``id:`` on `updateItem` -> `FieldError` on `id`, no crash.
 
     The ``id:`` is `ID!` and decoded server-side; a string that is not a well-formed
@@ -1413,7 +1414,7 @@ def test_update_item_malformed_id_is_field_error_no_coercion_crash():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_malformed_category_id_is_top_level_coercion_error():
+def test_create_item_malformed_category_id_is_top_level_coercion_error() -> None:
     """A MALFORMED `categoryId` is a top-level coercion error, not a `FieldError`.
 
     Relation ids are typed `GlobalID` (not `ID!`), so Strawberry rejects a malformed
@@ -1440,7 +1441,7 @@ def test_create_item_malformed_category_id_is_top_level_coercion_error():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_wellformed_id_uncoercible_node_id_is_not_found_no_crash():
+def test_update_item_wellformed_id_uncoercible_node_id_is_not_found_no_crash() -> None:
     """A well-formed ``Item`` ``id:`` carrying an uncoercible ``node_id`` -> not-found, no 500.
 
     Distinct from the malformed case above: this ``id`` IS a well-formed
@@ -1476,7 +1477,7 @@ def test_update_item_wellformed_id_uncoercible_node_id_is_not_found_no_crash():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_wellformed_relation_id_uncoercible_node_id_is_field_error_no_crash():
+def test_create_item_wellformed_relation_id_uncoercible_node_id_is_field_error_no_crash() -> None:
     """A well-formed ``Category`` ``categoryId`` with an uncoercible ``node_id`` -> ``FieldError``.
 
     The relation analogue of the case above. ``categoryId`` is typed ``GlobalID``,
@@ -1516,8 +1517,10 @@ _ABSURD_INTEGER_NODE_ID = "9" * 400
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_relation_id_absurd_huge_pk_is_field_error_no_overflow():
-    """An out-of-range ``Category`` relation pk -> ``FieldError`` on ``categoryId``, never an OverflowError 500.
+def test_create_item_relation_id_absurd_huge_pk_is_field_error_no_overflow() -> None:
+    """An out-of-range ``Category`` relation pk is a ``FieldError`` on ``categoryId``, never a 500.
+
+    The pk never reaches an ``OverflowError``.
 
     A well-formed ``products.category`` GlobalID whose ``node_id`` is an absurd
     integer (``"9" * 400``) passes decode and the type-check. ``to_python``
@@ -1549,8 +1552,8 @@ def test_create_item_relation_id_absurd_huge_pk_is_field_error_no_overflow():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_id_absurd_huge_pk_is_not_found_no_overflow():
-    """An out-of-range top-level ``id:`` -> not-found ``FieldError`` on ``id``, consistent with the relation path.
+def test_update_item_id_absurd_huge_pk_is_not_found_no_overflow() -> None:
+    """An out-of-range top-level ``id:`` is a not-found ``FieldError`` on ``id``, like the relation path.
 
     The top-level ``updateItem`` ``id:`` analogue. ``.get(pk=<huge>)`` happens to
     return ``DoesNotExist`` on SQLite (not an overflow), so this path already
@@ -1581,7 +1584,7 @@ def test_update_item_id_absurd_huge_pk_is_not_found_no_overflow():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_g2_mutation_response_keeps_relation_with_bounded_query_count():
+def test_g2_mutation_response_keeps_relation_with_bounded_query_count() -> None:
     """G2 behavioral tier: a mutation response selecting a relation has no N+1, no lazy query.
 
     Discharges the ``spec-035`` G2 live-test handoff at the BEHAVIORAL tier: a
@@ -1627,7 +1630,8 @@ def test_g2_mutation_response_keeps_relation_with_bounded_query_count():
     # Bounded count = 14, derived from a real run (stable across runs):
     #   BEGIN + COMMIT                                    = 2 (the DjangoSchema
     #                                                         completion-spanning
-    #                                                         transaction - mutation atomicity, shipped 0.0.14)
+    #                                                         transaction - mutation atomicity,
+    #                                                         shipped 0.0.14)
     #   SAVEPOINT + RELEASE                               = 2 (the pipeline's inner
     #                                                         atomic, now nested)
     #   session + auth_user + user_perms + group_perms    = 4 (authorized-caller
@@ -1662,7 +1666,7 @@ def test_g2_mutation_response_keeps_relation_with_bounded_query_count():
 
 
 @pytest.mark.django_db
-def test_emitted_globalid_is_model_anchored():
+def test_emitted_globalid_is_model_anchored() -> None:
     """An emitted ``node { id }`` decodes to the Django model label, not the type name.
 
     Under the ``0.0.9`` model-label default, ``ItemType``'s ``GlobalID``
@@ -1693,7 +1697,7 @@ def test_emitted_globalid_is_model_anchored():
 
 
 @pytest.mark.django_db
-def test_globalid_filter_round_trip():
+def test_globalid_filter_round_trip() -> None:
     """THE headline ``0.0.9`` workflow: feed an emitted GlobalID straight back as a filter.
 
     Take the model-label ``id`` the products API just emitted for one item and
@@ -1731,7 +1735,7 @@ def test_globalid_filter_round_trip():
 @pytest.mark.django_db
 def test_type_strategy_opt_out_reproduces_type_name(
     project_schema_override: Callable[[], None],
-):
+) -> None:
     """``RELAY_GLOBALID_STRATEGY = "type"`` opts back into the GraphQL-type-name payload.
 
     Ordering matters here: the override is applied *before*
@@ -1768,7 +1772,7 @@ def test_type_strategy_opt_out_reproduces_type_name(
 
 
 @pytest.mark.django_db
-def test_products_optimizer_merges_duplicate_root_field_nodes_over_http():
+def test_products_optimizer_merges_duplicate_root_field_nodes_over_http() -> None:
     """Re-pinned through the connection wrapper: duplicate-root-field merge holds.
 
     The two `allItems` connection selections still merge into one node set (each
@@ -1827,7 +1831,7 @@ def test_products_optimizer_merges_duplicate_root_field_nodes_over_http():
 
 
 @pytest.mark.django_db
-def test_products_optimizer_prefetches_nested_reverse_fk_depth_2_over_http():
+def test_products_optimizer_prefetches_nested_reverse_fk_depth_2_over_http() -> None:
     """Re-pinned through the connection wrapper: depth-2 reverse-FK prefetch holds.
 
     `allCategories` is a connection (one planned categories slice query), and
@@ -1908,7 +1912,7 @@ _RELAY_MAX_RESULTS = 100
 
 
 @pytest.mark.django_db
-def test_products_optimizer_selects_nested_forward_fk_depth_2_over_http():
+def test_products_optimizer_selects_nested_forward_fk_depth_2_over_http() -> None:
     """Re-pinned for the activated cascade: depth-2 forward-FK plans a Prefetch chain.
 
     Before spec-034 this query planned a single `select_related(
@@ -2007,7 +2011,7 @@ def test_products_optimizer_selects_nested_forward_fk_depth_2_over_http():
 
 
 @pytest.mark.django_db
-def test_all_items_dangling_forward_fk_is_the_non_null_completion_error_only():
+def test_all_items_dangling_forward_fk_is_the_non_null_completion_error_only() -> None:
     """A dangling forward FK read live surfaces graphql-core's completion guard, nothing rawer.
 
     The `Category` row is removed through a raw cursor with constraint checks
@@ -2056,7 +2060,7 @@ def test_all_items_dangling_forward_fk_is_the_non_null_completion_error_only():
 
 
 @pytest.mark.django_db
-def test_products_categories_filter_by_name_exact_as_staff():
+def test_products_categories_filter_by_name_exact_as_staff() -> None:
     """A staff user clears ``CategoryFilter.check_name_permission`` and filters by name."""
     seed_data(1)
     category = models.Category.objects.earliest("id")
@@ -2069,7 +2073,7 @@ def test_products_categories_filter_by_name_exact_as_staff():
 
 
 @pytest.mark.django_db
-def test_products_categories_filter_by_name_denied_for_anonymous():
+def test_products_categories_filter_by_name_denied_for_anonymous() -> None:
     """An anonymous user filtering by ``Category.name`` (exact) is rejected by the gate."""
     seed_data(1)
     category = models.Category.objects.earliest("id")
@@ -2084,7 +2088,7 @@ def test_products_categories_filter_by_name_denied_for_anonymous():
 
 
 @pytest.mark.django_db
-def test_products_categories_name_permission_fires_for_non_exact_lookup():
+def test_products_categories_name_permission_fires_for_non_exact_lookup() -> None:
     """The gate fires for a NON-``exact`` lookup too (regression guard).
 
     Before the fix, ``check_<field>_permission`` was dispatched on the
@@ -2106,7 +2110,7 @@ def test_products_categories_name_permission_fires_for_non_exact_lookup():
 
 
 @pytest.mark.django_db
-def test_products_items_related_category_name_permission_fires_for_anonymous():
+def test_products_items_related_category_name_permission_fires_for_anonymous() -> None:
     """A child ``RelatedFilter`` permission gate fires through the live API."""
     seed_data(1)
     category = models.Category.objects.earliest("id")
@@ -2121,7 +2125,7 @@ def test_products_items_related_category_name_permission_fires_for_anonymous():
 
 
 @pytest.mark.django_db
-def test_products_items_flat_category_name_permission_fires_for_anonymous():
+def test_products_items_flat_category_name_permission_fires_for_anonymous() -> None:
     """The FLAT twin ``categoryName`` fires the same target gate as ``category: { name }``.
 
     ``ItemFilter`` exposes both the nested ``category`` branch and a generated
@@ -2144,7 +2148,7 @@ def test_products_items_flat_category_name_permission_fires_for_anonymous():
 
 
 @pytest.mark.django_db
-def test_products_items_deep_flat_category_name_permission_fires_for_anonymous():
+def test_products_items_deep_flat_category_name_permission_fires_for_anonymous() -> None:
     """A DEEP flat twin fires the full target gate chain the nested form fires.
 
     ``entriesPropertyCategoryName`` (source path
@@ -2169,7 +2173,7 @@ def test_products_items_deep_flat_category_name_permission_fires_for_anonymous()
 
 
 @pytest.mark.django_db
-def test_products_items_flat_category_name_as_staff():
+def test_products_items_flat_category_name_as_staff() -> None:
     """A staff user clears the flat-twin gate too - the fix denies, it does not over-block.
 
     Permission-equivalence cuts both ways: once the target gate is satisfied
@@ -2266,7 +2270,7 @@ def test_products_entries_flat_property_leaf_stays_inside_the_explicit_queryset(
     viewer: str,
     spelling: str,
     shape: str,
-):
+) -> None:
     """A flat ``EntryFilter.property`` leaf cannot reach a property the explicit ``queryset=`` excludes.
 
     ``propertyName`` and ``property: { name }`` are two spellings of one
@@ -2369,8 +2373,9 @@ def _item_ids(filter_input: str, *, staff: bool) -> list[str]:
 @pytest.mark.parametrize("viewer", ["anonymous", "staff"])
 def test_products_items_entries_key_isnull_answers_over_the_entries_the_viewer_sees(
     viewer: str,
+    *,
     is_null: bool,
-):
+) -> None:
     """``entriesId: { isNull }`` reads the declared ``entries`` hop over visible entries.
 
     ``entriesId`` walks ``ItemFilter.entries`` into the entry's own key, so
@@ -2405,7 +2410,7 @@ def test_products_items_entries_key_isnull_answers_over_the_entries_the_viewer_s
 def test_products_items_entries_key_membership_never_matches_a_hidden_entry(
     viewer: str,
     members: str,
-):
+) -> None:
     """``entriesId: { in }`` naming an entry hidden from the viewer matches nothing through it.
 
     The GlobalID of a private entry reaches the predicate like any other, and the
@@ -2441,7 +2446,10 @@ _ENTRY_PROPERTY_KEY_ROWS: dict[str, tuple[str, list[str]]] = {
 @pytest.mark.django_db
 @pytest.mark.parametrize("shape", sorted(_ENTRY_PROPERTY_KEY_ROWS))
 @pytest.mark.parametrize("viewer", ["anonymous", "staff"])
-def test_products_entries_property_key_reads_the_explicit_queryset(viewer: str, shape: str):
+def test_products_entries_property_key_reads_the_explicit_queryset(
+    viewer: str,
+    shape: str,
+) -> None:
     """A forward key through ``EntryFilter.property`` answers over the properties it admits.
 
     ``EntryFilter.property`` declares ``queryset=Property.objects.exclude(name="Secret")``
@@ -2478,7 +2486,7 @@ def test_products_entries_property_key_reads_the_explicit_queryset(viewer: str, 
 
 
 @pytest.mark.django_db
-def test_products_categories_filter_by_relay_own_pk_global_id_in():
+def test_products_categories_filter_by_relay_own_pk_global_id_in() -> None:
     """Own-PK Relay ``id: { in: [...] }`` accepts a list of GlobalIDs.
 
     ``CategoryType`` is a Relay node, so ``id`` is a GlobalID; the ``in``
@@ -2530,7 +2538,7 @@ def test_products_categories_filter_by_relay_own_pk_global_id_in():
 
 
 @pytest.mark.django_db
-def test_products_categories_empty_relay_global_id_in_matches_nothing():
+def test_products_categories_empty_relay_global_id_in_matches_nothing() -> None:
     """An explicit empty GlobalID membership set returns no category edges."""
     seed_data(1)
 
@@ -2541,7 +2549,7 @@ def test_products_categories_empty_relay_global_id_in_matches_nothing():
 
 
 @pytest.mark.django_db
-def test_products_categories_generated_reverse_fk_leaf_collapses_duplicate_parents():
+def test_products_categories_generated_reverse_fk_leaf_collapses_duplicate_parents() -> None:
     """A generated reverse-FK leaf returns one parent even when two children match."""
     seed_data(1)
     category = models.Category.objects.filter(is_private=False).earliest("pk")
@@ -2570,7 +2578,7 @@ _CATEGORIES_BY_ITEM_NAME = (
 
 
 @pytest.mark.django_db
-def test_products_categories_items_name_leaf_never_matches_through_a_private_item():
+def test_products_categories_items_name_leaf_never_matches_through_a_private_item() -> None:
     """``itemsName`` matches a category only through an item ``ItemType`` lets the viewer see.
 
     ``CategoryFilter`` declares no ``RelatedFilter`` over ``items``; the path still
@@ -2617,7 +2625,7 @@ def _category_filter_input_field_names() -> set[str]:
 
 def test_hide_flat_filters_keeps_explicit_non_relatedfilter_flat_on_category_input(
     project_schema_override: Callable[[], None],
-):
+) -> None:
     """``itemsName`` stays published under ``HIDE_FLAT_FILTERS=True``.
 
     ``CategoryFilter`` declares ``items__name`` in ``Meta.fields`` and does not
@@ -2631,7 +2639,7 @@ def test_hide_flat_filters_keeps_explicit_non_relatedfilter_flat_on_category_inp
 
 
 @pytest.mark.django_db
-def test_products_categories_filter_by_starts_with_via_all_lookups():
+def test_products_categories_filter_by_starts_with_via_all_lookups() -> None:
     """``Meta.fields = {"name": "__all__"}`` exposes lookups beyond the explicit set.
 
     ``startsWith`` is in none of the hand-listed lookup sets -- it exists only
@@ -2657,7 +2665,7 @@ def test_products_categories_filter_by_starts_with_via_all_lookups():
 
 
 @pytest.mark.django_db
-def test_products_items_filter_by_related_category_global_id():
+def test_products_items_filter_by_related_category_global_id() -> None:
     """``Item.category`` ``RelatedFilter`` traversal via the nested GlobalID input.
 
     Filters to a PUBLIC category (visible anonymously under the activated cascade,
@@ -2694,7 +2702,7 @@ def test_products_items_filter_by_related_category_global_id():
 
 
 @pytest.mark.django_db
-def test_products_items_order_by_name_asc():
+def test_products_items_order_by_name_asc() -> None:
     """``orderBy: [{ name: ASC }]`` sorts items by name ascending (Item has no order gate).
 
     Runs anonymously, so the activated cascade (spec-034) narrows to
@@ -2716,7 +2724,7 @@ def test_products_items_order_by_name_asc():
 
 
 @pytest.mark.django_db
-def test_products_items_order_by_name_desc():
+def test_products_items_order_by_name_desc() -> None:
     """``orderBy: [{ name: DESC }]`` sorts items by name descending.
 
     Anonymous, so the cascade-narrowed visible set (non-private items under
@@ -2737,7 +2745,7 @@ def test_products_items_order_by_name_desc():
 
 
 @pytest.mark.django_db
-def test_products_categories_order_by_name_denied_for_anonymous():
+def test_products_categories_order_by_name_denied_for_anonymous() -> None:
     """``CategoryOrder.check_name_permission`` rejects an anonymous order-by-name.
 
     Active-input-only: the gate fires because the ``orderBy`` input names the
@@ -2755,7 +2763,7 @@ def test_products_categories_order_by_name_denied_for_anonymous():
 
 
 @pytest.mark.django_db
-def test_products_categories_order_by_name_as_staff():
+def test_products_categories_order_by_name_as_staff() -> None:
     """A staff user clears the order-by-name gate and gets categories sorted by name."""
     seed_data(1)
     expected = [
@@ -2770,7 +2778,7 @@ def test_products_categories_order_by_name_as_staff():
 
 
 @pytest.mark.django_db
-def test_products_items_order_by_related_category_name_denied_for_anonymous():
+def test_products_items_order_by_related_category_name_denied_for_anonymous() -> None:
     """A child ``RelatedOrder`` permission gate fires through the live API."""
     seed_data(1)
     response = _post_graphql(
@@ -2789,7 +2797,7 @@ def test_products_items_order_by_related_category_name_denied_for_anonymous():
 
 
 @pytest.mark.django_db
-def test_products_items_order_by_related_category_name_as_staff():
+def test_products_items_order_by_related_category_name_as_staff() -> None:
     """Nested ``RelatedOrder`` input sorts by the child order field.
 
     Each item's category is distinct (one item per category at
@@ -2817,7 +2825,7 @@ def test_products_items_order_by_related_category_name_as_staff():
 
 
 @pytest.mark.django_db
-def test_products_items_filter_and_order_compose():
+def test_products_items_filter_and_order_compose() -> None:
     """``filter:`` narrows rows then ``orderBy:`` arranges them (filter -> order chain).
 
     Filters items to one category via the own-PK GlobalID ``RelatedFilter``
@@ -2880,7 +2888,7 @@ query {
 
 
 @pytest.mark.django_db
-def test_products_categories_items_connection_fixed_query_count():
+def test_products_categories_items_connection_fixed_query_count() -> None:
     """The nested reverse-FK ``itemsConnection`` resolves in a FIXED query count.
 
     Runs the same ``allCategories { edges { node { itemsConnection(first: 2)
@@ -2974,7 +2982,7 @@ def _items_connection_page(category_name: str, variables: dict[str, object]) -> 
 
 
 @pytest.mark.django_db
-def test_products_items_connection_inverted_after_before_window_is_empty():
+def test_products_items_connection_inverted_after_before_window_is_empty() -> None:
     """An inverted ``after`` + ``before`` nested window serves the empty page.
 
     Regression guard for the negative-``expected`` cursor-parity bug: with
@@ -3036,7 +3044,10 @@ def test_products_items_connection_inverted_after_before_window_is_empty():
 @pytest.mark.django_db
 @pytest.mark.parametrize("argument", ["after", "before"])
 @pytest.mark.parametrize("index", ["-1", "-2"])
-def test_products_items_connection_negative_cursor_is_a_cursor_error(argument: str, index: str):
+def test_products_items_connection_negative_cursor_is_a_cursor_error(
+    argument: str,
+    index: str,
+) -> None:
     """A correctly prefixed offset cursor naming a negative index is a cursor error.
 
     No connection mints a negative offset cursor, so
@@ -3091,7 +3102,7 @@ def _login(username: str) -> Client:
 
 
 @pytest.mark.django_db
-def test_cascade_anonymous_sees_no_entries_under_private_categories():
+def test_cascade_anonymous_sees_no_entries_under_private_categories() -> None:
     """The 2-deep live pin: a private Category hides its Items' Entries from anonymous.
 
     Seeds a private Category with a public Item carrying a public Entry (via a
@@ -3132,7 +3143,7 @@ def test_cascade_anonymous_sees_no_entries_under_private_categories():
 
 
 @pytest.mark.django_db
-def test_cascade_view_item_user_respects_category_visibility():
+def test_cascade_view_item_user_respects_category_visibility() -> None:
     """A ``view_item`` user only sees Items under a visible Category; nested ``category`` never errors.
 
     The ``view_item`` branch cascades after its ``is_private=False`` filter,
@@ -3169,8 +3180,10 @@ def test_cascade_view_item_user_respects_category_visibility():
 
 
 @pytest.mark.django_db
-def test_cascade_view_entry_user_nested_selection_drops_hidden_targets():
-    """A ``view_entry`` user selecting ``item { name category { name } }`` drops hidden-target Entries, no resolver error.
+def test_cascade_view_entry_user_nested_selection_drops_hidden_targets() -> None:
+    """A ``view_entry`` user selecting ``item { name category { name } }`` drops hidden-target Entries.
+
+    No resolver error surfaces.
 
     ``EntryType``'s ``view_entry`` branch cascades through both non-null FK edges
     (``item`` and ``property``) after its own ``is_private=False`` filter, so an
@@ -3255,7 +3268,11 @@ def _cascade_page_gids(model: _CascadeModel) -> list[str]:
 
 @pytest.mark.django_db
 @pytest.mark.parametrize(("field", "model", "_view_username"), _CASCADE_ROOT_FIELDS)
-def test_cascade_staff_sees_everything(field: str, model: _CascadeModel, _view_username: str):
+def test_cascade_staff_sees_everything(
+    field: str,
+    model: _CascadeModel,
+    _view_username: str,
+) -> None:
     """A staff user (``create_users`` makes ``staff_<n>`` is_staff, NOT is_superuser) bypasses the cascade.
 
     Staff hits the ``user.is_staff`` short-circuit in every hook, so the page IS
@@ -3294,7 +3311,7 @@ def test_cascade_staff_sees_private_rows_hidden_from_non_staff(
     field: str,
     model: _CascadeModel,
     view_username: str,
-):
+) -> None:
     """Staff sees a specific private row that BOTH non-staff actors provably cannot.
 
     The differential half of the spec-034 anonymous / ``view_<model>`` / staff
@@ -3339,7 +3356,7 @@ def test_cascade_staff_sees_private_rows_hidden_from_non_staff(
 
 
 @pytest.mark.django_db
-def test_cascade_query_count_fixed():
+def test_cascade_query_count_fixed() -> None:
     """``allEntries { value item { name category { name } } }`` runs in a FIXED query count.
 
     The cascade adds zero round-trips - the ``__in`` subqueries compile inline as
@@ -3393,7 +3410,7 @@ def test_cascade_query_count_fixed():
 
 
 @pytest.mark.django_db
-def test_cascade_composes_with_filter_and_order_live():
+def test_cascade_composes_with_filter_and_order_live() -> None:
     """``filter:`` + ``orderBy:`` + cascade in one request; ``check_name_permission`` keeps firing.
 
     Two shapes per Decision 11 (cascade narrows rows, gates judge input):
@@ -3466,7 +3483,7 @@ def test_cascade_composes_with_filter_and_order_live():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_post_invalid_utf8_json_body_returns_400_not_500():
+def test_post_invalid_utf8_json_body_returns_400_not_500() -> None:
     """An invalid-UTF-8 byte inside an otherwise-JSON body -> controlled 400."""
     body = b'{"query":"{ __typename }","variables":{"d":"\xff\xfe\xfa"}}'
 
@@ -3476,7 +3493,7 @@ def test_post_invalid_utf8_json_body_returns_400_not_500():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_post_raw_binary_body_returns_400_not_500():
+def test_post_raw_binary_body_returns_400_not_500() -> None:
     """A wholly non-UTF-8 binary body -> controlled 400, never a 500."""
     response = _post_graphql_raw(bytes(range(256)) * 4)
 
@@ -3484,7 +3501,7 @@ def test_post_raw_binary_body_returns_400_not_500():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_post_utf16_json_body_is_rejected_as_400():
+def test_post_utf16_json_body_is_rejected_as_400() -> None:
     """A UTF-16-encoded JSON body (with BOM) -> controlled 400.
 
     The history is the point of keeping this row. Before spec-046 this request
@@ -3507,7 +3524,7 @@ def test_post_utf16_json_body_is_rejected_as_400():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_post_utf16_le_json_body_is_rejected_as_400():
+def test_post_utf16_le_json_body_is_rejected_as_400() -> None:
     """BOM-less UTF-16-LE JSON -> controlled 400, by a different mechanism than its sibling.
 
     History: ``encode("utf-16-le")`` carries no BOM, so the interleaved NULs
@@ -3531,7 +3548,7 @@ def test_post_utf16_le_json_body_is_rejected_as_400():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_post_utf8_bom_json_body_is_rejected_as_400():
+def test_post_utf8_bom_json_body_is_rejected_as_400() -> None:
     """UTF-8 JSON with a leading BOM -> controlled 400; the BOM is deliberately not stripped.
 
     History: ``json.loads`` accepts BOM'd *bytes* but rejects a ``str`` that
@@ -3562,7 +3579,7 @@ def test_post_utf8_bom_json_body_is_rejected_as_400():
         pytest.param("utf-32-be", id="utf-32-be-no-bom"),
     ],
 )
-def test_post_multibyte_encoded_json_body_is_rejected_as_400(encoding: str):
+def test_post_multibyte_encoded_json_body_is_rejected_as_400(encoding: str) -> None:
     """The remaining UTF-16 / UTF-32 shapes -> controlled 400, completing the encoding set.
 
     The three rows above carry the history for the encodings that used to
@@ -3589,12 +3606,12 @@ _MULTIBYTE_CATEGORY_NAME = "zzz_live_caf\u00e9_\u00fcber"
 
 
 @pytest.mark.django_db(transaction=True)
-def test_post_multibyte_utf8_json_body_round_trips_the_non_ascii_value():
-    """Ordinary UTF-8 is unchanged, multi-byte characters included (test-plan row 20).
+def test_post_multibyte_utf8_json_body_round_trips_the_non_ascii_value() -> None:
+    r"""Ordinary UTF-8 is unchanged, multi-byte characters included (test-plan row 20).
 
     The contract narrowed to UTF-8, **not** to ASCII, so a positive control
     built the usual way would be vacuous: ``json.dumps``'s default
-    ``ensure_ascii=True`` emits ``\\u00e9`` escapes, i.e. pure ASCII, and would
+    ``ensure_ascii=True`` emits ``\u00e9`` escapes, i.e. pure ASCII, and would
     pass even if the wrapper decoded with the ``"ascii"`` codec. This row builds
     the body with ``ensure_ascii=False``, asserts a byte above ``0x7F`` really
     is on the wire before posting, and then round-trips the value back out
@@ -3632,7 +3649,7 @@ def test_post_multibyte_utf8_json_body_round_trips_the_non_ascii_value():
         pytest.param(b"null", id="json-null"),
     ],
 )
-def test_post_non_object_json_body_returns_400_not_500(body: bytes):
+def test_post_non_object_json_body_returns_400_not_500(body: bytes) -> None:
     """A valid-JSON-but-non-object body (scalar / null) -> controlled 400, never a 500.
 
     Strawberry's `parse_http_body` handles a JSON object (a single operation) and
@@ -3656,7 +3673,7 @@ def test_post_non_object_json_body_returns_400_not_500(body: bytes):
         pytest.param(b'[{"query": "{ __typename }"}, 42]', id="mixed-batch"),
     ],
 )
-def test_post_batch_with_non_object_elements_returns_400_not_500(body: bytes):
+def test_post_batch_with_non_object_elements_returns_400_not_500(body: bytes) -> None:
     """A JSON array with any non-object element -> controlled 400, never a 500.
 
     Upstream's batch branch validates enablement / size only, then calls
@@ -3677,7 +3694,7 @@ def test_post_batch_with_non_object_elements_returns_400_not_500(body: bytes):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("param", ["variables", "extensions"])
-def test_get_query_with_null_param_executes_like_upstream(param: str):
+def test_get_query_with_null_param_executes_like_upstream(param: str) -> None:
     """GET `?query=...&variables=null` (and `extensions=null`) -> 200 with data.
 
     `null` is valid per upstream's own contract (`variables` / `extensions`
@@ -3698,7 +3715,7 @@ def test_get_query_with_null_param_executes_like_upstream(param: str):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_get_query_with_object_variables_executes_like_upstream():
+def test_get_query_with_object_variables_executes_like_upstream() -> None:
     """GET `?query=...&variables={"n": 1}` -> 200 with data: the shield parses the object.
 
     The happy path of the shielded GET parse. The param IS a JSON object, which is
@@ -3719,7 +3736,7 @@ def test_get_query_with_object_variables_executes_like_upstream():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_get_query_with_malformed_variables_param_is_the_upstream_parse_400():
+def test_get_query_with_malformed_variables_param_is_the_upstream_parse_400() -> None:
     """GET `?variables={not json` -> upstream's own malformed-JSON 400, byte for byte.
 
     The shield adds no error handling of its own: the failure is raised inside the
@@ -3736,7 +3753,7 @@ def test_get_query_with_malformed_variables_param_is_the_upstream_parse_400():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_get_query_with_scalar_variables_keeps_upstream_message():
+def test_get_query_with_scalar_variables_keeps_upstream_message() -> None:
     """GET `?variables=42` -> upstream's precise per-param 400, not the body message.
 
     A scalar param is invalid, but the 400 must be upstream's own
@@ -3755,7 +3772,9 @@ def test_get_query_with_scalar_variables_keeps_upstream_message():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_post_pathologically_nested_body_returns_400_not_500(pathological_json_body: bytes):
+def test_post_pathologically_nested_body_returns_400_not_500(
+    pathological_json_body: bytes,
+) -> None:
     """A valid-JSON body nested past the parser's C stack -> controlled 400.
 
     Upstream's ``parse_json`` catches only ``json.JSONDecodeError``; a
@@ -3776,7 +3795,7 @@ def test_post_pathologically_nested_body_returns_400_not_500(pathological_json_b
 def test_get_query_with_pathologically_nested_param_returns_400_not_500(
     param: str,
     pathological_json_text: str,
-):
+) -> None:
     """GET ``?<param>=<deep>`` -> the shield translates the same escape.
 
     The shield deliberately routes the GET parses around the envelope guard,
@@ -3835,7 +3854,7 @@ _SUBMIT_CONTACT = (
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_form_happy_path():
+def test_create_item_via_form_happy_path() -> None:
     """`createItemViaForm` with a permitted caller creates the `Item`, no errors.
 
     The `ModelForm` create flavor mirrors the `036` `createItem` happy path:
@@ -3870,7 +3889,7 @@ def test_create_item_via_form_happy_path():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_form_category_id_writes_through_form_category_field():
+def test_create_item_via_form_category_id_writes_through_form_category_field() -> None:
     """`categoryId` validates + writes through the form's `category` field.
 
     The created `Item.category_id` equals the submitted category pk, and the only
@@ -3904,7 +3923,7 @@ def test_create_item_via_form_category_id_writes_through_form_category_field():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_form_surrogate_in_constraint_name_is_field_error_no_crash():
+def test_create_item_via_form_surrogate_in_constraint_name_is_field_error_no_crash() -> None:
     """An unpaired surrogate in `createItemViaForm` `name` -> `FieldError` on `name`, no 500.
 
     The form-path twin of `test_create_category_surrogate_in_unique_name_is_field_error_no_crash`:
@@ -3941,7 +3960,7 @@ def test_create_item_via_form_surrogate_in_constraint_name_is_field_error_no_cra
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_form_surrogate_in_description_is_field_error_no_crash():
+def test_create_item_via_form_surrogate_in_description_is_field_error_no_crash() -> None:
     """An unpaired surrogate in `createItemViaForm` `description` -> `FieldError`, no 500.
 
     The non-constraint save vector: a clean `name` passes constraint validation, so the
@@ -3975,7 +3994,7 @@ def test_create_item_via_form_surrogate_in_description_is_field_error_no_crash()
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_via_form_non_colliding_partial_update():
+def test_update_item_via_form_non_colliding_partial_update() -> None:
     """A `name`-only `updateItemViaForm` persists `name`, leaving the row otherwise intact.
 
     The non-colliding partial-update success: `ItemModelFormPartialInput` provides only
@@ -4024,7 +4043,7 @@ def test_update_item_via_form_non_colliding_partial_update():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_via_form_partial_update_preserves_category_and_description():
+def test_update_item_via_form_partial_update_preserves_category_and_description() -> None:
     """RIGHT-PATH / LOAD-BEARING: a `name`-only update preserves `category` (FK) + `description`.
 
     The mutation's `data:` is `{name: ...}` ONLY, so the test can only exercise the
@@ -4062,7 +4081,7 @@ def test_update_item_via_form_partial_update_preserves_category_and_description(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_via_form_revalidates_an_untouched_stale_name():
+def test_update_item_via_form_revalidates_an_untouched_stale_name() -> None:
     """A stored `name` the current form rejects blocks a partial update that never sends it.
 
     The row is written through the ORM carrying `REJECTED_ITEM_NAME`, which
@@ -4119,7 +4138,7 @@ def test_update_item_via_form_revalidates_an_untouched_stale_name():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_via_form_explicit_null_category_id_is_the_form_required_error():
+def test_update_item_via_form_explicit_null_category_id_is_the_form_required_error() -> None:
     """An explicit `null` on the required FK is the form's own `required` error on `categoryId`.
 
     `null` is not an unresolvable relation id: the decode passes it through as an
@@ -4160,7 +4179,7 @@ def test_update_item_via_form_explicit_null_category_id_is_the_form_required_err
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_via_form_partial_collision_fires_unique_constraint_on_name_change():
+def test_update_item_via_form_partial_collision_fires_unique_constraint_on_name_change() -> None:
     """RIGHT-PATH / LOAD-BEARING: a `name`-only collision fires `unique_item_per_category`.
 
     Two `Item`s `A` / `B` under one category; `updateItemViaForm(A, {name: "B"})`. The
@@ -4195,7 +4214,7 @@ def test_update_item_via_form_partial_collision_fires_unique_constraint_on_name_
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_form_clean_field_error_is_field_keyed():
+def test_create_item_via_form_clean_field_error_is_field_keyed() -> None:
     """A `clean_<field>` error -> `FieldError` keyed to the FORM field (`name`), no top-level error.
 
     `ItemModelForm.clean_name` rejects `REJECTED_ITEM_NAME`. The failure surfaces in
@@ -4229,7 +4248,7 @@ def test_create_item_via_form_clean_field_error_is_field_keyed():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_form_omitted_required_name_is_a_coercion_error_no_write():
+def test_create_item_via_form_omitted_required_name_is_a_coercion_error_no_write() -> None:
     """Omitting a required generated form field is refused at coercion, before the resolver.
 
     `ItemModelForm`'s `name` is required, so `ItemModelFormInput.name` is non-null and
@@ -4258,7 +4277,7 @@ def test_create_item_via_form_omitted_required_name_is_a_coercion_error_no_write
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_form_unique_constraint_envelope_uses_all_sentinel():
+def test_create_item_via_form_unique_constraint_envelope_uses_all_sentinel() -> None:
     """A duplicate `(category, name)` `createItemViaForm` -> a `"__all__"`-keyed `FieldError`.
 
     The model's `unique_item_per_category` constraint surfaces through the `ModelForm`'s
@@ -4294,7 +4313,7 @@ def test_create_item_via_form_unique_constraint_envelope_uses_all_sentinel():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_form_anonymous_is_denied_top_level_error_no_write():
+def test_create_item_via_form_anonymous_is_denied_top_level_error_no_write() -> None:
     """An anonymous `createItemViaForm` -> top-level error, `data` null, no write.
 
     The `ModelForm` flavor inherits the `DjangoModelPermission` default, which denies a
@@ -4327,7 +4346,7 @@ def test_create_item_via_form_anonymous_is_denied_top_level_error_no_write():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_form_missing_model_perm_is_denied_no_write():
+def test_create_item_via_form_missing_model_perm_is_denied_no_write() -> None:
     """A caller holding only `view_item` (lacks `add_item`) -> top-level denial, no write.
 
     `view_item_1` holds only `products.view_item` and LACKS `add_item`, so the inherited
@@ -4361,7 +4380,7 @@ def test_create_item_via_form_missing_model_perm_is_denied_no_write():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_via_form_visibility_scoped_hidden_private_row_is_not_found():
+def test_update_item_via_form_visibility_scoped_hidden_private_row_is_not_found() -> None:
     """A caller who holds `change_item` but cannot SEE a private `Item` gets not-found.
 
     `seed_cascade_split` gives `item_under_private` (a public Item under a PRIVATE
@@ -4408,7 +4427,7 @@ def test_update_item_via_form_visibility_scoped_hidden_private_row_is_not_found(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_form_relation_id_for_hidden_category_is_field_error():
+def test_create_item_via_form_relation_id_for_hidden_category_is_field_error() -> None:
     """RIGHT-PATH / LOAD-BEARING: a permitted writer cannot attach a `Category` they cannot SEE.
 
     `seed_cascade_split` gives a PRIVATE category. A non-staff `view_item_1` user granted
@@ -4470,7 +4489,7 @@ def test_create_item_via_form_relation_id_for_hidden_category_is_field_error():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_form_authorize_before_decode_anonymous_gets_auth_denial():
+def test_create_item_via_form_authorize_before_decode_anonymous_gets_auth_denial() -> None:
     """An unauthorized caller submitting a HIDDEN `categoryId` gets the AUTH denial, not the relation error.
 
     The form flavor's half of the security ordering (the serializer flavor's half is
@@ -4507,7 +4526,7 @@ def test_create_item_via_form_authorize_before_decode_anonymous_gets_auth_denial
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_with_file_via_form_multipart_upload_over_http(tmp_path: Path):
+def test_create_item_with_file_via_form_multipart_upload_over_http(tmp_path: Path) -> None:
     """A raw `django.test.Client` multipart upload to a form-backed `Upload` field.
 
     Mirrors `test_uploads_api.py::test_multipart_create_uploads_real_files_over_http`'s
@@ -4585,7 +4604,7 @@ def test_create_item_with_file_via_form_multipart_upload_over_http(tmp_path: Pat
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_with_file_via_form_omitting_the_file_preserves_it(tmp_path: Path):
+def test_update_item_with_file_via_form_omitting_the_file_preserves_it(tmp_path: Path) -> None:
     """A `name`-only `updateItemWithFileViaForm` leaves the stored file byte-identical.
 
     The preserve half of the file contract, over real HTTP. The row is created with a
@@ -4675,7 +4694,7 @@ _CREATE_DEFAULT_CATEGORY_ITEM_VIA_FORM = (
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_default_category_item_via_form_injects_the_default_category():
+def test_create_default_category_item_via_form_injects_the_default_category() -> None:
     """`get_form_kwargs` is what supplies `category`, and the created row's FK proves it.
 
     The positive leg of the write-time pair. `DefaultCategoryItemModelFormInput` carries
@@ -4713,7 +4732,7 @@ def test_create_default_category_item_via_form_injects_the_default_category():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_default_category_item_via_form_write_time_integrity_error_uses_envelope():
+def test_create_default_category_item_via_form_write_time_integrity_error_uses_envelope() -> None:
     """A post-validation `form.save()` `IntegrityError` returns the envelope, not a top-level error.
 
     `DefaultCategoryItemModelForm` narrows `category` out of `Meta.fields`, so Django's
@@ -4760,7 +4779,7 @@ def test_create_default_category_item_via_form_write_time_integrity_error_uses_e
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_stamped_item_via_form_get_form_kwargs_injects_user():
+def test_create_stamped_item_via_form_get_form_kwargs_injects_user() -> None:
     """A `get_form_kwargs` override injecting `user` drives a kwarg-requiring form.
 
     `StampedItemModelForm.__init__` REQUIRES a `user` kwarg and its `clean()` requires
@@ -4797,7 +4816,7 @@ def test_create_stamped_item_via_form_get_form_kwargs_injects_user():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_submit_contact_plain_form_success_shape():
+def test_submit_contact_plain_form_success_shape() -> None:
     """`submitContact` with valid data -> `ok: true`, empty `errors` (the plain-form success).
 
     The model-less `DjangoFormMutation` flavor: an explicit empty `permission_classes = []`
@@ -4820,7 +4839,7 @@ def test_submit_contact_plain_form_success_shape():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_submit_contact_plain_form_validation_failure_shape():
+def test_submit_contact_plain_form_validation_failure_shape() -> None:
     """`submitContact` with data failing `clean_subject` -> `ok: false`, field-keyed `errors`.
 
     A blank-after-strip `subject` trips `ContactForm.clean_subject`, so `form.is_valid()`
@@ -4843,7 +4862,7 @@ def test_submit_contact_plain_form_validation_failure_shape():
 
 
 @pytest.mark.django_db
-def test_submit_ping_plain_form_denied_by_default_top_level_error():
+def test_submit_ping_plain_form_denied_by_default_top_level_error() -> None:
     """A plain ``DjangoFormMutation`` with NO ``permission_classes`` denies every caller live.
 
     The model-less ``SubmitPing`` does not opt into the explicit ``[]`` allow-any posture
@@ -4864,7 +4883,7 @@ def test_submit_ping_plain_form_denied_by_default_top_level_error():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_form_wrong_type_global_id_on_category_id_is_field_error():
+def test_create_item_via_form_wrong_type_global_id_on_category_id_is_field_error() -> None:
     """A well-formed ``Item`` GlobalID on form ``categoryId`` is a field-keyed error, no write.
 
     The form decoder type-checks the relation against ``Category``; a wrong-model
@@ -4898,7 +4917,7 @@ def test_create_item_via_form_wrong_type_global_id_on_category_id_is_field_error
     ["not-a-global-id", "raw-pk"],
     ids=["not-a-global-id", "raw-pk"],
 )
-def test_update_item_via_form_malformed_id_is_field_error_no_coercion_crash(bad_id: str):
+def test_update_item_via_form_malformed_id_is_field_error_no_coercion_crash(bad_id: str) -> None:
     """A malformed / raw-pk ``id:`` on ``updateItemViaForm`` is a ``FieldError`` on ``id``.
 
     Decided before locate, never coerced to a bare pk that would 500 at ``.get``.
@@ -4925,7 +4944,7 @@ def test_update_item_via_form_malformed_id_is_field_error_no_coercion_crash(bad_
     assert item.name == "FormUntouched"
 
 
-async def _async_shipped_graphql_view(request: HttpRequest):
+async def _async_shipped_graphql_view(request: HttpRequest) -> HttpResponseBase:
     from config.schema import schema
 
     return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
@@ -4953,12 +4972,12 @@ async def _post_async_shipped(
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_create_item_over_graphql_async():
+async def test_create_item_over_graphql_async() -> None:
     """``createItem`` over ``/graphql-async/`` writes the row through the async view."""
     await sync_to_async(create_users)(1)
     await sync_to_async(seed_data)(1)
 
-    def _user_and_category():
+    def _user_and_category() -> tuple[User, models.Category]:
         from django.contrib.auth.models import Permission
 
         user = User.objects.get(username="view_item_1")
@@ -4990,12 +5009,12 @@ async def test_create_item_over_graphql_async():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_create_item_via_form_over_graphql_async():
+async def test_create_item_via_form_over_graphql_async() -> None:
     """``createItemViaForm`` over ``/graphql-async/`` writes the row through one sync boundary."""
     await sync_to_async(create_users)(1)
     await sync_to_async(seed_data)(1)
 
-    def _user_and_category():
+    def _user_and_category() -> tuple[User, models.Category]:
         from django.contrib.auth.models import Permission
 
         user = User.objects.get(username="view_item_1")
@@ -5027,12 +5046,12 @@ async def test_create_item_via_form_over_graphql_async():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_create_item_via_serializer_over_graphql_async():
+async def test_create_item_via_serializer_over_graphql_async() -> None:
     """``createItemViaSerializer`` over ``/graphql-async/`` writes the row through one sync boundary."""
     await sync_to_async(create_users)(1)
     await sync_to_async(seed_data)(1)
 
-    def _user_and_category():
+    def _user_and_category() -> tuple[User, models.Category]:
         from django.contrib.auth.models import Permission
 
         user = User.objects.get(username="view_item_1")
@@ -5064,7 +5083,7 @@ async def test_create_item_via_serializer_over_graphql_async():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_submit_contact_plain_form_over_graphql_async():
+async def test_submit_contact_plain_form_over_graphql_async() -> None:
     """``submitContact`` over ``/graphql-async/`` returns the plain-form success envelope."""
     await sync_to_async(create_users)(1)
     payload = await _post_async_shipped(
@@ -5091,7 +5110,7 @@ async def test_submit_contact_plain_form_over_graphql_async():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_serializer_happy_path():
+def test_create_item_via_serializer_happy_path() -> None:
     """`createItemViaSerializer` writes through the serializer and returns the optimizer node.
 
     A permitted caller (`add_item`) creates an `Item`; the payload `node` is the
@@ -5123,7 +5142,7 @@ def test_create_item_via_serializer_happy_path():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_via_serializer_happy_path():
+def test_update_item_via_serializer_happy_path() -> None:
     """`updateItemViaSerializer` changing only `name` persists via DRF `partial=True`."""
     create_users(1)
     seed_data(1)
@@ -5147,7 +5166,7 @@ def test_update_item_via_serializer_happy_path():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_serializer_category_id_reverse_map_writes():
+def test_create_item_via_serializer_category_id_reverse_map_writes() -> None:
     """`categoryId` (GlobalID) resolves through the serializer's `category` field and writes.
 
     Locks the reverse map: the wire `categoryId` decodes to the serializer's
@@ -5179,7 +5198,7 @@ def test_create_item_via_serializer_category_id_reverse_map_writes():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_serializer_validate_field_error_is_field_keyed():
+def test_create_item_via_serializer_validate_field_error_is_field_keyed() -> None:
     """A `name` failing `validate_name` is a `FieldError(field="name")`, `node: null`, no top-level error."""
     create_users(1)
     seed_data(1)
@@ -5208,7 +5227,7 @@ def test_create_item_via_serializer_validate_field_error_is_field_keyed():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_serializer_unencodable_scalar_is_field_error_no_crash():
+def test_create_item_via_serializer_unencodable_scalar_is_field_error_no_crash() -> None:
     """A lone-surrogate serializer scalar is rejected in-band before database validation."""
     create_users(1)
     seed_data(1)
@@ -5236,7 +5255,7 @@ def test_create_item_via_serializer_unencodable_scalar_is_field_error_no_crash()
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_serializer_object_validate_all_sentinel_and_request_context():
+def test_create_item_via_serializer_object_validate_all_sentinel_and_request_context() -> None:
     """A `name` equal to the username trips the object `validate()` -> `"__all__"` (request-context proof).
 
     The serializer's object `validate()` reads `self.context["request"].user` and
@@ -5273,7 +5292,7 @@ def test_create_item_via_serializer_object_validate_all_sentinel_and_request_con
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_serializer_unique_together_error_uses_all_sentinel():
+def test_create_item_via_serializer_unique_together_error_uses_all_sentinel() -> None:
     """The `unique_item_per_category` `UniqueTogetherValidator` surfaces under `"__all__"`.
 
     DRF's `UniqueTogetherValidator` raises its error under the `non_field_errors`
@@ -5306,7 +5325,7 @@ def test_create_item_via_serializer_unique_together_error_uses_all_sentinel():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_via_serializer_partial_update_preserves_other_fields():
+def test_update_item_via_serializer_partial_update_preserves_other_fields() -> None:
     """A `name`-only `updateItemViaSerializer` preserves `description` / `category` via `partial=True`."""
     create_users(1)
     seed_data(1)
@@ -5335,7 +5354,7 @@ def test_update_item_via_serializer_partial_update_preserves_other_fields():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_via_serializer_partial_unique_together_fires_on_name_only_change():
+def test_update_item_via_serializer_partial_unique_together_fires_on_name_only_change() -> None:
     """Changing only `name` to a value already taken under the unchanged `category` -> `"__all__"`.
 
     DRF's `UniqueTogetherValidator` backfills the unchanged `category` from
@@ -5369,7 +5388,7 @@ def test_update_item_via_serializer_partial_unique_together_fires_on_name_only_c
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_via_serializer_visibility_scoped_hidden_row_is_not_found():
+def test_update_item_via_serializer_visibility_scoped_hidden_row_is_not_found() -> None:
     """A caller who cannot see a private `Item` gets not-found (`FieldError(field="id")`)."""
     create_users(1)
     chain = seed_cascade_split()
@@ -5402,7 +5421,7 @@ def test_update_item_via_serializer_visibility_scoped_hidden_row_is_not_found():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_serializer_anonymous_is_denied_top_level_error_no_write():
+def test_create_item_via_serializer_anonymous_is_denied_top_level_error_no_write() -> None:
     """An anonymous caller is denied with a top-level `GraphQLError`, no row written."""
     create_users(1)
     seed_data(1)
@@ -5428,7 +5447,7 @@ def test_create_item_via_serializer_anonymous_is_denied_top_level_error_no_write
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_serializer_missing_model_perm_is_denied_no_write():
+def test_create_item_via_serializer_missing_model_perm_is_denied_no_write() -> None:
     """A logged-in caller missing `add_item` is denied; a permitted caller succeeds."""
     create_users(1)
     seed_data(1)
@@ -5469,7 +5488,7 @@ def test_create_item_via_serializer_missing_model_perm_is_denied_no_write():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_serializer_hidden_category_id_is_field_keyed_relation_error():
+def test_create_item_via_serializer_hidden_category_id_is_field_keyed_relation_error() -> None:
     """A permitted writer submitting a HIDDEN `Category` GlobalID -> `FieldError(field="categoryId")`."""
     create_users(1)
     chain = seed_cascade_split()
@@ -5512,7 +5531,7 @@ def test_create_item_via_serializer_hidden_category_id_is_field_keyed_relation_e
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_serializer_authorize_before_decode_unpermitted_gets_auth_denial():
+def test_create_item_via_serializer_authorize_before_decode_unpermitted_gets_auth_denial() -> None:
     """An UNpermitted writer submitting the hidden `categoryId` gets the AUTH denial, NOT the relation error.
 
     The security-ordering proof: authorize runs BEFORE the relation decode, so an
@@ -5547,7 +5566,7 @@ def test_create_item_via_serializer_authorize_before_decode_unpermitted_gets_aut
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_serializer_multipart_upload_to_attachment(tmp_path: Path):
+def test_create_item_via_serializer_multipart_upload_to_attachment(tmp_path: Path) -> None:
     """A real multipart `/graphql/` request routes an `Upload` into the serializer's `data`.
 
     Mirrors `test_create_item_with_file_via_form_multipart_upload_over_http`'s
@@ -5618,7 +5637,7 @@ def test_create_item_via_serializer_multipart_upload_to_attachment(tmp_path: Pat
 
 
 @pytest.mark.django_db(transaction=True)
-def test_g2_serializer_mutation_response_keeps_relation_with_bounded_query_count():
+def test_g2_serializer_mutation_response_keeps_relation_with_bounded_query_count() -> None:
     """G2 behavioral tier for the serializer flavor: the re-fetch keeps the relation, no `.only(...)`.
 
     A `createItemViaSerializer` selecting `node { name category { name } }` is
@@ -5660,7 +5679,8 @@ def test_g2_serializer_mutation_response_keeps_relation_with_bounded_query_count
     # attestation). Per-query breakdown:
     #   BEGIN + COMMIT                                       = 2 (the DjangoSchema
     #                                                            completion-spanning
-    #                                                            transaction - mutation atomicity, shipped 0.0.14)
+    #                                                            transaction - mutation atomicity,
+    #                                                            shipped 0.0.14)
     #   SAVEPOINT + RELEASE                                  = 2 (the pipeline's inner
     #                                                            atomic, now nested)
     #   session + auth_user + user_perms + group_perms       = 4 (authorized-caller
@@ -5675,7 +5695,7 @@ def test_g2_serializer_mutation_response_keeps_relation_with_bounded_query_count
     #                                                            products_item)
     #   save SAVEPOINT + RELEASE                             = 2 (the hardening pass's
     #                                                            savepoint around
-    #                                                            serializer.save(),
+    #                                                            serializer save,
     #                                                            rolled back before a
     #                                                            failure converts to
     #                                                            the FieldError envelope)
@@ -5738,7 +5758,7 @@ def test_g2_serializer_mutation_response_keeps_relation_with_bounded_query_count
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_renamed_serializer_happy_path():
+def test_create_item_via_renamed_serializer_happy_path() -> None:
     """A renamed scalar (`displayName`->`name`) + relation (`categoryPk`->`category`) write through.
 
     Proves the generated input exposes the RENAMED wire names and the source-renamed
@@ -5770,7 +5790,7 @@ def test_create_item_via_renamed_serializer_happy_path():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_renamed_serializer_relation_error_keys_to_graphql_wire_name():
+def test_renamed_serializer_relation_error_keys_to_graphql_wire_name() -> None:
     """A wrong-type id on the RENAMED `categoryPk` -> `FieldError` keyed to `categoryPk`.
 
     `categoryPk` (serializer field `category_pk`, source `category`) is fed a wrong-type
@@ -5801,7 +5821,7 @@ def test_renamed_serializer_relation_error_keys_to_graphql_wire_name():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_renamed_serializer_scalar_validation_error_keys_to_graphql_wire_name():
+def test_renamed_serializer_scalar_validation_error_keys_to_graphql_wire_name() -> None:
     """A `validate_display_name` rejection on the RENAMED `displayName` -> error keyed to `displayName`.
 
     A `validate_<field>` error DRF keys to the serializer field `display_name` must
@@ -5835,7 +5855,7 @@ def test_renamed_serializer_scalar_validation_error_keys_to_graphql_wire_name():
 
 
 @pytest.mark.django_db
-def test_category_type_items_are_both_and_properties_are_connection_only():
+def test_category_type_items_are_both_and_properties_are_connection_only() -> None:
     """``CategoryType`` ships both relation shapes on one type over ``/graphql/``.
 
     ``items`` is the explicit ``relation_shapes = "both"`` opt-in (list sibling
@@ -5860,7 +5880,7 @@ def test_category_type_items_are_both_and_properties_are_connection_only():
 
 
 @pytest.mark.django_db
-def test_category_properties_list_is_not_selectable_over_http():
+def test_category_properties_list_is_not_selectable_over_http() -> None:
     """The connection-only default leaves no ``properties`` field to select on the shipped endpoint."""
     response = _post_graphql(
         "{ allCategories(first: 1) { edges { node { properties { id } } } } }",

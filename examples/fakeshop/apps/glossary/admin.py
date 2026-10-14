@@ -6,6 +6,8 @@ from apps.glossary import models
 
 
 class _LookupAdmin(admin.ModelAdmin[models.LookupBase]):
+    """Admin shared by the status, category and link-kind lookup tables."""
+
     list_display = ("key", "label", "order")
     search_fields = ("key", "label", "description")
     ordering = ("order", "label")
@@ -17,11 +19,15 @@ admin.site.register(models.GlossaryTermLinkKind, _LookupAdmin)
 
 
 class GlossaryAliasInline(admin.TabularInline[models.GlossaryAlias, models.GlossaryTerm]):
+    """Inline editor for a term's alternate labels."""
+
     model = models.GlossaryAlias
     extra = 0
 
 
 class GlossaryTermLinkInline(admin.TabularInline[models.GlossaryTermLink, models.GlossaryTerm]):
+    """Inline editor for a term's outgoing links to other terms."""
+
     model = models.GlossaryTermLink
     fk_name = "source_term"
     extra = 0
@@ -32,6 +38,8 @@ class GlossaryTermLinkInline(admin.TabularInline[models.GlossaryTermLink, models
 class GlossaryCategoryMembershipInline(
     admin.TabularInline[models.GlossaryCategoryMembership, models.GlossaryTerm],
 ):
+    """Inline editor for the categories a term belongs to."""
+
     model = models.GlossaryCategoryMembership
     extra = 0
     show_change_link = True
@@ -41,6 +49,8 @@ class GlossaryCategoryMembershipInline(
 class GlossarySpecMentionInline(
     admin.TabularInline[models.GlossarySpecMention, models.GlossaryTerm],
 ):
+    """Inline editor for the specs that mention a term."""
+
     model = models.GlossarySpecMention
     extra = 0
     show_change_link = True
@@ -49,6 +59,8 @@ class GlossarySpecMentionInline(
 class GlossarySourceLinkInline(
     admin.TabularInline[models.GlossarySourceLink, models.GlossaryTerm],
 ):
+    """Inline editor for a term's source links."""
+
     model = models.GlossarySourceLink
     extra = 0
     show_change_link = True
@@ -56,6 +68,8 @@ class GlossarySourceLinkInline(
 
 @admin.register(models.GlossaryTerm)
 class GlossaryTermAdmin(admin.ModelAdmin[models.GlossaryTerm]):
+    """Admin for glossary terms, with every edge type edited inline."""
+
     list_display = (
         "title",
         "anchor",
@@ -83,6 +97,8 @@ class GlossaryTermAdmin(admin.ModelAdmin[models.GlossaryTerm]):
 
 @admin.register(models.GlossaryAlias)
 class GlossaryAliasAdmin(admin.ModelAdmin[models.GlossaryAlias]):
+    """Admin for term aliases, searchable by label and owning term."""
+
     list_display = ("label", "term", "normalized")
     search_fields = ("label", "normalized", "term__title")
     autocomplete_fields = ("term",)
@@ -90,6 +106,8 @@ class GlossaryAliasAdmin(admin.ModelAdmin[models.GlossaryAlias]):
 
 @admin.register(models.GlossaryTermLink)
 class GlossaryTermLinkAdmin(admin.ModelAdmin[models.GlossaryTermLink]):
+    """Admin for term-to-term links, filterable by link kind."""
+
     list_display = (
         "source_term",
         "target_term",
@@ -104,6 +122,8 @@ class GlossaryTermLinkAdmin(admin.ModelAdmin[models.GlossaryTermLink]):
 
 @admin.register(models.GlossaryCategoryMembership)
 class GlossaryCategoryMembershipAdmin(admin.ModelAdmin[models.GlossaryCategoryMembership]):
+    """Admin for category memberships, filterable by category."""
+
     list_display = ("category", "term", "order")
     list_filter = ("category",)
     search_fields = ("category__label", "term__title")
@@ -112,6 +132,8 @@ class GlossaryCategoryMembershipAdmin(admin.ModelAdmin[models.GlossaryCategoryMe
 
 @admin.register(models.GlossarySpecMention)
 class GlossarySpecMentionAdmin(admin.ModelAdmin[models.GlossarySpecMention]):
+    """Admin for spec mentions, filterable by spec path."""
+
     list_display = (
         "spec_path",
         "term",
@@ -130,6 +152,8 @@ class GlossarySpecMentionAdmin(admin.ModelAdmin[models.GlossarySpecMention]):
 
 @admin.register(models.GlossarySourceLink)
 class GlossarySourceLinkAdmin(admin.ModelAdmin[models.GlossarySourceLink]):
+    """Admin for term source links, filterable by kind."""
+
     list_display = (
         "term",
         "label",

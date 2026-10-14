@@ -35,6 +35,8 @@ from . import models
 
 
 class CategoryOrder(OrderSet):
+    """Orders ``Category`` rows by every column."""
+
     class Meta:
         model = models.Category
         fields = "__all__"
@@ -47,6 +49,8 @@ class CategoryOrder(OrderSet):
 
 
 class ItemOrder(OrderSet):
+    """Orders ``Item`` rows by every column and through the related ``category`` and ``entries`` orders."""
+
     category = RelatedOrder(CategoryOrder, field_name="category")
     entries = RelatedOrder("EntryOrder", field_name="entries")
 
@@ -56,6 +60,8 @@ class ItemOrder(OrderSet):
 
 
 class PropertyOrder(OrderSet):
+    """Orders ``Property`` rows by every column and through the related ``category`` orders."""
+
     category = RelatedOrder(CategoryOrder, field_name="category")
 
     class Meta:
@@ -64,6 +70,8 @@ class PropertyOrder(OrderSet):
 
 
 class EntryOrder(OrderSet):
+    """Orders ``Entry`` rows by ``value`` and through the related ``property`` orders."""
+
     property = RelatedOrder(PropertyOrder, field_name="property")
 
     class Meta:

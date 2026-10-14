@@ -121,7 +121,7 @@ def _isolate_registry() -> Iterator[None]:
     registry.clear()
 
 
-def _item_serializer():
+def _item_serializer() -> type[ModelSerializerBase[product_models.Item]]:
     """A ``ModelSerializer`` over products ``Item`` (the serializer-flavor fixture)."""
 
     class ItemSerializer(ModelSerializerBase[product_models.Item]):
@@ -137,7 +137,7 @@ def _item_serializer():
     return ItemSerializer
 
 
-def _declare_products_primaries():
+def _declare_products_primaries() -> tuple[type[DjangoType], type[DjangoType]]:
     """Register primary ``DjangoType``s for ``Item`` + ``Category`` (Relay-shaped)."""
 
     class CategoryT(DjangoType, strawberry.relay.Node):
@@ -160,7 +160,7 @@ def _declare_products_primaries():
 # ---------------------------------------------------------------------------
 
 
-def test_serializer_mutation_resolves_through_root_getattr():
+def test_serializer_mutation_resolves_through_root_getattr() -> None:
     """``SerializerMutation`` resolves by name through the root ``__getattr__`` (DRF present)."""
     from django_strawberry_framework.rest_framework.sets import (
         SerializerMutation as SerializerMutationFromSets,
@@ -169,7 +169,7 @@ def test_serializer_mutation_resolves_through_root_getattr():
     assert django_strawberry_framework.SerializerMutation is SerializerMutationFromSets
 
 
-def test_serializer_mutation_not_in_all():
+def test_serializer_mutation_not_in_all() -> None:
     """``SerializerMutation`` is NOT in ``__all__`` while DRF is soft."""
     assert "SerializerMutation" not in django_strawberry_framework.__all__
 
@@ -179,7 +179,7 @@ def test_serializer_mutation_not_in_all():
 # ---------------------------------------------------------------------------
 
 
-def test_missing_serializer_class_raises():
+def test_missing_serializer_class_raises() -> None:
     """A ``SerializerMutation`` with no ``Meta.serializer_class`` raises naming the key."""
     with pytest.raises(ConfigurationError, match="declares no serializer_class"):
 
@@ -189,13 +189,13 @@ def test_missing_serializer_class_raises():
                 operation = "create"
 
 
-def test_non_serializer_value_rejected():
+def test_non_serializer_value_rejected() -> None:
     """A non-``Serializer`` value on ``serializer_class`` raises the broad type gate."""
 
     class NotASerializer:
         pass
 
-    with pytest.raises(ConfigurationError, match="must be a DRF .*Serializer"):
+    with pytest.raises(ConfigurationError, match=r"must be a DRF .*Serializer"):
 
         @definition_raises
         class CreateItem(SerializerMutation):
@@ -204,12 +204,12 @@ def test_non_serializer_value_rejected():
                 operation = "create"
 
 
-def test_serializer_hostile_class_repr_maps_to_configuration_error():
+def test_serializer_hostile_class_repr_maps_to_configuration_error() -> None:
     """An invalid serializer-class value with a broken repr still yields a typed config error."""
 
     class HostileRepr:
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr exploded")
 
     with pytest.raises(ConfigurationError, match="unprintable HostileRepr"):
@@ -221,13 +221,13 @@ def test_serializer_hostile_class_repr_maps_to_configuration_error():
                 operation = "create"
 
 
-def test_plain_serializer_with_no_model_rejected():
+def test_plain_serializer_with_no_model_rejected() -> None:
     """A plain ``serializers.Serializer`` (no model) is rejected naming the ModelSerializer requirement."""
 
     class PlainSerializer(serializers.Serializer[object]):
         name = serializers.CharField()
 
-    with pytest.raises(ConfigurationError, match="must be a serializers.ModelSerializer"):
+    with pytest.raises(ConfigurationError, match=r"must be a serializers\.ModelSerializer"):
 
         @definition_raises
         class CreateThing(SerializerMutation):
@@ -236,7 +236,7 @@ def test_plain_serializer_with_no_model_rejected():
                 operation = "create"
 
 
-def test_modelserializer_with_no_meta_model_rejected():
+def test_modelserializer_with_no_meta_model_rejected() -> None:
     """A ``ModelSerializer`` whose ``Meta.model`` is unset raises a clean config error, not AttributeError."""
 
     class NoModelSerializer(ModelSerializerBase[models.Model]):
@@ -254,7 +254,7 @@ def test_modelserializer_with_no_meta_model_rejected():
                 operation = "create"
 
 
-def test_modelserializer_non_model_meta_model_raises_at_class_creation():
+def test_modelserializer_non_model_meta_model_raises_at_class_creation() -> None:
     """A ``ModelSerializer`` whose ``Meta.model`` is not a Django model class fails at class creation.
 
     Rides ``require_model_class`` so a string / instance cannot leak to bind.
@@ -272,8 +272,11 @@ def test_modelserializer_non_model_meta_model_raises_at_class_creation():
                 operation = "create"
 
 
-def test_delete_operation_rejected():
-    """``operation = "delete"`` is rejected via the shared non-delete message (DRF serializers do not delete)."""
+def test_delete_operation_rejected() -> None:
+    """``operation = "delete"`` is rejected via the shared non-delete message.
+
+    DRF serializers do not delete.
+    """
     serializer_cls = _item_serializer()
     with pytest.raises(ConfigurationError, match="operation must be one of"):
 
@@ -284,7 +287,7 @@ def test_delete_operation_rejected():
                 operation = "delete"
 
 
-def test_missing_operation_rejected():
+def test_missing_operation_rejected() -> None:
     """A missing ``operation`` is rejected (``None`` invalid)."""
     serializer_cls = _item_serializer()
     with pytest.raises(ConfigurationError, match="operation must be one of"):
@@ -295,7 +298,7 @@ def test_missing_operation_rejected():
                 serializer_class = serializer_cls
 
 
-def test_serializer_class_accepted_as_known_key():
+def test_serializer_class_accepted_as_known_key() -> None:
     """A valid ``SerializerMutation`` declaration does not raise; the snapshot is stamped."""
     serializer_cls = _item_serializer()
 
@@ -309,7 +312,7 @@ def test_serializer_class_accepted_as_known_key():
     assert CreateItem._mutation_meta.operation == "create"
 
 
-def test_unset_permission_classes_keeps_model_permission_default():
+def test_unset_permission_classes_keeps_model_permission_default() -> None:
     """An unset ``permission_classes`` resolves to ``[DjangoModelPermission]`` (the 036 write-auth seam)."""
     serializer_cls = _item_serializer()
 
@@ -321,7 +324,7 @@ def test_unset_permission_classes_keeps_model_permission_default():
     assert CreateItem._mutation_meta.permission_classes == (DjangoModelPermission,)
 
 
-def test_permission_classes_accepted_as_known_key():
+def test_permission_classes_accepted_as_known_key() -> None:
     """An explicit ``permission_classes`` is preserved (the allowed key is kept, Decision 11)."""
     serializer_cls = _item_serializer()
 
@@ -335,7 +338,7 @@ def test_permission_classes_accepted_as_known_key():
     assert CreateItem._mutation_meta.permission_classes == ()
 
 
-def test_fields_and_exclude_both_raises():
+def test_fields_and_exclude_both_raises() -> None:
     """Declaring both ``fields`` and ``exclude`` raises."""
     serializer_cls = _item_serializer()
     with pytest.raises(ConfigurationError, match="both `fields` and `exclude`"):
@@ -349,7 +352,7 @@ def test_fields_and_exclude_both_raises():
                 exclude = ("description",)
 
 
-def test_optional_fields_bare_string_rejected_at_class_creation():
+def test_optional_fields_bare_string_rejected_at_class_creation() -> None:
     """A bare-string mutation ``Meta.optional_fields`` (incl. ``"__all__"``) is rejected at class creation.
 
     ``optional_fields`` is the MUTATION's ``Meta`` key (spec-039 - NOT the
@@ -358,7 +361,7 @@ def test_optional_fields_bare_string_rejected_at_class_creation():
     the reject is immediate, not deferred to finalize.
     """
     serializer_cls = _item_serializer()
-    with pytest.raises(ConfigurationError, match="bare string|optional_fields"):
+    with pytest.raises(ConfigurationError, match=r"bare string|optional_fields"):
 
         @definition_raises
         class CreateItem(SerializerMutation):
@@ -368,7 +371,7 @@ def test_optional_fields_bare_string_rejected_at_class_creation():
                 optional_fields = "__all__"
 
 
-def test_unknown_meta_key_raises():
+def test_unknown_meta_key_raises() -> None:
     """A stray ``Meta`` key raises the promoted typo guard."""
     serializer_cls = _item_serializer()
     with pytest.raises(ConfigurationError, match="unknown keys"):
@@ -381,7 +384,7 @@ def test_unknown_meta_key_raises():
                 widget = "nope"
 
 
-def test_model_key_is_unknown():
+def test_model_key_is_unknown() -> None:
     """``model`` is NOT an allowed serializer key (it dropped from the serializer allowed set)."""
     serializer_cls = _item_serializer()
     with pytest.raises(ConfigurationError, match="unknown keys"):
@@ -399,7 +402,7 @@ def test_model_key_is_unknown():
 # ---------------------------------------------------------------------------
 
 
-def test_serializer_mutation_registers_in_mutation_registry():
+def test_serializer_mutation_registers_in_mutation_registry() -> None:
     """A concrete ``SerializerMutation`` rides the ``DjangoMutation`` declaration registry."""
     serializer_cls = _item_serializer()
 
@@ -412,13 +415,13 @@ def test_serializer_mutation_registers_in_mutation_registry():
     assert CreateItem not in iter_form_mutations()
 
 
-def test_abstract_base_registers_nowhere():
+def test_abstract_base_registers_nowhere() -> None:
     """The abstract ``SerializerMutation`` base registers nowhere."""
     assert SerializerMutation not in iter_mutations()
     assert SerializerMutation not in iter_form_mutations()
 
 
-def test_late_declaration_after_finalize_raises():
+def test_late_declaration_after_finalize_raises() -> None:
     """Declaring a serializer mutation after ``finalize_django_types()`` raises naming the flavor."""
 
     class ItemType(DjangoType):
@@ -445,7 +448,7 @@ def test_late_declaration_after_finalize_raises():
 # ---------------------------------------------------------------------------
 
 
-def test_bind_materializes_serializer_input_into_rest_framework_namespace():
+def test_bind_materializes_serializer_input_into_rest_framework_namespace() -> None:
     """The serializer flavor binds via ``bind_mutations()`` through the ``build_input`` seam.
 
     The serializer-derived input materializes into ``rest_framework.inputs`` (NOT
@@ -489,7 +492,7 @@ def test_bind_materializes_serializer_input_into_rest_framework_namespace():
     assert len(CreateItem._input_field_specs) > 0
 
 
-def test_bind_materializes_one_shot_meta_field_selector():
+def test_bind_materializes_one_shot_meta_field_selector() -> None:
     """A one-shot Meta selector survives class validation and phase-2.5 bind."""
     _declare_products_primaries()
     serializer_cls = _item_serializer()
@@ -511,7 +514,7 @@ def test_bind_materializes_one_shot_meta_field_selector():
     }
 
 
-def test_update_binds_partial_input():
+def test_update_binds_partial_input() -> None:
     """An ``update`` serializer mutation materializes the PARTIAL-shaped input."""
     _declare_products_primaries()
     serializer_cls = _item_serializer()
@@ -526,7 +529,7 @@ def test_update_binds_partial_input():
     assert UpdateItem._input_class is serializer_materialized_names["ItemSerializerPartialInput"]
 
 
-def test_no_registered_primary_type_raises_at_finalize():
+def test_no_registered_primary_type_raises_at_finalize() -> None:
     """A ``SerializerMutation`` whose model has no registered ``DjangoType`` raises at finalize.
 
     No primary type for the model means the mutation has no type to return - the
@@ -543,7 +546,7 @@ def test_no_registered_primary_type_raises_at_finalize():
     assert CreateItem in iter_mutations()
 
     # No DjangoType declared for Item this build.
-    with pytest.raises(ConfigurationError, match="no registered DjangoType|no type to return"):
+    with pytest.raises(ConfigurationError, match=r"no registered DjangoType|no type to return"):
         finalize_django_types()
 
 
@@ -554,7 +557,7 @@ def test_no_registered_primary_type_raises_at_finalize():
 
 def test_bind_is_retry_idempotent_after_fixable_later_phase_failure(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A serializer re-finalize after a fixable post-bind failure succeeds, not a masked collision.
 
     Locks the ``register_subsystem_clear`` seam: ``bind_mutations`` materializes
@@ -597,7 +600,7 @@ def test_bind_is_retry_idempotent_after_fixable_later_phase_failure(
 # ---------------------------------------------------------------------------
 
 
-def _item_serializer_with_required_extra():
+def _item_serializer_with_required_extra() -> type[ModelSerializerBase[product_models.Item]]:
     """A ``ModelSerializer`` over ``Item`` with a REQUIRED writable column-less field.
 
     ``confirm`` has no model column, so narrowing the effective set down to model
@@ -615,7 +618,7 @@ def _item_serializer_with_required_extra():
     return ItemSerializer
 
 
-def test_create_required_guard_fires_through_build_input():
+def test_create_required_guard_fires_through_build_input() -> None:
     """Narrowing a required writable field away on create raises at finalize via ``build_input``.
 
     The bind's own wiring: ``build_input``'s ``_build`` closure runs
@@ -638,7 +641,7 @@ def test_create_required_guard_fires_through_build_input():
         finalize_django_types()
 
 
-def test_declared_choice_allow_blank_over_strict_choice_column_fails_finalize():
+def test_declared_choice_allow_blank_over_strict_choice_column_fails_finalize() -> None:
     """A ``ChoiceField(allow_blank=True)`` over a ``blank=False`` choice column fails the bind.
 
     Its input enum would offer ``BLANK`` while the column's read enum has no member for the
@@ -679,7 +682,7 @@ def test_declared_choice_allow_blank_over_strict_choice_column_fails_finalize():
         finalize_django_types()
 
 
-def test_multiple_choice_over_single_value_choice_column_fails_finalize():
+def test_multiple_choice_over_single_value_choice_column_fails_finalize() -> None:
     """A ``MultipleChoiceField`` over a single-value choice column fails the bind.
 
     DRF validates a list and ``save()`` stores it as one value (``"['available']"``), which
@@ -719,7 +722,7 @@ def test_multiple_choice_over_single_value_choice_column_fails_finalize():
         finalize_django_types()
 
 
-def _grouped_shelf_model():
+def _grouped_shelf_model() -> type[models.Model]:
     """A fresh model whose ``status`` column declares Django's grouped-choices form."""
 
     class GroupedShelf(models.Model):
@@ -734,7 +737,12 @@ def _grouped_shelf_model():
     return GroupedShelf
 
 
-def _declare_primary(model: type[models.Model], *, status_field: str, exposes_status: bool):
+def _declare_primary(
+    model: type[models.Model],
+    *,
+    status_field: str,
+    exposes_status: bool,
+) -> None:
     """Register a primary type over ``model``: its choice column read as ``str``, or not read."""
     fields = ("id", status_field) if exposes_status else ("id",)
     meta = type("Meta", (), {"model": model, "fields": fields, "primary": True})
@@ -745,7 +753,10 @@ def _declare_primary(model: type[models.Model], *, status_field: str, exposes_st
     assert registry.get(model) is type_cls
 
 
-def _declare_create(model: type[models.Model], status: serializers.ChoiceField):
+def _declare_create(
+    model: type[models.Model],
+    status: serializers.ChoiceField,
+) -> type[SerializerMutation]:
     """Declare a create ``SerializerMutation`` whose serializer declares ``status``."""
     meta = type("Meta", (), {"model": model, "fields": ("status",)})
     serializer_cls = type(
@@ -764,7 +775,7 @@ def _declare_create(model: type[models.Model], status: serializers.ChoiceField):
 
 
 @pytest.mark.parametrize("exposes_status", [True, False], ids=["str-override", "not-exposed"])
-def test_declared_flat_choice_over_grouped_column_binds(exposes_status: bool):
+def test_declared_flat_choice_over_grouped_column_binds(*, exposes_status: bool) -> None:
     """A declared flat ``ChoiceField`` over a grouped column binds, typed by its declared choices.
 
     The column is read as ``str`` by an annotation override, or by no type at all, so no read
@@ -787,7 +798,7 @@ def test_declared_flat_choice_over_grouped_column_binds(exposes_status: bool):
     assert registry.get_enum(model, "status") is None
 
 
-def test_generated_choice_over_grouped_column_fails_finalize():
+def test_generated_choice_over_grouped_column_fails_finalize() -> None:
     """An auto-generated ``ChoiceField`` would take the grouped column's read enum: refused."""
     model = _grouped_shelf_model()
     _declare_primary(model, status_field="status", exposes_status=True)
@@ -826,8 +837,9 @@ def test_generated_choice_over_grouped_column_fails_finalize():
 )
 def test_declared_choice_value_the_column_does_not_list_fails_finalize(
     make_model: Callable[[], type[models.Model]] | None,
+    *,
     exposes_status: bool,
-):
+) -> None:
     """A declared value the choice column does not list is refused, whether or not a type reads it.
 
     The refusal states the column fact: no read enum need exist (a grouped column, or a flat one
@@ -858,7 +870,7 @@ def test_declared_choice_value_the_column_does_not_list_fails_finalize(
     )
 
 
-def test_get_serializer_kwargs_override_no_longer_waives_create_required_guard():
+def test_get_serializer_kwargs_override_no_longer_waives_create_required_guard() -> None:
     """Overriding ``get_serializer_kwargs`` does NOT waive the create-required guard (hardened).
 
     The old blanket waiver (``_hook_overridden`` skipping the guard) let a constructor hook
@@ -891,8 +903,10 @@ def test_get_serializer_kwargs_override_no_longer_waives_create_required_guard()
         finalize_django_types()
 
 
-def test_build_input_runs_required_guard_per_declaration():
-    """An injecting declaration that builds the narrowed shape FIRST must not let a later non-injecting declaration skip the guard (Finding 5 / Decision 7).
+def test_build_input_runs_required_guard_per_declaration() -> None:
+    """An injecting declaration building the narrowed shape FIRST never lets a later one skip the guard.
+
+    The later declaration is a non-injecting one over the same serializer.
 
     The serializer twin of
     ``tests/forms/test_sets.py::test_cached_build_form_input_runs_required_guard_per_declaration``.
@@ -948,7 +962,7 @@ def test_build_input_runs_required_guard_per_declaration():
         finalize_django_types()
 
 
-def test_meta_injected_field_still_in_input_raises_at_class_creation():
+def test_meta_injected_field_still_in_input_raises_at_class_creation() -> None:
     """An injected field still present in the generated GraphQL input fails loud (hardened).
 
     An injected field is server-supplied by definition; leaving it in the input would make
@@ -972,7 +986,7 @@ def test_meta_injected_field_still_in_input_raises_at_class_creation():
 )
 def test_meta_injected_field_must_be_writable_at_class_creation(
     field: serializers.CharField | serializers.HiddenField,
-):
+) -> None:
     """Injected fields use the generated input's writable schema-time basis."""
 
     class NonWritableInjectedSerializer(ModelSerializerBase[product_models.Item]):
@@ -994,7 +1008,7 @@ def test_meta_injected_field_must_be_writable_at_class_creation(
                 permission_classes = []
 
 
-def test_hidden_field_source_collision_with_client_input_raises_at_class_creation():
+def test_hidden_field_source_collision_with_client_input_raises_at_class_creation() -> None:
     """A HiddenField default cannot silently replace a client's value for the same source."""
 
     class HiddenCollisionSerializer(ModelSerializerBase[product_models.Item]):
@@ -1014,7 +1028,7 @@ def test_hidden_field_source_collision_with_client_input_raises_at_class_creatio
                 permission_classes = []
 
 
-def test_narrowed_default_field_source_collision_raises_at_class_creation():
+def test_narrowed_default_field_source_collision_raises_at_class_creation() -> None:
     """A narrowed-out defaulted field remains part of DRF's validated-data write surface."""
 
     class DefaultCollisionSerializer(ModelSerializerBase[product_models.Item]):
@@ -1035,7 +1049,7 @@ def test_narrowed_default_field_source_collision_raises_at_class_creation():
                 permission_classes = []
 
 
-def _dup_source_serializer():
+def _dup_source_serializer() -> type[ModelSerializerBase[product_models.Item]]:
     """A serializer where `summary` (source=) and `description` feed ONE model attribute."""
 
     class DupSourceSer(ModelSerializerBase[product_models.Item]):
@@ -1053,7 +1067,7 @@ def _dup_source_serializer():
     return DupSourceSer
 
 
-def test_duplicate_source_across_input_and_injected_raises_at_class_creation():
+def test_duplicate_source_across_input_and_injected_raises_at_class_creation() -> None:
     """A client input field and an injected field binding ONE source fail loud (hardened).
 
     The name-disjointness check cannot see a ``source=`` alias: two differently-named
@@ -1073,7 +1087,7 @@ def test_duplicate_source_across_input_and_injected_raises_at_class_creation():
                 permission_classes = []
 
 
-def test_writable_star_source_field_is_rejected_at_class_creation():
+def test_writable_star_source_field_is_rejected_at_class_creation() -> None:
     """A writable ``source="*"`` field is rejected: it can overwrite any validated_data key.
 
     ``"*"`` is not a single-key collision - DRF merges a whole-object field's returned mapping
@@ -1100,7 +1114,7 @@ def test_writable_star_source_field_is_rejected_at_class_creation():
                 permission_classes = []
 
 
-def test_duplicate_source_between_two_input_fields_raises_at_class_creation():
+def test_duplicate_source_between_two_input_fields_raises_at_class_creation() -> None:
     """Two CLIENT input fields sharing one source are rejected too (same last-write-wins hazard)."""
     with pytest.raises(ConfigurationError, match="bind one serializer source"):
 
@@ -1221,7 +1235,7 @@ _ALIAS_OWNER_ROWS = [
 def test_aliases_of_one_model_field_are_one_write_target_at_class_creation(
     meta_factory: Callable[[], dict[str, object]],
     message: str,
-):
+) -> None:
     """Two writable fields over one model field are refused whatever spelling each source uses.
 
     The ownership key is the model field a source resolves to (an FK's ``attname``
@@ -1295,7 +1309,7 @@ _DISTINCT_TARGET_ROWS = [
 @pytest.mark.parametrize("meta_factory", _DISTINCT_TARGET_ROWS)
 def test_distinct_model_fields_stay_separate_write_targets_at_class_creation(
     meta_factory: Callable[[], dict[str, object]],
-):
+) -> None:
     """Sources resolving to different model fields (or to no model) build.
 
     A read-only alias never writes; an MTI child's inherited ``id`` and its
@@ -1363,7 +1377,7 @@ _LONE_ATTNAME_ROWS = [
 @pytest.mark.parametrize("meta_factory", _LONE_ATTNAME_ROWS)
 def test_lone_relation_bound_to_its_attname_fails_the_bind(
     meta_factory: Callable[[], dict[str, object]],
-):
+) -> None:
     """A writable relation bound only through its ``attname`` fails loud for every operation.
 
     No alias shares its model field, so class creation's ownership check passes; the
@@ -1390,7 +1404,7 @@ def _input_fields(input_cls: type) -> dict[str, StrawberryField]:
     return {f.python_name: f for f in get_object_definition(input_cls, strict=True).fields}
 
 
-def test_serializer_meta_optional_fields_is_not_the_public_api():
+def test_serializer_meta_optional_fields_is_not_the_public_api() -> None:
     """``optional_fields`` on the SERIALIZER's own ``Meta`` is IGNORED at bind.
 
     The masking the original implementation relied on: the spec documents
@@ -1418,7 +1432,7 @@ def test_serializer_meta_optional_fields_is_not_the_public_api():
     assert fields["name"].default_value is not strawberry.UNSET
 
 
-def test_mutation_optional_fields_unknown_name_raises_at_class_creation():
+def test_mutation_optional_fields_unknown_name_raises_at_class_creation() -> None:
     """A mutation ``Meta.optional_fields`` naming a field not in the effective set raises."""
     serializer_cls = _item_serializer()
     with pytest.raises(ConfigurationError, match="optional_fields"):
@@ -1436,7 +1450,7 @@ def test_mutation_optional_fields_unknown_name_raises_at_class_creation():
 # ---------------------------------------------------------------------------
 
 
-def test_get_serializer_for_schema_classmethod_override_drives_bind():
+def test_get_serializer_for_schema_classmethod_override_drives_bind() -> None:
     """A concrete ``get_serializer_for_schema()`` override drives validation + bind.
 
     ``CtxItemSerializer.get_fields()`` reads ``self.context``, so DEFAULT no-arg
@@ -1488,7 +1502,7 @@ _INVALID_FIELD_MAP_ROWS: list[tuple[Callable[[dict[str, DRFField]], object], str
 def test_schema_hook_rejects_invalid_field_map_at_class_creation(
     map_factory: Callable[[dict[str, DRFField]], object],
     message: str,
-):
+) -> None:
     """The schema hook's mapping/field-name contract fails typed at class creation."""
     serializer_cls = _item_serializer()
     fields = dict(bound_fields(serializer_cls()))
@@ -1506,16 +1520,16 @@ def test_schema_hook_rejects_invalid_field_map_at_class_creation(
             @classmethod
             @override
             # basedpyright: deliberately returns each invalid field map, the input class creation refuses
-            def get_serializer_for_schema(cls):  # pyright: ignore[reportIncompatibleMethodOverride]
+            def get_serializer_for_schema(cls) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]
                 return field_map
 
 
-def test_schema_hook_rejects_mapping_that_cannot_be_materialized():
+def test_schema_hook_rejects_mapping_that_cannot_be_materialized() -> None:
     """A hostile Mapping implementation cannot leak its iteration error."""
 
     class BrokenMapping(dict[str, object]):
         @override
-        def items(self):
+        def items(self) -> NoReturn:
             raise RuntimeError("mapping iteration exploded")
 
     serializer_cls = _item_serializer()
@@ -1530,12 +1544,12 @@ def test_schema_hook_rejects_mapping_that_cannot_be_materialized():
 
             @classmethod
             @override
-            # basedpyright: deliberately a Mapping that cannot be materialized, the input class creation refuses
-            def get_serializer_for_schema(cls):  # pyright: ignore[reportIncompatibleMethodOverride]
+            # basedpyright: deliberately a Mapping that cannot be materialized, so input creation refuses
+            def get_serializer_for_schema(cls) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]
                 return BrokenMapping()
 
 
-def test_schema_field_map_reports_malformed_entries_and_unreadable_bound_names():
+def test_schema_field_map_reports_malformed_entries_and_unreadable_bound_names() -> None:
     """An unpackable-entry failure and an unreadable ``field_name`` both stay typed.
 
     Neither the per-entry unpack nor the bound-name read trusts the hook's objects,
@@ -1546,7 +1560,7 @@ def test_schema_field_map_reports_malformed_entries_and_unreadable_bound_names()
     class MalformedEntries(dict[str, object]):
         @override
         # basedpyright: deliberately yields malformed entries, the input the validator refuses
-        def items(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+        def items(self) -> list[tuple[str] | tuple[str, serializers.CharField]]:  # pyright: ignore[reportIncompatibleMethodOverride]
             return [("name",), ("title", serializers.CharField())]
 
     with pytest.raises(ConfigurationError, match="could not be unpacked"):
@@ -1561,14 +1575,14 @@ def test_schema_field_map_reports_malformed_entries_and_unreadable_bound_names()
         @field_name.setter
         # basedpyright: the hostile shape under test, a ``field_name`` property whose read raises;
         # the checker rejects any property overriding a base class attribute
-        def field_name(self, value: str | None):  # pyright: ignore[reportIncompatibleVariableOverride]
+        def field_name(self, value: str | None) -> None:  # pyright: ignore[reportIncompatibleVariableOverride]
             self._field_name = value
 
     with pytest.raises(ConfigurationError, match="field_name descriptor"):
         _validate_schema_field_map("BrokenField", {"name": HostileBoundName()})
 
 
-def test_schema_field_map_hostile_bound_name_comparison_is_typed():
+def test_schema_field_map_hostile_bound_name_comparison_is_typed() -> None:
     """A bound-name VALUE with a hostile ``__ne__`` stays a typed configuration error.
 
     The ``field_name`` descriptor's READ was already guarded; the guard does not sanitize
@@ -1579,11 +1593,11 @@ def test_schema_field_map_hostile_bound_name_comparison_is_typed():
 
     class HostileNe:
         @override
-        def __ne__(self, other: object):
+        def __ne__(self, other: object) -> NoReturn:
             raise RuntimeError("ne exploded")
 
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             return "<HostileNe>"
 
     field = serializers.CharField()
@@ -1594,7 +1608,7 @@ def test_schema_field_map_hostile_bound_name_comparison_is_typed():
         _validate_schema_field_map("M", {"name": field})
 
 
-def test_schema_field_map_rejects_str_subclass_key_with_hostile_hash():
+def test_schema_field_map_rejects_str_subclass_key_with_hostile_hash() -> None:
     """A ``str``-subclass key is rejected before any comparison or dict-set dispatch.
 
     Keys become input field names, so the plain-string gate (the resolver-tier
@@ -1604,7 +1618,7 @@ def test_schema_field_map_rejects_str_subclass_key_with_hostile_hash():
 
     class HostileStr(str):
         @override
-        def __hash__(self):
+        def __hash__(self) -> NoReturn:
             raise RuntimeError("hash exploded")
 
     field = serializers.CharField()
@@ -1613,19 +1627,19 @@ def test_schema_field_map_rejects_str_subclass_key_with_hostile_hash():
     class OneHostileKey(dict[str, object]):
         @override
         # basedpyright: deliberately yields a str-subclass key, the input the validator refuses
-        def items(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+        def items(self) -> list[tuple[object, serializers.CharField]]:  # pyright: ignore[reportIncompatibleMethodOverride]
             return [(HostileStr("name"), field)]
 
     with pytest.raises(ConfigurationError, match="key must be a plain string"):
         _validate_schema_field_map("M", OneHostileKey())
 
 
-def test_schema_hook_invalid_value_with_hostile_repr_is_typed():
+def test_schema_hook_invalid_value_with_hostile_repr_is_typed() -> None:
     """A malformed hook value with a broken repr still reports a safe configuration error."""
 
     class HostileRepr:
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr exploded")
 
     serializer_cls = _item_serializer()
@@ -1641,7 +1655,7 @@ def test_schema_hook_invalid_value_with_hostile_repr_is_typed():
             @classmethod
             @override
             # basedpyright: deliberately a non-mapping with a hostile repr, the input class creation refuses
-            def get_serializer_for_schema(cls):  # pyright: ignore[reportIncompatibleMethodOverride]
+            def get_serializer_for_schema(cls) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]
                 return HostileRepr()
 
 
@@ -1659,8 +1673,10 @@ def test_schema_hook_invalid_value_with_hostile_repr_is_typed():
 # ``tests/rest_framework/test_inputs.py::test_descriptor_name_distinguishes_relation_target_model``.
 
 
-def test_subclass_redefining_serializer_validates_against_child_serializer():
-    """A subclass redefining ``Meta.serializer_class`` validates against the CHILD serializer, not an inherited parent snapshot (spec-039).
+def test_subclass_redefining_serializer_validates_against_child_serializer() -> None:
+    """A subclass redefining ``Meta.serializer_class`` validates against the CHILD serializer (spec-039).
+
+    The inherited parent snapshot is never consulted.
 
     The metaclass assigns ``_mutation_meta`` AFTER ``_validate_meta`` runs, so during the
     child's validation ``cls._mutation_meta`` resolves up the MRO to the PARENT's
@@ -1714,7 +1730,7 @@ def test_subclass_redefining_serializer_validates_against_child_serializer():
 # ---------------------------------------------------------------------------
 
 
-def test_model_flavor_base_unregressed():
+def test_model_flavor_base_unregressed() -> None:
     """A model-flavor ``DjangoMutation`` still validates + binds; the allowed-key set is unchanged."""
     from django_strawberry_framework import DjangoMutation
     from django_strawberry_framework.mutations.sets import _ALLOWED_MUTATION_META_KEYS
@@ -1751,7 +1767,7 @@ def test_model_flavor_base_unregressed():
     assert registry.is_finalized() is True
 
 
-def test_deferred_and_allowed_meta_keys_unchanged():
+def test_deferred_and_allowed_meta_keys_unchanged() -> None:
     """``types/base.py``'s ``DEFERRED_META_KEYS`` / ``ALLOWED_META_KEYS`` are untouched (Decision 6)."""
     from django_strawberry_framework.types import base as types_base
 
@@ -1766,7 +1782,7 @@ def test_deferred_and_allowed_meta_keys_unchanged():
 # ---------------------------------------------------------------------------
 
 
-def test_nondeterministic_schema_hook_raises_at_bind():
+def test_nondeterministic_schema_hook_raises_at_bind() -> None:
     """A ``get_serializer_for_schema()`` that DRIFTS between class validation and bind fails loud (#10)."""
     _declare_products_primaries()
     serializer_cls = _item_serializer()
@@ -1795,7 +1811,7 @@ def test_nondeterministic_schema_hook_raises_at_bind():
         finalize_django_types()
 
 
-def test_deterministic_schema_hook_binds_without_drift_error():
+def test_deterministic_schema_hook_binds_without_drift_error() -> None:
     """A stable ``get_serializer_for_schema()`` binds without the drift error (#10 happy path)."""
     _declare_products_primaries()
     serializer_cls = _item_serializer()
@@ -1820,7 +1836,7 @@ def test_deterministic_schema_hook_binds_without_drift_error():
 # ---------------------------------------------------------------------------
 
 
-def test_meta_injected_fields_lets_narrowing_drop_required_field():
+def test_meta_injected_fields_lets_narrowing_drop_required_field() -> None:
     """``Meta.injected_fields`` lets a narrowing drop a required field WITHOUT the blanket waiver."""
     _declare_products_primaries()
     serializer_cls = _item_serializer()  # `name` + `category` are required.
@@ -1837,7 +1853,7 @@ def test_meta_injected_fields_lets_narrowing_drop_required_field():
     assert InjectMut._input_class is not None
 
 
-def test_narrowing_dropping_required_without_injected_still_raises():
+def test_narrowing_dropping_required_without_injected_still_raises() -> None:
     """Dropping a required field with NEITHER an override nor ``injected_fields`` still fails loud."""
     _declare_products_primaries()
 
@@ -1854,7 +1870,7 @@ def test_narrowing_dropping_required_without_injected_still_raises():
         finalize_django_types()
 
 
-def test_unknown_injected_fields_meta_key_still_rejected():
+def test_unknown_injected_fields_meta_key_still_rejected() -> None:
     """A typo'd ``Meta`` key adjacent to ``injected_fields`` is still rejected by the typo guard."""
     with pytest.raises(ConfigurationError, match="unknown keys"):
 
@@ -1872,7 +1888,7 @@ def test_unknown_injected_fields_meta_key_still_rejected():
 # ---------------------------------------------------------------------------
 
 
-def test_meta_select_for_update_stored_on_snapshot():
+def test_meta_select_for_update_stored_on_snapshot() -> None:
     """``Meta.select_for_update = True`` is validated + stored on the snapshot."""
 
     class LockMut(SerializerMutation):
@@ -1885,7 +1901,7 @@ def test_meta_select_for_update_stored_on_snapshot():
     assert LockMut._mutation_meta.select_for_update is True
 
 
-def test_meta_select_for_update_defaults_true():
+def test_meta_select_for_update_defaults_true() -> None:
     """``Meta.select_for_update`` defaults to ``True`` for locked writes.
 
     The default is opt-out, not opt-in: the update/delete locate and relation-target
@@ -1902,7 +1918,7 @@ def test_meta_select_for_update_defaults_true():
     assert PlainMut._mutation_meta.select_for_update is True
 
 
-def test_meta_select_for_update_explicit_false_opts_out():
+def test_meta_select_for_update_explicit_false_opts_out() -> None:
     """An explicit ``Meta.select_for_update = False`` opts into unlocked writes."""
 
     class UnlockedMut(SerializerMutation):
@@ -1915,7 +1931,7 @@ def test_meta_select_for_update_explicit_false_opts_out():
     assert UnlockedMut._mutation_meta.select_for_update is False
 
 
-def test_meta_select_for_update_non_bool_raises():
+def test_meta_select_for_update_non_bool_raises() -> None:
     """A non-bool ``Meta.select_for_update`` fails loud at class creation."""
     with pytest.raises(ConfigurationError, match="select_for_update must be a bool"):
 
@@ -1928,7 +1944,7 @@ def test_meta_select_for_update_non_bool_raises():
                 permission_classes = []
 
 
-def test_meta_injected_fields_unknown_name_raises_at_class_creation():
+def test_meta_injected_fields_unknown_name_raises_at_class_creation() -> None:
     """``Meta.injected_fields`` naming a field not in the schema map fails loud at class creation."""
     with pytest.raises(ConfigurationError, match="unknown or non-writable at schema time"):
 
@@ -1941,7 +1957,7 @@ def test_meta_injected_fields_unknown_name_raises_at_class_creation():
                 permission_classes = []
 
 
-def test_input_type_name_runs_the_determinism_guard():
+def test_input_type_name_runs_the_determinism_guard() -> None:
     """``input_type_name`` reads the hook through the SAME guarded path; a drifted hook raises."""
     _declare_products_primaries()
     serializer_cls = _item_serializer()
@@ -1967,7 +1983,7 @@ def test_input_type_name_runs_the_determinism_guard():
         DriftNameMut.input_type_name(DriftNameMut._mutation_meta)
 
 
-def test_input_type_name_reads_bound_name_after_finalize():
+def test_input_type_name_reads_bound_name_after_finalize() -> None:
     """After bind, ``input_type_name`` reuses the materialized name stashed by ``build_input``."""
     _declare_products_primaries()
     serializer_cls = _item_serializer()
@@ -2023,7 +2039,7 @@ def _category_field_map(
     return CategorySer, dict(bound_fields(CategorySer()))
 
 
-def test_validate_nested_fields_none_returns_none():
+def test_validate_nested_fields_none_returns_none() -> None:
     """An unset ``Meta.nested_fields`` normalizes to ``None``."""
     serializer_cls, field_map = _category_field_map()
     assert (
@@ -2031,14 +2047,14 @@ def test_validate_nested_fields_none_returns_none():
     )
 
 
-def test_validate_nested_fields_rejects_non_mapping():
+def test_validate_nested_fields_rejects_non_mapping() -> None:
     """A non-mapping ``Meta.nested_fields`` fails loud at class creation."""
     serializer_cls, field_map = _category_field_map()
     with pytest.raises(ConfigurationError, match="must be a mapping"):
         _validate_serializer_nested_fields("M", serializer_cls, "create", field_map, ["items"])
 
 
-def test_validate_nested_fields_rejects_non_config_value():
+def test_validate_nested_fields_rejects_non_config_value() -> None:
     """A value that is not a ``NestedSerializerConfig`` fails loud."""
     serializer_cls, field_map = _category_field_map()
     with pytest.raises(ConfigurationError, match="must be a NestedSerializerConfig"):
@@ -2051,7 +2067,7 @@ def test_validate_nested_fields_rejects_non_config_value():
         )
 
 
-def test_validate_nested_fields_rejects_unknown_field():
+def test_validate_nested_fields_rejects_unknown_field() -> None:
     """A ``nested_fields`` key not in the serializer's field map fails loud."""
     serializer_cls, field_map = _category_field_map()
     with pytest.raises(ConfigurationError, match="not in the serializer's schema-time field map"):
@@ -2064,7 +2080,7 @@ def test_validate_nested_fields_rejects_unknown_field():
         )
 
 
-def test_validate_nested_fields_rejects_non_nested_field():
+def test_validate_nested_fields_rejects_non_nested_field() -> None:
     """A ``nested_fields`` key naming a scalar (not a nested serializer) fails loud."""
     serializer_cls, field_map = _category_field_map()
     with pytest.raises(ConfigurationError, match="not a nested serializer"):
@@ -2077,7 +2093,7 @@ def test_validate_nested_fields_rejects_non_nested_field():
         )
 
 
-def test_validate_nested_fields_requires_create_override():
+def test_validate_nested_fields_requires_create_override() -> None:
     """``nested_fields`` on a create op requires the serializer to override ``create()``."""
     serializer_cls, field_map = _category_field_map(with_create=False)
     with pytest.raises(ConfigurationError, match="does not override create"):
@@ -2090,7 +2106,7 @@ def test_validate_nested_fields_requires_create_override():
         )
 
 
-def test_validate_nested_fields_requires_update_override_for_update_op():
+def test_validate_nested_fields_requires_update_override_for_update_op() -> None:
     """``nested_fields`` on an update op requires the serializer to override ``update()``."""
     serializer_cls, field_map = _category_field_map(with_create=True)
     # The class overrides create() but NOT update(); an update op needs update().
@@ -2104,7 +2120,7 @@ def test_validate_nested_fields_requires_update_override_for_update_op():
         )
 
 
-def test_validate_nested_fields_valid_returns_normalized_dict():
+def test_validate_nested_fields_valid_returns_normalized_dict() -> None:
     """A valid ``Meta.nested_fields`` normalizes to a plain dict."""
     serializer_cls, field_map = _category_field_map()
     config = NestedSerializerConfig()
@@ -2118,7 +2134,7 @@ def test_validate_nested_fields_valid_returns_normalized_dict():
     assert result == {"items": config}
 
 
-def test_validate_nested_fields_materializes_one_shot_selectors():
+def test_validate_nested_fields_materializes_one_shot_selectors() -> None:
     """Nested config selectors are reusable after class validation consumes them."""
     serializer_cls, field_map = _category_field_map()
     result = _validate_serializer_nested_fields(
@@ -2132,13 +2148,13 @@ def test_validate_nested_fields_materializes_one_shot_selectors():
     assert result["items"].fields == ("name",)
 
 
-def test_validate_nested_fields_rejects_mapping_that_cannot_be_materialized():
+def test_validate_nested_fields_rejects_mapping_that_cannot_be_materialized() -> None:
     """A hostile ``Meta.nested_fields`` Mapping cannot leak its iteration error."""
     serializer_cls, field_map = _category_field_map()
 
     class BrokenMapping(dict[str, object]):
         @override
-        def items(self):
+        def items(self) -> NoReturn:
             raise RuntimeError("nested iteration exploded")
 
     with pytest.raises(ConfigurationError, match="could not be materialized"):
@@ -2151,7 +2167,7 @@ def test_validate_nested_fields_rejects_mapping_that_cannot_be_materialized():
         )
 
 
-def test_validate_nested_fields_rejects_iteration_raising_midway():
+def test_validate_nested_fields_rejects_iteration_raising_midway() -> None:
     """An ``.items()`` iterator that raises after one VALID entry still fails typed.
 
     The entries are materialized up front, so a midway explosion cannot escape between
@@ -2159,14 +2175,14 @@ def test_validate_nested_fields_rejects_iteration_raising_midway():
     """
     serializer_cls, field_map = _category_field_map()
 
-    def entries():
+    def entries() -> Iterator[tuple[str, NestedSerializerConfig]]:
         yield "items", NestedSerializerConfig()
         raise RuntimeError("midway explosion")
 
     class MidwayMapping(dict[str, object]):
         @override
         # basedpyright: deliberately a generator that fails midway, the input the validator refuses
-        def items(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+        def items(self) -> Iterator[tuple[str, NestedSerializerConfig]]:  # pyright: ignore[reportIncompatibleMethodOverride]
             return entries()
 
     with pytest.raises(ConfigurationError, match="could not be materialized"):
@@ -2179,14 +2195,14 @@ def test_validate_nested_fields_rejects_iteration_raising_midway():
         )
 
 
-def test_validate_nested_fields_rejects_malformed_entries():
+def test_validate_nested_fields_rejects_malformed_entries() -> None:
     """Entries that do not unpack as ``(field_name, NestedSerializerConfig)`` fail typed."""
     serializer_cls, field_map = _category_field_map()
 
     class MalformedEntries(dict[str, object]):
         @override
         # basedpyright: deliberately yields malformed entries, the input the validator refuses
-        def items(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+        def items(self) -> list[tuple[str, NestedSerializerConfig, str]]:  # pyright: ignore[reportIncompatibleMethodOverride]
             return [("items", NestedSerializerConfig(), "extra")]
 
     with pytest.raises(ConfigurationError, match="could not be unpacked"):
@@ -2200,14 +2216,18 @@ def test_validate_nested_fields_rejects_malformed_entries():
 
 
 class HostileNestedKeyHash(str):
+    """A ``str`` key whose hash raises, modelling a hostile consumer key."""
+
     @override
-    def __hash__(self):
+    def __hash__(self) -> NoReturn:
         raise RuntimeError("hash exploded")
 
 
 class HostileNestedKeyRepr:
+    """A key whose ``repr`` raises, modelling a hostile consumer key."""
+
     @override
-    def __repr__(self):
+    def __repr__(self) -> str:
         raise RuntimeError("repr exploded")
 
 
@@ -2222,14 +2242,16 @@ class HostileNestedKeyRepr:
         HostileNestedKeyRepr,
     ],
 )
-def test_validate_nested_fields_rejects_non_plain_string_keys(key_factory: Callable[[], object]):
+def test_validate_nested_fields_rejects_non_plain_string_keys(
+    key_factory: Callable[[], object],
+) -> None:
     """Only an exact ``str`` key may reach ``field_map.get()`` or the ``normalized`` dict-set."""
     serializer_cls, field_map = _category_field_map()
 
     class HostileKeyEntries(dict[str, object]):
         @override
         # basedpyright: deliberately yields a non-str key, the input the validator refuses
-        def items(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+        def items(self) -> list[tuple[object, NestedSerializerConfig]]:  # pyright: ignore[reportIncompatibleMethodOverride]
             return [(key_factory(), NestedSerializerConfig())]
 
     with pytest.raises(ConfigurationError, match="keys must be plain strings"):
@@ -2242,7 +2264,7 @@ def test_validate_nested_fields_rejects_non_plain_string_keys(key_factory: Calla
         )
 
 
-def test_validate_nested_fields_empty_mapping_requires_no_write_override():
+def test_validate_nested_fields_empty_mapping_requires_no_write_override() -> None:
     """An EMPTY ``Meta.nested_fields = {}`` is no declaration: no create()/update() override demanded.
 
     The write-method gate exists so nested DATA never reaches a default
@@ -2265,7 +2287,7 @@ def test_validate_nested_fields_empty_mapping_requires_no_write_override():
     assert result == {}
 
 
-def test_nested_fields_stored_on_snapshot_and_builds():
+def test_nested_fields_stored_on_snapshot_and_builds() -> None:
     """A declared ``Meta.nested_fields`` is stored on the snapshot and the mutation finalizes."""
 
     class ItemInline(ModelSerializerBase[product_models.Item]):
@@ -2322,7 +2344,7 @@ def test_nested_fields_stored_on_snapshot_and_builds():
     assert "ItemInlineInput" in sdl
 
 
-def test_nested_hidden_field_source_collision_raises_at_class_creation():
+def test_nested_hidden_field_source_collision_raises_at_class_creation() -> None:
     """An opted-in nested serializer cannot hide a last-write-wins source collision."""
 
     class ItemInline(ModelSerializerBase[product_models.Item]):
@@ -2354,7 +2376,7 @@ def test_nested_hidden_field_source_collision_raises_at_class_creation():
                 permission_classes = []
 
 
-def test_nested_star_source_field_raises_at_class_creation():
+def test_nested_star_source_field_raises_at_class_creation() -> None:
     """An opted-in nested serializer cannot smuggle a whole-object ``source="*"`` field."""
 
     class ItemInline(ModelSerializerBase[product_models.Item]):
@@ -2375,7 +2397,7 @@ def test_nested_star_source_field_raises_at_class_creation():
         def create(self, validated_data: dict[str, object]) -> NoReturn:
             raise AssertionError("the nested-write check reads this override; nothing calls it")
 
-    with pytest.raises(ConfigurationError, match="nested serializer path 'items'.*source='\\*'"):
+    with pytest.raises(ConfigurationError, match=r"nested serializer path 'items'.*source='\*'"):
 
         @definition_raises
         class CreateCategoryWithStar(SerializerMutation):
@@ -2386,7 +2408,7 @@ def test_nested_star_source_field_raises_at_class_creation():
                 permission_classes = []
 
 
-def test_read_only_nested_serializer_narrowed_away_does_not_break_class_creation():
+def test_read_only_nested_serializer_narrowed_away_does_not_break_class_creation() -> None:
     """A read-only nested serializer whose fields raise, narrowed away, still validates + binds.
 
     The fingerprint is scoped to the writable + narrowed (effective) set, so a read-only nested
@@ -2399,7 +2421,7 @@ def test_read_only_nested_serializer_narrowed_away_does_not_break_class_creation
 
     class RaisingChild(serializers.Serializer[object]):
         @override
-        def get_fields(self):
+        def get_fields(self) -> NoReturn:
             raise RuntimeError("child fields should not be read")
 
     class ShelfWithReadOnlyChild(ModelSerializerBase[product_models.Item]):
@@ -2439,7 +2461,7 @@ def test_read_only_nested_serializer_narrowed_away_does_not_break_class_creation
     assert "createItemNarrowed" in sdl
 
 
-def test_narrowed_away_writable_nested_not_fingerprinted():
+def test_narrowed_away_writable_nested_not_fingerprinted() -> None:
     """A WRITABLE nested serializer narrowed away by ``Meta.fields`` is not fingerprinted.
 
     Because the fingerprint is over the EFFECTIVE (narrowed) set, a writable nested field whose
@@ -2448,7 +2470,7 @@ def test_narrowed_away_writable_nested_not_fingerprinted():
 
     class RaisingWritableChild(serializers.Serializer[object]):
         @override
-        def get_fields(self):
+        def get_fields(self) -> NoReturn:
             raise RuntimeError("cannot read no-arg")
 
     class ItemWithWritableChild(ModelSerializerBase[product_models.Item]):
@@ -2470,7 +2492,7 @@ def test_narrowed_away_writable_nested_not_fingerprinted():
     assert CreateItemNarrowedWritable._mutation_meta.schema_fingerprint is not None
 
 
-def test_unopted_writable_nested_reports_opt_in_error_not_materialization():
+def test_unopted_writable_nested_reports_opt_in_error_not_materialization() -> None:
     """An UNOPTED writable nested child that raises from ``get_fields()`` reports the opt-in error.
 
     The prior fingerprint descended into EVERY writable nested serializer, so an unopted,
@@ -2484,7 +2506,7 @@ def test_unopted_writable_nested_reports_opt_in_error_not_materialization():
 
     class RaisingChild(serializers.Serializer[object]):
         @override
-        def get_fields(self):
+        def get_fields(self) -> NoReturn:
             raise RuntimeError("unopted nested child fields must not be read")
 
     class ItemWithUnoptedChild(ModelSerializerBase[product_models.Item]):
@@ -2515,7 +2537,7 @@ def test_unopted_writable_nested_reports_opt_in_error_not_materialization():
 # ---------------------------------------------------------------------------
 
 
-def _nested_category_serializer():
+def _nested_category_serializer() -> type[ModelSerializerBase[product_models.Category]]:
     """A ``Category`` ``ModelSerializer`` with a nested writable ``items`` list + a ``create`` override."""
 
     class ItemInline(ModelSerializerBase[product_models.Item]):
@@ -2537,7 +2559,7 @@ def _nested_category_serializer():
     return CategoryWithItems
 
 
-def test_nested_input_materialized_in_ledger_after_finalize():
+def test_nested_input_materialized_in_ledger_after_finalize() -> None:
     """Pre-bind name discovery cannot make a nested input disappear during finalization."""
     _declare_products_primaries()
 
@@ -2566,7 +2588,9 @@ def test_nested_input_materialized_in_ledger_after_finalize():
     assert get_object_definition(Mutation) is not None
 
 
-def test_nested_input_rematerialized_after_recover_in_place(monkeypatch: pytest.MonkeyPatch):
+def test_nested_input_rematerialized_after_recover_in_place(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A failed finalization cannot leave a cache that suppresses nested re-emission."""
     _declare_products_primaries()  # Category + Item primaries (Category needed for the parent).
 
@@ -2597,7 +2621,7 @@ def test_nested_input_rematerialized_after_recover_in_place(monkeypatch: pytest.
     assert serializer_materialized_names["ItemInlineInput"] is not first_nested
 
 
-def test_deeper_nested_fields_unknown_field_raises_configuration_error():
+def test_deeper_nested_fields_unknown_field_raises_configuration_error() -> None:
     """A deeper NestedSerializerConfig declaring a nonexistent field fails loud with ConfigurationError."""
     category_cls = _nested_category_serializer()
 
@@ -2615,7 +2639,7 @@ def test_deeper_nested_fields_unknown_field_raises_configuration_error():
                 }
 
 
-def test_deeper_nested_fields_non_nested_field_raises_configuration_error():
+def test_deeper_nested_fields_non_nested_field_raises_configuration_error() -> None:
     """A deeper NestedSerializerConfig declaring a scalar field fails loud with ConfigurationError."""
     category_cls = _nested_category_serializer()
 
@@ -2633,7 +2657,7 @@ def test_deeper_nested_fields_non_nested_field_raises_configuration_error():
                 }
 
 
-def test_nested_fields_cycle_raises_configuration_error_at_class_creation():
+def test_nested_fields_cycle_raises_configuration_error_at_class_creation() -> None:
     """A self-referential nested serializer configuration fails loud with ConfigurationError."""
 
     class RecursiveCategorySerializer(ModelSerializerBase[product_models.Category]):
@@ -2652,7 +2676,7 @@ def test_nested_fields_cycle_raises_configuration_error_at_class_creation():
             return fields
 
         @override
-        def create(self, validated_data: dict[str, object]):
+        def create(self, validated_data: dict[str, object]) -> product_models.Category:
             return product_models.Category.objects.create(**validated_data)
 
     with pytest.raises(ConfigurationError, match="re-enters RecursiveCategorySerializer"):
@@ -2665,7 +2689,7 @@ def test_nested_fields_cycle_raises_configuration_error_at_class_creation():
                 nested_fields = {"parent": NestedSerializerConfig()}
 
 
-def test_mutual_nested_fields_cycle_raises_configuration_error_at_class_creation():
+def test_mutual_nested_fields_cycle_raises_configuration_error_at_class_creation() -> None:
     """A mutual cycle in nested serializers fails loud with ConfigurationError."""
 
     class MutCategorySerializer(ModelSerializerBase[product_models.Category]):
@@ -2674,7 +2698,7 @@ def test_mutual_nested_fields_cycle_raises_configuration_error_at_class_creation
             fields = ("name", "item")
 
         @override
-        def create(self, validated_data: dict[str, object]):
+        def create(self, validated_data: dict[str, object]) -> product_models.Category:
             return product_models.Category.objects.create(**validated_data)
 
     class MutItemSerializer(ModelSerializerBase[product_models.Item]):
@@ -2685,7 +2709,7 @@ def test_mutual_nested_fields_cycle_raises_configuration_error_at_class_creation
             fields = ("name", "category")
 
         @override
-        def create(self, validated_data: dict[str, object]):
+        def create(self, validated_data: dict[str, object]) -> product_models.Item:
             return product_models.Item.objects.create(**validated_data)
 
     # basedpyright: drf-stubs type _declared_fields as dict[str, Field] over the bare generic Field
@@ -2706,13 +2730,13 @@ def test_mutual_nested_fields_cycle_raises_configuration_error_at_class_creation
                 nested_fields = {"category": config_cat}
 
 
-def test_validate_nested_fields_child_serializer_errors():
+def test_validate_nested_fields_child_serializer_errors() -> None:
     class BrokenConfigChild(serializers.Serializer[object]):
         @property
         @override
         # basedpyright: the hostile shape under test, a ``fields`` property whose read raises; the
         # checker rejects any property overriding a base class attribute
-        def fields(self):  # pyright: ignore[reportIncompatibleVariableOverride]
+        def fields(self) -> NoReturn:  # pyright: ignore[reportIncompatibleVariableOverride]
             raise ConfigurationError("Explicit config error in child fields")
 
     class BrokenExcChild(serializers.Serializer[object]):
@@ -2720,7 +2744,7 @@ def test_validate_nested_fields_child_serializer_errors():
         @override
         # basedpyright: the hostile shape under test, a ``fields`` property whose read raises; the
         # checker rejects any property overriding a base class attribute
-        def fields(self):  # pyright: ignore[reportIncompatibleVariableOverride]
+        def fields(self) -> NoReturn:  # pyright: ignore[reportIncompatibleVariableOverride]
             raise RuntimeError("Unexpected runtime error in child fields")
 
     class Parent1(ModelSerializerBase[product_models.Category]):
@@ -2780,7 +2804,7 @@ def test_validate_nested_fields_child_serializer_errors():
     )
 
 
-def test_default_serializer_mutation_instance_hook_methods():
+def test_default_serializer_mutation_instance_hook_methods() -> None:
     """Verify default instance hook methods on SerializerMutation."""
     from django_strawberry_framework.rest_framework.hook_context import SerializerHookContext
 

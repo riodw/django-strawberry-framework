@@ -21,10 +21,10 @@ import contextvars
 import gc
 import threading
 from collections import OrderedDict
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from functools import partial
 from types import SimpleNamespace
-from typing import SupportsIndex, TypeVar, overload
+from typing import NoReturn, SupportsIndex, TypeVar, overload
 
 import pytest
 import strawberry
@@ -63,7 +63,7 @@ _M = TypeVar("_M", bound=Model)
 # ---------------------------------------------------------------------------
 
 
-def test_metaclass_collects_related_orders():
+def test_metaclass_collects_related_orders() -> None:
     """``related_orders`` is an ``OrderedDict`` keyed by declaration name."""
 
     class TargetOrder(OrderSet):
@@ -77,7 +77,7 @@ def test_metaclass_collects_related_orders():
     assert list(Owner.related_orders) == ["first", "second"]
 
 
-def test_metaclass_calls_bind_orderset_on_each_related_order():
+def test_metaclass_calls_bind_orderset_on_each_related_order() -> None:
     """Every collected ``RelatedOrder`` is bound to the new class."""
 
     class TargetOrder(OrderSet):
@@ -89,7 +89,7 @@ def test_metaclass_calls_bind_orderset_on_each_related_order():
     assert Owner.related_orders["first"].bound_orderset is Owner
 
 
-def test_metaclass_inherits_related_orders_from_bases():
+def test_metaclass_inherits_related_orders_from_bases() -> None:
     """Base-class ``related_orders`` propagate to subclasses via MRO."""
 
     class TargetOrder(OrderSet):
@@ -105,7 +105,7 @@ def test_metaclass_inherits_related_orders_from_bases():
     assert ChildOwner.related_orders["rel"] is BaseOwner.related_orders["rel"]
 
 
-def test_metaclass_subclass_overrides_inherited_related_order():
+def test_metaclass_subclass_overrides_inherited_related_order() -> None:
     """A same-named declaration on the subclass wins over the inherited one."""
 
     class TargetOrder(OrderSet):
@@ -121,7 +121,7 @@ def test_metaclass_subclass_overrides_inherited_related_order():
     assert ChildOwner.related_orders["rel"].field_name == "rel_override"
 
 
-def test_metaclass_none_removal_survives_diamond_inheritance():
+def test_metaclass_none_removal_survives_diamond_inheritance() -> None:
     """An earlier base's ``None`` tombstone prevents later-base resurrection."""
 
     class TargetOrder(OrderSet):
@@ -164,7 +164,7 @@ def test_metaclass_none_removal_survives_diamond_inheritance():
 # ---------------------------------------------------------------------------
 
 
-def test_orderset_owner_definition_default_none():
+def test_orderset_owner_definition_default_none() -> None:
     """The binding seam is ``None`` until phase 2.5 wires it."""
 
     class FreshOrder(OrderSet):
@@ -173,7 +173,7 @@ def test_orderset_owner_definition_default_none():
     assert FreshOrder._owner_definition is None
 
 
-def test_orderset_expanded_fields_default_none():
+def test_orderset_expanded_fields_default_none() -> None:
     """``_expanded_fields`` defaults to ``None`` (cache miss until populated)."""
 
     class FreshOrder(OrderSet):
@@ -182,7 +182,7 @@ def test_orderset_expanded_fields_default_none():
     assert FreshOrder._expanded_fields is None
 
 
-def test_orderset_is_expanding_fields_default_false():
+def test_orderset_is_expanding_fields_default_false() -> None:
     """``_is_expanding_fields`` defaults to ``False`` (no recursion in flight)."""
 
     class FreshOrder(OrderSet):
@@ -196,7 +196,7 @@ def test_orderset_is_expanding_fields_default_false():
 # ---------------------------------------------------------------------------
 
 
-def test_orderset_meta_fields_list_form():
+def test_orderset_meta_fields_list_form() -> None:
     """List entries become ``key -> None`` per cookbook line 280."""
 
     class BookOrder(OrderSet):
@@ -209,7 +209,7 @@ def test_orderset_meta_fields_list_form():
     assert all(v is None for v in fields.values())
 
 
-def test_orderset_get_fields_merges_related_orders():
+def test_orderset_get_fields_merges_related_orders() -> None:
     """``Meta.fields`` entries land first; ``related_orders`` merge on top."""
 
     class ShelfOrder(OrderSet):
@@ -230,7 +230,7 @@ def test_orderset_get_fields_merges_related_orders():
     assert fields["shelf"] is BookOrder.related_orders["shelf"]
 
 
-def test_orderset_get_fields_caches_on_resolved_related_orders():
+def test_orderset_get_fields_caches_on_resolved_related_orders() -> None:
     """The two-condition gate writes ``_expanded_fields`` for class-ref targets."""
 
     class ShelfOrder(OrderSet):
@@ -251,7 +251,7 @@ def test_orderset_get_fields_caches_on_resolved_related_orders():
     assert second is first  # cache hit returns the same OrderedDict instance.
 
 
-def test_orderset_get_fields_does_not_cache_with_unresolved_string_target():
+def test_orderset_get_fields_does_not_cache_with_unresolved_string_target() -> None:
     """A pending string target leaves the cache slot empty so a later resolve writes it."""
 
     class BookOrder(OrderSet):
@@ -271,7 +271,7 @@ def test_orderset_get_fields_does_not_cache_with_unresolved_string_target():
     assert BookOrder.__dict__.get("_expanded_fields") is None
 
 
-def test_orderset_meta_fields_none_returns_only_related_orders():
+def test_orderset_meta_fields_none_returns_only_related_orders() -> None:
     """Missing ``Meta.fields`` collapses to the ``related_orders`` map only."""
 
     class ShelfOrder(OrderSet):
@@ -287,7 +287,7 @@ def test_orderset_meta_fields_none_returns_only_related_orders():
     assert fields["shelf"] is BookOrder.related_orders["shelf"]
 
 
-def test_orderset_metaclass_and_expansion_share_factory_fields_owner():
+def test_orderset_metaclass_and_expansion_share_factory_fields_owner() -> None:
     """Class Meta write-back and Layer-4 expansion ride the shared fingerprint."""
     from django_strawberry_framework.orders.sets import OrderSetMetaclass
     from django_strawberry_framework.utils.inputs import (
@@ -311,7 +311,7 @@ def test_orderset_metaclass_and_expansion_share_factory_fields_owner():
 # ---------------------------------------------------------------------------
 
 
-def test_orderset_meta_fields_all_raises_configurationerror_without_meta_model():
+def test_orderset_meta_fields_all_raises_configurationerror_without_meta_model() -> None:
     """``"__all__"`` requires ``Meta.model`` to derive column names."""
 
     class NoModelOrder(OrderSet):
@@ -323,7 +323,7 @@ def test_orderset_meta_fields_all_raises_configurationerror_without_meta_model()
     assert "Meta.model" in str(exc_info.value)
 
 
-def test_orderset_meta_fields_rejects_unknown_order_path():
+def test_orderset_meta_fields_rejects_unknown_order_path() -> None:
     """Unknown explicit paths fail before a query can raise Django FieldError."""
 
     class InvalidPathOrder(OrderSet):
@@ -335,7 +335,7 @@ def test_orderset_meta_fields_rejects_unknown_order_path():
         InvalidPathOrder.get_fields()
 
 
-def test_orderset_resolve_order_expressions_rejects_unknown_order_path():
+def test_orderset_resolve_order_expressions_rejects_unknown_order_path() -> None:
     """The expression builder re-validates rather than trusting its caller.
 
     ``Meta.fields`` validation catches a bad path at declaration, but the
@@ -359,7 +359,7 @@ def test_orderset_resolve_order_expressions_rejects_unknown_order_path():
         )
 
 
-def test_orderset_all_excludes_virtual_generic_fields():
+def test_orderset_all_excludes_virtual_generic_fields() -> None:
     """``__all__`` leaves out the virtual GenericRelation / GFK descriptors."""
     from apps.library.models import Branch, TaggedItem
 
@@ -395,14 +395,14 @@ def _every_row(scope: type[DjangoType]) -> QuerySet[Model]:
     return model_for(scope)._base_manager.all()
 
 
-def _make_info(user_is_anonymous: bool = False) -> SimpleNamespace:
+def _make_info(*, user_is_anonymous: bool = False) -> SimpleNamespace:
     """Build a minimal ``info``-shaped stub with a Django ``HttpRequest`` on it."""
     request = HttpRequest()
     request.user = AnonymousUser() if user_is_anonymous else User(username="u")
     return SimpleNamespace(context=SimpleNamespace(request=request))
 
 
-def _book_order_with_factory():
+def _book_order_with_factory() -> tuple[type[OrderSet], Callable[..., object]]:
     """Declare ``BookOrder`` + build its Strawberry input class via the factory."""
 
     class BookOrder(OrderSet):
@@ -421,7 +421,7 @@ def _book_order_with_factory():
 
 
 @pytest.mark.django_db
-def test_orderset_apply_async_via_asyncio_run():
+def test_orderset_apply_async_via_asyncio_run() -> None:
     """``apply_async`` writes a nonempty ``query.order_by`` for a scalar term.
 
     Consumer to-many async colour is
@@ -438,7 +438,7 @@ def test_orderset_apply_async_via_asyncio_run():
 
 
 @pytest.mark.django_db
-def test_orderset_apply_async_runs_check_permission_in_sync_to_async():
+def test_orderset_apply_async_runs_check_permission_in_sync_to_async() -> None:
     """``check_*_permission`` raising propagates through the event loop."""
 
     class GatedAsyncOrder(OrderSet):
@@ -446,7 +446,7 @@ def test_orderset_apply_async_runs_check_permission_in_sync_to_async():
             model = Book
             fields = ["title"]
 
-        def check_title_permission(self, request: HttpRequest):
+        def check_title_permission(self, request: HttpRequest) -> None:
             if request.user.is_anonymous:
                 raise GraphQLError("staff only", extensions={"code": "ORDER_PERMISSION_DENIED"})
 
@@ -465,7 +465,7 @@ def test_orderset_apply_async_runs_check_permission_in_sync_to_async():
 
 
 @pytest.mark.django_db
-def test_orderset_check_permission_dedups_repeated_list_entries():
+def test_orderset_check_permission_dedups_repeated_list_entries() -> None:
     """The dedup map fires each ``check_<field>_permission`` once per class."""
     counts = {"shelf": 0, "code": 0}
 
@@ -474,7 +474,7 @@ def test_orderset_check_permission_dedups_repeated_list_entries():
             model = Shelf
             fields = ["code"]
 
-        def check_code_permission(self, _request: object):
+        def check_code_permission(self, _request: object) -> None:
             counts["code"] += 1
 
     class BookOrderDedup(OrderSet):
@@ -484,7 +484,7 @@ def test_orderset_check_permission_dedups_repeated_list_entries():
             model = Book
             fields = ["title"]
 
-        def check_shelf_permission(self, _request: object):
+        def check_shelf_permission(self, _request: object) -> None:
             counts["shelf"] += 1
 
     factory = OrderArgumentsFactory(BookOrderDedup)
@@ -507,21 +507,21 @@ def test_orderset_check_permission_dedups_repeated_list_entries():
 # ---------------------------------------------------------------------------
 
 
-def test_orderset_request_from_info_reads_context_request_attribute():
+def test_orderset_request_from_info_reads_context_request_attribute() -> None:
     """``info.context.request`` is the canonical shape."""
     request = HttpRequest()
     info = SimpleNamespace(context=SimpleNamespace(request=request))
     assert OrderSet._request_from_info(info) is request
 
 
-def test_orderset_request_from_info_reads_bare_httprequest_context():
+def test_orderset_request_from_info_reads_bare_httprequest_context() -> None:
     """``info.context`` being a bare ``HttpRequest`` is also accepted."""
     request = HttpRequest()
     info = SimpleNamespace(context=request)
     assert OrderSet._request_from_info(info) is request
 
 
-def test_orderset_request_from_info_raises_on_unrecognized_context_shape():
+def test_orderset_request_from_info_raises_on_unrecognized_context_shape() -> None:
     """A non-HttpRequest context with no ``.request`` attribute raises."""
 
     class _PlainCtx:
@@ -533,7 +533,7 @@ def test_orderset_request_from_info_raises_on_unrecognized_context_shape():
     assert "OrderSet could not resolve" in str(exc_info.value)
 
 
-def test_orderset_request_from_info_raises_when_info_context_is_none():
+def test_orderset_request_from_info_raises_when_info_context_is_none() -> None:
     """``info.context = None`` raises ``ConfigurationError``."""
     info = SimpleNamespace(context=None)
     with pytest.raises(ConfigurationError):
@@ -545,7 +545,7 @@ def test_orderset_request_from_info_raises_when_info_context_is_none():
 # ---------------------------------------------------------------------------
 
 
-def test_orderset_get_flat_orders_walks_normalized_pairs():
+def test_orderset_get_flat_orders_walks_normalized_pairs() -> None:
     """``get_flat_orders`` is a pass-through that applies the prefix per element."""
     result = OrderSet.get_flat_orders(
         [("title", Ordering.ASC), ("shelf__code", Ordering.DESC)],
@@ -553,7 +553,7 @@ def test_orderset_get_flat_orders_walks_normalized_pairs():
     assert result == [("title", Ordering.ASC), ("shelf__code", Ordering.DESC)]
 
 
-def test_orderset_get_flat_orders_applies_prefix():
+def test_orderset_get_flat_orders_applies_prefix() -> None:
     """The ``prefix`` argument concatenates to each field path."""
     result = OrderSet.get_flat_orders(
         [("code", Ordering.ASC)],
@@ -567,7 +567,7 @@ def test_orderset_get_flat_orders_applies_prefix():
 # ---------------------------------------------------------------------------
 
 
-def test_orderset_normalize_input_delegates_to_module_helper():
+def test_orderset_normalize_input_delegates_to_module_helper() -> None:
     """The classmethod is a thin delegate to ``normalize_input_value``."""
 
     class BookOrderNormalize(OrderSet):
@@ -583,7 +583,7 @@ def test_orderset_normalize_input_delegates_to_module_helper():
 
 
 @pytest.mark.django_db
-def test_orderset_direct_mapping_initializes_specs_before_permissions():
+def test_orderset_direct_mapping_initializes_specs_before_permissions() -> None:
     """Flat mappings must not bypass nested target permission gates."""
 
     class ShelfOrderDirectMapping(OrderSet):
@@ -591,7 +591,7 @@ def test_orderset_direct_mapping_initializes_specs_before_permissions():
             model = Shelf
             fields = ["code"]
 
-        def check_code_permission(self, _request: object):
+        def check_code_permission(self, _request: object) -> NoReturn:
             raise GraphQLError("code gate fired")
 
     class BookOrderDirectMapping(OrderSet):
@@ -609,7 +609,7 @@ def test_orderset_direct_mapping_initializes_specs_before_permissions():
         )
 
 
-def test_orderset_inactive_input_does_not_resolve_lazy_related_target():
+def test_orderset_inactive_input_does_not_resolve_lazy_related_target() -> None:
     """None and empty-list order inputs remain no-ops before lazy resolution."""
 
     class NoOpOrder(OrderSet):
@@ -630,7 +630,7 @@ def test_orderset_inactive_input_does_not_resolve_lazy_related_target():
 # ---------------------------------------------------------------------------
 
 
-def test_orderset_expand_meta_fields_returns_empty_when_meta_has_no_fields_attr():
+def test_orderset_expand_meta_fields_returns_empty_when_meta_has_no_fields_attr() -> None:
     """Covers ``orders/sets.py::OrderSet._expand_meta_fields`` #"if meta_fields is None:".
 
     Declaring ``Meta`` without a ``fields`` attribute -> the shared
@@ -647,12 +647,12 @@ def test_orderset_expand_meta_fields_returns_empty_when_meta_has_no_fields_attr(
     assert result == OrderedDict()
 
 
-def test_orderset_extract_branch_value_returns_none_for_none_input():
+def test_orderset_extract_branch_value_returns_none_for_none_input() -> None:
     """Covers ``utils/permissions.py::extract_branch_value`` #"if input_value is None:"."""
     assert OrderSet._extract_branch_value(None, "anything") is None
 
 
-def test_orderset_extract_branch_value_reads_dict_field():
+def test_orderset_extract_branch_value_reads_dict_field() -> None:
     """Covers ``utils/input_values.py::input_field_value``'s dict branch.
 
     ``OrderSet._extract_branch_value`` delegates the dict-vs-dataclass sniff
@@ -664,12 +664,14 @@ def test_orderset_extract_branch_value_reads_dict_field():
     assert OrderSet._extract_branch_value({"shelf": "value"}, "missing") is None
 
 
-def test_orderset_active_permission_leaf_paths_returns_empty_for_none_input():
+def test_orderset_active_permission_leaf_paths_returns_empty_for_none_input() -> None:
     """Covers ``utils/input_values.py::iter_active_fields`` #"is_inactive_value(input_value"."""
     assert OrderSet._active_permission_targets(None)[0] == []
 
 
-def test_orderset_active_permission_leaf_paths_returns_empty_for_non_dataclass_non_dict_input():
+def test_orderset_active_permission_leaf_paths_returns_empty_for_non_dataclass_non_dict_input() -> (
+    None
+):
     """Covers ``utils/input_values.py::iter_active_fields`` #"if items is None:".
 
     A plain object (no ``__dataclass_fields__``, not a ``dict``) makes
@@ -679,7 +681,7 @@ def test_orderset_active_permission_leaf_paths_returns_empty_for_non_dataclass_n
     assert OrderSet._active_permission_targets(object())[0] == []
 
 
-def test_orderset_active_permission_leaf_paths_walks_dict_items():
+def test_orderset_active_permission_leaf_paths_walks_dict_items() -> None:
     """Covers ``utils/input_values.py::iter_input_items`` #"if isinstance(input_value, dict):".
 
     Dict-shaped inputs are walked through ``dict.items`` so the
@@ -694,13 +696,15 @@ def test_orderset_active_permission_leaf_paths_walks_dict_items():
     # Populate ``_field_specs`` so the spec lookup in
     # ``utils/permissions.py::active_permission_targets`` returns a real
     # ``django_source_path`` rather than the python-attr fallback.
-    OrderArgumentsFactory(DictInputOrder).arguments
+    _ = OrderArgumentsFactory(DictInputOrder).arguments
 
     paths = DictInputOrder._active_permission_targets({"title": Ordering.ASC})[0]
     assert paths == ["title"]
 
 
-def test_orderset_active_permission_leaf_paths_falls_back_to_python_attr_when_no_field_spec_entry():
+def test_orderset_active_permission_leaf_paths_falls_back_to_python_attr_when_no_field_spec_entry() -> (
+    None
+):
     """Covers ``utils/permissions.py::active_permission_targets`` #"else fallback_path(field.python_attr)".
 
     When ``_field_specs`` has no entry for ``(cls, python_attr)`` (e.g.
@@ -723,7 +727,9 @@ def test_orderset_active_permission_leaf_paths_falls_back_to_python_attr_when_no
 
 
 @pytest.mark.django_db
-def test_orderset_apply_sync_returns_queryset_when_all_directions_filter_to_empty_expressions():
+def test_orderset_apply_sync_returns_queryset_when_all_directions_filter_to_empty_expressions() -> (
+    None
+):
     """Covers ``orders/sets.py::OrderSet._apply_orderings`` #"if not expressions:".
 
     A subclass overrides ``_normalize_input`` to emit
@@ -752,7 +758,7 @@ def test_orderset_apply_sync_returns_queryset_when_all_directions_filter_to_empt
 
 
 @pytest.mark.django_db
-def test_orderset_apply_async_returns_queryset_when_data_is_empty():
+def test_orderset_apply_async_returns_queryset_when_data_is_empty() -> None:
     """Covers ``orders/sets.py::OrderSet._apply_orderings`` #"if not data:" via ``apply_async``.
 
     Calling ``apply_async`` with an empty list yields an empty normalized
@@ -774,7 +780,9 @@ def test_orderset_apply_async_returns_queryset_when_data_is_empty():
 
 
 @pytest.mark.django_db
-def test_orderset_apply_async_returns_queryset_when_all_directions_filter_to_empty_expressions():
+def test_orderset_apply_async_returns_queryset_when_all_directions_filter_to_empty_expressions() -> (
+    None
+):
     """Covers ``orders/sets.py::OrderSet._apply_orderings`` #"if not expressions:" via ``apply_async``.
 
     Symmetric of the sync-side row: a subclass overrides
@@ -803,7 +811,7 @@ def test_orderset_apply_async_returns_queryset_when_all_directions_filter_to_emp
 # =============================================================================
 
 
-def test_path_traverses_to_many_detects_multiplying_relations():
+def test_path_traverses_to_many_detects_multiplying_relations() -> None:
     """``_path_traverses_to_many`` flags reverse-FK / M2M paths, not scalar / to-one."""
     from django_strawberry_framework.utils.relations import (
         path_traverses_to_many as _path_traverses_to_many,
@@ -817,7 +825,7 @@ def test_path_traverses_to_many_detects_multiplying_relations():
     assert _path_traverses_to_many(Branch, "city") is False  # scalar
 
 
-def test_path_traverses_to_many_is_cached():
+def test_path_traverses_to_many_is_cached() -> None:
     """Repeated to-many path checks reuse the metadata walk."""
     from django_strawberry_framework.utils import relations
     from django_strawberry_framework.utils.relations import (
@@ -836,7 +844,7 @@ def test_path_traverses_to_many_is_cached():
         relations._path_traverses_to_many_cache_clear()
 
 
-def test_resolve_order_expressions_aggregates_to_many_orders_scalar_directly():
+def test_resolve_order_expressions_aggregates_to_many_orders_scalar_directly() -> None:
     """A to-many term orders by a ``Min`` aggregate; a scalar term orders directly.
 
     Consumer two-term ``MIN(`` SQL is
@@ -877,7 +885,7 @@ def test_resolve_order_expressions_aggregates_to_many_orders_scalar_directly():
 def test_resolve_order_expressions_aggregates_each_carrier_of_a_to_many_foreign_object(
     direction: Ordering,
     aggregate_name: str,
-):
+) -> None:
     """A to-many path ending on a multi-column ``ForeignObject`` aggregates each carrier.
 
     ``Branch.shelf_labels`` fans out to the labels and ``ShelfLabel.shelf`` is
@@ -914,7 +922,7 @@ def test_resolve_order_expressions_aggregates_each_carrier_of_a_to_many_foreign_
     }
 
 
-def test_path_traverses_to_many_returns_false_for_nonmultiplying_paths():
+def test_path_traverses_to_many_returns_false_for_nonmultiplying_paths() -> None:
     """``_path_traverses_to_many`` returns False for unresolvable / generic / all-to-one paths.
 
     Covers the three non-multiplying exits: an unresolvable segment
@@ -936,7 +944,7 @@ def test_path_traverses_to_many_returns_false_for_nonmultiplying_paths():
 
 
 @pytest.mark.django_db
-def test_modelless_orderset_uses_queryset_model_for_to_many_order():
+def test_modelless_orderset_uses_queryset_model_for_to_many_order() -> None:
     """A direct model-less orderset application still keeps the row-preserving aggregate."""
     from django.db.models import Min
 
@@ -967,7 +975,7 @@ def test_modelless_orderset_uses_queryset_model_for_to_many_order():
 
 
 @pytest.mark.django_db
-def test_queryset_model_overrides_conflicting_orderset_meta_model():
+def test_queryset_model_overrides_conflicting_orderset_meta_model() -> None:
     """To-many detection follows the concrete queryset, never stale class metadata."""
     from django.db.models import Min
 
@@ -999,7 +1007,7 @@ def test_queryset_model_overrides_conflicting_orderset_meta_model():
     assert any(isinstance(agg, Min) for agg in result.query.annotations.values())
 
 
-def test_resolve_order_expressions_rejects_non_ordering_direction():
+def test_resolve_order_expressions_rejects_non_ordering_direction() -> None:
     """Passing a non-Ordering object to _resolve_order_expressions raises ConfigurationError."""
 
     class CustomBookOrder(OrderSet):
@@ -1027,7 +1035,7 @@ def test_resolve_order_expressions_rejects_non_ordering_direction():
 
 
 @pytest.mark.django_db
-def test_orderset_apply_sync_handles_unset_in_nested_dict():
+def test_orderset_apply_sync_handles_unset_in_nested_dict() -> None:
     """apply_sync with UNSET fields normalizes cleanly and preserves queryset."""
     from strawberry import UNSET
 
@@ -1054,7 +1062,7 @@ def test_orderset_apply_sync_handles_unset_in_nested_dict():
 
 
 @pytest.mark.django_db
-def test_orderset_expand_meta_fields_rejects_non_iterable_fields():
+def test_orderset_expand_meta_fields_rejects_non_iterable_fields() -> None:
     """Non-collection or string Meta.fields (other than '__all__') raises ConfigurationError."""
 
     class IntFieldsOrder(OrderSet):
@@ -1092,7 +1100,7 @@ def test_orderset_expand_meta_fields_rejects_non_iterable_fields():
 
 
 @pytest.mark.django_db
-def test_orderset_expand_meta_fields_rejects_non_string_entries_without_model():
+def test_orderset_expand_meta_fields_rejects_non_string_entries_without_model() -> None:
     """Entry-TYPE validation is unconditional: it does not need ``Meta.model``.
 
     The model-less related-only arm previously skipped entry validation
@@ -1126,7 +1134,7 @@ def test_orderset_expand_meta_fields_rejects_non_string_entries_without_model():
 
 
 @pytest.mark.django_db
-def test_orderset_expand_meta_fields_rejects_non_string_entries_with_model():
+def test_orderset_expand_meta_fields_rejects_non_string_entries_with_model() -> None:
     """The entry-type gate precedes path validation, with or without ``Meta.model``."""
 
     class NoneEntryOrder(OrderSet):
@@ -1147,7 +1155,7 @@ def test_orderset_expand_meta_fields_rejects_non_string_entries_with_model():
 
 
 @pytest.mark.django_db
-def test_orderset_expand_meta_fields_rejects_one_shot_iterator_fields():
+def test_orderset_expand_meta_fields_rejects_one_shot_iterator_fields() -> None:
     """A one-shot ``Meta.fields`` iterator is rejected instead of silently diverging.
 
     The expansion re-runs whenever a lazy ``RelatedOrder`` target keeps the
@@ -1178,7 +1186,7 @@ def test_orderset_expand_meta_fields_rejects_one_shot_iterator_fields():
 
 
 @pytest.mark.django_db
-def test_orderset_expand_meta_fields_accepts_a_computed_re_readable_collection():
+def test_orderset_expand_meta_fields_accepts_a_computed_re_readable_collection() -> None:
     """A ``dict`` view or a custom ``Collection`` is a legal ``Meta.fields``.
 
     The contract is re-readability, not membership of a builtin allow-list:
@@ -1188,16 +1196,16 @@ def test_orderset_expand_meta_fields_accepts_a_computed_re_readable_collection()
     """
 
     class _NameSet:
-        def __init__(self, *names: str):
+        def __init__(self, *names: str) -> None:
             self._names = names
 
-        def __iter__(self):
+        def __iter__(self) -> Iterator[str]:
             return iter(self._names)
 
-        def __len__(self):
+        def __len__(self) -> int:
             return len(self._names)
 
-        def __contains__(self, item: object):
+        def __contains__(self, item: object) -> bool:
             return item in self._names
 
     class KeysViewOrder(OrderSet):
@@ -1217,7 +1225,7 @@ def test_orderset_expand_meta_fields_accepts_a_computed_re_readable_collection()
     assert list(CustomCollectionOrder._expand_meta_fields()) == ["title", "subtitle"]
 
 
-def test_orderset_expand_meta_fields_rejects_hostile_iterable_without_iterating():
+def test_orderset_expand_meta_fields_rejects_hostile_iterable_without_iterating() -> None:
     """A hostile ``__iter__`` raising midway is rejected by the container gate.
 
     The shape gate is structural (an ``isinstance`` container check), so a
@@ -1227,7 +1235,7 @@ def test_orderset_expand_meta_fields_rejects_hostile_iterable_without_iterating(
     """
 
     class Boom:
-        def __iter__(self):
+        def __iter__(self) -> Iterator[str]:
             yield "title"  # never reached past the gate
             raise RuntimeError("boom mid-iteration")
 
@@ -1241,7 +1249,7 @@ def test_orderset_expand_meta_fields_rejects_hostile_iterable_without_iterating(
 
 
 @pytest.mark.django_db
-def test_orderset_expand_meta_fields_dict_shape_iterates_keys():
+def test_orderset_expand_meta_fields_dict_shape_iterates_keys() -> None:
     """Dict-shaped ``Meta.fields`` (django-filter lookup bags) expands the KEYS.
 
     Pins the documented degradation: the lookup-bag values are dropped and
@@ -1260,7 +1268,7 @@ def test_orderset_expand_meta_fields_dict_shape_iterates_keys():
 
 
 @pytest.mark.django_db
-def test_orderset_expand_meta_fields_handles_non_class_meta_model():
+def test_orderset_expand_meta_fields_handles_non_class_meta_model() -> None:
     """Non-class / invalid Meta.model does not crash with AttributeError and raises ConfigurationError."""
 
     class BadModelOrder(OrderSet):
@@ -1281,7 +1289,7 @@ def test_orderset_expand_meta_fields_handles_non_class_meta_model():
 
 
 @pytest.mark.django_db
-def test_get_concrete_field_names_for_order_rejects_non_model():
+def test_get_concrete_field_names_for_order_rejects_non_model() -> None:
     """_get_concrete_field_names_for_order raises ConfigurationError on non-model objects."""
     from django_strawberry_framework.orders.inputs import _get_concrete_field_names_for_order
 
@@ -1292,7 +1300,7 @@ def test_get_concrete_field_names_for_order_rejects_non_model():
         _get_concrete_field_names_for_order(123)
 
 
-def test_resolve_order_expressions_handles_non_class_model_on_path_error():
+def test_resolve_order_expressions_handles_non_class_model_on_path_error() -> None:
     """_resolve_order_expressions safely formats non-class model when path resolution fails."""
 
     class CustomBookOrder(OrderSet):
@@ -1310,7 +1318,7 @@ def test_resolve_order_expressions_handles_non_class_model_on_path_error():
         )
 
 
-def test_orderset_clear_order_input_namespace_clears_subclass_caches():
+def test_orderset_clear_order_input_namespace_clears_subclass_caches() -> None:
     """clear_order_input_namespace clears _expanded_fields on base and subclass OrderSets."""
     from django_strawberry_framework.orders.inputs import clear_order_input_namespace
 
@@ -1337,7 +1345,7 @@ def test_orderset_clear_order_input_namespace_clears_subclass_caches():
     assert SubOrder._expanded_fields is None
 
 
-def test_orderset_type_name_for_inherits_mixin_naming_convention():
+def test_orderset_type_name_for_inherits_mixin_naming_convention() -> None:
     """OrderSet inherits ClassBasedTypeNameMixin defaulting to '<Name>InputType'."""
 
     class CustomOrder(OrderSet):
@@ -1352,7 +1360,7 @@ assert F is not None
 assert Genre is not None
 
 
-def test_input_has_active_terms():
+def test_input_has_active_terms() -> None:
     """OrderSet._input_has_active_terms detects presence of active ordering terms."""
     import strawberry
 
@@ -1391,7 +1399,7 @@ def test_input_has_active_terms():
     )
 
 
-def test_input_has_active_terms_purity():
+def test_input_has_active_terms_purity() -> None:
     """OrderSet._input_has_active_terms raises ConfigurationError when _normalize_input is impure."""
 
     class ImpureOrder(OrderSet):
@@ -1416,8 +1424,8 @@ def test_input_has_active_terms_purity():
         ImpureOrder._input_has_active_terms([{"title": "anything"}])
 
 
-def test_input_has_active_terms_purity_structure_disagreement():
-    """OrderSet._input_has_active_terms raises ConfigurationError when successive normalizations disagree on shape."""
+def test_input_has_active_terms_purity_structure_disagreement() -> None:
+    """``_input_has_active_terms`` raises ``ConfigurationError`` when normalizations disagree on shape."""
 
     class FlakyOrder(OrderSet):
         class Meta:
@@ -1458,7 +1466,7 @@ def test_input_has_active_terms_purity_structure_disagreement():
         (["__ACTIVE_TITLE_BOOK_INPUT__", "__NULL_TITLE_BOOK_INPUT__"], True),
     ],
 )
-def test_input_has_active_terms_contract(input_value: object, expected: bool):
+def test_input_has_active_terms_contract(input_value: object, *, expected: bool) -> None:
     """Pin OrderSet._input_has_active_terms against a comprehensive input variation matrix."""
 
     class ShelfOrder(OrderSet):
@@ -1499,7 +1507,7 @@ def test_input_has_active_terms_contract(input_value: object, expected: bool):
     assert BookOrder._input_has_active_terms(resolved_input) is expected
 
 
-def _attestations(orderset_class: type[OrderSet] | None = None):
+def _attestations(orderset_class: type[OrderSet] | None = None) -> list[_AppliedNormalization]:
     """Return the attestations the active ledger holds, optionally for one class.
 
     Reads the ledger's private record list because these are package tests of a
@@ -1513,13 +1521,13 @@ def _attestations(orderset_class: type[OrderSet] | None = None):
     return [record for record in ledger._records if record.orderset_class is orderset_class]
 
 
-def _claimed_pairs():
+def _claimed_pairs() -> list[tuple[type[OrderSet], object]] | None:
     """Return the ``(orderset_class, input_value)`` pairs the active ledger has issued."""
     ledger = _ORDER_NORMALIZATION_CAPTURE.get()
     return None if ledger is None else list(ledger._claimed)
 
 
-def test_input_has_active_terms_independent_query_and_double_normalization():
+def test_input_has_active_terms_independent_query_and_double_normalization() -> None:
     """Pin the 2-call count inside a capture scope and the 3-call count outside one."""
 
     class TrackedOrder(OrderSet):
@@ -1531,7 +1539,7 @@ def test_input_has_active_terms_independent_query_and_double_normalization():
 
         @classmethod
         @override
-        def _normalize_input(cls, input_value: object):
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             cls.normalize_count += 1
             return super()._normalize_input(input_value)
 
@@ -1559,7 +1567,7 @@ def test_input_has_active_terms_independent_query_and_double_normalization():
     # which is how the async pipeline opens it, immediately around its own awaits.
     TrackedOrder.normalize_count = 0
 
-    async def _scoped_async_resolution():
+    async def _scoped_async_resolution() -> None:
         with capture_applied_order_normalization():
             qs_ordered_async = await TrackedOrder.apply_async(active_input, qs, info)
             assert TrackedOrder.normalize_count == 1
@@ -1590,7 +1598,7 @@ def test_input_has_active_terms_independent_query_and_double_normalization():
     assert TrackedOrder.normalize_count == 3
 
 
-def test_applied_normalization_is_consumed_and_scoped_to_one_capture():
+def test_applied_normalization_is_consumed_and_scoped_to_one_capture() -> None:
     """A captured record is one-shot and never visible to another scope."""
 
     class TrackedOrder(OrderSet):
@@ -1639,7 +1647,7 @@ def test_applied_normalization_is_consumed_and_scoped_to_one_capture():
     assert _ORDER_NORMALIZATION_CAPTURE.get() is None
 
 
-def test_applied_normalization_record_pins_the_input_object_not_its_address():
+def test_applied_normalization_record_pins_the_input_object_not_its_address() -> None:
     """The record holds the input OBJECT, so a freed address cannot forge a match.
 
     Keying the record by ``id(input_value)`` alone records an address without
@@ -1687,7 +1695,7 @@ def test_applied_normalization_record_pins_the_input_object_not_its_address():
         assert TrackedOrder._input_has_active_terms(decoys[0]) is True
 
 
-def test_applied_normalization_checks_input_identity():
+def test_applied_normalization_checks_input_identity() -> None:
     """The captured record requires exact input_value object identity."""
 
     class TrackedOrder(OrderSet):
@@ -1717,7 +1725,7 @@ def test_applied_normalization_checks_input_identity():
         assert TrackedOrder.normalize_count == 3
 
 
-def test_applied_normalization_checks_orderset_class_identity():
+def test_applied_normalization_checks_orderset_class_identity() -> None:
     """A record published by one OrderSet class is not a record for another."""
 
     class FirstOrder(OrderSet):
@@ -1753,7 +1761,7 @@ def test_applied_normalization_checks_orderset_class_identity():
         assert SecondOrder.normalize_count == 2
 
 
-def test_public_apply_never_writes_the_consumer_context():
+def test_public_apply_never_writes_the_consumer_context() -> None:
     """``apply_sync`` / ``apply_async`` leave ``info.context`` exactly as they found it.
 
     The normalization handoff is a task-local capture scope, so a public apply
@@ -1764,11 +1772,11 @@ def test_public_apply_never_writes_the_consumer_context():
 
     class GuardedContext(dict[str, object]):
         @override
-        def __setitem__(self, key: str, value: object):
+        def __setitem__(self, key: str, value: object) -> None:
             raise RuntimeError(f"guarded context written: {key}")
 
         @override
-        def __delitem__(self, key: str):
+        def __delitem__(self, key: str) -> None:
             raise RuntimeError(f"guarded context cleared: {key}")
 
     class TitleOrder(OrderSet):
@@ -1798,7 +1806,7 @@ def test_public_apply_never_writes_the_consumer_context():
     assert _ORDER_NORMALIZATION_CAPTURE.get() is None
 
 
-def test_capture_scope_is_reset_after_an_exception_and_isolated_per_async_task():
+def test_capture_scope_is_reset_after_an_exception_and_isolated_per_async_task() -> None:
     """The scope token is reset on the way out, and concurrent tasks never share a record."""
 
     class TitleOrder(OrderSet):
@@ -1809,7 +1817,7 @@ def test_capture_scope_is_reset_after_an_exception_and_isolated_per_async_task()
     info = SimpleNamespace(context={"request": HttpRequest()})
     TitleInput = _keyword_constructor(OrderArgumentsFactory(TitleOrder).arguments)
 
-    def body_that_raises():
+    def body_that_raises() -> NoReturn:
         with capture_applied_order_normalization():
             assert _ORDER_NORMALIZATION_CAPTURE.get() is not None
             raise RuntimeError("body failed")
@@ -1818,7 +1826,7 @@ def test_capture_scope_is_reset_after_an_exception_and_isolated_per_async_task()
         body_that_raises()
     assert _ORDER_NORMALIZATION_CAPTURE.get() is None
 
-    async def one_resolution(own_input: object):
+    async def one_resolution(own_input: object) -> bool:
         with capture_applied_order_normalization():
             await TitleOrder.apply_async(own_input, Book.objects.all(), info)
             # Yield so the sibling task runs its own apply in between.
@@ -1828,7 +1836,7 @@ def test_capture_scope_is_reset_after_an_exception_and_isolated_per_async_task()
             assert attestation.input_value is own_input
             return TitleOrder._input_has_active_terms(own_input)
 
-    async def both():
+    async def both() -> tuple[bool, bool]:
         return await asyncio.gather(
             one_resolution([TitleInput(title=Ordering.ASC)]),
             one_resolution([TitleInput(title=Ordering.DESC)]),
@@ -1838,7 +1846,7 @@ def test_capture_scope_is_reset_after_an_exception_and_isolated_per_async_task()
     assert _ORDER_NORMALIZATION_CAPTURE.get() is None
 
 
-def test_input_has_active_terms_sequence_controls_sync():
+def test_input_has_active_terms_sequence_controls_sync() -> None:
     """Load-bearing A/B/B and A/A/B/A normalization sequence controls under sync apply."""
     return_a: list[tuple[str, Ordering | None]] = [("title", Ordering.ASC)]
     return_b: list[tuple[str, Ordering | None]] = [("title", Ordering.DESC)]
@@ -1896,7 +1904,7 @@ def test_input_has_active_terms_sequence_controls_sync():
         AabOrder._input_has_active_terms([{"title": "ASC"}])
 
 
-def test_input_has_active_terms_sequence_controls_async():
+def test_input_has_active_terms_sequence_controls_async() -> None:
     """Load-bearing A/B/B and A/A/B/A normalization sequence controls under async apply."""
     return_a: list[tuple[str, Ordering | None]] = [("title", Ordering.ASC)]
     return_b: list[tuple[str, Ordering | None]] = [("title", Ordering.DESC)]
@@ -1921,7 +1929,7 @@ def test_input_has_active_terms_sequence_controls_async():
 
     abb_input = [{"title": "ASC"}]
 
-    async def _abb_resolution():
+    async def _abb_resolution() -> None:
         with capture_applied_order_normalization():
             await AbbOrder.apply_async(abb_input, qs, info)
             with pytest.raises(ConfigurationError, match=r"_normalize_input is not pure"):
@@ -1952,7 +1960,7 @@ def test_input_has_active_terms_sequence_controls_async():
 
     aab_input = [{"title": "ASC"}]
 
-    async def _aab_resolution():
+    async def _aab_resolution() -> None:
         with capture_applied_order_normalization():
             await AabOrder.apply_async(aab_input, qs, info)
             assert AabOrder._input_has_active_terms(aab_input) is True
@@ -1962,7 +1970,7 @@ def test_input_has_active_terms_sequence_controls_async():
         AabOrder._input_has_active_terms([{"title": "ASC"}])
 
 
-def test_a_child_task_application_reaches_the_parents_check():
+def test_a_child_task_application_reaches_the_parents_check() -> None:
     """A delegating ``apply_async`` applies in a child task; the parent still sees the terms.
 
     The supported public override seam is an ``apply_async`` that hands the work
@@ -1995,12 +2003,12 @@ def test_a_child_task_application_reaches_the_parents_check():
             input_value: object,
             queryset: QuerySet[_M],
             info: object,
-        ):
+        ) -> QuerySet[_M]:
             return await asyncio.create_task(super().apply_async(input_value, queryset, info))
 
     order_input = [{"title": "ASC"}]
 
-    async def parent():
+    async def parent() -> None:
         with capture_applied_order_normalization():
             ordered = await ChildDelegatingOrder.apply_async(order_input, Book.objects.all(), info)
             assert ordered.ordered is True
@@ -2015,7 +2023,7 @@ def test_a_child_task_application_reaches_the_parents_check():
     assert _ORDER_NORMALIZATION_CAPTURE.get() is None
 
 
-def test_a_child_delegated_impure_normalization_is_still_rejected():
+def test_a_child_delegated_impure_normalization_is_still_rejected() -> None:
     """The A/B/B purity rejection survives delegation into a child task.
 
     The ordering is built from A inside the child. Without the attestation
@@ -2049,12 +2057,12 @@ def test_a_child_delegated_impure_normalization_is_still_rejected():
             input_value: object,
             queryset: QuerySet[_M],
             info: object,
-        ):
+        ) -> QuerySet[_M]:
             return await asyncio.create_task(super().apply_async(input_value, queryset, info))
 
     order_input = [{"title": "ASC"}]
 
-    async def parent():
+    async def parent() -> None:
         with capture_applied_order_normalization():
             await ChildDelegatingAbbOrder.apply_async(order_input, Book.objects.all(), info)
             with pytest.raises(ConfigurationError, match=r"_normalize_input is not pure"):
@@ -2065,7 +2073,7 @@ def test_a_child_delegated_impure_normalization_is_still_rejected():
     assert _ORDER_NORMALIZATION_CAPTURE.get() is None
 
 
-def test_two_applications_of_one_input_that_disagree_fail_closed():
+def test_two_applications_of_one_input_that_disagree_fail_closed() -> None:
     """Two applicable attestations that disagree are rejected, never silently picked from.
 
     A descendant re-applying the SAME class and the SAME input object inside one
@@ -2094,11 +2102,11 @@ def test_two_applications_of_one_input_that_disagree_fail_closed():
 
     order_input = [{"title": "ASC"}]
 
-    async def parent():
+    async def parent() -> None:
         with capture_applied_order_normalization():
             await DoubleAppliedOrder.apply_async(order_input, Book.objects.all(), info)
 
-            async def child():
+            async def child() -> None:
                 await DoubleAppliedOrder.apply_async(order_input, Book.objects.all(), info)
 
             await asyncio.create_task(child())
@@ -2113,7 +2121,7 @@ def test_two_applications_of_one_input_that_disagree_fail_closed():
     assert _ORDER_NORMALIZATION_CAPTURE.get() is None
 
 
-def test_two_applications_of_one_input_that_agree_are_claimed_once():
+def test_two_applications_of_one_input_that_agree_are_claimed_once() -> None:
     """Agreeing duplicate attestations resolve to their shared terms, not a rejection."""
     info = SimpleNamespace(context={"request": HttpRequest()})
 
@@ -2132,11 +2140,11 @@ def test_two_applications_of_one_input_that_agree_are_claimed_once():
 
     order_input = [{"title": "ASC"}]
 
-    async def parent():
+    async def parent() -> None:
         with capture_applied_order_normalization():
             await PureDoubleOrder.apply_async(order_input, Book.objects.all(), info)
 
-            async def child():
+            async def child() -> None:
                 await PureDoubleOrder.apply_async(order_input, Book.objects.all(), info)
 
             await asyncio.create_task(child())
@@ -2147,7 +2155,7 @@ def test_two_applications_of_one_input_that_agree_are_claimed_once():
     asyncio.run(parent())
 
 
-def test_a_nested_orderset_between_apply_and_check_is_never_claimed():
+def test_a_nested_orderset_between_apply_and_check_is_never_claimed() -> None:
     """A different ``OrderSet`` applied mid-resolution cannot displace the outer record.
 
     An outer ``apply_sync`` override that delegates to the base and then invokes
@@ -2196,7 +2204,7 @@ def test_a_nested_orderset_between_apply_and_check_is_never_claimed():
             input_value: object,
             queryset: QuerySet[_M],
             info: object,
-        ):
+        ) -> QuerySet[_M]:
             ordered = super().apply_sync(input_value, queryset, info)
             NestedOrder.apply_sync(nested_input, Book.objects.all(), info)
             return ordered
@@ -2212,7 +2220,7 @@ def test_a_nested_orderset_between_apply_and_check_is_never_claimed():
     assert _ORDER_NORMALIZATION_CAPTURE.get() is None
 
 
-def test_an_unrelated_descendant_application_is_never_claimed():
+def test_an_unrelated_descendant_application_is_never_claimed() -> None:
     """A descendant applying a DIFFERENT input leaves the parent's own claim intact.
 
     The isolation half of the contract: the ledger is shared so a delegating
@@ -2239,11 +2247,11 @@ def test_an_unrelated_descendant_application_is_never_claimed():
     parent_input = [{"title": "ASC"}]
     unrelated_input = [{"title": "ASC"}]
 
-    async def parent():
+    async def parent() -> None:
         with capture_applied_order_normalization():
             await UnrelatedChildOrder.apply_async(parent_input, Book.objects.all(), info)
 
-            async def child():
+            async def child() -> None:
                 await UnrelatedChildOrder.apply_async(unrelated_input, Book.objects.all(), info)
 
             await asyncio.create_task(child())
@@ -2257,7 +2265,7 @@ def test_an_unrelated_descendant_application_is_never_claimed():
     assert _ORDER_NORMALIZATION_CAPTURE.get() is None
 
 
-def test_a_claim_anywhere_in_the_resolution_is_the_only_claim():
+def test_a_claim_anywhere_in_the_resolution_is_the_only_claim() -> None:
     """Claiming is once per resolution, wherever it happens - never once per context.
 
     A child's own active-term check claims the pair for the whole resolution, so
@@ -2282,12 +2290,12 @@ def test_a_claim_anywhere_in_the_resolution_is_the_only_claim():
 
     order_input = [{"title": "ASC"}]
 
-    async def parent():
+    async def parent() -> None:
         with capture_applied_order_normalization():
             # Call 1: the parent's apply attests.
             await SharedRecordOrder.apply_async(order_input, Book.objects.all(), info)
 
-            async def child():
+            async def child() -> bool:
                 # Call 2: the child claims the attestation and re-verifies once.
                 return SharedRecordOrder._input_has_active_terms(order_input)
 
@@ -2304,7 +2312,7 @@ def test_a_claim_anywhere_in_the_resolution_is_the_only_claim():
     assert _ORDER_NORMALIZATION_CAPTURE.get() is None
 
 
-def test_a_worker_threads_application_reaches_the_ledger_its_parent_claims_from():
+def test_a_worker_threads_application_reaches_the_ledger_its_parent_claims_from() -> None:
     """A copied context carries the ledger, so a worker thread's apply attests into it.
 
     ``contextvars.copy_context().run(...)`` is the shape ``sync_to_async`` and
@@ -2324,7 +2332,7 @@ def test_a_worker_threads_application_reaches_the_ledger_its_parent_claims_from(
 
         @classmethod
         @override
-        def _normalize_input(cls, input_value: object):
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             cls.normalize_count += 1
             return super()._normalize_input(input_value)
 
@@ -2335,7 +2343,7 @@ def test_a_worker_threads_application_reaches_the_ledger_its_parent_claims_from(
         assert _attestations(WorkerOrder) == []
         copied = contextvars.copy_context()
 
-        def publish_in_worker():
+        def publish_in_worker() -> None:
             copied.run(WorkerOrder.apply_sync, worker_input, Book.objects.all(), info)
 
         worker = threading.Thread(target=publish_in_worker)
@@ -2353,7 +2361,7 @@ def test_a_worker_threads_application_reaches_the_ledger_its_parent_claims_from(
 
 def test_concurrent_threads_publishing_into_one_ledger_lose_nothing(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Every attestation survives simultaneous appends from many worker threads.
 
     Each worker runs in its own copy of the context holding the one ledger, as
@@ -2379,7 +2387,7 @@ def test_concurrent_threads_publishing_into_one_ledger_lose_nothing(
     monkeypatch.setattr(_NormalizationLedger, "publish", publish_together)
     errors: list[BaseException] = []
 
-    def apply_one(copied: contextvars.Context, order_input: object):
+    def apply_one(copied: contextvars.Context, order_input: object) -> None:
         copied.run(ConcurrentOrder.apply_sync, order_input, Book.objects.all(), info)
 
     with capture_applied_order_normalization():
@@ -2402,7 +2410,7 @@ def test_concurrent_threads_publishing_into_one_ledger_lose_nothing(
         assert {id(record.input_value) for record in attested} == {id(value) for value in inputs}
 
 
-def test_validate_normalized_terms_rejects_hostile_container_and_string_subclasses():
+def test_validate_normalized_terms_rejects_hostile_container_and_string_subclasses() -> None:
     """Every boundary shape is pinned by EXACT type, so no consumer hook can fire.
 
     A ``list`` subclass would run its ``__iter__`` in the validation loop, a
@@ -2415,13 +2423,13 @@ def test_validate_normalized_terms_rejects_hostile_container_and_string_subclass
 
     class HostileList(list[object]):
         @override
-        def __iter__(self):
+        def __iter__(self) -> Iterator[object]:
             fired.append("list.__iter__")
             return super().__iter__()
 
     class HostileTuple(tuple[object, ...]):
         @override
-        def __len__(self):
+        def __len__(self) -> int:
             fired.append("tuple.__len__")
             return super().__len__()
 
@@ -2436,14 +2444,14 @@ def test_validate_normalized_terms_rejects_hostile_container_and_string_subclass
 
     class HostileStr(str):
         @override
-        def __eq__(self, other: object):
+        def __eq__(self, other: object) -> NoReturn:
             fired.append("str.__eq__")
             raise RuntimeError("hostile equality ran")
 
         __hash__ = str.__hash__
 
         @override
-        def __format__(self, spec: str):
+        def __format__(self, spec: str) -> str:
             fired.append("str.__format__")
             raise RuntimeError("hostile format ran")
 
@@ -2493,26 +2501,26 @@ def test_validate_normalized_terms_rejects_hostile_container_and_string_subclass
     assert _validate_normalized_terms(HostileOrder, good) is good
 
 
-def test_input_has_active_terms_hostile_eq_and_repr():
+def test_input_has_active_terms_hostile_eq_and_repr() -> None:
     """Hostile non-primitive terms returned by _normalize_input raise ConfigurationError."""
 
     class HostileEqTerm:
-        def __init__(self, val: object):
+        def __init__(self, val: object) -> None:
             self.val = val
 
         @override
-        def __eq__(self, other: object):
+        def __eq__(self, other: object) -> NoReturn:
             raise RuntimeError("hostile __eq__ called")
 
         # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
         __hash__ = None  # pyright: ignore[reportAssignmentType]
 
     class HostileReprTerm:
-        def __init__(self, val: object):
+        def __init__(self, val: object) -> None:
             self.val = val
 
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("hostile __repr__ called")
 
     # Hostile non-str path rejected during boundary validation
@@ -2524,7 +2532,7 @@ def test_input_has_active_terms_hostile_eq_and_repr():
         @classmethod
         @override
         # basedpyright: deliberately a non-str key, the invalid term the boundary refuses
-        def _normalize_input(cls, input_value: object):  # pyright: ignore[reportIncompatibleMethodOverride]
+        def _normalize_input(cls, input_value: object) -> list[tuple[object, Ordering | None]]:  # pyright: ignore[reportIncompatibleMethodOverride]
             return [("title", Ordering.ASC), (HostileEqTerm("custom"), None)]
 
     with pytest.raises(
@@ -2542,7 +2550,7 @@ def test_input_has_active_terms_hostile_eq_and_repr():
         @classmethod
         @override
         # basedpyright: deliberately a non-Ordering direction, the invalid term the boundary refuses
-        def _normalize_input(cls, input_value: object):  # pyright: ignore[reportIncompatibleMethodOverride]
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, object]]:  # pyright: ignore[reportIncompatibleMethodOverride]
             return [("title", HostileReprTerm("boom"))]
 
     with pytest.raises(ConfigurationError) as exc_info:
@@ -2551,8 +2559,8 @@ def test_input_has_active_terms_hostile_eq_and_repr():
     assert "<unprintable" in str(exc_info.value)
 
 
-def test_input_has_active_terms_public_apply_override_independence():
-    """Pin that overriding public apply without delegating leaves helper as an independent post-success query."""
+def test_input_has_active_terms_public_apply_override_independence() -> None:
+    """Overriding public apply without delegating leaves the helper an independent post-success query."""
 
     class CustomApplyOrder(OrderSet):
         class Meta:
@@ -2567,7 +2575,7 @@ def test_input_has_active_terms_public_apply_override_independence():
             queryset: QuerySet[_M],
             info: object,
             **kwargs: object,
-        ):
+        ) -> QuerySet[_M]:
             return queryset.filter(pk__gt=0)
 
         @classmethod
@@ -2578,7 +2586,7 @@ def test_input_has_active_terms_public_apply_override_independence():
             queryset: QuerySet[_M],
             info: object,
             **kwargs: object,
-        ):
+        ) -> QuerySet[_M]:
             return queryset.filter(pk__gt=0)
 
     factory = OrderArgumentsFactory(CustomApplyOrder)
@@ -2603,7 +2611,7 @@ def test_input_has_active_terms_public_apply_override_independence():
 def test_input_has_active_terms_purity_violation(
     first_return: list[tuple[str, Ordering | None]],
     second_return: list[tuple[str, Ordering | None]],
-):
+) -> None:
     """Impure _normalize_input raising disagreement raises ConfigurationError naming the method."""
 
     class ImpureOrder(OrderSet):
@@ -2628,7 +2636,7 @@ def test_input_has_active_terms_purity_violation(
         ImpureOrder._input_has_active_terms([{"title": "dummy"}])
 
 
-def test_orderset_normalize_input_validation_contract():
+def test_orderset_normalize_input_validation_contract() -> None:
     """_validate_normalized_terms enforces the declared return contract at the pipeline boundary."""
 
     class NonListOrder(OrderSet):
@@ -2639,7 +2647,7 @@ def test_orderset_normalize_input_validation_contract():
         @classmethod
         @override
         # basedpyright: deliberately a dict, the invalid data the boundary refuses
-        def _normalize_input(cls, input_value: object):  # pyright: ignore[reportIncompatibleMethodOverride]
+        def _normalize_input(cls, input_value: object) -> dict[str, Ordering]:  # pyright: ignore[reportIncompatibleMethodOverride]
             return {"title": Ordering.ASC}
 
     with pytest.raises(
@@ -2656,7 +2664,7 @@ def test_orderset_normalize_input_validation_contract():
         @classmethod
         @override
         # basedpyright: deliberately list terms, the invalid term shape the boundary refuses
-        def _normalize_input(cls, input_value: object):  # pyright: ignore[reportIncompatibleMethodOverride]
+        def _normalize_input(cls, input_value: object) -> list[list[str | Ordering]]:  # pyright: ignore[reportIncompatibleMethodOverride]
             return [["title", Ordering.ASC]]
 
     with pytest.raises(
@@ -2673,7 +2681,7 @@ def test_orderset_normalize_input_validation_contract():
         @classmethod
         @override
         # basedpyright: deliberately a str direction, the invalid term the boundary refuses
-        def _normalize_input(cls, input_value: object):  # pyright: ignore[reportIncompatibleMethodOverride]
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, str]]:  # pyright: ignore[reportIncompatibleMethodOverride]
             return [("title", "ASC")]
 
     with pytest.raises(
@@ -2695,7 +2703,7 @@ def test_orderset_normalize_input_validation_contract():
 # ``examples/fakeshop/test_query/test_list_field_api.py``.
 
 
-def test_a_task_that_outlives_the_scope_cannot_reopen_the_closed_ledger():
+def test_a_task_that_outlives_the_scope_cannot_reopen_the_closed_ledger() -> None:
     """A delayed child's apply finds a closed ledger and attests nowhere.
 
     ``asyncio.create_task`` inside a live scope hands the child a context that
@@ -2724,7 +2732,7 @@ def test_a_task_that_outlives_the_scope_cannot_reopen_the_closed_ledger():
 
         @classmethod
         @override
-        def _normalize_input(cls, input_value: object):
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             cls.normalize_count += 1
             return super()._normalize_input(input_value)
 
@@ -2733,7 +2741,7 @@ def test_a_task_that_outlives_the_scope_cannot_reopen_the_closed_ledger():
     released = asyncio.Event()
     observed: dict[str, object] = {}
 
-    async def child():
+    async def child() -> None:
         await released.wait()
         # Inside the child's own copied context the binding is still the parent's
         # ledger object - which is precisely why emptying it would not be enough.
@@ -2744,7 +2752,7 @@ def test_a_task_that_outlives_the_scope_cannot_reopen_the_closed_ledger():
         observed["claim"] = ledger.claim(OutlivingOrder, order_input)
         observed["active"] = OutlivingOrder._input_has_active_terms(order_input)
 
-    async def parent():
+    async def parent() -> None:
         with capture_applied_order_normalization():
             # Created INSIDE the live scope, so the task's copied context binds
             # the ledger; it does not run until the scope is long gone.
@@ -2761,7 +2769,7 @@ def test_a_task_that_outlives_the_scope_cannot_reopen_the_closed_ledger():
     assert OutlivingOrder.normalize_count == 3
 
 
-def test_a_worker_thread_that_outlives_the_scope_cannot_reopen_the_closed_ledger():
+def test_a_worker_thread_that_outlives_the_scope_cannot_reopen_the_closed_ledger() -> None:
     """The same tombstone through ``copy_context()`` and a real worker thread.
 
     The thread handoff is the shape ``sync_to_async`` takes, and a worker can
@@ -2785,7 +2793,7 @@ def test_a_worker_thread_that_outlives_the_scope_cannot_reopen_the_closed_ledger
     # The scope is over; the copied context still binds the same object.
     assert copied[_ORDER_NORMALIZATION_CAPTURE] is ledger
 
-    def apply_in_worker():
+    def apply_in_worker() -> None:
         copied.run(OutlivingWorkerOrder.apply_sync, worker_input, Book.objects.all(), info)
 
     worker = threading.Thread(target=apply_in_worker)
@@ -2797,7 +2805,9 @@ def test_a_worker_thread_that_outlives_the_scope_cannot_reopen_the_closed_ledger
     assert _ORDER_NORMALIZATION_CAPTURE.get() is None
 
 
-def test_a_failing_binding_reset_still_leaves_the_ledger_closed(monkeypatch: pytest.MonkeyPatch):
+def test_a_failing_binding_reset_still_leaves_the_ledger_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Closure runs first and in its own ``finally``; a broken reset cannot skip it.
 
     The tombstone is what descendants observe, so it must be set even when
@@ -2810,13 +2820,16 @@ def test_a_failing_binding_reset_still_leaves_the_ledger_closed(monkeypatch: pyt
     class _ResetFails:
         """Delegates the binding, refuses to tear it down."""
 
-        def get(self):
+        def get(self) -> _NormalizationLedger | None:
             return real.get()
 
-        def set(self, value: _NormalizationLedger | None):
+        def set(
+            self,
+            value: _NormalizationLedger | None,
+        ) -> contextvars.Token[_NormalizationLedger | None]:
             return real.set(value)
 
-        def reset(self, token: contextvars.Token[_NormalizationLedger | None]):
+        def reset(self, token: contextvars.Token[_NormalizationLedger | None]) -> NoReturn:
             real.reset(token)
             raise RuntimeError("reset failed")
 
@@ -2831,9 +2844,8 @@ def test_a_failing_binding_reset_still_leaves_the_ledger_closed(monkeypatch: pyt
     order_input = [ResetInput(title=Ordering.ASC)]
     escaped: dict[str, object] = {}
 
-    with pytest.raises(RuntimeError, match="reset failed"):
-        with capture_applied_order_normalization():
-            escaped["ledger"] = sets_module._ORDER_NORMALIZATION_CAPTURE.get()
+    with pytest.raises(RuntimeError, match="reset failed"), capture_applied_order_normalization():
+        escaped["ledger"] = sets_module._ORDER_NORMALIZATION_CAPTURE.get()
 
     ledger = escaped["ledger"]
     assert isinstance(ledger, _NormalizationLedger)
@@ -2847,7 +2859,13 @@ def test_a_failing_binding_reset_still_leaves_the_ledger_closed(monkeypatch: pyt
 # ---------------------------------------------------------------------------
 
 
-def _hiding_type(model: type[Model], type_name: str, *, primary: bool = True, **hidden: object):
+def _hiding_type(
+    model: type[Model],
+    type_name: str,
+    *,
+    primary: bool = True,
+    **hidden: object,
+) -> type[DjangoType]:
     """Register a type for ``model`` whose ``get_queryset`` hides the rows matching ``hidden``."""
 
     def get_queryset(
@@ -2855,7 +2873,7 @@ def _hiding_type(model: type[Model], type_name: str, *, primary: bool = True, **
         queryset: QuerySet[Model],
         _info: object,
         **_kwargs: object,
-    ):
+    ) -> QuerySet[Model]:
         return queryset.exclude(**hidden)
 
     return type(
@@ -2868,7 +2886,7 @@ def _hiding_type(model: type[Model], type_name: str, *, primary: bool = True, **
     )
 
 
-def _plain_type(model: type[Model], name: str):
+def _plain_type(model: type[Model], name: str) -> type[DjangoType]:
     """Register a type for ``model`` that keeps the identity ``get_queryset``."""
     return type(
         name,
@@ -2878,7 +2896,7 @@ def _plain_type(model: type[Model], name: str):
 
 
 @pytest.mark.usefixtures("isolate_global_registry")
-def test_scoped_hops_read_only_relations_whose_type_hides_rows():
+def test_scoped_hops_read_only_relations_whose_type_hides_rows() -> None:
     """A relation is scoped by a registered type with its own hook; nothing else is."""
     shelf_type = _hiding_type(Shelf, "HidingShelfType", topic="secret")
     _plain_type(Branch, "PlainBranchType")
@@ -2895,7 +2913,7 @@ def test_scoped_hops_read_only_relations_whose_type_hides_rows():
 
 
 @pytest.mark.usefixtures("isolate_global_registry")
-def test_scoped_hops_read_every_hop_of_an_undeclared_to_many_path():
+def test_scoped_hops_read_every_hop_of_an_undeclared_to_many_path() -> None:
     """Each relation segment is one hop, joined by the path that reaches it."""
     book_type = _hiding_type(Book, "HidingBookType", circulation_status="repair")
     shelf_type = _hiding_type(Shelf, "HidingShelfType", topic="secret")
@@ -2912,7 +2930,7 @@ def test_scoped_hops_read_every_hop_of_an_undeclared_to_many_path():
 
 
 @pytest.mark.usefixtures("isolate_global_registry")
-def test_scoped_hops_read_a_pk_segment_on_a_relation_keyed_model_as_that_relation():
+def test_scoped_hops_read_a_pk_segment_on_a_relation_keyed_model_as_that_relation() -> None:
     """``pk`` on ``PatronProfile`` (keyed by ``patron``) is the relation, named by its field."""
     from apps.library.models import Patron, PatronProfile
 
@@ -2927,7 +2945,7 @@ def test_scoped_hops_read_a_pk_segment_on_a_relation_keyed_model_as_that_relatio
 
 
 @pytest.mark.usefixtures("isolate_global_registry")
-def test_scoped_hops_read_a_declared_hop_through_its_target_sets_bound_type():
+def test_scoped_hops_read_a_declared_hop_through_its_target_sets_bound_type() -> None:
     """A ``RelatedOrder`` hop answers for the type its target set is bound to, not the primary."""
     primary = _hiding_type(Shelf, "PrimaryShelfType", topic="secret")
     secondary = _hiding_type(Shelf, "SecondaryShelfType", primary=False, topic="private")
@@ -2956,7 +2974,7 @@ def test_scoped_hops_read_a_declared_hop_through_its_target_sets_bound_type():
 
 
 @pytest.mark.usefixtures("isolate_global_registry")
-def test_scoped_hops_read_the_intermediate_model_of_a_multi_relation_declaration():
+def test_scoped_hops_read_the_intermediate_model_of_a_multi_relation_declaration() -> None:
     """``RelatedOrder(field_name="shelf__branch")`` passes through the shelf's type too."""
     shelf_type = _hiding_type(Shelf, "HidingShelfType", topic="secret")
     branch_type = _hiding_type(Branch, "HidingBranchType", city="restricted")
@@ -2980,7 +2998,7 @@ def test_scoped_hops_read_the_intermediate_model_of_a_multi_relation_declaration
 
 
 @pytest.mark.usefixtures("isolate_global_registry")
-def test_scoped_hops_reentering_the_sets_model_read_the_type_the_set_is_bound_to():
+def test_scoped_hops_reentering_the_sets_model_read_the_type_the_set_is_bound_to() -> None:
     """A path back into the set's own model reads its bound type, not the model's primary."""
     _hiding_type(Shelf, "PrimaryShelfType", topic="secret")
     secondary = _hiding_type(Shelf, "SecondaryShelfType", primary=False, topic="private")
@@ -2997,7 +3015,7 @@ def test_scoped_hops_reentering_the_sets_model_read_the_type_the_set_is_bound_to
     )
 
 
-def _secret_and_mid_shelf_books():
+def _secret_and_mid_shelf_books() -> None:
     """Two books on a ``secret`` and an ``mmm`` shelf, each in its own genre."""
     branch = Branch.objects.create(name="home")
     secret = Shelf.objects.create(branch=branch, code="S1", topic="secret")
@@ -3038,7 +3056,7 @@ def test_apply_async_awaits_an_async_only_hook_behind_a_related_term(
     fields: list[str],
     order_input: list[dict[str, Ordering]],
     expected: list[str],
-):
+) -> None:
     """``apply_async`` derives an async-only target ``get_queryset`` up front; ``apply_sync`` refuses it."""
     from asgiref.sync import sync_to_async
 
@@ -3049,7 +3067,7 @@ def test_apply_async_awaits_an_async_only_hook_behind_a_related_term(
         queryset: QuerySet[Model],
         _info: object,
         **_kwargs: object,
-    ):
+    ) -> QuerySet[Model]:
         return await sync_to_async(lambda: queryset.exclude(topic="secret"))()
 
     type(
@@ -3072,13 +3090,13 @@ def test_apply_async_awaits_an_async_only_hook_behind_a_related_term(
     )
     label = "title" if model is Book else "name"
     assert list(ordered.values_list(label, flat=True)) == expected
-    with pytest.raises(SyncMisuseError, match="await OrderSet.apply_async"):
+    with pytest.raises(SyncMisuseError, match=r"await OrderSet\.apply_async"):
         async_order.apply_sync(order_input, model._default_manager.all(), _make_info())
 
 
 @pytest.mark.django_db
 @pytest.mark.usefixtures("isolate_global_registry")
-def test_declared_hop_orders_by_the_rows_its_target_sets_bound_type_shows():
+def test_declared_hop_orders_by_the_rows_its_target_sets_bound_type_shows() -> None:
     """Ordering through a ``RelatedOrder`` reads the bound secondary's hook, not the primary's."""
     _hiding_type(Shelf, "PrimaryShelfType", topic="mmm")
     secondary = _hiding_type(Shelf, "SecondaryShelfType", primary=False, topic="secret")
@@ -3108,7 +3126,7 @@ def test_declared_hop_orders_by_the_rows_its_target_sets_bound_type_shows():
 
 @pytest.mark.django_db
 @pytest.mark.usefixtures("isolate_global_registry")
-def test_reentering_path_orders_by_the_rows_the_sets_bound_type_shows():
+def test_reentering_path_orders_by_the_rows_the_sets_bound_type_shows() -> None:
     """``books__shelf__topic`` from a shelf set bound to the secondary reads the secondary's hook."""
     _hiding_type(Shelf, "PrimaryShelfType", topic="mmm")
     secondary = _hiding_type(Shelf, "SecondaryShelfType", primary=False, topic="secret")

@@ -28,7 +28,7 @@ def _write(root: Path, relative_path: str) -> Path:
 def test_clean_up_targets_current_generated_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The cleaner deletes generated artifacts and leaves standing docs plus worker-memory shells."""
     monkeypatch.setattr(clean_up, "REPO_ROOT", tmp_path)
 
@@ -74,7 +74,7 @@ def test_clean_up_targets_current_generated_artifacts(
     assert (tmp_path / "docs/dry/worker-memory").exists()
 
 
-def test_clean_up_glob_matches_the_bug_hunt_output_name():
+def test_clean_up_glob_matches_the_bug_hunt_output_name() -> None:
     """The cleaner's glob must agree with the name ``bug_hunt.py`` writes.
 
     ``bug_hunt.py::main`` writes ``docs/bug_hunt/bug_hunt-<release>.md`` with the

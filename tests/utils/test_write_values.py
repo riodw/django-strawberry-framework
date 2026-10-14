@@ -21,6 +21,7 @@ from django.db.models import Model
 from strawberry import relay
 from typing_extensions import override
 
+from django_strawberry_framework.mutations.inputs import FieldError
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils.errors import field_error
 from django_strawberry_framework.utils.inputs import (
@@ -52,8 +53,6 @@ from tests._info import make_info, unread_info
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import TypeAlias
-
-    from django_strawberry_framework.mutations.inputs import FieldError
 
     _FieldHandler: TypeAlias = Callable[[InputFieldSpec, object], FieldError | None]
 
@@ -89,11 +88,11 @@ def _isolate_registry() -> Iterator[None]:
 
 
 @pytest.mark.django_db
-def test_decode_layers_preserve_omitted_null_and_provided_values():
+def test_decode_layers_preserve_omitted_null_and_provided_values() -> None:
     """The shared gate never collapses omitted, explicit-null, and provided input states."""
     decoded: dict[str, object] = {}
 
-    def relation_handler(spec: InputFieldSpec, value: object):
+    def relation_handler(spec: InputFieldSpec, value: object) -> FieldError | None:
         related_model = spec.related_model
         assert related_model is not None
         result, error = decode_visible_relation(
@@ -109,7 +108,7 @@ def test_decode_layers_preserve_omitted_null_and_provided_values():
             decoded[spec.input_attr] = result
         return error
 
-    def scalar_handler(spec: InputFieldSpec, value: object):
+    def scalar_handler(spec: InputFieldSpec, value: object) -> FieldError | None:
         result, error = decode_scalar_leaf(spec.graphql_name, value)
         if error is None:
             decoded[spec.input_attr] = result
@@ -145,7 +144,9 @@ def test_decode_layers_preserve_omitted_null_and_provided_values():
 
 
 @pytest.mark.django_db
-def test_decode_visible_relation_ids_rejects_uncoercible_member_without_a_visibility_query():
+def test_decode_visible_relation_ids_rejects_uncoercible_member_without_a_visibility_query() -> (
+    None
+):
     """A string member fails the type check before any ``pk__in``; GraphQL ``[Int!]`` never delivers it."""
     from django.db import connection
     from django.test.utils import CaptureQueriesContext
@@ -167,11 +168,11 @@ def test_decode_visible_relation_ids_rejects_uncoercible_member_without_a_visibi
     assert ctx.captured_queries == []
 
 
-def test_decode_visible_relation_ids_maps_malformed_containers_to_relation_error():
+def test_decode_visible_relation_ids_maps_malformed_containers_to_relation_error() -> None:
     """A non-iterable or iterator failure stays inside the field error envelope."""
 
     class HostileIterator:
-        def __iter__(self):
+        def __iter__(self) -> NoReturn:
             raise RuntimeError("hostile relation iterator")
 
     for values in (object(), HostileIterator()):
@@ -187,7 +188,7 @@ def test_decode_visible_relation_ids_maps_malformed_containers_to_relation_error
         assert error.field == "categoryIds"
 
 
-def test_materialize_relation_id_container_rejects_text_mapping_and_non_iterable_atoms():
+def test_materialize_relation_id_container_rejects_text_mapping_and_non_iterable_atoms() -> None:
     """Text / mapping atoms (including SUBCLASSES) and non-iterables are the uniform error.
 
     A text atom iterated would decompose into per-character "ids" and a mapping
@@ -219,7 +220,7 @@ def test_materialize_relation_id_container_rejects_text_mapping_and_non_iterable
         assert error.field == "categoryIds"
 
 
-def test_materialize_relation_id_container_materializes_once_and_contains_failures():
+def test_materialize_relation_id_container_materializes_once_and_contains_failures() -> None:
     """Legitimate iterables materialize ONCE; iteration failures stay in the envelope.
 
     A one-shot generator is fully consumed by the materialization (exactly one
@@ -234,22 +235,22 @@ def test_materialize_relation_id_container_materializes_once_and_contains_failur
 
     consumed: list[int] = []
 
-    def _one_shot():
+    def _one_shot() -> Iterator[int]:
         for item in (1, 2):
             consumed.append(item)
             yield item
 
     class _MidwayRaise:
-        def __iter__(self):
+        def __iter__(self) -> Iterator[int]:
             yield 1
             raise RuntimeError("midway")
 
     class _BaseExceptionIter:
-        def __iter__(self):
+        def __iter__(self) -> NoReturn:
             raise _HostileBaseException("hostile")
 
     class _NonIterator:
-        def __iter__(self):
+        def __iter__(self) -> int:
             return 42  # not an iterator
 
     provided_values, error = materialize_relation_id_container(_one_shot(), "categoryIds")
@@ -270,7 +271,7 @@ def _spec(
     kind: str,
     target: str | None = None,
     graphql: str | None = None,
-):
+) -> InputFieldSpec:
     return InputFieldSpec(
         input_attr=attr,
         graphql_name=graphql or attr,
@@ -280,7 +281,7 @@ def _spec(
     )
 
 
-def test_store_decoded_writes_target_or_returns_error():
+def test_store_decoded_writes_target_or_returns_error() -> None:
     """The store glue writes ``target_name`` on success and leaves dest untouched on error."""
     dest: dict[str, object] = {}
     spec = _spec(attr="name", kind=SCALAR, target="title", graphql="displayName")
@@ -293,12 +294,12 @@ def test_store_decoded_writes_target_or_returns_error():
     assert dest == {}
 
 
-def test_decode_scalar_leaf_rejects_hostile_string_subclass_encoding():
+def test_decode_scalar_leaf_rejects_hostile_string_subclass_encoding() -> None:
     """Unicode preflight must not dispatch a consumer string subclass's ``encode``."""
 
     class HostileText(str):
         @override
-        def encode(self, *args: object, **kwargs: object):
+        def encode(self, *args: object, **kwargs: object) -> bytes:
             return b""
 
     decoded, error = decode_scalar_leaf("name", HostileText("\ud800"))
@@ -307,12 +308,12 @@ def test_decode_scalar_leaf_rejects_hostile_string_subclass_encoding():
     assert error.field == "name"
 
 
-def test_decode_scalar_leaf_normalizes_string_subclass_after_preflight():
+def test_decode_scalar_leaf_normalizes_string_subclass_after_preflight() -> None:
     """A valid string subclass is stored as an exact ``str``, not consumer code."""
 
     class HostileText(str):
         @override
-        def __str__(self):
+        def __str__(self) -> str:
             raise AssertionError("storage must not dispatch the override")
 
     decoded, error = decode_scalar_leaf("name", HostileText("valid"))
@@ -326,7 +327,7 @@ class _Flag(Enum):
     on = "on"
 
 
-def test_raw_choice_value_unwraps_list_elements():
+def test_raw_choice_value_unwraps_list_elements() -> None:
     """A list-of-choices value arrives as members; each is unwrapped, ``BLANK`` to ``""``."""
     members = [
         _Flag.BLANK,
@@ -350,7 +351,7 @@ def test_raw_choice_value_unwraps_list_elements():
     ]
 
 
-def test_raw_choice_value_unwraps_one_level_only():
+def test_raw_choice_value_unwraps_one_level_only() -> None:
     """A nested list is a JSON value, which never carries a member: it passes through untouched."""
     nested = [[_Flag.on]]
     decoded = raw_choice_value(nested)
@@ -359,7 +360,7 @@ def test_raw_choice_value_unwraps_one_level_only():
     assert decoded[0] is nested[0]
 
 
-def test_decode_scalar_leaf_checks_choice_value_after_unwrapping():
+def test_decode_scalar_leaf_checks_choice_value_after_unwrapping() -> None:
     """An enum's raw storage string receives the Unicode preflight."""
 
     class InvalidTextChoice(Enum):
@@ -405,14 +406,14 @@ class _HidingDict(dict[object, object]):
 def test_unencodable_text_error_reads_containers_through_the_base_slots(
     value: object,
     error_field: str,
-):
+) -> None:
     """A list / dict subclass's overridden iteration cannot hide an unstorable leaf."""
     error = unencodable_text_error("tags", value)
     assert error is not None
     assert error.field == error_field
 
 
-def test_unencodable_text_error_walks_nesting_deeper_than_the_recursion_limit():
+def test_unencodable_text_error_walks_nesting_deeper_than_the_recursion_limit() -> None:
     """The walk keeps an explicit stack, so a deeply nested ``JSON`` value cannot overflow it."""
     depth = sys.getrecursionlimit() * 2
     root: list[object] = []
@@ -428,7 +429,7 @@ def test_unencodable_text_error_walks_nesting_deeper_than_the_recursion_limit():
     assert error.path == ["payload", *(["0"] * (depth + 1))]
 
 
-def test_scalar_into_stores_decoded_leaf_and_keys_errors_to_field_name():
+def test_scalar_into_stores_decoded_leaf_and_keys_errors_to_field_name() -> None:
     """SCALAR handlers share ``decode_scalar_leaf`` + ``store_decoded``; nested paths rekey."""
     dest: dict[str, object] = {}
     spec = _spec(attr="name", kind=SCALAR, target="title", graphql="displayName")
@@ -448,7 +449,7 @@ def test_scalar_into_stores_decoded_leaf_and_keys_errors_to_field_name():
     assert error.field == "parent.displayName"
 
 
-def test_file_into_stores_upload_on_the_supplied_dest():
+def test_file_into_stores_upload_on_the_supplied_dest() -> None:
     """FILE destination is the flavor policy: form ``files=`` vs serializer ``data``."""
     files: dict[str, object] = {}
     data: dict[str, object] = {}
@@ -461,7 +462,7 @@ def test_file_into_stores_upload_on_the_supplied_dest():
     assert data == {"attachment": upload}
 
 
-def test_relation_into_dispatches_single_and_multi_then_stores():
+def test_relation_into_dispatches_single_and_multi_then_stores() -> None:
     """One relation handler picks multi vs single, forwards extras, and stores the result."""
     dest: dict[str, object] = {}
     calls: list[tuple[object, ...]] = []
@@ -470,11 +471,11 @@ def test_relation_into_dispatches_single_and_multi_then_stores():
         value: object,
         *,
         graphql_name: str,
-        # basedpyright: relation_into passes the decoder kwargs by keyword
-        related_model: type[Model],  # pyright: ignore[reportUnusedParameter]
+        related_model: type[Model],
         info: object,
         **extra: object,
-    ):
+    ) -> tuple[str, None]:
+        del related_model  # relation_into passes it by keyword; this stand-in does not read it
         calls.append(
             (
                 "single",
@@ -490,11 +491,11 @@ def test_relation_into_dispatches_single_and_multi_then_stores():
         value: object,
         *,
         graphql_name: str,
-        # basedpyright: relation_into passes the decoder kwargs by keyword
-        related_model: type[Model],  # pyright: ignore[reportUnusedParameter]
+        related_model: type[Model],
         info: object,
         **extra: object,
-    ):
+    ) -> tuple[list[str | object], None]:
+        del related_model  # relation_into passes it by keyword; this stand-in does not read it
         calls.append(
             (
                 "multi",
@@ -546,11 +547,13 @@ def test_relation_into_dispatches_single_and_multi_then_stores():
         _value: object,
         *,
         graphql_name: str,
-        # basedpyright: relation_into passes the decoder kwargs by keyword
-        related_model: type[Model],  # pyright: ignore[reportUnusedParameter]
-        # basedpyright: relation_into passes the decoder kwargs by keyword
-        info: object,  # pyright: ignore[reportUnusedParameter]
-    ):
+        related_model: type[Model],
+        info: object,
+    ) -> tuple[None, FieldError]:
+        del (
+            related_model,
+            info,
+        )  # relation_into passes it by keyword; this stand-in does not read it
         return None, field_error(graphql_name, "hidden", codes="invalid")
 
     error_handler = relation_into(dest, single=failing, multi=failing, info=unread_info())
@@ -560,7 +563,7 @@ def test_relation_into_dispatches_single_and_multi_then_stores():
     assert dest == {}
 
 
-def test_decoded_into_is_the_store_glue_nested_handlers_use():
+def test_decoded_into_is_the_store_glue_nested_handlers_use() -> None:
     """Nested serializer decode is the same store primitive as SCALAR / FILE / RELATION."""
     dest: dict[str, object] = {}
     spec = _spec(attr="shelves", kind="nested_single", target="shelves")
@@ -572,7 +575,7 @@ def test_decoded_into_is_the_store_glue_nested_handlers_use():
     assert dest == {"shelves": {"n": {"title": "A"}, "k": "shelves"}}
 
 
-def test_decode_field_handlers_split_files_from_data():
+def test_decode_field_handlers_split_files_from_data() -> None:
     """The compose both walks call: FILE dest is optional; SCALAR/RELATION share dest."""
     data: dict[str, object] = {}
     files: dict[str, object] = {}
@@ -583,25 +586,29 @@ def test_decode_field_handlers_split_files_from_data():
     def single(
         value: object,
         *,
-        # basedpyright: relation_into passes the decoder kwargs by keyword
-        graphql_name: str,  # pyright: ignore[reportUnusedParameter]
-        # basedpyright: relation_into passes the decoder kwargs by keyword
-        related_model: type[Model],  # pyright: ignore[reportUnusedParameter]
-        # basedpyright: relation_into passes the decoder kwargs by keyword
-        info: object,  # pyright: ignore[reportUnusedParameter]
-    ):
+        graphql_name: str,
+        related_model: type[Model],
+        info: object,
+    ) -> tuple[str, None]:
+        del (
+            graphql_name,
+            related_model,
+            info,
+        )  # relation_into passes it by keyword; this stand-in does not read it
         return f"pk-{value}", None
 
     def multi(
         _value: object,
         *,
-        # basedpyright: relation_into passes the decoder kwargs by keyword
-        graphql_name: str,  # pyright: ignore[reportUnusedParameter]
-        # basedpyright: relation_into passes the decoder kwargs by keyword
-        related_model: type[Model],  # pyright: ignore[reportUnusedParameter]
-        # basedpyright: relation_into passes the decoder kwargs by keyword
-        info: object,  # pyright: ignore[reportUnusedParameter]
-    ):
+        graphql_name: str,
+        related_model: type[Model],
+        info: object,
+    ) -> NoReturn:
+        del (
+            graphql_name,
+            related_model,
+            info,
+        )  # relation_into passes it by keyword; this stand-in does not read it
         raise AssertionError("multi should not run")
 
     handlers, scalar_handler = decode_field_handlers(
@@ -618,7 +625,7 @@ def test_decode_field_handlers_split_files_from_data():
     assert files == {"attachment": "upload"}
 
 
-def test_form_and_serializer_decode_walks_share_field_handlers():
+def test_form_and_serializer_decode_walks_share_field_handlers() -> None:
     """Form, serializer, and model decode walks import the same store-into-dest compose."""
     from django_strawberry_framework.forms import resolvers as form_resolvers
     from django_strawberry_framework.mutations import resolvers as mutation_resolvers
@@ -638,7 +645,7 @@ def test_form_and_serializer_decode_walks_share_field_handlers():
 
 
 @pytest.mark.django_db
-def test_decode_visible_relation_ids_rejects_non_collection_types():
+def test_decode_visible_relation_ids_rejects_non_collection_types() -> None:
     """Strings, bytes, bytearrays, memoryviews, and mappings are rejected as invalid relation values."""
     category = Category.objects.create(name="NonCollTarget")
     recourse = "Use a synchronous visibility hook."
@@ -663,7 +670,7 @@ def test_decode_visible_relation_ids_rejects_non_collection_types():
         assert error.field == "categoryIds"
 
 
-def test_coerce_relation_pk_or_none_handles_non_models_and_hostile_objects():
+def test_coerce_relation_pk_or_none_handles_non_models_and_hostile_objects() -> None:
     """coerce_relation_pk_or_none returns None without crashing on non-models or hostile objects."""
     # basedpyright: the non-model class is the hostile input under test; coerce_relation_pk_or_none
     # types the parameter as type[Model]
@@ -673,14 +680,14 @@ def test_coerce_relation_pk_or_none_handles_non_models_and_hostile_objects():
     assert coerce_relation_pk_or_none(None, 1) is None  # pyright: ignore[reportArgumentType]
 
     class HostileInt:
-        def __int__(self):
+        def __int__(self) -> int:
             raise RuntimeError("hostile int conversion")
 
     assert coerce_relation_pk_or_none(Category, HostileInt()) is None
     assert coerce_relation_pk_or_none(Category, object()) is None
 
 
-def test_decode_provided_fields_tolerates_unmapped_input_fields():
+def test_decode_provided_fields_tolerates_unmapped_input_fields() -> None:
     """Input fields present on the data object but not declared in specs are safely skipped."""
 
     @strawberry.input
@@ -703,7 +710,7 @@ def test_decode_provided_fields_tolerates_unmapped_input_fields():
     assert dest == {"name": "Test"}
 
 
-def test_decode_provided_fields_handles_none_and_non_strawberry_data():
+def test_decode_provided_fields_handles_none_and_non_strawberry_data() -> None:
     """decode_provided_fields safely treats None and non-strawberry data as empty without crashing."""
     dest: dict[str, object] = {}
     specs = [_spec(attr="name", kind=SCALAR, target="name")]
@@ -733,7 +740,7 @@ def test_decode_provided_fields_handles_none_and_non_strawberry_data():
     assert dest == {}
 
 
-def test_unencodable_text_error_handles_non_strings_and_valid_strings():
+def test_unencodable_text_error_handles_non_strings_and_valid_strings() -> None:
     """unencodable_text_error returns None for non-strings and valid UTF-8 strings."""
     assert unencodable_text_error("field", None) is None
     assert unencodable_text_error("field", 123) is None
@@ -747,7 +754,7 @@ def test_unencodable_text_error_handles_non_strings_and_valid_strings():
 
 
 @pytest.mark.django_db
-def test_decode_visible_relation_handles_invalid_id_and_missing_object():
+def test_decode_visible_relation_handles_invalid_id_and_missing_object() -> None:
     """decode_visible_relation returns field errors for type-check failure or missing/hidden object."""
     recourse = "Use a synchronous visibility hook."
 
@@ -780,7 +787,7 @@ def test_decode_visible_relation_handles_invalid_id_and_missing_object():
     assert error.field == "categoryId"
 
 
-def test_decode_provided_fields_short_circuits_on_handler_error():
+def test_decode_provided_fields_short_circuits_on_handler_error() -> None:
     """decode_provided_fields immediately halts and returns the error from a failing handler."""
 
     @strawberry.input
@@ -795,11 +802,11 @@ def test_decode_provided_fields_short_circuits_on_handler_error():
     failing_handler_called: list[tuple[str, object]] = []
     scalar_handler_called: list[tuple[str, object]] = []
 
-    def failing_handler(spec: InputFieldSpec, val: object):
+    def failing_handler(spec: InputFieldSpec, val: object) -> FieldError:
         failing_handler_called.append((spec.input_attr, val))
         return field_error(spec.graphql_name, "handler failed", codes="custom_error")
 
-    def dummy_scalar(spec: InputFieldSpec, val: object):
+    def dummy_scalar(spec: InputFieldSpec, val: object) -> None:
         scalar_handler_called.append((spec.input_attr, val))
 
     error = decode_provided_fields(
@@ -816,7 +823,7 @@ def test_decode_provided_fields_short_circuits_on_handler_error():
 
 
 @pytest.mark.django_db
-def test_decode_visible_relation_ids_accepts_global_id_members_with_one_query():
+def test_decode_visible_relation_ids_accepts_global_id_members_with_one_query() -> None:
     """GlobalID members decode end-to-end at the batch seam and still batch to ONE query.
 
     A valid ``GlobalID`` beside a raw pk decodes both to real pks and confirms
@@ -872,7 +879,7 @@ def test_decode_visible_relation_ids_accepts_global_id_members_with_one_query():
 
 
 @pytest.mark.django_db
-def test_decode_visible_relation_ids_accepts_duplicate_pks_with_one_query():
+def test_decode_visible_relation_ids_accepts_duplicate_pks_with_one_query() -> None:
     """Duplicate pks are a subset check, not a count match: the decode keeps the duplicates.
 
     Live ``test_serializer_m2m_duplicate_alt_branch_pks_still_one_visibility_query``
@@ -899,7 +906,7 @@ def test_decode_visible_relation_ids_accepts_duplicate_pks_with_one_query():
 
 
 @pytest.mark.django_db
-def test_decode_visible_relation_ids_answers_the_key_a_non_pk_relation_stores():
+def test_decode_visible_relation_ids_answers_the_key_a_non_pk_relation_stores() -> None:
     """The ids name rows by pk; the answer is each row's ``key_attname`` value, in input order.
 
     A relation keyed by a column other than the pk stores that column's value, read
@@ -913,7 +920,7 @@ def test_decode_visible_relation_ids_answers_the_key_a_non_pk_relation_stores():
     other = NullableScalarSpecimen.objects.create(label="Other")
     unkeyed = NullableScalarSpecimen.objects.create(label=None)
 
-    def decode(pks: list[object]):
+    def decode(pks: list[object]) -> tuple[list[object] | None, FieldError | None]:
         return decode_visible_relation_ids(
             pks,
             graphql_name="partnerIds",
@@ -935,7 +942,7 @@ def test_decode_visible_relation_ids_answers_the_key_a_non_pk_relation_stores():
 
 
 @pytest.mark.django_db
-def test_decode_visible_relation_ids_materializes_generators_once_and_clears_empty():
+def test_decode_visible_relation_ids_materializes_generators_once_and_clears_empty() -> None:
     """A one-shot generator container is materialized ONCE; an empty one clears query-free.
 
     End-to-end over the batch seam: the container is consumed exactly once by
@@ -949,7 +956,7 @@ def test_decode_visible_relation_ids_materializes_generators_once_and_clears_emp
     created = [Category.objects.create(name=f"Gen{i}") for i in range(2)]
     consumed: list[int] = []
 
-    def _one_shot():
+    def _one_shot() -> Iterator[int]:
         for item in created:
             consumed.append(item.pk)
             yield item.pk
@@ -982,7 +989,7 @@ def test_decode_visible_relation_ids_materializes_generators_once_and_clears_emp
 
 
 @pytest.mark.django_db
-def test_decode_visible_relation_ids_coercion_and_null_boundaries_stay_contained():
+def test_decode_visible_relation_ids_coercion_and_null_boundaries_stay_contained() -> None:
     """Hostile member shapes collapse to the uniform error or coerce visibly - never raw.
 
     ``None`` as a MEMBER or as the whole container, an out-of-range int (the
@@ -1044,7 +1051,7 @@ def _relation_decoder_never_called(*_args: object, **_kwargs: object) -> NoRetur
     raise AssertionError("the relation decoders must not run")
 
 
-def test_decode_field_handlers_extra_handlers_override_the_scalar_kind():
+def test_decode_field_handlers_extra_handlers_override_the_scalar_kind() -> None:
     """``extra_handlers`` entries are FULL handlers and replace the scalar fallback.
 
     The spread-last map keys by ``spec.kind``, so an override under the scalar
@@ -1059,7 +1066,7 @@ def test_decode_field_handlers_extra_handlers_override_the_scalar_kind():
 
     dest: dict[str, object] = {}
 
-    def custom(spec: InputFieldSpec, value: object):
+    def custom(spec: InputFieldSpec, value: object) -> None:
         dest[spec.target_name] = f"custom-{value}"
 
     handlers, _ = decode_field_handlers(
@@ -1074,7 +1081,7 @@ def test_decode_field_handlers_extra_handlers_override_the_scalar_kind():
         [spec],
         NameInput(),
         handlers=handlers,
-        scalar_handler=lambda item, value: (_ for _ in ()).throw(AssertionError("default ran")),
+        scalar_handler=lambda _item, _value: (_ for _ in ()).throw(AssertionError("default ran")),
     )
     assert error is None
     assert dest == {"name": "custom-x"}

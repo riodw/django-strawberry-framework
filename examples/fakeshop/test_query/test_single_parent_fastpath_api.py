@@ -40,7 +40,7 @@ from graphql_client import post_graphql as _post_graphql
 from django_strawberry_framework.testing import TestClient
 
 
-def _seed_periodical(name: str, count: int, *, embargoed: bool = False):
+def _seed_periodical(name: str, count: int, *, embargoed: bool = False) -> models.Periodical:
     """One periodical named ``name`` with issues #1..#count (newest-first window order)."""
     periodical = models.Periodical.objects.create(name=name)
     for number in range(1, count + 1):
@@ -53,7 +53,7 @@ def _seed_periodical(name: str, count: int, *, embargoed: bool = False):
     return periodical
 
 
-def _seed_one_genre_with_books(*titles: str):
+def _seed_one_genre_with_books(*titles: str) -> models.Genre:
     """One genre with ``titles`` books via the reverse M2M (THROUGH_TABLE substrate)."""
     genre = models.Genre.objects.create(name="Speculative")
     branch = models.Branch.objects.create(name="Central", city="Boston")
@@ -64,7 +64,7 @@ def _seed_one_genre_with_books(*titles: str):
     return genre
 
 
-def _capture(query: str):
+def _capture(query: str) -> tuple[JSONObject, CaptureQueriesContext]:
     """Post an anonymous GraphQL query, returning ``(payload, captured)``."""
     with CaptureQueriesContext(connection) as captured:
         response = _post_graphql(query)
@@ -74,7 +74,7 @@ def _capture(query: str):
     return payload, captured
 
 
-def _capture_as_staff(query: str):
+def _capture_as_staff(query: str) -> tuple[JSONObject, CaptureQueriesContext]:
     """Post a GraphQL query authenticated as a fresh staff user, returning ``(payload, captured)``.
 
     Staff bypasses every library ``get_queryset`` visibility hook, so the child
@@ -87,9 +87,8 @@ def _capture_as_staff(query: str):
         defaults={"is_staff": True},
     )
     client = TestClient()
-    with CaptureQueriesContext(connection) as captured:
-        with client.login(staff):
-            response = client.query(query, assert_no_errors=False).response
+    with CaptureQueriesContext(connection) as captured, client.login(staff):
+        response = client.query(query, assert_no_errors=False).response
     assert response.status_code == 200
     payload = response.json()
     assert "errors" not in payload, payload
@@ -123,7 +122,7 @@ def _issues_query(inner: str) -> str:
 
 
 @pytest.mark.django_db
-def test_single_parent_first_page_skips_window_over_http():
+def test_single_parent_first_page_skips_window_over_http() -> None:
     """One parent + a count-free plain first page: the fast path runs, no ``OVER (``."""
     _seed_periodical("Astro", 3)
 
@@ -139,7 +138,7 @@ def test_single_parent_first_page_skips_window_over_http():
 
 
 @pytest.mark.django_db
-def test_single_parent_probe_shape_overfetches_without_window_over_http():
+def test_single_parent_probe_shape_overfetches_without_window_over_http() -> None:
     """``pageInfo { hasNextPage }`` (no ``totalCount``) overfetches ``LIMIT 3`` off-window."""
     _seed_periodical("Astro", 3)
 
@@ -155,7 +154,7 @@ def test_single_parent_probe_shape_overfetches_without_window_over_http():
 
 
 @pytest.mark.django_db
-def test_single_parent_total_count_keeps_window_over_http():
+def test_single_parent_total_count_keeps_window_over_http() -> None:
     """Selecting ``totalCount`` keeps the window: a bare ``LIMIT`` cannot count the partition."""
     _seed_periodical("Astro", 3)
 
@@ -169,7 +168,7 @@ def test_single_parent_total_count_keeps_window_over_http():
 
 
 @pytest.mark.django_db
-def test_multi_parent_keeps_window_over_http():
+def test_multi_parent_keeps_window_over_http() -> None:
     """Two parents (IN length 2) keep the window; each parent's page is correct."""
     _seed_periodical("Astro", 3)
     _seed_periodical("Botany", 2)
@@ -188,7 +187,7 @@ def test_multi_parent_keeps_window_over_http():
 
 
 @pytest.mark.django_db
-def test_single_parent_offset_page_keeps_window_over_http():
+def test_single_parent_offset_page_keeps_window_over_http() -> None:
     """A seek (``after:``) page is not the plain first page, so the window is kept.
 
     ``IssueType`` is keyset-cursored, so the non-first page is reached with a
@@ -212,7 +211,7 @@ def test_single_parent_offset_page_keeps_window_over_http():
 
 
 @pytest.mark.django_db
-def test_single_parent_keyset_first_page_skips_window_as_staff_over_http():
+def test_single_parent_keyset_first_page_skips_window_as_staff_over_http() -> None:
     """A keyset first page engages the fast path AND mints valid, round-trippable cursors.
 
     The consumer derives keyset cursors from the row column values, not from the
@@ -237,7 +236,7 @@ def test_single_parent_keyset_first_page_skips_window_as_staff_over_http():
 
 
 @pytest.mark.django_db
-def test_single_parent_keyset_seek_page_keeps_window_over_http():
+def test_single_parent_keyset_seek_page_keeps_window_over_http() -> None:
     """An ``after:`` seek on the same single-parent connection keeps the windowed body.
 
     The fast path exists to reproduce a plain filtered ``LIMIT`` row for row; a
@@ -269,7 +268,7 @@ def test_single_parent_keyset_seek_page_keeps_window_over_http():
 
 
 @pytest.mark.django_db
-def test_visibility_filtered_child_keeps_window_over_http():
+def test_visibility_filtered_child_keeps_window_over_http() -> None:
     """The same first-page query ANONYMOUS: the visibility filter refuses the fast path.
 
     ``IssueType.get_queryset`` excludes ``embargoed=True`` for non-staff, landing
@@ -287,7 +286,7 @@ def test_visibility_filtered_child_keeps_window_over_http():
 
 
 @pytest.mark.django_db
-def test_single_parent_empty_children_over_http():
+def test_single_parent_empty_children_over_http() -> None:
     """One parent with zero children: the fast path serves an empty page, no ``OVER (``."""
     _seed_periodical("Astro", 0)
 
@@ -301,7 +300,7 @@ def test_single_parent_empty_children_over_http():
 
 
 @pytest.mark.django_db
-def test_fast_path_disabled_by_setting_over_http():
+def test_fast_path_disabled_by_setting_over_http() -> None:
     """``SINGLE_PARENT_FAST_PATH: False`` keeps the window on the otherwise-eligible shape."""
     _seed_periodical("Astro", 3)
 
@@ -315,7 +314,7 @@ def test_fast_path_disabled_by_setting_over_http():
 
 
 @pytest.mark.django_db
-def test_m2m_shape_keeps_window_over_http():
+def test_m2m_shape_keeps_window_over_http() -> None:
     """A single-parent M2M (THROUGH_TABLE) connection keeps the window (v1 excludes M2M)."""
     _seed_one_genre_with_books("Aurora", "Binti", "Circe")
 

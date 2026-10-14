@@ -68,12 +68,12 @@ def _book_rows(value: object) -> list[Book]:
     return books
 
 
-def _quote(name: str):
+def _quote(name: str) -> str:
     """The identifier quoting the pure-builder tests pin against."""
     return f'"{name}"'
 
 
-def _shelf_books_request(**overrides: object):
+def _shelf_books_request(**overrides: object) -> NestedConnectionRequest:
     """Reverse FK ``Shelf.books`` with the walker's ``.only()`` projection."""
     overrides.setdefault(
         "child_queryset",
@@ -111,7 +111,7 @@ def _lateral_spec(queryset: LateralQuerySet) -> LateralWindowSpec:
     return spec
 
 
-def _planned_lateral_queryset(request: NestedConnectionRequest):
+def _planned_lateral_queryset(request: NestedConnectionRequest) -> LateralQuerySet:
     """Run the strategy and return the planned ``LateralQuerySet``."""
     plan = OptimizationPlan()
     assert LateralPrefetchStrategy().plan(request, plan) is True
@@ -126,7 +126,7 @@ def _planned_lateral_queryset(request: NestedConnectionRequest):
 # ---------------------------------------------------------------------------
 
 
-def test_spec_direct_fk_reverse_foreign_key():
+def test_spec_direct_fk_reverse_foreign_key() -> None:
     """Reverse FK: the child table itself carries the parent-id column."""
     spec = _build_lateral_spec(_shelf_books_request())
     assert spec is not None
@@ -153,7 +153,7 @@ def test_spec_direct_fk_reverse_foreign_key():
     )
 
 
-def test_lateral_spec_rejects_engaged_probe_with_count():
+def test_lateral_spec_rejects_engaged_probe_with_count() -> None:
     """The lateral window spec enforces the same probe/count contract as the ORM.
 
     The lateral twin of the ``NestedConnectionRequest`` guard: constructing a
@@ -172,7 +172,7 @@ def test_lateral_spec_rejects_engaged_probe_with_count():
         dataclasses.replace(probe_spec, with_total_count=True)
 
 
-def test_spec_forward_m2m_through_table():
+def test_spec_forward_m2m_through_table() -> None:
     """Forward M2M (``Book.genres``): the through table owns the parent link."""
     spec = _build_lateral_spec(_request(Book, "genres"))
     assert spec is not None
@@ -188,7 +188,7 @@ def test_spec_forward_m2m_through_table():
     assert spec.prefetch_value_aliases == ("_prefetch_related_val_book_id",)
 
 
-def test_spec_reverse_m2m_swaps_the_through_sides():
+def test_spec_reverse_m2m_swaps_the_through_sides() -> None:
     """Reverse M2M (``Genre.books``): the same through table, sides swapped."""
     spec = _build_lateral_spec(_request(Genre, "books"))
     assert spec is not None
@@ -199,7 +199,7 @@ def test_spec_reverse_m2m_swaps_the_through_sides():
     assert spec.prefetch_value_aliases == ("_prefetch_related_val_genre_id",)
 
 
-def test_spec_downgrades_for_unresolvable_through_link_fields():
+def test_spec_downgrades_for_unresolvable_through_link_fields() -> None:
     """Incomplete or cross-table through metadata cannot be rendered safely."""
     request = _request(Book, "genres")
     assert (
@@ -237,7 +237,7 @@ def test_spec_downgrades_for_unresolvable_through_link_fields():
     )
 
 
-def test_spec_maps_pk_alias_and_descending_order():
+def test_spec_maps_pk_alias_and_descending_order() -> None:
     """``"pk"`` resolves to the pk column; a ``-`` prefix flips to DESC."""
     spec = _build_lateral_spec(_shelf_books_request(order_by=("-title", "pk")))
     assert spec is not None
@@ -262,7 +262,7 @@ def test_spec_maps_pk_alias_and_descending_order():
         ),
     ],
 )
-def test_spec_carries_single_table_visibility_where(child_queryset: models.QuerySet[Book]):
+def test_spec_carries_single_table_visibility_where(child_queryset: models.QuerySet[Book]) -> None:
     """A DIRECT_FK single-table plain-column scope rides the spec.
 
     The common anonymous-traffic shape: a target-type ``get_queryset``
@@ -278,13 +278,13 @@ def test_spec_carries_single_table_visibility_where(child_queryset: models.Query
     assert spec.visibility_where.children  # the qual survived the clone.
 
 
-def test_spec_refuses_visibility_where_on_m2m_through():
+def test_spec_refuses_visibility_where_on_m2m_through() -> None:
     """v1 visibility WHERE is DIRECT_FK-only: an M2M through filter downgrades."""
     request = _request(Genre, "books", child_queryset=Book.objects.filter(title="x"))
     assert _build_lateral_spec(request) is None
 
 
-def test_spec_refuses_visibility_where_with_a_keyset_seek():
+def test_spec_refuses_visibility_where_with_a_keyset_seek() -> None:
     """A keyset shape carrying a filter downgrades (the matchers do not combine)."""
     from django_strawberry_framework.keyset import (
         KeysetCursor,
@@ -305,7 +305,7 @@ def test_spec_refuses_visibility_where_with_a_keyset_seek():
     assert _build_lateral_spec(request) is None
 
 
-def test_plain_single_table_where_rejects_relation_and_expression_quals():
+def test_plain_single_table_where_rejects_relation_and_expression_quals() -> None:
     """The admission helper's defensive tail, pinned directly.
 
     A base-column ``exclude`` (nested negated node) is admitted; a
@@ -370,7 +370,7 @@ def test_plain_single_table_where_rejects_relation_and_expression_quals():
         ({"order_by": ("shelf__code", "id")}, "relation-traversal ordering"),
     ],
 )
-def test_spec_downgrades_to_windowed(overrides: dict[str, object], reason: str):
+def test_spec_downgrades_to_windowed(overrides: dict[str, object], reason: str) -> None:
     """Inexpressible shapes plan the plain windowed prefetch (still planned)."""
     plan = OptimizationPlan()
     assert LateralPrefetchStrategy().plan(_request(Shelf, "books", **overrides), plan) is True
@@ -381,7 +381,7 @@ def test_spec_downgrades_to_windowed(overrides: dict[str, object], reason: str):
     assert WINDOW_ROW_NUMBER in entry.queryset.query.annotations
 
 
-def test_order_columns_reject_unresolvable_names():
+def test_order_columns_reject_unresolvable_names() -> None:
     """The order mapper's defensive tail, pinned directly.
 
     ``"?"``, empty entries, and names that resolve to nothing are not walker
@@ -396,7 +396,7 @@ def test_order_columns_reject_unresolvable_names():
     assert _order_columns(("",), _meta(Book)) is None
 
 
-def test_order_columns_reject_an_empty_order():
+def test_order_columns_reject_an_empty_order() -> None:
     """An empty order downgrades: the lateral branch cannot render ``OVER (ORDER BY )``.
 
     Not a planner product (``deterministic_order`` always ends in the pk), but
@@ -417,7 +417,7 @@ def test_order_columns_reject_an_empty_order():
     assert WINDOW_ROW_NUMBER in entry.queryset.query.annotations
 
 
-def test_spec_downgrades_on_columnless_primary_key():
+def test_spec_downgrades_on_columnless_primary_key() -> None:
     """A composite (columnless) child pk has no single default join column."""
     fake_queryset = SimpleNamespace(
         query=SimpleNamespace(
@@ -433,7 +433,7 @@ def test_spec_downgrades_on_columnless_primary_key():
     assert _build_lateral_spec(_request(Shelf, "books", child_queryset=fake_queryset)) is None
 
 
-def test_spec_downgrades_for_multi_table_inherited_order_column():
+def test_spec_downgrades_for_multi_table_inherited_order_column() -> None:
     """Parent-table order columns cannot be rendered against the child table.
 
     ``LendingDesk.opened_on`` lives on the ``Venue`` table, one parent-link join
@@ -454,7 +454,7 @@ def test_spec_downgrades_for_multi_table_inherited_order_column():
     assert _build_lateral_spec(request) is None
 
 
-def test_spec_downgrades_for_selected_multi_table_parent_column():
+def test_spec_downgrades_for_selected_multi_table_parent_column() -> None:
     """A parent-table projection needs Django's join, so raw lateral SQL downgrades.
 
     The order ``("window_count", "pk")`` is child-local and renderable, so the
@@ -472,7 +472,7 @@ def test_spec_downgrades_for_selected_multi_table_parent_column():
     assert _build_lateral_spec(request) is None
 
 
-def test_spec_downgrades_on_unreadable_deferred_loading():
+def test_spec_downgrades_on_unreadable_deferred_loading() -> None:
     """Unreadable projection state downgrades instead of raising in the lateral path."""
     queryset = Book.objects.all()
     # basedpyright: the planted unreadable deferred_loading is the hostile input under test;
@@ -482,11 +482,11 @@ def test_spec_downgrades_on_unreadable_deferred_loading():
 
 
 # ---------------------------------------------------------------------------
-# build_lateral_sql (pure)
+# Building the lateral SQL (pure)
 # ---------------------------------------------------------------------------
 
 
-def test_sql_forward_page_shape():
+def test_sql_forward_page_shape() -> None:
     """``first: 2``: an in-branch ORDER BY + LIMIT page (the plannable shape).
 
     The unambiguous forward page paginates INSIDE the lateral branch - a
@@ -524,7 +524,7 @@ def test_sql_forward_page_shape():
     assert params == [[1, 2, 3], 2]
 
 
-def test_sql_count_free_page_omits_the_count_window():
+def test_sql_count_free_page_omits_the_count_window() -> None:
     """``with_total_count=False`` drops the count from both select lists."""
     spec = _built_spec(_shelf_books_request(with_total_count=False))
     sql, params = build_lateral_sql(spec, [1], quote_name=_quote)
@@ -534,7 +534,7 @@ def test_sql_count_free_page_omits_the_count_window():
     assert params == [1, 2]
 
 
-def test_sql_next_page_probe_overfetches_one_row_in_branch():
+def test_sql_next_page_probe_overfetches_one_row_in_branch() -> None:
     """The count-free ``hasNextPage`` probe: in-branch ``LIMIT limit + 1``, no count.
 
     The lateral half of the win. ``fetch_limit`` (``2 + 1``) is a single-token
@@ -558,7 +558,7 @@ def test_sql_next_page_probe_overfetches_one_row_in_branch():
     assert params == [7, 3]  # limit 2 + 1 sentinel row.
 
 
-def test_sql_offset_shape_keeps_the_marker_row():
+def test_sql_offset_shape_keeps_the_marker_row() -> None:
     """Overshot ``after:``: the ambiguous-shape ``OR rn = 1`` marker survives."""
     spec = _built_spec(_shelf_books_request(offset=3, limit=2))
     sql, params = build_lateral_sql(spec, [7], quote_name=_quote)
@@ -570,7 +570,7 @@ def test_sql_offset_shape_keeps_the_marker_row():
     assert params == [7, 3, 5]
 
 
-def test_sql_offset_probe_composes_marker_and_fetch_upper_bound():
+def test_sql_offset_probe_composes_marker_and_fetch_upper_bound() -> None:
     """The bounded offset page binds ``fetch_upper_bound`` and keeps the marker.
 
     The load-bearing lateral half of A1: the rn-filter upper bound is
@@ -594,7 +594,7 @@ def test_sql_offset_probe_composes_marker_and_fetch_upper_bound():
     assert params == [7, 3, 6]  # lower 3, fetch ceiling 5 + 1 sentinel.
 
 
-def test_sql_first_zero_shape_keeps_the_marker_row():
+def test_sql_first_zero_shape_keeps_the_marker_row() -> None:
     """``first: 0``: upper bound zero plus the marker row."""
     spec = _built_spec(_shelf_books_request(offset=0, limit=0))
     sql, params = build_lateral_sql(spec, [7], quote_name=_quote)
@@ -605,7 +605,7 @@ def test_sql_first_zero_shape_keeps_the_marker_row():
     assert params == [7, 0]
 
 
-def test_sql_unbounded_shape_has_no_range_predicate():
+def test_sql_unbounded_shape_has_no_range_predicate() -> None:
     """``limit=None`` (or the relay maxsize sentinel): every row, no WHERE."""
     spec = _built_spec(_shelf_books_request(limit=None))
     sql, params = build_lateral_sql(spec, [7], quote_name=_quote)
@@ -613,7 +613,7 @@ def test_sql_unbounded_shape_has_no_range_predicate():
     assert params == [7]
 
 
-def test_sql_reverse_shape_filters_the_reversed_row_number():
+def test_sql_reverse_shape_filters_the_reversed_row_number() -> None:
     """``last: 2``: a reversed row number bounds the page; forward rn returns."""
     spec = _built_spec(_shelf_books_request(reverse=True, limit=2))
     sql, params = build_lateral_sql(spec, [7], quote_name=_quote)
@@ -629,7 +629,7 @@ def test_sql_reverse_shape_filters_the_reversed_row_number():
     assert params == [7, 2]
 
 
-def test_sql_reverse_shape_applies_the_offset_filter_when_present():
+def test_sql_reverse_shape_applies_the_offset_filter_when_present() -> None:
     """The reverse branch mirrors ``apply_window_pagination``'s offset filter."""
     spec = _built_spec(_shelf_books_request(reverse=True, offset=1, limit=2))
     sql, params = build_lateral_sql(spec, [7], quote_name=_quote)
@@ -640,7 +640,7 @@ def test_sql_reverse_shape_applies_the_offset_filter_when_present():
     assert params == [7, 1, 2]
 
 
-def test_sql_through_table_shape_joins_inside_the_lateral():
+def test_sql_through_table_shape_joins_inside_the_lateral() -> None:
     """M2M: the through table drives the lateral branch and the parent match."""
     spec = _built_spec(_request(Genre, "books"))
     sql, params = build_lateral_sql(spec, [5, 6], quote_name=_quote, parent_cast="bigint")
@@ -653,7 +653,7 @@ def test_sql_through_table_shape_joins_inside_the_lateral():
     assert params == [[5, 6], 2]
 
 
-def test_sql_non_scalar_parent_keys_keep_typed_values_rows():
+def test_sql_non_scalar_parent_keys_keep_typed_values_rows() -> None:
     """Structured parent keys avoid the value-changing array-of-values adapter."""
     spec = _built_spec(_shelf_books_request())
     spec = dataclasses.replace(
@@ -672,7 +672,7 @@ def test_sql_non_scalar_parent_keys_keep_typed_values_rows():
     assert params == [{"tenant": 1}, {"tenant": 2}, 2]
 
 
-def test_sql_splices_the_compiled_visibility_where_into_the_branch():
+def test_sql_splices_the_compiled_visibility_where_into_the_branch() -> None:
     """The compiled scope is ``AND (...)``-spliced into the branch.
 
     The predicate lands next to the parent-link predicate (inside the lateral
@@ -703,7 +703,7 @@ def test_sql_splices_the_compiled_visibility_where_into_the_branch():
 # ---------------------------------------------------------------------------
 
 
-def test_lateral_queryset_clones_carry_the_spec():
+def test_lateral_queryset_clones_carry_the_spec() -> None:
     """Every clone Django's prefetch machinery makes keeps the lateral spec."""
     queryset = _planned_lateral_queryset(_shelf_books_request())
     spec = queryset._dst_lateral_spec
@@ -719,12 +719,12 @@ def test_lateral_queryset_clones_carry_the_spec():
     assert WINDOW_TOTAL_COUNT in queryset.query.annotations
 
 
-def test_fetch_returns_none_without_a_spec():
+def test_fetch_returns_none_without_a_spec() -> None:
     """A ``LateralQuerySet`` built outside the strategy falls straight back."""
     assert _fetch_lateral_rows(LateralQuerySet(model=Book)) is None
 
 
-def test_fetch_returns_none_off_postgres(monkeypatch: pytest.MonkeyPatch):
+def test_fetch_returns_none_off_postgres(monkeypatch: pytest.MonkeyPatch) -> None:
     """The vendor guard: a non-Postgres connection executes the windowed body.
 
     Scripted (rather than read off the real connection) so the pin holds on
@@ -749,7 +749,7 @@ def _prefetch_filtered(
     request: NestedConnectionRequest,
     field_name: str,
     parents: list[models.Model],
-):
+) -> LateralQuerySet:
     """The planned queryset exactly as Django's prefetch hands it to ``_fetch_all``."""
     queryset = _planned_lateral_queryset(request)
     filtered = filter_prefetch_queryset(queryset, field_name, parents)
@@ -764,7 +764,7 @@ def _recognized(queryset: LateralQuerySet, spec: LateralWindowSpec) -> _Recogniz
     return recognized
 
 
-def test_extract_reverse_fk_parent_ids():
+def test_extract_reverse_fk_parent_ids() -> None:
     """The happy path: window quals plus the prefetch ``__in`` on the FK column."""
     queryset = _prefetch_filtered(
         _shelf_books_request(),
@@ -774,7 +774,7 @@ def test_extract_reverse_fk_parent_ids():
     assert _recognized(queryset, _lateral_spec(queryset)).parent_ids == [1, 2, 3]
 
 
-def test_extract_recognizes_the_marker_or_node():
+def test_extract_recognizes_the_marker_or_node() -> None:
     """The ambiguous-shape marker filter arrives as a nested OR of window quals."""
     queryset = _prefetch_filtered(
         _shelf_books_request(offset=3, limit=2),
@@ -784,7 +784,7 @@ def test_extract_recognizes_the_marker_or_node():
     assert _recognized(queryset, _lateral_spec(queryset)).parent_ids == [4]
 
 
-def test_extract_recognizes_the_reversed_window_qual():
+def test_extract_recognizes_the_reversed_window_qual() -> None:
     """``last``-only windows filter on the reversed row number - still a window qual."""
     queryset = _prefetch_filtered(
         _shelf_books_request(reverse=True, limit=2),
@@ -794,7 +794,7 @@ def test_extract_recognizes_the_reversed_window_qual():
     assert _recognized(queryset, _lateral_spec(queryset)).parent_ids == [4]
 
 
-def _shelf_books_visibility_request(**overrides: object):
+def _shelf_books_visibility_request(**overrides: object) -> NestedConnectionRequest:
     """A ``Shelf.books`` request whose child carries a single-table scope."""
     overrides.setdefault(
         "child_queryset",
@@ -803,11 +803,13 @@ def _shelf_books_visibility_request(**overrides: object):
     return _shelf_books_request(**overrides)
 
 
-def test_extract_recognizes_the_planned_visibility_scope():
-    """The planned single-table scope in the fetch-time residue is
-    proven byte-equal to the spec and consumed, leaving the parent ids AND the
-    APPROVED compiled predicate the executor reuses (so it never compiles a third
-    time)."""
+def test_extract_recognizes_the_planned_visibility_scope() -> None:
+    """The planned single-table scope is proven byte-equal to the spec and consumed.
+
+    The scope sits in the fetch-time residue; consuming it leaves the parent ids
+    AND the APPROVED compiled predicate the executor reuses (so it never compiles
+    a third time).
+    """
     queryset = _prefetch_filtered(
         _shelf_books_visibility_request(),
         "shelf",
@@ -827,18 +829,22 @@ def test_extract_recognizes_the_planned_visibility_scope():
     assert compiled_params == ["repair"]
 
 
-def test_extract_returns_none_for_an_unmatched_visibility_residue():
-    """An extra consumer filter beyond the planned scope fails the byte-equal
-    match - the recognizer degrades to the windowed body (never double-applies)."""
+def test_extract_returns_none_for_an_unmatched_visibility_residue() -> None:
+    """An extra consumer filter beyond the planned scope fails the byte-equal match.
+
+    The recognizer degrades to the windowed body (never double-applies).
+    """
     queryset = _prefetch_filtered(_shelf_books_visibility_request(), "shelf", [Shelf(pk=1)])
     spec = _lateral_spec(queryset)
     mutated = queryset.filter(title="x")  # a qual the plan never carried.
     assert _recognize_lateral_fetch(mutated, spec) is None
 
 
-def test_extract_returns_none_when_the_planned_visibility_scope_is_missing():
-    """A visibility spec whose fetch-time tree lost the scope (only the parent
-    filter remains) is not the planned shape - fall back."""
+def test_extract_returns_none_when_the_planned_visibility_scope_is_missing() -> None:
+    """A visibility spec whose fetch-time tree lost the scope is not the planned shape.
+
+    Only the parent filter remains, so the recognizer falls back.
+    """
     plain = _prefetch_filtered(_shelf_books_request(), "shelf", [Shelf(pk=1)])
     visibility_spec = _build_lateral_spec(_shelf_books_visibility_request())
     assert visibility_spec is not None
@@ -847,10 +853,10 @@ def test_extract_returns_none_when_the_planned_visibility_scope_is_missing():
     assert _recognize_lateral_fetch(plain, visibility_spec) is None
 
 
-def test_extract_returns_none_when_the_scope_compiles_to_an_empty_result_set():
-    """A single-table scope that compiles to ``EmptyResultSet`` (an ``__in=[]``)
+def test_extract_returns_none_when_the_scope_compiles_to_an_empty_result_set() -> None:
+    """A single-table scope that compiles to ``EmptyResultSet`` degrades to the windowed body.
 
-    passes the spec-time ``is_empty()`` gate (the queryset is not ``.none()``)
+    The scope (an ``__in=[]``) passes the spec-time ``is_empty()`` gate (the queryset is not ``.none()``)
     but cannot be proven byte-equal at fetch time: the byte-equal compile in
     ``_visibility_quals_match`` raises and the recognizer degrades to the
     windowed body rather than trusting the raw SQL.
@@ -868,7 +874,7 @@ def test_extract_returns_none_when_the_scope_compiles_to_an_empty_result_set():
     assert _recognize_lateral_fetch(queryset, spec) is None
 
 
-def test_extract_m2m_requires_the_predicted_extra_select():
+def test_extract_m2m_requires_the_predicted_extra_select() -> None:
     """M2M fetch time carries Django's ``_prefetch_related_val`` extra select."""
     queryset = _prefetch_filtered(_request(Genre, "books"), "genres", [Genre(pk=5)])
     spec = _lateral_spec(queryset)
@@ -881,7 +887,7 @@ def test_extract_m2m_requires_the_predicted_extra_select():
     assert _recognized(with_extra, spec).parent_ids == [5]
 
 
-def test_extract_empty_parent_list_short_circuits_to_no_rows():
+def test_extract_empty_parent_list_short_circuits_to_no_rows() -> None:
     """Zero parents extract as ``[]`` and fetch as ``[]`` without touching SQL."""
     queryset = _prefetch_filtered(_shelf_books_request(), "shelf", [])
     assert _recognized(queryset, _lateral_spec(queryset)).parent_ids == []
@@ -898,7 +904,7 @@ def _window_body(
     limit: int | None = None,
     reverse: bool = False,
     next_page_probe: bool = False,
-):
+) -> models.QuerySet[Book]:
     """A bare count-free windowed ``Book`` queryset for window-signature shape unit tests."""
     from django_strawberry_framework.optimizer.plans import apply_window_pagination
 
@@ -914,21 +920,21 @@ def _window_body(
     )
 
 
-def test_window_signature_is_deterministic_for_one_shape():
+def test_window_signature_is_deterministic_for_one_shape() -> None:
     """Two independent builds of the same window shape sign identically (the match path)."""
     assert window_predicate_signature(_window_body(limit=2).query) == window_predicate_signature(
         _window_body(limit=2).query,
     )
 
 
-def test_window_signature_distinguishes_a_changed_bound():
+def test_window_signature_distinguishes_a_changed_bound() -> None:
     """``first: 2`` and ``first: 3`` differ only in the bound value - and so do their signatures."""
     assert window_predicate_signature(_window_body(limit=2).query) != window_predicate_signature(
         _window_body(limit=3).query,
     )
 
 
-def test_window_signature_of_an_unbounded_window_is_empty():
+def test_window_signature_of_an_unbounded_window_is_empty() -> None:
     """An unbounded forward window plans no row-number filter -> the empty signature.
 
     ``()`` is a real signature (no window quals), distinct from a bounded window
@@ -938,27 +944,27 @@ def test_window_signature_of_an_unbounded_window_is_empty():
     assert window_predicate_signature(_window_body(limit=2).query) != ()
 
 
-def test_window_signature_distinguishes_the_reversed_annotation():
+def test_window_signature_distinguishes_the_reversed_annotation() -> None:
     """A ``last``-only window filters the REVERSED row number - a different ``_dst_*`` name."""
     assert window_predicate_signature(
         _window_body(limit=2).query,
     ) != window_predicate_signature(_window_body(limit=2, reverse=True).query)
 
 
-def test_window_signature_distinguishes_the_marker_or_shape():
+def test_window_signature_distinguishes_the_marker_or_shape() -> None:
     """The offset page's nested marker ``OR`` node is a distinct shape from the plain page."""
     assert window_predicate_signature(
         _window_body(offset=3, limit=2, next_page_probe=True).query,
     ) != window_predicate_signature(_window_body(limit=2).query)
 
 
-def test_window_signature_is_none_when_a_bound_is_an_expression():
+def test_window_signature_is_none_when_a_bound_is_an_expression() -> None:
     """A window qual whose rhs is an expression cannot be normalized -> ``None`` (fail closed)."""
     mutated = _window_body(limit=2).filter(**{f"{WINDOW_ROW_NUMBER}__lte": F("id")})
     assert window_predicate_signature(mutated.query) is None
 
 
-def test_normalize_window_node_fails_closed_on_a_nested_unmapped_leaf():
+def test_normalize_window_node_fails_closed_on_a_nested_unmapped_leaf() -> None:
     """A nested marker OR whose leaves are not in the annotation map returns ``None``.
 
     Drives the internal fail-closed propagation of ``_normalize_window_node``: an
@@ -1010,7 +1016,7 @@ _UNRECOGNIZED_LATERAL_SHAPES: list[tuple[Callable[[LateralQuerySet], LateralQuer
 def test_extract_returns_none_for_unrecognized_shapes(
     mutate: Callable[[LateralQuerySet], LateralQuerySet],
     reason: str,
-):
+) -> None:
     """Every unrecognized fetch-time mutation falls back to the windowed body.
 
     Includes the shared window-predicate-signature guard: a leaf whose ``lhs``
@@ -1024,13 +1030,13 @@ def test_extract_returns_none_for_unrecognized_shapes(
     assert _recognize_lateral_fetch(mutated, _lateral_spec(queryset)) is None, reason
 
 
-def test_extract_returns_none_without_a_parent_filter():
+def test_extract_returns_none_without_a_parent_filter() -> None:
     """The bare planned queryset (no prefetch filter yet) has no parent list."""
     queryset = _planned_lateral_queryset(_shelf_books_request())
     assert _recognize_lateral_fetch(queryset, _lateral_spec(queryset)) is None
 
 
-def test_extract_returns_none_for_an_ored_parent_filter():
+def test_extract_returns_none_for_an_ored_parent_filter() -> None:
     """A parent filter nested under OR is neither a window qual nor extractable."""
     from django.db.models import Q
 
@@ -1039,7 +1045,7 @@ def test_extract_returns_none_for_an_ored_parent_filter():
     assert _recognize_lateral_fetch(queryset, _lateral_spec(queryset)) is None
 
 
-def test_extract_returns_none_for_a_mutated_root_node():
+def test_extract_returns_none_for_a_mutated_root_node() -> None:
     """A negated or OR-connected root is not the planner's shape - fall back."""
     queryset = _prefetch_filtered(_shelf_books_request(), "shelf", [Shelf(pk=1)])
     spec = _lateral_spec(queryset)
@@ -1051,7 +1057,7 @@ def test_extract_returns_none_for_a_mutated_root_node():
     assert _recognize_lateral_fetch(negated_root, spec) is None
 
 
-def test_parent_in_values_guards_target_and_rhs_shapes():
+def test_parent_in_values_guards_target_and_rhs_shapes() -> None:
     """The ``__in`` matcher's defensive tail, pinned with synthetic nodes.
 
     C1: ``_parent_in_values`` takes the target ``column``/``table`` as keyword
@@ -1107,14 +1113,14 @@ def test_parent_in_values_guards_target_and_rhs_shapes():
 
 
 class _ScriptedCursor:
-    def __init__(self, rows: list[tuple[object, ...]]):
+    def __init__(self, rows: list[tuple[object, ...]]) -> None:
         self.rows = rows
         self.executed: tuple[str, object] | None = None
 
-    def execute(self, sql: str, params: object):
+    def execute(self, sql: str, params: object) -> None:
         self.executed = (sql, params)
 
-    def fetchall(self):
+    def fetchall(self) -> list[tuple[object, ...]]:
         return self.rows
 
     def executed_call(self) -> tuple[str, object]:
@@ -1122,10 +1128,10 @@ class _ScriptedCursor:
         assert self.executed is not None
         return self.executed
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *exc_info: object):
+    def __exit__(self, *exc_info: object) -> bool:
         return False
 
 
@@ -1139,18 +1145,18 @@ class _PostgresFacade:
 
     vendor = "postgresql"
 
-    def __init__(self, rows: list[tuple[object, ...]]):
+    def __init__(self, rows: list[tuple[object, ...]]) -> None:
         self._real = connections["default"]
         self.scripted_cursor = _ScriptedCursor(rows)
 
-    def cursor(self):
+    def cursor(self) -> _ScriptedCursor:
         return self.scripted_cursor
 
-    def __getattr__(self, name: str):
+    def __getattr__(self, name: str) -> object:
         return getattr(self._real, name)
 
 
-def test_lateral_execution_instantiates_window_rows(monkeypatch: pytest.MonkeyPatch):
+def test_lateral_execution_instantiates_window_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     """The full lateral fetch: extraction, SQL, params, and row instantiation."""
     from django_strawberry_framework.optimizer import lateral_fetch
 
@@ -1204,7 +1210,9 @@ def test_lateral_execution_instantiates_window_rows(monkeypatch: pytest.MonkeyPa
     assert rows[0]._state.db == "default"
 
 
-def test_lateral_execution_splices_the_visibility_predicate(monkeypatch: pytest.MonkeyPatch):
+def test_lateral_execution_splices_the_visibility_predicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The recognized visibility scope is compiled and spliced at execution.
 
     The full path over the facade: a DIRECT_FK spec carrying a single-table
@@ -1228,7 +1236,7 @@ def test_lateral_execution_splices_the_visibility_predicate(monkeypatch: pytest.
     assert params == [[1], "repair", 2]  # parent array, scope bind, in-branch LIMIT.
 
 
-def test_lateral_execution_sets_m2m_prefetch_values(monkeypatch: pytest.MonkeyPatch):
+def test_lateral_execution_sets_m2m_prefetch_values(monkeypatch: pytest.MonkeyPatch) -> None:
     """M2M rows carry the ``_prefetch_related_val_*`` parent id Django attaches by."""
     from django_strawberry_framework.optimizer import lateral_fetch
 
@@ -1257,7 +1265,7 @@ def test_lateral_execution_sets_m2m_prefetch_values(monkeypatch: pytest.MonkeyPa
     assert params == [[5], 2]
 
 
-def test_lateral_execution_deduplicates_parent_ids(monkeypatch: pytest.MonkeyPatch):
+def test_lateral_execution_deduplicates_parent_ids(monkeypatch: pytest.MonkeyPatch) -> None:
     """Repeated parent ids execute one lateral branch instead of duplicating child rows."""
     from django_strawberry_framework.optimizer import lateral_fetch
 
@@ -1273,7 +1281,7 @@ def test_lateral_execution_deduplicates_parent_ids(monkeypatch: pytest.MonkeyPat
     assert params == [[1, 2], 2]
 
 
-def test_parent_id_deduplication_handles_hashable_and_unhashable_values():
+def test_parent_id_deduplication_handles_hashable_and_unhashable_values() -> None:
     """Hashable values de-duplicate; unhashable values retain their input order."""
     from django_strawberry_framework.optimizer.lateral_fetch import _deduplicate_parent_ids
 
@@ -1295,7 +1303,7 @@ def test_parent_id_deduplication_handles_hashable_and_unhashable_values():
     ) == [[1], [1], [2]]
 
 
-def test_lateral_raw_rows_run_through_django_field_converters():
+def test_lateral_raw_rows_run_through_django_field_converters() -> None:
     """Raw JSON text is converted exactly as ORM-compiled model rows are."""
     from apps.scalars.models import ScalarSpecimen
 
@@ -1332,7 +1340,9 @@ def test_lateral_raw_rows_run_through_django_field_converters():
     ]
 
 
-def test_lateral_execution_serves_zero_parents_without_sql(monkeypatch: pytest.MonkeyPatch):
+def test_lateral_execution_serves_zero_parents_without_sql(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """An empty parent list returns an empty page without executing anything."""
     from django_strawberry_framework.optimizer import lateral_fetch
 
@@ -1343,7 +1353,9 @@ def test_lateral_execution_serves_zero_parents_without_sql(monkeypatch: pytest.M
     assert facade.scripted_cursor.executed is None
 
 
-def test_fetch_returns_none_when_extraction_fails_on_postgres(monkeypatch: pytest.MonkeyPatch):
+def test_fetch_returns_none_when_extraction_fails_on_postgres(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Unextractable state on a real-vendor connection still falls back."""
     from django_strawberry_framework.optimizer import lateral_fetch
 
@@ -1355,7 +1367,7 @@ def test_fetch_returns_none_when_extraction_fails_on_postgres(monkeypatch: pytes
     assert facade.scripted_cursor.executed is None
 
 
-def test_fetch_returns_none_for_values_iteration(monkeypatch: pytest.MonkeyPatch):
+def test_fetch_returns_none_for_values_iteration(monkeypatch: pytest.MonkeyPatch) -> None:
     """``values_list()`` changes row shape - never intercepted."""
     from django_strawberry_framework.optimizer import lateral_fetch
 
@@ -1367,7 +1379,9 @@ def test_fetch_returns_none_for_values_iteration(monkeypatch: pytest.MonkeyPatch
     assert _fetch_lateral_rows(values_queryset) is None
 
 
-def test_fetch_vendor_follows_the_queryset_alias_not_default(monkeypatch: pytest.MonkeyPatch):
+def test_fetch_vendor_follows_the_queryset_alias_not_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A routed non-Postgres alias windows even when ``default`` is Postgres."""
     from django_strawberry_framework.optimizer import lateral_fetch
 
@@ -1395,7 +1409,7 @@ def test_fetch_vendor_follows_the_queryset_alias_not_default(monkeypatch: pytest
 
 
 @pytest.mark.django_db
-def test_auto_fallback_executes_the_windowed_body_end_to_end():
+def test_auto_fallback_executes_the_windowed_body_end_to_end() -> None:
     """Off Postgres ``"auto"`` serves the bounded window and count annotations.
 
     This is the correctness floor the lateral path can never fall below: the
@@ -1428,7 +1442,7 @@ def test_auto_fallback_executes_the_windowed_body_end_to_end():
     assert getattr(shelves[1], entry.to_attr) == []
 
 
-def test_spec_downgrades_for_custom_queryset_subclasses():
+def test_spec_downgrades_for_custom_queryset_subclasses() -> None:
     """A custom ``QuerySet`` subclass keeps the windowed strategy.
 
     ``RecognizedFetchQuerySet.rebind`` swaps the queryset class, which would erase a
@@ -1467,7 +1481,7 @@ def test_spec_downgrades_for_custom_queryset_subclasses():
     assert WINDOW_ROW_NUMBER in entry.queryset.query.annotations
 
 
-def test_spec_refuses_unsupported_lateral_join_shape():
+def test_spec_refuses_unsupported_lateral_join_shape() -> None:
     """An unsupported join shape cannot build a LateralWindowSpec."""
     import dataclasses
 
@@ -1485,7 +1499,7 @@ def test_spec_refuses_unsupported_lateral_join_shape():
     assert _build_lateral_spec(req) is None
 
 
-def test_keyset_seek_quals_match_single_and_multi_column():
+def test_keyset_seek_quals_match_single_and_multi_column() -> None:
     """Test full keyset seek flow recognition for 1-column, 2-column, and 3-column plans."""
     from django_strawberry_framework.keyset import (
         KeysetCursor,
@@ -1581,7 +1595,7 @@ def test_keyset_seek_quals_match_single_and_multi_column():
     assert _recognize_lateral_fetch(prefetched3, spec_mutated) is None
 
 
-def test_build_window_spec_unsupported_shape_returns_none():
+def test_build_window_spec_unsupported_shape_returns_none() -> None:
     from django_strawberry_framework.optimizer.lateral_fetch import _build_lateral_spec
 
     req = _shelf_books_request()
@@ -1590,7 +1604,7 @@ def test_build_window_spec_unsupported_shape_returns_none():
     assert _build_lateral_spec(req_bad) is None
 
 
-def test_lateral_sql_namespace_derivation():
+def test_lateral_sql_namespace_derivation() -> None:
     """All lateral SQL aliases and column names derive from the single LATERAL_SQL_STEM."""
     from django_strawberry_framework.optimizer.lateral_fetch import (
         LATERAL_CHILD_ALIAS,

@@ -39,12 +39,12 @@ class _UnmarkedAsView(AsyncGraphQLView[object, object]):
         return super(AsyncGraphQLView, cls).as_view(**initkwargs)
 
 
-def test_async_view_callback_is_a_coroutine_function():
+def test_async_view_callback_is_a_coroutine_function() -> None:
     """The stamped callback of the async view is a coroutine function."""
     assert inspect.iscoroutinefunction(AsyncDjangoGraphQLView.as_view())
 
 
-def test_async_view_refuses_an_unmarked_upstream_callback():
+def test_async_view_refuses_an_unmarked_upstream_callback() -> None:
     """An upstream ``as_view`` that drops the coroutine mark is refused."""
 
     # basedpyright: the two bases' ``as_view`` differ by design: the stand-in's is the one

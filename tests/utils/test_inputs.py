@@ -9,7 +9,7 @@ Shipped filter/order input names live in
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, NoReturn
 
 import pytest
 import strawberry
@@ -55,7 +55,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-def test_build_strawberry_input_class_emits_name_alias_and_description():
+def test_build_strawberry_input_class_emits_name_alias_and_description() -> None:
     """``name=`` lands as the GraphQL alias and ``description=`` on the field."""
     cls = build_strawberry_input_class(
         "SharedScratchInputType",
@@ -71,7 +71,7 @@ def test_build_strawberry_input_class_emits_name_alias_and_description():
     assert note.description == "a note"
 
 
-def test_builder_pins_names_so_digit_boundary_fields_do_not_silently_collide():
+def test_builder_pins_names_so_digit_boundary_fields_do_not_silently_collide() -> None:
     """A ``field_2`` / ``field2`` pair survives as two distinct GraphQL input fields.
 
     Regression for the silent collision caused by leaving an identity ``name=``
@@ -108,7 +108,8 @@ def test_builder_pins_names_so_digit_boundary_fields_do_not_silently_collide():
     @strawberry.type
     class Query:
         @strawberry.field
-        # basedpyright: Strawberry reads this annotation at runtime; the input class is built by the helper under test
+        # basedpyright: Strawberry reads this annotation at runtime; the input class is built by
+        # the helper under test
         def probe(self, inp: input_cls) -> int:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
             del inp  # Strawberry reads it to put the input class in the SDL under test; never runs
             return 1
@@ -125,16 +126,16 @@ def test_builder_pins_names_so_digit_boundary_fields_do_not_silently_collide():
     assert field_specs[(_ProbeSet, "field2")].graphql_name == "field2"
 
 
-def test_builder_rejects_duplicate_python_attributes():
+def test_builder_rejects_duplicate_python_attributes() -> None:
     """The last defensive layer rejects a duplicate before the namespace drops a field."""
-    with pytest.raises(ConfigurationError, match="input attribute 'same'.*more than once"):
+    with pytest.raises(ConfigurationError, match=r"input attribute 'same'.*more than once"):
         build_strawberry_input_class(
             "DuplicateAttrInput",
             [("same", int, {}), ("same", str, {})],
         )
 
 
-def test_builder_rejects_duplicate_effective_graphql_names():
+def test_builder_rejects_duplicate_effective_graphql_names() -> None:
     """Explicit aliases cannot collapse two distinct attrs onto one GraphQL field."""
     with pytest.raises(ConfigurationError, match="same GraphQL field name 'same'"):
         build_strawberry_input_class(
@@ -148,13 +149,13 @@ def test_builder_rejects_duplicate_effective_graphql_names():
     [{"name": 5}, {"description": 5}, {"name": b"x", "description": ["d"]}],
     ids=["name", "description", "both"],
 )
-def test_builder_rejects_non_string_name_and_description(kwargs: dict[str, object]):
+def test_builder_rejects_non_string_name_and_description(kwargs: dict[str, object]) -> None:
     """The builder forwards only strings into ``strawberry.field``'s ``name`` / ``description``."""
     with pytest.raises(ConfigurationError, match="takes a string name and description"):
         build_strawberry_input_class("NonStringKwargInput", [("field", int, kwargs)])
 
 
-def test_builder_rejects_malformed_field_kwargs_with_configuration_error():
+def test_builder_rejects_malformed_field_kwargs_with_configuration_error() -> None:
     with pytest.raises(ConfigurationError, match="field kwargs must be a mapping"):
         # basedpyright: the non-mapping field kwargs is the hostile input under test;
         # build_strawberry_input_class types each triple's kwargs as Mapping[str, object] | None
@@ -176,7 +177,7 @@ def test_builder_rejects_malformed_field_kwargs_with_configuration_error():
         ("__", "__"),
     ],
 )
-def test_graphql_camel_name(value: str, expected: str):
+def test_graphql_camel_name(value: str, expected: str) -> None:
     """Head lowercased, rest PascalCased; no-word-token inputs pass through."""
     assert graphql_camel_name(value) == expected
 
@@ -186,7 +187,7 @@ def test_graphql_camel_name(value: str, expected: str):
 # ---------------------------------------------------------------------------
 
 
-def test_filter_and_order_families_share_one_substrate():
+def test_filter_and_order_families_share_one_substrate() -> None:
     """Both ``inputs`` modules re-export the SAME shared mechanics by identity.
 
     This is the single-substrate contract guard: if a future change re-introduces a
@@ -211,7 +212,7 @@ def test_filter_and_order_families_share_one_substrate():
 # ---------------------------------------------------------------------------
 
 
-def test_materialize_generated_input_class_names_family_in_collision():
+def test_materialize_generated_input_class_names_family_in_collision() -> None:
     """The collision message is parameterized by ``family_label``.
 
     Proves the family-specific wording (``FilterSet`` / ``OrderSet``) is a
@@ -259,7 +260,7 @@ def test_materialize_generated_input_class_names_family_in_collision():
 # ---------------------------------------------------------------------------
 
 
-def test_iter_set_subclasses_dedupes_diamond_inheritance():
+def test_iter_set_subclasses_dedupes_diamond_inheritance() -> None:
     """A diamond hierarchy surfaces each subclass once (the dedup ``continue``)."""
 
     class Root:
@@ -279,7 +280,7 @@ def test_iter_set_subclasses_dedupes_diamond_inheritance():
     assert {B, C, D}.issubset(set(found))
 
 
-def test_safe_import_returns_none_for_unimportable_module():
+def test_safe_import_returns_none_for_unimportable_module() -> None:
     """``_safe_import`` swallows ImportError so a partial-load clear continues.
 
     A ``None`` entry in ``sys.modules`` makes the import raise ImportError --
@@ -293,7 +294,7 @@ def test_safe_import_returns_none_for_unimportable_module():
         assert _safe_import(fake_name, "anything") is None
 
 
-def test_safe_import_returns_none_for_missing_attribute_on_importable_module():
+def test_safe_import_returns_none_for_missing_attribute_on_importable_module() -> None:
     """``_safe_import`` keeps its attr-lenient shape: importable module, absent attr -> ``None``.
 
     The wrapper deliberately diverges from its ``import_attr_if_importable``
@@ -311,7 +312,7 @@ def test_safe_import_returns_none_for_missing_attribute_on_importable_module():
 # ---------------------------------------------------------------------------
 
 
-def test_input_field_spec_carries_five_axes_and_optional_source():
+def test_input_field_spec_carries_five_axes_and_optional_source() -> None:
     """``InputFieldSpec`` carries the five axes + the optional ``source`` (default ``None``)."""
     # Default source is None (the form-symmetric shape, no source axis).
     no_source = InputFieldSpec(
@@ -340,7 +341,7 @@ def test_input_field_spec_carries_five_axes_and_optional_source():
         with_source.source = "other"  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def test_make_input_namespace_returns_ledger_materialize_clear_trio():
+def test_make_input_namespace_returns_ledger_materialize_clear_trio() -> None:
     """``make_input_namespace`` returns ``(ledger, materialize, clear)``; clear empties the ledger.
 
     ``materialize`` writes a real module global; ``clear`` empties only the ledger
@@ -375,7 +376,7 @@ def test_make_input_namespace_returns_ledger_materialize_clear_trio():
     delattr(module, "ProbeNamespaceInputType")
 
 
-def test_set_input_type_name_delegates_to_type_name_for():
+def test_set_input_type_name_delegates_to_type_name_for() -> None:
     """``set_input_type_name`` is the one ``<Class>InputType`` derivation site."""
 
     class _Named(OrderSet):
@@ -384,7 +385,7 @@ def test_set_input_type_name_delegates_to_type_name_for():
     assert set_input_type_name(_Named) == "_NamedInputType"
 
 
-def test_make_set_input_namespace_returns_heavy_ledger_field_specs_materialize_clear():
+def test_make_set_input_namespace_returns_heavy_ledger_field_specs_materialize_clear() -> None:
     """Heavy quartet: materialize writes the ledger; clear empties ledger AND field_specs.
 
     Unimportable factory / set modules are tolerated (the same cycle-safe skip
@@ -436,7 +437,7 @@ def test_make_set_input_namespace_returns_heavy_ledger_field_specs_materialize_c
     delattr(module, "ProbeSetInputType")
 
 
-def test_filter_and_order_input_namespaces_ride_make_set_input_namespace():
+def test_filter_and_order_input_namespaces_ride_make_set_input_namespace() -> None:
     """Both set families unpack the same factory closures and naming helper."""
     from django_strawberry_framework.filters import inputs as filter_inputs
     from django_strawberry_framework.orders import inputs as order_inputs
@@ -450,21 +451,21 @@ def test_filter_and_order_input_namespaces_ride_make_set_input_namespace():
     )
 
 
-def test_base_container_values_reads_builtin_dict_items():
+def test_base_container_values_reads_builtin_dict_items() -> None:
     """The container reader exposes built-in dict entries without invoking overrides."""
     assert base_container_values({"name": 1}) == (("name", 1),)
 
 
-def test_normalize_field_name_sequence_wraps_hostile_iterators():
+def test_normalize_field_name_sequence_wraps_hostile_iterators() -> None:
     class _HostileSequence:
-        def __iter__(self):
+        def __iter__(self) -> NoReturn:
             raise RuntimeError("hostile field sequence")
 
     with pytest.raises(ConfigurationError, match="readable sequence"):
         normalize_field_name_sequence(_HostileSequence(), flavor="Probe")
 
 
-def test_normalize_field_name_sequence_rejects_unordered_sets():
+def test_normalize_field_name_sequence_rejects_unordered_sets() -> None:
     """A set / frozenset is rejected: its iteration order varies per process.
 
     The serializer flavor folds the DECLARED order into the generated input
@@ -485,51 +486,51 @@ def test_normalize_field_name_sequence_rejects_unordered_sets():
         )
 
 
-def test_meta_sorting_wraps_a_hostile_generic_iterator():
+def test_meta_sorting_wraps_a_hostile_generic_iterator() -> None:
     class _HostileIterable:
-        def __iter__(self):
+        def __iter__(self) -> NoReturn:
             raise RuntimeError("metadata iteration exploded")
 
     with pytest.raises(ConfigurationError, match="unreadable _HostileIterable container"):
         _sorted_meta_values(_HostileIterable())
 
 
-def test_input_builder_wraps_unreadable_and_malformed_field_specifications():
+def test_input_builder_wraps_unreadable_and_malformed_field_specifications() -> None:
     class _UnreadableSpecs:
-        def __iter__(self):
+        def __iter__(self) -> NoReturn:
             raise RuntimeError("field specs exploded")
 
     with pytest.raises(ConfigurationError, match="field specifications could not be read"):
         # basedpyright: the unreadable field-spec container is the hostile input under test;
         # build_strawberry_input_class types the parameter as a Sequence of triples
         build_strawberry_input_class("UnreadableInput", _UnreadableSpecs())  # pyright: ignore[reportArgumentType]
-    with pytest.raises(ConfigurationError, match="must contain.*triples"):
+    with pytest.raises(ConfigurationError, match=r"must contain.*triples"):
         # basedpyright: the two-member field spec is the hostile input under test;
         # build_strawberry_input_class types the parameter as a Sequence of triples
         build_strawberry_input_class("MalformedInput", [("name", int)])  # pyright: ignore[reportArgumentType]
 
 
-def test_meta_fields_canonicalization_bypasses_hostile_containers_and_reprs():
+def test_meta_fields_canonicalization_bypasses_hostile_containers_and_reprs() -> None:
     """``Meta.fields`` canonicalization never trusts consumer container hooks or reprs."""
 
     class _HostileRepr:
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("hostile repr")
 
     class _HostileDict(dict[str, object]):
         @override
-        def items(self):
+        def items(self) -> NoReturn:
             raise RuntimeError("hostile items")
 
     class _HostileSet(set[object]):
         @override
-        def __iter__(self):
+        def __iter__(self) -> NoReturn:
             raise RuntimeError("hostile set iterator")
 
     class _HostileList(list[object]):
         @override
-        def __iter__(self):
+        def __iter__(self) -> NoReturn:
             raise RuntimeError("hostile list iterator")
 
     hostile_repr = _HostileRepr()
@@ -541,7 +542,7 @@ def test_meta_fields_canonicalization_bypasses_hostile_containers_and_reprs():
     assert _sorted_meta_values(_HostileList(["z", "a"])) == ["a", "z"]
 
 
-def test_resolve_set_meta_fields_promotes_the_alias_on_a_meta_class():
+def test_resolve_set_meta_fields_promotes_the_alias_on_a_meta_class() -> None:
     """A class Meta supplying only ``filter_fields`` resolves through the synonym."""
     alias = {"code": ["exact"]}
 
@@ -551,7 +552,7 @@ def test_resolve_set_meta_fields_promotes_the_alias_on_a_meta_class():
     assert resolve_set_meta_fields(Meta, fields_alias=FILTERSET_FIELDS_ALIAS) == (alias, True)
 
 
-def test_resolve_set_meta_fields_fields_wins_over_the_alias():
+def test_resolve_set_meta_fields_fields_wins_over_the_alias() -> None:
     """``fields`` wins over ``filter_fields``; ``from_alias`` is False."""
 
     class Both:
@@ -561,7 +562,7 @@ def test_resolve_set_meta_fields_fields_wins_over_the_alias():
     assert resolve_set_meta_fields(Both, fields_alias=FILTERSET_FIELDS_ALIAS) == (["name"], False)
 
 
-def test_resolve_set_meta_fields_none_source_and_no_alias_family():
+def test_resolve_set_meta_fields_none_source_and_no_alias_family() -> None:
     """``None`` source and the order-side ``fields_alias=None`` are no-ops."""
     assert resolve_set_meta_fields(None, fields_alias=FILTERSET_FIELDS_ALIAS) == (None, False)
 
@@ -571,7 +572,7 @@ def test_resolve_set_meta_fields_none_source_and_no_alias_family():
     assert resolve_set_meta_fields(AliasOnly, fields_alias=None) == (None, False)
 
 
-def test_set_metaclasses_share_the_fields_alias_owner():
+def test_set_metaclasses_share_the_fields_alias_owner() -> None:
     """Both set families promote and read ``Meta.fields`` through one rule."""
     from django_strawberry_framework.filters import sets as filter_sets
     from django_strawberry_framework.orders import sets as order_sets
@@ -585,7 +586,7 @@ def test_set_metaclasses_share_the_fields_alias_owner():
     assert "read_set_meta_fields" in order_sets.OrderSet._expand_meta_fields.__code__.co_names
 
 
-def test_promote_set_meta_fields_writes_the_alias_onto_class_meta():
+def test_promote_set_meta_fields_writes_the_alias_onto_class_meta() -> None:
     """Class Meta gets ``.fields``; the consumer's alias attribute stays."""
 
     class Meta:
@@ -597,7 +598,7 @@ def test_promote_set_meta_fields_writes_the_alias_onto_class_meta():
     assert Meta.filter_fields == ["code"]
 
 
-def test_read_set_meta_fields_canonicalizes_sets_without_mutating_source():
+def test_read_set_meta_fields_canonicalizes_sets_without_mutating_source() -> None:
     """Expansion reads process-stable order; class Meta keeps the original set."""
     names = {"title", "subtitle"}
 
@@ -616,7 +617,7 @@ def test_read_set_meta_fields_canonicalizes_sets_without_mutating_source():
     assert read_set_meta_fields(None) is None
 
 
-def test_make_shape_build_cache_returns_dict_and_clear():
+def test_make_shape_build_cache_returns_dict_and_clear() -> None:
     """``make_shape_build_cache`` returns a ``(dict, clear)`` pair; clear empties the dict."""
     cache_pair: tuple[dict[tuple[str, str, frozenset[str]], object], Callable[[], None]] = (
         make_shape_build_cache()
@@ -629,7 +630,7 @@ def test_make_shape_build_cache_returns_dict_and_clear():
     assert cache == {}
 
 
-def test_get_or_store_shape_build_stores_on_miss_and_reuses_on_hit():
+def test_get_or_store_shape_build_stores_on_miss_and_reuses_on_hit() -> None:
     """A miss stores ``factory()``; a later hit returns it without calling factory again."""
     cache: dict[str, str] = {}
     calls: list[int] = []
@@ -644,7 +645,7 @@ def test_get_or_store_shape_build_stores_on_miss_and_reuses_on_hit():
     assert cache["k"] == "built"
 
 
-def test_write_flavor_shape_caches_share_get_or_store_owner():
+def test_write_flavor_shape_caches_share_get_or_store_owner() -> None:
     """Model bind, form cached_build_input, and serializer dedupe import one get-or-store."""
     from django_strawberry_framework.mutations import sets as mutation_sets
     from django_strawberry_framework.rest_framework import inputs as ser_inputs
@@ -653,7 +654,7 @@ def test_write_flavor_shape_caches_share_get_or_store_owner():
     assert module_binding(ser_inputs, "get_or_store_shape_build") is get_or_store_shape_build
 
 
-def test_pascalize_token_is_injective_across_legal_field_name_boundaries():
+def test_pascalize_token_is_injective_across_legal_field_name_boundaries() -> None:
     """Underscore, digit, and case distinctions survive without interior capitals."""
     assert pascalize_token("") == ""
     assert pascalize_token("is_private") == "Is_uprivate"
@@ -675,7 +676,7 @@ def test_pascalize_token_is_injective_across_legal_field_name_boundaries():
         assert pascalize_token(left) != pascalize_token(right)
 
 
-def test_name_set_input_type_name_canonical_and_narrowed():
+def test_name_set_input_type_name_canonical_and_narrowed() -> None:
     """Full name-set shapes take ``<Base>Input`` / ``PartialInput``; a narrowing is tokenized."""
     full = ("name", "category")
     assert (
@@ -707,7 +708,7 @@ def test_name_set_input_type_name_canonical_and_narrowed():
     )
 
 
-def test_name_set_input_type_name_token_boundaries_do_not_collide():
+def test_name_set_input_type_name_token_boundaries_do_not_collide() -> None:
     """Sorted ``pascalize_token`` concatenation stays uniquely decomposable."""
     full = ("other",)
     left = name_set_input_type_name(
@@ -737,7 +738,7 @@ class _CollisionSpec:
     source: str
 
 
-def test_input_collision_walker_reports_shared_write_sources():
+def test_input_collision_walker_reports_shared_write_sources() -> None:
     """The optional source axis detects two distinct fields writing one attribute."""
     specs = [
         _CollisionSpec(
@@ -769,7 +770,7 @@ def test_input_collision_walker_reports_shared_write_sources():
     assert "'name' and 'alias' sharing one source 'name'" in messages[0]
 
 
-def test_optional_field_kwargs_defaults_none_and_aliases_only_on_divergence():
+def test_optional_field_kwargs_defaults_none_and_aliases_only_on_divergence() -> None:
     """The A4 helper carries aliases; the builder pins package-default names."""
     from django_strawberry_framework.utils.inputs import optional_field_kwargs
 
@@ -781,7 +782,7 @@ def test_optional_field_kwargs_defaults_none_and_aliases_only_on_divergence():
     assert optional_field_kwargs("field_2", "field_2") == {"default": None}
 
 
-def test_optional_input_field_widens_and_aliases_per_flags():
+def test_optional_input_field_widens_and_aliases_per_flags() -> None:
     """The A10 helper widens optional fields and carries only divergent aliases."""
     from django_strawberry_framework.utils.inputs import optional_input_field
 
@@ -804,7 +805,7 @@ def test_optional_input_field_widens_and_aliases_per_flags():
     assert kwargs == {}
 
 
-def test_iter_provided_input_fields_handles_none_and_non_inputs():
+def test_iter_provided_input_fields_handles_none_and_non_inputs() -> None:
     """iter_provided_input_fields yields nothing on None or non-Strawberry inputs."""
     from django_strawberry_framework.utils.inputs import iter_provided_input_fields
 
@@ -813,7 +814,7 @@ def test_iter_provided_input_fields_handles_none_and_non_inputs():
     assert list(iter_provided_input_fields(42)) == []
 
 
-def test_generated_input_arguments_factory_tolerates_none_or_missing_related_attr():
+def test_generated_input_arguments_factory_tolerates_none_or_missing_related_attr() -> None:
     """GeneratedInputArgumentsFactory does not crash when related_attr is None or missing."""
     from django_strawberry_framework.utils.inputs import GeneratedInputArgumentsFactory
 
@@ -845,7 +846,7 @@ def test_generated_input_arguments_factory_tolerates_none_or_missing_related_att
     assert input_cls.__name__ == "_SetWithNoneRelatedInputType"
 
 
-def test_build_strawberry_input_class_rejects_empty_specs_with_the_callers_remedy():
+def test_build_strawberry_input_class_rejects_empty_specs_with_the_callers_remedy() -> None:
     """The zero-field guard lives at the construction site, not only at its callers.
 
     Strawberry rejects an empty input object at ``Schema(...)`` build with a raw
@@ -867,7 +868,7 @@ def test_build_strawberry_input_class_rejects_empty_specs_with_the_callers_remed
     assert built.__name__ == "EmptyMergedInputType"
 
 
-def test_emit_rejects_graphql_name_collision_across_distinct_python_attrs():
+def test_emit_rejects_graphql_name_collision_across_distinct_python_attrs() -> None:
     """The emit scaffold's SECOND arm: two members collapsing onto one GraphQL name.
 
     ``foo_bar`` and ``fooBar`` flatten to distinct python attrs, but
@@ -894,7 +895,7 @@ def test_emit_rejects_graphql_name_collision_across_distinct_python_attrs():
     assert field_specs == {}
 
 
-def test_emit_rejects_flatten_collision_between_traversal_and_declared_member():
+def test_emit_rejects_flatten_collision_between_traversal_and_declared_member() -> None:
     """``a__b`` (a relation traversal) flattens onto the declared member ``a_b``."""
 
     class _ProbeSet(ClassBasedTypeNameMixin):
@@ -917,7 +918,7 @@ def _class_name(cls: type) -> str:
     return cls.__name__
 
 
-def test_emit_stages_field_specs_atomically_across_a_clean_walk_then_collision():
+def test_emit_stages_field_specs_atomically_across_a_clean_walk_then_collision() -> None:
     """``field_specs`` rows commit only after the WHOLE set walks clean.
 
     Writing provenance rows as each field is emitted left the family table
@@ -932,7 +933,7 @@ def test_emit_stages_field_specs_atomically_across_a_clean_walk_then_collision()
     def _emit(
         entries: list[tuple[str, object]],
         field_specs: dict[tuple[type, str], GeneratedInputFieldSpec],
-    ):
+    ) -> list[tuple[str, object, dict[str, object]]]:
         return emit_set_input_field_triples(
             _ProbeSet,
             entries,

@@ -61,6 +61,7 @@ from collections.abc import AsyncGenerator, Generator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from types import SimpleNamespace
+from typing import NoReturn
 
 import pytest
 import pytest_django
@@ -154,7 +155,7 @@ def default_wrapper() -> Iterator[BaseDatabaseWrapper]:
 # ---------------------------------------------------------------------------
 
 
-def test_exception_serializer_triple_forms():
+def test_exception_serializer_triple_forms() -> None:
     with pytest.raises(ValueError, match="kaboom message") as raised:
         raise ValueError("kaboom message")
 
@@ -169,7 +170,7 @@ def test_exception_serializer_triple_forms():
     assert "test_exception_serializer_triple_forms" in row["stack"]  # the raise site
 
 
-def test_exception_serializer_chained_traceback_stack():
+def test_exception_serializer_chained_traceback_stack() -> None:
     """A ``raise ... from`` chain serializes BOTH tracebacks; the triple stays outer-only.
 
     ``format_exception``'s default ``chain=True`` follows ``__cause__``, so
@@ -233,9 +234,10 @@ def test_sql_row_serializer_slow_threshold_and_executemany_form(
     sql: str,
     time: str,
     expected_duration: float,
+    *,
     expected_slow: bool,
     expected_select: bool,
-):
+) -> None:
     """The 10s slow cut and the executemany log form have no live SQL shape.
 
     Wire keys, ``float`` duration, and interpolated ``SELECT`` (no ``%s``) are
@@ -263,7 +265,7 @@ def test_sql_row_serializer_slow_threshold_and_executemany_form(
     assert row["isSelect"] is expected_select
 
 
-def test_exception_collector_guards_filter_order_and_no_dedup():
+def test_exception_collector_guards_filter_order_and_no_dedup() -> None:
     # The two None guards (the sync pre-execution teardown shapes).
     assert _collect_exceptions(None) == []
     assert _collect_exceptions(SimpleNamespace(errors=None)) == []
@@ -297,7 +299,7 @@ def test_exception_collector_guards_filter_order_and_no_dedup():
     assert rows[1]["excType"] == "<class 'graphql.error.graphql_error.GraphQLError'>"
 
 
-def test_nested_original_error_chain_reaches_the_terminal_python_exception():
+def test_nested_original_error_chain_reaches_the_terminal_python_exception() -> None:
     terminal = ValueError("the real one")
     inner = GraphQLError("inner", original_error=terminal)
     outer = GraphQLError("outer", original_error=inner)
@@ -310,7 +312,7 @@ def test_nested_original_error_chain_reaches_the_terminal_python_exception():
 # ---------------------------------------------------------------------------
 
 
-def test_hop_policy_self_cycle_terminates_deterministically():
+def test_hop_policy_self_cycle_terminates_deterministically() -> None:
     cyclic = GraphQLError("self cycle")
     cyclic.original_error = cyclic
     outer = GraphQLError("outer", original_error=cyclic)
@@ -318,7 +320,7 @@ def test_hop_policy_self_cycle_terminates_deterministically():
     assert _terminal_original_error(outer) is cyclic
 
 
-def test_hop_policy_multi_node_cycle_returns_last_unique_candidate():
+def test_hop_policy_multi_node_cycle_returns_last_unique_candidate() -> None:
     node_a = GraphQLError("a")
     node_b = GraphQLError("b")
     node_a.original_error = node_b
@@ -328,7 +330,7 @@ def test_hop_policy_multi_node_cycle_returns_last_unique_candidate():
     assert _terminal_original_error(outer) is node_b
 
 
-def test_hop_policy_long_acyclic_chain_stops_at_the_ceiling():
+def test_hop_policy_long_acyclic_chain_stops_at_the_ceiling() -> None:
     chain = [GraphQLError(f"hop {index}") for index in range(100)]
     for parent, child in itertools.pairwise(chain):
         parent.original_error = child
@@ -349,8 +351,9 @@ def test_hop_policy_long_acyclic_chain_stops_at_the_ceiling():
 @pytest.mark.parametrize("prior", [False, True], ids=["prior-false", "prior-true"])
 def test_coordinator_saved_value_restore_and_depth(
     default_wrapper: BaseDatabaseWrapper,
+    *,
     prior: bool,
-):
+) -> None:
     coordinator = _CursorCaptureCoordinator()
     default_wrapper.force_debug_cursor = prior
 
@@ -374,11 +377,11 @@ def test_coordinator_saved_value_restore_and_depth(
 
 def test_coordinator_isolates_distinct_wrappers_for_one_alias(
     default_wrapper: BaseDatabaseWrapper,
-):
+) -> None:
     coordinator = _CursorCaptureCoordinator()
     holder: dict[str, BaseDatabaseWrapper] = {}
 
-    def _materialize_thread_local_wrapper():
+    def _materialize_thread_local_wrapper() -> None:
         holder["wrapper"] = connections["default"]
 
     worker = threading.Thread(target=_materialize_thread_local_wrapper)
@@ -404,7 +407,7 @@ def test_coordinator_isolates_distinct_wrappers_for_one_alias(
 def test_partial_acquisition_failure_unwinds_earlier_connections(
     default_wrapper: BaseDatabaseWrapper,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A later-alias acquire failure restores every earlier alias before propagating.
 
     The one sanctioned fake, sitting at the private acquisition boundary
@@ -421,7 +424,9 @@ def test_partial_acquisition_failure_unwinds_earlier_connections(
 
     real_acquire = debug_module._coordinator.acquire
 
-    def _acquire(database_connection: BaseDatabaseWrapper | SimpleNamespace):
+    def _acquire(
+        database_connection: BaseDatabaseWrapper | SimpleNamespace,
+    ) -> debug_module._CaptureToken:
         if database_connection is exploding_wrapper:
             raise RuntimeError("second alias acquisition failed")
         return real_acquire(_as_connection(database_connection))
@@ -444,7 +449,7 @@ def test_partial_acquisition_failure_unwinds_earlier_connections(
     assert extension.get_results() == {}  # no stash was ever published
 
 
-def test_query_log_slicing_suffix_clamp_and_rollover():
+def test_query_log_slicing_suffix_clamp_and_rollover() -> None:
     log: deque[dict[str, str]] = deque(maxlen=5)
     log.append({"sql": "pre-existing", "time": "0.001"})
     wrapper = SimpleNamespace(queries_log=log)
@@ -480,7 +485,7 @@ def test_query_log_slicing_suffix_clamp_and_rollover():
 # ---------------------------------------------------------------------------
 
 
-def test_get_results_no_stash_shape_and_idempotent_read():
+def test_get_results_no_stash_shape_and_idempotent_read() -> None:
     extension = DjangoDebugExtension()  # zero-argument construction succeeds
 
     assert extension.get_results() == {}  # no operation at all: never {"debug": None}
@@ -504,7 +509,7 @@ def test_get_results_no_stash_shape_and_idempotent_read():
 
 
 @override_settings(DEBUG=True)
-def test_validation_failure_with_raising_teardown_calls_get_results_twice():
+def test_validation_failure_with_raising_teardown_calls_get_results_twice() -> None:
     """The early-result plus teardown-failure recovery path invokes get_results twice.
 
     The validation early return evaluates the extension results INSIDE the
@@ -526,7 +531,7 @@ def test_validation_failure_with_raising_teardown_calls_get_results_twice():
 
     class _RaisingTeardown(SchemaExtension):
         @override
-        def on_operation(self):
+        def on_operation(self) -> Iterator[None]:
             yield
             raise RuntimeError("teardown boom")
 
@@ -542,12 +547,12 @@ def test_validation_failure_with_raising_teardown_calls_get_results_twice():
 
 
 @override_settings(DEBUG=True)
-def test_parse_failure_with_raising_teardown_publishes_no_debug_key():
+def test_parse_failure_with_raising_teardown_publishes_no_debug_key() -> None:
     """Parse early-return + sibling teardown raise must still omit ``debug``."""
 
     class _RaisingTeardown(SchemaExtension):
         @override
-        def on_operation(self):
+        def on_operation(self) -> Iterator[None]:
             yield
             raise RuntimeError("teardown boom")
 
@@ -562,7 +567,7 @@ def test_parse_failure_with_raising_teardown_publishes_no_debug_key():
 
 
 @override_settings(DEBUG=True)
-async def test_async_validation_failure_with_raising_teardown_publishes_no_debug_key():
+async def test_async_validation_failure_with_raising_teardown_publishes_no_debug_key() -> None:
     """Async validation sets ``PreExecutionError`` on context before teardown.
 
     That assignment must not be mistaken for GraphQL execution, or the
@@ -571,7 +576,7 @@ async def test_async_validation_failure_with_raising_teardown_publishes_no_debug
 
     class _RaisingTeardown(SchemaExtension):
         @override
-        def on_operation(self):
+        def on_operation(self) -> Iterator[None]:
             yield
             raise RuntimeError("teardown boom")
 
@@ -586,19 +591,19 @@ async def test_async_validation_failure_with_raising_teardown_publishes_no_debug
 
 
 @override_settings(DEBUG=True)
-def test_generic_recovery_alone_calls_get_results_once():
+def test_generic_recovery_alone_calls_get_results_once() -> None:
     """A teardown failure on an EXECUTED operation is one recovery, one get_results call."""
     calls: list[int] = []
 
     class _CountingDebug(DjangoDebugExtension):
         @override
-        def get_results(self):
+        def get_results(self) -> dict[str, _DebugPayload]:
             calls.append(1)
             return super().get_results()
 
     class _RaisingTeardown(SchemaExtension):
         @override
-        def on_operation(self):
+        def on_operation(self) -> Iterator[None]:
             yield
             raise RuntimeError("teardown boom")
 
@@ -618,8 +623,9 @@ def test_generic_recovery_alone_calls_get_results_once():
 @pytest.mark.parametrize("prior", [False, True], ids=["prior-false", "prior-true"])
 def test_execute_sync_restores_the_prior_flag_value(
     default_wrapper: BaseDatabaseWrapper,
+    *,
     prior: bool,
-):
+) -> None:
     default_wrapper.force_debug_cursor = prior
     schema = strawberry.Schema(query=_OkQuery, extensions=[DjangoDebugExtension])
 
@@ -644,7 +650,7 @@ def test_execute_sync_restores_the_prior_flag_value(
     [True, False],
     ids=["debug-after-masking", "debug-before-masking"],
 )
-def test_mask_errors_ordering_controls_exception_visibility(debug_after_masking: bool):
+def test_mask_errors_ordering_controls_exception_visibility(*, debug_after_masking: bool) -> None:
     if debug_after_masking:
         extension_list = [partial(MaskErrors), DjangoDebugExtension]
     else:
@@ -675,33 +681,33 @@ def test_mask_errors_ordering_controls_exception_visibility(debug_after_masking:
 
 class _FirstProbe(SchemaExtension):
     @override
-    def get_results(self):
+    def get_results(self) -> dict[str, str | int]:
         return {"probe": "first", "only_first": 1}
 
 
 class _SecondProbe(SchemaExtension):
     @override
-    def get_results(self):
+    def get_results(self) -> dict[str, str]:
         return {"probe": "second"}
 
 
 class _ContextResultsSeeder(SchemaExtension):
     @override
-    def on_operation(self):
+    def on_operation(self) -> Iterator[None]:
         self.execution_context.extensions_results = {"probe": "context"}
         yield
 
 
 class _ResultMapPrepopulator(SchemaExtension):
     @override
-    def on_operation(self):
+    def on_operation(self) -> Iterator[None]:
         yield
         result = execution_result(self.execution_context)
         assert isinstance(result, GraphQLExecutionResult)
         result.extensions = {"sentinel": True}
 
 
-def test_extension_list_order_wins_same_key_collisions_sync():
+def test_extension_list_order_wins_same_key_collisions_sync() -> None:
     schema = strawberry.Schema(query=_OkQuery, extensions=[_FirstProbe, _SecondProbe])
 
     result = schema.execute_sync("{ ok }")
@@ -711,7 +717,7 @@ def test_extension_list_order_wins_same_key_collisions_sync():
     assert result.extensions["only_first"] == 1
 
 
-async def test_extension_list_order_wins_same_key_collisions_async():
+async def test_extension_list_order_wins_same_key_collisions_async() -> None:
     schema = strawberry.Schema(query=_OkQuery, extensions=[_FirstProbe, _SecondProbe])
 
     result = await schema.execute("{ ok }")
@@ -721,7 +727,7 @@ async def test_extension_list_order_wins_same_key_collisions_async():
     assert result.extensions["only_first"] == 1
 
 
-async def test_async_context_results_overlay_has_final_precedence():
+async def test_async_context_results_overlay_has_final_precedence() -> None:
     schema = strawberry.Schema(
         query=_OkQuery,
         extensions=[_FirstProbe, _SecondProbe, _ContextResultsSeeder],
@@ -733,7 +739,7 @@ async def test_async_context_results_overlay_has_final_precedence():
     assert result.extensions["probe"] == "context"
 
 
-def test_sync_runner_has_no_context_results_overlay():
+def test_sync_runner_has_no_context_results_overlay() -> None:
     schema = strawberry.Schema(
         query=_OkQuery,
         extensions=[_FirstProbe, _SecondProbe, _ContextResultsSeeder],
@@ -745,7 +751,7 @@ def test_sync_runner_has_no_context_results_overlay():
     assert result.extensions["probe"] == "second"  # the seeded map is never overlaid
 
 
-async def test_prepopulated_result_extensions_map_is_replaced_not_merged():
+async def test_prepopulated_result_extensions_map_is_replaced_not_merged() -> None:
     schema = strawberry.Schema(
         query=_OkQuery,
         extensions=[_FirstProbe, _ResultMapPrepopulator],
@@ -775,7 +781,7 @@ async def test_prepopulated_result_extensions_map_is_replaced_not_merged():
 )
 async def test_async_overlapping_operations_share_the_wrapper_and_restore(
     completion_order: tuple[str, str],
-):
+) -> None:
     """Two overlapping async operations refcount one wrapper and restore in any order.
 
     The wrapper is materialized in the parent async context BEFORE either task
@@ -842,7 +848,7 @@ async def test_async_overlapping_operations_share_the_wrapper_and_restore(
 @pytest.mark.django_db
 def test_nested_sync_operations_share_the_log_and_cross_attribute(
     default_wrapper: BaseDatabaseWrapper,
-):
+) -> None:
     original_flag = default_wrapper.force_debug_cursor
     inner_holder: dict[str, ExecutionResult] = {}
 
@@ -894,13 +900,15 @@ def test_nested_sync_operations_share_the_log_and_cross_attribute(
 # test - selected by node id, never a copied script - in an isolated
 # ``strawberry-graphql==0.322.2`` environment:
 #
+# ruff: disable[ERA001]
 #   uv run pytest -o addopts="-v -n0" \
 #     "tests/extensions/test_debug.py::test_concurrent_sync_operations_use_isolated_instances"
+# ruff: enable[ERA001]
 # ---------------------------------------------------------------------------
 
 
 @override_settings(DEBUG=True)
-def test_concurrent_sync_operations_use_isolated_instances():
+def test_concurrent_sync_operations_use_isolated_instances() -> None:
     """Two concurrent sync operations never see each other's exception payloads.
 
     The resolvers perform NO ORM work in the executor threads (concurrent
@@ -923,7 +931,7 @@ def test_concurrent_sync_operations_use_isolated_instances():
     thread_wrappers = {}
     restored_flags = {}
 
-    def _run(marker: str):
+    def _run(marker: str) -> ExecutionResult:
         thread_wrappers[marker] = connections["default"]
         result = schema.execute_sync(f'{{ boom(marker: "{marker}") }}')
         restored_flags[marker] = connections["default"].force_debug_cursor
@@ -956,7 +964,7 @@ def test_concurrent_sync_operations_use_isolated_instances():
 def test_sql_diagnostic_failure_degrades_payload_and_preserves_the_result(
     default_wrapper: BaseDatabaseWrapper,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """A malformed backend log entry costs its own row and never the result."""
 
     @strawberry.type
@@ -998,7 +1006,7 @@ def test_sql_diagnostic_failure_degrades_payload_and_preserves_the_result(
 
 def test_a_failing_query_log_drain_degrades_to_the_rows_serialized_so_far(
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """The other SQL degrade: a log that cannot be DRAINED is not a per-row failure.
 
     The per-row guard covers a bad entry, but reading a connection's query log
@@ -1010,7 +1018,7 @@ def test_a_failing_query_log_drain_degrades_to_the_rows_serialized_so_far(
     """
 
     class _ExplodingQueryLog:
-        def __iter__(self):
+        def __iter__(self) -> NoReturn:
             raise RuntimeError("query log read failed")
 
     good = SimpleNamespace(vendor="sqlite", alias="default", queries_log=[])
@@ -1040,12 +1048,14 @@ def test_a_failing_query_log_drain_degrades_to_the_rows_serialized_so_far(
     assert any("SQL diagnostic collection failed" in record.message for record in caplog.records)
 
 
-def test_exception_diagnostic_failure_degrades_to_an_empty_list(caplog: pytest.LogCaptureFixture):
+def test_exception_diagnostic_failure_degrades_to_an_empty_list(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """A failing errors read degrades ``exceptions`` to [] without raising."""
 
     class _ExplodingResult:
         @property
-        def errors(self):
+        def errors(self) -> NoReturn:
             raise RuntimeError("diagnostic errors read failed")
 
     with caplog.at_level(logging.ERROR, logger="django_strawberry_framework"):
@@ -1063,7 +1073,9 @@ def test_exception_diagnostic_failure_degrades_to_an_empty_list(caplog: pytest.L
 
 
 @pytest.mark.django_db
-def test_cursor_construction_defines_the_capture_interval(default_wrapper: BaseDatabaseWrapper):
+def test_cursor_construction_defines_the_capture_interval(
+    default_wrapper: BaseDatabaseWrapper,
+) -> None:
     pre_opened_cursor = default_wrapper.cursor()  # a NORMAL cursor, created before acquire
     token = debug_module._coordinator.acquire(default_wrapper)
     try:
@@ -1096,7 +1108,7 @@ class _MarkerSQLExtension(SchemaExtension):
     """A sibling whose ``on_operation`` performs marker SQL around its yield."""
 
     @override
-    def on_operation(self):
+    def on_operation(self) -> Iterator[None]:
         with connection.cursor() as cursor:
             cursor.execute("SELECT 31")  # the setup marker
         yield
@@ -1111,7 +1123,7 @@ class _MarkerSQLExtension(SchemaExtension):
     [True, False],
     ids=["debug-listed-first", "debug-listed-second"],
 )
-def test_sibling_hook_sql_capture_is_list_order_dependent(debug_listed_first: bool):
+def test_sibling_hook_sql_capture_is_list_order_dependent(*, debug_listed_first: bool) -> None:
     if debug_listed_first:
         extension_list = [DjangoDebugExtension, _MarkerSQLExtension]
     else:
@@ -1146,14 +1158,14 @@ def test_sibling_hook_sql_capture_is_list_order_dependent(debug_listed_first: bo
 # ---------------------------------------------------------------------------
 
 
-def test_zero_argument_construction_defaults_to_the_safe_answer():
+def test_zero_argument_construction_defaults_to_the_safe_answer() -> None:
     """A bare class entry is built with no arguments, so the default must fail closed."""
     assert DjangoDebugExtension().allow_unsafe_production is False
     assert DjangoDebugExtension(allow_unsafe_production=True).allow_unsafe_production is True
 
     with pytest.raises(TypeError):
         # basedpyright: deliberately positional; keyword-only acknowledging must be SPELLED
-        DjangoDebugExtension(True)  # pyright: ignore[reportCallIssue]
+        DjangoDebugExtension(True)  # pyright: ignore[reportCallIssue]  # noqa: FBT003 - a positional bool is the misuse under test
 
 
 @pytest.mark.parametrize(
@@ -1181,7 +1193,7 @@ def test_zero_argument_construction_defaults_to_the_safe_answer():
 )
 def test_a_non_bool_acknowledgement_is_refused_at_construction(
     value: str | int | list[object] | None,
-):
+) -> None:
     """The acknowledgement is a bool, not a truthiness test.
 
     ``"false"`` is the case that makes this a security row rather than a typing
@@ -1198,7 +1210,7 @@ def test_a_non_bool_acknowledgement_is_refused_at_construction(
 
 
 @override_settings(DEBUG=False)
-def test_a_refused_acknowledgement_never_becomes_an_armed_extension():
+def test_a_refused_acknowledgement_never_becomes_an_armed_extension() -> None:
     """The refusal happens at construction, so no operation can run with it.
 
     The consequence worth pinning separately from the message: a schema whose
@@ -1221,7 +1233,7 @@ def test_a_refused_acknowledgement_never_becomes_an_armed_extension():
 def test_inert_operation_acquires_no_bracket_and_takes_no_snapshot(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """Refusal is inertness, not payload suppression: no acquire, no snapshot, no flag write.
 
     The connections handler is replaced by one whose ``all()`` raises: the
@@ -1238,7 +1250,7 @@ def test_inert_operation_acquires_no_bracket_and_takes_no_snapshot(
         for database_connection in connections.all()
     }
 
-    def _refuse():
+    def _refuse() -> NoReturn:
         raise AssertionError("the inert path must never enumerate the connections")
 
     monkeypatch.setattr(debug_module, "connections", SimpleNamespace(all=_refuse))
@@ -1269,7 +1281,7 @@ def test_inert_operation_acquires_no_bracket_and_takes_no_snapshot(
 def test_acknowledged_factory_restores_the_cursor_bracket_and_logs_no_warning(
     default_wrapper: BaseDatabaseWrapper,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """The acknowledged spelling is silent, and its bracket unwinds like the gated one.
 
     Both halves are internal state a response cannot show: the absence of a log
@@ -1330,7 +1342,7 @@ def _exception_row(message: str, stack: str = "") -> _DebugExceptionRow:
 # ---------------------------------------------------------------------------
 
 
-async def test_streaming_seam_publishes_the_payload_the_engine_reads():
+async def test_streaming_seam_publishes_the_payload_the_engine_reads() -> None:
     """A streamed operation carries ``extensions["debug"]`` like execute does.
 
     Regression for the streaming seam: ``Schema.stream`` reads the extension
@@ -1371,7 +1383,7 @@ async def test_streaming_seam_publishes_the_payload_the_engine_reads():
     ]
 
 
-async def test_streaming_clean_operation_carries_both_lists():
+async def test_streaming_clean_operation_carries_both_lists() -> None:
     schema = strawberry.Schema(
         query=_OkQuery,
         extensions=[lambda: DjangoDebugExtension(allow_unsafe_production=True)],
@@ -1387,16 +1399,14 @@ async def test_streaming_clean_operation_carries_both_lists():
     assert payload == {"sql": [], "exceptions": []}
 
 
-async def test_streaming_parse_failure_publishes_no_debug_key():
+async def test_streaming_parse_failure_publishes_no_debug_key() -> None:
     """The no-key contract holds on the streaming seam for a never-executed operation."""
     schema = strawberry.Schema(
         query=_OkQuery,
         extensions=[lambda: DjangoDebugExtension(allow_unsafe_production=True)],
     )
 
-    frames: list[object] = []
-    async for result in await _open_stream(schema, "{ ok"):
-        frames.append(result)
+    frames = [result async for result in await _open_stream(schema, "{ ok")]
 
     assert frames
     for result in frames:
@@ -1405,7 +1415,9 @@ async def test_streaming_parse_failure_publishes_no_debug_key():
 
 
 @override_settings(DEBUG=False)
-async def test_streaming_fail_closed_gate_withholds_and_warns(caplog: pytest.LogCaptureFixture):
+async def test_streaming_fail_closed_gate_withholds_and_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """The inert gate holds on the streaming seam: no key, one warning, operation intact."""
     schema = strawberry.Schema(query=_OkQuery, extensions=[DjangoDebugExtension])
 
@@ -1425,11 +1437,11 @@ async def test_streaming_fail_closed_gate_withholds_and_warns(caplog: pytest.Log
     assert "allow_unsafe_production" in warnings[0].getMessage()
 
 
-def test_caps_leave_an_empty_payload_with_both_lists_present():
+def test_caps_leave_an_empty_payload_with_both_lists_present() -> None:
     assert _apply_payload_caps([], []) == {"sql": [], "exceptions": []}
 
 
-def test_over_long_row_strings_are_cut_at_their_own_limit_and_marked():
+def test_over_long_row_strings_are_cut_at_their_own_limit_and_marked() -> None:
     """Each variable-length string has its OWN limit, and only a cut value is marked."""
     payload = _apply_payload_caps(
         [_sql_row("s" * (_SQL_TEXT_CAP + 1)), _sql_row("SELECT 1")],
@@ -1454,7 +1466,7 @@ def test_over_long_row_strings_are_cut_at_their_own_limit_and_marked():
     assert payload["sql"][0]["duration"] == 0.001
 
 
-def test_row_count_caps_keep_exactly_the_earliest_rows():
+def test_row_count_caps_keep_exactly_the_earliest_rows() -> None:
     """The TAIL is dropped: the first rows explain how the operation started."""
     payload = _apply_payload_caps(
         [_sql_row(f"SELECT {index}") for index in range(_SQL_ROW_CAP + 7)],
@@ -1469,7 +1481,7 @@ def test_row_count_caps_keep_exactly_the_earliest_rows():
     ]
 
 
-def test_shared_budget_admits_exceptions_first_and_stops_at_the_first_over_row():
+def test_shared_budget_admits_exceptions_first_and_stops_at_the_first_over_row() -> None:
     """One budget, exceptions first, and admission STOPS - it never skips and continues.
 
     Both families are given rows already at their per-row ceiling plus one tiny
@@ -1497,7 +1509,7 @@ def test_shared_budget_admits_exceptions_first_and_stops_at_the_first_over_row()
     assert all(row["sql"] != "SELECT tiny" for row in payload["sql"])
 
 
-def test_build_payload_routes_its_assembled_rows_through_the_caps():
+def test_build_payload_routes_its_assembled_rows_through_the_caps() -> None:
     """The caps are applied BEFORE the stash, not by the caller - the ordering contract."""
     long_message = "m" * (_EXCEPTION_MESSAGE_CAP + 1)
     result = SimpleNamespace(
@@ -1526,7 +1538,7 @@ def test_build_payload_routes_its_assembled_rows_through_the_caps():
 def test_deleted_debug_setting_is_an_inert_refusal(
     settings: pytest_django.Settings,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """A DELETED ``settings.DEBUG`` gets the inert refusal, not a crashed request.
 
     ``getattr(settings, "DEBUG", None)`` with a default, not attribute access:
@@ -1575,7 +1587,7 @@ def test_deleted_debug_setting_is_an_inert_refusal(
         "float-inf",
     ],
 )
-def test_a_non_finite_duration_is_refused_at_the_serializer(time: str | float):
+def test_a_non_finite_duration_is_refused_at_the_serializer(time: str | float) -> None:
     """A non-finite duration cannot reach a row: it is refused, not rounded.
 
     ``json.dumps`` encodes NaN and Infinity by default, but strict encoders
@@ -1597,7 +1609,7 @@ def test_a_non_finite_duration_is_refused_at_the_serializer(time: str | float):
 def test_a_nan_duration_costs_only_its_own_row_and_the_rest_keep_their_order(
     default_wrapper: BaseDatabaseWrapper,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """The end-to-end shape of the non-finite refusal: only the NaN row is lost.
 
     Three queries, the NaN in the MIDDLE, because that is the position the
@@ -1648,7 +1660,7 @@ def test_a_nan_duration_costs_only_its_own_row_and_the_rest_keep_their_order(
             log.pop()
 
 
-def test_hostile_exception_str_degrades_to_an_empty_list(caplog: pytest.LogCaptureFixture):
+def test_hostile_exception_str_degrades_to_an_empty_list(caplog: pytest.LogCaptureFixture) -> None:
     """An exception whose ``__str__`` itself raises degrades ``exceptions`` to [].
 
     ``_serialize_exception`` reads ``str(exception)`` after graphql-core's
@@ -1659,7 +1671,7 @@ def test_hostile_exception_str_degrades_to_an_empty_list(caplog: pytest.LogCaptu
 
     class _HostileStrError(Exception):
         @override
-        def __str__(self):
+        def __str__(self) -> str:
             raise RuntimeError("__str__ refused")
 
     result = SimpleNamespace(errors=[GraphQLError("outer", original_error=_HostileStrError())])
@@ -1673,7 +1685,9 @@ def test_hostile_exception_str_degrades_to_an_empty_list(caplog: pytest.LogCaptu
     )
 
 
-def test_non_iterable_errors_scalar_degrades_to_an_empty_list(caplog: pytest.LogCaptureFixture):
+def test_non_iterable_errors_scalar_degrades_to_an_empty_list(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """A result whose ``errors`` is a non-iterable scalar degrades ``exceptions`` to [].
 
     graphql-core always carries a list or None, so this shape is synthetic -
@@ -1691,7 +1705,9 @@ def test_non_iterable_errors_scalar_degrades_to_an_empty_list(caplog: pytest.Log
 
 
 @override_settings(DEBUG=True)
-def test_abandoned_hook_generator_close_restores_the_flag(default_wrapper: BaseDatabaseWrapper):
+def test_abandoned_hook_generator_close_restores_the_flag(
+    default_wrapper: BaseDatabaseWrapper,
+) -> None:
     """A hook generator abandoned mid-operation still restores the captured flag.
 
     ``hook.close()`` raises ``GeneratorExit`` at the yield; the teardown's
@@ -1726,7 +1742,7 @@ def test_abandoned_hook_generator_close_restores_the_flag(default_wrapper: BaseD
 
 
 @override_settings(DEBUG=True)
-def test_one_operations_payload_is_not_the_extensions():
+def test_one_operations_payload_is_not_the_extensions() -> None:
     """Two operations on one shared instance get two states, and one payload each.
 
     The payload is the value a response publishes, so an extension that kept it
@@ -1750,7 +1766,7 @@ def test_one_operations_payload_is_not_the_extensions():
 
 
 @override_settings(DEBUG=False)
-def test_the_acknowledgement_is_read_from_the_construction_not_from_an_attribute():
+def test_the_acknowledgement_is_read_from_the_construction_not_from_an_attribute() -> None:
     """An attribute write does not change what the extension answers, or what it does.
 
     The wire half - a resolver writing this on a process-lived entry and the

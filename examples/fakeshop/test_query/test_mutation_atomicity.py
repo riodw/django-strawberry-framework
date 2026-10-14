@@ -30,6 +30,7 @@ is sync-only).
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 import pytest
 from apps.products.services import create_users
@@ -44,6 +45,9 @@ from strawberry import relay
 
 from django_strawberry_framework.testing import AsyncTestClient, TestClient
 from django_strawberry_framework.views import AsyncDjangoGraphQLView
+
+if TYPE_CHECKING:
+    from django.test.client import _MonkeyPatchedASGIResponse, _MonkeyPatchedWSGIResponse
 
 _UPDATE_ITEM = """
 mutation($id: ID!, $d: ItemPartialInput!) {
@@ -164,7 +168,7 @@ def _post_update(
     *,
     query: str = _UPDATE_ITEM,
     name: str,
-):
+) -> _MonkeyPatchedWSGIResponse:
     res = TestClient(client=client).query(
         query,
         variables={"id": _global_id("products.item", item_pk), "d": {"name": name}},
@@ -173,7 +177,7 @@ def _post_update(
     return res.response
 
 
-def _post_create(client: Client, category_pk: int):
+def _post_create(client: Client, category_pk: int) -> _MonkeyPatchedWSGIResponse:
     res = TestClient(client=client).query(
         _CREATE_ITEM,
         variables={
@@ -187,7 +191,7 @@ def _post_create(client: Client, category_pk: int):
     return res.response
 
 
-def _post_delete(client: Client, item_pk: int):
+def _post_delete(client: Client, item_pk: int) -> _MonkeyPatchedWSGIResponse:
     res = TestClient(client=client).query(
         _DELETE_ITEM,
         variables={"id": _global_id("products.item", item_pk)},
@@ -249,7 +253,7 @@ def _stored_item_name(item_pk: int) -> str:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_does_not_commit_when_response_completion_fails():
+def test_update_does_not_commit_when_response_completion_fails() -> None:
     """An update whose response can't be serialized must roll back, not commit a partial write."""
     create_users(1)
     client = _login_with_perm("view_item_1", "view_category", "change_item")
@@ -276,7 +280,7 @@ def test_update_does_not_commit_when_response_completion_fails():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_delete_does_not_commit_when_own_scalar_response_completion_fails():
+def test_delete_does_not_commit_when_own_scalar_response_completion_fails() -> None:
     """A delete selecting a corrupt scalar on the deleted object ITSELF must roll back.
 
     Distinct from the relation-path tests: here the completion failure is on the
@@ -308,7 +312,7 @@ def test_delete_does_not_commit_when_own_scalar_response_completion_fails():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_does_not_commit_when_response_completion_fails():
+def test_create_does_not_commit_when_response_completion_fails() -> None:
     """A create whose response can't be serialized must roll back, not leave a row."""
     create_users(1)
     client = _login_with_perm("view_item_1", "add_item")
@@ -328,7 +332,7 @@ def test_create_does_not_commit_when_response_completion_fails():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_delete_does_not_commit_when_response_completion_fails():
+def test_delete_does_not_commit_when_response_completion_fails() -> None:
     """A delete whose response can't be serialized must roll back, not remove the row."""
     create_users(1)
     client = _login_with_perm("staff_1", "delete_item")
@@ -346,7 +350,7 @@ def test_delete_does_not_commit_when_response_completion_fails():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_successful_update_still_commits_through_the_completion_spanning_transaction():
+def test_successful_update_still_commits_through_the_completion_spanning_transaction() -> None:
     """The completion-spanning transaction COMMITS a cleanly-serializable write.
 
     The rollback contract's other half: extending the transaction through
@@ -368,9 +372,11 @@ def test_successful_update_still_commits_through_the_completion_spanning_transac
 
 
 @pytest.mark.django_db(transaction=True)
-def test_serial_top_level_mutations_keep_independent_transactions():
-    """Two serial top-level mutation fields: the second's completion failure rolls back
-    ONLY the second's write - the first field's already-committed transaction survives.
+def test_serial_top_level_mutations_keep_independent_transactions() -> None:
+    """Two serial top-level mutation fields keep independent transactions.
+
+    The second's completion failure rolls back ONLY the second's write - the first
+    field's already-committed transaction survives.
     """
     create_users(1)
     client = _login_with_perm("view_item_1", "view_category", "change_item")
@@ -417,7 +423,7 @@ async def _post_async(
     *,
     variables: Mapping[str, object] | None = None,
     client: AsyncClient | None = None,
-):
+) -> _MonkeyPatchedASGIResponse:
     """POST ``query`` against the shipped schema over ``/graphql-async/``."""
     with override_settings(ROOT_URLCONF=__name__):
         result = await AsyncTestClient(client=client).query(
@@ -430,7 +436,7 @@ async def _post_async(
 
 
 async def _async_client_with_perm(username: str, *codenames: str) -> AsyncClient:
-    def _login():
+    def _login() -> Client:
         return _login_with_perm(username, *codenames)
 
     await sync_to_async(_login)()
@@ -441,12 +447,12 @@ async def _async_client_with_perm(username: str, *codenames: str) -> AsyncClient
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_update_does_not_commit_when_response_completion_fails_over_graphql_async():
+async def test_update_does_not_commit_when_response_completion_fails_over_graphql_async() -> None:
     """Async ``updateItem`` whose response can't be serialized must roll back."""
     await sync_to_async(create_users)(1)
     client = await _async_client_with_perm("view_item_1", "view_category", "change_item")
 
-    def _seed():
+    def _seed() -> int:
         category_pk = _insert_category("async-raw-update-bad-date-category", corrupt=True)
         return _insert_item("async-raw-bad-date-item", category_pk)
 
@@ -474,12 +480,12 @@ async def test_update_does_not_commit_when_response_completion_fails_over_graphq
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_successful_update_still_commits_over_graphql_async():
+async def test_successful_update_still_commits_over_graphql_async() -> None:
     """A serializable async ``updateItem`` still commits through completion."""
     await sync_to_async(create_users)(1)
     client = await _async_client_with_perm("view_item_1", "view_category", "change_item")
 
-    def _seed():
+    def _seed() -> int:
         category_pk = _insert_category("async-healthy-commit-category")
         return _insert_item("async-healthy-commit-item", category_pk)
 

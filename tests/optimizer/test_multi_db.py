@@ -19,8 +19,10 @@ in ``examples/fakeshop/test_query/test_multi_db.py``: if a future refactor
 caused ``OptimizationPlan.apply`` to drop ``_db``, the resolver's
 ``Book.objects.using("shard_b")`` queryset would route to ``default``,
 return zero rows, and the live test's seeded-titles assertion would fail.
-Per ``AGENTS.md #"Test through real usage, prefer the example project"``, real-world live-HTTP coverage is preferred over
-package-internal mocking when both reach the line.
+Per
+``AGENTS.md #"Test through real usage, prefer the example project"``,
+real-world live-HTTP coverage is preferred over package-internal mocking when
+both reach the line.
 
 The five resolver-level tests (FK-id elision branches + strictness
 connection-agnostic shape) live in ``tests/types/test_resolvers.py``: both
@@ -46,7 +48,7 @@ from django_strawberry_framework.utils._queryset_private import (
 )
 
 
-def _sel(name: str, selections: list[SimpleNamespace] | None = None):
+def _sel(name: str, selections: list[SimpleNamespace] | None = None) -> SimpleNamespace:
     """Build a synthetic ``SelectedField`` mirroring ``tests/optimizer/test_walker.py``."""
     return SimpleNamespace(
         name=name,
@@ -57,9 +59,8 @@ def _sel(name: str, selections: list[SimpleNamespace] | None = None):
     )
 
 
-def test_consumer_provided_prefetch_via_optimizer_hint_round_trips_using_alias():
+def test_consumer_provided_prefetch_via_optimizer_hint_round_trips_using_alias() -> None:
     """Decision 3 axis 3 - ``OptimizerHint.prefetch(Prefetch(queryset=using))`` round-trips ``_db``."""
-
     explicit = Prefetch("items", queryset=Item.objects.using("shard_b").all())
 
     registry.clear()

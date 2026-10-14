@@ -17,6 +17,7 @@ from unittest import mock
 
 import pytest
 from django.db import connections
+from django.db.backends.utils import CursorWrapper
 from typing_extensions import override
 
 from django_strawberry_framework import _django_patches
@@ -24,15 +25,16 @@ from django_strawberry_framework.testing import safe_wrap_connection_method
 from tests._idioms import call_remove_databases_failures
 
 
-def _database_failure(wrapped: Callable[..., object]):
+def _database_failure(wrapped: Callable[..., object]) -> object:
     if _django_patches._DatabaseFailure is None:
         pytest.skip("Django private _DatabaseFailure symbol is unavailable.")
     return _django_patches._DatabaseFailure(wrapped, "test message")
 
 
-def test_safe_wrap_connection_method_installs_wrapper_when_no_database_failure():
-    """Happy path: when ``connection.<method>`` is NOT a ``_DatabaseFailure``,
-    the helper installs the consumer's wrapper.
+def test_safe_wrap_connection_method_installs_wrapper_when_no_database_failure() -> None:
+    """Happy path: the helper installs the consumer's wrapper over a plain method.
+
+    ``connection.<method>`` is NOT a ``_DatabaseFailure`` here.
     """
     connection = connections["default"]
     original_cursor = connection.cursor
@@ -50,10 +52,11 @@ def test_safe_wrap_connection_method_installs_wrapper_when_no_database_failure()
 
 def test_safe_wrap_connection_method_declines_when_database_failure_in_place(
     monkeypatch: pytest.MonkeyPatch,
-):
-    """The Trac #37064 cooperative-wrap mirror: when Django has already
-    installed ``_DatabaseFailure`` at the method, the helper refuses
-    to clobber it and returns ``False``.
+) -> None:
+    """The Trac #37064 cooperative-wrap mirror: the helper refuses to clobber a failure.
+
+    When Django has already installed ``_DatabaseFailure`` at the method, the helper
+    leaves it in place and returns ``False``.
     """
     connection = connections["default"]
     original_cursor = connection.cursor
@@ -73,7 +76,7 @@ def test_safe_wrap_connection_method_declines_when_database_failure_in_place(
         connection.cursor = original_cursor
 
 
-def test_safe_wrap_connection_method_installs_when_database_failure_symbol_missing():
+def test_safe_wrap_connection_method_installs_when_database_failure_symbol_missing() -> None:
     """Future-Django private-symbol drift must not break the public test helper.
 
     ``_DatabaseFailure`` is a private Django symbol. If Django renames
@@ -96,10 +99,10 @@ def test_safe_wrap_connection_method_installs_when_database_failure_symbol_missi
         connection.cursor = original_cursor
 
 
-def test_safe_wrap_connection_method_works_on_arbitrary_method_names():
-    """Helper works for any disallowed-connection method, not just
-    ``cursor``. Pinned so the helper doesn't accidentally become
-    cursor-specific over time.
+def test_safe_wrap_connection_method_works_on_arbitrary_method_names() -> None:
+    """Helper works for any disallowed-connection method, not just ``cursor``.
+
+    Pinned so the helper doesn't accidentally become cursor-specific over time.
     """
     connection = connections["default"]
     original = connection.chunked_cursor
@@ -121,10 +124,11 @@ def test_safe_wrap_connection_method_works_on_arbitrary_method_names():
 
 def test_safe_wrap_connection_method_pairs_with_unwrap_time_patch_for_defense_in_depth(
     monkeypatch: pytest.MonkeyPatch,
-):
-    """End-to-end composition: when a consumer uses
-    :func:`safe_wrap_connection_method` AND Django's setup/teardown
-    pair runs, the package's unwrap-time patch
+) -> None:
+    """End-to-end composition of the helper with Django's setup/teardown pair.
+
+    When a consumer uses :func:`safe_wrap_connection_method` AND Django's
+    setup/teardown pair runs, the package's unwrap-time patch
     (:func:`_django_patches._patched_remove_databases_failures`)
     restores the wrapper without any work from the consumer.
 
@@ -170,10 +174,11 @@ def test_safe_wrap_connection_method_pairs_with_unwrap_time_patch_for_defense_in
         connection.cursor = original_cursor
 
 
-def test_safe_wrap_connection_method_raises_on_non_callable_wrapper():
-    """Wrap-time guard: a non-callable ``wrapper`` raises ``TypeError``
-    at the wrap site instead of installing silently and failing at the
-    next ``connection.<method>()`` invocation.
+def test_safe_wrap_connection_method_raises_on_non_callable_wrapper() -> None:
+    """Wrap-time guard: a non-callable ``wrapper`` raises ``TypeError`` at the wrap site.
+
+    It raises there instead of installing silently and failing at the next
+    ``connection.<method>()`` invocation.
 
     Pins the wrap-time-vs-call-time silent-failure mode closed: the
     type annotation ``Callable[..., object]`` is enforced at runtime,
@@ -198,14 +203,14 @@ def test_safe_wrap_connection_method_raises_on_non_callable_wrapper():
     assert connection.__dict__.get("cursor") is installed_before
 
 
-def test_safe_wrap_connection_method_keeps_type_error_boundary_for_hostile_repr():
+def test_safe_wrap_connection_method_keeps_type_error_boundary_for_hostile_repr() -> None:
     """A broken ``repr`` must not replace the documented non-callable ``TypeError``."""
     connection = connections["default"]
     installed_before = connection.__dict__.get("cursor")
 
     class _HostileRepr:
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr exploded")
 
     with pytest.raises(TypeError, match="non-callable wrapper"):
@@ -216,13 +221,13 @@ def test_safe_wrap_connection_method_keeps_type_error_boundary_for_hostile_repr(
     assert connection.__dict__.get("cursor") is installed_before
 
 
-def test_safe_wrap_connection_method_accepts_callable_class_instance():
+def test_safe_wrap_connection_method_accepts_callable_class_instance() -> None:
     """Any callable object (such as an instance with __call__) is accepted."""
     connection = connections["default"]
     original_cursor = connection.cursor
 
     class _CallableWrapper:
-        def __call__(self, *args: object, **kwargs: object):
+        def __call__(self, *args: object, **kwargs: object) -> CursorWrapper:
             return original_cursor(*args, **kwargs)
 
     instance = _CallableWrapper()
@@ -234,7 +239,7 @@ def test_safe_wrap_connection_method_accepts_callable_class_instance():
         connection.cursor = original_cursor
 
 
-def test_safe_wrap_connection_method_raises_attribute_error_on_missing_method():
+def test_safe_wrap_connection_method_raises_attribute_error_on_missing_method() -> None:
     """Attempting to wrap a non-existent connection method raises AttributeError."""
     connection = connections["default"]
     with pytest.raises(AttributeError):

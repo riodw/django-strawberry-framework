@@ -8,6 +8,7 @@ are in ``examples/fakeshop/test_query/test_library_api.py`` and
 
 from collections.abc import Callable
 from types import MappingProxyType, SimpleNamespace
+from typing import NoReturn
 
 import pytest
 from typing_extensions import override
@@ -21,22 +22,22 @@ from django_strawberry_framework.utils.context import (
 )
 
 
-def test_context_stash_round_trips_and_clears_object_dict_and_slots_mapping():
+def test_context_stash_round_trips_and_clears_object_dict_and_slots_mapping() -> None:
     """Each supported writable shape uses the same read and clear contract."""
 
     class SlotsMapping:
         __slots__ = ("values",)
 
-        def __init__(self):
+        def __init__(self) -> None:
             self.values: dict[str, object] = {}
 
         def __getitem__(self, key: str) -> object:
             return self.values[key]
 
-        def __setitem__(self, key: str, value: object):
+        def __setitem__(self, key: str, value: object) -> None:
             self.values[key] = value
 
-        def __delitem__(self, key: str):
+        def __delitem__(self, key: str) -> None:
             del self.values[key]
 
     dict_context: dict[str, object] = {}
@@ -47,44 +48,44 @@ def test_context_stash_round_trips_and_clears_object_dict_and_slots_mapping():
         assert get_context_value(context, "dst_context_test", "missing") == "missing"
 
 
-def test_context_read_fails_closed_for_hostile_attribute_and_mapping_access():
+def test_context_read_fails_closed_for_hostile_attribute_and_mapping_access() -> None:
     """A broken consumer context cannot abort the resource/optimizer read path."""
 
     class HostileAttribute:
         @property
-        def dst_context_test(self):
+        def dst_context_test(self) -> NoReturn:
             raise RuntimeError("descriptor failed")
 
     class HostileMapping(dict[str, object]):
         @override
-        def get(self, key: str, default: object = None):
+        def get(self, key: str, default: object = None) -> NoReturn:
             raise RuntimeError("mapping read failed")
 
     assert get_context_value(HostileAttribute(), "dst_context_test", "missing") == "missing"
     assert get_context_value(HostileMapping(), "dst_context_test", "missing") == "missing"
 
 
-def test_context_read_tries_mapping_after_hostile_attribute():
+def test_context_read_tries_mapping_after_hostile_attribute() -> None:
     """A mapping value remains reachable when an object's attribute descriptor fails."""
 
     class HostileAttributeMapping:
-        def __init__(self):
+        def __init__(self) -> None:
             self.values = {"dst_context_test": 42}
 
         @override
-        def __getattribute__(self, name: str):
+        def __getattribute__(self, name: str) -> object:
             if name == "dst_context_test":
                 raise RuntimeError("descriptor failed")
             return object.__getattribute__(self, name)
 
-        def __getitem__(self, key: str):
+        def __getitem__(self, key: str) -> int:
             return self.values[key]
 
     context = HostileAttributeMapping()
     assert get_context_value(context, "dst_context_test", "missing") == 42
 
 
-def test_frozen_context_stash_and_clear_are_noops():
+def test_frozen_context_stash_and_clear_are_noops() -> None:
     """Read-only mappings keep their original value; the write and clear are silently skipped."""
     context = MappingProxyType({"dst_context_test": 42})
     stash_on_context(context, "dst_context_test", 99)
@@ -92,7 +93,7 @@ def test_frozen_context_stash_and_clear_are_noops():
     assert get_context_value(context, "dst_context_test") == 42
 
 
-def test_context_none_short_circuits_and_skips_writes_and_clears():
+def test_context_none_short_circuits_and_skips_writes_and_clears() -> None:
     """None context returns default on read and silently skips write and clear."""
     assert get_context_value(None, "dst_context_test") is None
     assert get_context_value(None, "dst_context_test", "missing") == "missing"
@@ -100,7 +101,7 @@ def test_context_none_short_circuits_and_skips_writes_and_clears():
     clear_context_key(None, "dst_context_test")
 
 
-def test_context_distinguishes_explicit_none_from_missing_sentinel():
+def test_context_distinguishes_explicit_none_from_missing_sentinel() -> None:
     """Stashing an explicit None value returns None rather than falling back to default."""
     obj_ctx = SimpleNamespace()
     dict_ctx: dict[str, object] = {}
@@ -112,16 +113,16 @@ def test_context_distinguishes_explicit_none_from_missing_sentinel():
     assert get_context_value(dict_ctx, "dst_context_test", "default") is None
 
 
-def test_locked_dict_subclass_stash_and_clear_are_noops():
+def test_locked_dict_subclass_stash_and_clear_are_noops() -> None:
     """Immutable dict subclasses (e.g. locked QueryDict) silently skip stash and clear."""
 
     class LockedDict(dict[str, object]):
         @override
-        def __setitem__(self, key: str, value: object):
+        def __setitem__(self, key: str, value: object) -> None:
             raise AttributeError("This dict is immutable")
 
         @override
-        def __delitem__(self, key: str):
+        def __delitem__(self, key: str) -> None:
             raise AttributeError("This dict is immutable")
 
     ctx = LockedDict({"dst_context_test": 42})
@@ -135,16 +136,20 @@ class SlotsMapping:
 
     __slots__: tuple[str, ...] = ("values",)
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """Start with no stored items."""
         self.values: dict[str, object] = {}
 
     def __getitem__(self, key: str) -> object:
+        """Read ``key`` from the item store."""
         return self.values[key]
 
-    def __setitem__(self, key: str, value: object):
+    def __setitem__(self, key: str, value: object) -> None:
+        """Store ``value`` under ``key``."""
         self.values[key] = value
 
-    def __delitem__(self, key: str):
+    def __delitem__(self, key: str) -> None:
+        """Remove ``key`` from the item store."""
         del self.values[key]
 
 
@@ -153,7 +158,9 @@ class SlotsMapping:
     [SimpleNamespace, dict, SlotsMapping],
     ids=["object", "dict", "slots"],
 )
-def test_restored_context_keys_round_trips_absent_present_and_none(make: Callable[[], object]):
+def test_restored_context_keys_round_trips_absent_present_and_none(
+    make: Callable[[], object],
+) -> None:
     """The restore puts ABSENT keys back to absent and re-stashes found values.
 
     An explicit ``None`` snapshot is a VALUE: it is re-stashed, never cleared,
@@ -175,12 +182,12 @@ def test_restored_context_keys_round_trips_absent_present_and_none(make: Callabl
     assert get_context_value(context, "dst_context_test", "absent") == "absent"
 
 
-def test_restored_context_keys_still_restores_when_the_body_raises():
+def test_restored_context_keys_still_restores_when_the_body_raises() -> None:
     """Restoration runs in a ``finally``: a raising body leaves the context as found."""
     context: dict[str, object] = {}
     stash_on_context(context, "kept", "outer")
 
-    def body_that_raises():
+    def body_that_raises() -> NoReturn:
         with restored_context_keys(context, "kept", "never-was"):
             stash_on_context(context, "kept", "inner")
             stash_on_context(context, "never-was", "transient")
@@ -192,7 +199,7 @@ def test_restored_context_keys_still_restores_when_the_body_raises():
     assert get_context_value(context, "never-was", "absent") == "absent"
 
 
-def test_restored_context_keys_on_a_none_context_is_inert():
+def test_restored_context_keys_on_a_none_context_is_inert() -> None:
     """No context means nothing to snapshot and nothing to restore."""
     with restored_context_keys(None, "dst_context_test"):
         stash_on_context(None, "dst_context_test", 42)
@@ -200,13 +207,13 @@ def test_restored_context_keys_on_a_none_context_is_inert():
     assert get_context_value(None, "dst_context_test", "d") == "d"
 
 
-def test_restored_context_keys_snapshots_an_unreadable_key_as_absent():
+def test_restored_context_keys_snapshots_an_unreadable_key_as_absent() -> None:
     """A hostile read cannot be distinguished from absence: the restore clears."""
 
     class ReadGuarded(SlotsMapping):
         __slots__ = ("readable",)
 
-        def __init__(self):
+        def __init__(self) -> None:
             super().__init__()
             self.readable = False
 
@@ -224,7 +231,7 @@ def test_restored_context_keys_snapshots_an_unreadable_key_as_absent():
     assert get_context_value(context, "dst_context_test", "absent") == "absent"
 
 
-def test_the_public_missing_sentinel_is_the_round_trip_identity():
+def test_the_public_missing_sentinel_is_the_round_trip_identity() -> None:
     """``MISSING`` is importable and is the exact sentinel the read dispatches on."""
     assert get_context_value({}, "dst_context_test", MISSING) is MISSING
     assert MISSING is not None

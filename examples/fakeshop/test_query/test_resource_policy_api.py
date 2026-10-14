@@ -74,7 +74,7 @@ from __future__ import annotations
 import json
 import threading
 import warnings
-from collections.abc import Callable, Coroutine, Iterator, Mapping
+from collections.abc import Callable, Coroutine, Generator, Iterator, Mapping
 from contextlib import contextmanager
 from functools import cache, partial
 from typing import TYPE_CHECKING, NewType
@@ -91,7 +91,7 @@ from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.db.models import QuerySet
-from django.http import HttpRequest
+from django.http import HttpRequest, HttpResponseBase
 from django.test import AsyncClient, Client
 from django.test.utils import CaptureQueriesContext
 from django.urls import include, path
@@ -175,36 +175,36 @@ def _optimized_probe_schema(overrides: tuple[tuple[str, float], ...]) -> DjangoS
     )
 
 
-def _optimized_probe_view(**overrides: float):
+def _optimized_probe_view(**overrides: float) -> Callable[..., HttpResponseBase]:
     """Mount the package view over the optimizer-mounted probe twin."""
     frozen = tuple(sorted(overrides.items()))
 
     @csrf_exempt
-    def view(request: HttpRequest, *args: object, **kwargs: object):
+    def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = DjangoGraphQLView.as_view(schema=_optimized_probe_schema(frozen))
         return built(request, *args, **kwargs)
 
     return view
 
 
-def _probe_view(**overrides: float):
+def _probe_view(**overrides: float) -> Callable[..., HttpResponseBase]:
     """Mount the package view over a probe schema narrowing exactly ``overrides``."""
     frozen = tuple(sorted(overrides.items()))
 
     @csrf_exempt
-    def view(request: HttpRequest, *args: object, **kwargs: object):
+    def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = DjangoGraphQLView.as_view(schema=_probe_schema(frozen))
         return built(request, *args, **kwargs)
 
     return view
 
 
-def _probe_upload_view(**overrides: int):
+def _probe_upload_view(**overrides: int) -> Callable[..., HttpResponseBase]:
     """The upload twin: same probe schema, with upstream's multipart handling on."""
     frozen = tuple(sorted(overrides.items()))
 
     @csrf_exempt
-    def view(request: HttpRequest, *args: object, **kwargs: object):
+    def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = DjangoGraphQLView.as_view(
             schema=_probe_schema(frozen),
             multipart_uploads_enabled=True,
@@ -214,12 +214,14 @@ def _probe_upload_view(**overrides: int):
     return view
 
 
-def _probe_async_view(**overrides: float):
+def _probe_async_view(
+    **overrides: float,
+) -> Callable[..., Coroutine[object, object, HttpResponseBase]]:
     """The async twin of ``_probe_view``, so parity is proven on a real event loop."""
     frozen = tuple(sorted(overrides.items()))
 
     @csrf_exempt
-    async def view(request: HttpRequest, *args: object, **kwargs: object):
+    async def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = AsyncDjangoGraphQLView.as_view(schema=_probe_schema(frozen))
         return await built(request, *args, **kwargs)
 
@@ -244,12 +246,12 @@ class _EscapingQuerySet(QuerySet[library_models.Loan]):
 
     @override
     # basedpyright: deliberately answers a slice with a list, the shape the ceiling must not trust
-    def __getitem__(self, key: int | slice):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def __getitem__(self, key: int | slice) -> list[library_models.Loan]:  # pyright: ignore[reportIncompatibleMethodOverride]
         return list(library_models.Loan.objects.all())
 
 
 @contextmanager
-def _hostile_relation_manager():
+def _hostile_relation_manager() -> Generator[None]:
     """Make the reverse ``loans`` manager hand back the escaping subclass.
 
     The relation resolver builds its source with ``getattr(root, accessor).all()``
@@ -260,7 +262,7 @@ def _hostile_relation_manager():
     manager_cls = library_models.Patron.loans.related_manager_cls
     original = manager_cls.all
 
-    def escaping_all(self: RelatedManager[library_models.Loan]):
+    def escaping_all(self: RelatedManager[library_models.Loan]) -> _EscapingQuerySet:
         source = original(self)
         return _EscapingQuerySet(
             model=library_models.Loan,
@@ -290,7 +292,6 @@ def _hostile_relation_schema(patron_type: type) -> DjangoSchema:
     would hold the generation before that reload and mix two type graphs into
     one schema.
     """
-
     # Built with ``type(...)`` and a REAL annotation object: this module runs
     # under ``from __future__ import annotations``, so a written annotation would
     # be the string ``"list[patron_type]"`` and would resolve against the module
@@ -314,14 +315,22 @@ def _hostile_relation_schema(patron_type: type) -> DjangoSchema:
 
 
 @csrf_exempt
-def _hostile_relation_view(request: HttpRequest, *args: object, **kwargs: object):
+def _hostile_relation_view(
+    request: HttpRequest,
+    *args: object,
+    **kwargs: object,
+) -> HttpResponseBase:
     """Mount the package view over the hostile-relation probe schema."""
     schema = _hostile_relation_schema(library_schema.PatronType)
     return DjangoGraphQLView.as_view(schema=schema)(request, *args, **kwargs)
 
 
 @csrf_exempt
-async def _hostile_relation_async_view(request: HttpRequest, *args: object, **kwargs: object):
+async def _hostile_relation_async_view(
+    request: HttpRequest,
+    *args: object,
+    **kwargs: object,
+) -> HttpResponseBase:
     """The async twin, so the bound is proven on a real event loop too."""
     schema = _hostile_relation_schema(library_schema.PatronType)
     built = AsyncDjangoGraphQLView.as_view(schema=schema)
@@ -374,7 +383,11 @@ def _async_relation_deadline_schema(card_type: type, patron_type: type) -> Djang
 
 
 @csrf_exempt
-async def _async_relation_deadline_view(request: HttpRequest, *args: object, **kwargs: object):
+async def _async_relation_deadline_view(
+    request: HttpRequest,
+    *args: object,
+    **kwargs: object,
+) -> HttpResponseBase:
     """Mount the async-root relation deadline schema over the async view."""
     schema = _async_relation_deadline_schema(
         library_schema.MembershipCardType,
@@ -415,22 +428,24 @@ def _native_node_schema(node_type: type, deadline: float | None) -> DjangoSchema
     )
 
 
-def _native_node_view(deadline: float | None):
+def _native_node_view(deadline: float | None) -> Callable[..., HttpResponseBase]:
     """Mount the native-node schema over the sync view."""
 
     @csrf_exempt
-    def view(request: HttpRequest, *args: object, **kwargs: object):
+    def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         schema = _native_node_schema(products_schema.CategoryType, deadline)
         return DjangoGraphQLView.as_view(schema=schema)(request, *args, **kwargs)
 
     return view
 
 
-def _native_node_async_view(deadline: float | None):
+def _native_node_async_view(
+    deadline: float | None,
+) -> Callable[..., Coroutine[object, object, HttpResponseBase]]:
     """Mount the native-node schema over the async view."""
 
     @csrf_exempt
-    async def view(request: HttpRequest, *args: object, **kwargs: object):
+    async def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         schema = _native_node_schema(products_schema.CategoryType, deadline)
         return await AsyncDjangoGraphQLView.as_view(schema=schema)(request, *args, **kwargs)
 
@@ -482,14 +497,22 @@ def _carry_relation_schema(patron_type: type) -> DjangoSchema:
 
 
 @csrf_exempt
-def _carry_relation_view(request: HttpRequest, *args: object, **kwargs: object):
+def _carry_relation_view(
+    request: HttpRequest,
+    *args: object,
+    **kwargs: object,
+) -> HttpResponseBase:
     """Mount the public project-manager relation over the synchronous view."""
     schema = _carry_relation_schema(library_schema.PatronType)
     return DjangoGraphQLView.as_view(schema=schema)(request, *args, **kwargs)
 
 
 @csrf_exempt
-async def _carry_relation_async_view(request: HttpRequest, *args: object, **kwargs: object):
+async def _carry_relation_async_view(
+    request: HttpRequest,
+    *args: object,
+    **kwargs: object,
+) -> HttpResponseBase:
     """The async twin, so the rebuilt relation is proven on a real event loop too."""
     schema = _carry_relation_schema(library_schema.PatronType)
     built = AsyncDjangoGraphQLView.as_view(schema=schema)
@@ -677,7 +700,7 @@ def _authority_schema() -> DjangoSchema:
 
 
 @csrf_exempt
-def _authority_view(request: HttpRequest, *args: object, **kwargs: object):
+def _authority_view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
     built = DjangoGraphQLView.as_view(schema=_authority_schema())
     return built(request, *args, **kwargs)
 
@@ -693,7 +716,7 @@ def _entry_rows_schema() -> DjangoSchema:
 
 
 @csrf_exempt
-def _entry_rows_view(request: HttpRequest, *args: object, **kwargs: object):
+def _entry_rows_view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
     built = DjangoGraphQLView.as_view(schema=_entry_rows_schema())
     return built(request, *args, **kwargs)
 
@@ -707,11 +730,11 @@ class _EqualSchema(DjangoSchema):
     """
 
     @override
-    def __hash__(self):
+    def __hash__(self) -> int:
         return 1
 
     @override
-    def __eq__(self, other: object):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, _EqualSchema)
 
 
@@ -724,11 +747,11 @@ def _equal_schema(rows: int) -> DjangoSchema:
     )
 
 
-def _equal_view(rows: int):
+def _equal_view(rows: int) -> Callable[..., HttpResponseBase]:
     """One mount per equal-but-distinct schema, so two live requests can differ."""
 
     @csrf_exempt
-    def view(request: HttpRequest, *args: object, **kwargs: object):
+    def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = DjangoGraphQLView.as_view(schema=_equal_schema(rows))
         return built(request, *args, **kwargs)
 
@@ -848,7 +871,11 @@ def _accepted_instance_schema() -> DjangoSchema:
 
 
 @csrf_exempt
-def _accepted_instance_view(request: HttpRequest, *args: object, **kwargs: object):
+def _accepted_instance_view(
+    request: HttpRequest,
+    *args: object,
+    **kwargs: object,
+) -> HttpResponseBase:
     built = DjangoGraphQLView.as_view(schema=_accepted_instance_schema())
     return built(request, *args, **kwargs)
 
@@ -875,12 +902,16 @@ def _inherited_instance_schema() -> DjangoSchema:
 
 
 @csrf_exempt
-def _inherited_instance_view(request: HttpRequest, *args: object, **kwargs: object):
+def _inherited_instance_view(
+    request: HttpRequest,
+    *args: object,
+    **kwargs: object,
+) -> HttpResponseBase:
     built = DjangoGraphQLView.as_view(schema=_inherited_instance_schema())
     return built(request, *args, **kwargs)
 
 
-def _widening_factory():
+def _widening_factory() -> DjangoResourcePolicyExtension:
     """The entry a resolver would rather the next operation resolved."""
     return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=999))
 
@@ -959,9 +990,9 @@ def _membership_schema(mount: str) -> DjangoSchema:
     return DjangoSchema(query=_MembershipQuery, resource_policy=ResourcePolicy(max_list_rows=1))
 
 
-def _membership_view(mount: str):
+def _membership_view(mount: str) -> Callable[..., HttpResponseBase]:
     @csrf_exempt
-    def view(request: HttpRequest, *args: object, **kwargs: object):
+    def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = DjangoGraphQLView.as_view(schema=_membership_schema(mount))
         return built(request, *args, **kwargs)
 
@@ -976,7 +1007,7 @@ class _CountedExtension(SchemaExtension):
     """A consumer extension the mount's factory builds fresh for every operation."""
 
 
-def _narrow_extension_factory():
+def _narrow_extension_factory() -> _CountedExtension:
     """A fresh extension per operation, the way a consumer's own factory builds one."""
     built = _CountedExtension()
     _FACTORY_BUILDS.append(built)
@@ -1007,7 +1038,7 @@ def _factory_schema() -> DjangoSchema:
 
 
 @csrf_exempt
-def _factory_view(request: HttpRequest, *args: object, **kwargs: object):
+def _factory_view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
     built = DjangoGraphQLView.as_view(schema=_factory_schema())
     return built(request, *args, **kwargs)
 
@@ -1051,9 +1082,9 @@ def _droppable_schema(mount: str) -> DjangoSchema:
     )
 
 
-def _droppable_view(mount: str):
+def _droppable_view(mount: str) -> Callable[..., HttpResponseBase]:
     @csrf_exempt
-    def view(request: HttpRequest, *args: object, **kwargs: object):
+    def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
             schema = _droppable_schema(mount)
@@ -1074,7 +1105,7 @@ def _census_schema() -> DjangoSchema:
 
 
 @csrf_exempt
-def _census_view(request: HttpRequest, *args: object, **kwargs: object):
+def _census_view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
     built = DjangoGraphQLView.as_view(schema=_census_schema())
     return built(request, *args, **kwargs)
 
@@ -1100,7 +1131,7 @@ class _ExecutionWitness(SchemaExtension):
     entered: list[str] = []
 
     @override
-    def on_execute(self):
+    def on_execute(self) -> Iterator[None]:
         """Record the query executing began for, as a generator hook like the package's."""
         _ExecutionWitness.entered.append(self.execution_context.query or "")
         yield
@@ -1131,18 +1162,18 @@ def _witness_schema(order: str) -> DjangoSchema:
     )
 
 
-def _witness_view(order: str):
+def _witness_view(order: str) -> Callable[..., HttpResponseBase]:
     @csrf_exempt
-    def view(request: HttpRequest, *args: object, **kwargs: object):
+    def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = DjangoGraphQLView.as_view(schema=_witness_schema(order))
         return built(request, *args, **kwargs)
 
     return view
 
 
-def _witness_async_view(order: str):
+def _witness_async_view(order: str) -> Callable[..., Coroutine[object, object, HttpResponseBase]]:
     @csrf_exempt
-    async def view(request: HttpRequest, *args: object, **kwargs: object):
+    async def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = AsyncDjangoGraphQLView.as_view(schema=_witness_schema(order))
         return await built(request, *args, **kwargs)
 
@@ -1191,18 +1222,18 @@ def _cache_schema(order: str) -> DjangoSchema:
     )
 
 
-def _cache_view(order: str):
+def _cache_view(order: str) -> Callable[..., HttpResponseBase]:
     @csrf_exempt
-    def view(request: HttpRequest, *args: object, **kwargs: object):
+    def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = DjangoGraphQLView.as_view(schema=_cache_schema(order))
         return built(request, *args, **kwargs)
 
     return view
 
 
-def _cache_async_view(order: str):
+def _cache_async_view(order: str) -> Callable[..., Coroutine[object, object, HttpResponseBase]]:
     @csrf_exempt
-    async def view(request: HttpRequest, *args: object, **kwargs: object):
+    async def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = AsyncDjangoGraphQLView.as_view(schema=_cache_schema(order))
         return await built(request, *args, **kwargs)
 
@@ -1223,13 +1254,13 @@ def _retained_schema() -> DjangoSchema:
 
 
 @csrf_exempt
-def _retained_view(request: HttpRequest, *args: object, **kwargs: object):
+def _retained_view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
     built = DjangoGraphQLView.as_view(schema=_retained_schema())
     return built(request, *args, **kwargs)
 
 
 @csrf_exempt
-def _unconfigured_view(request: HttpRequest, *args: object, **kwargs: object):
+def _unconfigured_view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
     """Mount a schema that configures NO resource policy at all, built per request.
 
     Deliberately not cached, unlike every other schema factory here: the row this
@@ -1283,7 +1314,7 @@ class _OverlapCoordinator(SchemaExtension):
     armed = False
 
     @override
-    def on_parse(self):
+    def on_parse(self) -> Iterator[None]:
         """Park the oversized document, once, while the overlap row is armed."""
         if _OverlapCoordinator.armed and "a: rows" in (self.execution_context.query or ""):
             _OverlapCoordinator.parked.set()
@@ -1304,7 +1335,9 @@ def _entry_extension(_spelling: str) -> _SharedEntryExtension:
     return _SharedEntryExtension()
 
 
-def _entry_entry(spelling: str):
+def _entry_entry(
+    spelling: str,
+) -> type[SchemaExtension] | SchemaExtension | Callable[[], SchemaExtension]:
     """The ``extensions=[...]`` entry that spells ``spelling``."""
     if spelling == "class":
         return _SharedEntryExtension
@@ -1339,22 +1372,22 @@ def _entry_schema(spelling: str) -> DjangoSchema:
         )
 
 
-def _entry_view(spelling: str):
+def _entry_view(spelling: str) -> Callable[..., HttpResponseBase]:
     """Mount the synchronous package view over one entry spelling."""
 
     @csrf_exempt
-    def view(request: HttpRequest, *args: object, **kwargs: object):
+    def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = DjangoGraphQLView.as_view(schema=_entry_schema(spelling))
         return built(request, *args, **kwargs)
 
     return view
 
 
-def _entry_async_view(spelling: str):
+def _entry_async_view(spelling: str) -> Callable[..., Coroutine[object, object, HttpResponseBase]]:
     """Mount the asynchronous package view over one entry spelling."""
 
     @csrf_exempt
-    async def view(request: HttpRequest, *args: object, **kwargs: object):
+    async def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = AsyncDjangoGraphQLView.as_view(schema=_entry_schema(spelling))
         return await built(request, *args, **kwargs)
 
@@ -1467,7 +1500,7 @@ def _post(
     variables: Mapping[str, object] | None = None,
     *,
     client: Client | None = None,
-):
+) -> JSONObject:
     """POST one GraphQL document to a probe mount and return the parsed envelope."""
     return graphql_payload(
         query,
@@ -1477,7 +1510,7 @@ def _post(
     )
 
 
-def _rejection(payload: JSONObject):
+def _rejection(payload: JSONObject) -> JSONObject:
     """Return the single resource rejection in ``payload``, asserting its shape.
 
     Every row funnels through here, so "the request was rejected" always means
@@ -1510,7 +1543,7 @@ def _is_json_object(value: object) -> TypeIs[JSONObject]:
     return _is_dict(value) and all(isinstance(key, str) for key in value)
 
 
-def _no_rejection(payload: JSONObject):
+def _no_rejection(payload: JSONObject) -> None:
     """Assert ``payload`` carries no resource rejection (it may carry other errors).
 
     The under/at-boundary half of each pair. It deliberately does NOT demand a
@@ -1527,13 +1560,13 @@ def _no_rejection(payload: JSONObject):
 # ---------------------------------------------------------------------------
 
 
-def test_document_under_the_token_bound_executes():
+def test_document_under_the_token_bound_executes() -> None:
     payload = _post("/rp-tokens/", "{ __typename }")
     _no_rejection(payload)
     assert payload["data"]["__typename"] == "Query"
 
 
-def test_document_over_the_token_bound_is_rejected():
+def test_document_over_the_token_bound_is_rejected() -> None:
     """Tokens are charged on the raw text, so the document never reaches the parser."""
     fields = " ".join(f"a{index}: __typename" for index in range(MAX_TOKENS))
     extensions = _rejection(_post("/rp-tokens/", "{ %s }" % fields))
@@ -1542,7 +1575,7 @@ def test_document_over_the_token_bound_is_rejected():
     assert extensions["charged"] == MAX_TOKENS + 1
 
 
-def _post_named(mount: str, query: str, operation_name: str):
+def _post_named(mount: str, query: str, operation_name: str) -> JSONObject:
     """POST a document with an ``operationName``, which the shared client cannot express.
 
     The raw-envelope exemption (spec-043): the subject IS the wire field, so the
@@ -1564,7 +1597,7 @@ _TWO_OPERATIONS = "query Small { __typename }\nquery Big { %s }" % " ".join(
 )
 
 
-def test_the_token_bound_is_charged_over_the_whole_request_document():
+def test_the_token_bound_is_charged_over_the_whole_request_document() -> None:
     """``max_document_tokens`` bounds the parse, and the parse reads every operation.
 
     Naming one operation does not make the rest of the document free: it is
@@ -1576,13 +1609,13 @@ def test_the_token_bound_is_charged_over_the_whole_request_document():
     assert extensions["bound"] == "max_document_tokens"
 
 
-def test_the_named_operation_alone_is_under_the_same_token_bound():
+def test_the_named_operation_alone_is_under_the_same_token_bound() -> None:
     """The control: the document, minus the operation it did not name, executes."""
     payload = _post_named("/rp-tokens/", "query Small { __typename }", "Small")
     assert payload["data"] == {"__typename": "Query"}
 
 
-def test_a_malformed_document_keeps_the_parsers_own_syntax_diagnostic():
+def test_a_malformed_document_keeps_the_parsers_own_syntax_diagnostic() -> None:
     """A document the lexer cannot finish comes back as a syntax error, not a resource rejection.
 
     The scan tokenizes the raw text to charge it, so it meets a malformed
@@ -1600,7 +1633,7 @@ def test_a_malformed_document_keeps_the_parsers_own_syntax_diagnostic():
     assert "Syntax Error" in payload["errors"][0]["message"], payload
 
 
-def test_a_malformed_document_over_the_token_bound_is_rejected_on_size():
+def test_a_malformed_document_over_the_token_bound_is_rejected_on_size() -> None:
     """Tokens are charged as they are lexed, so size fires before the lexer reaches the garbage."""
     fields = " ".join(f"a{index}: __typename" for index in range(MAX_TOKENS))
 
@@ -1610,7 +1643,7 @@ def test_a_malformed_document_over_the_token_bound_is_rejected_on_size():
     assert extensions["limit"] == MAX_TOKENS
 
 
-def test_document_over_the_depth_bound_is_rejected():
+def test_document_over_the_depth_bound_is_rejected() -> None:
     """Structural nesting is charged before the parse, so deep documents cannot recurse it."""
     query = "{ " * (MAX_DEPTH + 1) + "__typename" + " }" * (MAX_DEPTH + 1)
     extensions = _rejection(_post("/rp-depth/", query))
@@ -1618,7 +1651,7 @@ def test_document_over_the_depth_bound_is_rejected():
     assert extensions["charged"] == MAX_DEPTH + 1
 
 
-def test_depth_counts_argument_and_input_object_nesting():
+def test_depth_counts_argument_and_input_object_nesting() -> None:
     """Argument and input-object brackets count toward depth, as the bound documents.
 
     The scan runs before the parse, where nothing distinguishes an argument list
@@ -1641,7 +1674,7 @@ _UNDEFINED_VARIABLE_IN_A_SHARED_FRAGMENT = (
 )
 
 
-def test_a_name_at_the_name_bound_reaches_validation_once_per_operation():
+def test_a_name_at_the_name_bound_reaches_validation_once_per_operation() -> None:
     """At the bound the document is parsed, and every operation's report echoes the name."""
     name = "v" * MAX_NAME_BYTES
     payload = _post("/rp-names/", _UNDEFINED_VARIABLE_IN_A_SHARED_FRAGMENT % name)
@@ -1651,7 +1684,7 @@ def test_a_name_at_the_name_bound_reaches_validation_once_per_operation():
     assert all(f"${name}'" in error["message"] for error in errors), errors
 
 
-def test_a_name_over_the_name_bound_is_rejected_before_the_parse():
+def test_a_name_over_the_name_bound_is_rejected_before_the_parse() -> None:
     """Names are measured on the raw text, so validation never copies an oversized one."""
     name = "v" * (MAX_NAME_BYTES + 1)
     extensions = _rejection(_post("/rp-names/", _UNDEFINED_VARIABLE_IN_A_SHARED_FRAGMENT % name))
@@ -1665,7 +1698,7 @@ def test_a_name_over_the_name_bound_is_rejected_before_the_parse():
 # ---------------------------------------------------------------------------
 
 
-def test_selections_are_charged_after_fragment_expansion():
+def test_selections_are_charged_after_fragment_expansion() -> None:
     """A fragment is charged at EVERY spread site, so spreading it N times costs N times.
 
     The evasion this closes: moving a selection set into a fragment and spreading
@@ -1678,8 +1711,11 @@ def test_selections_are_charged_after_fragment_expansion():
     assert extensions["bound"] in {"max_selections", "max_aliases"}
 
 
-def _doubling_fragments(depth: int, leaf: str):
-    """``F0`` spreads ``F1`` twice, ``F1`` spreads ``F2`` twice, ..., so ``F0`` reaches ``leaf`` ``2 ** depth`` times."""
+def _doubling_fragments(depth: int, leaf: str) -> str:
+    """Chain fragments that double, so ``F0`` reaches ``leaf`` ``2 ** depth`` times.
+
+    ``F0`` spreads ``F1`` twice, ``F1`` spreads ``F2`` twice, and so on.
+    """
     chain = [
         f"fragment F{index} on Query {{ ...F{index + 1} ...F{index + 1} }}"
         for index in range(depth)
@@ -1692,7 +1728,7 @@ def _doubling_fragments(depth: int, leaf: str):
     ["...Missing", "...F0", "... { ...Missing }"],
     ids=["unknown-fragment", "fragment-cycle", "inline-fragment"],
 )
-def test_a_fragment_chain_selecting_no_field_is_charged_per_fragment_entered(leaf: str):
+def test_a_fragment_chain_selecting_no_field_is_charged_per_fragment_entered(leaf: str) -> None:
     """A fragment that selects no field still costs a walk step at every spread.
 
     Each ``F{n}`` doubles the spreads below it, so with no field to charge the
@@ -1706,7 +1742,7 @@ def test_a_fragment_chain_selecting_no_field_is_charged_per_fragment_entered(lea
     assert extensions["charged"] == MAX_SELECTIONS + 1
 
 
-def test_a_directive_does_not_hide_a_selection_from_accounting():
+def test_a_directive_does_not_hide_a_selection_from_accounting() -> None:
     """``@skip`` changes what is RETURNED, never what is charged.
 
     Charging only the fields a directive lets through would make ``@skip(if:
@@ -1719,7 +1755,7 @@ def test_a_directive_does_not_hide_a_selection_from_accounting():
     assert extensions["bound"] in {"max_selections", "max_aliases"}
 
 
-def test_the_same_field_under_many_aliases_is_charged_once_per_alias():
+def test_the_same_field_under_many_aliases_is_charged_once_per_alias() -> None:
     aliased = " ".join(f"a{index}: __typename" for index in range(MAX_ALIASES + 1))
     extensions = _rejection(_post("/rp-shape/", "{ %s }" % aliased))
     assert extensions["bound"] == "max_aliases"
@@ -1781,7 +1817,7 @@ _SHAPE_ANON_OVERSIZE_CASES = [
     [_SHAPE_NAMED_ALIAS_DOCUMENT, _SHAPE_NAMED_SPREAD_DOCUMENT],
     ids=["oversized-aliases", "oversized-fragment-spreads"],
 )
-def test_naming_the_small_operation_does_not_charge_the_oversized_sibling(document: str):
+def test_naming_the_small_operation_does_not_charge_the_oversized_sibling(document: str) -> None:
     """Post-parse bounds charge only the operation ``operationName`` names.
 
     ``Big`` is over the alias or selection ceiling; ``Small`` is not. Naming
@@ -1802,7 +1838,7 @@ def test_naming_the_oversized_operation_rejects_on_its_own_shape(
     document: str,
     bound: str,
     charged: int,
-):
+) -> None:
     """The must-not: naming the oversized sibling still charges it."""
     extensions = _rejection(_post_named("/rp-shape/", document, "Big"))
     assert extensions["bound"] == bound
@@ -1817,7 +1853,7 @@ def test_an_unnamed_multi_operation_document_is_charged_in_full(
     document: str,
     bound: str,
     charged: int,
-):
+) -> None:
     """With no ``operationName``, every operation in the document is charged.
 
     The leading operation is anonymous so the engine cannot infer a name from
@@ -1834,7 +1870,7 @@ def test_an_unnamed_multi_operation_document_is_charged_in_full(
     assert all("Must provide operation name" not in err.get("message", "") for err in errors)
 
 
-def test_nested_collections_are_charged_multiplicatively():
+def test_nested_collections_are_charged_multiplicatively() -> None:
     """Two nested full pages cost their product, which is what the cost bound sees."""
     query = """
     {
@@ -1848,7 +1884,7 @@ def test_nested_collections_are_charged_multiplicatively():
     assert extensions["charged"] > MAX_COST
 
 
-def test_an_introspection_document_is_charged_like_any_other():
+def test_an_introspection_document_is_charged_like_any_other() -> None:
     """Introspection is a document shape, not an exemption.
 
     ``__schema`` opens a subtree over every type, field and argument in the
@@ -1863,7 +1899,7 @@ def test_an_introspection_document_is_charged_like_any_other():
     assert extensions["charged"] > MAX_COST
 
 
-def test_an_explicit_small_page_narrows_the_collection_cost():
+def test_an_explicit_small_page_narrows_the_collection_cost() -> None:
     """``first:`` narrows the charge, so a client that asks for less is charged less."""
     query = """
     {
@@ -1875,7 +1911,7 @@ def test_an_explicit_small_page_narrows_the_collection_cost():
     _no_rejection(_post("/rp-cost/", query))
 
 
-def test_a_page_argument_other_than_first_or_last_does_not_narrow_the_collection_cost():
+def test_a_page_argument_other_than_first_or_last_does_not_narrow_the_collection_cost() -> None:
     """``after:`` names no page size, so both nested connections still charge full pages."""
     query = """
     {
@@ -1895,7 +1931,7 @@ def test_a_page_argument_other_than_first_or_last_does_not_narrow_the_collection
 
 
 @pytest.mark.django_db
-def test_a_nested_row_list_over_the_bound_is_rejected():
+def test_a_nested_row_list_over_the_bound_is_rejected() -> None:
     """A list of input objects is a nested row set, charged on ``max_nested_rows``.
 
     The ``and`` combinator is a list of filter input objects - the same shape a
@@ -1912,14 +1948,14 @@ def test_a_nested_row_list_over_the_bound_is_rejected():
 
 
 @pytest.mark.django_db
-def test_a_nested_row_list_at_the_bound_is_not_rejected():
+def test_a_nested_row_list_at_the_bound_is_not_rejected() -> None:
     branches = ", ".join('{ name: { exact: "x" } }' for _ in range(MAX_NESTED_ROWS))
     query = "{ allLibraryGenres(filter: { and: [%s] }) { name } }" % branches
     _no_rejection(_post("/rp-nested-rows/", query))
 
 
 @pytest.mark.django_db
-def test_a_nested_row_list_rides_in_through_one_variable():
+def test_a_nested_row_list_rides_in_through_one_variable() -> None:
     """The tiny-document / large-variable shape, on the nested-rows bound.
 
     ``$f`` carries the whole row list in a variable, so no document bracket
@@ -1946,12 +1982,12 @@ _GENRE_FILTER = "query G($f: GenreFilterInputType) { allLibraryGenres(filter: $f
 
 
 @pytest.mark.django_db
-def test_node_refetch_ids_at_the_bound_are_not_rejected():
+def test_node_refetch_ids_at_the_bound_are_not_rejected() -> None:
     _no_rejection(_post("/rp-values/", _NODES, {"ids": ["x"] * MAX_NODE_IDS}))
 
 
 @pytest.mark.django_db
-def test_node_refetch_ids_over_the_bound_are_rejected_before_any_id_is_decoded():
+def test_node_refetch_ids_over_the_bound_are_rejected_before_any_id_is_decoded() -> None:
     """A tiny document with a large variable payload - the shape S4 names.
 
     The rejection is charged from the variable list, so no GlobalID is decoded
@@ -1968,7 +2004,7 @@ def test_node_refetch_ids_over_the_bound_are_rejected_before_any_id_is_decoded()
 
 
 @pytest.mark.django_db
-def test_duplicate_node_ids_are_charged_positionally():
+def test_duplicate_node_ids_are_charged_positionally() -> None:
     """Duplicates cost what they cost: the framework reassembles every position.
 
     The database may collapse an ``IN`` predicate, but ``DjangoNodesField``
@@ -1980,18 +2016,18 @@ def test_duplicate_node_ids_are_charged_positionally():
 
 
 @pytest.mark.django_db
-def test_an_empty_id_list_is_not_rejected():
+def test_an_empty_id_list_is_not_rejected() -> None:
     _no_rejection(_post("/rp-values/", _NODES, {"ids": []}))
 
 
 @pytest.mark.django_db
-def test_membership_list_over_the_bound_is_rejected():
+def test_membership_list_over_the_bound_is_rejected() -> None:
     extensions = _rejection(_post("/rp-values/", _GENRE_IN, {"ids": ["1"] * (MAX_MEMBERSHIP + 1)}))
     assert extensions["bound"] == "max_membership_items"
 
 
 @pytest.mark.django_db
-def test_membership_list_at_the_bound_is_not_rejected():
+def test_membership_list_at_the_bound_is_not_rejected() -> None:
     _no_rejection(_post("/rp-values/", _GENRE_IN, {"ids": ["1"] * MAX_MEMBERSHIP}))
 
 
@@ -2008,7 +2044,7 @@ _MEMBERSHIP_DEFAULT_AT = (
 
 
 @pytest.mark.django_db
-def test_variable_default_value_in_operation_header_is_rejected_when_omitted():
+def test_variable_default_value_in_operation_header_is_rejected_when_omitted() -> None:
     """An omitted variable is charged as its document default, over and at the bound."""
     extensions = _rejection(_post("/rp-values/", _MEMBERSHIP_DEFAULT_OVER, {}))
     assert extensions["bound"] == "max_membership_items"
@@ -2017,7 +2053,7 @@ def test_variable_default_value_in_operation_header_is_rejected_when_omitted():
 
 
 @pytest.mark.django_db
-def test_variable_default_value_in_operation_header_ignored_when_overridden():
+def test_variable_default_value_in_operation_header_ignored_when_overridden() -> None:
     """An explicit variable is charged at its use as the runtime list, not the default.
 
     The default sits at the bound (four) and is charged once at its definition;
@@ -2034,7 +2070,7 @@ def test_variable_default_value_in_operation_header_ignored_when_overridden():
 
 
 @pytest.mark.django_db
-def test_a_wide_filter_tree_is_charged_by_container_width():
+def test_a_wide_filter_tree_is_charged_by_container_width() -> None:
     """An ``and``/``or`` tree's WIDTH is bounded, not only its depth."""
     branches = ", ".join('{ name: { exact: "x" } }' for _ in range(MAX_CONTAINER_WIDTH + 1))
     query = "{ allLibraryGenres(filter: { and: [%s] }) { name } }" % branches
@@ -2043,7 +2079,7 @@ def test_a_wide_filter_tree_is_charged_by_container_width():
 
 
 @pytest.mark.django_db
-def test_relation_ids_in_one_mutation_are_bounded():
+def test_relation_ids_in_one_mutation_are_bounded() -> None:
     mutation = (
         "mutation B($d: BookInput!) { createBookViaCustomInput(data: $d) "
         "{ node { title } errors { field messages } } }"
@@ -2061,7 +2097,7 @@ def test_relation_ids_in_one_mutation_are_bounded():
 
 
 @pytest.mark.django_db
-def test_relation_ids_across_several_mutation_fields_are_bounded_in_aggregate():
+def test_relation_ids_across_several_mutation_fields_are_bounded_in_aggregate() -> None:
     """Two writes that each pass the per-field bound can still exceed the request's.
 
     Serial mutation fields are one request's worth of work, so the aggregate
@@ -2088,7 +2124,7 @@ def test_relation_ids_across_several_mutation_fields_are_bounded_in_aggregate():
 
 
 @pytest.mark.django_db
-def test_one_variable_spliced_into_two_mutation_fields_is_charged_twice():
+def test_one_variable_spliced_into_two_mutation_fields_is_charged_twice() -> None:
     """The bypass a charge-once-per-container cache left open, over the wire.
 
     ``$g`` is ONE Python list object, and splicing it into two mutation fields
@@ -2160,7 +2196,7 @@ def _data_input_type(field: str) -> str:
 
 
 @pytest.mark.django_db
-def test_a_raw_pk_model_relation_list_over_the_bound_is_rejected():
+def test_a_raw_pk_model_relation_list_over_the_bound_is_rejected() -> None:
     """A raw-pk relation list charges the relation bound, like its GlobalID twin.
 
     The wire item type of a raw-pk relation is ``Int`` - ``createShelf``'s
@@ -2176,7 +2212,7 @@ def test_a_raw_pk_model_relation_list_over_the_bound_is_rejected():
 
 
 @pytest.mark.django_db
-def test_a_raw_pk_form_relation_list_over_the_bound_is_rejected():
+def test_a_raw_pk_form_relation_list_over_the_bound_is_rejected() -> None:
     """The FORM flavor's raw-pk M2M charges the relation bound like its model twin."""
     extensions = _rejection(
         _post(
@@ -2190,7 +2226,7 @@ def test_a_raw_pk_form_relation_list_over_the_bound_is_rejected():
 
 
 @pytest.mark.django_db
-def test_a_raw_pk_serializer_relation_list_over_the_bound_is_rejected():
+def test_a_raw_pk_serializer_relation_list_over_the_bound_is_rejected() -> None:
     """The SERIALIZER flavor's raw-pk M2M charges the relation bound like its twins."""
     extensions = _rejection(
         _post(
@@ -2204,7 +2240,7 @@ def test_a_raw_pk_serializer_relation_list_over_the_bound_is_rejected():
 
 
 @pytest.mark.django_db
-def test_a_nested_serializer_row_relation_list_is_charged_against_the_field():
+def test_a_nested_serializer_row_relation_list_is_charged_against_the_field() -> None:
     """A raw-pk relation list inside a NESTED row charges its enclosing field.
 
     ``createBranchWithNestedShelves`` carries ``shelves: [<row>!]``, and each row
@@ -2227,7 +2263,7 @@ def test_a_nested_serializer_row_relation_list_is_charged_against_the_field():
 
 
 @pytest.mark.django_db
-def test_a_global_id_relation_list_still_charges_the_relation_bound():
+def test_a_global_id_relation_list_still_charges_the_relation_bound() -> None:
     """The ``ID``-typed twin keeps its bound - the spec and the name agree there.
 
     The serializer UPDATE shape's relation list rides ``GlobalID``; it charged
@@ -2247,7 +2283,7 @@ def test_a_global_id_relation_list_still_charges_the_relation_bound():
 
 
 @pytest.mark.django_db
-def test_raw_pk_relation_lists_at_the_bound_execute():
+def test_raw_pk_relation_lists_at_the_bound_execute() -> None:
     """The bound is a ceiling over legal writes, not a wall in front of them.
 
     Two visible branches at a per-field bound of two run the whole decode +
@@ -2268,7 +2304,7 @@ def test_raw_pk_relation_lists_at_the_bound_execute():
 
 
 @pytest.mark.django_db
-def test_raw_pk_relation_ids_across_fields_accumulate_in_the_aggregate():
+def test_raw_pk_relation_ids_across_fields_accumulate_in_the_aggregate() -> None:
     """Two raw-pk writes that each pass the per-field bound exhaust the request's total.
 
     The aggregate is the bound that sees a batch assembled out of
@@ -2278,7 +2314,10 @@ def test_raw_pk_relation_ids_across_fields_accumulate_in_the_aggregate():
     separate budget, not the per-field one misfiring.
     """
     mutation = """
-    mutation S($a: ShelfAlt_ubranchesBranchCodeConditionInput!, $b: ShelfAlt_ubranchesBranchCodeConditionInput!) {
+    mutation S(
+      $a: ShelfAlt_ubranchesBranchCodeConditionInput!
+      $b: ShelfAlt_ubranchesBranchCodeConditionInput!
+    ) {
       first: createShelf(data: $a) { result { code } }
       second: createShelf(data: $b) { result { code } }
     }
@@ -2293,7 +2332,7 @@ def test_raw_pk_relation_ids_across_fields_accumulate_in_the_aggregate():
 
 
 @pytest.mark.django_db
-def test_a_global_id_relation_and_a_raw_pk_relation_share_one_aggregate():
+def test_a_global_id_relation_and_a_raw_pk_relation_share_one_aggregate() -> None:
     """One aggregate budget, two spellings of the same write.
 
     The request batches a raw-pk model write (2 ids) with a GlobalID serializer
@@ -2301,7 +2340,11 @@ def test_a_global_id_relation_and_a_raw_pk_relation_share_one_aggregate():
     from differently-typed relation lists cannot spend more than one budget.
     """
     mutation = """
-    mutation M($s: ShelfAlt_ubranchesBranchCodeConditionInput!, $d: BookGenresSerializerPartialInput!, $id: ID!) {
+    mutation M(
+      $s: ShelfAlt_ubranchesBranchCodeConditionInput!
+      $d: BookGenresSerializerPartialInput!
+      $id: ID!
+    ) {
       shelf: createShelf(data: $s) { result { code } }
       book: updateBookGenresViaSerializer(id: $id, data: $d) { node { title } }
     }
@@ -2317,7 +2360,7 @@ def test_a_global_id_relation_and_a_raw_pk_relation_share_one_aggregate():
 
 
 @pytest.mark.django_db
-def test_a_nested_row_relation_list_at_the_bound_is_not_rejected():
+def test_a_nested_row_relation_list_at_the_bound_is_not_rejected() -> None:
     """The under-boundary half on the nested tier: one row of one id stays legal."""
     input_type = _data_input_type("createBranchWithNestedShelves")
     mutation = (
@@ -2329,7 +2372,7 @@ def test_a_nested_row_relation_list_at_the_bound_is_not_rejected():
 
 
 @pytest.mark.django_db
-def test_a_membership_list_inside_a_generated_mutation_input_stays_membership():
+def test_a_membership_list_inside_a_generated_mutation_input_stays_membership() -> None:
     """Spec-keyed classification charges only RELATION fields as relations.
 
     ``ShelfAlt_ubranchesBranchCodeConditionInput.branchId`` is a raw-pk SINGLE relation
@@ -2353,7 +2396,7 @@ def test_a_membership_list_inside_a_generated_mutation_input_stays_membership():
 
 
 @pytest.mark.django_db
-def test_a_deeply_nested_variable_value_is_bounded_by_value_depth():
+def test_a_deeply_nested_variable_value_is_bounded_by_value_depth() -> None:
     """The bound the pre-parse depth scan structurally cannot supply.
 
     ``max_depth`` counts brackets in the document TEXT; this document has three
@@ -2370,12 +2413,12 @@ def test_a_deeply_nested_variable_value_is_bounded_by_value_depth():
 
 
 @pytest.mark.django_db
-def test_a_shallow_variable_value_is_not_rejected_on_value_depth():
+def test_a_shallow_variable_value_is_not_rejected_on_value_depth() -> None:
     _no_rejection(_post("/rp-value-depth/", _GENRE_FILTER, {"f": {"name": {"exact": "x"}}}))
 
 
 @pytest.mark.django_db
-def test_a_scalar_larger_than_the_byte_bound_is_rejected():
+def test_a_scalar_larger_than_the_byte_bound_is_rejected() -> None:
     mutation = (
         "mutation S($d: ShelfSerializerInput!) { createShelfViaSerializer(data: $d) "
         "{ result { code } errors { field messages } } }"
@@ -2386,7 +2429,7 @@ def test_a_scalar_larger_than_the_byte_bound_is_rejected():
     assert extensions["charged"] == MAX_SCALAR_BYTES + 1
 
 
-def test_an_inline_string_argument_is_bounded_by_scalar_bytes():
+def test_an_inline_string_argument_is_bounded_by_scalar_bytes() -> None:
     """A string literal in the document is charged the same bound as a variable string."""
     name = "Q" * (MAX_SCALAR_BYTES + 1)
     extensions = _rejection(
@@ -2397,7 +2440,7 @@ def test_an_inline_string_argument_is_bounded_by_scalar_bytes():
 
 
 @pytest.mark.django_db
-def test_total_input_nodes_are_bounded_across_several_arguments():
+def test_total_input_nodes_are_bounded_across_several_arguments() -> None:
     """Several individually-legal arguments can still exhaust the request's node budget."""
     branches = ", ".join(
         '{ name: { exact: "x" }, id: { exact: "1" } }' for _ in range(MAX_CONTAINER_WIDTH)
@@ -2417,57 +2460,57 @@ def test_total_input_nodes_are_bounded_across_several_arguments():
 _OVER_BYTES = "x" * (MAX_SCALAR_BYTES + 1)
 
 
-def _assert_over_bytes(payload: JSONObject):
+def _assert_over_bytes(payload: JSONObject) -> None:
     """Assert ``payload`` is the scalar-byte rejection of exactly ``_OVER_BYTES``."""
     extensions = _rejection(payload)
     assert extensions["bound"] == "max_scalar_bytes"
     assert extensions["charged"] == MAX_SCALAR_BYTES + 1
 
 
-def _assert_over_nodes(payload: JSONObject):
+def _assert_over_nodes(payload: JSONObject) -> None:
     """Assert ``payload`` is the input-node rejection one node past ``MAX_INPUT_NODES``."""
     extensions = _rejection(payload)
     assert extensions["bound"] == "max_input_nodes"
     assert extensions["charged"] == MAX_INPUT_NODES + 1
 
 
-def _included_fields(count: int):
+def _included_fields(count: int) -> str:
     """``count`` aliased ``__typename`` selections, each carrying one ``@include`` value."""
     return " ".join(f"f{index}: __typename @include(if: true)" for index in range(count))
 
 
-def test_field_directive_values_at_the_node_bound_are_admitted():
+def test_field_directive_values_at_the_node_bound_are_admitted() -> None:
     payload = _post("/rp-values/", "{ %s }" % _included_fields(MAX_INPUT_NODES))
     _no_rejection(payload)
     assert payload["data"] == {f"f{index}": "Query" for index in range(MAX_INPUT_NODES)}
 
 
-def test_field_directive_values_are_charged_as_input_nodes():
+def test_field_directive_values_are_charged_as_input_nodes() -> None:
     """Each ``@include(if: true)`` on a field is one input node, charged per field."""
     _assert_over_nodes(_post("/rp-values/", "{ %s }" % _included_fields(MAX_INPUT_NODES + 1)))
 
 
-def test_inline_fragment_directive_values_are_charged_as_input_nodes():
+def test_inline_fragment_directive_values_are_charged_as_input_nodes() -> None:
     fragments = " ".join(
         "... @include(if: true) { __typename }" for _ in range(MAX_INPUT_NODES + 1)
     )
     _assert_over_nodes(_post("/rp-values/", "{ %s }" % fragments))
 
 
-def test_spread_directive_values_are_charged_at_every_spread():
+def test_spread_directive_values_are_charged_at_every_spread() -> None:
     spreads = " ".join("...F @include(if: true)" for _ in range(MAX_INPUT_NODES + 1))
     query = "{ %s } fragment F on Query { __typename }" % spreads
     _assert_over_nodes(_post("/rp-values/", query))
 
 
-def test_fragment_definition_directive_values_are_charged_per_expansion():
+def test_fragment_definition_directive_values_are_charged_per_expansion() -> None:
     """The definition's own directive is converted again for every spread that expands it."""
     spreads = " ".join("...F" for _ in range(MAX_INPUT_NODES + 1))
     query = "{ %s } fragment F on Query @include(if: true) { __typename }" % spreads
     _assert_over_nodes(_post("/rp-values/", query))
 
 
-def test_a_fragment_spread_only_from_an_unselected_operation_is_charged_once():
+def test_a_fragment_spread_only_from_an_unselected_operation_is_charged_once() -> None:
     """Validation parses a fragment's literals once, however many spreads reach it.
 
     ``Big`` reaches ``F5``'s ``@include`` value ``2 ** 5`` times, past
@@ -2485,7 +2528,7 @@ def test_a_fragment_spread_only_from_an_unselected_operation_is_charged_once():
     assert payload["data"] == {"__typename": "Query"}
 
 
-def test_a_fragment_spread_below_an_unknown_field_is_charged_once():
+def test_a_fragment_spread_below_an_unknown_field_is_charged_once() -> None:
     """Below a field the parent does not have, the walk charges values and expands nothing."""
     query = "{ __typename nope { ...F0 } } " + _doubling_fragments(
         5,
@@ -2496,7 +2539,7 @@ def test_a_fragment_spread_below_an_unknown_field_is_charged_once():
     assert "nope" in payload["errors"][0]["message"]
 
 
-def test_an_unknown_field_subtree_in_a_fragment_is_walked_once_however_often_it_expands():
+def test_an_unknown_field_subtree_in_a_fragment_is_walked_once_however_often_it_expands() -> None:
     """Validation parses the literals below an unknown field once per field node.
 
     ``F`` is spread three times; the ten arguments under ``nope`` are ten input
@@ -2511,24 +2554,24 @@ def test_an_unknown_field_subtree_in_a_fragment_is_walked_once_however_often_it_
     assert "nope" in payload["errors"][0]["message"]
 
 
-def test_a_directive_value_on_a_spread_of_an_unknown_fragment_is_charged():
+def test_a_directive_value_on_a_spread_of_an_unknown_fragment_is_charged() -> None:
     query = '{ __typename ...Missing @deprecated(reason: "%s") }' % _OVER_BYTES
     _assert_over_bytes(_post("/rp-values/", query))
 
 
-def test_a_directive_value_on_a_spread_closing_a_fragment_cycle_is_charged():
+def test_a_directive_value_on_a_spread_closing_a_fragment_cycle_is_charged() -> None:
     query = (
         '{ ...A } fragment A on Query { __typename ...A @deprecated(reason: "%s") }' % _OVER_BYTES
     )
     _assert_over_bytes(_post("/rp-values/", query))
 
 
-def test_an_operation_directive_value_is_charged():
+def test_an_operation_directive_value_is_charged() -> None:
     query = 'query Q @deprecated(reason: "%s") { __typename }' % _OVER_BYTES
     _assert_over_bytes(_post("/rp-values/", query))
 
 
-def test_a_variable_definition_directive_value_is_charged():
+def test_a_variable_definition_directive_value_is_charged() -> None:
     query = (
         'query Q($v: Boolean! @deprecated(reason: "%s")) { __typename @include(if: $v) }'
         % _OVER_BYTES
@@ -2536,67 +2579,67 @@ def test_a_variable_definition_directive_value_is_charged():
     _assert_over_bytes(_post("/rp-values/", query, {"v": True}))
 
 
-def test_a_variable_default_read_only_by_a_directive_is_charged():
+def test_a_variable_default_read_only_by_a_directive_is_charged() -> None:
     query = 'query Q($v: String = "%s") { __typename @deprecated(reason: $v) }' % _OVER_BYTES
     _assert_over_bytes(_post("/rp-values/", query))
 
 
-def test_an_unused_variable_default_is_charged():
+def test_an_unused_variable_default_is_charged() -> None:
     query = 'query Q($v: String = "%s") { __typename }' % _OVER_BYTES
     _assert_over_bytes(_post("/rp-values/", query))
 
 
-def test_a_variable_default_referenced_only_from_an_unknown_field_is_charged():
+def test_a_variable_default_referenced_only_from_an_unknown_field_is_charged() -> None:
     query = 'query Q($v: String = "%s") { __typename nosuch(b: $v) }' % _OVER_BYTES
     _assert_over_bytes(_post("/rp-values/", query))
 
 
-def test_a_variable_default_shadowed_by_a_supplied_variable_is_still_charged():
+def test_a_variable_default_shadowed_by_a_supplied_variable_is_still_charged() -> None:
     """Validation parses the default whether or not the request supplies the variable."""
     query = 'query Q($v: String = "%s") { __type(name: $v) { name } }' % _OVER_BYTES
     _assert_over_bytes(_post("/rp-values/", query, {"v": "Query"}))
 
 
-def test_an_unknown_argument_value_is_charged_untyped():
+def test_an_unknown_argument_value_is_charged_untyped() -> None:
     """Nothing types ``nope``, so no family classifies it; its bytes are still charged."""
     query = '{ __type(name: "Query", nope: "%s") { name } }' % _OVER_BYTES
     _assert_over_bytes(_post("/rp-values/", query))
 
 
-def test_a_value_of_an_unknown_directive_is_charged_untyped():
+def test_a_value_of_an_unknown_directive_is_charged_untyped() -> None:
     query = '{ __typename @nope(x: "%s") }' % _OVER_BYTES
     _assert_over_bytes(_post("/rp-values/", query))
 
 
-def test_an_unknown_argument_of_a_known_directive_is_charged_untyped():
+def test_an_unknown_argument_of_a_known_directive_is_charged_untyped() -> None:
     query = '{ __typename @include(if: true, nope: "%s") }' % _OVER_BYTES
     _assert_over_bytes(_post("/rp-values/", query))
 
 
-def test_a_directive_value_on_a_type_system_definition_at_the_byte_bound_is_admitted():
+def test_a_directive_value_on_a_type_system_definition_at_the_byte_bound_is_admitted() -> None:
     """At the bound the budget admits it, and rejecting the definition is validation's job."""
     query = '{ __typename } scalar S @specifiedBy(url: "%s")' % ("x" * MAX_SCALAR_BYTES)
     _no_rejection(_post("/rp-values/", query))
 
 
-def test_a_directive_value_on_a_type_system_definition_is_charged():
+def test_a_directive_value_on_a_type_system_definition_is_charged() -> None:
     """Validation types a known directive's arguments in any definition it visits."""
     query = '{ __typename } scalar S @specifiedBy(url: "%s")' % _OVER_BYTES
     _assert_over_bytes(_post("/rp-values/", query))
 
 
-def test_a_literal_in_an_operation_the_request_did_not_select_is_charged():
+def test_a_literal_in_an_operation_the_request_did_not_select_is_charged() -> None:
     """Validation walks every definition in the document, not only the selected one."""
     query = 'query A { __typename } query B { __type(name: "%s") { name } }' % _OVER_BYTES
     _assert_over_bytes(_post_named("/rp-values/", query, "A"))
 
 
-def test_a_literal_in_a_fragment_no_spread_reaches_is_charged():
+def test_a_literal_in_a_fragment_no_spread_reaches_is_charged() -> None:
     query = '{ __typename } fragment U on Query { __type(name: "%s") { name } }' % _OVER_BYTES
     _assert_over_bytes(_post("/rp-values/", query))
 
 
-def test_a_literal_in_a_duplicate_fragment_definition_is_charged():
+def test_a_literal_in_a_duplicate_fragment_definition_is_charged() -> None:
     """The spread expands the last ``F``; validation still parses the first one's literals."""
     query = (
         '{ ...F } fragment F on Query { __type(name: "%s") { name } } '
@@ -2605,7 +2648,7 @@ def test_a_literal_in_a_duplicate_fragment_definition_is_charged():
     _assert_over_bytes(_post("/rp-values/", query))
 
 
-def test_an_unselected_mutation_is_classified_by_its_write_bind_specs():
+def test_an_unselected_mutation_is_classified_by_its_write_bind_specs() -> None:
     """A raw-pk relation list in an unselected write still charges the relation bound.
 
     ``altBranches`` is ``[Int!]`` on the wire, so only ``createShelf``'s bind
@@ -2620,7 +2663,7 @@ def test_an_unselected_mutation_is_classified_by_its_write_bind_specs():
     assert extensions["charged"] == MAX_RELATION_IDS + 1
 
 
-def _genre_or_filter(branches: int, *, extra: str = ""):
+def _genre_or_filter(branches: int, *, extra: str = "") -> str:
     """A genre filter literal: one ``or`` list of ``branches`` single-name rows.
 
     It is ``2 + 3 * branches`` input nodes (the object, the list, and per row
@@ -2637,17 +2680,17 @@ _SUBSTITUTED_DEFAULT = (
 
 
 @pytest.mark.django_db
-def test_a_default_substituted_at_its_use_is_charged_once_at_the_node_bound():
+def test_a_default_substituted_at_its_use_is_charged_once_at_the_node_bound() -> None:
     """Six rows are exactly ``MAX_INPUT_NODES`` nodes, charged at the use site alone."""
     _no_rejection(_post("/rp-values/", _SUBSTITUTED_DEFAULT % _genre_or_filter(6)))
 
 
-def test_a_default_substituted_at_its_use_one_node_over_the_bound_is_rejected():
+def test_a_default_substituted_at_its_use_one_node_over_the_bound_is_rejected() -> None:
     query = _SUBSTITUTED_DEFAULT % _genre_or_filter(6, extra=', iContains: "x"')
     _assert_over_nodes(_post("/rp-values/", query))
 
 
-def test_an_unselected_operation_repeating_a_charged_argument_is_charged_again():
+def test_an_unselected_operation_repeating_a_charged_argument_is_charged_again() -> None:
     """Two byte-identical arguments are two values; each one's nodes are charged."""
     argument = "filter: %s" % _genre_or_filter(3)
     query = (
@@ -2657,7 +2700,7 @@ def test_an_unselected_operation_repeating_a_charged_argument_is_charged_again()
     _assert_over_nodes(_post_named("/rp-values/", query, "A"))
 
 
-def test_an_upload_variable_in_an_unselected_mutation_is_admitted():
+def test_an_upload_variable_in_an_unselected_mutation_is_admitted() -> None:
     """A variable reference there carries no value, so it is not an unmeasurable file."""
     query = (
         "query A { __typename } mutation M($a: Upload!, $i: Upload!) { createMediaSpecimen("
@@ -2680,7 +2723,7 @@ _SPECIMEN = (
 
 
 @pytest.mark.django_db
-def test_an_oversized_upload_is_rejected_by_the_policy_not_by_the_body_cap():
+def test_an_oversized_upload_is_rejected_by_the_policy_not_by_the_body_cap() -> None:
     """The multipart body is never materialized by the transport cap, so this is the bound.
 
     ``MAX_REQUEST_BODY_BYTES`` deliberately does not measure a multipart body -
@@ -2712,7 +2755,7 @@ def test_an_oversized_upload_is_rejected_by_the_policy_not_by_the_body_cap():
 
 
 @pytest.mark.django_db
-def test_list_argument_smaller_limit_serializes_subset_and_charges_full_collection_cost():
+def test_list_argument_smaller_limit_serializes_subset_and_charges_full_collection_cost() -> None:
     """Client limit narrows serialized rows while collection cost charges full max_list_rows."""
     library_models.Branch.objects.create(name="B1", city="Boston")
     library_models.Branch.objects.create(name="B2", city="Boston")
@@ -2736,7 +2779,7 @@ def test_list_argument_smaller_limit_serializes_subset_and_charges_full_collecti
     assert ext["limit"] == MAX_LIST_ROWS - 1
 
 
-def _seed_five_branches():
+def _seed_five_branches() -> list[library_models.Branch]:
     """Seed five same-city branches - more rows than the narrowed policy ceiling.
 
     The count is what makes an at-ceiling page a real window rather than the whole
@@ -2748,7 +2791,7 @@ def _seed_five_branches():
 
 
 @pytest.mark.django_db
-def test_list_argument_limit_at_and_over_narrowed_policy_ceiling():
+def test_list_argument_limit_at_and_over_narrowed_policy_ceiling() -> None:
     """Client limit at policy ceiling succeeds; over ceiling reports narrowed bound."""
     _seed_five_branches()
 
@@ -2776,7 +2819,7 @@ def test_list_argument_limit_at_and_over_narrowed_policy_ceiling():
 
 
 @pytest.mark.django_db
-def test_list_argument_offset_at_and_over_narrowed_policy_ceiling():
+def test_list_argument_offset_at_and_over_narrowed_policy_ceiling() -> None:
     """Ordered offset at policy ceiling succeeds; over ceiling reports narrowed bound."""
     create_users(1)
     client = Client()
@@ -2829,7 +2872,7 @@ def test_list_argument_offset_at_and_over_narrowed_policy_ceiling():
 
 
 @pytest.mark.django_db
-def test_list_argument_rejections_and_limit_zero_perform_no_sql():
+def test_list_argument_rejections_and_limit_zero_perform_no_sql() -> None:
     """Argument refusal and limit: 0 perform zero row-fetching queries."""
     library_models.Branch.objects.create(name="B1", city="Boston")
     library_models.Branch.objects.create(name="B2", city="Boston")
@@ -2856,7 +2899,7 @@ def test_list_argument_rejections_and_limit_zero_perform_no_sql():
 
 
 @pytest.mark.django_db
-def test_a_raw_root_list_stops_at_the_configured_maximum():
+def test_a_raw_root_list_stops_at_the_configured_maximum() -> None:
     """``DjangoListField`` is bounded whether or not the field says anything."""
     seed_data(2)
     payload = _post("/rp-rows/", "{ allLibraryBranchesViaListField { name } }")
@@ -2865,7 +2908,7 @@ def test_a_raw_root_list_stops_at_the_configured_maximum():
 
 
 @pytest.mark.django_db
-def test_the_list_sibling_cannot_bypass_the_connection_page_cap():
+def test_the_list_sibling_cannot_bypass_the_connection_page_cap() -> None:
     """The bypass S3 names, closed from both ends.
 
     ``CategoryType.items`` is an explicit ``"both"`` opt-in, so the raw list
@@ -2883,7 +2926,7 @@ def test_the_list_sibling_cannot_bypass_the_connection_page_cap():
 
 
 @pytest.mark.django_db
-def test_a_connection_page_larger_than_the_policy_is_refused():
+def test_a_connection_page_larger_than_the_policy_is_refused() -> None:
     """The policy is a ceiling over ``relay_max_results``, never a replacement for it.
 
     The refusal is the package's own ``PaginationArgumentError``, carrying the
@@ -2902,7 +2945,7 @@ def test_a_connection_page_larger_than_the_policy_is_refused():
 
 
 @pytest.mark.django_db
-def test_the_connection_only_default_leaves_no_raw_list_sibling():
+def test_the_connection_only_default_leaves_no_raw_list_sibling() -> None:
     """``CategoryType.properties`` declares nothing, so the SDL carries no list form.
 
     The live half of the ``DEFAULT_RELATION_SHAPE`` flip: the raw sibling is
@@ -2921,7 +2964,7 @@ def test_the_connection_only_default_leaves_no_raw_list_sibling():
 # ---------------------------------------------------------------------------
 
 
-def _deadline_rejection(payload: JSONObject):
+def _deadline_rejection(payload: JSONObject) -> JSONObject:
     """Return the deadline rejection in ``payload``, asserting it is the only error.
 
     Separate from ``_rejection`` because a deadline fires from inside a resolver
@@ -2938,7 +2981,7 @@ def _deadline_rejection(payload: JSONObject):
 
 
 @pytest.mark.django_db
-def test_a_passed_deadline_stops_a_connection_before_it_reaches_the_database():
+def test_a_passed_deadline_stops_a_connection_before_it_reaches_the_database() -> None:
     """The connection seam: the head every ``resolve_connection`` shape passes through."""
     seed_data(1)
     with CaptureQueriesContext(connection) as captured:
@@ -2952,7 +2995,7 @@ def test_a_passed_deadline_stops_a_connection_before_it_reaches_the_database():
 
 
 @pytest.mark.django_db
-def test_a_passed_deadline_stops_a_raw_list_before_it_reaches_the_database():
+def test_a_passed_deadline_stops_a_raw_list_before_it_reaches_the_database() -> None:
     """The ``bounded_rows`` seam, shared by both raw-list spellings."""
     seed_data(1)
     with CaptureQueriesContext(connection) as captured:
@@ -2962,7 +3005,7 @@ def test_a_passed_deadline_stops_a_raw_list_before_it_reaches_the_database():
 
 
 @pytest.mark.django_db
-def test_a_passed_deadline_stops_a_relay_refetch_before_any_id_is_decoded():
+def test_a_passed_deadline_stops_a_relay_refetch_before_any_id_is_decoded() -> None:
     """The Relay refetch seam: a decode is what makes the query inevitable."""
     seed_data(1)
     with CaptureQueriesContext(connection) as captured:
@@ -2993,7 +3036,7 @@ def _native_node_cases(gid: str, name: str) -> dict[str, tuple[str, JSONObject, 
 
 @pytest.mark.parametrize("field", ["node", "nodes"])
 @pytest.mark.django_db
-def test_an_unarmed_deadline_lets_a_native_node_field_resolve(field: str):
+def test_an_unarmed_deadline_lets_a_native_node_field_resolve(field: str) -> None:
     """The control: the same native fields with no deadline answer the row."""
     seed_data(1)
     query, variables, data = _native_node_cases(*_public_category_gid())[field]
@@ -3004,7 +3047,7 @@ def test_an_unarmed_deadline_lets_a_native_node_field_resolve(field: str):
 
 @pytest.mark.parametrize("field", ["node", "nodes"])
 @pytest.mark.django_db
-def test_a_passed_deadline_stops_a_native_node_field_before_it_queries(field: str):
+def test_a_passed_deadline_stops_a_native_node_field_before_it_queries(field: str) -> None:
     """Strawberry's own ``relay.node()`` fields reach the package's node defaults.
 
     No package refetch field checks in front of them, so the check at the head of
@@ -3021,7 +3064,7 @@ def test_a_passed_deadline_stops_a_native_node_field_before_it_queries(field: st
 
 @pytest.mark.parametrize("field", ["node", "nodes"])
 @pytest.mark.django_db(transaction=True)
-def test_a_passed_deadline_stops_a_native_node_field_on_the_async_transport(field: str):
+def test_a_passed_deadline_stops_a_native_node_field_on_the_async_transport(field: str) -> None:
     """Sync/async parity: the head check runs ahead of the execution-mode branch.
 
     The rejection and its path rather than a query count, for the reason
@@ -3044,7 +3087,7 @@ def test_a_passed_deadline_stops_a_native_node_field_on_the_async_transport(fiel
 
 
 @pytest.mark.django_db
-def test_a_passed_deadline_stops_a_write_before_its_pipeline_transaction_opens():
+def test_a_passed_deadline_stops_a_write_before_its_pipeline_transaction_opens() -> None:
     """The write seam: refusing before the pipeline's own atomic leaves no write to unwind."""
     mutation = (
         'mutation { createBookViaCustomInput(data: { title: "t", subtitle: "s", shelfId: 1 }) '
@@ -3093,7 +3136,7 @@ def _error_paths(payload: JSONObject) -> list[list[object]]:
 
 
 @pytest.mark.django_db
-def test_a_passed_deadline_stops_a_nested_forward_fk_before_its_lazy_load():
+def test_a_passed_deadline_stops_a_nested_forward_fk_before_its_lazy_load() -> None:
     """The forward FK resolver checks at its head, so the shelf hop never queries.
 
     ``ShelfType`` declares ``get_queryset``, so without the check each book would
@@ -3110,7 +3153,7 @@ def test_a_passed_deadline_stops_a_nested_forward_fk_before_its_lazy_load():
 
 
 @pytest.mark.django_db
-def test_a_passed_deadline_stops_a_nested_forward_one_to_one_before_its_lazy_load():
+def test_a_passed_deadline_stops_a_nested_forward_one_to_one_before_its_lazy_load() -> None:
     """The forward OneToOne shares the forward resolver and its head check."""
     _seed_relation_deadline_rows()
     with CaptureQueriesContext(connection) as captured:
@@ -3122,7 +3165,7 @@ def test_a_passed_deadline_stops_a_nested_forward_one_to_one_before_its_lazy_loa
 
 
 @pytest.mark.django_db
-def test_a_passed_deadline_stops_every_nested_reverse_one_to_one_before_its_lazy_load():
+def test_a_passed_deadline_stops_every_nested_reverse_one_to_one_before_its_lazy_load() -> None:
     """The reverse OneToOne resolver checks at its head, once per parent row.
 
     ``card`` is nullable, so each rejection nulls only its own hop and the next
@@ -3146,7 +3189,7 @@ def test_a_passed_deadline_stops_every_nested_reverse_one_to_one_before_its_lazy
 
 
 @pytest.mark.django_db
-def test_a_passed_deadline_stops_a_nested_many_side_relation_at_its_bound():
+def test_a_passed_deadline_stops_a_nested_many_side_relation_at_its_bound() -> None:
     """The many-side contrast: the same check, reached through ``bounded_rows``."""
     _seed_relation_deadline_rows()
     with CaptureQueriesContext(connection) as captured:
@@ -3198,7 +3241,7 @@ def test_an_unarmed_deadline_lets_every_nested_relation_load(
     query: str,
     queries: int,
     data: JSONObject,
-):
+) -> None:
     """The control: the same schema with no deadline pays every lazy hop.
 
     One root query, then per row a lazy load (plus a visibility re-check for the
@@ -3214,7 +3257,7 @@ def test_an_unarmed_deadline_lets_every_nested_relation_load(
 
 
 @pytest.mark.django_db
-def test_a_passed_deadline_stops_a_forward_relation_the_optimizer_elided():
+def test_a_passed_deadline_stops_a_forward_relation_the_optimizer_elided() -> None:
     """The FK-id elision stub sits behind the head check too.
 
     ``patron { id }`` selects nothing the card row does not already carry, and
@@ -3255,7 +3298,7 @@ def test_a_passed_deadline_stops_a_relation_the_optimizer_already_fetched(
     query: str,
     queries: int,
     paths: list[list[object]],
-):
+) -> None:
     """Every generated relation resolver checks on every call, loaded or not.
 
     Under a plan the hop arrives already fetched - joined for the un-hooked
@@ -3288,7 +3331,7 @@ def test_a_passed_deadline_stops_a_nested_relation_on_the_async_transport(
     query: str,
     error_path: list[object],
     data: JSONObject | None,
-):
+) -> None:
     """Sync/async parity: both OneToOne directions reject under async execution too.
 
     The async roots leave each hop an unloaded descriptor, the shape the
@@ -3348,7 +3391,7 @@ def _last_login() -> object:
 
 
 @pytest.mark.django_db
-def test_an_unarmed_deadline_lets_login_establish_a_session():
+def test_an_unarmed_deadline_lets_login_establish_a_session() -> None:
     """The auth control: without a deadline the probe schema signs ``staff_1`` in."""
     create_users(1)
     client = _signed_in_client()
@@ -3357,7 +3400,7 @@ def test_an_unarmed_deadline_lets_login_establish_a_session():
 
 
 @pytest.mark.django_db
-def test_a_passed_deadline_stops_login_before_it_authenticates():
+def test_a_passed_deadline_stops_login_before_it_authenticates() -> None:
     """``login`` checks first: no user lookup, no password hash, no session.
 
     Zero queries means ``authenticate`` never ran; no cookie and an unchanged
@@ -3376,7 +3419,7 @@ def test_a_passed_deadline_stops_login_before_it_authenticates():
 
 
 @pytest.mark.django_db
-def test_a_passed_deadline_stops_logout_before_it_touches_the_session():
+def test_a_passed_deadline_stops_logout_before_it_touches_the_session() -> None:
     """``logout`` checks first: the session is never loaded, so it is never flushed."""
     create_users(1)
     client = _signed_in_client()
@@ -3390,7 +3433,7 @@ def test_a_passed_deadline_stops_logout_before_it_touches_the_session():
 
 
 @pytest.mark.django_db
-def test_a_passed_deadline_stops_me_before_it_resolves_the_user():
+def test_a_passed_deadline_stops_me_before_it_resolves_the_user() -> None:
     """``me`` checks first: ``request.user`` is never forced, so neither lookup runs.
 
     A signed-in client, so the field would otherwise load the session and then
@@ -3442,7 +3485,7 @@ def test_a_passed_deadline_stops_the_auth_fields_on_the_async_transport(
     variables: Mapping[str, object] | None,
     error_path: list[object],
     data: JSONObject | None,
-):
+) -> None:
     """Sync/async parity for the auth fields, over a signed-in session.
 
     Outcomes rather than a query count, for the reason
@@ -3474,7 +3517,7 @@ def test_a_passed_deadline_stops_the_auth_fields_on_the_async_transport(
 
 
 @pytest.mark.django_db
-def test_an_unarmed_deadline_never_rejects():
+def test_an_unarmed_deadline_never_rejects() -> None:
     """The default policy carries no deadline, so no seam may reject on one."""
     seed_data(1)
     _no_rejection(_post("/rp-rows/", "{ allLibraryBranchesViaListField { name } }"))
@@ -3485,7 +3528,7 @@ def test_an_unarmed_deadline_never_rejects():
 # ---------------------------------------------------------------------------
 
 
-def test_a_bound_declared_by_an_entry_is_the_one_a_request_is_held_to():
+def test_a_bound_declared_by_an_entry_is_the_one_a_request_is_held_to() -> None:
     """An entry carrying a policy is a declaration, and the declaration is what bounds.
 
     Read once where it is accepted and folded into the schema's own record, so
@@ -3498,7 +3541,7 @@ def test_a_bound_declared_by_an_entry_is_the_one_a_request_is_held_to():
     assert payload["data"] == {"rows": ["a"]}
 
 
-def test_a_resolver_cannot_widen_the_next_request_through_the_schema():
+def test_a_resolver_cannot_widen_the_next_request_through_the_schema() -> None:
     """The budget survives a resolver writing both names it can reach.
 
     ``info.schema`` is handed to every resolver, and the schema outlives the
@@ -3525,7 +3568,7 @@ def test_a_resolver_cannot_widen_the_next_request_through_the_schema():
     assert _rejection(third)["bound"] == "max_container_width"
 
 
-def test_a_resolver_cannot_nominate_a_new_policy_authority_over_the_wire():
+def test_a_resolver_cannot_nominate_a_new_policy_authority_over_the_wire() -> None:
     """Presence of an enforcement extension is not evidence that it was configured.
 
     A replacement list can carry an ordinary resource-policy extension with a
@@ -3542,7 +3585,7 @@ def test_a_resolver_cannot_nominate_a_new_policy_authority_over_the_wire():
     assert second["data"]["rows"] == ["a"]
 
 
-def test_two_schemas_that_compare_equal_bound_their_own_requests():
+def test_two_schemas_that_compare_equal_bound_their_own_requests() -> None:
     """A request is held to ITS schema's policy, not to one that compares equal to it.
 
     Two mounts, two equal-but-distinct schemas, two different row bounds: a
@@ -3561,7 +3604,7 @@ def test_two_schemas_that_compare_equal_bound_their_own_requests():
     assert _post("/rp-equal-narrow/", "{ rows }")["data"]["rows"] == ["a"]
 
 
-def test_a_policy_the_deployment_still_holds_cannot_widen_a_later_request():
+def test_a_policy_the_deployment_still_holds_cannot_widen_a_later_request() -> None:
     """Configuration intake copies; the object a deployment keeps is not the authority.
 
     An exact policy instance used to pass through intake unchanged, so the
@@ -3582,7 +3625,7 @@ def test_a_policy_the_deployment_still_holds_cannot_widen_a_later_request():
     assert second["data"]["rows"] == ["a"]
 
 
-def test_a_written_exported_default_cannot_widen_an_unconfigured_schema():
+def test_a_written_exported_default_cannot_widen_an_unconfigured_schema() -> None:
     """The exported default is a value template; a bound is read from the package's own.
 
     ``DEFAULT_RESOURCE_POLICY`` is a root export, so any consumer module holds
@@ -3609,7 +3652,7 @@ def test_a_written_exported_default_cannot_widen_an_unconfigured_schema():
     assert control["data"]["manyRows"] == widened["data"]["manyRows"]
 
 
-def _opaque_request(source: str, width: int):
+def _opaque_request(source: str, width: int) -> tuple[str, dict[str, list[int]] | None, list[int]]:
     """One request carrying ``width`` members to the scalar argument, by ``source``.
 
     The three places a value enters an operation. A supplied variable arrives
@@ -3631,7 +3674,7 @@ def _opaque_request(source: str, width: int):
     ["variable", "literal", "default"],
     ids=["supplied-variable", "inline-literal", "variable-default"],
 )
-def test_a_scalar_argument_is_bounded_by_the_shape_the_request_carried(source: str):
+def test_a_scalar_argument_is_bounded_by_the_shape_the_request_carried(source: str) -> None:
     """The value budget charges the RAW argument, before any scalar converts it.
 
     The walk reads the variables the request supplied and the argument ASTs the
@@ -3656,7 +3699,7 @@ def test_a_scalar_argument_is_bounded_by_the_shape_the_request_carried(source: s
     ["variable", "literal", "default"],
     ids=["supplied-variable", "inline-literal", "variable-default"],
 )
-def test_a_scalar_argument_within_the_bound_reaches_its_parser(source: str):
+def test_a_scalar_argument_within_the_bound_reaches_its_parser(source: str) -> None:
     """The control, and the other half of the boundary: an admitted argument converts.
 
     One member under the bound the same request runs, and the parser sees the
@@ -3673,7 +3716,7 @@ def test_a_scalar_argument_within_the_bound_reaches_its_parser(source: str):
     assert all(parsed == members for parsed in _scalar_parses)
 
 
-def test_no_name_on_a_schema_answers_with_the_policy_enforcing_it():
+def test_no_name_on_a_schema_answers_with_the_policy_enforcing_it() -> None:
     """The authority is not an attribute, asked by content rather than by name.
 
     A row naming the attribute it expects to be absent passes the moment that
@@ -3688,7 +3731,7 @@ def test_no_name_on_a_schema_answers_with_the_policy_enforcing_it():
 
 
 @pytest.mark.parametrize("attempt", ["before", "after"])
-def test_a_resolver_cannot_put_raw_exception_text_on_the_wire(attempt: str):
+def test_a_resolver_cannot_put_raw_exception_text_on_the_wire(attempt: str) -> None:
     """The record that settles the budget settles masking, and neither is reachable.
 
     Under ``DEBUG=False`` an unexpected resolver exception reaches the client as
@@ -3713,7 +3756,7 @@ def test_a_resolver_cannot_put_raw_exception_text_on_the_wire(attempt: str):
     ["/rp-accepted-instance/", "/rp-inherited-instance/"],
     ids=["explicit-policy", "inherited-policy"],
 )
-def test_no_name_on_an_accepted_extension_answers_with_the_policy_it_enforces(mount: str):
+def test_no_name_on_an_accepted_extension_answers_with_the_policy_it_enforces(mount: str) -> None:
     """The same question of the entry a schema was configured WITH.
 
     Both configurations of that entry are asked: one that carries a policy, and
@@ -3738,7 +3781,7 @@ def test_rerunning_a_constructor_over_the_wire_does_not_widen_a_later_request(
     mount: str,
     field: str,
     reported: str,
-):
+) -> None:
     """An object a resolver reaches is one whose ``__init__`` a resolver can call.
 
     A second construction would settle a new ceiling for every later request the
@@ -3777,7 +3820,7 @@ def test_writing_the_accepted_extensions_does_not_choose_what_runs_the_next_requ
     mount: str,
     field: str,
     written: list[str],
-):
+) -> None:
     """Membership is what decides whether an operation is bounded and masked at all.
 
     Keeping the policy values private answers a different question: a resolver
@@ -3806,7 +3849,7 @@ def test_writing_the_accepted_extensions_does_not_choose_what_runs_the_next_requ
     assert masked["errors"][0]["extensions"][DEFAULT_ERROR_POLICY.correlation_extension_key]
 
 
-def test_an_extension_factory_still_builds_one_per_operation():
+def test_an_extension_factory_still_builds_one_per_operation() -> None:
     """Refusing a SECOND construction of one instance is not refusing construction.
 
     A factory entry is how a consumer gets an extension per operation, and it is
@@ -3830,7 +3873,10 @@ def test_an_extension_factory_still_builds_one_per_operation():
     [("/rp-forged-entries/", "forge"), ("/rp-dropped-entries/", "drop")],
     ids=["forge-the-accepted-entries", "delete-the-accepted-entries"],
 )
-def test_losing_the_accepted_extensions_does_not_widen_the_next_request(mount: str, field: str):
+def test_losing_the_accepted_extensions_does_not_widen_the_next_request(
+    mount: str,
+    field: str,
+) -> None:
     """A bound is not held in anything a resolver can forge or delete.
 
     Every private name a schema carries is replaced with an empty value of the
@@ -3861,7 +3907,7 @@ def test_losing_the_accepted_extensions_does_not_widen_the_next_request(mount: s
 def test_an_accepted_extension_instance_cannot_widen_a_later_request(
     field: str,
     reported: str | list[str],
-):
+) -> None:
     """A declaration is read once and does not travel, so there is nothing left to write.
 
     Strawberry hands back an accepted instance unchanged and
@@ -3921,7 +3967,7 @@ CACHE_MOUNTS = {
 def test_an_alias_rejection_survives_an_installed_validation_extension(
     order: str,
     cache_state: str,
-):
+) -> None:
     """A rejection is not the mutable field it is published in.
 
     A validation extension that runs the pass itself assigns its own result over
@@ -3952,7 +3998,7 @@ def test_an_alias_rejection_survives_an_installed_validation_extension(
 def test_an_over_bound_argument_is_refused_before_any_installed_validation_runs(
     order: str,
     source: str,
-):
+) -> None:
     """Admission precedes the validation stage, whatever position the consumer chose.
 
     An installed validation extension runs the pass itself, and that pass parses
@@ -3979,7 +4025,7 @@ def test_an_over_bound_argument_is_refused_before_any_installed_validation_runs(
 def test_an_argument_within_the_bound_still_executes_beside_a_validation_extension(
     order: str,
     source: str,
-):
+) -> None:
     """The other verdict, which is what keeps the rejecting row from being vacuous."""
     _scalar_parses.clear()
     query, variables, members = _opaque_request(source, MAX_CONTAINER_WIDTH)
@@ -3996,7 +4042,7 @@ def test_an_argument_within_the_bound_still_executes_beside_a_validation_extensi
     ids=["cache-before-the-witness", "cache-after-the-witness", "cache-after-the-witness-async"],
 )
 @pytest.mark.parametrize("verdict", ["rejected", "admitted"])
-def test_a_rejected_operation_never_enters_the_executing_stage(mount: str, verdict: str):
+def test_a_rejected_operation_never_enters_the_executing_stage(mount: str, verdict: str) -> None:
     """Asked from outside the guard, on a schema carrying a validation cache.
 
     Upstream decides whether to execute from inside the validation stage, so
@@ -4026,7 +4072,7 @@ def test_a_rejected_operation_never_enters_the_executing_stage(mount: str, verdi
 
 
 @pytest.mark.parametrize("order", CACHE_ORDERS, ids=CACHE_ORDER_IDS)
-def test_ordinary_validation_still_answers_beside_the_admission_stage(order: str):
+def test_ordinary_validation_still_answers_beside_the_admission_stage(order: str) -> None:
     """Admission stands down a document's validation only when it refused it.
 
     Emptying an admitted operation's validation rules would turn every schema
@@ -4047,7 +4093,7 @@ def test_ordinary_validation_still_answers_beside_the_admission_stage(order: str
 def test_the_composed_admission_stage_answers_the_same_on_the_async_transport(
     order: str,
     mount: str,
-):
+) -> None:
     """One verdict per request, whichever transport carried it."""
     _scalar_parses.clear()
     query, variables, _ = _opaque_request("literal", MAX_CONTAINER_WIDTH + 1)
@@ -4080,7 +4126,7 @@ _HOSTILE_RELATION_QUERY = "{ patrons { name loans { note } } }"
 
 
 @pytest.mark.django_db
-def test_a_relation_manager_cannot_widen_the_raw_list_bound_with_its_own_slice():
+def test_a_relation_manager_cannot_widen_the_raw_list_bound_with_its_own_slice() -> None:
     """The many-side relation is bounded by what the package slices, not by the source.
 
     The generated ``loans`` resolver hands its source straight to the raw-list
@@ -4102,7 +4148,7 @@ def test_a_relation_manager_cannot_widen_the_raw_list_bound_with_its_own_slice()
 
 
 @pytest.mark.django_db
-def test_an_ordinary_relation_manager_is_bounded_the_same_way():
+def test_an_ordinary_relation_manager_is_bounded_the_same_way() -> None:
     """The control: the same mount, the same document, Django's own manager.
 
     Without it the row above would prove only that something rejected four rows,
@@ -4119,7 +4165,7 @@ def test_an_ordinary_relation_manager_is_bounded_the_same_way():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_a_relation_manager_cannot_widen_the_raw_list_bound_on_the_async_transport():
+def test_a_relation_manager_cannot_widen_the_raw_list_bound_on_the_async_transport() -> None:
     """Sync/async parity: the awaited relation branch is bounded by the same seam.
 
     The async many-side branch iterates the bound asynchronously instead of
@@ -4184,7 +4230,7 @@ def _carry_relation_payload(patrons: int) -> dict[str, object]:
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("patrons", [2, 3], ids=["two-parents", "three-parents"])
-def test_a_project_queryset_class_relation_costs_two_prefetch_queries(patrons: int):
+def test_a_project_queryset_class_relation_costs_two_prefetch_queries(patrons: int) -> None:
     """The real project manager is windowed from the rows prefetch already fetched.
 
     Two parent cardinalities pin batching rather than merely one request's shape:
@@ -4203,7 +4249,7 @@ def test_a_project_queryset_class_relation_costs_two_prefetch_queries(patrons: i
 
 
 @pytest.mark.django_db(transaction=True)
-def test_a_project_queryset_class_relation_answers_the_same_rows_when_awaited():
+def test_a_project_queryset_class_relation_answers_the_same_rows_when_awaited() -> None:
     """Sync/async parity for the rebuilt relation source.
 
     Rows rather than a query count: ``CaptureQueriesContext`` binds to the
@@ -4225,7 +4271,7 @@ def test_a_project_queryset_class_relation_answers_the_same_rows_when_awaited():
 
 
 @pytest.mark.django_db
-def test_a_bound_at_the_representable_maximum_reaches_the_database():
+def test_a_bound_at_the_representable_maximum_reaches_the_database() -> None:
     """The largest configurable bound has to work as a real ``LIMIT``.
 
     A bound is handed to the backend's adapter, which binds it as an integer of
@@ -4250,7 +4296,7 @@ def test_a_bound_at_the_representable_maximum_reaches_the_database():
 
 
 @pytest.mark.django_db
-def test_sync_and_async_transports_share_one_typed_error_code():
+def test_sync_and_async_transports_share_one_typed_error_code() -> None:
     """The rejection is a ``GraphQLError``, so no transport translates it.
 
     Sync and async mounts of the package view must answer with the same code,
@@ -4272,14 +4318,14 @@ def test_sync_and_async_transports_share_one_typed_error_code():
     assert _rejection(async_payload) == sync_extensions
 
 
-def _await_response(coroutine: Coroutine[object, object, Response]):
+def _await_response(coroutine: Coroutine[object, object, Response]) -> Response:
     """Run one ``AsyncTestClient.query`` coroutine to completion on a fresh event loop."""
     import asyncio
 
     return asyncio.run(_resolve(coroutine))
 
 
-async def _resolve(coroutine: Coroutine[object, object, Response]):
+async def _resolve(coroutine: Coroutine[object, object, Response]) -> Response:
     return await coroutine
 
 
@@ -4324,7 +4370,7 @@ def _reset_overlap_state() -> Iterator[None]:
     ENTRY_ROWS,
     ids=ENTRY_IDS,
 )
-def test_an_overlapping_request_does_not_admit_an_oversized_one(spelling: str, color: str):
+def test_an_overlapping_request_does_not_admit_an_oversized_one(spelling: str, color: str) -> None:
     """Whichever object a consumer entry resolves to, the charge lands on its own document.
 
     Strawberry resolves a class and a fresh factory into a new extension per
@@ -4358,7 +4404,7 @@ def test_an_overlapping_request_does_not_admit_an_oversized_one(spelling: str, c
     _OverlapCoordinator.armed = True
     overlapped: dict[str, JSONObject] = {}
 
-    def _run_oversized():
+    def _run_oversized() -> None:
         overlapped["payload"] = _entry_request(entry, oversized)
 
     held = threading.Thread(target=_run_oversized)

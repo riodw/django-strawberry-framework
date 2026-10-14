@@ -6,7 +6,7 @@ from apps.glossary import factories as gf
 
 
 @pytest.mark.django_db
-def test_glossary_term_edges_and_spec_name():
+def test_glossary_term_edges_and_spec_name() -> None:
     term = gf.make_glossary_term(title="`FilterSet`", title_sort="filterset", anchor="filterset")
     category = gf.make_glossary_category("filtering")
     gf.make_glossary_alias(term=term, label="FilterSet", normalized="filterset")

@@ -41,7 +41,7 @@ import enum
 import itertools
 import re
 from collections.abc import Callable, Iterator
-from typing import TYPE_CHECKING, TypedDict, get_args
+from typing import TYPE_CHECKING, NoReturn, TypedDict, get_args
 
 import pytest
 import strawberry
@@ -205,10 +205,10 @@ def grouped_choice_field(choice_fixture_model: type[models.Model]) -> "Iterator[
 # ---------------------------------------------------------------------------
 
 
-def test_choice_field_generates_strawberry_enum(choice_fixture_model: type[models.Model]):
-    """A ``DjangoType`` over the fixture model produces an enum-typed
-    annotation on the choice attribute, named per
-    ``f\"{type_name}{PascalCase(field_name)}Enum\"``.
+def test_choice_field_generates_strawberry_enum(choice_fixture_model: type[models.Model]) -> None:
+    """A ``DjangoType`` over the fixture model produces an enum-typed choice annotation.
+
+    The enum is named per ``f"{type_name}{PascalCase(field_name)}Enum"``.
     """
 
     class FixtureType(DjangoType):
@@ -232,8 +232,9 @@ def test_choice_field_generates_strawberry_enum(choice_fixture_model: type[model
 
 def test_choice_enum_cached_in_registry_keyed_by_model_field(
     choice_fixture_model: type[models.Model],
-):
-    """Once generated, the enum is cached on ``(model, field_name)`` and
+) -> None:
+    """Once generated, the enum is cached on ``(model, field_name)``.
+
     ``registry.get_enum`` returns the identical object on subsequent reads.
     """
 
@@ -249,7 +250,7 @@ def test_choice_enum_cached_in_registry_keyed_by_model_field(
 
 def test_two_djangotypes_reading_same_choice_field_share_one_enum(
     choice_fixture_model: type[models.Model],
-):
+) -> None:
     """Two ``DjangoType``s pointing at the same column receive the cached enum.
 
     The first type wins the enum's GraphQL name; later types reuse the
@@ -278,7 +279,7 @@ def test_two_djangotypes_reading_same_choice_field_share_one_enum(
     assert FixtureTypeA.__annotations__["status"].__name__ == "FixtureTypeAStatusEnum"
 
 
-def test_grouped_choices_form_rejected(grouped_choice_field: "ConcreteField"):
+def test_grouped_choices_form_rejected(grouped_choice_field: "ConcreteField") -> None:
     """Django's grouped-choices form raises ``ConfigurationError``, not a silent flatten."""
     with pytest.raises(ConfigurationError, match="grouped-choices"):
         convert_choices_to_enum(grouped_choice_field, "FixtureType")
@@ -309,7 +310,10 @@ def test_grouped_choices_form_rejected(grouped_choice_field: "ConcreteField"):
         ),
     ],
 )
-def test_build_enum_rejects_malformed_choice_pairs(choice_pairs: object, expected_message: str):
+def test_build_enum_rejects_malformed_choice_pairs(
+    choice_pairs: object,
+    expected_message: str,
+) -> None:
     """Each malformed choice shape produces its own typed configuration failure."""
     with pytest.raises(ConfigurationError, match=re.escape(expected_message)):
         # basedpyright: the malformed choice sequence is the hostile input under test;
@@ -317,16 +321,16 @@ def test_build_enum_rejects_malformed_choice_pairs(choice_pairs: object, expecte
         build_enum_from_choices(choice_pairs, "FixtureTypeEnum", source_label="probe")  # pyright: ignore[reportArgumentType]
 
 
-def test_build_enum_diagnostics_survive_hostile_choice_values():
+def test_build_enum_diagnostics_survive_hostile_choice_values() -> None:
     """Hostile choice string/repr methods cannot escape enum construction."""
 
     class HostileChoice:
         @override
-        def __str__(self):
+        def __str__(self) -> str:
             return "a"
 
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr should not escape")
 
     with pytest.raises(ConfigurationError, match="sanitize to the same enum member"):
@@ -337,7 +341,7 @@ def test_build_enum_diagnostics_survive_hostile_choice_values():
         )
 
 
-def test_scalar_for_field_diagnostics_survive_hostile_metadata():
+def test_scalar_for_field_diagnostics_survive_hostile_metadata() -> None:
     """Unsupported fields with broken metadata still raise ConfigurationError.
 
     A field of an unsupported class whose ``name`` raises from ``__str__`` and
@@ -349,11 +353,11 @@ def test_scalar_for_field_diagnostics_survive_hostile_metadata():
 
     class HostileMetadata:
         @override
-        def __str__(self):
+        def __str__(self) -> str:
             raise RuntimeError("str should not escape")
 
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr should not escape")
 
     class UnsupportedField(models.Field[object, object]):
@@ -377,11 +381,11 @@ def test_scalar_for_field_diagnostics_survive_hostile_metadata():
 def test_convert_choices_to_enum_diagnostics_survive_hostile_truthiness(
     choice_fixture_model: type[models.Model],
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A choices container with broken truthiness still raises ConfigurationError."""
 
     class HostileChoices:
-        def __bool__(self):
+        def __bool__(self) -> bool:
             raise RuntimeError("bool should not escape")
 
     field = _concrete_field(choice_fixture_model, "status")
@@ -390,10 +394,10 @@ def test_convert_choices_to_enum_diagnostics_survive_hostile_truthiness(
         convert_choices_to_enum(field, "FixtureType")
 
 
-def test_field_diagnostics_survive_unreadable_metadata_descriptors():
+def test_field_diagnostics_survive_unreadable_metadata_descriptors() -> None:
     class _HostileModelMeta(type):
         @override
-        def __getattribute__(cls, name: str):
+        def __getattribute__(cls, name: str) -> object:
             if name == "__name__":
                 raise RuntimeError("model name exploded")
             return super().__getattribute__(name)
@@ -403,7 +407,7 @@ def test_field_diagnostics_survive_unreadable_metadata_descriptors():
 
     class _UnreadableModel:
         @property
-        def model(self):
+        def model(self) -> NoReturn:
             raise RuntimeError("model exploded")
 
         name = "field"
@@ -412,7 +416,7 @@ def test_field_diagnostics_survive_unreadable_metadata_descriptors():
         model = object
 
         @property
-        def name(self):
+        def name(self) -> NoReturn:
             raise RuntimeError("name exploded")
 
     assert _field_label(_UnreadableModel()) == "<unbound>.field"
@@ -422,17 +426,17 @@ def test_field_diagnostics_survive_unreadable_metadata_descriptors():
     assert _field_label(_UnreadableName()) == "object.<unknown>"
 
 
-def test_converter_wraps_unreadable_choices_and_nullability_metadata():
+def test_converter_wraps_unreadable_choices_and_nullability_metadata() -> None:
     with pytest.raises(ConfigurationError, match="Could not inspect choices"):
         _field_has_choices(_UnreadableAttributeField("choices", name="field"))
     with pytest.raises(ConfigurationError, match="Could not inspect nullability"):
         convert_scalar(_UnreadableAttributeField("null", name="field"), "OwnerType")
 
 
-def test_choice_conversion_wraps_unrenderable_values_and_unreadable_field_metadata():
+def test_choice_conversion_wraps_unrenderable_values_and_unreadable_field_metadata() -> None:
     class _UnrenderableChoice:
         @override
-        def __str__(self):
+        def __str__(self) -> str:
             raise RuntimeError("choice rendering exploded")
 
     with pytest.raises(ConfigurationError, match="cannot be converted"):
@@ -450,10 +454,10 @@ def test_choice_conversion_wraps_unrenderable_values_and_unreadable_field_metada
 
 def test_choice_enum_name_derivation_wraps_a_hostile_type_name(
     choice_fixture_model: type[models.Model],
-):
+) -> None:
     class _HostileTypeName:
         @override
-        def __format__(self, spec: str):
+        def __format__(self, spec: str) -> str:
             raise RuntimeError("type name formatting exploded")
 
     field = _concrete_field(choice_fixture_model, "status")
@@ -502,11 +506,11 @@ def _blank_choice_model(
     return BlankChoiceFixture
 
 
-def _member_map(enum_cls: type[enum.Enum]):
+def _member_map(enum_cls: type[enum.Enum]) -> dict[str, object]:
     return {member.name: member.value for member in enum_cls}
 
 
-def test_blank_admitting_text_choice_column_gets_blank_member():
+def test_blank_admitting_text_choice_column_gets_blank_member() -> None:
     """A ``blank=True`` text choice column admits ``""``, so its enum carries ``BLANK``."""
     model = _blank_choice_model(choices=[("good", "Good"), ("worn", "Worn")], blank=True)
     enum_cls = convert_choices_to_enum(_concrete_field(model, "status"), "BlankFixtureType")
@@ -515,7 +519,7 @@ def test_blank_admitting_text_choice_column_gets_blank_member():
     assert next(iter(enum_cls)).name == "BLANK"
 
 
-def test_non_blank_text_choice_column_gets_no_blank_member():
+def test_non_blank_text_choice_column_gets_no_blank_member() -> None:
     """A ``blank=False`` choice column does not admit ``""``, so no ``BLANK`` member."""
     model = _blank_choice_model(choices=[("good", "Good"), ("worn", "Worn")])
     enum_cls = convert_choices_to_enum(_concrete_field(model, "status"), "NonBlankFixtureType")
@@ -528,7 +532,7 @@ def test_non_blank_text_choice_column_gets_no_blank_member():
 )
 def test_integer_choice_column_with_blank_gets_no_blank_member(
     field_cls: type[models.Field[Never, object]],
-):
+) -> None:
     """An integer column with ``blank=True`` admits only ``None``, never ``""``."""
 
     class IntegerBlankChoiceFixture(models.Model):
@@ -549,7 +553,7 @@ def test_integer_choice_column_with_blank_gets_no_blank_member(
 )
 def test_blank_column_with_declared_empty_choice_has_one_blank_member(
     choices: list[tuple[str, str]],
-):
+) -> None:
     """A ``blank=True`` column that already declares ``""`` keeps exactly one ``BLANK``."""
     model = _blank_choice_model(choices=choices, blank=True)
     enum_cls = convert_choices_to_enum(
@@ -559,7 +563,7 @@ def test_blank_column_with_declared_empty_choice_has_one_blank_member(
     assert _member_map(enum_cls) == {"BLANK": "", "good": "good"}
 
 
-def test_declared_empty_choice_is_not_duplicated_by_include_blank():
+def test_declared_empty_choice_is_not_duplicated_by_include_blank() -> None:
     """A declared ``("", label)`` already is the blank member; ``include_blank`` adds none."""
     enum_cls = build_enum_from_choices(
         [("", "Unassessed"), ("good", "Good")],
@@ -590,9 +594,10 @@ _CHOICE_COLUMN_CASES: "list[tuple[models.Field[Never, object], bool, list[object
 )
 def test_choice_column_values(
     field: models.Field[Never, object],
+    *,
     admits: bool,
     values: list[object],
-):
+) -> None:
     """A column's represented values are its choices plus ``""`` when it admits the empty string.
 
     A ``blank=False`` column that declares ``""`` represents it through the declared value; an
@@ -603,7 +608,7 @@ def test_choice_column_values(
     assert choice_column_values(field) == values
 
 
-def test_choice_column_values_match_the_read_enum():
+def test_choice_column_values_match_the_read_enum() -> None:
     """The represented values are exactly the read enum's member values, in member order."""
     model = _blank_choice_model(choices=[("good", "Good"), ("worn", "Worn")], blank=True)
     field = _concrete_field(model, "status")
@@ -623,8 +628,9 @@ def test_choice_column_values_match_the_read_enum():
 def test_malformed_column_choices_keep_their_specific_message(
     choices: object,
     message: str,
+    *,
     blank: bool,
-):
+) -> None:
     """A malformed choice is named on the column enum and the represented-value reader alike.
 
     The represented values are read through the enum's own choice checks, so neither path
@@ -671,9 +677,10 @@ _GROUPED_MESSAGE = re.escape(
 )
 def test_choice_column_values_flatten_groups_but_the_read_enum_refuses_them(
     choices: list[tuple[object, object]],
+    *,
     blank: bool,
     values: list[object],
-):
+) -> None:
     """A grouped column lists its values flattened in group order; it still has no read enum.
 
     The write side asks whether the column lists a value (Django's ``flatchoices``), the read
@@ -694,7 +701,10 @@ def test_choice_column_values_flatten_groups_but_the_read_enum_refuses_them(
     ],
     ids=["bare-string", "one-tuple"],
 )
-def test_malformed_choice_inside_a_group_keeps_its_specific_message(choices: object, message: str):
+def test_malformed_choice_inside_a_group_keeps_its_specific_message(
+    choices: object,
+    message: str,
+) -> None:
     """A group's inner entry passes the same malformed-entry check as a flat entry."""
     field = _concrete_field(_blank_choice_model(choices=choices), "status")
     with pytest.raises(ConfigurationError, match=message):
@@ -710,11 +720,11 @@ def test_choice_column_readers_wrap_unreadable_choices(
     choice_fixture_model: type[models.Model],
     monkeypatch: pytest.MonkeyPatch,
     read_column: Callable[["ConcreteField"], object],
-):
+) -> None:
     """A choices container with broken truthiness raises the package error, not its own."""
 
     class HostileChoices:
-        def __bool__(self):
+        def __bool__(self) -> bool:
             raise RuntimeError("bool should not escape")
 
     field = _concrete_field(choice_fixture_model, "status")
@@ -723,7 +733,7 @@ def test_choice_column_readers_wrap_unreadable_choices(
         read_column(field)
 
 
-def test_declared_blank_value_collides_with_blank_member():
+def test_declared_blank_value_collides_with_blank_member() -> None:
     """A declared ``"BLANK"`` value and the blank member sanitize to one name: rejected."""
     with pytest.raises(ConfigurationError, match=r"sanitize to the same enum member: 'BLANK'"):
         build_enum_from_choices(
@@ -741,7 +751,7 @@ def test_declared_blank_value_collides_with_blank_member():
     assert _member_map(enum_cls) == {"BLANK": "BLANK", "good": "good"}
 
 
-def test_nullable_blank_choice_column_keeps_null_and_blank_distinct():
+def test_nullable_blank_choice_column_keeps_null_and_blank_distinct() -> None:
     """``null=True, blank=True`` publishes a nullable enum whose ``BLANK`` member is ``""``."""
     model = _blank_choice_model(choices=[("good", "Good")], blank=True, null=True)
     annotation = convert_scalar(_concrete_field(model, "status"), "NullableBlankFixtureType")
@@ -803,7 +813,7 @@ _EMPTY_LABEL_CASES: "list[tuple[models.Field[Never, object], dict[str, object]]]
 def test_none_valued_choice_is_the_empty_option_label_and_gets_no_member(
     field: models.Field[Never, object],
     members: dict[str, object],
-):
+) -> None:
     """A ``(None, label)`` pair labels the empty option, never a value, so it gets no member.
 
     ``Choices.__empty__`` prepends the pair to ``.choices``; a hand-declared one is read the
@@ -822,7 +832,7 @@ def test_none_valued_choice_is_the_empty_option_label_and_gets_no_member(
     assert choice_column_values(field) == list(members.values())
 
 
-def test_nullable_empty_label_choice_column_reads_null_without_a_none_member():
+def test_nullable_empty_label_choice_column_reads_null_without_a_none_member() -> None:
     """A ``null=True`` column with ``__empty__`` publishes ``Enum | None`` and reads NULL as ``null``.
 
     The empty option travels as GraphQL ``null``, never as a member: the enum carries only the
@@ -853,7 +863,7 @@ def test_nullable_empty_label_choice_column_reads_null_without_a_none_member():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_nullable_empty_label_choice_column_writes_null_as_null():
+def test_nullable_empty_label_choice_column_writes_null_as_null() -> None:
     """A ``null`` sent to a ``null=True`` ``__empty__`` column stores NULL; ``_None`` is no member.
 
     The unmanaged owner's table is created for this test only (SQLite's schema editor needs the
@@ -929,7 +939,7 @@ def test_nullable_empty_label_choice_column_writes_null_as_null():
     [[(None, "Unassessed")], [(None, "Unassessed"), (None, "Unknown")]],
     ids=["one", "two"],
 )
-def test_choices_holding_only_the_empty_option_are_empty(choices: list[tuple[None, str]]):
+def test_choices_holding_only_the_empty_option_are_empty(choices: list[tuple[None, str]]) -> None:
     """A sequence whose every pair is ``None``-valued declares no value: the empty-choices error."""
     labels = ", ".join(repr(label) for _value, label in choices)
     message = re.escape(
@@ -945,7 +955,7 @@ def test_choices_holding_only_the_empty_option_are_empty(choices: list[tuple[Non
         choice_column_values(field)
 
 
-def test_empty_choices_message_names_no_empty_option():
+def test_empty_choices_message_names_no_empty_option() -> None:
     """A sequence with no pair at all keeps the plain empty-choices message."""
     with pytest.raises(
         ConfigurationError,
@@ -954,7 +964,7 @@ def test_empty_choices_message_names_no_empty_option():
         build_enum_from_choices([], "NoChoicesEnum", source_label="Fixture.status")
 
 
-def test_choice_member_name_sanitization():
+def test_choice_member_name_sanitization() -> None:
     """Hyphenated, leading-digit, and keyword choice values produce safe identifiers.
 
     Direct unit tests of ``_sanitize_member_name`` so the rules are pinned
@@ -971,7 +981,7 @@ def test_choice_member_name_sanitization():
     assert _sanitize_member_name("") == "BLANK"
 
 
-def test_sanitize_member_name_neutralizes_python_enum_reserved_shapes():
+def test_sanitize_member_name_neutralizes_python_enum_reserved_shapes() -> None:
     """Values that sanitize to Python-``enum``-reserved member names get ``MEMBER_``-prefixed.
 
     ``Enum(cls_name, {name: value})`` refuses ``"mro"`` and treats any single-
@@ -1016,7 +1026,7 @@ def test_sanitize_member_name_neutralizes_python_enum_reserved_shapes():
 
 def test_choice_enum_with_graphql_reserved_and_non_ascii_values_builds_schema(
     choice_fixture_model: type[models.Model],
-):
+) -> None:
     """Reserved, non-ASCII, and introspection-prefixed values produce GraphQL-safe enum members."""
     field = choice_fixture_model._meta.get_field("status")
     assert isinstance(field, models.Field)
@@ -1043,7 +1053,8 @@ def test_choice_enum_with_graphql_reserved_and_non_ascii_values_builds_schema(
         @strawberry.type
         class Query:
             @strawberry.field
-            # basedpyright: Strawberry reads this annotation at runtime; the enum class is generated by the converter under test
+            # basedpyright: Strawberry reads this annotation at runtime; the enum class is generated by
+            # the converter under test
             def statuses(self) -> list[enum_cls]:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
                 return list(enum_cls)
 
@@ -1065,7 +1076,9 @@ def test_choice_enum_with_graphql_reserved_and_non_ascii_values_builds_schema(
         registry.clear()
 
 
-def test_choice_field_with_null_widens_to_enum_or_none(choice_fixture_model: type[models.Model]):
+def test_choice_field_with_null_widens_to_enum_or_none(
+    choice_fixture_model: type[models.Model],
+) -> None:
     """A nullable choice column produces *exactly* ``EnumType | None``.
 
     Strict equality matters \u2014 if a future ``convert_scalar`` reorder
@@ -1090,7 +1103,9 @@ def test_choice_field_with_null_widens_to_enum_or_none(choice_fixture_model: typ
 # ---------------------------------------------------------------------------
 
 
-def test_convert_choices_to_enum_raises_on_empty_choices(choice_fixture_model: type[models.Model]):
+def test_convert_choices_to_enum_raises_on_empty_choices(
+    choice_fixture_model: type[models.Model],
+) -> None:
     """A field with ``choices=()`` raises rather than producing an empty enum."""
     field = choice_fixture_model._meta.get_field("status")
     assert isinstance(field, models.Field)
@@ -1105,7 +1120,7 @@ def test_convert_choices_to_enum_raises_on_empty_choices(choice_fixture_model: t
 
 def test_convert_choices_to_enum_raises_on_sanitized_member_collision(
     choice_fixture_model: type[models.Model],
-):
+) -> None:
     """Two choice values that sanitize to the same Python identifier raise.
 
     Without the collision check, the dict comprehension silently keeps the last
@@ -1128,7 +1143,7 @@ def test_convert_choices_to_enum_raises_on_sanitized_member_collision(
 
 def test_convert_choices_to_enum_raises_on_keyword_prefix_collision(
     choice_fixture_model: type[models.Model],
-):
+) -> None:
     """Keyword-prefix collisions also raise: ``"if"`` mangles to ``"_if"`` and collides with raw ``"_if"``.
 
     The second collision shape: the value ``"if"`` is a Python keyword
@@ -1151,7 +1166,7 @@ def test_convert_choices_to_enum_raises_on_keyword_prefix_collision(
 
 def test_convert_choices_to_enum_raises_on_graphql_safe_name_collision(
     choice_fixture_model: type[models.Model],
-):
+) -> None:
     """Collision detection runs after GraphQL reserved-name rewriting."""
     field = choice_fixture_model._meta.get_field("status")
     assert isinstance(field, models.Field)
@@ -1168,7 +1183,7 @@ def test_convert_choices_to_enum_raises_on_graphql_safe_name_collision(
 
 def test_convert_choices_to_enum_with_python_enum_reserved_values_builds_schema(
     choice_fixture_model: type[models.Model],
-):
+) -> None:
     """Choice values that map to Python-``enum``-reserved member names build a working enum.
 
     Without the ``_is_enum_reserved_member`` neutralisation in
@@ -1214,7 +1229,8 @@ def test_convert_choices_to_enum_with_python_enum_reserved_values_builds_schema(
         @strawberry.type
         class Query:
             @strawberry.field
-            # basedpyright: Strawberry reads this annotation at runtime; the enum class is generated by the converter under test
+            # basedpyright: Strawberry reads this annotation at runtime; the enum class is generated by
+            # the converter under test
             def statuses(self) -> list[enum_cls]:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
                 return list(enum_cls)
 
@@ -1238,7 +1254,7 @@ def test_convert_choices_to_enum_with_python_enum_reserved_values_builds_schema(
 
 def test_convert_choices_to_enum_raises_on_enum_reserved_sanitize_collision(
     choice_fixture_model: type[models.Model],
-):
+) -> None:
     """Collision detection still fires after the Python-``enum``-reserved rewrite.
 
     ``"-x-"`` and ``"_x_"`` both sanitize to ``MEMBER__x_``; the collision must
@@ -1277,7 +1293,7 @@ class _NullableTrimmedCharField(models.CharField[str | None, str | None]):
     """Same shape but with ``null=True`` to exercise widening on a subclass."""
 
 
-def test_convert_scalar_resolves_subclass_of_supported_field_to_parent_scalar():
+def test_convert_scalar_resolves_subclass_of_supported_field_to_parent_scalar() -> None:
     """A consumer subclass of ``CharField`` resolves to ``str`` via MRO walk.
 
     Exact-type ``SCALAR_MAP`` lookup misses subclasses, breaking the standard Django
@@ -1295,7 +1311,7 @@ def test_convert_scalar_resolves_subclass_of_supported_field_to_parent_scalar():
     assert convert_scalar(field, "OwnerType") is str
 
 
-def test_convert_scalar_subclass_with_null_widens_through_mro_resolution():
+def test_convert_scalar_subclass_with_null_widens_through_mro_resolution() -> None:
     """The MRO-resolved scalar still flows through the ``null=True`` widening branch."""
 
     class _Owner(models.Model):
@@ -1308,7 +1324,7 @@ def test_convert_scalar_subclass_with_null_widens_through_mro_resolution():
     assert convert_scalar(field, "OwnerType") == (str | None)
 
 
-def test_convert_scalar_unknown_field_type_still_raises():
+def test_convert_scalar_unknown_field_type_still_raises() -> None:
     """A field whose MRO does not intersect ``SCALAR_MAP`` still raises.
 
     Guard against the MRO walk accidentally swallowing the unsupported
@@ -1334,7 +1350,7 @@ def test_convert_scalar_unknown_field_type_still_raises():
         convert_scalar(field, "OwnerType")
 
 
-def test_convert_scalar_duration_field_raises_unsupported():
+def test_convert_scalar_duration_field_raises_unsupported() -> None:
     """``DurationField`` is intentionally absent from ``SCALAR_MAP``.
 
     Strawberry refuses ``datetime.timedelta`` at schema construction time
@@ -1362,7 +1378,7 @@ def test_convert_scalar_duration_field_raises_unsupported():
         convert_scalar(field, "OwnerType")
 
 
-def test_convert_scalar_binary_field_raises_unsupported():
+def test_convert_scalar_binary_field_raises_unsupported() -> None:
     """``BinaryField`` is intentionally absent from ``SCALAR_MAP``.
 
     Same reasoning as ``DurationField``: Strawberry has no first-party
@@ -1409,7 +1425,8 @@ def test_convert_scalar_binary_field_raises_unsupported():
 #
 # Synthetic models live under ``app_label = "test_bigint"`` so they do not
 # collide with the choice-enum fixture's ``app_label = "test_choice_enums"``.
-# ``managed = False`` per spec-017 Decision 7 #"every test model hosting `_FakeArrayField` or `_FakeHStoreField` declares `class Meta: managed = False`":
+# ``managed = False`` per spec-017 Decision 7
+# #"every test model hosting `_FakeArrayField` or `_FakeHStoreField` declares `class Meta: managed = False`":
 # no migration implication; test rows are instantiated directly when needed.
 # ---------------------------------------------------------------------------
 
@@ -1426,8 +1443,9 @@ def _walk_introspected_type(type_field: _IntrospectedTypeRef) -> _IntrospectedTy
     """Walk a GraphQL introspection ``type`` payload to the terminal scalar.
 
     Wrapping types (``NON_NULL``, ``LIST``) have ``name: None`` per
-    spec-017 Decision 7's introspection note (#"walk it explicitly rather than asserting on `field.type.name`"). Walking the chain
-    surfaces the inner ``SCALAR { name: "BigInt" }`` regardless of
+    spec-017 Decision 7's introspection note
+    (#"walk it explicitly rather than asserting on `field.type.name`").
+    Walking the chain surfaces the inner ``SCALAR { name: "BigInt" }`` regardless of
     nullability / list wrapping.
     """
     current = type_field
@@ -1471,7 +1489,7 @@ class _FakeArrayField(models.Field[object, object]):
         *,
         null: bool = False,
         choices: list[tuple[int, str]] | None = None,
-    ):
+    ) -> None:
         super().__init__(null=null, choices=choices)
         self.base_field = base_field
 
@@ -1497,9 +1515,8 @@ class _FakeHStoreField(models.Field[object, object]):
     """
 
 
-def test_big_auto_field_still_maps_to_int():
+def test_big_auto_field_still_maps_to_int() -> None:
     """``BigAutoField`` stays mapped to ``Int`` (no current-day recourse for 2**31)."""
-
     from apps.library.models import Periodical
 
     # The library app's ``default_auto_field`` gives every model a BigAutoField pk.
@@ -1526,9 +1543,10 @@ def test_big_auto_field_still_maps_to_int():
     assert terminal["name"] == "Int"
 
 
-def test_bigint_in_input_position_with_null_via_schema_execution():
-    """A nullable ``BigInt`` argument accepts ``null`` - Strawberry strips it before
-    the parser runs, so the resolver receives ``None``.
+def test_bigint_in_input_position_with_null_via_schema_execution() -> None:
+    """A nullable ``BigInt`` argument accepts ``null``.
+
+    Strawberry strips it before the parser runs, so the resolver receives ``None``.
     """
 
     @strawberry.type
@@ -1543,17 +1561,18 @@ def test_bigint_in_input_position_with_null_via_schema_execution():
     assert result.data == {"echo": "null"}
 
 
-def test_bigint_resolver_returning_bool_raises_via_schema_execution():
-    """Outbound: a resolver returning ``True`` (a ``bool``) for a ``BigInt`` annotation
-    surfaces a ``TypeError`` at the schema boundary via ``_serialize_bigint``.
+def test_bigint_resolver_returning_bool_raises_via_schema_execution() -> None:
+    """Outbound: a resolver returning ``True`` for a ``BigInt`` annotation raises ``TypeError``.
+
+    The ``bool`` surfaces a ``TypeError`` at the schema boundary via ``_serialize_bigint``.
     """
 
     @strawberry.type
     class Query:
         @strawberry.field
         def bool_as_bigint(self) -> BigInt:
-            # basedpyright: the resolver returns a bool for a BigInt field on purpose: the test proves the strict
-            # serializer rejects it at the schema boundary
+            # basedpyright: the resolver returns a bool for a BigInt field on purpose: the test
+            # proves the strict serializer rejects it at the schema boundary
             return True  # pyright: ignore[reportReturnType]
 
     schema = strawberry.Schema(query=Query, config=strawberry_config())
@@ -1573,8 +1592,8 @@ def test_bigint_resolver_returning_bool_raises_via_schema_execution():
 # not collide with the prior synthetic apps (``test_bigint``,
 # ``test_choice_enums``). Sentinel-branch tests monkey-patch
 # ``converters._ARRAY_FIELD_CLS = _FakeArrayField`` BEFORE declaring the
-# ``DjangoType`` (spec-017 Decision 7 #"calls `monkeypatch.setattr(converters, \"_ARRAY_FIELD_CLS\", _FakeArrayField)` *before* declaring the `DjangoType`"). The
-# introspection helpers (``_introspect_field_type`` /
+# ``DjangoType`` (spec-017 Decision 7 #"*before* declaring the `DjangoType`").
+# The introspection helpers (``_introspect_field_type`` /
 # ``_walk_introspected_type``) defined in the BigInt section above are
 # reused verbatim by every owner-introspection test below.
 #
@@ -1586,7 +1605,9 @@ def test_bigint_resolver_returning_bool_raises_via_schema_execution():
 # ---------------------------------------------------------------------------
 
 
-def test_array_field_of_int_maps_to_list_int_via_fake_sentinel(monkeypatch: pytest.MonkeyPatch):
+def test_array_field_of_int_maps_to_list_int_via_fake_sentinel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``ArrayField(IntegerField())`` maps to ``list[int]`` (non-null outer + inner).
 
     ``ArrayField`` is PostgreSQL-only and fakeshop migrates on SQLite, so this unmanaged
@@ -1630,7 +1651,9 @@ def test_array_field_of_int_maps_to_list_int_via_fake_sentinel(monkeypatch: pyte
     assert terminal["name"] == "Int"
 
 
-def test_array_field_of_char_maps_to_list_str_via_fake_sentinel(monkeypatch: pytest.MonkeyPatch):
+def test_array_field_of_char_maps_to_list_str_via_fake_sentinel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``ArrayField(CharField())`` maps to ``list[str]`` (terminal SCALAR name "String").
 
     ``ArrayField`` is PostgreSQL-only and fakeshop migrates on SQLite, so this unmanaged
@@ -1671,7 +1694,7 @@ def test_array_field_of_char_maps_to_list_str_via_fake_sentinel(monkeypatch: pyt
     assert terminal["name"] == "String"
 
 
-def test_array_field_nullable_inner_via_fake_sentinel(monkeypatch: pytest.MonkeyPatch):
+def test_array_field_nullable_inner_via_fake_sentinel(monkeypatch: pytest.MonkeyPatch) -> None:
     """``ArrayField(IntegerField(null=True))`` maps to ``list[int | None]``.
 
     Inner ``null=True`` drops the inner ``NON_NULL`` wrapper; outer stays
@@ -1716,7 +1739,7 @@ def test_array_field_nullable_inner_via_fake_sentinel(monkeypatch: pytest.Monkey
     assert type_payload["ofType"]["ofType"]["name"] == "Int"
 
 
-def test_array_field_outer_nullable_via_fake_sentinel(monkeypatch: pytest.MonkeyPatch):
+def test_array_field_outer_nullable_via_fake_sentinel(monkeypatch: pytest.MonkeyPatch) -> None:
     """``ArrayField(IntegerField(), null=True)`` maps to ``list[int] | None``.
 
     Outer ``null=True`` drops the outer ``NON_NULL`` wrapper; inner stays
@@ -1759,7 +1782,7 @@ def test_array_field_outer_nullable_via_fake_sentinel(monkeypatch: pytest.Monkey
     assert type_payload["ofType"]["ofType"]["name"] == "Int"
 
 
-def test_array_field_multidim_rejected_via_fake_sentinel(monkeypatch: pytest.MonkeyPatch):
+def test_array_field_multidim_rejected_via_fake_sentinel(monkeypatch: pytest.MonkeyPatch) -> None:
     """Nested ``ArrayField`` raises ``ConfigurationError`` at type creation.
 
     Exposing this column is what the package refuses to build (the package raises) and
@@ -1787,7 +1810,7 @@ def test_array_field_multidim_rejected_via_fake_sentinel(monkeypatch: pytest.Mon
 
 def test_annotation_override_of_arrayfield_with_nested_array_is_allowed(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Consumer ``arr: list[list[int]]`` annotation bypasses nested-ArrayField rejection.
 
     ``ArrayField`` is PostgreSQL-only and fakeshop migrates on SQLite, so this unmanaged
@@ -1814,7 +1837,7 @@ def test_annotation_override_of_arrayfield_with_nested_array_is_allowed(
     assert NestedArrayOverrideOwnerType.__annotations__["arr"] == list[list[int]]
 
 
-def test_array_field_choices_inner_via_fake_sentinel(monkeypatch: pytest.MonkeyPatch):
+def test_array_field_choices_inner_via_fake_sentinel(monkeypatch: pytest.MonkeyPatch) -> None:
     """``ArrayField(CharField(choices=...))`` produces ``list[<TypeName><FieldName>Enum]``.
 
     The recursive ``convert_scalar(field.base_field, type_name)`` call hits
@@ -1860,7 +1883,7 @@ def test_array_field_choices_inner_via_fake_sentinel(monkeypatch: pytest.MonkeyP
 
 def test_array_field_element_empty_label_gets_no_member_via_fake_sentinel(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """An ``ArrayField`` ``base_field`` with ``__empty__`` choices gets an element enum without ``_None``.
 
     The element enum is built by the same ``_normalize_choice_pairs`` the column enum reads, so the
@@ -1884,7 +1907,9 @@ def test_array_field_element_empty_label_gets_no_member_via_fake_sentinel(
     assert _member_map(element_enum) == {"good": "good", "worn": "worn"}
 
 
-def test_array_field_outer_choices_rejected_via_fake_sentinel(monkeypatch: pytest.MonkeyPatch):
+def test_array_field_outer_choices_rejected_via_fake_sentinel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Outer ``choices`` on ``ArrayField`` raises ``ConfigurationError``.
 
     Spec-pinned error message mentions ``base_field`` and ``FilterSet`` as
@@ -1916,9 +1941,10 @@ def test_array_field_outer_choices_rejected_via_fake_sentinel(monkeypatch: pytes
                 fields = ("arr",)
 
 
-def test_array_field_base_field_unsupported_type_raises(monkeypatch: pytest.MonkeyPatch):
-    """An unsupported ``base_field`` type surfaces the existing
-    ``Unsupported Django field type`` error via the recursive call.
+def test_array_field_base_field_unsupported_type_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unsupported ``base_field`` type surfaces the existing unsupported-type error.
+
+    The ``Unsupported Django field type`` error comes via the recursive call.
 
     Exposing this column is what the package refuses to build (the package raises) and
     the column type is PostgreSQL-only besides, so no fakeshop model carries it; this
@@ -1946,9 +1972,10 @@ def test_array_field_base_field_unsupported_type_raises(monkeypatch: pytest.Monk
                 fields = ("arr",)
 
 
-def test_array_field_sentinel_none_path(monkeypatch: pytest.MonkeyPatch):
-    """With ``_ARRAY_FIELD_CLS = None`` the sentinel short-circuits and the
-    field falls through to the MRO walk's unsupported-field error.
+def test_array_field_sentinel_none_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With ``_ARRAY_FIELD_CLS = None`` the sentinel short-circuits.
+
+    The field falls through to the MRO walk's unsupported-field error.
 
     Pins the short-circuit guard: without ``_ARRAY_FIELD_CLS is not None``,
     the ``isinstance(field, _ARRAY_FIELD_CLS)`` call would ``TypeError``.
@@ -1976,9 +2003,10 @@ def test_array_field_sentinel_none_path(monkeypatch: pytest.MonkeyPatch):
                 fields = ("arr",)
 
 
-def test_real_array_field_compatible_with_strawberry():
-    """Optional gated test: real ``django.contrib.postgres.fields.ArrayField``
-    flows through the sentinel branch end-to-end on a postgres-equipped env.
+def test_real_array_field_compatible_with_strawberry() -> None:
+    """Optional gated test: real ``ArrayField`` flows through the sentinel branch end-to-end.
+
+    This runs ``django.contrib.postgres.fields.ArrayField`` on a postgres-equipped env.
 
     The real ``ArrayField`` owner is unmanaged and never migrated, because fakeshop runs
     on SQLite; it proves the sentinel dispatch in
@@ -2029,8 +2057,8 @@ def test_real_array_field_compatible_with_strawberry():
 # not collide with the prior synthetic apps (``test_bigint``,
 # ``test_arrayfield``, ``test_choice_enums``). Sentinel-branch tests
 # monkey-patch ``converters._HSTORE_FIELD_CLS = _FakeHStoreField`` BEFORE
-# declaring the ``DjangoType`` (spec-017 Decision 7 #"calls `monkeypatch.setattr(converters, \"_HSTORE_FIELD_CLS\", _FakeHStoreField)` *before* declaring the `DjangoType`"). The
-# sentinel's soft-import resolution is covered once in ``tests/utils/test_imports.py``,
+# declaring the ``DjangoType`` (spec-017 Decision 7 #"*before* declaring the `DjangoType`").
+# The sentinel's soft-import resolution is covered once in ``tests/utils/test_imports.py``,
 # not here (spec-017 #"**Soft-import branch coverage** is NOT written here.").
 #
 # Same postgres-only constraint as the ArrayField section: ``HStoreField``
@@ -2040,7 +2068,9 @@ def test_real_array_field_compatible_with_strawberry():
 # ---------------------------------------------------------------------------
 
 
-def test_hstore_field_maps_to_json_scalar_via_fake_sentinel(monkeypatch: pytest.MonkeyPatch):
+def test_hstore_field_maps_to_json_scalar_via_fake_sentinel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``HStoreField`` (non-null) appears as ``JSON!`` in the schema.
 
     ``HStoreField`` is PostgreSQL-only and fakeshop migrates on SQLite, so this
@@ -2078,7 +2108,7 @@ def test_hstore_field_maps_to_json_scalar_via_fake_sentinel(monkeypatch: pytest.
     assert terminal["name"] == "JSON"
 
 
-def test_hstore_field_nullable_via_fake_sentinel(monkeypatch: pytest.MonkeyPatch):
+def test_hstore_field_nullable_via_fake_sentinel(monkeypatch: pytest.MonkeyPatch) -> None:
     """``HStoreField(null=True)`` appears as ``JSON`` (nullable).
 
     ``HStoreField`` is PostgreSQL-only and fakeshop migrates on SQLite, so this
@@ -2115,9 +2145,10 @@ def test_hstore_field_nullable_via_fake_sentinel(monkeypatch: pytest.MonkeyPatch
 
 def test_hstore_field_resolver_dict_serializes_via_schema_execution(
     monkeypatch: pytest.MonkeyPatch,
-):
-    """Serializer-level test: a resolver returning a hand-built dict round-trips
-    verbatim through the ``JSON`` scalar via ``schema.execute_sync``.
+) -> None:
+    """Serializer-level test: a hand-built dict round-trips verbatim through the ``JSON`` scalar.
+
+    The resolver returns the dict and ``schema.execute_sync`` serializes it.
 
     No DB persistence - SQLite cannot store HStore values; the test exercises
     only the scalar's wire-level serialization through Strawberry.
@@ -2158,9 +2189,10 @@ def test_hstore_field_resolver_dict_serializes_via_schema_execution(
 
 def test_hstore_field_resolver_dict_with_none_value_via_schema_execution(
     monkeypatch: pytest.MonkeyPatch,
-):
-    """A resolver returning ``{"k1": "v", "k2": None}`` round-trips with the
-    ``None`` value preserved inside the dict - mirrors ``HStoreField``'s native
+) -> None:
+    """A resolver returning ``{"k1": "v", "k2": None}`` round-trips with ``None`` preserved.
+
+    The ``None`` value stays inside the dict, mirroring ``HStoreField``'s native
     ``dict[str, str | None]`` shape.
 
     ``HStoreField`` is PostgreSQL-only and fakeshop migrates on SQLite, so this
@@ -2197,7 +2229,9 @@ def test_hstore_field_resolver_dict_with_none_value_via_schema_execution(
     assert result.data == {"owner": {"data": payload}}
 
 
-def test_hstore_field_outer_choices_rejected_via_fake_sentinel(monkeypatch: pytest.MonkeyPatch):
+def test_hstore_field_outer_choices_rejected_via_fake_sentinel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Outer ``choices`` on ``HStoreField`` raises ``ConfigurationError``.
 
     HStore stores ``dict[str, str | None]`` with no enum-able shape at the
@@ -2226,9 +2260,10 @@ def test_hstore_field_outer_choices_rejected_via_fake_sentinel(monkeypatch: pyte
                 fields = ("data",)
 
 
-def test_hstore_field_sentinel_none_path(monkeypatch: pytest.MonkeyPatch):
-    """With ``_HSTORE_FIELD_CLS = None`` the sentinel short-circuits and the
-    field falls through to the MRO walk's unsupported-field error.
+def test_hstore_field_sentinel_none_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With ``_HSTORE_FIELD_CLS = None`` the sentinel short-circuits.
+
+    The field falls through to the MRO walk's unsupported-field error.
 
     Pins the short-circuit guard: without ``_HSTORE_FIELD_CLS is not None``,
     the ``isinstance(field, _HSTORE_FIELD_CLS)`` call would ``TypeError``.
@@ -2256,9 +2291,10 @@ def test_hstore_field_sentinel_none_path(monkeypatch: pytest.MonkeyPatch):
                 fields = ("data",)
 
 
-def test_real_hstore_field_compatible_with_strawberry():
-    """Optional gated test: real ``django.contrib.postgres.fields.HStoreField``
-    flows through the sentinel branch end-to-end on a postgres-equipped env.
+def test_real_hstore_field_compatible_with_strawberry() -> None:
+    """Optional gated test: real ``HStoreField`` flows through the sentinel branch end-to-end.
+
+    This runs ``django.contrib.postgres.fields.HStoreField`` on a postgres-equipped env.
 
     Asserts both the introspection chain (``NON_NULL -> SCALAR { name: "JSON" }``)
     and resolver round-tripping (``{"k1": "v", "k2": None}`` preserved).
@@ -2310,7 +2346,7 @@ def test_real_hstore_field_compatible_with_strawberry():
 # ---------------------------------------------------------------------------
 
 
-def test_consumer_authored_relation_annotation_override_survives_always_defer():
+def test_consumer_authored_relation_annotation_override_survives_always_defer() -> None:
     """Consumer-authored annotation override targeting a secondary survives always-defer.
 
     With ``Meta.primary = True`` on ``ItemType`` and ``AdminItemType`` as a
@@ -2352,7 +2388,7 @@ def test_consumer_authored_relation_annotation_override_survives_always_defer():
     assert CategoryType.__annotations__["items"] == list[AdminItemType]
 
 
-def test_consumer_assigned_strawberry_field_relation_survives_always_defer():
+def test_consumer_assigned_strawberry_field_relation_survives_always_defer() -> None:
     """Consumer-assigned ``strawberry.field`` on a multi-type relation survives always-defer."""
     from apps.products.models import Category, Item
 
@@ -2398,7 +2434,7 @@ def test_consumer_assigned_strawberry_field_relation_survives_always_defer():
     assert resolver_function(items_field).__qualname__.endswith("CategoryType.items")
 
 
-def test_relation_resolves_to_primary_type_when_target_model_has_multiple():
+def test_relation_resolves_to_primary_type_when_target_model_has_multiple() -> None:
     """A relation to a multi-type model resolves to the primary."""
     from apps.products.models import Category, Item
 
@@ -2437,7 +2473,9 @@ def test_relation_resolves_to_primary_type_when_target_model_has_multiple():
     assert terminal["name"] == "ItemType"
 
 
-def test_relation_resolves_to_primary_when_secondary_registered_before_source_before_primary():
+def test_relation_resolves_to_primary_when_secondary_registered_before_source_before_primary() -> (
+    None
+):
     """Import-order trap closure: declare secondary -> source -> primary in order.
 
     Without always-defer, ``CategoryType.items`` would freeze against
@@ -2486,7 +2524,7 @@ def test_relation_resolves_to_primary_when_secondary_registered_before_source_be
     assert terminal["name"] == "ItemType"
 
 
-def test_relation_resolves_when_target_model_has_one_type_no_primary():
+def test_relation_resolves_when_target_model_has_one_type_no_primary() -> None:
     """Backward-compat: a single registered type with no primary still resolves."""
     from apps.products.models import Category, Item
 
@@ -2504,7 +2542,7 @@ def test_relation_resolves_when_target_model_has_one_type_no_primary():
     assert CategoryType.__annotations__["items"] == list[ItemType]
 
 
-def test_relation_target_with_multiple_no_primary_surfaces_audit_error_at_finalize():
+def test_relation_target_with_multiple_no_primary_surfaces_audit_error_at_finalize() -> None:
     """The ambiguity audit fires before unresolved-target when target is multi-type-no-primary."""
     from apps.products.models import Category, Item
 
@@ -2562,19 +2600,19 @@ def _text_field(*, null: bool) -> models.Field[str | None, str | None]:
     return field
 
 
-def test_convert_scalar_force_nullable_true_widens_non_null_column():
+def test_convert_scalar_force_nullable_true_widens_non_null_column() -> None:
     """``force_nullable=True`` on a non-null ``TextField`` returns ``str | None``."""
     field = _text_field(null=False)
     assert convert_scalar(field, "OwnerType", force_nullable=True) == (str | None)
 
 
-def test_convert_scalar_force_nullable_false_narrows_nullable_column():
+def test_convert_scalar_force_nullable_false_narrows_nullable_column() -> None:
     """``force_nullable=False`` on a nullable ``TextField`` returns bare ``str``."""
     field = _text_field(null=True)
     assert convert_scalar(field, "OwnerType", force_nullable=False) is str
 
 
-def test_convert_scalar_force_nullable_none_honors_field_null():
+def test_convert_scalar_force_nullable_none_honors_field_null() -> None:
     """``force_nullable=None`` (and the implicit default) reproduce ``field.null``.
 
     Regression guard for Decision 7's "the ``None`` default is identical to
@@ -2592,7 +2630,9 @@ def test_convert_scalar_force_nullable_none_honors_field_null():
     assert convert_scalar(nullable, "OwnerType") == (str | None)
 
 
-def test_convert_scalar_force_nullable_on_choice_field(choice_fixture_model: type[models.Model]):
+def test_convert_scalar_force_nullable_on_choice_field(
+    choice_fixture_model: type[models.Model],
+) -> None:
     """The override flips a choice field's generated enum nullability (Decision 9).
 
     Widening sits AFTER choice substitution, so ``force_nullable=True`` on the
@@ -2614,7 +2654,7 @@ def test_convert_scalar_force_nullable_on_choice_field(choice_fixture_model: typ
     assert narrowed is nullable_enum
 
 
-def test_convert_scalar_force_nullable_on_array_field(monkeypatch: pytest.MonkeyPatch):
+def test_convert_scalar_force_nullable_on_array_field(monkeypatch: pytest.MonkeyPatch) -> None:
     """The override flips the OUTER ``list[inner]`` nullability; inner is unchanged.
 
     A non-null ``ArrayField(IntegerField())`` with ``force_nullable=True``
@@ -2651,7 +2691,7 @@ def test_convert_scalar_force_nullable_on_array_field(monkeypatch: pytest.Monkey
     assert narrowed == list[int]
 
 
-def test_convert_scalar_force_nullable_on_hstore_field(monkeypatch: pytest.MonkeyPatch):
+def test_convert_scalar_force_nullable_on_hstore_field(monkeypatch: pytest.MonkeyPatch) -> None:
     """The override flips ``HStoreField`` between ``JSON | None`` and ``JSON``.
 
     ``HStoreField`` is PostgreSQL-only and fakeshop migrates on SQLite, so this
@@ -2686,29 +2726,27 @@ class _SubImageField(models.ImageField):
     """A consumer ``ImageField`` subclass, to pin the MRO precedence walk."""
 
 
-def test_convert_field_output_filefield_to_djangofiletype():
+def test_convert_field_output_filefield_to_djangofiletype() -> None:
     """A ``FileField`` resolves to ``DjangoFileType`` via ``FIELD_OUTPUT_TYPE_MAP``.
 
     The map identity is ``DjangoFileType``; ``convert_field_output`` widens it to
     the default-nullable ``DjangoFileType | None`` (spec-037 Decision 4).
     """
-
     field = _concrete_field(MediaSpecimen, "attachment")
     assert convert_field_output(field, "OwnerType") == (DjangoFileType | None)
     assert _field_output_type_for(field) is DjangoFileType
 
 
-def test_convert_field_output_imagefield_to_djangoimagetype():
+def test_convert_field_output_imagefield_to_djangoimagetype() -> None:
     """An ``ImageField`` resolves to ``DjangoImageType`` via ``FIELD_OUTPUT_TYPE_MAP``.
 
     Widened to the default-nullable ``DjangoImageType | None`` (spec-037 Decision 4).
     """
-
     field = _concrete_field(MediaSpecimen, "image")
     assert convert_field_output(field, "OwnerType") == (DjangoImageType | None)
 
 
-def test_field_output_map_mro_precedence_image_subclass_wins():
+def test_field_output_map_mro_precedence_image_subclass_wins() -> None:
     """An ``ImageField`` subclass resolves to ``DjangoImageType``, never ``DjangoFileType``.
 
     ``ImageField`` is a ``FileField`` subclass, so the MRO walk must hit the
@@ -2728,7 +2766,7 @@ def test_field_output_map_mro_precedence_image_subclass_wins():
     assert convert_field_output(field, "OwnerType") == (DjangoImageType | None)
 
 
-def test_convert_field_output_file_image_nullable_by_default():
+def test_convert_field_output_file_image_nullable_by_default() -> None:
     """File/image output is ``<object> | None`` by DEFAULT, regardless of ``blank`` / ``null``.
 
     The generated parent resolver returns ``None`` for an empty / falsy
@@ -2757,7 +2795,7 @@ def test_convert_field_output_file_image_nullable_by_default():
     assert convert_field_output(null_image, "OwnerType") == (DjangoImageType | None)
 
 
-def test_convert_field_output_force_nullable_overrides_default():
+def test_convert_field_output_force_nullable_overrides_default() -> None:
     """``force_nullable`` wins over the default-nullable file/image shape.
 
     ``required_overrides`` (``force_nullable=False``) forces the bare
@@ -2765,7 +2803,6 @@ def test_convert_field_output_force_nullable_overrides_default():
     non-empty invariant; ``nullable_overrides`` (``force_nullable=True``) keeps
     ``DjangoFileType | None`` (the default) on a plain required column.
     """
-
     required = _concrete_field(MediaSpecimen, "attachment")
     blank_file = _concrete_field(MediaSpecimen, "optional_attachment")
 
@@ -2775,9 +2812,8 @@ def test_convert_field_output_force_nullable_overrides_default():
     assert convert_field_output(blank_file, "OwnerType", force_nullable=False) is DjangoFileType
 
 
-def test_convert_field_output_delegates_scalar_columns():
+def test_convert_field_output_delegates_scalar_columns() -> None:
     """A non-file column delegates to ``convert_scalar`` unchanged."""
-
     title = _concrete_field(ScalarSpecimen, "label")
     score = _concrete_field(NullableScalarSpecimen, "score")
     assert convert_field_output(title, "OwnerType") is str
@@ -2786,7 +2822,7 @@ def test_convert_field_output_delegates_scalar_columns():
     assert convert_field_output(title, "OwnerType", force_nullable=True) == (str | None)
 
 
-def test_file_columns_stay_scalar_on_the_filter_input_path():
+def test_file_columns_stay_scalar_on_the_filter_input_path() -> None:
     """The SHARED scalar/filter-input path still sees ``str`` for a file column.
 
     ``FIELD_OUTPUT_TYPE_MAP`` is read-output-only; ``scalar_for_field`` (the
@@ -2817,7 +2853,7 @@ def test_file_columns_stay_scalar_on_the_filter_input_path():
 # ---------------------------------------------------------------------------
 
 
-def test_default_file_output_objects_publish_no_filesystem_path():
+def test_default_file_output_objects_publish_no_filesystem_path() -> None:
     """``path`` is absent from both default output objects; the opt-in siblings carry it.
 
     The field surface is read off Strawberry's own type definitions rather than
@@ -2848,7 +2884,7 @@ def test_default_file_output_objects_publish_no_filesystem_path():
     assert opt_in_image == default_image | {"path"}
 
 
-def test_opt_in_path_field_carries_the_security_description():
+def test_opt_in_path_field_carries_the_security_description() -> None:
     """The single shared ``path`` definition warns, on BOTH opt-in types.
 
     The mixin exists so the wording cannot drift between the file and image
@@ -2871,14 +2907,13 @@ def test_opt_in_path_field_carries_the_security_description():
     assert "filesystem_path_fields" in file_path.description
 
 
-def test_convert_field_output_swaps_in_the_path_bearing_sibling():
+def test_convert_field_output_swaps_in_the_path_bearing_sibling() -> None:
     """``expose_filesystem_path`` routes a file/image column to its opt-in sibling.
 
     The nullability tri-state is unchanged by the swap: the opt-in type is
     nullable by default for the same empty-``FieldFile`` reason the default one
     is (spec-037 Decision 4), and ``force_nullable=False`` still narrows it.
     """
-
     attachment = _concrete_field(MediaSpecimen, "attachment")
     image = _concrete_field(MediaSpecimen, "image")
     assert convert_field_output(attachment, "OwnerType") == (DjangoFileType | None)
@@ -2901,7 +2936,7 @@ def test_convert_field_output_swaps_in_the_path_bearing_sibling():
     assert FILESYSTEM_PATH_OUTPUT_TYPE_MAP[DjangoImageType] is DjangoImagePathType
 
 
-def test_consumer_imagefield_subclass_opts_in_to_the_image_sibling():
+def test_consumer_imagefield_subclass_opts_in_to_the_image_sibling() -> None:
     """The opt-in follows the MRO walk's answer, so a subclass keeps its dimensions.
 
     A consumer ``ImageField`` subclass resolves to ``DjangoImageType`` through

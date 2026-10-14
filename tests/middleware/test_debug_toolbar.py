@@ -1,4 +1,6 @@
-"""Package tests for DebugToolbarMiddleware import guards, unreachable postprocess bails, and the GraphiQL bridge template source.
+"""Package tests for ``DebugToolbarMiddleware`` guards, bails, and the GraphiQL bridge source.
+
+Covers the import guards, the unreachable postprocess bails, and the bridge template source.
 
 Happy-path GraphiQL HTML, named JSON panel payloads (including ``has_content``-false
 ``title: null`` on RedirectsPanel, callable panel title/subtitle, and the
@@ -20,7 +22,7 @@ import contextlib
 import importlib
 import re
 import sys
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING
@@ -98,7 +100,7 @@ def middleware(toolbar_leaf: ModuleType) -> DebugToolbarMiddleware:
 
 
 @contextlib.contextmanager
-def _simulated_toolbar_absence():
+def _simulated_toolbar_absence() -> Generator[None, None, None]:
     """Simulate toolbar absence with the shared ``sys.modules["debug_toolbar"] = None`` sentinel.
 
     Importlib-compatible by construction (spec-042 Decision 9):
@@ -120,7 +122,7 @@ def _simulated_toolbar_absence():
         yield
 
 
-def test_package_and_middleware_imports_stay_clean_without_toolbar():
+def test_package_and_middleware_imports_stay_clean_without_toolbar() -> None:
     """Root + parent-package imports succeed; star import binds no toolbar name."""
     with _simulated_toolbar_absence():
         root = importlib.import_module("django_strawberry_framework")
@@ -134,7 +136,7 @@ def test_package_and_middleware_imports_stay_clean_without_toolbar():
         assert "DebugToolbarMiddleware" not in namespace
 
 
-def test_leaf_import_raises_install_hint_when_toolbar_absent():
+def test_leaf_import_raises_install_hint_when_toolbar_absent() -> None:
     """The leaf import raises the HINT-carrying ImportError, cause chained.
 
     The hint (not a bare ``ModuleNotFoundError``) proves ``require_debug_toolbar()``
@@ -147,11 +149,10 @@ def test_leaf_import_raises_install_hint_when_toolbar_absent():
         assert isinstance(excinfo.value.__cause__, ImportError)
 
 
-def test_leaf_reimports_after_restore(toolbar_leaf: ModuleType):
+def test_leaf_reimports_after_restore(toolbar_leaf: ModuleType) -> None:
     """After restore the leaf imports again and both sides hold ONE object."""
-    with _simulated_toolbar_absence():
-        with pytest.raises(ImportError, match=_HINT_SUBSTRING):
-            importlib.import_module(_LEAF)
+    with _simulated_toolbar_absence(), pytest.raises(ImportError, match=_HINT_SUBSTRING):
+        importlib.import_module(_LEAF)
     leaf = importlib.import_module(_LEAF)
     assert leaf is sys.modules[_LEAF]
     assert leaf is toolbar_leaf
@@ -161,7 +162,7 @@ def test_leaf_reimports_after_restore(toolbar_leaf: ModuleType):
     assert parent.debug_toolbar is leaf
 
 
-def test_broken_toolbar_install_propagates_raw_import_error(toolbar_leaf: ModuleType):
+def test_broken_toolbar_install_propagates_raw_import_error(toolbar_leaf: ModuleType) -> None:
     """A present-but-broken install propagates the RAW ImportError, unwrapped.
 
     The guard imports only the TOP-LEVEL package, so with ``debug_toolbar``
@@ -181,13 +182,13 @@ def test_broken_toolbar_install_propagates_raw_import_error(toolbar_leaf: Module
     ) as saved:
         sys.modules["debug_toolbar"] = saved["debug_toolbar"]  # top-level: present + real
         with blocked_modules("debug_toolbar.middleware"):  # its submodule: broken
-            with pytest.raises(ImportError, match="debug_toolbar.middleware") as excinfo:
+            with pytest.raises(ImportError, match=r"debug_toolbar\.middleware") as excinfo:
                 importlib.import_module(_LEAF)
             assert _HINT_SUBSTRING not in str(excinfo.value)
             assert excinfo.value.__cause__ is None
 
 
-def test_leaf_import_requires_debug_toolbar_in_installed_apps():
+def test_leaf_import_requires_debug_toolbar_in_installed_apps() -> None:
     """Toolbar importable but app absent from INSTALLED_APPS -> package ImproperlyConfigured.
 
     The misconfiguration distinct from a broken install (spec-042 Error shapes):
@@ -203,12 +204,14 @@ def test_leaf_import_requires_debug_toolbar_in_installed_apps():
     with modify_settings(INSTALLED_APPS={"remove": "debug_toolbar"}):
         assert not apps.is_installed("debug_toolbar")
         middleware_pkg = importlib.import_module(_PARENT)
-        with evicted_modules(_LEAF, parent=middleware_pkg, attr="debug_toolbar"):
-            with pytest.raises(ImproperlyConfigured, match="INSTALLED_APPS"):
-                importlib.import_module(_LEAF)
+        with (
+            evicted_modules(_LEAF, parent=middleware_pkg, attr="debug_toolbar"),
+            pytest.raises(ImproperlyConfigured, match="INSTALLED_APPS"),
+        ):
+            importlib.import_module(_LEAF)
 
 
-def test_require_debug_toolbar_guard_unit(toolbar_leaf: ModuleType):
+def test_require_debug_toolbar_guard_unit(toolbar_leaf: ModuleType) -> None:
     """The thin-wrapper contract - module identity when present, hint when absent."""
     assert toolbar_leaf.require_debug_toolbar() is sys.modules["debug_toolbar"]
     with _simulated_toolbar_absence():
@@ -217,7 +220,7 @@ def test_require_debug_toolbar_guard_unit(toolbar_leaf: ModuleType):
         assert isinstance(excinfo.value.__cause__, ImportError)
 
 
-def test_install_hint_floor_matches_the_pyproject_dev_group_row(toolbar_leaf: ModuleType):
+def test_install_hint_floor_matches_the_pyproject_dev_group_row(toolbar_leaf: ModuleType) -> None:
     """The floor's three gated sites agree, including the one nothing imports.
 
     The hint-matching rows above compare the install hint against the re-typed
@@ -254,10 +257,11 @@ class _FakePanel:
     def __init__(
         self,
         panel_id: str,
+        *,
         has_content: bool,
         title: str | Callable[[], str],
         nav_subtitle: str | Callable[[], str],
-    ):
+    ) -> None:
         self.panel_id = panel_id
         self.has_content = has_content
         self.title = title
@@ -273,15 +277,19 @@ class _FakeToolbar:
     for stats / server timing / headers) and ``render_toolbar()``.
     """
 
-    def __init__(self, request_id: str | None = None, enabled_panels: Iterable[_FakePanel] = ()):
+    def __init__(
+        self,
+        request_id: str | None = None,
+        enabled_panels: Iterable[_FakePanel] = (),
+    ) -> None:
         self.request_id = request_id
         self.enabled_panels = list(enabled_panels)
 
-    def render_toolbar(self):
+    def render_toolbar(self) -> str:
         return ""
 
 
-def test_streaming_response_gets_no_package_mutation(middleware: DebugToolbarMiddleware):
+def test_streaming_response_gets_no_package_mutation(middleware: DebugToolbarMiddleware) -> None:
     """Streaming early-out - no package-specific mutation after the stock pass.
 
     Not "returns untouched" in the absolute sense: the stock postprocess runs
@@ -307,7 +315,7 @@ def test_streaming_response_gets_no_package_mutation(middleware: DebugToolbarMid
     assert b"".join(streamed) == b'{"data": 1}'
 
 
-def test_get_payload_bails_without_request_id(toolbar_leaf: ModuleType):
+def test_get_payload_bails_without_request_id(toolbar_leaf: ModuleType) -> None:
     """No ``request_id`` -> ``None`` (the real toolbar always assigns one).
 
     Live named operations in
@@ -320,7 +328,7 @@ def test_get_payload_bails_without_request_id(toolbar_leaf: ModuleType):
     assert toolbar_leaf._get_payload(request, response, _FakeToolbar(request_id=None)) is None
 
 
-def test_get_payload_panel_title_only_when_has_content(toolbar_leaf: ModuleType):
+def test_get_payload_panel_title_only_when_has_content(toolbar_leaf: ModuleType) -> None:
     """Stock panels expose properties, so the callable arm is package-only.
 
     Sibling of the missing-``request_id`` row: ``has_content``-false -> ``title``
@@ -349,7 +357,7 @@ def test_get_payload_panel_title_only_when_has_content(toolbar_leaf: ModuleType)
     assert "TemplatesPanel" not in panels
 
 
-def test_get_payload_bails_on_non_object_json_body(toolbar_leaf: ModuleType):
+def test_get_payload_bails_on_non_object_json_body(toolbar_leaf: ModuleType) -> None:
     """A non-object JSON body yields ``None``.
 
     A valid single GraphQL response is always a JSON object, so this branch is
@@ -365,7 +373,7 @@ def test_get_payload_bails_on_non_object_json_body(toolbar_leaf: ModuleType):
 def test_malformed_json_body_gets_no_package_rewrite(
     middleware: DebugToolbarMiddleware,
     content: bytes,
-):
+) -> None:
     """A tagged declared-JSON body that cannot be parsed or decoded is not rewritten.
 
     A valid Strawberry operation always returns a JSON object, so the custom
@@ -393,7 +401,7 @@ def test_malformed_json_body_gets_no_package_rewrite(
     assert int(result["Content-Length"]) == len(content)
 
 
-def test_process_view_tolerates_non_class_view_class(middleware: DebugToolbarMiddleware):
+def test_process_view_tolerates_non_class_view_class(middleware: DebugToolbarMiddleware) -> None:
     """A non-class ``view_class`` -> ``False``, no ``TypeError`` from ``issubclass``.
 
     Live HTML negatives in
@@ -405,7 +413,7 @@ def test_process_view_tolerates_non_class_view_class(middleware: DebugToolbarMid
     """
     request = RequestFactory().get("/")
 
-    def view_func(_request: HttpRequest):
+    def view_func(_request: HttpRequest) -> None:
         return None
 
     # Django's ``as_view()`` callback contract puts ``view_class`` in the callback function's
@@ -426,7 +434,7 @@ def test_process_view_tolerates_non_class_view_class(middleware: DebugToolbarMid
 # ---------------------------------------------------------------------------
 
 
-def _template_text():
+def _template_text() -> str:
     """The shipped bridge asset's source text (the asset is never executed here)."""
     return (
         Path(django_strawberry_framework.__file__).parent
@@ -451,7 +459,7 @@ def _defined_once(needle: str) -> Callable[[str], bool]:
     return lambda text: text.count(needle) == 1
 
 
-def _ordered(*needles: str):
+def _ordered(*needles: str) -> Callable[[str], bool]:
     """Predicate: every ``needle`` is present, in this order, by first occurrence.
 
     Returns False rather than raising when one is missing, so a row that a
@@ -459,7 +467,7 @@ def _ordered(*needles: str):
     erroring out of the parametrized body.
     """
 
-    def predicate(text: str):
+    def predicate(text: str) -> bool:
         if any(needle not in text for needle in needles):
             return False
         positions = [text.index(needle) for needle in needles]
@@ -468,7 +476,7 @@ def _ordered(*needles: str):
     return predicate
 
 
-def _adjacent(first: str, second: str):
+def _adjacent(first: str, second: str) -> Callable[[str], bool]:
     """Predicate: ``second`` follows ``first`` with only whitespace between them.
 
     Ordering predicates compare indices, so a statement wrapped in a condition
@@ -476,7 +484,7 @@ def _adjacent(first: str, second: str):
     is exactly what an index comparison cannot see, and adjacency can.
     """
 
-    def predicate(text: str):
+    def predicate(text: str) -> bool:
         if first not in text:
             return False
         rest = text[text.index(first) + len(first) :]
@@ -492,14 +500,14 @@ def _own_statement_line(statement: str) -> Callable[[str], bool]:
     return lambda text: any(line.strip() == statement for line in text.splitlines())
 
 
-def _unnested_within(opener: str, needle: str):
+def _unnested_within(opener: str, needle: str) -> Callable[[str], bool]:
     """Predicate: ``needle`` sits at the block level ``opener`` opens, not inside a nested one.
 
     Braces between the two balance out when nothing has been wrapped around the
     needle; a block-form condition around it leaves one unclosed.
     """
 
-    def predicate(text: str):
+    def predicate(text: str) -> bool:
         if opener not in text:
             return False
         rest = text[text.index(opener) + len(opener) :]
@@ -511,7 +519,7 @@ def _unnested_within(opener: str, needle: str):
     return predicate
 
 
-def _return_count_between(first: str, second: str, expected: int):
+def _return_count_between(first: str, second: str, expected: int) -> Callable[[str], bool]:
     """Predicate: exactly ``expected`` ``return`` keywords sit between the two needles.
 
     Whether a statement is unconditional is a property of the answer - does
@@ -522,7 +530,7 @@ def _return_count_between(first: str, second: str, expected: int):
     counting the returns in the span answers the question directly.
     """
 
-    def predicate(text: str):
+    def predicate(text: str) -> bool:
         if first not in text:
             return False
         rest = text[text.index(first) + len(first) :]
@@ -762,7 +770,7 @@ _TEMPLATE_CONTRACT = (
 def test_template_port_invariants_and_robustness_divergence(
     name: str,
     predicate: Callable[[str], bool],
-):
+) -> None:
     """One row per form the copied asset must keep, invariants and divergences alike.
 
     The suite has no JS runtime, so this does not prove the script WORKS - it

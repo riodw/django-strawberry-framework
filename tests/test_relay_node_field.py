@@ -15,7 +15,7 @@ field), and the public-export surface.
 """
 
 from collections.abc import Awaitable, Callable, Iterable, Iterator
-from typing import SupportsIndex
+from typing import NoReturn, SupportsIndex
 
 import pytest
 import strawberry
@@ -111,7 +111,7 @@ _CATEGORIES_QUERY = "query ($ids: [ID!]!) { categories(ids: $ids) { name } }"
 
 
 @pytest.mark.django_db
-def test_bare_node_field_resolves_type_name_id():
+def test_bare_node_field_resolves_type_name_id() -> None:
     """Bare ``node(id:)`` decodes a type-name payload under ``Meta.globalid_strategy = "type"``."""
     services.seed_data(1)
     category_node = _make_node_type("CategoryNode", strategy="type")
@@ -159,7 +159,7 @@ def _make_multi_type_category_nodes() -> tuple[type, type]:
 
 
 @pytest.mark.django_db
-def test_bare_node_field_multi_type_model_typename_follows_gid():
+def test_bare_node_field_multi_type_model_typename_follows_gid() -> None:
     """``__typename`` matches the type the GlobalID named, not candidate order.
 
     The bare ``node`` hands graphql-core a raw model instance, and with two
@@ -190,7 +190,7 @@ def test_bare_node_field_multi_type_model_typename_follows_gid():
 
 
 @pytest.mark.django_db
-def test_bare_nodes_field_multi_type_model_typenames_follow_gids():
+def test_bare_nodes_field_multi_type_model_typenames_follow_gids() -> None:
     """Batch sibling of the S2 regression: per-position ``__typename`` routing."""
     services.seed_data(1)
     primary, secondary = _make_multi_type_category_nodes()
@@ -217,7 +217,7 @@ def test_bare_nodes_field_multi_type_model_typenames_follow_gids():
 
 
 @pytest.mark.django_db
-def test_node_type_hint_does_not_poison_reused_model_instance():
+def test_node_type_hint_does_not_poison_reused_model_instance() -> None:
     """A refetch hint is isolated when a consumer reuses one ORM instance.
 
     The bare node field must route a secondary GlobalID to its named concrete
@@ -252,7 +252,7 @@ def test_node_type_hint_does_not_poison_reused_model_instance():
             *,
             info: strawberry.Info,
             required: bool = False,
-        ):
+        ) -> Category | None:
             del cls, node_id, info, required
             return row
 
@@ -279,7 +279,7 @@ def test_node_type_hint_does_not_poison_reused_model_instance():
     assert not hasattr(row, "_dsf_node_type_hint")
 
 
-def test_stamp_node_type_passes_through_none_and_unstampable_objects():
+def test_stamp_node_type_passes_through_none_and_unstampable_objects() -> None:
     """``None`` rides through; an attribute-rejecting return stays unstamped.
 
     ``None`` is the hidden/missing/uncoercible -> ``null`` contract; a bare
@@ -304,13 +304,13 @@ def test_stamp_node_type_passes_through_none_and_unstampable_objects():
     assert not hasattr(unstampable, "_dsf_node_type_hint")
 
 
-def test_stamp_node_type_returns_a_model_instance_that_rejects_copying():
+def test_stamp_node_type_returns_a_model_instance_that_rejects_copying() -> None:
     class Model:
         pass
 
     class UncopyableNode(Model):
         @override
-        def __reduce_ex__(self, protocol: SupportsIndex):
+        def __reduce_ex__(self, protocol: SupportsIndex) -> NoReturn:
             raise TypeError("copy unavailable")
 
     resolved_type = type(
@@ -321,7 +321,7 @@ def test_stamp_node_type_returns_a_model_instance_that_rejects_copying():
     node = UncopyableNode()
     # basedpyright: a type()-built class whose definition names a plain (non-Django) model, so
     # the node is an instance that refuses copying; _stamp_node_type types the parameter as
-    # type[_RelayDjangoType]
+    # the class of a Relay Django type
     assert _stamp_node_type(resolved_type, node) is node  # pyright: ignore[reportArgumentType]
     assert not hasattr(node, "_dsf_node_type_hint")
 
@@ -332,7 +332,7 @@ def test_stamp_node_type_returns_a_model_instance_that_rejects_copying():
 
 
 @pytest.mark.django_db
-def test_node_custom_node_id_attr_resolves():
+def test_node_custom_node_id_attr_resolves() -> None:
     """A consumer ``id: relay.NodeID[str]`` over a non-pk column resolves correctly.
 
     Coercion must key on ``resolve_id_attr()`` (here ``name``), not
@@ -371,7 +371,7 @@ def test_node_custom_node_id_attr_resolves():
 
 
 @pytest.mark.django_db
-def test_node_custom_node_id_attr_uncoercible_returns_null():
+def test_node_custom_node_id_attr_uncoercible_returns_null() -> None:
     """An uncoercible literal for a TYPED custom NodeID column returns null (no ORM leak).
 
     ``created_date`` is a ``DateTimeField``; an id its ``to_python`` rejects
@@ -405,7 +405,7 @@ def test_node_custom_node_id_attr_uncoercible_returns_null():
 
 
 @pytest.mark.django_db
-def test_decode_model_global_id_resolves_custom_node_id_to_real_pk():
+def test_decode_model_global_id_resolves_custom_node_id_to_real_pk() -> None:
     """Write-side decode maps a custom NodeID value to the REAL pk, not the attr value.
 
     ``decode_model_global_id`` feeds every WRITE consumer (update/delete
@@ -439,7 +439,7 @@ def test_decode_model_global_id_resolves_custom_node_id_to_real_pk():
 
 
 @pytest.mark.django_db
-def test_decode_model_global_id_custom_node_id_no_row_is_uncoercible():
+def test_decode_model_global_id_custom_node_id_no_row_is_uncoercible() -> None:
     """A custom NodeID value matching no row decodes as UNCOERCIBLE_PK, never a phantom pk.
 
     A ``name`` that exists on no row resolves to ``None`` in ``_resolve_real_pk``,
@@ -466,7 +466,7 @@ def test_decode_model_global_id_custom_node_id_no_row_is_uncoercible():
 
 
 @pytest.mark.django_db
-def test_decode_model_global_id_passes_raw_value_for_non_field_node_id():
+def test_decode_model_global_id_passes_raw_value_for_non_field_node_id() -> None:
     """A NodeID over a non-concrete attr has no column to resolve, so the value passes through.
 
     ``_resolve_real_pk`` mirrors ``_coerce_pk_or_none``'s ``FieldDoesNotExist``
@@ -493,7 +493,7 @@ def test_decode_model_global_id_passes_raw_value_for_non_field_node_id():
     assert result.pk == "abc-123"
 
 
-def test_coerce_pk_or_none_passes_raw_string_for_non_field_node_id():
+def test_coerce_pk_or_none_passes_raw_string_for_non_field_node_id() -> None:
     """A NodeID over a non-model-field attr skips coercion and passes the raw string.
 
     ``_coerce_pk_or_none`` keys on ``resolve_id_attr()``; when that names no
@@ -521,7 +521,7 @@ def test_coerce_pk_or_none_passes_raw_string_for_non_field_node_id():
 
 
 @pytest.mark.django_db
-def test_consumer_overrides_receive_the_decoded_node_id_string():
+def test_consumer_overrides_receive_the_decoded_node_id_string() -> None:
     """Both root fields hand a consumer override the ``node_id`` string, as Strawberry does.
 
     Strawberry's ``Node.resolve_node(node_id: str)`` / ``resolve_nodes(node_ids:
@@ -547,11 +547,10 @@ def test_consumer_overrides_receive_the_decoded_node_id_string():
             cls,
             node_id: str,
             *,
-            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
-            info: strawberry.Info,  # pyright: ignore[reportUnusedParameter]
-            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
-            required: bool = False,  # pyright: ignore[reportUnusedParameter]
-        ):
+            info: strawberry.Info,
+            required: bool = False,
+        ) -> Category | None:
+            del info, required  # Strawberry's relay passes these by keyword
             received.append(node_id)
             return None if node_id.startswith("legacy-") else row
 
@@ -559,12 +558,11 @@ def test_consumer_overrides_receive_the_decoded_node_id_string():
         def resolve_nodes(
             cls,
             *,
-            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
-            info: strawberry.Info,  # pyright: ignore[reportUnusedParameter]
+            info: strawberry.Info,
             node_ids: Iterable[str],
-            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
-            required: bool = False,  # pyright: ignore[reportUnusedParameter]
-        ):
+            required: bool = False,
+        ) -> list[Category | None]:
+            del info, required  # Strawberry's relay passes these by keyword
             node_ids = list(node_ids)
             received.append(node_ids)
             return [row for _ in node_ids]
@@ -588,7 +586,7 @@ def test_consumer_overrides_receive_the_decoded_node_id_string():
 
 
 @pytest.mark.django_db
-def test_default_resolvers_find_a_row_whose_id_literal_spells_its_pk_differently():
+def test_default_resolvers_find_a_row_whose_id_literal_spells_its_pk_differently() -> None:
     """The defaults coerce the ``node_id`` string themselves, so ``"07"`` finds pk ``7``.
 
     The batch default reorders rows by the coerced key; keying on the raw string
@@ -623,7 +621,7 @@ def test_default_resolvers_find_a_row_whose_id_literal_spells_its_pk_differently
     assert result.data == {"node": {"name": row.name}, "nodes": [{"name": row.name}]}
 
 
-def _strawberry_node_schema():
+def _strawberry_node_schema() -> strawberry.Schema:
     """A schema whose root fields are Strawberry's own ``relay.node()`` over the defaults."""
 
     class CategoryNode(DjangoType):
@@ -651,7 +649,7 @@ _STRAWBERRY_NODE_QUERY = (
 
 
 @pytest.mark.django_db
-def test_default_resolvers_read_an_uncoercible_id_as_no_row_under_strawberrys_node_field():
+def test_default_resolvers_read_an_uncoercible_id_as_no_row_under_strawberrys_node_field() -> None:
     """``library.genre:abc``-shaped ids reach the defaults raw through ``relay.node()``.
 
     Strawberry's own field has no id-slot gate, so the default resolvers own the
@@ -683,7 +681,7 @@ def test_default_resolvers_read_an_uncoercible_id_as_no_row_under_strawberrys_no
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_default_resolvers_read_an_uncoercible_id_as_no_row():
+async def test_async_default_resolvers_read_an_uncoercible_id_as_no_row() -> None:
     """The async defaults take the same no-row reading of an uncoercible id."""
     await sync_to_async(services.seed_data)(1)
     schema = _strawberry_node_schema()
@@ -706,7 +704,7 @@ async def test_async_default_resolvers_read_an_uncoercible_id_as_no_row():
 
 
 @pytest.mark.parametrize("factory", [DjangoNodeField, DjangoNodesField])
-def test_node_field_target_guards(factory: Callable[..., object]):
+def test_node_field_target_guards(factory: Callable[..., object]) -> None:
     """The typed form runs the four shared guards plus the Relay-Node-shaped fifth."""
     with pytest.raises(
         ConfigurationError,
@@ -746,7 +744,7 @@ def test_node_field_target_guards(factory: Callable[..., object]):
 def test_node_field_rejects_bare_string_directives(
     factory: Callable[..., object],
     bare: str | bytes,
-):
+) -> None:
     """A bare str / bytes ``directives`` is rejected at the construction line.
 
     Both root Relay factories forwarded ``directives`` to ``strawberry.field()``
@@ -764,7 +762,7 @@ def test_node_field_rejects_bare_string_directives(
 
 
 @pytest.mark.parametrize("factory", [DjangoNodeField, DjangoNodesField])
-def test_node_field_rejects_hostile_directives_iterator(factory: Callable[..., object]):
+def test_node_field_rejects_hostile_directives_iterator(factory: Callable[..., object]) -> None:
     """A hostile iterator escaped raw pre-fix; a non-iterable detonated as TypeError.
 
     The rejection also runs BEFORE the ``_node_fields_declared`` ledger append,
@@ -773,7 +771,7 @@ def test_node_field_rejects_hostile_directives_iterator(factory: Callable[..., o
     """
 
     class HostileDirectives:
-        def __iter__(self):
+        def __iter__(self) -> Iterator[object]:
             raise RuntimeError("hostile iterator detonated")
 
     with pytest.raises(
@@ -794,7 +792,9 @@ def test_node_field_rejects_hostile_directives_iterator(factory: Callable[..., o
 
 
 @pytest.mark.parametrize("factory", [DjangoNodeField, DjangoNodesField])
-def test_node_field_passes_real_directive_instances_through(factory: Callable[..., object]):
+def test_node_field_passes_real_directive_instances_through(
+    factory: Callable[..., object],
+) -> None:
     """Positive control: a genuine directive instance still constructs and declares."""
 
     @schema_directive(locations=[DirectiveLocation.FIELD_DEFINITION], name="probeTag")
@@ -805,7 +805,7 @@ def test_node_field_passes_real_directive_instances_through(factory: Callable[..
     assert _node_fields_declared == [factory.__name__]
 
 
-def test_node_field_without_node_types_raises_at_finalize():
+def test_node_field_without_node_types_raises_at_finalize() -> None:
     """The ledger check fires with the documented message; ``registry.clear()`` resets it."""
 
     class PlainCategoryType(DjangoType):
@@ -836,7 +836,7 @@ def test_node_field_without_node_types_raises_at_finalize():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_nodes_async_with_sync_consumer_resolve_nodes_override():
+async def test_nodes_async_with_sync_consumer_resolve_nodes_override() -> None:
     """A SYNCHRONOUS consumer ``resolve_nodes`` override works under async execution.
 
     The batch gatherer must treat ``resolve_nodes`` as AwaitableOrValue: the
@@ -858,14 +858,13 @@ async def test_nodes_async_with_sync_consumer_resolve_nodes_override():
         def resolve_nodes(
             cls,
             *,
-            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
-            info: strawberry.Info,  # pyright: ignore[reportUnusedParameter]
+            info: strawberry.Info,
             node_ids: Iterable[str],
-            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
-            required: bool = False,  # pyright: ignore[reportUnusedParameter]
-        ):
+            required: bool = False,
+        ) -> list[Category | None]:
             # Synchronous list return (no coroutine); closes over pre-fetched
             # rows so it issues no ORM query inside the event loop.
+            del info, required  # Strawberry's relay passes these by keyword
             return [rows.get(str(node_id)) for node_id in node_ids]
 
     schema = _schema_with(
@@ -886,7 +885,7 @@ async def test_nodes_async_with_sync_consumer_resolve_nodes_override():
 
 
 @pytest.mark.django_db
-def test_node_sync_with_async_consumer_resolve_node_raises_sync_misuse():
+def test_node_sync_with_async_consumer_resolve_node_raises_sync_misuse() -> None:
     """Sync node refetch rejects an async consumer ``resolve_node`` explicitly."""
     services.seed_data(1)
 
@@ -904,7 +903,7 @@ def test_node_sync_with_async_consumer_resolve_node_raises_sync_misuse():
             *,
             info: strawberry.Info,
             required: bool = False,
-        ):
+        ) -> None:
             del cls, node_id, info, required
 
     schema = _schema_with(
@@ -925,7 +924,7 @@ def test_node_sync_with_async_consumer_resolve_node_raises_sync_misuse():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_node_sync_operation_inside_an_event_loop_never_calls_async_resolve_node():
+async def test_node_sync_operation_inside_an_event_loop_never_calls_async_resolve_node() -> None:
     """``execute_sync`` under a running loop refuses before the override is called.
 
     Masking is off because the subject is the typed error itself.
@@ -977,7 +976,7 @@ async def test_node_sync_operation_inside_an_event_loop_never_calls_async_resolv
 
 
 @pytest.mark.django_db
-def test_nodes_sync_with_async_consumer_resolve_nodes_raises_sync_misuse():
+def test_nodes_sync_with_async_consumer_resolve_nodes_raises_sync_misuse() -> None:
     """Sync batch refetch rejects an async consumer ``resolve_nodes`` explicitly."""
     services.seed_data(1)
 
@@ -995,7 +994,7 @@ def test_nodes_sync_with_async_consumer_resolve_nodes_raises_sync_misuse():
             info: strawberry.Info,
             node_ids: Iterable[str],
             required: bool = False,
-        ):
+        ) -> list[None]:
             del cls, info, required
             return [None for _ in node_ids]
 
@@ -1017,7 +1016,7 @@ def test_nodes_sync_with_async_consumer_resolve_nodes_raises_sync_misuse():
 
 
 @pytest.mark.django_db
-def test_nodes_consumer_resolve_nodes_wrong_length_raises():
+def test_nodes_consumer_resolve_nodes_wrong_length_raises() -> None:
     """A consumer ``resolve_nodes`` override returning a wrong-length list fails loudly.
 
     ``_interleave`` indexes by within-group position, so a shrunk /
@@ -1038,13 +1037,11 @@ def test_nodes_consumer_resolve_nodes_wrong_length_raises():
         def resolve_nodes(
             cls,
             *,
-            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
-            info: strawberry.Info,  # pyright: ignore[reportUnusedParameter]
-            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
-            node_ids: Iterable[str],  # pyright: ignore[reportUnusedParameter]
-            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
-            required: bool = False,  # pyright: ignore[reportUnusedParameter]
+            info: strawberry.Info,
+            node_ids: Iterable[str],
+            required: bool = False,
         ) -> list[Self]:
+            del info, node_ids, required  # Strawberry's relay passes these by keyword
             return []  # wrong length: 0 rows for the requested ids.
 
     schema = _schema_with(
@@ -1066,7 +1063,7 @@ def test_nodes_consumer_resolve_nodes_wrong_length_raises():
 
 
 @pytest.mark.django_db
-def test_nodes_consumer_resolve_nodes_generator_return_accepted():
+def test_nodes_consumer_resolve_nodes_generator_return_accepted() -> None:
     """A consumer ``resolve_nodes`` override may return a generator.
 
     ``_check_nodes_result`` materializes a no-``__len__`` return before the
@@ -1087,12 +1084,11 @@ def test_nodes_consumer_resolve_nodes_generator_return_accepted():
         def resolve_nodes(
             cls,
             *,
-            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
-            info: strawberry.Info,  # pyright: ignore[reportUnusedParameter]
+            info: strawberry.Info,
             node_ids: Iterable[str],
-            # basedpyright: Strawberry's relay passes the resolve_node(s) arguments by keyword
-            required: bool = False,  # pyright: ignore[reportUnusedParameter]
-        ):
+            required: bool = False,
+        ) -> Iterator[Category | None]:
+            del info, required  # Strawberry's relay passes these by keyword
             rows = {str(obj.pk): obj for obj in Category.objects.filter(pk__in=node_ids)}
             return (rows.get(str(node_id)) for node_id in node_ids)
 
@@ -1114,7 +1110,7 @@ def test_nodes_consumer_resolve_nodes_generator_return_accepted():
 
 
 @pytest.mark.django_db
-def test_node_sync_async_get_queryset_raises_sync_misuse():
+def test_node_sync_async_get_queryset_raises_sync_misuse() -> None:
     """An async ``get_queryset`` under sync execution surfaces SyncMisuseError, NOT GLOBALID_INVALID.
 
     Discriminating (spec-032 Decision 5): ``SyncMisuseError`` IS-A
@@ -1134,7 +1130,12 @@ def test_node_sync_async_get_queryset_raises_sync_misuse():
         @classmethod
         @override
         # basedpyright: deliberately async on the sync path: the coroutine is the input the guard refuses
-        async def get_queryset(cls, queryset: QuerySet[Category], info: object, **kwargs: object):  # pyright: ignore[reportIncompatibleMethodOverride]
+        async def get_queryset(  # pyright: ignore[reportIncompatibleMethodOverride]
+            cls,
+            queryset: QuerySet[Category],
+            info: object,
+            **kwargs: object,
+        ) -> QuerySet[Category]:
             return queryset
 
     schema = _schema_with(
@@ -1159,7 +1160,7 @@ def test_node_sync_async_get_queryset_raises_sync_misuse():
 # ---------------------------------------------------------------------------
 
 
-def test_public_exports():
+def test_public_exports() -> None:
     """``DjangoNodeField`` / ``DjangoNodesField`` are importable package-root exports."""
     assert django_strawberry_framework.DjangoNodeField is DjangoNodeField
     assert django_strawberry_framework.DjangoNodesField is DjangoNodesField

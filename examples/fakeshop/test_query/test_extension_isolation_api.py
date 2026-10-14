@@ -30,9 +30,10 @@ has.
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine, Iterator
 from functools import partial
 from types import MethodType, SimpleNamespace
+from typing import TYPE_CHECKING, NoReturn
 
 import pytest
 import strawberry
@@ -44,6 +45,7 @@ from django.test import AsyncClient, Client
 from django.urls import include, path
 from django.views.decorators.csrf import csrf_exempt
 from graphql import GraphQLError
+from graphql_client import JSONObject
 from strawberry.extensions.base_extension import SchemaExtension
 from typing_extensions import override
 
@@ -71,13 +73,16 @@ from django_strawberry_framework.schema import SCHEMA_CONFIGURATION_ERROR_CODE
 from django_strawberry_framework.testing import TestClient
 from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
 
+if TYPE_CHECKING:
+    from django.test.client import _MonkeyPatchedWSGIResponse
+
 
 async def _post_async(
     client: AsyncClient,
     document: str,
     mount: str = "/iso-survivor/",
     **body: str,
-):
+) -> JSONObject:
     """Post one document to an async mount and return the decoded payload."""
     response = await client.post(
         mount,
@@ -88,7 +93,12 @@ async def _post_async(
     return json.loads(response.content)
 
 
-def _post_sync(client: Client, document: str, mount: str, **body: str):
+def _post_sync(
+    client: Client,
+    document: str,
+    mount: str,
+    **body: str,
+) -> "tuple[_MonkeyPatchedWSGIResponse, bytes]":
     """Post one document to a sync mount and return ``(response, decoded payload)``."""
     response = client.post(
         mount,
@@ -114,7 +124,7 @@ class _ClaimsAnExtension:
     @property
     @override
     # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def __class__(self) -> type[_ConsumerExtension]:  # pyright: ignore[reportIncompatibleMethodOverride]
         """Claim the ordinary consumer extension, which ``isinstance`` would believe."""
         return _ConsumerExtension
 
@@ -125,7 +135,7 @@ class _ClaimsAnAuthority:
     @property
     @override
     # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def __class__(self) -> type[DjangoErrorPolicyExtension]:  # pyright: ignore[reportIncompatibleMethodOverride]
         """Claim the masking extension, which ``isinstance`` would believe."""
         return DjangoErrorPolicyExtension
 
@@ -144,7 +154,7 @@ class _HybridAuthority(  # pyright: ignore[reportUnsafeMultipleInheritance]
     """One class answering to both authorities, of which it can dispatch one."""
 
 
-def _raise_sentinel():
+def _raise_sentinel() -> NoReturn:
     """A factory whose own exception text must not reach the wire."""
     raise RuntimeError(SENTINEL)
 
@@ -172,10 +182,10 @@ class _MutableConsumerFactory:
     the ceiling for every later request would be a resolver's to choose.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.widened = False
 
-    def __call__(self):
+    def __call__(self) -> _ConsumerExtension:
         return _ConsumerExtension()
 
 
@@ -189,7 +199,7 @@ class _NarrowResourceFactory:
 
     __slots__ = ()
 
-    def __call__(self):
+    def __call__(self) -> DjangoResourcePolicyExtension:
         return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_aliases=1))
 
 
@@ -198,7 +208,7 @@ class _AcceptedConsumerFactory:
 
     __slots__ = ()
 
-    def __call__(self):
+    def __call__(self) -> _ConsumerExtension:
         return _ConsumerExtension()
 
 
@@ -207,7 +217,7 @@ class _ReplacementConsumerFactory:
 
     __slots__ = ()
 
-    def __call__(self):
+    def __call__(self) -> _ConsumerExtension:
         return _ConsumerExtension()
 
 
@@ -232,7 +242,7 @@ TAMPERS: dict[str, Callable[[MethodType, _ReplacementConsumerFactory], None]] = 
         "__self__",
         replacement,
     ),
-    "delete-the-binding": lambda box, replacement: delattr(box, "__self__"),
+    "delete-the-binding": lambda box, _replacement: delattr(box, "__self__"),
     "rebuild-the-box": _rebuild_the_box,
 }
 
@@ -322,7 +332,7 @@ class _Nester(SchemaExtension):
         self.published: list[dict[str, object]] = []
 
     @override
-    def on_operation(self):
+    def on_operation(self) -> Iterator[None]:
         """Run the inner operation once the outer operation's hooks are done."""
         yield
         if self.ran:
@@ -355,7 +365,7 @@ def _published(context: object) -> dict[str, object]:
     return {key: get_context_value(context, key) for key in DST_OPTIMIZER_KEYS}
 
 
-def _resource_schema():
+def _resource_schema() -> DjangoSchema:
     """The schema mounted behind the resource mounts, built once per process."""
     return DjangoSchema(
         query=_ResourceQuery,
@@ -364,7 +374,7 @@ def _resource_schema():
     )
 
 
-def _error_schema():
+def _error_schema() -> DjangoSchema:
     """The schema mounted behind the error mounts, built once per process."""
     return DjangoSchema(
         query=_ErrorQuery,
@@ -387,17 +397,17 @@ def _held(name: str, build: Callable[[], DjangoSchema]) -> object:
     return _HELD[name]
 
 
-def _view(name: str, build: Callable[[], DjangoSchema]):
+def _view(name: str, build: Callable[[], DjangoSchema]) -> Callable[..., HttpResponseBase]:
     """Mount the package's synchronous view over one held schema."""
 
-    def view(request: HttpRequest, *args: object, **kwargs: object):
+    def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = DjangoGraphQLView.as_view(schema=_held(name, build))
         return built(request, *args, **kwargs)
 
     return csrf_exempt(view)
 
 
-def _fresh_view(build: Callable[[], DjangoSchema]):
+def _fresh_view(build: Callable[[], DjangoSchema]) -> Callable[..., HttpResponseBase]:
     """Mount the package's synchronous view over a schema built per request.
 
     The optimizer row needs the project's own generated types, which the
@@ -405,14 +415,14 @@ def _fresh_view(build: Callable[[], DjangoSchema]):
     requests is the module-level optimizer, which is the shipped spelling.
     """
 
-    def view(request: HttpRequest, *args: object, **kwargs: object):
+    def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = DjangoGraphQLView.as_view(schema=build())
         return built(request, *args, **kwargs)
 
     return csrf_exempt(view)
 
 
-def _nesting_schema():
+def _nesting_schema() -> DjangoSchema:
     """The shipped optimizer spelling, with a consumer extension beside it."""
     from apps.products.schema import Query as ProductsQuery
 
@@ -463,7 +473,7 @@ class _SurvivorReport:
     plan_published: bool
 
 
-def _ambiguous_schema():
+def _ambiguous_schema() -> DjangoSchema:
     """An opaque factory resolving to an enforcement authority the schema owns.
 
     Bounded narrowly on purpose: the refusal chain keeps the package's own
@@ -482,7 +492,7 @@ def _ladder_schema(factory: Callable[[], object]) -> DjangoSchema:
     return DjangoSchema(query=_ResourceQuery, extensions=[factory])
 
 
-def _survivor_schema():
+def _survivor_schema() -> DjangoSchema:
     """The async mount: the project's own types, bounded, with the shipped optimizer."""
     from apps.products.schema import Query as ProductsQuery
 
@@ -534,20 +544,25 @@ def _survivor_schema():
     )
 
 
-def _async_view(build: Callable[[], DjangoSchema]):
+def _async_view(
+    build: Callable[[], DjangoSchema],
+) -> Callable[..., Coroutine[object, object, HttpResponseBase]]:
     """Mount the package's asynchronous view over a schema built per request."""
 
-    async def view(request: HttpRequest, *args: object, **kwargs: object):
+    async def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = AsyncDjangoGraphQLView.as_view(schema=build())
         return await built(request, *args, **kwargs)
 
     return csrf_exempt(view)
 
 
-def _held_async_view(name: str, build: Callable[[], DjangoSchema]):
+def _held_async_view(
+    name: str,
+    build: Callable[[], DjangoSchema],
+) -> Callable[..., Coroutine[object, object, HttpResponseBase]]:
     """Mount the asynchronous view over one held schema."""
 
-    async def view(request: HttpRequest, *args: object, **kwargs: object):
+    async def view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         built = AsyncDjangoGraphQLView.as_view(schema=_held(name, build))
         return await built(request, *args, **kwargs)
 
@@ -588,7 +603,9 @@ TAMPER_OUTCOMES = {
 
 
 @pytest.mark.parametrize("tamper", sorted(TAMPER_OUTCOMES), ids=sorted(TAMPER_OUTCOMES))
-def test_a_resolver_cannot_widen_the_next_requests_bound_through_the_accepted_entry(tamper: str):
+def test_a_resolver_cannot_widen_the_next_requests_bound_through_the_accepted_entry(
+    tamper: str,
+) -> None:
     """The bound the SCHEMA was configured with is the bound the next request is held to.
 
     The resolver does everything a resolver can do to the configuration it can
@@ -614,7 +631,7 @@ def test_a_resolver_cannot_widen_the_next_requests_bound_through_the_accepted_en
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_resolver_cannot_widen_the_next_requests_bound_on_the_async_view():
+async def test_a_resolver_cannot_widen_the_next_requests_bound_on_the_async_view() -> None:
     """The same claim over the asynchronous view, which is a different request path."""
     client = AsyncClient()
 
@@ -631,7 +648,9 @@ async def test_a_resolver_cannot_widen_the_next_requests_bound_on_the_async_view
 
 
 @pytest.mark.parametrize("tamper", sorted(TAMPER_OUTCOMES), ids=sorted(TAMPER_OUTCOMES))
-def test_a_resolver_cannot_unmask_the_next_requests_errors_through_the_accepted_entry(tamper: str):
+def test_a_resolver_cannot_unmask_the_next_requests_errors_through_the_accepted_entry(
+    tamper: str,
+) -> None:
     """Masking is the amplifier: an unmasked response carries whatever was raised.
 
     The masking extension is built per operation from the schema's own error
@@ -653,7 +672,7 @@ def test_a_resolver_cannot_unmask_the_next_requests_errors_through_the_accepted_
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_resolver_cannot_unmask_the_next_requests_errors_on_the_async_view():
+async def test_a_resolver_cannot_unmask_the_next_requests_errors_on_the_async_view() -> None:
     """The same claim over the asynchronous view."""
     client = AsyncClient()
 
@@ -670,7 +689,7 @@ async def test_a_resolver_cannot_unmask_the_next_requests_errors_on_the_async_vi
 
 
 @pytest.mark.django_db
-def test_an_operation_a_consumer_extension_starts_leaves_the_request_its_optimizer_plan():
+def test_an_operation_a_consumer_extension_starts_leaves_the_request_its_optimizer_plan() -> None:
     """The shipped singleton, through the project's own types, over a real request.
 
     The optimizer publishes its plan, elisions and lookup paths on the request's
@@ -702,7 +721,7 @@ def test_an_operation_a_consumer_extension_starts_leaves_the_request_its_optimiz
     ["{ hello }", "{ a: hello }", "{"],
     ids=["valid", "aliased", "malformed"],
 )
-def test_a_schema_whose_factory_claims_an_authority_refuses_every_request(document: str):
+def test_a_schema_whose_factory_claims_an_authority_refuses_every_request(document: str) -> None:
     """A factory cannot be an enforcement authority, and the wire says so identically.
 
     The factory is opaque until it runs, so what it produces is typed at
@@ -728,7 +747,7 @@ def test_a_schema_whose_factory_claims_an_authority_refuses_every_request(docume
 def test_a_factory_resolving_to_anything_but_an_ordinary_extension_refuses_every_request(
     shape: str,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """What a factory returns is typed by its real type, and every miss is one refusal.
 
     Upstream assigns ``execution_context`` on whatever came back, outside every
@@ -758,7 +777,7 @@ def test_a_factory_resolving_to_anything_but_an_ordinary_extension_refuses_every
     ["{ a: hello b: hello c: hello }", "{ nested { hello } }"],
     ids=["over-token-budget", "over-depth-budget"],
 )
-def test_a_refused_schema_still_bounds_the_document_it_refuses(document: str):
+def test_a_refused_schema_still_bounds_the_document_it_refuses(document: str) -> None:
     """A broken configuration is not the one shape with no parsing ceiling.
 
     The refusal chain keeps the package's own resource extension, reading the
@@ -790,7 +809,7 @@ _REFUSED_OPERATION_NAMES = {
 _REFUSED_NAME_IDS = sorted(_REFUSED_OPERATION_NAMES)
 
 
-def _assert_refused_envelope(response: HttpResponseBase, body: bytes):
+def _assert_refused_envelope(response: HttpResponseBase, body: bytes) -> JSONObject:
     """One JSON envelope carrying the configuration code, and nothing about the request."""
     assert response.status_code == 200, body
     assert response.headers["Content-Type"].startswith("application/json"), response.headers
@@ -803,7 +822,7 @@ def _assert_refused_envelope(response: HttpResponseBase, body: bytes):
 
 
 @pytest.mark.parametrize("name", _REFUSED_NAME_IDS, ids=_REFUSED_NAME_IDS)
-def test_a_refused_schema_answers_every_operation_name_the_same_way(name: str):
+def test_a_refused_schema_answers_every_operation_name_the_same_way(name: str) -> None:
     """A name no document can carry is refused like every other request.
 
     Upstream selects the operation to run by looking the requested name up in
@@ -823,7 +842,7 @@ def test_a_refused_schema_answers_every_operation_name_the_same_way(name: str):
 
 
 @pytest.mark.parametrize("name", _REFUSED_NAME_IDS, ids=_REFUSED_NAME_IDS)
-def test_a_refused_schema_still_bounds_a_document_sent_under_any_operation_name(name: str):
+def test_a_refused_schema_still_bounds_a_document_sent_under_any_operation_name(name: str) -> None:
     """The ceiling is charged before the name is looked at, and still outranks the refusal.
 
     Normalizing the selector must not move the pre-parse scan: an oversized
@@ -846,7 +865,7 @@ def test_a_refused_schema_still_bounds_a_document_sent_under_any_operation_name(
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("name", _REFUSED_NAME_IDS, ids=_REFUSED_NAME_IDS)
-async def test_a_refused_schema_answers_every_operation_name_asynchronously_too(name: str):
+async def test_a_refused_schema_answers_every_operation_name_asynchronously_too(name: str) -> None:
     """The asynchronous view answers hostile request metadata identically.
 
     Sync and async are separate code paths through the same schema, and the
@@ -869,7 +888,7 @@ async def test_a_refused_schema_answers_every_operation_name_asynchronously_too(
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_refused_schema_answers_the_async_view_the_same_way():
+async def test_a_refused_schema_answers_the_async_view_the_same_way() -> None:
     """The refusal and its ceiling are the same over the asynchronous view."""
     client = AsyncClient()
 
@@ -886,7 +905,7 @@ async def test_a_refused_schema_answers_the_async_view_the_same_way():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_worker_that_outlived_a_request_is_bounded_and_published_for_itself():
+async def test_a_worker_that_outlived_a_request_is_bounded_and_published_for_itself() -> None:
     """The work a background job does is not the request that happened to start it.
 
     A resolver's task keeps a copy of the context its request ran in, and no

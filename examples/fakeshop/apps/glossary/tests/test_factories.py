@@ -6,7 +6,7 @@ from apps.glossary import factories, models
 
 
 @pytest.mark.django_db
-def test_lookup_factory_reuses_canonical_row():
+def test_lookup_factory_reuses_canonical_row() -> None:
     first = factories.make_glossary_status()
     second = factories.make_glossary_status()
     assert first.pk == second.pk
@@ -14,7 +14,7 @@ def test_lookup_factory_reuses_canonical_row():
 
 
 @pytest.mark.django_db
-def test_make_glossary_term_unique_identity_fields():
+def test_make_glossary_term_unique_identity_fields() -> None:
     one = factories.make_glossary_term()
     two = factories.make_glossary_term()
     assert one.pk is not None
@@ -25,14 +25,14 @@ def test_make_glossary_term_unique_identity_fields():
 
 
 @pytest.mark.django_db
-def test_make_glossary_term_accepts_overrides():
+def test_make_glossary_term_accepts_overrides() -> None:
     term = factories.make_glossary_term(title="`FilterSet`", anchor="filterset")
     assert term.title == "`FilterSet`"
     assert term.anchor == "filterset"
 
 
 @pytest.mark.django_db
-def test_make_alias_and_source_link_attach_to_term():
+def test_make_alias_and_source_link_attach_to_term() -> None:
     term = factories.make_glossary_term()
     alias = factories.make_glossary_alias(term=term)
     assert alias.term_id == term.pk
@@ -43,7 +43,7 @@ def test_make_alias_and_source_link_attach_to_term():
 
 
 @pytest.mark.django_db
-def test_make_term_link_orders_within_source_and_kind():
+def test_make_term_link_orders_within_source_and_kind() -> None:
     source = factories.make_glossary_term()
     kind = factories.make_glossary_term_link_kind()
     first = factories.make_glossary_term_link(source_term=source, kind=kind)
@@ -53,7 +53,7 @@ def test_make_term_link_orders_within_source_and_kind():
 
 
 @pytest.mark.django_db
-def test_make_category_membership_and_spec_mention():
+def test_make_category_membership_and_spec_mention() -> None:
     membership = factories.make_glossary_category_membership()
     assert membership.category_id is not None
     assert membership.term_id is not None

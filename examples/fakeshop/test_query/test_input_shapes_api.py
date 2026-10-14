@@ -59,14 +59,14 @@ def _list_of_non_null(name: str) -> dict[str, object]:
     }
 
 
-def test_forward_key_to_a_relay_primary_is_a_required_global_id():
+def test_forward_key_to_a_relay_primary_is_a_required_global_id() -> None:
     """``ItemInput.categoryId`` is ``ID!``: ``CategoryType`` is a Relay node."""
     fields = _input_fields("ItemInput")
 
     assert fields["categoryId"] == _non_null(_scalar("ID")), fields
 
 
-def test_forward_key_to_a_plain_primary_is_the_raw_pk_scalar():
+def test_forward_key_to_a_plain_primary_is_the_raw_pk_scalar() -> None:
     """``BookInput.shelfId`` is ``Int!``: ``ShelfType`` is not a Relay node.
 
     ``shelf`` is a required key, so the raw pk scalar is non-null; the
@@ -78,7 +78,7 @@ def test_forward_key_to_a_plain_primary_is_the_raw_pk_scalar():
     assert "shelf" not in fields, fields
 
 
-def test_many_to_many_to_a_relay_primary_is_an_optional_global_id_list():
+def test_many_to_many_to_a_relay_primary_is_an_optional_global_id_list() -> None:
     """``BookInput.genres`` is ``[ID!]``: ``GenreType`` is a Relay node through ``Meta.interfaces``.
 
     The outer list is nullable: a many-to-many is optional on create whatever
@@ -89,7 +89,7 @@ def test_many_to_many_to_a_relay_primary_is_an_optional_global_id_list():
     assert fields["genres"] == _list_of_non_null("ID"), fields
 
 
-def test_many_to_many_to_a_plain_primary_is_an_optional_raw_pk_list():
+def test_many_to_many_to_a_plain_primary_is_an_optional_raw_pk_list() -> None:
     """``createShelf``'s ``altBranches`` is ``[Int!]``: ``BranchType`` is not a Relay node."""
     fields = _input_fields(_mutation_data_input_name("createShelf"))
 
@@ -126,7 +126,7 @@ _FIELD_ERRORS = _non_null(
 )
 
 
-def test_payload_of_a_relay_primary_carries_a_nullable_node_slot():
+def test_payload_of_a_relay_primary_carries_a_nullable_node_slot() -> None:
     """``CreateBookViaCustomInputPayload`` exposes a nullable ``node`` and no ``result``.
 
     ``BookType`` is a Relay node, so ``payload_object_slot`` names the object
@@ -139,7 +139,7 @@ def test_payload_of_a_relay_primary_carries_a_nullable_node_slot():
     assert "result" not in fields, fields
 
 
-def test_payload_of_a_plain_primary_carries_a_nullable_result_slot():
+def test_payload_of_a_plain_primary_carries_a_nullable_result_slot() -> None:
     """``createShelf``'s payload exposes a nullable ``result`` and no ``node``.
 
     ``ShelfType`` is not a Relay node, so the object slot is the uniform

@@ -78,15 +78,16 @@ from apps.library import models
 from django.conf import settings
 from django.db import connections
 from django.db.models import Model, QuerySet
-from django.http import HttpRequest
+from django.http import HttpRequest, HttpResponseBase
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches, path
 from graphql_client import (
-    assert_graphql_success as _graphql_data,
+    JSONObject,
+    graphql_payload,
 )
 from graphql_client import (
-    graphql_payload,
+    assert_graphql_success as _graphql_data,
 )
 from strategy_schemas import make_django_type
 from strawberry import relay
@@ -135,7 +136,7 @@ mutation($id: ID!, $d: AliasValidatedBookSerializerPartialInput!) {
 _current: dict[str, object | None] = {"schema": None}
 
 
-def _graphql_view(request: HttpRequest):
+def _graphql_view(request: HttpRequest) -> HttpResponseBase:
     """Closure-bound view that reads ``_current['schema']`` per request."""
     schema = _current["schema"]
     assert schema is not None, "_build_test_schema fixture must run before any /graphql/ request"
@@ -185,7 +186,7 @@ def _build_list_field_routing_mismatch_schema(
 
 @pytest.mark.usefixtures("_build_list_field_routing_mismatch_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_post_orderset_routing_mismatch_rejected_on_sharded_db():
+def test_post_orderset_routing_mismatch_rejected_on_sharded_db() -> None:
     """Post-OrderSet validation rejects database routing intent mismatch on sharded DB."""
     models.Branch.objects.using("shard_b").create(name="Branch-ShardB", city="Boston")
     models.Branch.objects.using("default").create(name="Branch-Default", city="Boston")
@@ -257,7 +258,7 @@ def _build_connection_routing_mismatch_schema(
 
 @pytest.mark.usefixtures("_build_connection_routing_mismatch_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_post_orderset_routing_mismatch_rejected_on_connection_field():
+def test_post_orderset_routing_mismatch_rejected_on_connection_field() -> None:
     """The connection field runs the same post-OrderSet routing seal the list field runs.
 
     Without it the Relay window would be taken on the ``default`` rows the
@@ -318,7 +319,7 @@ def _build_list_field_hints_mismatch_schema(
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_malicious_hints_apply_sync))
 
-    def _hints_resolver(_root: object, _info: Info[object, object]):
+    def _hints_resolver(_root: object, _info: Info[object, object]) -> QuerySet[models.Branch]:
         qs = models.Branch.objects.all()
         monkeypatch.setattr(qs, "_hints", {"tenant": 1})
         return qs
@@ -340,7 +341,7 @@ def _build_list_field_hints_mismatch_schema(
 
 @pytest.mark.usefixtures("_build_list_field_hints_mismatch_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_post_orderset_hints_routing_mismatch_rejected_on_sharded_db():
+def test_post_orderset_hints_routing_mismatch_rejected_on_sharded_db() -> None:
     """Post-OrderSet validation rejects routing hints mismatch when _db is None on both sides."""
     models.Branch.objects.using("default").create(name="Branch-Default", city="Boston")
 
@@ -394,7 +395,10 @@ def _build_list_field_in_place_routing_mutation_schema(
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_in_place_apply_sync))
 
-    def _shard_b_tenant_resolver(_root: object, _info: Info[object, object]):
+    def _shard_b_tenant_resolver(
+        _root: object,
+        _info: Info[object, object],
+    ) -> QuerySet[models.Branch]:
         qs = models.Branch.objects.using("shard_b")
         monkeypatch.setattr(qs, "_hints", {"tenant": 1})
         return qs
@@ -417,7 +421,7 @@ def _branch_sql(captured: list[dict[str, str]]) -> list[str]:
 
 @pytest.mark.usefixtures("_build_list_field_in_place_routing_mutation_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_post_orderset_in_place_routing_mutation_rejected_on_sharded_db():
+def test_post_orderset_in_place_routing_mutation_rejected_on_sharded_db() -> None:
     """Routing is snapshotted BEFORE ``apply_sync`` runs, so an in-place rewrite cannot pass.
 
     The override receives the sealed ``shard_b`` queryset, points it at ``default``
@@ -513,7 +517,7 @@ def identity_token_swap(
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_token_swapping_apply_sync))
 
-    def _tenant_resolver(_root: object, _info: Info[object, object]):
+    def _tenant_resolver(_root: object, _info: Info[object, object]) -> QuerySet[models.Branch]:
         qs = models.Branch.objects.all()
         monkeypatch.setattr(qs, "_hints", {"tenant": _TENANT_TOKEN})
         return qs
@@ -530,7 +534,7 @@ def identity_token_swap(
 @pytest.mark.django_db(databases=["default", "shard_b"])
 def test_post_orderset_equal_but_distinct_hint_token_rejected_under_identity_router(
     identity_token_swap: dict[str, bool],
-):
+) -> None:
     """An equal-but-not-identical hint value is a routing change under a legal identity router.
 
     Control: with the token preserved, the identity-sensitive router reads the
@@ -645,7 +649,7 @@ def mutable_hint_token(
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_hint_mutating_apply_sync))
 
-    def _tenant_resolver(_root: object, _info: Info[object, object]):
+    def _tenant_resolver(_root: object, _info: Info[object, object]) -> QuerySet[models.Branch]:
         qs = models.Branch.objects.all()
         monkeypatch.setattr(qs, "_hints", {"tenant": token})
         return qs
@@ -662,7 +666,7 @@ def mutable_hint_token(
 @pytest.mark.django_db(databases=["default", "shard_b"])
 def test_post_orderset_mutable_hint_cannot_reroute_the_completed_read(
     mutable_hint_token: dict[str, str],
-):
+) -> None:
     """A hint mutated behind a preserved identity cannot move the read to another alias.
 
     The source is unrouted and carries a mutable tenant token the router reads
@@ -832,9 +836,10 @@ def _build_loan_filter_test_schema(
 def _seed_book_chain(alias: str, *, title: str) -> "models.Book":
     """Seed a full ``Branch -> Shelf -> Book`` chain on ``alias``.
 
-    ``Branch.name`` is ``unique=True`` (``examples/fakeshop/apps/library/models.py::Branch #"name = models.TextField(unique=True)"``), so the
-    branch / shelf field values are varied by ``title`` to keep two calls on
-    the same alias from colliding when a test seeds multiple chains.
+    ``Branch.name`` is ``unique=True``
+    (``examples/fakeshop/apps/library/models.py::Branch #"name = models.TextField(unique=True)"``),
+    so the branch / shelf field values are varied by ``title`` to keep two calls
+    on the same alias from colliding when a test seeds multiple chains.
     """
     branch = models.Branch.objects.using(alias).create(
         name=f"Branch-{alias}-{title}",
@@ -859,7 +864,7 @@ def _seed_book_chain(alias: str, *, title: str) -> "models.Book":
 
 @pytest.mark.usefixtures("_build_test_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_using_shard_b_resolver_returns_rows_seeded_on_shard_b():
+def test_using_shard_b_resolver_returns_rows_seeded_on_shard_b() -> None:
     """Seeded ``shard_b`` rows are visible through a ``.using('shard_b')`` resolver."""
     _seed_book_chain("shard_b", title="A")
     _seed_book_chain("shard_b", title="B")
@@ -887,7 +892,7 @@ def test_using_shard_b_resolver_returns_rows_seeded_on_shard_b():
 
 @pytest.mark.usefixtures("_build_test_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_cross_shard_isolation_default_rows_not_visible_via_shard_b_resolver():
+def test_cross_shard_isolation_default_rows_not_visible_via_shard_b_resolver() -> None:
     """A chain seeded on ``default`` is invisible to a ``.using('shard_b')`` resolver."""
     _seed_book_chain("default", title="default-only")
     _seed_book_chain("shard_b", title="shard-b-only")
@@ -909,7 +914,7 @@ def test_cross_shard_isolation_default_rows_not_visible_via_shard_b_resolver():
 
 @pytest.mark.usefixtures("_build_debug_test_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_debug_extension_captures_shard_b_alias_rows():
+def test_debug_extension_captures_shard_b_alias_rows() -> None:
     """The real multi-database capture proof (spec-044 Test plan scenario 16).
 
     A live query routed to ``shard_b`` through a debug-enabled probe schema
@@ -995,7 +1000,7 @@ def _seed_loan_relation_graph_on_shard_b() -> dict[str, int]:
 
 @pytest.mark.usefixtures("_build_loan_filter_test_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_row_preserving_relational_leaf_predicate_executes_on_shard_b_alias():
+def test_row_preserving_relational_leaf_predicate_executes_on_shard_b_alias() -> None:
     """The relational-leaf predicate runs on the ``shard_b`` alias.
 
     The production ``LoanFilter`` deep leaf ``book__loans__patron__email`` (spelled
@@ -1161,7 +1166,7 @@ def _item_gid(pk: int) -> str:
 
 @pytest.mark.usefixtures("_project_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"], transaction=True)
-def test_mutation_write_pins_locate_write_and_refetch_to_the_write_alias():
+def test_mutation_write_pins_locate_write_and_refetch_to_the_write_alias() -> None:
     """Under a divergent read/write router the WHOLE update pipeline rides ``shard_b``.
 
     The locate (visibility), the write, and the post-write re-fetch must all use
@@ -1201,7 +1206,7 @@ def test_mutation_write_pins_locate_write_and_refetch_to_the_write_alias():
 
 
 @pytest.mark.django_db(databases=["default", "shard_b"], transaction=True)
-def test_custom_nodeid_mutation_resolves_real_pk_on_write_alias():
+def test_custom_nodeid_mutation_resolves_real_pk_on_write_alias() -> None:
     """A custom NodeID mutation resolves its non-pk payload on ``shard_b``.
 
     ``CategoryNode.name`` is the Relay id, while the mutation locate still needs
@@ -1298,7 +1303,7 @@ def test_custom_nodeid_mutation_resolves_real_pk_on_write_alias():
 
 @pytest.mark.usefixtures("_project_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"], transaction=True)
-def test_mutation_validation_envelope_rolls_back_on_the_write_alias():
+def test_mutation_validation_envelope_rolls_back_on_the_write_alias() -> None:
     """A validation-envelope failure rolls back on ``shard_b`` (the pinned alias).
 
     Two shard_b items share a category; renaming one to the other's name trips
@@ -1415,7 +1420,7 @@ def _library_gid(type_name: str, pk: int) -> str:
 
 @pytest.mark.usefixtures("_project_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"], transaction=True)
-def test_serializer_mutation_pins_locate_relation_save_and_refetch_to_write_alias():
+def test_serializer_mutation_pins_locate_relation_save_and_refetch_to_write_alias() -> None:
     """Under a divergent read/write router the WHOLE serializer update rides ``shard_b``.
 
     The genre attached exists ONLY on ``shard_b``, so the relation decode, DRF's
@@ -1464,7 +1469,7 @@ def test_serializer_mutation_pins_locate_relation_save_and_refetch_to_write_alia
 
 @pytest.mark.usefixtures("_project_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"], transaction=True)
-def test_serializer_unique_validator_reads_write_alias():
+def test_serializer_unique_validator_reads_write_alias() -> None:
     """A default-only collision does not poison validation of the shard_b update."""
     _seed_same_pk_book_pair(91006)
     default_shelf = models.Shelf.objects.using("default").get(pk=91006)
@@ -1503,7 +1508,7 @@ def test_serializer_unique_validator_reads_write_alias():
 
 @pytest.mark.usefixtures("_project_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"], transaction=True)
-def test_serializer_mutation_envelope_rolls_back_on_the_write_alias():
+def test_serializer_mutation_envelope_rolls_back_on_the_write_alias() -> None:
     """A serializer save-time failure rolls back on ``shard_b`` (the pinned alias).
 
     Renaming the shard_b book to a same-shelf sibling's title trips the
@@ -1557,7 +1562,7 @@ def _prefetch_alias_schema(
     ],
     *,
     root_alias: str | None = None,
-):
+) -> strawberry.Schema:
     """A ``shelves { books }`` schema whose CHILD type carries ``child_hook``.
 
     The root resolver hands back a queryset (pinned to ``root_alias`` when one is
@@ -1603,19 +1608,23 @@ def _prefetch_alias_schema(
 _PREFETCH_ALIAS_QUERY = "{ shelves { code books { title } } }"
 
 
-def _post_prefetch_alias_query(schema: strawberry.Schema):
+def _post_prefetch_alias_query(
+    schema: strawberry.Schema,
+) -> tuple[JSONObject, dict[str, list[str]]]:
     """POST ``_PREFETCH_ALIAS_QUERY`` against ``schema``; return (payload, per-alias SQL)."""
     _current["schema"] = schema
     try:
         with override_settings(ROOT_URLCONF=__name__):
             clear_url_caches()
-            with CaptureQueriesContext(connections["default"]) as on_default:
-                with CaptureQueriesContext(connections["shard_b"]) as on_shard_b:
-                    payload = graphql_payload(
-                        _PREFETCH_ALIAS_QUERY,
-                        client=Client(),
-                        url="/graphql/",
-                    )
+            with (
+                CaptureQueriesContext(connections["default"]) as on_default,
+                CaptureQueriesContext(connections["shard_b"]) as on_shard_b,
+            ):
+                payload = graphql_payload(
+                    _PREFETCH_ALIAS_QUERY,
+                    client=Client(),
+                    url="/graphql/",
+                )
     finally:
         _current["schema"] = None
         clear_url_caches()
@@ -1631,7 +1640,7 @@ def _post_prefetch_alias_query(schema: strawberry.Schema):
 
 
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_planned_prefetch_child_cannot_route_itself_to_the_other_shard():
+def test_planned_prefetch_child_cannot_route_itself_to_the_other_shard() -> None:
     """A child hook returning ``.using('shard_b')`` fails the planned relation closed.
 
     Nothing else in the query names ``shard_b``: the parent rows are read on
@@ -1644,7 +1653,7 @@ def test_planned_prefetch_child_cannot_route_itself_to_the_other_shard():
     _seed_book_chain("shard_b", title="on-shard-b")
 
     payload, book_sql = _post_prefetch_alias_query(
-        _prefetch_alias_schema(lambda cls, queryset, info: queryset.using("shard_b")),
+        _prefetch_alias_schema(lambda _cls, queryset, _info: queryset.using("shard_b")),
     )
 
     assert payload["data"] is None
@@ -1656,13 +1665,13 @@ def test_planned_prefetch_child_cannot_route_itself_to_the_other_shard():
 
 
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_planned_prefetch_child_inherits_an_unrouted_parents_connection():
+def test_planned_prefetch_child_inherits_an_unrouted_parents_connection() -> None:
     """Control: an unrouted child under an unrouted parent stays on ``default``."""
     _seed_book_chain("default", title="on-default")
     _seed_book_chain("shard_b", title="on-shard-b")
 
     payload, book_sql = _post_prefetch_alias_query(
-        _prefetch_alias_schema(lambda cls, queryset, info: queryset.exclude(title="")),
+        _prefetch_alias_schema(lambda _cls, queryset, _info: queryset.exclude(title="")),
     )
 
     assert payload.get("errors") is None, payload
@@ -1673,7 +1682,7 @@ def test_planned_prefetch_child_inherits_an_unrouted_parents_connection():
 
 
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_planned_prefetch_child_follows_a_routed_parent_onto_its_shard():
+def test_planned_prefetch_child_follows_a_routed_parent_onto_its_shard() -> None:
     """Control: the same unrouted child follows a ``.using('shard_b')`` parent.
 
     The child queryset the walker builds carries no alias of its own, which is
@@ -1686,7 +1695,7 @@ def test_planned_prefetch_child_follows_a_routed_parent_onto_its_shard():
 
     payload, book_sql = _post_prefetch_alias_query(
         _prefetch_alias_schema(
-            lambda cls, queryset, info: queryset.exclude(title=""),
+            lambda _cls, queryset, _info: queryset.exclude(title=""),
             root_alias="shard_b",
         ),
     )

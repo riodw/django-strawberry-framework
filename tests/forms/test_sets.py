@@ -39,6 +39,7 @@ from __future__ import annotations
 import itertools
 import sys
 from collections.abc import Callable, Iterator
+from typing import NoReturn
 
 import pytest
 import strawberry
@@ -114,7 +115,7 @@ def _unique_app_label() -> str:
     return f"test_form_sets__{next(_app_label_counter)}"
 
 
-def _item_model_form():
+def _item_model_form() -> type[forms.ModelForm[product_models.Item]]:
     """A ``ModelForm`` over products ``Item`` (the ``ModelForm`` flavor fixture)."""
 
     class ItemModelForm(forms.ModelForm[product_models.Item]):
@@ -125,7 +126,7 @@ def _item_model_form():
     return ItemModelForm
 
 
-def _contact_form():
+def _contact_form() -> type[forms.Form]:
     """A plain ``forms.Form`` (no model column) - the plain-flavor fixture."""
 
     class ContactForm(forms.Form):
@@ -134,7 +135,7 @@ def _contact_form():
     return ContactForm
 
 
-def _declare_products_primaries():
+def _declare_products_primaries() -> tuple[type[DjangoType], type[DjangoType]]:
     """Register primary ``DjangoType``s for ``Item`` + ``Category`` (Relay-shaped)."""
 
     class CategoryT(DjangoType, strawberry.relay.Node):
@@ -157,7 +158,7 @@ def _declare_products_primaries():
 # ---------------------------------------------------------------------------
 
 
-def test_bases_exported_from_package_root():
+def test_bases_exported_from_package_root() -> None:
     """Both bases are re-exported from the package root + are in ``__all__``."""
     assert django_strawberry_framework.DjangoFormMutation is DjangoFormMutationFromForms
     assert django_strawberry_framework.DjangoModelFormMutation is DjangoModelFormMutationFromForms
@@ -170,7 +171,7 @@ def test_bases_exported_from_package_root():
 # ---------------------------------------------------------------------------
 
 
-def test_modelform_missing_form_class_raises():
+def test_modelform_missing_form_class_raises() -> None:
     """A ``DjangoModelFormMutation`` with no ``Meta.form_class`` raises naming the key."""
     with pytest.raises(ConfigurationError, match="declares no form_class"):
 
@@ -180,7 +181,7 @@ def test_modelform_missing_form_class_raises():
                 operation = "create"
 
 
-def test_plain_form_missing_form_class_raises():
+def test_plain_form_missing_form_class_raises() -> None:
     """A ``DjangoFormMutation`` with no ``Meta.form_class`` raises naming the key."""
     with pytest.raises(ConfigurationError, match="declares no form_class"):
 
@@ -190,10 +191,10 @@ def test_plain_form_missing_form_class_raises():
                 pass
 
 
-def test_modelform_with_plain_form_raises():
+def test_modelform_with_plain_form_raises() -> None:
     """A plain ``forms.Form`` on ``DjangoModelFormMutation`` raises (must be a ModelForm)."""
     form_cls = _contact_form()
-    with pytest.raises(ConfigurationError, match="must be a forms.ModelForm subclass"):
+    with pytest.raises(ConfigurationError, match=r"must be a forms\.ModelForm subclass"):
 
         @definition_raises
         class CreateThing(DjangoModelFormMutation):
@@ -202,7 +203,7 @@ def test_modelform_with_plain_form_raises():
                 operation = "create"
 
 
-def test_plain_base_with_modelform_raises_naming_modelform_base():
+def test_plain_base_with_modelform_raises_naming_modelform_base() -> None:
     """A ``ModelForm`` on the plain ``DjangoFormMutation`` base raises naming the ModelForm base.
 
     The ``issubclass(form_class, forms.ModelForm)``-first check: the
@@ -218,13 +219,13 @@ def test_plain_base_with_modelform_raises_naming_modelform_base():
                 form_class = form_cls
 
 
-def test_plain_base_form_class_not_a_form_raises():
+def test_plain_base_form_class_not_a_form_raises() -> None:
     """A non-``Form`` value on the plain base raises the general type gate."""
 
     class NotAForm:
         pass
 
-    with pytest.raises(ConfigurationError, match="must be a forms.Form subclass"):
+    with pytest.raises(ConfigurationError, match=r"must be a forms\.Form subclass"):
 
         @definition_raises
         class Submit(DjangoFormMutation):
@@ -232,7 +233,7 @@ def test_plain_base_form_class_not_a_form_raises():
                 form_class = NotAForm
 
 
-def test_modelform_with_no_resolvable_model_raises():
+def test_modelform_with_no_resolvable_model_raises() -> None:
     """A ``ModelForm`` whose ``_meta.model`` is unset raises a clean config error, not AttributeError.
 
     A ``ModelForm`` declaring only ``fields`` with no ``Meta.model`` resolves no
@@ -252,7 +253,7 @@ def test_modelform_with_no_resolvable_model_raises():
                 operation = "create"
 
 
-def test_modelform_non_model_meta_model_raises_at_class_creation():
+def test_modelform_non_model_meta_model_raises_at_class_creation() -> None:
     """A ``ModelForm`` whose ``_meta.model`` is not a Django model class fails at class creation.
 
     Django's ``ModelForm`` metaclass normally rejects this earlier; a post-creation
@@ -260,8 +261,8 @@ def test_modelform_non_model_meta_model_raises_at_class_creation():
     """
     form_cls = _item_model_form()
     # basedpyright: the string model swapped onto the form's options is the hostile input under
-    # test; django-stubs types the slot as the model class
-    form_cls._meta.model = "Item"  # pyright: ignore[reportAttributeAccessIssue]
+    # test; django-stubs types the slot as the model class and the options as generic in it
+    form_cls._meta.model = "Item"  # pyright: ignore[reportAttributeAccessIssue, reportGeneralTypeIssues]
     with pytest.raises(ConfigurationError, match="must be a Django model class"):
 
         @definition_raises
@@ -271,13 +272,13 @@ def test_modelform_non_model_meta_model_raises_at_class_creation():
                 operation = "create"
 
 
-def test_default_form_field_hook_rejects_a_class_without_form_metadata():
+def test_default_form_field_hook_rejects_a_class_without_form_metadata() -> None:
     """The default field-basis hook fails loudly when neither snapshot nor Meta names a form."""
 
     class MissingFormMetadata:
         pass
 
-    with pytest.raises(ConfigurationError, match="cannot resolve Meta.form_class"):
+    with pytest.raises(ConfigurationError, match=r"cannot resolve Meta\.form_class"):
         # basedpyright: the class without form metadata is the hostile input under test;
         # _default_mutation_get_form_fields types the parameter as a form-mutation class
         _default_mutation_get_form_fields(MissingFormMetadata)  # pyright: ignore[reportArgumentType]
@@ -288,7 +289,7 @@ def test_default_form_field_hook_rejects_a_class_without_form_metadata():
 # ---------------------------------------------------------------------------
 
 
-def test_modelform_delete_operation_rejected():
+def test_modelform_delete_operation_rejected() -> None:
     """``operation = "delete"`` on ``DjangoModelFormMutation`` is rejected (no form delete)."""
     form_cls = _item_model_form()
     with pytest.raises(ConfigurationError, match="operation must be one of"):
@@ -300,7 +301,7 @@ def test_modelform_delete_operation_rejected():
                 operation = "delete"
 
 
-def test_modelform_missing_operation_rejected():
+def test_modelform_missing_operation_rejected() -> None:
     """A missing ``operation`` on the ``ModelForm`` base is rejected (``None`` invalid)."""
     form_cls = _item_model_form()
     with pytest.raises(ConfigurationError, match="operation must be one of"):
@@ -324,7 +325,7 @@ def test_modelform_missing_operation_rejected():
         None,
     ],
 )
-def test_plain_base_rejects_any_operation(operation: str | None):
+def test_plain_base_rejects_any_operation(operation: str | None) -> None:
     """The plain ``DjangoFormMutation`` base rejects ANY ``Meta.operation`` (Decision 10)."""
     form_cls = _contact_form()
     declared_operation = operation  # bind to a local: a class body cannot read the param name.
@@ -346,7 +347,7 @@ def test_plain_base_rejects_any_operation(operation: str | None):
         None,
     ],
 )
-def test_plain_base_rejects_inherited_meta_operation(operation: str | None):
+def test_plain_base_rejects_inherited_meta_operation(operation: str | None) -> None:
     """Decision 10 rejects ``Meta.operation`` inherited via a shared Meta parent too.
 
     ``form_class`` / ``permission_classes`` resolve through ``getattr`` (MRO-visible),
@@ -375,7 +376,7 @@ def test_plain_base_rejects_inherited_meta_operation(operation: str | None):
 # ---------------------------------------------------------------------------
 
 
-def test_modelform_form_class_accepted_as_known_key():
+def test_modelform_form_class_accepted_as_known_key() -> None:
     """A valid ``DjangoModelFormMutation`` declaration does not raise; the snapshot is stamped."""
     form_cls = _item_model_form()
 
@@ -389,7 +390,7 @@ def test_modelform_form_class_accepted_as_known_key():
     assert CreateItem._mutation_meta.operation == "create"
 
 
-def test_plain_form_class_accepted_as_known_key():
+def test_plain_form_class_accepted_as_known_key() -> None:
     """A valid ``DjangoFormMutation`` declaration does not raise; the snapshot uses the sentinel."""
     form_cls = _contact_form()
 
@@ -405,7 +406,7 @@ def test_plain_form_class_accepted_as_known_key():
     assert Submit._mutation_meta.permission_classes == (DenyAll,)
 
 
-def test_plain_form_unset_permission_classes_defaults_to_deny_all():
+def test_plain_form_unset_permission_classes_defaults_to_deny_all() -> None:
     """A plain form with no ``permission_classes`` defaults to ``[DenyAll]`` (Finding 1).
 
     A model-less form cannot inherit ``DjangoModelPermission`` (it reads a model
@@ -421,7 +422,7 @@ def test_plain_form_unset_permission_classes_defaults_to_deny_all():
     assert Submit._mutation_meta.permission_classes == (DenyAll,)
 
 
-def test_plain_form_empty_permission_classes_is_allow_any_opt_out():
+def test_plain_form_empty_permission_classes_is_allow_any_opt_out() -> None:
     """An explicit ``permission_classes = []`` on a plain form is preserved (allow-any opt-out)."""
     form_cls = _contact_form()
 
@@ -434,7 +435,7 @@ def test_plain_form_empty_permission_classes_is_allow_any_opt_out():
     assert Submit._mutation_meta.permission_classes == ()
 
 
-def test_modelform_unset_permission_classes_keeps_model_permission_default():
+def test_modelform_unset_permission_classes_keeps_model_permission_default() -> None:
     """The ModelForm flavor still defaults to ``[DjangoModelPermission]`` (no regression, Finding 1)."""
     form_cls = _item_model_form()
 
@@ -446,7 +447,7 @@ def test_modelform_unset_permission_classes_keeps_model_permission_default():
     assert CreateItem._mutation_meta.permission_classes == (DjangoModelPermission,)
 
 
-def test_modelform_unknown_meta_key_raises():
+def test_modelform_unknown_meta_key_raises() -> None:
     """A stray ``Meta`` key on the ``ModelForm`` base raises the typo guard."""
     form_cls = _item_model_form()
     with pytest.raises(ConfigurationError, match="unknown keys"):
@@ -459,7 +460,7 @@ def test_modelform_unknown_meta_key_raises():
                 widget = "nope"
 
 
-def test_plain_form_model_key_is_unknown():
+def test_plain_form_model_key_is_unknown() -> None:
     """``model`` is NOT an allowed plain-form key (it dropped from the form allowed set)."""
     form_cls = _contact_form()
     with pytest.raises(ConfigurationError, match="unknown keys"):
@@ -471,7 +472,7 @@ def test_plain_form_model_key_is_unknown():
                 model = product_models.Item
 
 
-def test_modelform_fields_and_exclude_both_raises():
+def test_modelform_fields_and_exclude_both_raises() -> None:
     """Declaring both ``fields`` and ``exclude`` on the ``ModelForm`` base raises."""
     form_cls = _item_model_form()
     with pytest.raises(ConfigurationError, match="both `fields` and `exclude`"):
@@ -485,7 +486,7 @@ def test_modelform_fields_and_exclude_both_raises():
                 exclude = ("category",)
 
 
-def test_plain_form_fields_and_exclude_both_raises():
+def test_plain_form_fields_and_exclude_both_raises() -> None:
     """Declaring both ``fields`` and ``exclude`` on the plain base raises."""
 
     class MultiForm(forms.Form):
@@ -503,7 +504,7 @@ def test_plain_form_fields_and_exclude_both_raises():
 
 
 @pytest.mark.parametrize("narrowing", ["fields", "exclude"])
-def test_plain_form_one_shot_narrowing_is_snapshotted_before_finalize(narrowing: str):
+def test_plain_form_one_shot_narrowing_is_snapshotted_before_finalize(narrowing: str) -> None:
     """One-shot ``Meta.fields`` / ``Meta.exclude`` iterables survive class validation.
 
     Validation must normalize the declaration before the effective-field check consumes
@@ -535,7 +536,7 @@ def test_plain_form_one_shot_narrowing_is_snapshotted_before_finalize(narrowing:
 @pytest.mark.parametrize("escape", [RuntimeError, KeyboardInterrupt])
 def test_plain_form_hostile_permission_iterable_maps_to_configuration_error(
     escape: type[BaseException],
-):
+) -> None:
     """A broken permission iterable cannot escape class validation as its raw exception.
 
     The normalization catches ``BaseException``, so an iterable raising from outside
@@ -543,7 +544,7 @@ def test_plain_form_hostile_permission_iterable_maps_to_configuration_error(
     """
 
     class BrokenPermissions:
-        def __iter__(self):
+        def __iter__(self) -> Iterator[object]:
             raise escape("permission iterator exploded")
 
     with pytest.raises(ConfigurationError, match="permission_classes must be a sequence"):
@@ -555,12 +556,12 @@ def test_plain_form_hostile_permission_iterable_maps_to_configuration_error(
                 permission_classes = BrokenPermissions()
 
 
-def test_plain_form_hostile_form_repr_maps_to_configuration_error():
+def test_plain_form_hostile_form_repr_maps_to_configuration_error() -> None:
     """An invalid form-class value with a broken repr still yields a typed config error."""
 
     class HostileRepr:
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr exploded")
 
     with pytest.raises(ConfigurationError, match="unprintable HostileRepr"):
@@ -571,7 +572,7 @@ def test_plain_form_hostile_form_repr_maps_to_configuration_error():
                 form_class = HostileRepr()
 
 
-def test_modelform_unknown_field_name_routes_through_slice1_narrowing():
+def test_modelform_unknown_field_name_routes_through_slice1_narrowing() -> None:
     """An unknown ``Meta.fields`` name routes through the narrowing fail-loud."""
     form_cls = _item_model_form()
     with pytest.raises(ConfigurationError, match="unknown form field"):
@@ -584,7 +585,7 @@ def test_modelform_unknown_field_name_routes_through_slice1_narrowing():
                 fields = ("definitely_not_a_field",)
 
 
-def test_cached_build_form_input_runs_required_guard_per_declaration():
+def test_cached_build_form_input_runs_required_guard_per_declaration() -> None:
     """A cached narrowed shape does NOT let a later declaration bypass the create-required guard (Finding 5).
 
     The per-shape build cache is keyed by ``(form_class, operation_kind, effective
@@ -635,7 +636,7 @@ def test_cached_build_form_input_runs_required_guard_per_declaration():
 def test_get_form_only_override_trips_the_construction_hook_waiver(
     mutation_base: type[DjangoFormMutation | DjangoModelFormMutation],
     form_factory: Callable[[], type[forms.BaseForm]],
-):
+) -> None:
     """Overriding ONLY ``get_form`` counts as a construction-hook override on both flavors.
 
     ``_form_kwargs_overridden`` tests BOTH construction hooks, and every other
@@ -659,7 +660,7 @@ def test_get_form_only_override_trips_the_construction_hook_waiver(
         data: dict[str, object],
         files: dict[str, object],
         instance: models.Model | None = None,
-    ):
+    ) -> forms.BaseForm:
         return form_cls(
             **self.get_form_kwargs(info, data=data, files=files, instance=instance),
         )
@@ -686,7 +687,7 @@ def test_get_form_only_override_trips_the_construction_hook_waiver(
 # ---------------------------------------------------------------------------
 
 
-def test_modelform_permission_classes_default():
+def test_modelform_permission_classes_default() -> None:
     """An unset ``permission_classes`` resolves to ``[DjangoModelPermission]`` (the ModelForm base)."""
     form_cls = _item_model_form()
 
@@ -698,7 +699,7 @@ def test_modelform_permission_classes_default():
     assert CreateItem._mutation_meta.permission_classes == (DjangoModelPermission,)
 
 
-def test_plain_form_permission_classes_explicit_opt_out():
+def test_plain_form_permission_classes_explicit_opt_out() -> None:
     """A plain form may opt out with an explicit ``[]`` (the AllowAny posture)."""
     form_cls = _contact_form()
 
@@ -710,7 +711,7 @@ def test_plain_form_permission_classes_explicit_opt_out():
     assert Submit._mutation_meta.permission_classes == ()
 
 
-def test_plain_form_rejects_model_permission_at_class_creation():
+def test_plain_form_rejects_model_permission_at_class_creation() -> None:
     """``DjangoModelPermission`` on a model-less plain form is rejected at class creation.
 
     ``DjangoModelPermission.has_permission`` reads the mutation's model via
@@ -744,7 +745,7 @@ def test_plain_form_rejects_model_permission_at_class_creation():
 # ---------------------------------------------------------------------------
 
 
-def test_modelform_registers_in_mutation_registry():
+def test_modelform_registers_in_mutation_registry() -> None:
     """A concrete ``DjangoModelFormMutation`` rides the ``DjangoMutation`` declaration registry."""
     form_cls = _item_model_form()
 
@@ -757,7 +758,7 @@ def test_modelform_registers_in_mutation_registry():
     assert CreateItem not in iter_form_mutations()
 
 
-def test_plain_form_registers_in_disjoint_form_registry():
+def test_plain_form_registers_in_disjoint_form_registry() -> None:
     """A concrete ``DjangoFormMutation`` records in the disjoint plain-form registry only."""
     form_cls = _contact_form()
 
@@ -769,13 +770,13 @@ def test_plain_form_registers_in_disjoint_form_registry():
     assert Submit not in iter_mutations()
 
 
-def test_abstract_bases_register_nowhere():
+def test_abstract_bases_register_nowhere() -> None:
     """The abstract ``DjangoFormMutation`` / ``DjangoModelFormMutation`` bases register nowhere."""
     assert DjangoModelFormMutation not in iter_mutations()
     assert DjangoFormMutation not in iter_form_mutations()
 
 
-def test_plain_form_registration_is_idempotent():
+def test_plain_form_registration_is_idempotent() -> None:
     """Re-recording the same plain class (identity) does not double-register."""
     form_cls = _contact_form()
 
@@ -789,7 +790,7 @@ def test_plain_form_registration_is_idempotent():
     assert _form_mutation_registry.count(Submit) == 1
 
 
-def test_plain_form_late_declaration_after_finalize_raises():
+def test_plain_form_late_declaration_after_finalize_raises() -> None:
     """Declaring a plain form after ``finalize_django_types()`` raises naming the flavor."""
 
     class ItemType(DjangoType):
@@ -801,7 +802,7 @@ def test_plain_form_late_declaration_after_finalize_raises():
     assert registry.get(product_models.Item) is ItemType
 
     finalize_django_types()
-    with pytest.raises(ConfigurationError, match="DjangoFormMutation .* after finalization"):
+    with pytest.raises(ConfigurationError, match=r"DjangoFormMutation .* after finalization"):
 
         @definition_raises
         class Submit(DjangoFormMutation):
@@ -814,7 +815,7 @@ def test_plain_form_late_declaration_after_finalize_raises():
 # ---------------------------------------------------------------------------
 
 
-def test_modelform_bind_materializes_form_input_into_forms_namespace():
+def test_modelform_bind_materializes_form_input_into_forms_namespace() -> None:
     """The ``ModelForm`` flavor binds via the ``DjangoMutation`` path through the ``build_input`` seam.
 
     The form-derived input materializes into ``forms.inputs`` (NOT
@@ -850,7 +851,7 @@ def test_modelform_bind_materializes_form_input_into_forms_namespace():
     assert "node" in slots  # Item is Relay-shaped -> node slot
 
 
-def test_plain_form_bind_materializes_input_and_ok_errors_payload():
+def test_plain_form_bind_materializes_input_and_ok_errors_payload() -> None:
     """The plain flavor binds via ``bind_form_mutations()`` with a pinned ``{ ok errors }`` payload."""
     form_cls = _contact_form()
 
@@ -871,15 +872,14 @@ def test_plain_form_bind_materializes_input_and_ok_errors_payload():
     assert slots == {"ok", "errors"}
 
 
-def test_plain_form_get_form_fields_hook_controls_input_basis():
+def test_plain_form_get_form_fields_hook_controls_input_basis() -> None:
     """The plain mutation hook may add a stable schema-time form field."""
-
     form_cls = _contact_form()
 
     class Submit(DjangoFormMutation):
         @classmethod
         @override
-        def get_form_fields(cls):
+        def get_form_fields(cls) -> dict[str, forms.Field]:
             fields = super().get_form_fields()
             fields["injected"] = forms.CharField(required=False)
             return fields
@@ -898,7 +898,7 @@ def test_plain_form_get_form_fields_hook_controls_input_basis():
     assert slots == {"message", "injected"}
 
 
-def test_default_get_form_fields_uses_frozen_form_class_snapshot():
+def test_default_get_form_fields_uses_frozen_form_class_snapshot() -> None:
     """Changing ``Meta.form_class`` after declaration cannot drift the generated input."""
 
     class FormA(forms.Form):
@@ -927,7 +927,7 @@ def test_default_get_form_fields_uses_frozen_form_class_snapshot():
     assert isinstance(bound, FormA)
 
 
-def test_modelform_get_form_fields_hook_controls_input_basis():
+def test_modelform_get_form_fields_hook_controls_input_basis() -> None:
     """The ModelForm mutation hook follows the same schema-time discovery contract."""
     _declare_products_primaries()
     form_cls = _item_model_form()
@@ -935,7 +935,7 @@ def test_modelform_get_form_fields_hook_controls_input_basis():
     class CreateItem(DjangoModelFormMutation):
         @classmethod
         @override
-        def get_form_fields(cls):
+        def get_form_fields(cls) -> dict[str, forms.Field]:
             fields = super().get_form_fields()
             fields["injected"] = forms.CharField(required=False)
             return fields
@@ -954,15 +954,14 @@ def test_modelform_get_form_fields_hook_controls_input_basis():
     assert "injected" in slots
 
 
-def test_get_form_fields_hook_basis_drives_required_guard():
+def test_get_form_fields_hook_basis_drives_required_guard() -> None:
     """Required fields from the hook cannot be narrowed away silently."""
-
     form_cls = _contact_form()
 
     class Submit(DjangoFormMutation):
         @classmethod
         @override
-        def get_form_fields(cls):
+        def get_form_fields(cls) -> dict[str, forms.Field]:
             fields = super().get_form_fields()
             fields["injected"] = forms.CharField(required=True)
             return fields
@@ -983,7 +982,7 @@ def test_get_form_fields_hook_basis_drives_required_guard():
 def test_non_callable_get_form_fields_is_configuration_error(
     mutation_base: type[DjangoFormMutation | DjangoModelFormMutation],
     bad_hook: str | None,
-):
+) -> None:
     """A malformed hook declaration fails as typed configuration, not raw ``TypeError``."""
     form_cls = _contact_form() if mutation_base is DjangoFormMutation else _item_model_form()
     meta_attrs: dict[str, object] = (
@@ -1002,7 +1001,7 @@ def test_non_callable_get_form_fields_is_configuration_error(
 @pytest.mark.parametrize("mutation_base", [DjangoFormMutation, DjangoModelFormMutation])
 def test_plain_function_get_form_fields_hook_is_configuration_error(
     mutation_base: type[DjangoFormMutation | DjangoModelFormMutation],
-):
+) -> None:
     """A plain (non-classmethod) multi-arg hook fails as typed configuration, not raw ``TypeError``.
 
     The hook invocation is the typed boundary both flavors' ``_validate_meta`` and
@@ -1018,7 +1017,7 @@ def test_plain_function_get_form_fields_hook_is_configuration_error(
         else {"form_class": form_cls, "operation": "create"}
     )
 
-    def get_form_fields(self: object, info: object = None):
+    def get_form_fields(self: object, info: object = None) -> dict[str, forms.Field]:
         del self, info
         return {"message": forms.CharField()}
 
@@ -1038,7 +1037,7 @@ def test_plain_function_get_form_fields_hook_is_configuration_error(
 @pytest.mark.parametrize("mutation_base", [DjangoFormMutation, DjangoModelFormMutation])
 def test_raising_get_form_fields_body_is_configuration_error(
     mutation_base: type[DjangoFormMutation | DjangoModelFormMutation],
-):
+) -> None:
     """A hook body raising mid-call is reported as typed configuration, not the raw exception.
 
     The invocation boundary catches ``BaseException`` (mirroring
@@ -1052,7 +1051,7 @@ def test_raising_get_form_fields_body_is_configuration_error(
         else {"form_class": form_cls, "operation": "create"}
     )
 
-    def get_exploding_form_fields(_cls: type):
+    def get_exploding_form_fields(_cls: type) -> NoReturn:
         raise RuntimeError("hook exploded")
 
     with pytest.raises(
@@ -1070,7 +1069,7 @@ def test_raising_get_form_fields_body_is_configuration_error(
     assert isinstance(excinfo.value.__cause__, RuntimeError)
 
 
-def test_get_form_fields_hook_raising_configuration_error_reraises_unchanged():
+def test_get_form_fields_hook_raising_configuration_error_reraises_unchanged() -> None:
     """A hook raising ``ConfigurationError`` propagates its own typed error, not a wrap.
 
     The invocation boundary re-raises ``ConfigurationError`` unchanged so a hook
@@ -1079,7 +1078,7 @@ def test_get_form_fields_hook_raising_configuration_error_reraises_unchanged():
     """
     form_cls = _contact_form()
 
-    def get_config_error_form_fields(_cls: type):
+    def get_config_error_form_fields(_cls: type) -> NoReturn:
         raise ConfigurationError("the hook's own typed reject")
 
     with pytest.raises(ConfigurationError, match="hook's own typed reject") as excinfo:
@@ -1098,7 +1097,7 @@ def test_get_form_fields_hook_raising_configuration_error_reraises_unchanged():
     assert "calling it raised" not in str(excinfo.value)
 
 
-def test_get_form_fields_hook_raising_empty_exception_reports_no_detail():
+def test_get_form_fields_hook_raising_empty_exception_reports_no_detail() -> None:
     """An exception with no message degrades the detail clause instead of raising.
 
     ``str(exc)`` on an empty exception is ``""``; the wrap renders ``no detail``
@@ -1106,7 +1105,7 @@ def test_get_form_fields_hook_raising_empty_exception_reports_no_detail():
     exception body must not defeat the typed message assembly).
     """
 
-    def get_empty_error_form_fields(_cls: type):
+    def get_empty_error_form_fields(_cls: type) -> NoReturn:
         raise ValueError
 
     with pytest.raises(ConfigurationError, match="calling it raised ValueError: no detail"):
@@ -1132,7 +1131,7 @@ def test_get_form_fields_hook_raising_empty_exception_reports_no_detail():
 def test_zero_arg_and_staticmethod_get_form_fields_hooks_are_accepted(
     mutation_base: type[DjangoFormMutation | DjangoModelFormMutation],
     hook_style: str,
-):
+) -> None:
     """A zero-arg plain function / ``@staticmethod`` hook still binds (permissive posture).
 
     Both are callable zero-arg, so the invocation boundary accepts them and the
@@ -1170,9 +1169,8 @@ def test_zero_arg_and_staticmethod_get_form_fields_hooks_are_accepted(
 def test_malformed_get_form_fields_return_is_configuration_error(
     mutation_base: type[DjangoFormMutation | DjangoModelFormMutation],
     bad_return: list[str] | list[tuple[str, ...]] | None,
-):
+) -> None:
     """Malformed hook returns fail through the typed configuration boundary for both bases."""
-
     form_cls = _contact_form() if mutation_base is DjangoFormMutation else _item_model_form()
     meta_attrs: dict[str, object] = (
         {"form_class": form_cls, "permission_classes": []}
@@ -1180,7 +1178,7 @@ def test_malformed_get_form_fields_return_is_configuration_error(
         else {"form_class": form_cls, "operation": "create"}
     )
 
-    def get_bad_form_fields(cls: type):
+    def get_bad_form_fields(cls: type) -> object:
         del cls
         return bad_return
 
@@ -1203,7 +1201,7 @@ def _hostile_class_value(raised: type[BaseException]) -> object:
         @override
         # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object
         # is the basis guard's input
-        def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+        def __class__(self) -> type[object]:  # pyright: ignore[reportIncompatibleMethodOverride]
             raise raised("hostile __class__")
 
     return HostileClass()
@@ -1214,14 +1212,13 @@ def _hostile_class_value(raised: type[BaseException]) -> object:
 def test_hostile_class_hook_value_is_configuration_error(
     mutation_base: type[DjangoFormMutation | DjangoModelFormMutation],
     raised: type[BaseException],
-):
+) -> None:
     """A hook value whose ``__class__`` raises fails declaration typed for both bases.
 
     The hook's basis is validated at class creation; a value that cannot even be
     asked ``isinstance(value, forms.Field)`` is listed under invalid fields in the
     typed ``ConfigurationError`` instead of escaping the declaration raw.
     """
-
     form_cls = _contact_form() if mutation_base is DjangoFormMutation else _item_model_form()
     meta_attrs: dict[str, object] = (
         {"form_class": form_cls, "permission_classes": []}
@@ -1229,7 +1226,7 @@ def test_hostile_class_hook_value_is_configuration_error(
         else {"form_class": form_cls, "operation": "create"}
     )
 
-    def get_hostile_form_fields(cls: type):
+    def get_hostile_form_fields(cls: type) -> dict[str, object]:
         del cls
         return {"message": _hostile_class_value(raised)}
 
@@ -1251,7 +1248,7 @@ def test_hostile_class_hook_value_is_configuration_error(
 
 def test_form_bind_is_retry_idempotent_after_fixable_later_phase_failure(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A plain-form re-finalize after a fixable post-bind failure succeeds, not a masked collision.
 
     The plain-form sibling of the mutation retry-idempotency guard. ``bind_form_mutations``
@@ -1285,7 +1282,7 @@ def test_form_bind_is_retry_idempotent_after_fixable_later_phase_failure(
     assert Submit._input_class is form_materialized_names["ContactFormInput"]
 
 
-def test_plain_form_input_dedupes_via_form_sentinel():
+def test_plain_form_input_dedupes_via_form_sentinel() -> None:
     """Two plain mutations over the SAME form + effective set dedupe to one input class.
 
     The ``"form"`` sentinel shape identity (Decision 7): both build the same
@@ -1310,7 +1307,7 @@ def test_plain_form_input_dedupes_via_form_sentinel():
     assert SubmitA._input_class is form_materialized_names["ContactFormInput"]
 
 
-def test_modelform_no_registered_primary_type_raises_at_finalize():
+def test_modelform_no_registered_primary_type_raises_at_finalize() -> None:
     """A ``DjangoModelFormMutation`` whose model has no registered ``DjangoType`` raises at finalize.
 
     No primary type for the model means the mutation has no type to return - the
@@ -1327,11 +1324,11 @@ def test_modelform_no_registered_primary_type_raises_at_finalize():
     assert CreateItem in iter_mutations()
 
     # No DjangoType declared for Item this build.
-    with pytest.raises(ConfigurationError, match="no registered DjangoType|no type to return"):
+    with pytest.raises(ConfigurationError, match=r"no registered DjangoType|no type to return"):
         finalize_django_types()
 
 
-def test_plain_form_default_perform_mutate_calls_form_save():
+def test_plain_form_default_perform_mutate_calls_form_save() -> None:
     """The default ``perform_mutate`` calls ``form.save()`` when the plain form defines one.
 
     A plain ``forms.Form`` has no ``save`` by default (the no-op path); a form that
@@ -1342,7 +1339,7 @@ def test_plain_form_default_perform_mutate_calls_form_save():
     class SavingForm(forms.Form):
         message = forms.CharField()
 
-        def save(self):
+        def save(self) -> None:
             called["saved"] = True
 
     class Submit(DjangoFormMutation):
@@ -1364,7 +1361,7 @@ def test_plain_form_default_perform_mutate_calls_form_save():
         lambda: None,
     ],
 )
-def test_plain_form_mutation_rejects_non_class_meta(invalid_meta: object):
+def test_plain_form_mutation_rejects_non_class_meta(invalid_meta: object) -> None:
     """A non-class Meta on DjangoFormMutation raises ConfigurationError."""
     with pytest.raises(ConfigurationError, match=r"BadMeta\.Meta must be a class; got "):
 
@@ -1383,7 +1380,7 @@ def test_plain_form_mutation_rejects_non_class_meta(invalid_meta: object):
         lambda: None,
     ],
 )
-def test_modelform_mutation_rejects_non_class_meta(invalid_meta: object):
+def test_modelform_mutation_rejects_non_class_meta(invalid_meta: object) -> None:
     """A non-class Meta on DjangoModelFormMutation raises ConfigurationError."""
     with pytest.raises(ConfigurationError, match=r"BadModelMeta\.Meta must be a class; got "):
 
@@ -1406,7 +1403,9 @@ def test_modelform_mutation_rejects_non_class_meta(invalid_meta: object):
         None,
     ],
 )
-def test_modelform_mutation_rejects_unhashable_and_non_string_operation(invalid_op: object):
+def test_modelform_mutation_rejects_unhashable_and_non_string_operation(
+    invalid_op: object,
+) -> None:
     """An unhashable or non-string operation on DjangoModelFormMutation raises ConfigurationError."""
     form_cls = _item_model_form()
 
@@ -1422,7 +1421,7 @@ def test_modelform_mutation_rejects_unhashable_and_non_string_operation(invalid_
                 operation = invalid_op
 
 
-def test_input_type_name_seams():
+def test_input_type_name_seams() -> None:
     """Both form bases expose input_type_name deriving the canonical input class name."""
     form_cls = _item_model_form()
 
@@ -1446,7 +1445,7 @@ def test_input_type_name_seams():
     assert Submit.input_type_name(Submit._mutation_meta) == "ContactFormInput"
 
 
-def test_plain_form_check_permission_seam():
+def test_plain_form_check_permission_seam() -> None:
     """DjangoFormMutation.check_permission runs the write-auth permission walk."""
 
     class AllowMutation(DjangoFormMutation):
@@ -1464,7 +1463,7 @@ def test_plain_form_check_permission_seam():
     assert DenyMutation().check_permission(unread_info(), operation="form", data={}) is False
 
 
-def test_cached_build_form_input_partial_column_less_guard():
+def test_cached_build_form_input_partial_column_less_guard() -> None:
     """PARTIAL build path executes guard_partial_required_column_less_fields and builds partial."""
 
     class ExtraRequiredForm(forms.ModelForm[product_models.Item]):
@@ -1494,7 +1493,7 @@ def test_cached_build_form_input_partial_column_less_guard():
     assert len(field_specs) == 2
 
 
-def test_form_shape_build_cache_clears_via_registry_and_direct_clear():
+def test_form_shape_build_cache_clears_via_registry_and_direct_clear() -> None:
     """The form shape cache co-clears on ``registry.clear()`` and the direct clear.
 
     The form twin of the model flavor's
@@ -1528,19 +1527,20 @@ def test_form_shape_build_cache_clears_via_registry_and_direct_clear():
 # ---------------------------------------------------------------------------
 
 
-def test_shared_hook_intermediate_base_siblings_dedupe():
+def test_shared_hook_intermediate_base_siblings_dedupe() -> None:
     """Two siblings inheriting ONE custom hook over one form dedupe to one input class.
 
     The shape-cache key carries the basis CONTENT, never the concrete mutation
     class: the hook lives on the intermediate base, both siblings produce
     identical bases, so both land on one cache entry and the materialize ledger
-    sees one class (no spurious distinct-class collision)."""
+    sees one class (no spurious distinct-class collision).
+    """
     form_cls = _contact_form()
 
     class BaseSubmit(DjangoFormMutation):
         @classmethod
         @override
-        def get_form_fields(cls):
+        def get_form_fields(cls) -> dict[str, forms.Field]:
             fields = dict(form_cls.base_fields)
             fields["injected"] = forms.CharField(required=False)
             return fields
@@ -1566,7 +1566,7 @@ def test_shared_hook_intermediate_base_siblings_dedupe():
     assert slots == {"message", "injected"}
 
 
-def test_modelform_shared_hook_siblings_dedupe():
+def test_modelform_shared_hook_siblings_dedupe() -> None:
     """The shared-hook dedupe contract holds on the ModelForm flavor too."""
     _declare_products_primaries()
     form_cls = _item_model_form()
@@ -1574,7 +1574,7 @@ def test_modelform_shared_hook_siblings_dedupe():
     class BaseCreateItem(DjangoModelFormMutation):
         @classmethod
         @override
-        def get_form_fields(cls):
+        def get_form_fields(cls) -> dict[str, forms.Field]:
             return dict(form_cls.base_fields)
 
     class CreateA(BaseCreateItem):
@@ -1593,18 +1593,19 @@ def test_modelform_shared_hook_siblings_dedupe():
     assert CreateA._input_class is form_materialized_names["ItemModelFormInput"]
 
 
-def test_distinct_hook_functions_identical_bases_dedupe():
+def test_distinct_hook_functions_identical_bases_dedupe() -> None:
     """Two mutations with their OWN hook functions returning identical bases dedupe.
 
     Hook-function identity is not the quantity - the returned basis content is:
     two different hook functions over one form producing the same
-    ``(name, type, requiredness, related model)`` tuples share one cache entry."""
+    ``(name, type, requiredness, related model)`` tuples share one cache entry.
+    """
     form_cls = _contact_form()
 
     class TwinA(DjangoFormMutation):
         @classmethod
         @override
-        def get_form_fields(cls):
+        def get_form_fields(cls) -> dict[str, forms.Field]:
             return dict(form_cls.base_fields)
 
         class Meta:
@@ -1614,7 +1615,7 @@ def test_distinct_hook_functions_identical_bases_dedupe():
     class TwinB(DjangoFormMutation):
         @classmethod
         @override
-        def get_form_fields(cls):
+        def get_form_fields(cls) -> dict[str, forms.Field]:
             return dict(form_cls.base_fields)
 
         class Meta:
@@ -1627,12 +1628,13 @@ def test_distinct_hook_functions_identical_bases_dedupe():
     assert TwinA._input_class is form_materialized_names["ContactFormInput"]
 
 
-def test_default_hook_and_custom_hook_same_basis_dedupe():
+def test_default_hook_and_custom_hook_same_basis_dedupe() -> None:
     """A default-hook mutation and a custom hook returning exactly ``base_fields`` dedupe.
 
     The default hook reads ``base_fields``; a custom hook handing back exactly
     that mapping contributes the same content, so the two mutations reuse one
-    built class instead of colliding on the ledger."""
+    built class instead of colliding on the ledger.
+    """
     form_cls = _contact_form()
 
     class DefaultHook(DjangoFormMutation):
@@ -1643,7 +1645,7 @@ def test_default_hook_and_custom_hook_same_basis_dedupe():
     class CustomSameBasis(DjangoFormMutation):
         @classmethod
         @override
-        def get_form_fields(cls):
+        def get_form_fields(cls) -> dict[str, forms.Field]:
             return dict(form_cls.base_fields)
 
         class Meta:
@@ -1656,13 +1658,14 @@ def test_default_hook_and_custom_hook_same_basis_dedupe():
     assert DefaultHook._input_class is form_materialized_names["ContactFormInput"]
 
 
-def test_stateful_shared_hook_requiredness_drift_is_loud():
+def test_stateful_shared_hook_requiredness_drift_is_loud() -> None:
     """A shared hook returning per-class requiredness lands on the LOUD collision.
 
     Same effective name-set, different content: the basis content identity
     differs, each sibling builds its own class, and the materialize ledger
     rejects the second distinct class under one name - never a silent share of
-    a wrong shape."""
+    a wrong shape.
+    """
 
     class TwoFieldForm(forms.Form):
         message = forms.CharField()
@@ -1671,7 +1674,7 @@ def test_stateful_shared_hook_requiredness_drift_is_loud():
     class StatefulBase(DjangoFormMutation):
         @classmethod
         @override
-        def get_form_fields(cls):
+        def get_form_fields(cls) -> dict[str, forms.Field]:
             fields = dict(TwoFieldForm.base_fields)
             fields["injected"] = forms.CharField(required=cls.__name__ == "DriftA")
             return fields
@@ -1694,13 +1697,14 @@ def test_stateful_shared_hook_requiredness_drift_is_loud():
         finalize_django_types()
 
 
-def test_stateful_shared_hook_choice_narrowing_drift_is_loud():
+def test_stateful_shared_hook_choice_narrowing_drift_is_loud() -> None:
     """A shared hook narrowing a choice field differently per class lands on the LOUD collision.
 
     Field type and requiredness agree, so only the column values each sibling's
     ``circulation_status`` admits tell the two bases apart: each builds its own
     generated enum, and the materialize ledger rejects the second distinct class under
-    one name - never one sibling silently publishing the other's members."""
+    one name - never one sibling silently publishing the other's members.
+    """
 
     class BookT(DjangoType):
         class Meta:
@@ -1716,7 +1720,7 @@ def test_stateful_shared_hook_choice_narrowing_drift_is_loud():
     class StatefulBase(DjangoModelFormMutation):
         @classmethod
         @override
-        def get_form_fields(cls):
+        def get_form_fields(cls) -> dict[str, forms.Field]:
             choices = [("available", "Available"), ("repair", "Repair")]
             if cls.__name__ == "DriftB":
                 choices = choices[:1]
@@ -1741,12 +1745,13 @@ def test_stateful_shared_hook_choice_narrowing_drift_is_loud():
         finalize_django_types()
 
 
-def test_excluded_choice_field_admitting_no_column_value_still_binds():
+def test_excluded_choice_field_admitting_no_column_value_still_binds() -> None:
     """An excluded field never refuses the build, though the shape identity reads it.
 
     ``circulation_status`` admits none of the non-empty values its column lists, which refuses
     an emitted field; the shape identity walks the whole hook basis, excluded fields included, so the
-    refusal must stay out of it, and the mutation binds without the field."""
+    refusal must stay out of it, and the mutation binds without the field.
+    """
 
     class BookT(DjangoType):
         class Meta:
@@ -1778,14 +1783,15 @@ def test_excluded_choice_field_admitting_no_column_value_still_binds():
     assert slots == {"title"}
 
 
-def test_two_distinct_form_classes_sharing_name_still_collide():
+def test_two_distinct_form_classes_sharing_name_still_collide() -> None:
     """Two DIFFERENT form classes with one ``__name__`` can never dedupe (documented).
 
     ``form_class`` identity stays the first cache-key component, so distinct
     same-named forms build separately and the ledger keeps rejecting the second
-    class under the shared name."""
+    class under the shared name.
+    """
 
-    def make_form():
+    def make_form() -> type[forms.Form]:
         class ContactForm(forms.Form):
             message = forms.CharField()
 

@@ -79,7 +79,7 @@ def _strawberry_field(type_cls: type[object], field_name: str) -> StrawberryFiel
     )
 
 
-def test_reverse_fk_resolves_when_parent_declared_before_child():
+def test_reverse_fk_resolves_when_parent_declared_before_child() -> None:
     """Category.items starts pending and resolves to list[ItemType] at finalization."""
 
     class CategoryType(DjangoType):
@@ -107,7 +107,7 @@ def test_reverse_fk_resolves_when_parent_declared_before_child():
     assert ItemType.__annotations__["category"] is CategoryType
 
 
-def test_reverse_fk_resolves_when_child_declared_before_parent():
+def test_reverse_fk_resolves_when_child_declared_before_parent() -> None:
     """Item.category starts pending and resolves once CategoryType exists."""
 
     class ItemType(DjangoType):
@@ -133,7 +133,7 @@ def test_reverse_fk_resolves_when_child_declared_before_parent():
     assert CategoryType.__annotations__["items"] == list[ItemType]
 
 
-def test_one_to_one_forward_and_reverse_relations_resolve():
+def test_one_to_one_forward_and_reverse_relations_resolve() -> None:
     """Forward OneToOne and reverse OneToOne get concrete final annotations."""
 
     class MembershipCardType(DjangoType):
@@ -152,7 +152,7 @@ def test_one_to_one_forward_and_reverse_relations_resolve():
     assert PatronType.__annotations__["card"] == (MembershipCardType | None)
 
 
-def test_many_to_many_forward_and_reverse_relations_resolve():
+def test_many_to_many_forward_and_reverse_relations_resolve() -> None:
     """Forward/reverse M2M and an adjacent FK resolve across declaration order."""
 
     class BookType(DjangoType):
@@ -183,7 +183,7 @@ def test_many_to_many_forward_and_reverse_relations_resolve():
     assert ShelfType.__annotations__["books"] == list[BookType]
 
 
-def test_multi_cycle_finalizes_every_edge():
+def test_multi_cycle_finalizes_every_edge() -> None:
     """A fakeshop multi-cycle resolves every pending FK and reverse FK edge."""
 
     class CategoryType(DjangoType):
@@ -238,7 +238,7 @@ def test_multi_cycle_finalizes_every_edge():
     assert PropertyType.__annotations__["entries"] == list[EntryType]
 
 
-def test_unresolved_target_raises_with_source_field_and_target():
+def test_unresolved_target_raises_with_source_field_and_target() -> None:
     """Finalization fails loudly when a selected relation target was never registered."""
 
     class ItemType(DjangoType):
@@ -257,7 +257,7 @@ def test_unresolved_target_raises_with_source_field_and_target():
     assert "no registered DjangoType" in msg
 
 
-def test_annotation_only_relation_override_keeps_generated_resolver():
+def test_annotation_only_relation_override_keeps_generated_resolver() -> None:
     """Annotation-only overrides keep the generated many-side resolver."""
 
     class ItemType(DjangoType):
@@ -283,7 +283,7 @@ def test_annotation_only_relation_override_keeps_generated_resolver():
     assert resolver_function(items_field).__name__ == "resolve_items"
 
 
-def test_assigned_relation_field_override_keeps_consumer_resolver():
+def test_assigned_relation_field_override_keeps_consumer_resolver() -> None:
     """Assigned Strawberry relation fields suppress generated relation resolvers."""
 
     class ItemType(DjangoType):
@@ -311,7 +311,7 @@ def test_assigned_relation_field_override_keeps_consumer_resolver():
     assert resolver_function(items_field).__qualname__.endswith("CategoryType.items")
 
 
-def test_assigned_relation_field_resolver_kwarg_override_keeps_consumer_resolver():
+def test_assigned_relation_field_resolver_kwarg_override_keeps_consumer_resolver() -> None:
     """An ``= strawberry.field(resolver=...)`` relation assignment keeps its resolver.
 
     Spec-010's third listed manual-annotation shape, distinct from the
@@ -377,7 +377,7 @@ def test_assigned_relation_field_resolver_kwarg_override_keeps_consumer_resolver
     assert "items: [ItemType!]!" in schema.as_str()
 
 
-def test_cross_module_lazy_relation_override_types_the_field_as_the_referenced_class():
+def test_cross_module_lazy_relation_override_types_the_field_as_the_referenced_class() -> None:
     """A hand-written ``Annotated[..., strawberry.lazy(...)]`` relation override wins.
 
     The second shape of spec-010's manual annotation contract: the consumer's
@@ -452,7 +452,7 @@ def test_cross_module_lazy_relation_override_types_the_field_as_the_referenced_c
     assert "items: [LazyItemType!]!" in schema.as_str()
 
 
-def test_cross_module_lazy_relation_override_wins_over_the_registered_primary_type():
+def test_cross_module_lazy_relation_override_wins_over_the_registered_primary_type() -> None:
     """The lazily referenced type wins even when another type is the model's primary.
 
     Discriminates the override from the auto-synthesis path: with a
@@ -521,7 +521,7 @@ def test_cross_module_lazy_relation_override_wins_over_the_registered_primary_ty
     assert "PrimaryItemType" not in schema.as_str()
 
 
-def test_relation_field_class_attribute_shadowing_raises():
+def test_relation_field_class_attribute_shadowing_raises() -> None:
     """Unsupported class attributes cannot silently shadow relation fields.
 
     The error is attributed to the consumer's ``DjangoType`` subclass
@@ -543,7 +543,7 @@ def test_relation_field_class_attribute_shadowing_raises():
                 fields = ("id", "name", "items")
 
 
-def test_assigned_scalar_field_override_keeps_consumer_resolver():
+def test_assigned_scalar_field_override_keeps_consumer_resolver() -> None:
     """A ``strawberry.field(resolver=...)`` assigned to a scalar column wins.
 
     Were ``_consumer_assigned_relation_fields`` to collect relation names
@@ -584,7 +584,7 @@ def test_assigned_scalar_field_override_keeps_consumer_resolver():
 # ---------------------------------------------------------------------------
 
 
-def test_camel_case_field_collision_raises():
+def test_camel_case_field_collision_raises() -> None:
     """Two columns whose names default-camel-case to one GraphQL name fail loud.
 
     ``foo_bar`` and ``fooBar`` are distinct Django columns that both camel-case to
@@ -615,7 +615,7 @@ def test_camel_case_field_collision_raises():
     assert "collide" in message
 
 
-def test_explicit_graphql_field_name_collision_raises():
+def test_explicit_graphql_field_name_collision_raises() -> None:
     """An explicit Strawberry name participates in the settled-surface audit."""
 
     class ExplicitNameCollision(models.Model):
@@ -644,7 +644,7 @@ def test_explicit_graphql_field_name_collision_raises():
     assert "collide" in message
 
 
-def test_relay_suppressed_pk_does_not_collide_with_real_consumer_field():
+def test_relay_suppressed_pk_does_not_collide_with_real_consumer_field() -> None:
     """A selected pk removed by Relay is not part of the settled GraphQL surface."""
 
     class RenamedPrimaryKey(models.Model):
@@ -658,7 +658,7 @@ def test_relay_suppressed_pk_does_not_collide_with_real_consumer_field():
 
     class RenamedPrimaryKeyType(DjangoType):
         @strawberry.field
-        def legacyId(self) -> str:
+        def legacyId(self) -> str:  # noqa: N802 - the camelCase attribute is the wire name, not shadowing legacy_id
             return "visible"
 
         class Meta:
@@ -675,7 +675,7 @@ def test_relay_suppressed_pk_does_not_collide_with_real_consumer_field():
     assert field_names == {"id", "legacyId"}
 
 
-def test_relation_connection_does_not_collide_with_relay_suppressed_pk():
+def test_relation_connection_does_not_collide_with_relay_suppressed_pk() -> None:
     """A generated connection may reuse the Python name of a suppressed pk column."""
 
     class Target(models.Model):
@@ -718,7 +718,7 @@ def test_relation_connection_does_not_collide_with_relay_suppressed_pk():
     assert field_names == {"id", "items_connection"}
 
 
-def test_relay_interface_field_prevents_false_empty_surface():
+def test_relay_interface_field_prevents_false_empty_surface() -> None:
     """The inherited Relay id is a real field even when no model field is selected."""
 
     class RelayOnlyModel(models.Model):
@@ -741,7 +741,7 @@ def test_relay_interface_field_prevents_false_empty_surface():
     assert field_names == {"id"}
 
 
-def test_empty_field_surface_raises():
+def test_empty_field_surface_raises() -> None:
     """A DjangoType with no GraphQL fields (``Meta.fields = ()``) fails loud at finalize.
 
     Strawberry would otherwise raise the generic ``Type <X> must define one or more
@@ -779,7 +779,7 @@ def test_empty_field_surface_raises():
 # ---------------------------------------------------------------------------
 
 
-def test_annotation_only_scalar_field_override_wins_over_synthesized():
+def test_annotation_only_scalar_field_override_wins_over_synthesized() -> None:
     """A consumer ``description: int`` annotation survives __init_subclass__ and finalize."""
 
     class CategoryType(DjangoType):
@@ -797,7 +797,7 @@ def test_annotation_only_scalar_field_override_wins_over_synthesized():
     assert _strawberry_field(CategoryType, "description").type is int
 
 
-def test_annotation_only_scalar_override_populates_definition_metadata():
+def test_annotation_only_scalar_override_populates_definition_metadata() -> None:
     """``DjangoTypeDefinition`` carries the new ``consumer_annotated_scalar_fields`` set."""
 
     class CategoryType(DjangoType):
@@ -813,7 +813,7 @@ def test_annotation_only_scalar_override_populates_definition_metadata():
     assert definition.consumer_assigned_scalar_fields == frozenset()
 
 
-def test_annotation_only_scalar_override_does_not_emit_synthesized_annotation():
+def test_annotation_only_scalar_override_does_not_emit_synthesized_annotation() -> None:
     """``_build_annotations``'s synthesized dict skips the overridden field."""
 
     class CategoryType(DjangoType):
@@ -839,7 +839,7 @@ def test_annotation_only_scalar_override_does_not_emit_synthesized_annotation():
 # ---------------------------------------------------------------------------
 
 
-def test_auto_annotation_synthesizes_model_inferred_scalar_type():
+def test_auto_annotation_synthesizes_model_inferred_scalar_type() -> None:
     """``name: auto`` keeps the field selected but infers its type from the model."""
 
     class CategoryType(DjangoType):
@@ -857,7 +857,7 @@ def test_auto_annotation_synthesizes_model_inferred_scalar_type():
     assert _strawberry_field(CategoryType, "name").type is str
 
 
-def test_auto_annotation_is_not_a_consumer_override():
+def test_auto_annotation_is_not_a_consumer_override() -> None:
     """An ``auto`` field routes back into synthesis, not the consumer-authored union."""
 
     class CategoryType(DjangoType):
@@ -873,7 +873,7 @@ def test_auto_annotation_is_not_a_consumer_override():
     assert "name" not in definition.consumer_authored_fields
 
 
-def test_auto_annotation_emits_synthesized_annotation():
+def test_auto_annotation_emits_synthesized_annotation() -> None:
     """Unlike a real override, an ``auto`` field IS present in the synthesized dict."""
 
     class CategoryType(DjangoType):
@@ -895,7 +895,7 @@ def test_auto_annotation_emits_synthesized_annotation():
     assert synthesized["name"] is str
 
 
-def test_auto_annotation_on_relation_field_synthesizes_relation():
+def test_auto_annotation_on_relation_field_synthesizes_relation() -> None:
     """``items: auto`` defers the reverse-FK relation to finalization like bare selection."""
 
     class CategoryType(DjangoType):
@@ -920,9 +920,8 @@ def test_auto_annotation_on_relation_field_synthesizes_relation():
     assert CategoryType.__annotations__["items"] == list[ItemType]
 
 
-def test_auto_annotation_on_unselected_field_raises():
+def test_auto_annotation_on_unselected_field_raises() -> None:
     """``auto`` never adds a field: an unselected ``auto`` name is rejected at creation."""
-
     with pytest.raises(ConfigurationError, match=r"annotated `auto` but not selected"):
 
         @definition_raises
@@ -935,7 +934,7 @@ def test_auto_annotation_on_unselected_field_raises():
                 fields = ("id", "name")
 
 
-def test_auto_annotation_combined_with_assigned_field_raises():
+def test_auto_annotation_combined_with_assigned_field_raises() -> None:
     """``auto`` (infer type) cannot coexist with an assigned resolver/type."""
 
     def _zero() -> int:
@@ -958,7 +957,7 @@ def test_auto_annotation_combined_with_assigned_field_raises():
 # ---------------------------------------------------------------------------
 
 
-def test_annotation_override_of_unsupported_scalar_field_type_is_allowed():
+def test_annotation_override_of_unsupported_scalar_field_type_is_allowed() -> None:
     """A consumer ``myfield: str`` annotation lets an unsupported scalar build."""
 
     class UnsupportedFieldOwner(models.Model):
@@ -988,7 +987,7 @@ def test_annotation_override_of_unsupported_scalar_field_type_is_allowed():
     finalize_django_types()
 
 
-def test_annotation_override_of_grouped_choices_field_is_allowed():
+def test_annotation_override_of_grouped_choices_field_is_allowed() -> None:
     """A consumer ``status: str`` annotation bypasses grouped-choices rejection."""
 
     class GroupedChoiceOwner(models.Model):
@@ -1013,7 +1012,7 @@ def test_annotation_override_of_grouped_choices_field_is_allowed():
     assert registry.get_enum(GroupedChoiceOwner, "status") is None
 
 
-def test_annotation_override_does_not_populate_shared_enum_cache_for_co_resident_types():
+def test_annotation_override_does_not_populate_shared_enum_cache_for_co_resident_types() -> None:
     """One overriding + one non-overriding type share enum from the non-overriding side alone."""
 
     class CoResidentChoiceOwner(models.Model):
@@ -1080,7 +1079,7 @@ def test_annotation_override_does_not_populate_shared_enum_cache_for_co_resident
 # ---------------------------------------------------------------------------
 
 
-def test_consumer_id_annotation_on_relay_node_type_raises():
+def test_consumer_id_annotation_on_relay_node_type_raises() -> None:
     """``id: int`` on a ``Meta.interfaces = (relay.Node,)`` type raises at class creation."""
     with pytest.raises(ConfigurationError) as exc_info:
 
@@ -1098,7 +1097,7 @@ def test_consumer_id_annotation_on_relay_node_type_raises():
     assert "GlobalID" in msg
 
 
-def test_consumer_id_annotation_on_direct_relay_node_subclass_raises():
+def test_consumer_id_annotation_on_direct_relay_node_subclass_raises() -> None:
     """``id: int`` on a direct ``relay.Node`` subclass raises (no ``Meta.interfaces``)."""
     with pytest.raises(ConfigurationError) as exc_info:
 
@@ -1115,7 +1114,7 @@ def test_consumer_id_annotation_on_direct_relay_node_subclass_raises():
     assert "GlobalID" in msg
 
 
-def test_consumer_id_assigned_strawberry_field_on_relay_node_type_raises():
+def test_consumer_id_assigned_strawberry_field_on_relay_node_type_raises() -> None:
     """Assigned ``id = strawberry.field(resolver=...)`` raises; message names the workarounds."""
 
     def _constant_id() -> str:
@@ -1138,7 +1137,7 @@ def test_consumer_id_assigned_strawberry_field_on_relay_node_type_raises():
     assert ("display_id" in msg) or ("sibling field" in msg)
 
 
-def test_consumer_id_unresolved_non_nodeid_string_on_relay_node_type_raises():
+def test_consumer_id_unresolved_non_nodeid_string_on_relay_node_type_raises() -> None:
     """``id: "MissingType"`` (unresolved, non-NodeID) raises: the string-form token regex rejects it."""
     with pytest.raises(ConfigurationError) as exc_info:
 
@@ -1157,7 +1156,7 @@ def test_consumer_id_unresolved_non_nodeid_string_on_relay_node_type_raises():
     assert "GlobalID" in msg
 
 
-def test_consumer_id_typo_lookalike_nodeid_string_on_relay_node_type_raises():
+def test_consumer_id_typo_lookalike_nodeid_string_on_relay_node_type_raises() -> None:
     """Prefixed-substring lookalikes (e.g. ``"NotNodeID[int]"``) are rejected by the token regex."""
     with pytest.raises(ConfigurationError) as exc_info:
 
@@ -1192,7 +1191,7 @@ def test_consumer_id_typo_lookalike_nodeid_string_on_relay_node_type_raises():
     assert "GlobalID" in msg
 
 
-def test_consumer_id_relay_nodeid_annotation_on_relay_node_type_is_accepted():
+def test_consumer_id_relay_nodeid_annotation_on_relay_node_type_is_accepted() -> None:
     """``id: relay.NodeID[int]`` (direct form) is the documented escape hatch."""
 
     class CategoryNode(DjangoType):
@@ -1214,7 +1213,9 @@ def test_consumer_id_relay_nodeid_annotation_on_relay_node_type_is_accepted():
     strawberry.Schema(query=Query)
 
 
-def test_consumer_id_resolved_string_relay_nodeid_annotation_on_relay_node_type_is_accepted_end_to_end():
+def test_consumer_id_resolved_string_relay_nodeid_annotation_on_relay_node_type_is_accepted_end_to_end() -> (
+    None
+):
     """``id: "relay.NodeID[int]"`` with ``relay`` importable in module scope succeeds end-to-end."""
 
     class CategoryNode(DjangoType):
@@ -1244,14 +1245,16 @@ def test_consumer_id_resolved_string_relay_nodeid_annotation_on_relay_node_type_
     assert id_type["ofType"]["name"] == "ID"
 
 
-def test_consumer_id_unresolved_nodeid_shaped_string_on_relay_node_type_passes_guard_only():
+def test_consumer_id_unresolved_nodeid_shaped_string_on_relay_node_type_passes_guard_only() -> (
+    None
+):
     """Unresolved-but-NodeID-shaped string passes the guard; downstream resolution is consumer's."""
     stub_name = f"spec015_unresolved_relay_stub_{uuid.uuid4().hex}"
     sys.modules[stub_name] = types.ModuleType(stub_name)
     assert "relay" not in sys.modules[stub_name].__dict__
     try:
 
-        def _body(ns: dict[str, object]):
+        def _body(ns: dict[str, object]) -> None:
             ns["__module__"] = stub_name
             ns["__annotations__"] = {"id": "relay.NodeID[int]"}
 
@@ -1267,7 +1270,9 @@ def test_consumer_id_unresolved_nodeid_shaped_string_on_relay_node_type_passes_g
         registry.clear()
 
 
-def test_consumer_id_resolved_relay_nodeid_with_unresolved_sibling_annotation_is_accepted():
+def test_consumer_id_resolved_relay_nodeid_with_unresolved_sibling_annotation_is_accepted() -> (
+    None
+):
     """Resolved ``id: relay.NodeID[int]`` + unresolved sibling annotation is accepted."""
 
     class CategoryNode(DjangoType):
@@ -1286,7 +1291,7 @@ def test_consumer_id_resolved_relay_nodeid_with_unresolved_sibling_annotation_is
     assert CategoryNode is not None
 
 
-def test_consumer_non_id_scalar_override_on_relay_node_type_is_accepted():
+def test_consumer_non_id_scalar_override_on_relay_node_type_is_accepted() -> None:
     """A non-``id`` scalar override on a Relay-Node-shaped type does not collide with ``Node.id``."""
 
     class CategoryNode(DjangoType):
@@ -1300,7 +1305,7 @@ def test_consumer_non_id_scalar_override_on_relay_node_type_is_accepted():
     assert CategoryNode.__annotations__["description"] is int
 
 
-def test_inherited_id_annotation_on_relay_node_subclass_is_handled_by_pk_suppression():
+def test_inherited_id_annotation_on_relay_node_subclass_is_handled_by_pk_suppression() -> None:
     """Inherited ``id: int`` slips past the guard; pk-suppression keeps Strawberry happy."""
 
     class BaseWithId(DjangoType):
@@ -1339,7 +1344,7 @@ def test_inherited_id_annotation_on_relay_node_subclass_is_handled_by_pk_suppres
     assert id_type["ofType"]["name"] == "ID"
 
 
-def test_scalar_field_class_attribute_shadowing_raises():
+def test_scalar_field_class_attribute_shadowing_raises() -> None:
     """Unsupported class attributes cannot silently shadow scalar fields either.
 
     Pins the same ``cls.__name__`` attribution as the relation case so a
@@ -1360,7 +1365,7 @@ def test_scalar_field_class_attribute_shadowing_raises():
                 fields = ("id", "name")
 
 
-def test_same_module_string_forward_reference_annotation_survives_finalization():
+def test_same_module_string_forward_reference_annotation_survives_finalization() -> None:
     """A same-module string relation override is resolved by Strawberry after finalization."""
 
     class StringItemType(DjangoType):
@@ -1396,7 +1401,7 @@ def test_same_module_string_forward_reference_annotation_survives_finalization()
 # ---------------------------------------------------------------------------
 
 
-def test_finalize_succeeds_when_model_has_multiple_types_one_primary():
+def test_finalize_succeeds_when_model_has_multiple_types_one_primary() -> None:
     """``finalize_django_types`` succeeds when one of the multi-type entries is primary."""
 
     class ItemType(DjangoType):
@@ -1418,7 +1423,7 @@ def test_finalize_succeeds_when_model_has_multiple_types_one_primary():
     assert registry.primary_for(Item) is AdminItemType
 
 
-def test_finalize_succeeds_when_model_has_single_type_no_primary():
+def test_finalize_succeeds_when_model_has_single_type_no_primary() -> None:
     """Backward-compat: a single registered type with no primary still finalizes cleanly."""
 
     class ItemType(DjangoType):
@@ -1433,7 +1438,7 @@ def test_finalize_succeeds_when_model_has_single_type_no_primary():
     assert registry.get(Item) is ItemType
 
 
-def test_finalize_ambiguity_error_fires_before_unresolved_target_error():
+def test_finalize_ambiguity_error_fires_before_unresolved_target_error() -> None:
     """The ambiguity audit runs before pending-relation resolution.
 
     Sets up both conditions in one test: two ``DjangoType`` subclasses on
@@ -1465,7 +1470,7 @@ def test_finalize_ambiguity_error_fires_before_unresolved_target_error():
     assert "no registered DjangoType" not in msg
 
 
-def test_filterset_class_resolves_across_module_boundary():
+def test_filterset_class_resolves_across_module_boundary() -> None:
     """``Meta.filterset_class`` from two sibling modules resolves under one finalize call.
 
     Imports both fixture modules under fresh ``sys.modules`` keys so the

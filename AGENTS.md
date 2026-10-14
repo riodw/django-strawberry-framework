@@ -16,7 +16,7 @@
 - One heavy job (full pytest, basedpyright) at a time machine-wide; check `pgrep -fl '[p]ytest|[b]asedpyright'` first
 - Run `uv run ruff check --fix .` then `uv run ruff format .` after every edit (format last: a `--fix` pass can add a magic trailing comma the formatter then rejects)
 - Line length 99 (`line-length = 99`; E501 graced to 110 via `[tool.ruff.lint.pycodestyle] max-line-length = 110` for lines the formatter cannot break); trailing-comma explode-at-threshold layout (threshold 4, 2 for any models.py), markdown link scaffold, JSON/GraphQL brace explosion and ASCII-only .py source all enforced by `scripts/check_trailing_commas.py` (auto-fix by default; pre-commit + CI `--check`; reads line length from pyproject.toml at runtime) — full rules in its docstring; ruff COM812 only adds commas to already-multi-line constructs so the script not ruff owns single-line explosion; never a trailing comma after a bare `*`/`/` marker (SyntaxError) or inside a 1-element tuple `(x,)` or after `**kwargs` (project convention not syntax; `*args` takes one)
-- ERA001 is on but TODO-anchored Pseudo blocks are exempt; suppress inline with `# noqa: ERA001` if needed; never refactor pseudo code to satisfy the lint
+- ERA001 is on everywhere; a TODO-anchored pseudo block stays verbatim inside a `# ruff: disable[ERA001]` / `# ruff: enable[ERA001]` fence (ruff exempts only the TODO line itself); never refactor pseudo code to satisfy the lint
 - `django_strawberry_framework.conf.settings` reads the `DJANGO_STRAWBERRY_FRAMEWORK` dict from the consumer's Django settings; missing keys raise AttributeError
 - Add a settings key only when the feature that needs it lands; never preemptively
 - No CHANGELOG.md updates unless told

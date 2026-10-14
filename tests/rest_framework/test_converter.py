@@ -54,7 +54,7 @@ import tempfile
 import uuid
 from collections.abc import Callable, Iterator
 from enum import Enum
-from typing import TYPE_CHECKING, Any, get_args, get_origin
+from typing import TYPE_CHECKING, Any, NoReturn, get_args, get_origin
 
 import pytest
 import strawberry
@@ -160,7 +160,7 @@ def _register_products_types() -> None:
     assert registry.get(product_models.Item) is ItemType
 
 
-def _make_relay_target():
+def _make_relay_target() -> tuple[type[library_models.Genre], type[DjangoType]]:
     """Register a Relay-Node ``DjangoType`` over ``library.Genre`` and return both."""
     from apps.library.models import Genre
 
@@ -197,14 +197,14 @@ def _make_relay_target():
         (serializers.JSONField(), strawberry.scalars.JSON),
     ],
 )
-def test_scalar_field_annotations(field: DRFField, expected: object):
+def test_scalar_field_annotations(field: DRFField, expected: object) -> None:
     """Each supported scalar serializer field maps to its Strawberry annotation, kind ``scalar``."""
     conversion = convert_serializer_field(bind_unparented(field, "f"))
     assert conversion.annotation == expected
     assert conversion.kind == SCALAR
 
 
-def test_required_ness_reflects_field_required():
+def test_required_ness_reflects_field_required() -> None:
     """``required`` mirrors ``field.required`` for both states."""
     assert (
         convert_serializer_field(
@@ -220,14 +220,14 @@ def test_required_ness_reflects_field_required():
     )
 
 
-def test_email_field_maps_via_mro_under_charfield():
+def test_email_field_maps_via_mro_under_charfield() -> None:
     """A known subclass (``EmailField``) resolves to its ``CharField`` parent's scalar (MRO walk)."""
     assert (
         convert_serializer_field(bind_unparented(serializers.EmailField(), "f")).annotation is str
     )
 
 
-def test_is_input_parameter_is_accepted_and_ignored():
+def test_is_input_parameter_is_accepted_and_ignored() -> None:
     """``is_input`` is threaded for graphene-parity but does not branch (spec-039)."""
     a = convert_serializer_field(bind_unparented(serializers.CharField(), "f"), is_input=True)
     b = convert_serializer_field(bind_unparented(serializers.CharField(), "f"), is_input=False)
@@ -240,7 +240,7 @@ def test_is_input_parameter_is_accepted_and_ignored():
 # ---------------------------------------------------------------------------
 
 
-def test_list_field_scalar_child_maps_to_list():
+def test_list_field_scalar_child_maps_to_list() -> None:
     """``ListField(child=IntegerField())`` -> ``list[int]`` (recursive through the scalar registry)."""
     field = bind_unparented(serializers.ListField(child=serializers.IntegerField()), "nums")
     conversion = convert_serializer_field(field)
@@ -248,7 +248,7 @@ def test_list_field_scalar_child_maps_to_list():
     assert conversion.kind == SCALAR
 
 
-def test_multiple_choice_field_maps_to_list_str():
+def test_multiple_choice_field_maps_to_list_str() -> None:
     """``MultipleChoiceField`` -> ``list[str]`` (precedes the scalar ``ChoiceField`` -> ``str``)."""
     field = bind_unparented(serializers.MultipleChoiceField(choices=["a", "b"]), "tags")
     conversion = convert_serializer_field(field)
@@ -256,7 +256,7 @@ def test_multiple_choice_field_maps_to_list_str():
     assert conversion.kind == SCALAR
 
 
-def test_list_field_relation_child_raises():
+def test_list_field_relation_child_raises() -> None:
     """A ``ListField`` whose child is a relation raises (only a scalar child is supported)."""
     _register_products_types()
     field = bind_unparented(
@@ -271,7 +271,7 @@ def test_list_field_relation_child_raises():
         convert_serializer_field(field)
 
 
-def test_list_field_nested_serializer_child_raises():
+def test_list_field_nested_serializer_child_raises() -> None:
     """A ``ListField`` whose child is a nested serializer raises."""
 
     class Inner(serializers.Serializer[object]):
@@ -282,7 +282,7 @@ def test_list_field_nested_serializer_child_raises():
         convert_serializer_field(field)
 
 
-def test_list_field_file_child_raises():
+def test_list_field_file_child_raises() -> None:
     """A ``ListField`` whose child is a ``FileField`` raises (a FILE-kind child is not a scalar).
 
     A ``FileField`` child is neither a relation nor a nested serializer (those raise
@@ -294,8 +294,10 @@ def test_list_field_file_child_raises():
         convert_serializer_field(field)
 
 
-def test_serializer_only_many_related_field_maps_to_globalid_list():
-    """A serializer-only ``PrimaryKeyRelatedField(many=True)`` -> ``list[GlobalID]`` (the column-less M2M annotation).
+def test_serializer_only_many_related_field_maps_to_globalid_list() -> None:
+    """A serializer-only ``PrimaryKeyRelatedField(many=True)`` -> ``list[GlobalID]``.
+
+    This is the column-less M2M annotation.
 
     The ``many=True`` (``ManyRelatedField``) analog of the single serializer-only relation:
     no backing column, so the related model resolves from ``child_relation.queryset.model``
@@ -315,7 +317,7 @@ def test_serializer_only_many_related_field_maps_to_globalid_list():
     assert related_model is relay_target
 
 
-def test_nested_serializer_field_raises():
+def test_nested_serializer_field_raises() -> None:
     """A nested ``Serializer`` field raises (the 036 nested-write non-goal)."""
 
     class Inner(serializers.Serializer[object]):
@@ -325,7 +327,7 @@ def test_nested_serializer_field_raises():
         convert_serializer_field(bind_unparented(Inner(), "inner"))
 
 
-def test_list_serializer_field_raises():
+def test_list_serializer_field_raises() -> None:
     """A ``ListSerializer`` (a ``many=True`` nested serializer) raises."""
 
     class Inner(serializers.Serializer[object]):
@@ -335,7 +337,7 @@ def test_list_serializer_field_raises():
         convert_serializer_field(bind_unparented(Inner(many=True), "items"))
 
 
-def test_is_nested_serializer_field_detects_nested_and_scalar():
+def test_is_nested_serializer_field_detects_nested_and_scalar() -> None:
     """``is_nested_serializer_field`` is True for a nested serializer / list, False for a scalar."""
 
     class Inner(serializers.Serializer[object]):
@@ -350,8 +352,11 @@ def test_is_nested_serializer_field_detects_nested_and_scalar():
     )
 
 
-def test_nested_serializer_child_reports_single_vs_many():
-    """``nested_serializer_child`` peels a ``ListSerializer`` to its child (many=True) vs a single (many=False)."""
+def test_nested_serializer_child_reports_single_vs_many() -> None:
+    """``nested_serializer_child`` peels a ``ListSerializer`` to its child, a single one to itself.
+
+    ``many=True`` peels to the child; ``many=False`` returns the serializer itself.
+    """
 
     class Inner(serializers.Serializer[object]):
         x = serializers.CharField()
@@ -367,7 +372,7 @@ def test_nested_serializer_child_reports_single_vs_many():
     assert many_flag is True
 
 
-def test_resolve_serializer_field_rejects_nested_over_relation_column():
+def test_resolve_serializer_field_rejects_nested_over_relation_column() -> None:
     """A nested serializer over a REVERSE-relation column fails loud, not misrouted as a relation.
 
     ``resolve_serializer_field`` rejects a nested serializer FIRST, before the backing-column
@@ -398,7 +403,7 @@ def test_resolve_serializer_field_rejects_nested_over_relation_column():
 # ---------------------------------------------------------------------------
 
 
-def test_primary_key_related_field_is_relation_single():
+def test_primary_key_related_field_is_relation_single() -> None:
     """``PrimaryKeyRelatedField`` -> kind ``relation_single`` (annotation finalized at build site)."""
     _register_products_types()
     field: _PkRelation[product_models.Category] = bind_unparented(
@@ -410,7 +415,7 @@ def test_primary_key_related_field_is_relation_single():
     assert conversion.annotation is None
 
 
-def test_many_related_field_is_relation_multi():
+def test_many_related_field_is_relation_multi() -> None:
     """``PrimaryKeyRelatedField(many=True)`` (a ``ManyRelatedField``) -> kind ``relation_multi``."""
     _register_products_types()
     field: _PkRelation[product_models.Category] = bind_unparented(
@@ -425,7 +430,7 @@ def test_many_related_field_is_relation_multi():
     assert conversion.annotation is None
 
 
-def test_slug_related_field_raises_non_pk_relation():
+def test_slug_related_field_raises_non_pk_relation() -> None:
     """A writable ``SlugRelatedField`` (a non-PK relation) fails loud.
 
     Only ``PrimaryKeyRelatedField`` decodes to a primary key; a slug-expecting field has
@@ -443,7 +448,7 @@ def test_slug_related_field_raises_non_pk_relation():
         convert_serializer_field(field)
 
 
-def test_many_related_field_non_pk_child_raises():
+def test_many_related_field_non_pk_child_raises() -> None:
     """A ``ManyRelatedField`` wrapping a non-PK child (``SlugRelatedField(many=True)``) fails loud."""
     _register_products_types()
     field: _SlugRelation[product_models.Category] = bind_unparented(
@@ -458,7 +463,7 @@ def test_many_related_field_non_pk_child_raises():
         convert_serializer_field(field)
 
 
-def test_file_and_image_fields_are_file_kind():
+def test_file_and_image_fields_are_file_kind() -> None:
     """``FileField`` / ``ImageField`` -> kind ``file`` (the ``Upload`` annotation is build-site)."""
     assert convert_serializer_field(bind_unparented(serializers.FileField(), "f")).kind == FILE
     # ``ImageField`` requires Pillow at validate time, but construction +
@@ -471,7 +476,7 @@ def test_file_and_image_fields_are_file_kind():
 # ---------------------------------------------------------------------------
 
 
-def test_unknown_custom_field_subclass_raises():
+def test_unknown_custom_field_subclass_raises() -> None:
     """A custom ``serializers.Field`` subclass with no supported ancestor raises ``ConfigurationError``.
 
     The catch-all-shadowing regression: a ``serializers.Field -> str`` catch-all
@@ -481,11 +486,11 @@ def test_unknown_custom_field_subclass_raises():
 
     class CustomField(serializers.Field[object, object, object, object]):
         @override
-        def to_internal_value(self, data: object):  # never called in conversion.
+        def to_internal_value(self, data: object) -> object:  # never called in conversion.
             return data
 
         @override
-        def to_representation(self, value: object):  # never called in conversion.
+        def to_representation(self, value: object) -> object:  # never called in conversion.
             return value
 
     with pytest.raises(
@@ -508,14 +513,14 @@ def test_unknown_custom_field_subclass_raises():
         ("category_pk", "category_pk", "categoryPk"),
     ],
 )
-def test_id_like_suffix_rule(declared: str, expected_attr: str, expected_graphql: str):
+def test_id_like_suffix_rule(declared: str, expected_attr: str, expected_graphql: str) -> None:
     """A single relation's declared name drives the input attr / GraphQL name (no doubling)."""
     attr, graphql = serializer_field_graphql_name(declared, RELATION_SINGLE)
     assert attr == expected_attr
     assert graphql == expected_graphql
 
 
-def test_multi_relation_keeps_plain_name():
+def test_multi_relation_keeps_plain_name() -> None:
     """A multi relation keeps the plain declared name (already a collection of ids)."""
     attr, graphql = serializer_field_graphql_name("cats", RELATION_MULTI)
     assert attr == "cats"
@@ -527,7 +532,7 @@ def test_multi_relation_keeps_plain_name():
 # ---------------------------------------------------------------------------
 
 
-def test_renamed_scalar_resolves_backing_column_via_source():
+def test_renamed_scalar_resolves_backing_column_via_source() -> None:
     """``full_name = CharField(source="name")`` resolves the ``name`` column, keeps the declared name."""
     _register_products_types()
 
@@ -551,7 +556,7 @@ def test_renamed_scalar_resolves_backing_column_via_source():
     assert spec.kind == SCALAR
 
 
-def test_renamed_relation_resolves_backing_column_and_id_like_name():
+def test_renamed_relation_resolves_backing_column_and_id_like_name() -> None:
     """``category_pk = PrimaryKeyRelatedField(source="category")`` -> ``categoryPk``, column via source."""
     _register_products_types()
 
@@ -577,7 +582,7 @@ def test_renamed_relation_resolves_backing_column_and_id_like_name():
     assert spec.related_model is product_models.Category
 
 
-def test_model_backed_relation_cardinality_mismatch_raises():
+def test_model_backed_relation_cardinality_mismatch_raises() -> None:
     """A DRF ``many=True`` relation cannot masquerade as a scalar FK input."""
     _register_products_types()
 
@@ -597,7 +602,7 @@ def test_model_backed_relation_cardinality_mismatch_raises():
         resolve_serializer_field(field, product_models.Item, "X")
 
 
-def test_many_relation_bound_to_an_attname_reports_the_cardinality_mismatch():
+def test_many_relation_bound_to_an_attname_reports_the_cardinality_mismatch() -> None:
     """A ``many=True`` field over an FK's ``attname`` is refused for its cardinality first.
 
     The cardinality guard runs before the attname guard, so the consumer is told the shape is
@@ -700,7 +705,7 @@ def test_relation_bound_to_its_attname_is_refused(
     source: str | None,
     target: type[models.Model],
     relation: str,
-):
+) -> None:
     """A ``PrimaryKeyRelatedField`` whose source is a forward relation's ``attname`` fails loud.
 
     It validates to the related instance, which DRF writes under the attname: the default
@@ -737,7 +742,7 @@ def test_relation_bound_by_name_keeps_its_graphql_name(
     name: str,
     input_attr: str,
     graphql_name: str,
-):
+) -> None:
     """The remedy ``source="category"`` builds, and the declared name keeps its GraphQL name."""
     _register_products_types()
     relation_field: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
@@ -785,7 +790,7 @@ def _register_membership_card_primary() -> None:
     assert registry.get(library_models.MembershipCard) is MembershipCardProbeType
 
 
-def test_many_pk_related_field_over_reverse_fk_column_emits_multi():
+def test_many_pk_related_field_over_reverse_fk_column_emits_multi() -> None:
     """A many relation over a one_to_many column emits a list id input, not one scalar id.
 
     ``Branch.shelves`` is a ``ManyToOneRel``: collection-shaped (``one_to_many=True``)
@@ -823,7 +828,7 @@ def test_many_pk_related_field_over_reverse_fk_column_emits_multi():
     assert relay.GlobalID in get_args(annotation)
 
 
-def test_many_pk_related_field_over_generic_relation_column_emits_multi():
+def test_many_pk_related_field_over_generic_relation_column_emits_multi() -> None:
     """The same alignment over a ``GenericRelation`` column (also one_to_many, not m2m)."""
     _register_tagged_item_primary()
     tags_rel = library_models.Branch._meta.get_field("tags")
@@ -852,7 +857,7 @@ def test_many_pk_related_field_over_generic_relation_column_emits_multi():
     assert get_origin(annotation) is list
 
 
-def test_single_pk_related_field_over_reverse_o2o_column_emits_single():
+def test_single_pk_related_field_over_reverse_o2o_column_emits_single() -> None:
     """A single relation over a reverse OneToOneRel stays a single id input.
 
     A ``OneToOneRel`` reports ``one_to_many=False`` (it mirrors the forward field's
@@ -886,7 +891,7 @@ def test_single_pk_related_field_over_reverse_o2o_column_emits_single():
     assert spec.related_model is library_models.MembershipCard
 
 
-def test_many_over_reverse_o2o_column_is_rejected():
+def test_many_over_reverse_o2o_column_is_rejected() -> None:
     """many=True over a reverse OneToOneRel is a cardinality mismatch (a collection lie)."""
 
     class PatronSer(ModelSerializerBase[library_models.Patron]):
@@ -934,7 +939,7 @@ def test_single_over_collection_column_is_rejected(
         resolve_serializer_field(field, model_cls, "ProbeInput")
 
 
-def test_model_backed_slug_related_field_raises():
+def test_model_backed_slug_related_field_raises() -> None:
     """A ``SlugRelatedField`` over a model RELATION column fails loud at resolve.
 
     The model-backed relation branch (``column.is_relation``) would otherwise type the
@@ -958,7 +963,7 @@ def test_model_backed_slug_related_field_raises():
         resolve_serializer_field(field, product_models.Item, "X")
 
 
-def test_dotted_source_on_model_column_field_raises():
+def test_dotted_source_on_model_column_field_raises() -> None:
     """A dotted ``source`` on a model-column-converting field raises ``ConfigurationError``."""
     _register_products_types()
 
@@ -974,7 +979,7 @@ def test_dotted_source_on_model_column_field_raises():
         backing_model_field(product_models.Item, field)
 
 
-def test_star_source_on_model_column_field_raises():
+def test_star_source_on_model_column_field_raises() -> None:
     """A ``source="*"`` on a model-column-converting field raises ``ConfigurationError``."""
     _register_products_types()
     field = bind_unparented(serializers.CharField(source="*"), "whole")
@@ -982,7 +987,7 @@ def test_star_source_on_model_column_field_raises():
         backing_model_field(product_models.Item, field)
 
 
-def test_require_one_segment_source_rejects_star_and_dotted():
+def test_require_one_segment_source_rejects_star_and_dotted() -> None:
     """The shared one-segment source helper rejects ``source='*'`` and dotted sources.
 
     ``backing_model_field`` and the nested-input walk both call this owner; column /
@@ -1015,7 +1020,7 @@ def test_require_one_segment_source_rejects_star_and_dotted():
 # ---------------------------------------------------------------------------
 
 
-def test_serializer_only_relation_resolves_target_from_queryset_model():
+def test_serializer_only_relation_resolves_target_from_queryset_model() -> None:
     """A plain-``Serializer`` relation resolves its target from ``field.queryset.model``."""
     _register_products_types()
 
@@ -1032,7 +1037,7 @@ def test_serializer_only_relation_resolves_target_from_queryset_model():
     assert annotation is int
 
 
-def test_serializer_only_relation_to_relay_target_uses_globalid():
+def test_serializer_only_relation_to_relay_target_uses_globalid() -> None:
     """A serializer-only relation to a Relay primary becomes ``GlobalID``."""
     relay_target, _ = _make_relay_target()
 
@@ -1046,7 +1051,7 @@ def test_serializer_only_relation_to_relay_target_uses_globalid():
     assert annotation is relay.GlobalID
 
 
-def test_relation_with_no_backing_column_and_no_queryset_raises():
+def test_relation_with_no_backing_column_and_no_queryset_raises() -> None:
     """A read-only-ish relation with no column and no concrete queryset.model raises.
 
     A ``read_only=True`` relation carries no queryset; routed through the
@@ -1058,11 +1063,11 @@ def test_relation_with_no_backing_column_and_no_queryset_raises():
         rel: _PkRelation[models.Model] = serializers.PrimaryKeyRelatedField(read_only=True)
 
     field = bound_fields(PlainSer())["rel"]
-    with pytest.raises(ConfigurationError, match="no concrete queryset.model"):
+    with pytest.raises(ConfigurationError, match=r"no concrete queryset\.model"):
         resolve_serializer_field(field, None, "X")
 
 
-def test_relation_target_with_no_registered_primary_raises():
+def test_relation_target_with_no_registered_primary_raises() -> None:
     """A relation whose target model has no registered primary DjangoType raises."""
 
     # No DjangoType registered for Category in this test -> the raise fires.
@@ -1090,7 +1095,7 @@ def test_relation_target_with_no_registered_primary_raises():
         (serializers.DurationField(), str),
     ],
 )
-def test_expanded_scalar_matrix(field: DRFField, expected: object):
+def test_expanded_scalar_matrix(field: DRFField, expected: object) -> None:
     """Each expanded-matrix scalar maps to its EXPLICIT annotation, kind ``scalar``.
 
     ``DictField`` -> ``JSON``; ``IPAddressField`` / ``FilePathField`` -> ``str``;
@@ -1102,14 +1107,14 @@ def test_expanded_scalar_matrix(field: DRFField, expected: object):
     assert conversion.kind == SCALAR
 
 
-def test_hstore_field_maps_to_json_via_mro():
+def test_hstore_field_maps_to_json_via_mro() -> None:
     """``HStoreField`` (a ``DictField`` subclass) resolves to ``JSON`` through the MRO walk."""
     conversion = convert_serializer_field(bind_unparented(serializers.HStoreField(), "h"))
     assert conversion.annotation == strawberry.scalars.JSON
     assert conversion.kind == SCALAR
 
 
-def test_model_field_maps_via_wrapped_model_field():
+def test_model_field_maps_via_wrapped_model_field() -> None:
     """``ModelField`` resolves its scalar through the wrapped Django ``model_field`` (#7)."""
     field = serializers.ModelField(model_field=_concrete_field(product_models.Item, "name"))
     conversion = convert_serializer_field(bind_unparented(field, "nm"))
@@ -1117,7 +1122,7 @@ def test_model_field_maps_via_wrapped_model_field():
     assert conversion.kind == SCALAR
 
 
-def test_model_field_without_wrapped_field_raises():
+def test_model_field_without_wrapped_field_raises() -> None:
     """A ``ModelField`` with no wrapped ``model_field`` fails loud (no scalar to resolve)."""
     # basedpyright: the missing wrapped model field is the hostile input under test; drf-stubs
     # types model_field as a Django Field
@@ -1127,7 +1132,7 @@ def test_model_field_without_wrapped_field_raises():
         convert_serializer_field(field)
 
 
-def test_model_field_over_unsupported_column_fails_loud():
+def test_model_field_over_unsupported_column_fails_loud() -> None:
     """A ``ModelField`` over an UNsupported column type raises (via ``scalar_for_field``, no ``String``)."""
 
     class WeirdField(models.Field[object, object]):
@@ -1150,16 +1155,16 @@ class _CustomHexField(serializers.Field[object, object, object, object]):
     """A custom DRF field whose MRO has NO supported ancestor (unregistered -> raises)."""
 
     @override
-    def to_internal_value(self, data: object):  # never called in conversion.
+    def to_internal_value(self, data: object) -> object:  # never called in conversion.
         return data
 
     @override
-    def to_representation(self, value: object):  # never called in conversion.
+    def to_representation(self, value: object) -> object:  # never called in conversion.
         return value
 
 
 @pytest.mark.usefixtures("_restore_converter_registry")
-def test_unregistered_custom_field_raises_then_registered_maps():
+def test_unregistered_custom_field_raises_then_registered_maps() -> None:
     """A custom field raises until a converter is registered, then maps - and no catch-all appears."""
     # Unregistered: the fail-loud raise (no silent ``String``).
     with pytest.raises(
@@ -1178,7 +1183,7 @@ def test_unregistered_custom_field_raises_then_registered_maps():
 
 
 @pytest.mark.usefixtures("_restore_converter_registry")
-def test_registered_converter_malformed_return_is_configuration_error():
+def test_registered_converter_malformed_return_is_configuration_error() -> None:
     """A registered converter must return the typed scalar conversion value object."""
     # basedpyright: the converter returning None is the hostile input under test;
     # register_serializer_field_converter types the parameter as SerializerFieldConverter
@@ -1188,10 +1193,10 @@ def test_registered_converter_malformed_return_is_configuration_error():
 
 
 @pytest.mark.usefixtures("_restore_converter_registry")
-def test_registered_converter_exception_is_wrapped_as_configuration_error():
+def test_registered_converter_exception_is_wrapped_as_configuration_error() -> None:
     """A converter that raises is reported against the registry, not as its own exception."""
 
-    def broken_converter(_field: DRFField):
+    def broken_converter(_field: DRFField) -> NoReturn:
         raise RuntimeError("converter failed")
 
     register_serializer_field_converter(_CustomHexField, broken_converter)
@@ -1200,7 +1205,7 @@ def test_registered_converter_exception_is_wrapped_as_configuration_error():
 
 
 @pytest.mark.usefixtures("_restore_converter_registry")
-def test_registered_converter_relation_kind_is_configuration_error():
+def test_registered_converter_relation_kind_is_configuration_error() -> None:
     """A scalar registry extension cannot bypass framework-owned relation handling."""
     register_serializer_field_converter(
         _CustomHexField,
@@ -1215,7 +1220,7 @@ def test_registered_converter_relation_kind_is_configuration_error():
 
 
 @pytest.mark.usefixtures("_restore_converter_registry")
-def test_register_converter_resolves_unregistered_subclass_via_mro():
+def test_register_converter_resolves_unregistered_subclass_via_mro() -> None:
     """A registered converter also covers the field class's unregistered subclasses (MRO walk)."""
     register_serializer_field_converter(
         _CustomHexField,
@@ -1229,7 +1234,7 @@ def test_register_converter_resolves_unregistered_subclass_via_mro():
 
 
 @pytest.mark.usefixtures("_restore_converter_registry")
-def test_register_converter_override_guard():
+def test_register_converter_override_guard() -> None:
     """Re-registering an already-mapped class raises unless ``override=True``."""
 
     def conv(field: DRFField) -> SerializerFieldConversion:
@@ -1256,9 +1261,9 @@ def test_register_converter_override_guard():
 @pytest.mark.usefixtures("_restore_converter_registry")
 def test_register_converter_rejects_non_field_class(
     field_class: object,
-):
+) -> None:
     """``field_class`` must be a ``serializers.Field`` subclass."""
-    with pytest.raises(ConfigurationError, match="must be a serializers.Field subclass"):
+    with pytest.raises(ConfigurationError, match=r"must be a serializers\.Field subclass"):
         register_serializer_field_converter(
             # basedpyright: each non-class field_class is the hostile input under test;
             # register_serializer_field_converter types the parameter as type[object]
@@ -1268,9 +1273,9 @@ def test_register_converter_rejects_non_field_class(
 
 
 @pytest.mark.usefixtures("_restore_converter_registry")
-def test_register_converter_rejects_non_callable():
+def test_register_converter_rejects_non_callable() -> None:
     """``converter`` must be callable."""
-    with pytest.raises(ConfigurationError, match="must be\n?.*callable|callable"):
+    with pytest.raises(ConfigurationError, match=r"must be a callable\(field\)"):
         # basedpyright: the non-callable converter is the hostile input under test;
         # register_serializer_field_converter types the parameter as SerializerFieldConverter
         register_serializer_field_converter(_CustomHexField, "not-a-callable")  # pyright: ignore[reportArgumentType]
@@ -1281,7 +1286,7 @@ def test_register_converter_rejects_non_callable():
 # ---------------------------------------------------------------------------
 
 
-def test_serializer_only_choicefield_becomes_enum():
+def test_serializer_only_choicefield_becomes_enum() -> None:
     """A serializer-only ``ChoiceField`` resolves to a generated GraphQL enum (schema precision)."""
 
     class ChoiceSer(serializers.Serializer[object]):
@@ -1295,7 +1300,7 @@ def test_serializer_only_choicefield_becomes_enum():
     assert {member.value for member in annotation} == {"r", "g"}
 
 
-def test_serializer_only_multiple_choicefield_becomes_list_enum():
+def test_serializer_only_multiple_choicefield_becomes_list_enum() -> None:
     """A serializer-only ``MultipleChoiceField`` resolves to ``list[<enum>]``."""
 
     class MultiSer(serializers.Serializer[object]):
@@ -1309,7 +1314,7 @@ def test_serializer_only_multiple_choicefield_becomes_list_enum():
     assert {member.value for member in inner} == {"a", "b"}
 
 
-def test_serializer_only_multiple_choicefield_allow_blank_enum_has_blank_member():
+def test_serializer_only_multiple_choicefield_allow_blank_enum_has_blank_member() -> None:
     """``MultipleChoiceField(allow_blank=True)`` admits ``""`` per element, so its enum carries ``BLANK``."""
 
     class MultiSer(serializers.Serializer[object]):
@@ -1321,7 +1326,7 @@ def test_serializer_only_multiple_choicefield_allow_blank_enum_has_blank_member(
     assert {member.name: member.value for member in inner} == {"BLANK": "", "a": "a"}
 
 
-def test_listfield_choice_child_allow_null_makes_the_enum_element_nullable():
+def test_listfield_choice_child_allow_null_makes_the_enum_element_nullable() -> None:
     """A choice child with ``allow_null=True`` admits ``None`` per element: ``list[<enum> | None]``."""
 
     class ListSer(serializers.Serializer[object]):
@@ -1338,7 +1343,7 @@ def test_listfield_choice_child_allow_null_makes_the_enum_element_nullable():
     assert {member.value for member in inner} == {"a"}
 
 
-def test_listfield_multiple_choice_child_stays_list_of_list_str():
+def test_listfield_multiple_choice_child_stays_list_of_list_str() -> None:
     """A ``MultipleChoiceField`` child admits a list per element, so no enum is generated for it."""
 
     class ListSer(serializers.Serializer[object]):
@@ -1351,7 +1356,7 @@ def test_listfield_multiple_choice_child_stays_list_of_list_str():
     assert annotation == list[list[str]]
 
 
-def test_listfield_filepath_child_stays_list_str(tmp_path: Path):
+def test_listfield_filepath_child_stays_list_str(tmp_path: Path) -> None:
     """A ``FilePathField`` child's choices are filesystem-dynamic, so the list stays ``list[str]``."""
 
     class ListSer(serializers.Serializer[object]):
@@ -1362,7 +1367,7 @@ def test_listfield_filepath_child_stays_list_str(tmp_path: Path):
     assert annotation == list[str]
 
 
-def test_declared_choicefield_allow_blank_over_model_column_enum_has_blank_member():
+def test_declared_choicefield_allow_blank_over_model_column_enum_has_blank_member() -> None:
     """A declared ``ChoiceField(allow_blank=True)`` over a plain column emits its enum with ``BLANK``."""
 
     class DeclaredSer(ModelSerializerBase[library_models.Shelf]):
@@ -1385,7 +1390,7 @@ def _value_refusal(
     missing: str,
     column: str,
     remedy: str,
-):
+) -> str:
     them = "them" if ", " in missing else "it"
     return (
         f"Serializer {serializer_name} field {field_name!r} admits {missing} over the choice "
@@ -1398,7 +1403,7 @@ _BLANK_COLUMN_REMEDY = (
 )
 
 
-def test_declared_choice_allow_blank_over_strict_choice_column_refused():
+def test_declared_choice_allow_blank_over_strict_choice_column_refused() -> None:
     """``allow_blank=True`` over a ``blank=False`` choice column would write an unreadable ``""``."""
 
     class BlankStatusSer(ModelSerializerBase[library_models.Book]):
@@ -1423,7 +1428,7 @@ def test_declared_choice_allow_blank_over_strict_choice_column_refused():
     )
 
 
-def test_source_mapped_choice_allow_blank_over_strict_choice_column_refused():
+def test_source_mapped_choice_allow_blank_over_strict_choice_column_refused() -> None:
     """The column is resolved through ``source``; the message names the declared field."""
 
     class RenamedStatusSer(ModelSerializerBase[library_models.Book]):
@@ -1449,7 +1454,7 @@ def test_source_mapped_choice_allow_blank_over_strict_choice_column_refused():
     )
 
 
-def test_extra_kwargs_allow_blank_over_strict_choice_column_refused():
+def test_extra_kwargs_allow_blank_over_strict_choice_column_refused() -> None:
     """An auto-generated choice field given ``allow_blank`` by ``extra_kwargs`` is refused too."""
 
     class ExtraBlankSer(ModelSerializerBase[library_models.Book]):
@@ -1518,10 +1523,11 @@ def test_extra_kwargs_allow_blank_over_strict_choice_column_refused():
 )
 def test_declared_choice_value_missing_from_column_enum_refused(
     declared: list[tuple[str, str]],
+    *,
     allow_blank: bool,
     missing: str,
     remedy: str,
-):
+) -> None:
     """Every value the serializer admits must be a member of the column's read enum."""
 
     class ValueSer(ModelSerializerBase[library_models.Book]):
@@ -1551,7 +1557,7 @@ def _integer_choice_column(*, blank: bool = False, null: bool = False) -> _Int:
     return column
 
 
-def test_allow_blank_over_blank_integer_choice_column_refused_without_blank_remedy():
+def test_allow_blank_over_blank_integer_choice_column_refused_without_blank_remedy() -> None:
     """An integer column never stores ``""``, so ``blank=True`` is no remedy: only the field is."""
 
     class RankSer(serializers.Serializer[object]):
@@ -1572,7 +1578,7 @@ def test_allow_blank_over_blank_integer_choice_column_refused_without_blank_reme
     )
 
 
-def test_choice_values_compared_as_the_column_reads_them_back():
+def test_choice_values_compared_as_the_column_reads_them_back() -> None:
     """A declared ``"1"`` over an integer column is stored and read back as ``1``: accepted."""
 
     class RankSer(serializers.Serializer[object]):
@@ -1584,7 +1590,7 @@ def test_choice_values_compared_as_the_column_reads_them_back():
     )
 
 
-def test_integer_choices_column_accepts_its_own_choices():
+def test_integer_choices_column_accepts_its_own_choices() -> None:
     """An ``IntegerChoices`` column with a field declaring the same choices is accepted."""
 
     class Rank(models.IntegerChoices):
@@ -1603,7 +1609,7 @@ def test_integer_choices_column_accepts_its_own_choices():
     )
 
 
-def test_declared_choice_allow_blank_over_blank_choice_column_accepted():
+def test_declared_choice_allow_blank_over_blank_choice_column_accepted() -> None:
     """Over a ``blank=True`` choice column both the input enum and the read enum carry ``BLANK``."""
     from django_strawberry_framework.types.converters import convert_choices_to_enum
 
@@ -1629,7 +1635,7 @@ def test_declared_choice_allow_blank_over_blank_choice_column_accepted():
     assert {member.name: member.value for member in read_enum}["BLANK"] == ""
 
 
-def test_declared_choice_allow_blank_over_strict_non_choice_column_accepted():
+def test_declared_choice_allow_blank_over_strict_non_choice_column_accepted() -> None:
     """A column without ``choices`` reads as ``String``, which carries ``""``: not refused.
 
     ``Book.title`` is ``blank=False``, so only the column's lack of ``choices`` keeps the
@@ -1650,7 +1656,7 @@ def test_declared_choice_allow_blank_over_strict_non_choice_column_accepted():
     assert {member.name: member.value for member in annotation} == {"BLANK": "", "dune": "dune"}
 
 
-def test_serializer_only_choice_allow_blank_on_model_serializer_accepted():
+def test_serializer_only_choice_allow_blank_on_model_serializer_accepted() -> None:
     """A choice field with no backing column keeps the ``BLANK`` member ``allow_blank`` adds."""
 
     class ExtraChoiceSer(ModelSerializerBase[library_models.Book]):
@@ -1673,7 +1679,7 @@ class _Condition(models.TextChoices):
     WORN = "worn", "Worn"
 
 
-def test_auto_model_serializer_over_empty_label_column_builds_the_read_enum():
+def test_auto_model_serializer_over_empty_label_column_builds_the_read_enum() -> None:
     """An auto ``ModelSerializer`` field over an ``__empty__`` column builds; ``None`` is no member.
 
     DRF copies the column's ``(None, "Unassessed")`` pair into the field's choices; the subset
@@ -1705,7 +1711,10 @@ def test_auto_model_serializer_over_empty_label_column_builds_the_read_enum():
 
 
 @pytest.mark.parametrize("allow_null", [False, True], ids=["strict", "allow-null"])
-def test_serializer_only_choice_over_empty_label_choices_gets_no_none_member(allow_null: bool):
+def test_serializer_only_choice_over_empty_label_choices_gets_no_none_member(
+    *,
+    allow_null: bool,
+) -> None:
     """A serializer-only ``ChoiceField`` over ``__empty__`` choices publishes no ``_None`` member.
 
     ``None`` is the empty option's label; ``allow_null`` decides whether the field takes it,
@@ -1727,7 +1736,9 @@ def test_serializer_only_choice_over_empty_label_choices_gets_no_none_member(all
             field.run_validation(None)
 
 
-def test_serializer_only_multiple_choice_over_empty_label_choices_keeps_a_non_null_element():
+def test_serializer_only_multiple_choice_over_empty_label_choices_keeps_a_non_null_element() -> (
+    None
+):
     """A serializer-only ``MultipleChoiceField`` element enum carries no ``_None`` member.
 
     The element stays non-null: ``allow_null`` on the field nulls the whole list, never an
@@ -1757,7 +1768,7 @@ def _multiple_choice_refusal(
     )
 
 
-def _declared_multiple_choice_ser():
+def _declared_multiple_choice_ser() -> tuple[type[ModelSerializerBase[library_models.Book]], str]:
     class MultiStatusSer(ModelSerializerBase[library_models.Book]):
         circulation_status = serializers.MultipleChoiceField(
             choices=library_models.Book.CirculationStatus.choices,
@@ -1770,7 +1781,10 @@ def _declared_multiple_choice_ser():
     return MultiStatusSer, "circulation_status"
 
 
-def _source_mapped_multiple_choice_ser():
+def _source_mapped_multiple_choice_ser() -> tuple[
+    type[ModelSerializerBase[library_models.Book]],
+    str,
+]:
     class MultiStatusSer(ModelSerializerBase[library_models.Book]):
         statuses = serializers.MultipleChoiceField(
             choices=library_models.Book.CirculationStatus.choices,
@@ -1784,7 +1798,7 @@ def _source_mapped_multiple_choice_ser():
     return MultiStatusSer, "statuses"
 
 
-def _generated_multiple_choice_ser():
+def _generated_multiple_choice_ser() -> tuple[type[ModelSerializerBase[library_models.Book]], str]:
     class MultiStatusSer(ModelSerializerBase[library_models.Book]):
         serializer_choice_field = serializers.MultipleChoiceField
 
@@ -1795,7 +1809,7 @@ def _generated_multiple_choice_ser():
     return MultiStatusSer, "circulation_status"
 
 
-def _listfield_choice_child_ser():
+def _listfield_choice_child_ser() -> tuple[type[ModelSerializerBase[library_models.Book]], str]:
     class MultiStatusSer(ModelSerializerBase[library_models.Book]):
         circulation_status = serializers.ListField(
             child=serializers.ChoiceField(choices=library_models.Book.CirculationStatus.choices),
@@ -1828,7 +1842,7 @@ def test_multiple_choice_over_single_value_choice_column_refused(
         [],
         tuple[type[serializers.ModelSerializer[library_models.Book]], str],
     ],
-):
+) -> None:
     """A list-of-choices field stores its list as one value no member of the column's enum reads.
 
     Every choice it declares is a column choice, so only the list shape is refused; a
@@ -1868,7 +1882,7 @@ def test_multiple_choice_over_column_without_choices_accepted(
     model: type[models.Model],
     column_name: str,
     make_field: Callable[[list[tuple[str, str]]], DRFField],
-):
+) -> None:
     """A column without ``choices`` has no read enum to hold the list to: the field is accepted.
 
     A declared list-of-choices field keeps its generated enum over it, whether it is a
@@ -1892,12 +1906,16 @@ class _FakeArrayField(models.Field[object, object]):
     """An ``ArrayField`` stand-in: ``django.contrib.postgres`` needs a Postgres driver."""
 
     # basedpyright: verbatim forward to Field.__init__; object fails its typed params
-    def __init__(self, base_field: ConcreteField, **kwargs: Any):  # pyright: ignore[reportExplicitAny]
+    def __init__(self, base_field: ConcreteField, **kwargs: Any) -> None:  # pyright: ignore[reportExplicitAny]
         super().__init__(**kwargs)
         self.base_field = base_field
 
 
-def _array_choice_column(monkeypatch: pytest.MonkeyPatch, *, blank: bool = False):
+def _array_choice_column(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    blank: bool = False,
+) -> _FakeArrayField:
     """A ``tags`` array column whose ``base_field`` declares ``a`` / ``b``."""
     from django_strawberry_framework.types import converters
 
@@ -1934,7 +1952,7 @@ def _list_choice_tags_field(**kwargs: Any) -> DRFField:  # pyright: ignore[repor
 def test_multiple_choice_over_array_choice_column_accepted(
     monkeypatch: pytest.MonkeyPatch,
     make_field: Callable[..., DRFField],
-):
+) -> None:
     """Each element is stored through ``base_field``, whose enum carries every declared choice."""
     column = _array_choice_column(monkeypatch)
     field = make_field(choices=[("a", "A"), ("b", "B")])
@@ -1946,7 +1964,7 @@ def test_multiple_choice_over_array_choice_column_accepted(
 
 def test_listfield_choice_child_element_missing_from_array_base_enum_refused(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A choice child's values are checked against the ``base_field`` like a ``MultipleChoiceField``'s."""
     column = _array_choice_column(monkeypatch)
     field = _list_choice_tags_field(choices=[("a", "A")], allow_blank=True)
@@ -1978,7 +1996,7 @@ def test_multiple_choice_element_missing_from_array_base_enum_refused(
     kwargs: dict[str, object],
     missing: str,
     remedy: str,
-):
+) -> None:
     """An element value the ``base_field``'s read enum lacks is refused, named on the column."""
     column = _array_choice_column(monkeypatch)
     field = _multi_tags_field(**kwargs)
@@ -1995,7 +2013,7 @@ def test_multiple_choice_element_missing_from_array_base_enum_refused(
 
 def test_multiple_choice_blank_element_over_blank_array_base_accepted(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A ``blank=True`` ``base_field`` reads ``""`` as ``BLANK``, so ``allow_blank`` is accepted."""
     column = _array_choice_column(monkeypatch, blank=True)
     field = _multi_tags_field(choices=[("a", "A")], allow_blank=True)
@@ -2004,7 +2022,9 @@ def test_multiple_choice_blank_element_over_blank_array_base_accepted(
     assert {member.name: member.value for member in inner} == {"BLANK": "", "a": "a"}
 
 
-def test_multiple_choice_over_empty_label_array_base_accepted(monkeypatch: pytest.MonkeyPatch):
+def test_multiple_choice_over_empty_label_array_base_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """An ``__empty__`` ``base_field``'s ``(None, label)`` pair is no element value: accepted.
 
     The field's choices carry ``None`` from ``Choices.__empty__``; the element check leaves it to
@@ -2027,7 +2047,7 @@ def test_multiple_choice_over_empty_label_array_base_accepted(monkeypatch: pytes
 _GROUPED_CHOICES = [("Fiction", [("a", "A"), ("b", "B")]), ("Other", [("c", "C")])]
 
 
-def _grouped_choice_model():
+def _grouped_choice_model() -> type[models.Model]:
     """A fresh model whose ``status`` column declares Django's grouped-choices form."""
 
     class GroupedShelf(models.Model):
@@ -2061,7 +2081,9 @@ def _grouped_status_field(
     [[("a", "A"), ("b", "B")], [("c", "C"), ("a", "A")]],
     ids=["one-group", "across-groups"],
 )
-def test_declared_flat_choice_over_grouped_column_accepted(declared: list[tuple[str, str]]):
+def test_declared_flat_choice_over_grouped_column_accepted(
+    declared: list[tuple[str, str]],
+) -> None:
     """A declared flat ``ChoiceField`` is checked against the column's flattened values.
 
     The column lists ``a`` / ``b`` / ``c`` (Django's ``flatchoices``), so a field declaring a
@@ -2102,10 +2124,11 @@ def test_declared_flat_choice_over_grouped_column_accepted(declared: list[tuple[
 )
 def test_declared_choice_over_grouped_column_value_the_column_does_not_list_refused(
     choices: list[tuple[str, str]],
+    *,
     allow_blank: bool,
     missing: str,
     remedy: str,
-):
+) -> None:
     """A value outside the grouped column's flattened values is refused with the column fact."""
     model = _grouped_choice_model()
     field = _grouped_status_field(model, choices, allow_blank=allow_blank)
@@ -2160,7 +2183,7 @@ def _declared_char_grouped_ser(model: type[models.Model]) -> DRFField:
 def test_field_taking_the_read_enum_of_a_grouped_column_refused(
     make_field: Callable[[type[models.Model]], DRFField],
     serializer_name: str,
-):
+) -> None:
     """A field whose input type is the column's read enum is refused: a grouped column has none.
 
     The auto-generated ``ChoiceField`` carries DRF's flattened choices, which the column lists,
@@ -2177,7 +2200,7 @@ def test_field_taking_the_read_enum_of_a_grouped_column_refused(
     )
 
 
-def _grouped_array_choice_column(monkeypatch: pytest.MonkeyPatch):
+def _grouped_array_choice_column(monkeypatch: pytest.MonkeyPatch) -> _FakeArrayField:
     """A ``tags`` array column whose ``base_field`` declares the grouped choices."""
     from django_strawberry_framework.types import converters
 
@@ -2198,7 +2221,7 @@ def _grouped_array_choice_column(monkeypatch: pytest.MonkeyPatch):
 def test_multiple_choice_over_grouped_array_base_accepted(
     monkeypatch: pytest.MonkeyPatch,
     make_field: Callable[..., DRFField],
-):
+) -> None:
     """Each element is checked against the grouped ``base_field``'s flattened values."""
     column = _grouped_array_choice_column(monkeypatch)
     field = make_field(choices=[("a", "A")])
@@ -2216,7 +2239,7 @@ def test_multiple_choice_over_grouped_array_base_accepted(
 def test_multiple_choice_element_the_grouped_array_base_does_not_list_refused(
     monkeypatch: pytest.MonkeyPatch,
     make_field: Callable[..., DRFField],
-):
+) -> None:
     """An element value outside the grouped ``base_field``'s flattened values is refused."""
     column = _grouped_array_choice_column(monkeypatch)
     field = make_field(choices=[("zzz", "Z")])
@@ -2239,7 +2262,7 @@ def test_multiple_choice_element_the_grouped_array_base_does_not_list_refused(
 def test_field_over_grouped_array_base_refused(
     monkeypatch: pytest.MonkeyPatch,
     declared_field: DRFField,
-):
+) -> None:
     """A field over the array that is no list of choices would take the grouped read enum.
 
     The remedy names the list-of-choices fields, which write the list the array stores: a
@@ -2260,7 +2283,7 @@ def test_field_over_grouped_array_base_refused(
 
 def test_generated_list_of_choices_over_grouped_array_base_refused(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """The ``ListField(child=ChoiceField)`` DRF generates over the array is refused.
 
     Its child carries the ``base_field``'s flattened choices, so the per-element value check
@@ -2286,7 +2309,7 @@ def test_generated_list_of_choices_over_grouped_array_base_refused(
     )
 
 
-def test_serializer_only_filepathfield_stays_str_not_enum():
+def test_serializer_only_filepathfield_stays_str_not_enum() -> None:
     """A ``FilePathField`` (a ``ChoiceField`` subclass with DYNAMIC choices) stays ``str``, never an enum."""
 
     class PathSer(serializers.Serializer[object]):
@@ -2297,10 +2320,10 @@ def test_serializer_only_filepathfield_stays_str_not_enum():
     assert annotation is str
 
 
-def test_serializer_only_choice_enum_dedupes_by_name():
+def test_serializer_only_choice_enum_dedupes_by_name() -> None:
     """Two resolves of the same serializer-only choice field share ONE enum object (dedupe)."""
 
-    def _resolve():
+    def _resolve() -> object:
         class ChoiceSer(serializers.Serializer[object]):
             color = serializers.ChoiceField(choices=[("r", "Red"), ("g", "Green")])
 
@@ -2309,7 +2332,7 @@ def test_serializer_only_choice_enum_dedupes_by_name():
     assert _resolve() is _resolve()
 
 
-def test_serializer_only_choice_enum_name_collision_with_diverging_members_raises():
+def test_serializer_only_choice_enum_name_collision_with_diverging_members_raises() -> None:
     """Reusing an enum NAME with a DIFFERENT member set fails loud (no silent reuse)."""
 
     class SerA(serializers.Serializer[object]):
@@ -2328,7 +2351,7 @@ def test_serializer_only_choice_enum_name_collision_with_diverging_members_raise
 # ---------------------------------------------------------------------------
 
 
-def test_consumer_declared_scalar_disagreeing_with_column_raises():
+def test_consumer_declared_scalar_disagreeing_with_column_raises() -> None:
     """A consumer-declared field whose scalar disagrees with the model column fails loud."""
     _register_products_types()
 
@@ -2344,7 +2367,7 @@ def test_consumer_declared_scalar_disagreeing_with_column_raises():
         resolve_serializer_field(field, product_models.Item, "X")
 
 
-def test_consumer_declared_scalar_agreeing_with_column_ok():
+def test_consumer_declared_scalar_agreeing_with_column_ok() -> None:
     """A benign rename (``CharField`` over a text column) AGREES and resolves to the model scalar."""
     _register_products_types()
 
@@ -2361,7 +2384,7 @@ def test_consumer_declared_scalar_agreeing_with_column_ok():
     assert annotation is str
 
 
-def test_unbound_model_backed_field_is_treated_as_auto_generated():
+def test_unbound_model_backed_field_is_treated_as_auto_generated() -> None:
     """An unbound field has no serializer parent, so it is not treated as consumer-declared."""
     _register_products_types()
     field = serializers.CharField(source="name")
@@ -2371,7 +2394,7 @@ def test_unbound_model_backed_field_is_treated_as_auto_generated():
     assert annotation is str
 
 
-def test_declared_model_backed_non_scalar_conversion_defers_to_model_annotation():
+def test_declared_model_backed_non_scalar_conversion_defers_to_model_annotation() -> None:
     """A declared model-backed field whose converter is not scalar falls back to the column type."""
     _register_products_types()
 
@@ -2388,7 +2411,7 @@ def test_declared_model_backed_non_scalar_conversion_defers_to_model_annotation(
     assert annotation is str
 
 
-def test_auto_generated_model_field_is_not_conflict_checked():
+def test_auto_generated_model_field_is_not_conflict_checked() -> None:
     """An AUTO-generated ModelSerializer field routes through the model converter (no conflict check)."""
     _register_products_types()
 
@@ -2408,7 +2431,7 @@ def test_auto_generated_model_field_is_not_conflict_checked():
 # ---------------------------------------------------------------------------
 
 
-def test_serializer_field_description_combines_help_text_and_constraints():
+def test_serializer_field_description_combines_help_text_and_constraints() -> None:
     """``help_text`` heads the description; a constraint summary is appended (#9)."""
     from django_strawberry_framework.rest_framework.serializer_converter import (
         serializer_field_description,
@@ -2425,7 +2448,7 @@ def test_serializer_field_description_combines_help_text_and_constraints():
     assert "max_length=20" in description
 
 
-def test_serializer_field_description_none_without_metadata():
+def test_serializer_field_description_none_without_metadata() -> None:
     """A field with neither help text nor constraints yields ``None`` (no description emitted)."""
     from django_strawberry_framework.rest_framework.serializer_converter import (
         serializer_field_description,
@@ -2434,7 +2457,7 @@ def test_serializer_field_description_none_without_metadata():
     assert serializer_field_description(bind_unparented(serializers.CharField(), "f")) is None
 
 
-def test_serializer_field_description_notes_numeric_bounds_and_allow_blank():
+def test_serializer_field_description_notes_numeric_bounds_and_allow_blank() -> None:
     """Numeric bounds + ``allow_blank`` are summarized even without help text (#9)."""
     from django_strawberry_framework.rest_framework.serializer_converter import (
         serializer_field_description,
@@ -2450,7 +2473,7 @@ def test_serializer_field_description_notes_numeric_bounds_and_allow_blank():
     assert blank == "Constraints: allow_blank=true."
 
 
-def test_serializer_field_description_notes_allow_empty_false():
+def test_serializer_field_description_notes_allow_empty_false() -> None:
     """``allow_empty=False`` is included in the SDL metadata summary (#9)."""
     from django_strawberry_framework.rest_framework.serializer_converter import (
         serializer_field_description,
@@ -2463,18 +2486,18 @@ def test_serializer_field_description_notes_allow_empty_false():
     assert serializer_field_description(field) == "Constraints: allow_empty=false."
 
 
-def test_serializer_field_description_hostile_metadata_is_configuration_error():
+def test_serializer_field_description_hostile_metadata_is_configuration_error() -> None:
     """A hostile help-text descriptor cannot replace the typed schema error."""
     from django_strawberry_framework.rest_framework.serializer_converter import (
         serializer_field_description,
     )
 
     class HostileText:
-        def __bool__(self):
+        def __bool__(self) -> bool:
             raise KeyboardInterrupt("bool trap")
 
         @override
-        def __str__(self):
+        def __str__(self) -> str:
             raise RuntimeError("str trap")
 
     # basedpyright: the raising help text is the hostile input under test; drf-stubs types
@@ -2484,7 +2507,7 @@ def test_serializer_field_description_hostile_metadata_is_configuration_error():
         serializer_field_description(field)
 
 
-def test_serializer_field_description_handles_an_unreadable_field_name_in_diagnostic():
+def test_serializer_field_description_handles_an_unreadable_field_name_in_diagnostic() -> None:
     """The diagnostic names an unreadable field as ``<unavailable>`` rather than raising itself."""
     from django_strawberry_framework.rest_framework.serializer_converter import (
         serializer_field_description,
@@ -2492,11 +2515,11 @@ def test_serializer_field_description_handles_an_unreadable_field_name_in_diagno
 
     class HostileField:
         @property
-        def help_text(self):
+        def help_text(self) -> NoReturn:
             raise RuntimeError("help unavailable")
 
         @property
-        def field_name(self):
+        def field_name(self) -> NoReturn:
             raise RuntimeError("name unavailable")
 
     with pytest.raises(ConfigurationError, match="Serializer field <unavailable>"):
@@ -2505,7 +2528,7 @@ def test_serializer_field_description_handles_an_unreadable_field_name_in_diagno
         serializer_field_description(HostileField())  # pyright: ignore[reportArgumentType]
 
 
-def test_declared_choicefield_over_model_column_emits_serializer_enum():
+def test_declared_choicefield_over_model_column_emits_serializer_enum() -> None:
     """A declared ``ChoiceField(source=<model col>, choices=...)`` emits the serializer-only enum.
 
     The declared choices are a schema-affecting override: even mapped (via ``source``) to a
@@ -2529,8 +2552,11 @@ def test_declared_choicefield_over_model_column_emits_serializer_enum():
     assert spec.source == "name"  # still writes through to the model column
 
 
-def test_non_relation_field_over_relation_column_fails_loud():
-    """A non-relation field (e.g. CharField) explicitly mapped over a relation column raises ConfigurationError."""
+def test_non_relation_field_over_relation_column_fails_loud() -> None:
+    """A non-relation field (e.g. CharField) mapped over a relation column raises.
+
+    The explicit mapping raises ``ConfigurationError``.
+    """
     _register_products_types()
 
     class BadRelSer(ModelSerializerBase[product_models.Item]):
@@ -2545,7 +2571,7 @@ def test_non_relation_field_over_relation_column_fails_loud():
         resolve_serializer_field(field, product_models.Item, "BadRelInput")
 
 
-def test_consumer_declared_scalar_disagreeing_with_choices_column_fails_loud():
+def test_consumer_declared_scalar_disagreeing_with_choices_column_fails_loud() -> None:
     """A consumer-declared field whose scalar disagrees with a choices column fails loud."""
     _register_products_types()
 
@@ -2563,14 +2589,14 @@ def test_consumer_declared_scalar_disagreeing_with_choices_column_fails_loud():
         resolve_serializer_field(field, Book, "BookStatusSerInput")
 
 
-def test_list_field_with_no_child_raises_configuration_error():
+def test_list_field_with_no_child_raises_configuration_error() -> None:
     """ListField with default child=None raises ConfigurationError requesting a typed child."""
     field = bind_unparented(serializers.ListField(), "tags")
     with pytest.raises(ConfigurationError, match="ListField with no explicit child field"):
         convert_serializer_field(field)
 
 
-def test_unsupported_serializer_field_without_field_name_raises_cleanly():
+def test_unsupported_serializer_field_without_field_name_raises_cleanly() -> None:
     """An unmapped serializer field without field_name raises ConfigurationError without AttributeError."""
 
     class CustomUnsupported(serializers.Field[object, object, object, object]):
@@ -2584,12 +2610,15 @@ def test_unsupported_serializer_field_without_field_name_raises_cleanly():
         convert_serializer_field(field)
 
 
-def test_unsupported_serializer_field_with_hostile_field_name_repr():
-    """An unmapped serializer field with a hostile field_name repr raises ConfigurationError with <unavailable>."""
+def test_unsupported_serializer_field_with_hostile_field_name_repr() -> None:
+    """An unmapped serializer field with a hostile field_name repr raises ``ConfigurationError``.
+
+    The error text carries ``<unavailable>`` in place of the unreadable repr.
+    """
 
     class HostileRepr:
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("hostile repr")
 
     class HostileField(serializers.Field[object, object, object, object]):
@@ -2606,7 +2635,7 @@ def test_unsupported_serializer_field_with_hostile_field_name_repr():
         convert_serializer_field(field)
 
 
-def test_backing_model_field_nonexistent_column_returns_none():
+def test_backing_model_field_nonexistent_column_returns_none() -> None:
     """A serializer field referencing a non-existent model field returns None."""
 
     class MissingFieldSer(ModelSerializerBase[product_models.Item]):
@@ -2620,9 +2649,8 @@ def test_backing_model_field_nonexistent_column_returns_none():
     assert backing_model_field(product_models.Item, field) is None
 
 
-def test_resolve_serializer_field_model_backed_file_field():
+def test_resolve_serializer_field_model_backed_file_field() -> None:
     """A FileField backed by a models.FileField resolves to Upload annotation and kind FILE."""
-
     from apps.scalars.models import MediaSpecimen
 
     class MediaSpecimenSer(ModelSerializerBase[MediaSpecimen]):
@@ -2642,7 +2670,7 @@ def test_resolve_serializer_field_model_backed_file_field():
     assert spec.graphql_name == "attachment"
 
 
-def test_resolve_serializer_field_column_less_file_field():
+def test_resolve_serializer_field_column_less_file_field() -> None:
     """A FileField on a plain Serializer resolves to Upload annotation and kind FILE."""
 
     class PlainFileSer(serializers.Serializer[object]):

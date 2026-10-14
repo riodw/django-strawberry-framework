@@ -64,14 +64,17 @@ def _next_order(manager: Manager[Model], **scope: object) -> int:
 
 
 def make_milestone(key: str = "alpha", **defaults: object) -> models.Milestone:
+    """Return the ``Milestone`` row for ``key``, creating it on first use."""
     return _lookup(models.Milestone, key, **defaults)
 
 
 def make_status(key: str = "todo", **defaults: object) -> models.Status:
+    """Return the ``Status`` row for ``key``, creating it on first use."""
     return _lookup(models.Status, key, **defaults)
 
 
 def make_priority(key: str = "medium", **defaults: object) -> models.Priority:
+    """Return the ``Priority`` row for ``key``, creating it on first use."""
     return _lookup(models.Priority, key, **defaults)
 
 
@@ -81,6 +84,7 @@ def make_relative_size(
     order: int = 2,
     **defaults: object,
 ) -> models.RelativeSize:
+    """Return the ``RelativeSize`` row for ``key``, creating it on first use."""
     return _lookup(models.RelativeSize, key, order=order, **defaults)
 
 
@@ -90,26 +94,32 @@ def make_upstream(
     emoji: str = "⚛️",
     **defaults: object,
 ) -> models.Upstream:
+    """Return the ``Upstream`` row for ``key``, creating it on first use."""
     return _lookup(models.Upstream, key, emoji=emoji, **defaults)
 
 
 def make_parity_level(key: str = "required", **defaults: object) -> models.ParityLevel:
+    """Return the ``ParityLevel`` row for ``key``, creating it on first use."""
     return _lookup(models.ParityLevel, key, **defaults)
 
 
 def make_section(key: str = "scope", **defaults: object) -> models.Section:
+    """Return the ``Section`` row for ``key``, creating it on first use."""
     return _lookup(models.Section, key, **defaults)
 
 
 def make_card_reference_kind(key: str = "related", **defaults: object) -> models.CardReferenceKind:
+    """Return the ``CardReferenceKind`` row for ``key``, creating it on first use."""
     return _lookup(models.CardReferenceKind, key, **defaults)
 
 
 def make_board_doc_kind(key: str = "column", **defaults: object) -> models.BoardDocKind:
+    """Return the ``BoardDocKind`` row for ``key``, creating it on first use."""
     return _lookup(models.BoardDocKind, key, **defaults)
 
 
 def make_label(key: str | None = None, **defaults: object) -> models.Label:
+    """Return the ``Label`` row for ``key``, creating it on first use."""
     key = key or f"label-{_seq()}"
     obj, _ = models.Label.objects.get_or_create(key=key, defaults=defaults)
     return obj
@@ -126,6 +136,7 @@ def make_target_version(
     milestone: models.Milestone | None = None,
     **defaults: object,
 ) -> models.TargetVersion:
+    """Return the ``TargetVersion`` row for ``number``, creating it on first use."""
     number = number or f"0.0.{_seq()}"
     milestone = milestone or make_milestone()
     obj, _ = models.TargetVersion.objects.get_or_create(
@@ -136,6 +147,7 @@ def make_target_version(
 
 
 def make_spec_doc(*, card: models.Card | None = None, **fields: object) -> models.SpecDoc:
+    """Create and return a saved ``SpecDoc``, filling required relations when not supplied."""
     card = card or make_card()
     fields.setdefault("name", f"spec-{card.number:03d}-{fake.slug()}")
     fields.setdefault("path", f"docs/SPECS/spec-{card.number:03d}-{fake.slug()}.md")
@@ -199,6 +211,7 @@ def make_card_item(
     section: models.Section | None = None,
     **fields: object,
 ) -> models.CardItem:
+    """Create and return a saved ``CardItem``, filling required relations when not supplied."""
     card = card or make_card()
     section = section or make_section()
     fields.setdefault("text", fake.sentence())
@@ -257,6 +270,7 @@ def make_parity_claim(
     upstream: models.Upstream | None = None,
     level: models.ParityLevel | None = None,
 ) -> models.ParityClaim:
+    """Create and return a saved ``ParityClaim``, filling required relations when not supplied."""
     return models.ParityClaim.objects.create(
         card=card or make_card(),
         upstream=upstream or make_upstream(),
@@ -286,10 +300,12 @@ def make_card_glossary_term(
 
 
 def make_attempt_outcome(key: str = "succeeded", **defaults: object) -> models.AttemptOutcome:
+    """Return the ``AttemptOutcome`` row for ``key``, creating it on first use."""
     return _lookup(models.AttemptOutcome, key, **defaults)
 
 
 def make_verification_kind(key: str = "test_run", **defaults: object) -> models.VerificationKind:
+    """Return the ``VerificationKind`` row for ``key``, creating it on first use."""
     return _lookup(models.VerificationKind, key, **defaults)
 
 
@@ -299,6 +315,7 @@ def make_actor(
     kind: str = models.ACTOR_HUMAN,
     **defaults: object,
 ) -> models.Actor:
+    """Return the ``Actor`` row for ``key``, creating it on first use."""
     obj, _ = models.Actor.objects.get_or_create(
         key=key,
         defaults={"label": _label(key), "kind": kind, **defaults},
@@ -314,6 +331,7 @@ def make_card_transition(
     actor: models.Actor | None = None,
     **fields: object,
 ) -> models.CardTransition:
+    """Create and return a saved ``CardTransition``, filling required relations when not supplied."""
     card = card or make_card()
     actor = actor or make_actor()
     to_status = to_status or make_status("wip")
@@ -332,6 +350,7 @@ def make_work_attempt(
     actor: models.Actor | None = None,
     **fields: object,
 ) -> models.WorkAttempt:
+    """Create and return a saved ``WorkAttempt``, filling required relations when not supplied."""
     card = card or make_card()
     actor = actor or make_actor()
     return models.WorkAttempt.objects.create(card=card, actor=actor, **fields)
@@ -367,6 +386,7 @@ def make_board_doc(
     kind: models.BoardDocKind | None = None,
     **fields: object,
 ) -> models.BoardDoc:
+    """Create and return a saved ``BoardDoc``, filling required relations when not supplied."""
     kind = kind or make_board_doc_kind()
     fields.setdefault("namespace", "kanban")
     fields.setdefault("key", f"doc-{_seq()}")
@@ -381,6 +401,7 @@ def make_board_doc_card_reference(
     card: models.Card | None = None,
     **fields: object,
 ) -> models.BoardDocCardReference:
+    """Create and return a saved ``BoardDocCardReference``, filling required relations when not supplied."""
     doc = doc or make_board_doc()
     card = card or make_card()
     fields.setdefault("raw_text", "")

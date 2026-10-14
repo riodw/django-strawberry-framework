@@ -15,9 +15,9 @@ planned JOIN never takes.
 import datetime
 import inspect
 import uuid
-from collections.abc import Iterable, Iterator, Sized
+from collections.abc import Callable, Iterable, Iterator, Sized
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, NoReturn, Protocol, runtime_checkable
 
 import django
 import pytest
@@ -27,9 +27,10 @@ from django.db import connection as db_connection
 from django.db.models import Model, QuerySet
 from django.db.models.expressions import Combinable
 from django.utils import timezone
+from strawberry.types import Info
 from typing_extensions import override
 
-from django_strawberry_framework import DjangoType, finalize_django_types
+from django_strawberry_framework import DjangoSchema, DjangoType, finalize_django_types
 from django_strawberry_framework.optimizer._context import (
     DST_OPTIMIZER_FK_ID_ELISIONS,
 )
@@ -86,7 +87,7 @@ def _isolate_registry() -> Iterator[None]:
 # ---------------------------------------------------------------------------
 
 
-def test_make_relation_resolver_many_side_is_named_resolve_field():
+def test_make_relation_resolver_many_side_is_named_resolve_field() -> None:
     """Generated many-side resolver is named ``resolve_<field>``.
 
     Payload and SQL live in ``examples/fakeshop/test_query/test_products_visibility_api.py``.
@@ -96,14 +97,14 @@ def test_make_relation_resolver_many_side_is_named_resolve_field():
     assert resolver.__name__ == "resolve_items"
 
     class FakeManager:
-        def all(self):
+        def all(self) -> list[int]:
             return [1, 2, 3]
 
     fake_info = make_info()
     assert resolver(SimpleNamespace(items=FakeManager()), fake_info) == [1, 2, 3]
 
 
-def test_make_relation_resolver_forward_is_named_resolve_field():
+def test_make_relation_resolver_forward_is_named_resolve_field() -> None:
     """Generated forward-FK resolver is named ``resolve_<field>``.
 
     Payload and SQL live in ``examples/fakeshop/test_query/test_products_visibility_api.py``.
@@ -123,7 +124,7 @@ def test_make_relation_resolver_forward_is_named_resolve_field():
     assert resolver(SimpleNamespace(category=sentinel), fake_info) is sentinel
 
 
-def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation():
+def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation() -> None:
     """Forward resolver returns a target stub from ``<field>_id`` when elided."""
     from types import SimpleNamespace
 
@@ -137,7 +138,7 @@ def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation():
         category_id = 42
 
         @property
-        def category(self):
+        def category(self) -> NoReturn:
             raise AssertionError("the relation resolver must not lazy-load the relation")
 
     field = Item._meta.get_field("category")
@@ -158,7 +159,7 @@ def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation():
 
 
 @pytest.mark.django_db
-def test_fk_id_elision_stub_is_scoped_when_the_relation_was_not_planned():
+def test_fk_id_elision_stub_is_scoped_when_the_relation_was_not_planned() -> None:
     """An FK-id stub for a CUSTOM-visibility target is re-read through the hook.
 
     The walker refuses to elide a target whose type overrides ``get_queryset``
@@ -179,7 +180,12 @@ def test_fk_id_elision_stub_is_scoped_when_the_relation_was_not_planned():
 
         @classmethod
         @override
-        def get_queryset(cls, queryset: QuerySet[Category], info: object, **kwargs: object):
+        def get_queryset(
+            cls,
+            queryset: QuerySet[Category],
+            info: object,
+            **kwargs: object,
+        ) -> QuerySet[Category]:
             return queryset.none()
 
     assert registry.get(Category) is CategoryType
@@ -199,7 +205,7 @@ def test_fk_id_elision_stub_is_scoped_when_the_relation_was_not_planned():
         category_id = elided_pk
 
         @property
-        def category(self):
+        def category(self) -> NoReturn:
             raise AssertionError("the relation resolver must not lazy-load the relation")
 
     field = Item._meta.get_field("category")
@@ -231,7 +237,7 @@ def test_fk_id_elision_stub_is_scoped_when_the_relation_was_not_planned():
     assert scoped.pk == category.pk
 
 
-def test_b2_forward_fk_id_elision_uses_registered_field_meta_attname():
+def test_b2_forward_fk_id_elision_uses_registered_field_meta_attname() -> None:
     """Resolver FK-id elision reads attname from registered FieldMeta."""
     from types import SimpleNamespace
 
@@ -252,7 +258,7 @@ def test_b2_forward_fk_id_elision_uses_registered_field_meta_attname():
         category_id = 42
 
         @property
-        def category(self):
+        def category(self) -> NoReturn:
             raise AssertionError("the relation resolver must not lazy-load the relation")
 
     result = resolver(Root(), fake_info)
@@ -261,7 +267,7 @@ def test_b2_forward_fk_id_elision_uses_registered_field_meta_attname():
     assert result.pk == 42
 
 
-def test_b2_forward_fk_id_elision_returns_none_for_null_fk():
+def test_b2_forward_fk_id_elision_returns_none_for_null_fk() -> None:
     """Nullable FK ids still resolve to ``None`` instead of a stub."""
     from types import SimpleNamespace
 
@@ -282,7 +288,7 @@ def test_b2_forward_fk_id_elision_returns_none_for_null_fk():
     assert resolver(fake_root, fake_info) is None
 
 
-def test_b2_fk_id_stub_returns_none_without_related_model():
+def test_b2_fk_id_stub_returns_none_without_related_model() -> None:
     """Direct unit: incomplete metadata cannot build an FK-id stub."""
     from types import SimpleNamespace
 
@@ -299,7 +305,7 @@ def test_b2_fk_id_stub_returns_none_without_related_model():
     assert _build_fk_id_stub(SimpleNamespace(category_id=42), field_meta) is None
 
 
-def test_b2_forward_fk_id_elision_does_not_leak_across_parent_types():
+def test_b2_forward_fk_id_elision_does_not_leak_across_parent_types() -> None:
     """Elision for one parent type does not affect another type."""
     from types import SimpleNamespace
 
@@ -323,7 +329,7 @@ def test_b2_forward_fk_id_elision_does_not_leak_across_parent_types():
     assert resolver(fake_root, fake_info) is sentinel
 
 
-def test_b2_forward_fk_id_elision_ignores_bare_field_name_key():
+def test_b2_forward_fk_id_elision_ignores_bare_field_name_key() -> None:
     """Elision requires the full branch-sensitive resolver key."""
     from types import SimpleNamespace
 
@@ -344,7 +350,7 @@ def test_b2_forward_fk_id_elision_ignores_bare_field_name_key():
     assert resolver(fake_root, fake_info) is sentinel
 
 
-def test_check_n1_ignores_bare_field_name_key():
+def test_check_n1_ignores_bare_field_name_key() -> None:
     """Planned relations require the full branch-sensitive resolver key."""
     from types import SimpleNamespace
 
@@ -363,7 +369,7 @@ def test_check_n1_ignores_bare_field_name_key():
         _check_n1(fake_info, SimpleNamespace(), "category", ItemType, kind=None)
 
 
-def test_check_n1_returns_when_relation_is_already_loaded():
+def test_check_n1_returns_when_relation_is_already_loaded() -> None:
     """Unplanned-but-cached relations do not warn or raise."""
     from types import SimpleNamespace
 
@@ -385,7 +391,7 @@ def test_check_n1_returns_when_relation_is_already_loaded():
     )
 
 
-def test_check_n1_warns_for_unplanned_lazy_load(caplog: pytest.LogCaptureFixture):
+def test_check_n1_warns_for_unplanned_lazy_load(caplog: pytest.LogCaptureFixture) -> None:
     """Warn strictness logs an unplanned lazy-load relation."""
     from types import SimpleNamespace
 
@@ -404,7 +410,7 @@ def test_check_n1_warns_for_unplanned_lazy_load(caplog: pytest.LogCaptureFixture
     assert any("Potential N+1 on category" in r.message for r in caplog.records)
 
 
-def test_check_n1_planned_absent_is_silent():
+def test_check_n1_planned_absent_is_silent() -> None:
     """No planned sentinel on context -> optimizer is not engaged."""
     from types import SimpleNamespace
 
@@ -424,7 +430,7 @@ def test_check_n1_planned_absent_is_silent():
     )
 
 
-def test_check_n1_planned_hit_is_silent():
+def test_check_n1_planned_hit_is_silent() -> None:
     """Planned key present -> resolver is a no-op regardless of strictness."""
     from types import SimpleNamespace
 
@@ -446,7 +452,7 @@ def test_check_n1_planned_hit_is_silent():
     )
 
 
-def test_check_n1_default_strictness_off_is_silent_on_lazy_load():
+def test_check_n1_default_strictness_off_is_silent_on_lazy_load() -> None:
     """Strictness defaults to ``off`` and an unplanned lazy load is silent."""
     from types import SimpleNamespace
 
@@ -467,7 +473,7 @@ def test_check_n1_default_strictness_off_is_silent_on_lazy_load():
     )
 
 
-def test_check_n1_raise_strictness_raises_on_lazy_load():
+def test_check_n1_raise_strictness_raises_on_lazy_load() -> None:
     """Strictness=raise + unplanned + lazy -> OptimizerError."""
     from types import SimpleNamespace
 
@@ -493,7 +499,7 @@ def test_check_n1_raise_strictness_raises_on_lazy_load():
 @pytest.mark.parametrize("kind", ["many", "reverse_many_to_one"])
 def test_check_n1_many_side_kind_treats_consumer_set_attribute_as_lazy(
     kind: Literal["many", "reverse_many_to_one"],
-):
+) -> None:
     """Many-side ignores ``__dict__`` short-circuit.
 
     A consumer (or test double) setting ``root.<field>`` directly does
@@ -519,7 +525,7 @@ def test_check_n1_many_side_kind_treats_consumer_set_attribute_as_lazy(
         _check_n1(fake_info, root, "items", CategoryType, kind=kind)
 
 
-def test_check_n1_many_kind_respects_prefetched_objects_cache():
+def test_check_n1_many_kind_respects_prefetched_objects_cache() -> None:
     """Many-side recognises ``_prefetched_objects_cache`` as the only valid cache."""
     from types import SimpleNamespace
 
@@ -536,7 +542,7 @@ def test_check_n1_many_kind_respects_prefetched_objects_cache():
     _check_n1(fake_info, root, "items", CategoryType, kind="many")
 
 
-def test_check_n1_probes_prefetch_cache_under_cache_name():
+def test_check_n1_probes_prefetch_cache_under_cache_name() -> None:
     """The cache probe keys on the CACHE NAME, the plan key on the field name.
 
     Django stores a reverse-FK prefetch under the instance accessor
@@ -580,7 +586,7 @@ def test_check_n1_probes_prefetch_cache_under_cache_name():
         )
 
 
-def test_runtime_path_from_info_strips_list_indexes_and_keeps_aliases():
+def test_runtime_path_from_info_strips_list_indexes_and_keeps_aliases() -> None:
     """Runtime response paths preserve aliases and omit list indexes.
 
     ``runtime_path_from_info`` is an optimizer-plan helper with no GraphQL
@@ -595,7 +601,7 @@ def test_runtime_path_from_info_strips_list_indexes_and_keeps_aliases():
     assert runtime_path_from_info(info) == ("allItems", "cat")
 
 
-def test_o1_make_relation_resolver_reverse_one_to_one_returns_none_on_doesnotexist():
+def test_o1_make_relation_resolver_reverse_one_to_one_returns_none_on_doesnotexist() -> None:
     """Direct unit: reverse OneToOne resolver swallows DoesNotExist into None.
 
     Direct ``_make_relation_resolver`` call with a fabricated ``DoesNotExist``.
@@ -626,7 +632,7 @@ def test_o1_make_relation_resolver_reverse_one_to_one_returns_none_on_doesnotexi
 
     class RootMissingProfile:
         @property
-        def profile(self):
+        def profile(self) -> NoReturn:
             raise FakeDoesNotExist
 
     class RootWithProfile:
@@ -645,7 +651,9 @@ def test_o1_make_relation_resolver_reverse_one_to_one_returns_none_on_doesnotexi
 # ---------------------------------------------------------------------------
 
 
-def _forward_category_resolver(parent_type: type[DjangoType]):
+def _forward_category_resolver(
+    parent_type: type[DjangoType],
+) -> Callable[[object, Info[object, object]], object]:
     """Build the generated forward resolver for ``Item.category`` under ``parent_type``."""
     from django_strawberry_framework.types.resolvers import _make_relation_resolver
 
@@ -655,7 +663,7 @@ def _forward_category_resolver(parent_type: type[DjangoType]):
     )
 
 
-def test_forward_resolver_contains_unsaved_instance_does_not_exist():
+def test_forward_resolver_contains_unsaved_instance_does_not_exist() -> None:
     """Forward resolver: an unsaved instance's unset non-null FK collapses to None.
 
     Django's ``ForwardManyToOneDescriptor`` answers ``item.category`` on an
@@ -672,7 +680,7 @@ def test_forward_resolver_contains_unsaved_instance_does_not_exist():
 
 
 @pytest.mark.asyncio
-async def test_forward_resolver_async_contains_unsaved_instance_does_not_exist():
+async def test_forward_resolver_async_contains_unsaved_instance_does_not_exist() -> None:
     """Async parity of the unsaved-instance containment (fast path).
 
     The async branch offloads the unloaded descriptor read through
@@ -687,7 +695,7 @@ async def test_forward_resolver_async_contains_unsaved_instance_does_not_exist()
     assert await pending is None
 
 
-def test_forward_resolver_planned_path_contains_unsaved_instance_does_not_exist():
+def test_forward_resolver_planned_path_contains_unsaved_instance_does_not_exist() -> None:
     """Planned-path parity: FK-id elisions armed, unsaved root still contained.
 
     Arming elisions (with a key that does not match this field) routes the
@@ -708,7 +716,7 @@ def test_forward_resolver_planned_path_contains_unsaved_instance_does_not_exist(
 
 
 @pytest.mark.asyncio
-async def test_forward_resolver_async_planned_path_contains_unsaved_instance():
+async def test_forward_resolver_async_planned_path_contains_unsaved_instance() -> None:
     """Async planned-path parity of the unsaved-instance containment."""
     from django_strawberry_framework.optimizer._context import DST_OPTIMIZER_FK_ID_ELISIONS
 
@@ -725,7 +733,7 @@ async def test_forward_resolver_async_planned_path_contains_unsaved_instance():
     assert await pending is None
 
 
-def test_o1_reverse_one_to_one_propagates_plain_attribute_error():
+def test_o1_reverse_one_to_one_propagates_plain_attribute_error() -> None:
     """Reverse OneToOne: a plain ``AttributeError`` is a BUG, not an absent row.
 
     The catch is exactly ``related_model.DoesNotExist`` - which Django's
@@ -755,7 +763,7 @@ def test_o1_reverse_one_to_one_propagates_plain_attribute_error():
 
     class RootHostileProfile:
         @property
-        def profile(self):
+        def profile(self) -> NoReturn:
             raise AttributeError("hostile reverse descriptor")
 
     fake_info = make_info()
@@ -763,7 +771,7 @@ def test_o1_reverse_one_to_one_propagates_plain_attribute_error():
         resolver(RootHostileProfile(), fake_info)
 
 
-def test_reverse_one_to_one_real_model_missing_row_contained():
+def test_reverse_one_to_one_real_model_missing_row_contained() -> None:
     """Real reverse OneToOne (library app): unsaved patron resolves to None.
 
     ``patron.card`` on an unsaved ``Patron`` raises
@@ -783,7 +791,7 @@ def test_reverse_one_to_one_real_model_missing_row_contained():
 
 
 @pytest.mark.asyncio
-async def test_reverse_one_to_one_async_contains_missing_row():
+async def test_reverse_one_to_one_async_contains_missing_row() -> None:
     """Async parity of the real-model reverse OneToOne containment."""
     from apps.library.models import Patron
 
@@ -800,7 +808,7 @@ async def test_reverse_one_to_one_async_contains_missing_row():
 
 
 @pytest.mark.django_db
-def test_forward_resolver_nullable_dangling_fk_resolves_to_none():
+def test_forward_resolver_nullable_dangling_fk_resolves_to_none() -> None:
     """Direct resolver: a nullable dangling FK swallows the target's ``DoesNotExist``.
 
     The non-nullable dangling case raises ``RelatedObjectDoesNotExist`` (an
@@ -813,7 +821,7 @@ def test_forward_resolver_nullable_dangling_fk_resolves_to_none():
     """
     from apps.scalars.models import ScalarSpecimen
 
-    def create_specimen(label: str, *, parent: ScalarSpecimen | None = None):
+    def create_specimen(label: str, *, parent: ScalarSpecimen | None = None) -> ScalarSpecimen:
         return ScalarSpecimen.objects.create(
             label=label,
             occurred_on=datetime.date(2026, 1, 1),
@@ -850,7 +858,7 @@ def test_forward_resolver_nullable_dangling_fk_resolves_to_none():
             db_connection.enable_constraint_checking()
 
 
-def test_forward_resolver_propagates_consumer_attribute_error():
+def test_forward_resolver_propagates_consumer_attribute_error() -> None:
     """A consumer descriptor raising ``AttributeError`` is NOT swallowed.
 
     The containment catches the target's ``DoesNotExist`` only. A plain
@@ -865,7 +873,7 @@ def test_forward_resolver_propagates_consumer_attribute_error():
         """Stands in for a consumer overriding the relation with a broken property."""
 
         @property
-        def category(self):
+        def category(self) -> NoReturn:
             raise AttributeError("consumer descriptor bug")
 
     fake_info = make_info()
@@ -887,6 +895,7 @@ def test_forward_resolver_propagates_consumer_attribute_error():
 #
 # Mock pattern (per spec Decision 5 + ``Mock contract`` block):
 #
+# ruff: disable[ERA001]
 #     from unittest.mock import Mock
 #     import django_strawberry_framework.types.resolvers as resolvers_module
 #     mock_router = Mock()
@@ -896,6 +905,7 @@ def test_forward_resolver_propagates_consumer_attribute_error():
 #     mock_router.db_for_read.assert_called_once_with(
 #         <related_model>, instance=<expected_instance>
 #     )
+# ruff: enable[ERA001]
 #
 # Rebinding the module-local ``router`` name leaves the shared
 # ``django.db.router`` singleton untouched (Decision 5); ``monkeypatch``
@@ -907,7 +917,9 @@ def test_forward_resolver_propagates_consumer_attribute_error():
 # ``_state``) or a ``SimpleNamespace`` (no ``_state``).
 
 
-def test_fk_id_elision_stub_sets_state_db_via_router_db_for_read(monkeypatch: pytest.MonkeyPatch):
+def test_fk_id_elision_stub_sets_state_db_via_router_db_for_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Decision 3 axis 1 - stub's ``_state.db`` is set via ``router.db_for_read``."""
     from unittest.mock import Mock
 
@@ -936,8 +948,10 @@ def test_fk_id_elision_stub_sets_state_db_via_router_db_for_read(monkeypatch: py
     mock_router.db_for_read.assert_called_once()
 
 
-def test_fk_id_elision_router_call_passes_parent_row_as_instance(monkeypatch: pytest.MonkeyPatch):
-    """Decision 3 axis 1 - router.db_for_read receives ``instance=<parent_row>`` when parent has ``_state``."""
+def test_fk_id_elision_router_call_passes_parent_row_as_instance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Decision 3 axis 1 - ``router.db_for_read`` receives ``instance=<parent_row>`` with ``_state``."""
     from unittest.mock import Mock
 
     import django_strawberry_framework.types.resolvers as resolvers_module
@@ -966,7 +980,7 @@ def test_fk_id_elision_router_call_passes_parent_row_as_instance(monkeypatch: py
 
 def test_fk_id_elision_router_call_passes_none_instance_when_parent_lacks_state(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Decision 3 axis 1 - router.db_for_read receives ``instance=None`` when parent lacks ``_state``."""
     from types import SimpleNamespace
     from unittest.mock import Mock
@@ -981,7 +995,7 @@ def test_fk_id_elision_router_call_passes_none_instance_when_parent_lacks_state(
 
     # ``SimpleNamespace`` has no ``_state`` attribute, so the
     # ``getattr(root, "_state", None) is not None`` branch at
-    # ``django_strawberry_framework/types/resolvers.py::_build_fk_id_stub #"instance = root if getattr(root, "_state", None) is not None else None"``
+    # ``django_strawberry_framework/types/resolvers.py::_build_fk_id_stub #"instance = root if getattr"``
     # forwards ``instance=None`` to the router.
     parent_row = SimpleNamespace(pk=1, category_id=42)
     assert not hasattr(parent_row, "_state")
@@ -1001,7 +1015,7 @@ def test_fk_id_elision_router_call_passes_none_instance_when_parent_lacks_state(
 
 def test_fk_id_elision_returns_none_for_null_fk_and_does_not_call_router(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Decision 3 axis 1 - null FK takes the early-return branch BEFORE the router is consulted."""
     from types import SimpleNamespace
     from unittest.mock import Mock
@@ -1033,7 +1047,7 @@ def test_fk_id_elision_returns_none_for_null_fk_and_does_not_call_router(
     mock_router.db_for_read.assert_not_called()
 
 
-def test_strictness_check_is_connection_agnostic_under_non_default_alias():
+def test_strictness_check_is_connection_agnostic_under_non_default_alias() -> None:
     """Decision 3 axis 4 - strictness mode raises ``OptimizerError`` regardless of ``_state.db``."""
     from types import SimpleNamespace
 
@@ -1075,7 +1089,7 @@ def test_strictness_check_is_connection_agnostic_under_non_default_alias():
 # ---------------------------------------------------------------------------
 
 
-def test_fk_id_elision_enabled_under_mutation():
+def test_fk_id_elision_enabled_under_mutation() -> None:
     """Decision 5: a fully-loaded FK column still elides; no join, no lazy load.
 
     The resolver never sees the operation type - the elision set is on
@@ -1084,7 +1098,6 @@ def test_fk_id_elision_enabled_under_mutation():
     consumer-``.only()``-that-includes-the-FK case), which is exactly why the
     Decision 5 guard is operation-independent.
     """
-
     from django_strawberry_framework.optimizer._context import DST_OPTIMIZER_FK_ID_ELISIONS
     from django_strawberry_framework.types.resolvers import _make_relation_resolver
 
@@ -1098,7 +1111,7 @@ def test_fk_id_elision_enabled_under_mutation():
         category_id = 42
 
         @property
-        def category(self):
+        def category(self) -> NoReturn:
             raise AssertionError("loaded FK column must elide, never lazy-load the relation")
 
     fake_info = make_info(
@@ -1115,7 +1128,7 @@ def test_fk_id_elision_enabled_under_mutation():
 def test_fk_id_elision_falls_back_when_consumer_only_defers_fk(
     operation_arm: str,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """Decision 5: a deferred consumer-``.only()`` FK column falls back loudly.
 
     A consumer ``Item.objects.only("name")`` stays as returned under a non-``QUERY``
@@ -1147,26 +1160,23 @@ def test_fk_id_elision_falls_back_when_consumer_only_defers_fk(
     resolver = _make_relation_resolver(field, parent_type=ItemType)
     key = resolver_key(ItemType, "category", ("allItems", "category"))
 
-    def make_root():
-        class Root:
-            accessed_relation = False
+    class Root:
+        accessed_relation = False
 
-            def get_deferred_fields(self):
-                return {"category_id"}
+        def get_deferred_fields(self) -> set[str]:
+            return {"category_id"}
 
-            @property
-            def category_id(self):
-                raise AssertionError("deferred FK column must NOT be read (silent per-row load)")
+        @property
+        def category_id(self) -> NoReturn:
+            raise AssertionError("deferred FK column must NOT be read (silent per-row load)")
 
-            @property
-            def category(self):
-                # The honest fallback: a real lazy load, which strictness must see.
-                type(self).accessed_relation = True
-                return SimpleNamespace(pk=42)
+        @property
+        def category(self) -> object:
+            # The honest fallback: a real lazy load, which strictness must see.
+            self.accessed_relation = True
+            return SimpleNamespace(pk=42)
 
-        return Root
-
-    def context(strictness: str):
+    def context(strictness: str) -> dict[str, set[str] | str]:
         # The relation is in BOTH elisions and planned (the elision branch records
         # it planned), exactly the production shape Decision 5 must not mistake.
         return {
@@ -1177,7 +1187,6 @@ def test_fk_id_elision_falls_back_when_consumer_only_defers_fk(
 
     # "raise": the fallback is loud - OptimizerError, not a silent planned-relation
     # lazy load, and never a read of the deferred FK column.
-    Root = make_root()
     info = make_info(
         context=context("raise"),
         field_name="category",
@@ -1188,7 +1197,7 @@ def test_fk_id_elision_falls_back_when_consumer_only_defers_fk(
         resolver(Root(), info)
 
     # "warn": logs and returns the related object via the normal resolve.
-    Root = make_root()
+    root = Root()
     info = make_info(
         context=context("warn"),
         field_name="category",
@@ -1196,14 +1205,14 @@ def test_fk_id_elision_falls_back_when_consumer_only_defers_fk(
         operation=OperationType(operation_arm),
     )
     caplog.set_level("WARNING", logger="django_strawberry_framework")
-    result = resolver(Root(), info)
+    result = resolver(root, info)
     assert any("Potential N+1 on category" in r.message for r in caplog.records)
-    assert Root.accessed_relation is True
+    assert root.accessed_relation is True
     assert isinstance(result, SimpleNamespace)
     assert result.pk == 42
 
 
-def test_fk_id_stub_returns_unsafe_sentinel_when_attname_deferred():
+def test_fk_id_stub_returns_unsafe_sentinel_when_attname_deferred() -> None:
     """Direct unit: ``_build_fk_id_stub`` signals unsafe without reading the column.
 
     Pins the loaded-check at the function boundary (mirrors
@@ -1224,11 +1233,11 @@ def test_fk_id_stub_returns_unsafe_sentinel_when_attname_deferred():
     )
 
     class Root:
-        def get_deferred_fields(self):
+        def get_deferred_fields(self) -> set[str]:
             return {"category_id"}
 
         @property
-        def category_id(self):
+        def category_id(self) -> NoReturn:
             raise AssertionError("deferred FK column must NOT be read")
 
     assert _build_fk_id_stub(Root(), field_meta) is _FK_ELISION_UNSAFE
@@ -1239,7 +1248,9 @@ def test_fk_id_stub_returns_unsafe_sentinel_when_attname_deferred():
 
 
 @pytest.mark.django_db
-def test_fk_id_elision_falls_back_on_real_deferred_only_instance(caplog: pytest.LogCaptureFixture):
+def test_fk_id_elision_falls_back_on_real_deferred_only_instance(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Decision 5: a REAL ``Item.objects.only("name")`` instance.
 
     The double-based fallback test asserts the behavior; this pins the actual
@@ -1252,7 +1263,6 @@ def test_fk_id_elision_falls_back_on_real_deferred_only_instance(caplog: pytest.
     logged + normal resolve), never a silent per-row read of the deferred FK
     column.
     """
-
     from apps.products import services
 
     from django_strawberry_framework.exceptions import OptimizerError
@@ -1277,7 +1287,7 @@ def test_fk_id_elision_falls_back_on_real_deferred_only_instance(caplog: pytest.
     assert "category_id" in root.get_deferred_fields()
     assert "category_id" not in root.__dict__
 
-    def context(strictness: str):
+    def context(strictness: str) -> dict[str, set[str] | str]:
         return {
             DST_OPTIMIZER_FK_ID_ELISIONS: {key},
             DST_OPTIMIZER_PLANNED: {key},
@@ -1306,7 +1316,7 @@ def test_fk_id_elision_falls_back_on_real_deferred_only_instance(caplog: pytest.
     assert isinstance(result, Category)
 
 
-def test_fk_attname_is_deferred_and_stub_exceptions():
+def test_fk_attname_is_deferred_and_stub_exceptions() -> None:
     from django_strawberry_framework.optimizer.field_meta import FieldMeta
     from django_strawberry_framework.types.resolvers import (
         _FK_ELISION_UNSAFE,
@@ -1316,15 +1326,15 @@ def test_fk_attname_is_deferred_and_stub_exceptions():
     )
 
     class BrokenDeferred:
-        def get_deferred_fields(self):
+        def get_deferred_fields(self) -> NoReturn:
             raise RuntimeError("hostile get_deferred_fields")
 
     assert not _fk_attname_is_deferred(BrokenDeferred(), "category_id")
 
     class BrokenDeferredIn:
-        def get_deferred_fields(self):
+        def get_deferred_fields(self) -> object:
             class HostileContainer:
-                def __contains__(self, item: object):
+                def __contains__(self, item: object) -> bool:
                     raise RuntimeError("hostile in")
 
             return HostileContainer()
@@ -1337,14 +1347,15 @@ def test_fk_attname_is_deferred_and_stub_exceptions():
     # _build_fk_id_stub with unreadable attname / uninstantiable related_model
     class BrokenRoot:
         @property
-        def category_id(self):
+        def category_id(self) -> NoReturn:
             raise AttributeError("broken attr")
 
     fm = FieldMeta.from_django_field(Item._meta.get_field("category"))
     assert _build_fk_id_stub(BrokenRoot(), fm) is None
 
     class BrokenModel:
-        def __init__(self, pk: object = None):
+        def __init__(self, pk: object = None) -> None:
+            del pk  # the keyword is part of the model constructor contract; the body only raises
             raise RuntimeError("uninstantiable model")
 
     fake_fm = SimpleNamespace(attname="target_id", related_model=BrokenModel)
@@ -1355,7 +1366,7 @@ def test_fk_attname_is_deferred_and_stub_exceptions():
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_async_resolvers_optimizer_scoped_and_visibility():
+async def test_async_resolvers_optimizer_scoped_and_visibility() -> None:
     import inspect
 
     import django_strawberry_framework.types.resolvers as resolvers_mod
@@ -1375,7 +1386,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
 
         @classmethod
         @override
-        def get_queryset(cls, queryset: QuerySet[Category], info: object):
+        def get_queryset(cls, queryset: QuerySet[Category], info: object) -> QuerySet[Category]:
             return queryset.filter(name__startswith="Visible")
 
     assert registry.get(Category) is CustomCategoryType
@@ -1387,7 +1398,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
 
         @classmethod
         @override
-        def get_queryset(cls, queryset: QuerySet[Item], info: object):
+        def get_queryset(cls, queryset: QuerySet[Item], info: object) -> QuerySet[Item]:
             return queryset.filter(name__startswith="Visible")
 
     assert registry.get(Item) is CustomItemType
@@ -1406,7 +1417,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
             auto_created = True
             related_model = Category
 
-            def get_accessor_name(self):
+            def get_accessor_name(self) -> str:
                 return "profile"
 
         # Reverse one-to-one resolver (scoped and unscoped)
@@ -1425,7 +1436,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
             _state = SimpleNamespace(fields_cache={})
 
             @property
-            def profile(self):
+            def profile(self) -> Category:
                 return cat
 
         fake_info = make_info(path=response_path("item", "profile"), context={})
@@ -1509,7 +1520,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
         # Fallback when _visible_related_object returns a non-awaitable object.
         orig_vis = resolvers_mod._visible_related_object
         try:
-            resolvers_mod._visible_related_object = lambda rel, vt, inf: rel
+            resolvers_mod._visible_related_object = lambda rel, _vt, _inf: rel
 
             res_rev_sync = rev_resolver(FakeRevRoot(), unscoped_info)
             if inspect.isawaitable(res_rev_sync):
@@ -1580,7 +1591,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
 
 
 @pytest.mark.django_db
-def test_sync_forward_and_many_resolver_visibility():
+def test_sync_forward_and_many_resolver_visibility() -> None:
     from django_strawberry_framework.optimizer._context import (
         begin_execution_frame,
         end_execution_frame,
@@ -1598,7 +1609,7 @@ def test_sync_forward_and_many_resolver_visibility():
 
         @classmethod
         @override
-        def get_queryset(cls, queryset: QuerySet[Category], info: object):
+        def get_queryset(cls, queryset: QuerySet[Category], info: object) -> QuerySet[Category]:
             return queryset.filter(name__startswith="Visible")
 
     assert registry.get(Category) is CustomCategoryType
@@ -1610,7 +1621,7 @@ def test_sync_forward_and_many_resolver_visibility():
 
         @classmethod
         @override
-        def get_queryset(cls, queryset: QuerySet[Item], info: object):
+        def get_queryset(cls, queryset: QuerySet[Item], info: object) -> QuerySet[Item]:
             return queryset.filter(name__startswith="Visible")
 
     assert registry.get(Item) is CustomItemType
@@ -1667,7 +1678,7 @@ def test_sync_forward_and_many_resolver_visibility():
                 auto_created = True
                 related_model = Category
 
-                def get_accessor_name(self):
+                def get_accessor_name(self) -> str:
                     return "profile"
 
             rev_resolver = _make_relation_resolver(
@@ -1681,7 +1692,7 @@ def test_sync_forward_and_many_resolver_visibility():
                 _state = SimpleNamespace(fields_cache={})
 
                 @property
-                def profile(self):
+                def profile(self) -> Category:
                     return cat
 
             rev_info = make_info(path=response_path("item", "profile"), context={})
@@ -1695,7 +1706,7 @@ def test_sync_forward_and_many_resolver_visibility():
         end_execution_frame(frame)
 
 
-def test_an_unsealable_prefetch_cache_is_refused_under_the_accessor_it_was_read_from():
+def test_an_unsealable_prefetch_cache_is_refused_under_the_accessor_it_was_read_from() -> None:
     """A prefetch-cache entry the seal refuses is named as the cache it came from.
 
     The consumer wrote no collection resolver here; the queryset is the one
@@ -1726,7 +1737,7 @@ def test_an_unsealable_prefetch_cache_is_refused_under_the_accessor_it_was_read_
     assert "collection resolver" not in message
 
 
-def test_resolver_helpers_edge_cases():
+def test_resolver_helpers_edge_cases() -> None:
     from django_strawberry_framework.types.resolvers import (
         _attach_file_resolvers,
         _attach_relation_resolvers,
@@ -1793,7 +1804,7 @@ def test_resolver_helpers_edge_cases():
 # ---------------------------------------------------------------------------
 
 
-def _declare_mti_tag_models():
+def _declare_mti_tag_models() -> tuple[type[Model], type[Model], type[Model]]:
     """Declare a forward many-to-many on an MTI parent, plus the parent's child.
 
     Test-local because fakeshop carries no forward many-to-many on a model with
@@ -1850,19 +1861,19 @@ class _PlaceWithShop(Protocol):
     mtishop: Model
 
 
-def _create_mti_tag_tables(*models_in_order: type[Model]):
+def _create_mti_tag_tables(*models_in_order: type[Model]) -> None:
     with db_connection.schema_editor() as editor:
         for model in models_in_order:
             editor.create_model(model)
 
 
-def _drop_mti_tag_tables(*models_in_order: type[Model]):
+def _drop_mti_tag_tables(*models_in_order: type[Model]) -> None:
     with db_connection.schema_editor() as editor:
         for model in reversed(models_in_order):
             editor.delete_model(model)
 
 
-def _seed_mti_tags(tag_model: type[Model], shop_model: type[Model]):
+def _seed_mti_tags(tag_model: type[Model], shop_model: type[Model]) -> None:
     """Two shops: ``One`` tagged Alpha / Beta / Hidden, ``Two`` tagged Beta."""
     alpha = tag_model.objects.create(name="Alpha")
     beta = tag_model.objects.create(name="Beta")
@@ -1898,13 +1909,12 @@ def _mti_tag_schema(
     *,
     hide_prefix: str | None = None,
     run_async: bool,
-):
+) -> DjangoSchema:
     """Build a ``DjangoSchema`` whose ``shops`` root returns the walked-down children."""
     import strawberry
     from asgiref.sync import sync_to_async
 
     from django_strawberry_framework import strawberry_config
-    from django_strawberry_framework.schema import DjangoSchema
 
     class MtiTagType(DjangoType):
         class Meta:
@@ -1915,7 +1925,7 @@ def _mti_tag_schema(
 
             @classmethod
             @override
-            def get_queryset(cls, queryset: QuerySet[Model], info: object):
+            def get_queryset(cls, queryset: QuerySet[Model], info: object) -> QuerySet[Model]:
                 return queryset.exclude(name__startswith=hide_prefix)
 
     assert registry.get(tag_model) is MtiTagType
@@ -1959,7 +1969,7 @@ _MTI_TAGS_QUERY = "{ shops { name tags { name } } }"
 async def test_async_many_side_served_from_an_mti_ancestor_prefetch(
     hide_prefix: str | None,
     first_shop_tags: list[str],
-):
+) -> None:
     """An ancestor-served evaluated queryset is routed like a prefetch cache entry.
 
     The key read in ``many_resolver`` misses (the child's own cache is empty), so
@@ -2002,7 +2012,7 @@ async def test_async_many_side_served_from_an_mti_ancestor_prefetch(
     "ancestor's prefetch, so the child's tags are queried rather than served",
 )
 @pytest.mark.django_db(transaction=True)
-def test_sync_many_side_served_from_an_mti_ancestor_prefetch_costs_no_query():
+def test_sync_many_side_served_from_an_mti_ancestor_prefetch_costs_no_query() -> None:
     """The ancestor's prefetched rows are served without a per-child tag query.
 
     Four statements: the places, their ``tags`` prefetch, and one walk down to

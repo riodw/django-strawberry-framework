@@ -29,7 +29,7 @@ DjangoType-wrapper collision and enum-caching through
 import functools
 from collections.abc import Callable, Iterator
 from enum import Enum
-from typing import ParamSpec, TypeVar
+from typing import NoReturn, ParamSpec, TypeVar
 
 import pytest
 import strawberry
@@ -89,7 +89,7 @@ def _isolate_global_registry() -> Iterator[None]:
 # ---------------------------------------------------------------------------
 
 
-def test_definition_for_graphql_name_returns_match():
+def test_definition_for_graphql_name_returns_match() -> None:
     """A registered Relay-Node type's ``graphql_type_name`` resolves to its definition.
 
     Registry lifecycle: definition-object identity or ``ConfigurationError``, which the wire
@@ -109,7 +109,7 @@ def test_definition_for_graphql_name_returns_match():
     assert registry.definition_for_graphql_name("ItemNode") is definition
 
 
-def test_definition_for_graphql_name_honors_meta_name():
+def test_definition_for_graphql_name_honors_meta_name() -> None:
     """The lookup keys on ``graphql_type_name`` (``Meta.name``), not ``type_cls.__name__``.
 
     Registry lifecycle: the decode key is ``graphql_type_name``, not ``__name__``. SDL
@@ -133,7 +133,7 @@ def test_definition_for_graphql_name_honors_meta_name():
         registry.definition_for_graphql_name("ItemNode")
 
 
-def test_definition_for_graphql_name_ignores_non_relay_definitions():
+def test_definition_for_graphql_name_ignores_non_relay_definitions() -> None:
     """A non-Relay-Node DjangoType with a matching name is ignored (Relay-only scan).
 
     Registry lifecycle: Relay-only scan. A non-Node type is invisible to this lookup even when the
@@ -154,7 +154,7 @@ def test_definition_for_graphql_name_ignores_non_relay_definitions():
         registry.definition_for_graphql_name("ItemPlain")
 
 
-def test_definition_for_graphql_name_unknown_raises():
+def test_definition_for_graphql_name_unknown_raises() -> None:
     """An unregistered GraphQL type name raises ``ConfigurationError`` naming it.
 
     Registry lifecycle: definition-object identity or ``ConfigurationError``, which the wire
@@ -176,7 +176,7 @@ def test_definition_for_graphql_name_unknown_raises():
         registry.definition_for_graphql_name("Nonexistent")
 
 
-def test_definition_for_graphql_name_ambiguous_raises():
+def test_definition_for_graphql_name_ambiguous_raises() -> None:
     """Two Relay-Node definitions sharing one ``graphql_type_name`` raise, naming the collision.
 
     Registry lifecycle: two Relay-Node types sharing one ``graphql_type_name``. A live schema
@@ -209,7 +209,7 @@ def test_definition_for_graphql_name_ambiguous_raises():
     assert "ItemDup" in message
 
 
-def test_register_and_get_round_trips(fresh_registry: TypeRegistry):
+def test_register_and_get_round_trips(fresh_registry: TypeRegistry) -> None:
     """``register(model, type_cls)`` makes ``get(model)`` return ``type_cls``.
 
     Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
@@ -224,7 +224,7 @@ def test_register_and_get_round_trips(fresh_registry: TypeRegistry):
     assert fresh_registry.get(Category) is CategoryType
 
 
-def test_get_returns_none_for_unregistered_model(fresh_registry: TypeRegistry):
+def test_get_returns_none_for_unregistered_model(fresh_registry: TypeRegistry) -> None:
     """``get`` returns ``None`` rather than raising when the model is unknown.
 
     Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
@@ -233,7 +233,7 @@ def test_get_returns_none_for_unregistered_model(fresh_registry: TypeRegistry):
     assert fresh_registry.get(Category) is None
 
 
-def test_register_same_class_against_two_models_raises(fresh_registry: TypeRegistry):
+def test_register_same_class_against_two_models_raises(fresh_registry: TypeRegistry) -> None:
     """Registering the same ``type_cls`` against two models raises ``ConfigurationError``.
 
     Pins the reverse-direction guard: ``_models[type_cls]`` must not be silently overwritten when
@@ -255,7 +255,7 @@ def test_register_same_class_against_two_models_raises(fresh_registry: TypeRegis
     assert fresh_registry.model_for_type(SharedType) is Category
 
 
-def test_model_for_type_returns_none_for_none(fresh_registry: TypeRegistry):
+def test_model_for_type_returns_none_for_none(fresh_registry: TypeRegistry) -> None:
     """Passing ``None`` short-circuits to ``None`` so the optimizer can pipeline.
 
     ``DjangoOptimizerExtension`` resolves GraphQL return types with ``unwrap_graphql_type`` and
@@ -267,7 +267,7 @@ def test_model_for_type_returns_none_for_none(fresh_registry: TypeRegistry):
     assert fresh_registry.model_for_type(None) is None
 
 
-def test_model_for_type_returns_none_for_unregistered_class(fresh_registry: TypeRegistry):
+def test_model_for_type_returns_none_for_unregistered_class(fresh_registry: TypeRegistry) -> None:
     """An unregistered class also returns ``None`` (no exception).
 
     Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
@@ -280,7 +280,7 @@ def test_model_for_type_returns_none_for_unregistered_class(fresh_registry: Type
     assert fresh_registry.model_for_type(NotRegistered) is None
 
 
-def test_model_for_type_round_trips(fresh_registry: TypeRegistry):
+def test_model_for_type_round_trips(fresh_registry: TypeRegistry) -> None:
     """``model_for_type`` reverses ``register``: ``type_cls`` -> ``model``.
 
     Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
@@ -295,7 +295,7 @@ def test_model_for_type_round_trips(fresh_registry: TypeRegistry):
     assert fresh_registry.model_for_type(CategoryType) is Category
 
 
-def test_register_enum_caches_by_model_field(fresh_registry: TypeRegistry):
+def test_register_enum_caches_by_model_field(fresh_registry: TypeRegistry) -> None:
     """``register_enum`` keys on ``(model, field_name)`` and ``get_enum`` retrieves it.
 
     Registry lifecycle: enum cache keyed on ``(model, field_name)``. Converter acceptance is live
@@ -312,7 +312,7 @@ def test_register_enum_caches_by_model_field(fresh_registry: TypeRegistry):
     assert fresh_registry.get_enum(Item, "status") is None
 
 
-def test_register_enum_same_class_is_idempotent(fresh_registry: TypeRegistry):
+def test_register_enum_same_class_is_idempotent(fresh_registry: TypeRegistry) -> None:
     """Re-registering the *same* enum class for the same key is a no-op.
 
     Pins the convert_choices_to_enum cache pattern: the call site reads ``get_enum`` first, so a
@@ -330,7 +330,7 @@ def test_register_enum_same_class_is_idempotent(fresh_registry: TypeRegistry):
     assert fresh_registry.get_enum(Category, "status") is Status
 
 
-def test_register_enum_different_class_for_same_key_raises(fresh_registry: TypeRegistry):
+def test_register_enum_different_class_for_same_key_raises(fresh_registry: TypeRegistry) -> None:
     """Registering a *different* enum class for an existing key raises.
 
     Registry lifecycle: enum cache keyed on ``(model, field_name)``. Converter acceptance is live
@@ -346,14 +346,14 @@ def test_register_enum_different_class_for_same_key_raises(fresh_registry: TypeR
     fresh_registry.register_enum(Category, "status", StatusA)
     with pytest.raises(
         ConfigurationError,
-        match="Category.status is already registered as StatusA",
+        match=r"Category\.status is already registered as StatusA",
     ):
         fresh_registry.register_enum(Category, "status", StatusB)
     # Original cache is preserved.
     assert fresh_registry.get_enum(Category, "status") is StatusA
 
 
-def test_clear_drops_all_state(fresh_registry: TypeRegistry):
+def test_clear_drops_all_state(fresh_registry: TypeRegistry) -> None:
     """``clear()`` empties type, model, and enum maps in one call.
 
     Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
@@ -379,7 +379,7 @@ def test_clear_drops_all_state(fresh_registry: TypeRegistry):
     assert fresh_registry.get_enum(Category, "status") is None
 
 
-def test_clear_runs_owner_registered_subsystem_callback(fresh_registry: TypeRegistry):
+def test_clear_runs_owner_registered_subsystem_callback(fresh_registry: TypeRegistry) -> None:
     """Subsystem teardown is resolved at registration, not by a drifting string lookup.
 
     Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
@@ -389,7 +389,7 @@ def test_clear_runs_owner_registered_subsystem_callback(fresh_registry: TypeRegi
     _subsystem_clears.clear()
     calls: list[str] = []
 
-    def clear_probe():
+    def clear_probe() -> None:
         calls.append("cleared")
 
     try:
@@ -405,7 +405,7 @@ def test_clear_runs_owner_registered_subsystem_callback(fresh_registry: TypeRegi
 def test_type_teardowns_run_in_reverse_order_once_before_registration_drops(
     fresh_registry: TypeRegistry,
     action: str,
-):
+) -> None:
     """Type teardown sees its registration, runs LIFO, and is discarded exactly once.
 
     Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
@@ -419,8 +419,8 @@ def test_type_teardowns_run_in_reverse_order_once_before_registration_drops(
     calls: list[str] = []
     fresh_registry.register(Category, CategoryType)
 
-    def record(label: str):
-        def teardown():
+    def record(label: str) -> Callable[[], None]:
+        def teardown() -> None:
             assert fresh_registry.model_for_type(CategoryType) is Category
             calls.append(label)
 
@@ -444,7 +444,7 @@ def test_type_teardowns_run_in_reverse_order_once_before_registration_drops(
 def test_failed_type_teardown_remains_registered_for_retry(
     fresh_registry: TypeRegistry,
     action: str,
-):
+) -> None:
     """A teardown failure preserves the callback and the type registration.
 
     Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
@@ -458,13 +458,13 @@ def test_failed_type_teardown_remains_registered_for_retry(
     attempts = 0
     fresh_registry.register(Category, CategoryType)
 
-    def teardown():
+    def teardown() -> None:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
             raise RuntimeError("retry teardown")
 
-    def invoke():
+    def invoke() -> None:
         if action == "clear":
             fresh_registry.clear()
         else:
@@ -481,7 +481,7 @@ def test_failed_type_teardown_remains_registered_for_retry(
     assert fresh_registry.model_for_type(CategoryType) is None
 
 
-def test_register_type_teardown_rejects_invalid_registration(fresh_registry: TypeRegistry):
+def test_register_type_teardown_rejects_invalid_registration(fresh_registry: TypeRegistry) -> None:
     """A teardown must belong to an already-registered type.
 
     Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
@@ -496,7 +496,7 @@ def test_register_type_teardown_rejects_invalid_registration(fresh_registry: Typ
         fresh_registry.register_type_teardown(CategoryType, lambda: None)
 
 
-def test_before_bind_iteration_excludes_full_clear_only_callbacks():
+def test_before_bind_iteration_excludes_full_clear_only_callbacks() -> None:
     """The finalizer cannot erase declaration registries before binding them.
 
     Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
@@ -505,10 +505,10 @@ def test_before_bind_iteration_excludes_full_clear_only_callbacks():
     callbacks = dict(_subsystem_clears)
     _subsystem_clears.clear()
 
-    def clear_emit_namespace():
+    def clear_emit_namespace() -> None:
         pass
 
-    def clear_declarations():
+    def clear_declarations() -> None:
         pass
 
     try:
@@ -525,7 +525,7 @@ def test_before_bind_iteration_excludes_full_clear_only_callbacks():
         _subsystem_clears.update(callbacks)
 
 
-def test_register_subsystem_clear_rejects_empty_owner():
+def test_register_subsystem_clear_rejects_empty_owner() -> None:
     """``register_subsystem_clear`` rejects an empty owner string.
 
     Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
@@ -535,7 +535,7 @@ def test_register_subsystem_clear_rejects_empty_owner():
         register_subsystem_clear(lambda: None, owner="")
 
 
-def test_iter_types_yields_registered_pairs(fresh_registry: TypeRegistry):
+def test_iter_types_yields_registered_pairs(fresh_registry: TypeRegistry) -> None:
     """``iter_types()`` yields ``(model, type_cls)`` for each registration.
 
     Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
@@ -556,7 +556,7 @@ def test_iter_types_yields_registered_pairs(fresh_registry: TypeRegistry):
     assert result == {Category: CategoryType, Item: ItemType}
 
 
-def test_iter_types_empty_on_fresh_registry(fresh_registry: TypeRegistry):
+def test_iter_types_empty_on_fresh_registry(fresh_registry: TypeRegistry) -> None:
     """``iter_types()`` yields nothing when no types are registered.
 
     Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
@@ -567,7 +567,7 @@ def test_iter_types_empty_on_fresh_registry(fresh_registry: TypeRegistry):
 
 def test_register_definition_rejects_different_definition_for_same_type(
     fresh_registry: TypeRegistry,
-):
+) -> None:
     """A type class cannot be rebound to a different collected definition.
 
     Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
@@ -591,7 +591,7 @@ def test_register_definition_rejects_different_definition_for_same_type(
     assert fresh_registry.get_definition(CategoryType) is original_definition
 
 
-def test_global_registry_is_a_type_registry_instance():
+def test_global_registry_is_a_type_registry_instance() -> None:
     """The ``registry`` module-level singleton is a ``TypeRegistry``.
 
     Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
@@ -619,7 +619,7 @@ def _recording_first_argument(fn: Callable[_P, _R], calls: list[object]) -> Call
     return spy
 
 
-def test_finalize_is_idempotent(monkeypatch: pytest.MonkeyPatch):
+def test_finalize_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
     """Calling finalize twice mutates type classes only once.
 
     Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
@@ -640,14 +640,15 @@ def test_finalize_is_idempotent(monkeypatch: pytest.MonkeyPatch):
     assert calls == [CategoryType]
 
 
-def test_finalize_discards_consumer_authored_pending_relation_without_rewriting_annotation():
+def test_finalize_discards_consumer_authored_pending_relation_without_rewriting_annotation() -> (
+    None
+):
     """Consumer-authored relation annotations are not rewritten if a stale pending record exists.
 
     Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
     A live request never sees a half-finalized registry. Live sibling for a successful compose:
     ``examples/fakeshop/test_query/test_schema_composition_api.py``.
     """
-
     try:
 
         class ManualPendingCategoryType(DjangoType):
@@ -689,7 +690,7 @@ def test_finalize_discards_consumer_authored_pending_relation_without_rewriting_
 
 def test_finalize_skips_definitions_marked_finalized_when_registry_is_unfinalized(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Definition-level finalized flags prevent duplicate resolver and Strawberry mutation.
 
     Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
@@ -699,10 +700,10 @@ def test_finalize_skips_definitions_marked_finalized_when_registry_is_unfinalize
     attach_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
     type_calls: list[tuple[type[object], dict[str, object]]] = []
 
-    def counting_attach(*args: object, **kwargs: object):
+    def counting_attach(*args: object, **kwargs: object) -> None:
         attach_calls.append((args, kwargs))
 
-    def counting_type(type_cls: type[object], **kwargs: object):
+    def counting_type(type_cls: type[object], **kwargs: object) -> None:
         type_calls.append((type_cls, kwargs))
 
     monkeypatch.setattr(finalizer_module, "_attach_relation_resolvers", counting_attach)
@@ -724,7 +725,7 @@ def test_finalize_skips_definitions_marked_finalized_when_registry_is_unfinalize
     assert registry.is_finalized() is True
 
 
-def test_registering_concrete_type_after_finalization_raises():
+def test_registering_concrete_type_after_finalization_raises() -> None:
     """A finalized registry rejects new concrete DjangoType classes.
 
     Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
@@ -750,7 +751,7 @@ def test_registering_concrete_type_after_finalization_raises():
                 fields = ("id", "name")
 
 
-def test_registry_clear_allows_fresh_type_classes_to_finalize_again():
+def test_registry_clear_allows_fresh_type_classes_to_finalize_again() -> None:
     """clear() resets registry state for newly declared type classes.
 
     Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
@@ -779,7 +780,7 @@ def test_registry_clear_allows_fresh_type_classes_to_finalize_again():
     assert registry.get(Category) is FreshCategoryType
 
 
-def test_registry_clear_allows_fresh_relay_declared_type_to_finalize():
+def test_registry_clear_allows_fresh_relay_declared_type_to_finalize() -> None:
     """``registry.clear()`` lets a fresh Relay-declared ``DjangoType`` finalize cleanly.
 
     Pins the lifecycle contract that the same model can be re-bound to a fresh Relay-declared type
@@ -834,7 +835,7 @@ def test_registry_clear_allows_fresh_relay_declared_type_to_finalize():
         assert attr in FreshCategoryNode.__dict__
 
 
-def test_phase_1_failure_is_atomic_and_retryable_after_missing_target_registers():
+def test_phase_1_failure_is_atomic_and_retryable_after_missing_target_registers() -> None:
     """Unresolved targets fail before class mutation and can retry after the target appears.
 
     Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
@@ -869,7 +870,9 @@ def test_phase_1_failure_is_atomic_and_retryable_after_missing_target_registers(
     assert list(registry.iter_pending_relations()) == []
 
 
-def test_phase_1_failure_does_not_rewrite_any_pending_annotations_when_one_target_is_missing():
+def test_phase_1_failure_does_not_rewrite_any_pending_annotations_when_one_target_is_missing() -> (
+    None
+):
     """A mixed pending set stays untouched until every relation target resolves.
 
     Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
@@ -895,7 +898,7 @@ def test_phase_1_failure_does_not_rewrite_any_pending_annotations_when_one_targe
     assert CategoryType.__annotations__["items"] is PendingRelationAnnotation
     assert CategoryType.__annotations__["properties"] is PendingRelationAnnotation
 
-    with pytest.raises(ConfigurationError, match="Category.properties -> Property"):
+    with pytest.raises(ConfigurationError, match=r"Category\.properties -> Property"):
         finalize_django_types()
 
     pending_names = [pending.field_name for pending in registry.iter_pending_relations()]
@@ -927,7 +930,7 @@ def test_phase_1_failure_does_not_rewrite_any_pending_annotations_when_one_targe
 
 def test_phase_3_failure_leaves_registry_unfinalized_and_requires_fresh_classes(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A Strawberry-side failure is recovered by clear() plus fresh class recreation.
 
     Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
@@ -937,7 +940,7 @@ def test_phase_3_failure_leaves_registry_unfinalized_and_requires_fresh_classes(
     original_type = strawberry.type
     reached_by_strawberry: list[type] = []
 
-    def failing_type(type_cls: type, **_kwargs: object):
+    def failing_type(type_cls: type, **_kwargs: object) -> NoReturn:
         reached_by_strawberry.append(type_cls)
         raise TypeError("simulated Strawberry failure")
 
@@ -971,7 +974,7 @@ def test_phase_3_failure_leaves_registry_unfinalized_and_requires_fresh_classes(
     assert registry.is_finalized() is True
 
 
-def test_pending_set_is_cleaned_after_success_and_retained_after_phase_1_failure():
+def test_pending_set_is_cleaned_after_success_and_retained_after_phase_1_failure() -> None:
     """Pending records remain after unresolved failure but disappear after success.
 
     Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
@@ -1002,7 +1005,7 @@ def test_pending_set_is_cleaned_after_success_and_retained_after_phase_1_failure
 
 def test_discard_pending_uses_identity_match_with_real_pending_relation(
     fresh_registry: TypeRegistry,
-):
+) -> None:
     """``discard_pending`` removes the exact records handed back by the caller.
 
     Builds two records from the same values and asserts that discarding one leaves the other in
@@ -1034,7 +1037,7 @@ def test_discard_pending_uses_identity_match_with_real_pending_relation(
     assert remaining[0] is record_b
 
 
-def test_discard_pending_tolerates_non_hashable_django_field(fresh_registry: TypeRegistry):
+def test_discard_pending_tolerates_non_hashable_django_field(fresh_registry: TypeRegistry) -> None:
     """``discard_pending`` removes pending records by identity without hashing them.
 
     Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
@@ -1043,7 +1046,7 @@ def test_discard_pending_tolerates_non_hashable_django_field(fresh_registry: Typ
 
     class _NonHashableField:
         @override
-        def __eq__(self, other: object):
+        def __eq__(self, other: object) -> bool:
             return self is other
 
         # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
@@ -1065,7 +1068,7 @@ def test_discard_pending_tolerates_non_hashable_django_field(fresh_registry: Typ
     assert list(fresh_registry.iter_pending_relations()) == []
 
 
-def test_mutators_reject_calls_after_mark_finalized(fresh_registry: TypeRegistry):
+def test_mutators_reject_calls_after_mark_finalized(fresh_registry: TypeRegistry) -> None:
     """After ``mark_finalized``, every mutator raises ``ConfigurationError``.
 
     Defense-in-depth: ``DjangoType.__init_subclass__`` already rejects new subclasses
@@ -1104,7 +1107,7 @@ def test_mutators_reject_calls_after_mark_finalized(fresh_registry: TypeRegistry
         fresh_registry.register_enum(Category, "status", Status)
 
 
-def test_clear_does_not_remove_mutation_from_previously_finalized_classes():
+def test_clear_does_not_remove_mutation_from_previously_finalized_classes() -> None:
     """clear() resets the registry, not already-mutated class objects.
 
     Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
@@ -1128,7 +1131,7 @@ def test_clear_does_not_remove_mutation_from_previously_finalized_classes():
 
 def test_register_with_definition_rolls_back_register_on_definition_failure(
     fresh_registry: TypeRegistry,
-):
+) -> None:
     """``register_with_definition`` is atomic across the pair.
 
     If ``register_definition`` raises after ``register`` succeeded, the model->type mapping must
@@ -1169,7 +1172,7 @@ def test_register_with_definition_rolls_back_register_on_definition_failure(
 
 def test_register_two_types_same_model_without_primary_allows_both_in_types_for(
     fresh_registry: TypeRegistry,
-):
+) -> None:
     """Two types for one model without ``primary`` co-exist; both appear in ``types_for``.
 
     Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
@@ -1194,7 +1197,7 @@ def test_register_two_types_same_model_without_primary_allows_both_in_types_for(
 
 def test_register_second_type_for_same_model_no_longer_raises_collision(
     fresh_registry: TypeRegistry,
-):
+) -> None:
     """A second type for an existing model registers without raising.
 
     Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
@@ -1218,7 +1221,7 @@ def test_register_second_type_for_same_model_no_longer_raises_collision(
         pytest.fail("second registration without primary must not raise")
 
 
-def test_register_same_type_twice_is_idempotent(fresh_registry: TypeRegistry):
+def test_register_same_type_twice_is_idempotent(fresh_registry: TypeRegistry) -> None:
     """Calling ``register(Model, T)`` twice is a no-op for the second call.
 
     Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
@@ -1235,7 +1238,7 @@ def test_register_same_type_twice_is_idempotent(fresh_registry: TypeRegistry):
     assert fresh_registry.types_for(Item) == (ItemType,)
 
 
-def test_register_primary_flag_sets_primary_for(fresh_registry: TypeRegistry):
+def test_register_primary_flag_sets_primary_for(fresh_registry: TypeRegistry) -> None:
     """``primary=True`` populates ``_primaries`` and ``primary_for`` reads it back.
 
     Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
@@ -1256,7 +1259,7 @@ def test_register_primary_flag_sets_primary_for(fresh_registry: TypeRegistry):
 
 def test_register_two_primaries_for_same_model_raises_configuration_error(
     fresh_registry: TypeRegistry,
-):
+) -> None:
     """Second ``primary=True`` on the same model raises naming attempt, model, and incumbent primary.
 
     Pins all three load-bearing identifiers in the error message so a future cosmetic refactor
@@ -1290,7 +1293,7 @@ def test_register_two_primaries_for_same_model_raises_configuration_error(
 
 def test_register_same_type_re_register_with_flipped_primary_false_raises(
     fresh_registry: TypeRegistry,
-):
+) -> None:
     """Flip of stored ``primary=True`` to ``primary=False`` raises.
 
     Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
@@ -1310,7 +1313,7 @@ def test_register_same_type_re_register_with_flipped_primary_false_raises(
 
 def test_register_same_type_re_register_with_flipped_primary_true_raises(
     fresh_registry: TypeRegistry,
-):
+) -> None:
     """Flip of stored ``primary=False`` to ``primary=True`` raises (symmetric guard).
 
     Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
@@ -1328,7 +1331,7 @@ def test_register_same_type_re_register_with_flipped_primary_true_raises(
         fresh_registry.register(Item, ItemType, primary=True)
 
 
-def test_register_with_definition_rollback_clears_primary(fresh_registry: TypeRegistry):
+def test_register_with_definition_rollback_clears_primary(fresh_registry: TypeRegistry) -> None:
     """``register_with_definition`` rolls back ``_primaries`` for state it added.
 
     Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
@@ -1363,7 +1366,7 @@ def test_register_with_definition_rollback_clears_primary(fresh_registry: TypeRe
 
 def test_register_with_definition_rollback_restores_pre_existing_primary(
     fresh_registry: TypeRegistry,
-):
+) -> None:
     """Rollback restores ``_primaries[model]`` to the pre-existing primary.
 
     Pins the ``else: self._primaries[model] = pre_primary`` branch of the rollback in
@@ -1406,7 +1409,7 @@ def test_register_with_definition_rollback_restores_pre_existing_primary(
 
 def test_register_with_definition_idempotent_re_register_does_not_corrupt_state(
     fresh_registry: TypeRegistry,
-):
+) -> None:
     """A re-register-with-different-definition failure leaves pre-existing state intact.
 
     Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
@@ -1436,7 +1439,7 @@ def test_register_with_definition_idempotent_re_register_does_not_corrupt_state(
 
 def test_register_with_definition_idempotent_re_register_preserves_primary(
     fresh_registry: TypeRegistry,
-):
+) -> None:
     """Primary-preservation corollary: the pre-existing primary survives a re-register failure.
 
     Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
@@ -1461,7 +1464,7 @@ def test_register_with_definition_idempotent_re_register_preserves_primary(
     assert fresh_registry.types_for(Item) == (ItemType,)
 
 
-def test_register_returns_true_for_new_state(fresh_registry: TypeRegistry):
+def test_register_returns_true_for_new_state(fresh_registry: TypeRegistry) -> None:
     """First registration returns ``True`` (state was added).
 
     Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
@@ -1475,7 +1478,7 @@ def test_register_returns_true_for_new_state(fresh_registry: TypeRegistry):
     assert fresh_registry.register(Item, ItemType) is True
 
 
-def test_register_returns_false_for_idempotent_re_register(fresh_registry: TypeRegistry):
+def test_register_returns_false_for_idempotent_re_register(fresh_registry: TypeRegistry) -> None:
     """Idempotent re-register returns ``False`` (no state added).
 
     Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
@@ -1490,7 +1493,9 @@ def test_register_returns_false_for_idempotent_re_register(fresh_registry: TypeR
     assert fresh_registry.register(Item, ItemType) is False
 
 
-def test_get_returns_single_type_when_one_registered_no_primary(fresh_registry: TypeRegistry):
+def test_get_returns_single_type_when_one_registered_no_primary(
+    fresh_registry: TypeRegistry,
+) -> None:
     """``get(Model)`` returns the lone type even when ``primary`` is not declared.
 
     Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
@@ -1507,7 +1512,9 @@ def test_get_returns_single_type_when_one_registered_no_primary(fresh_registry: 
     assert fresh_registry.get(Item) is ItemType
 
 
-def test_get_returns_primary_when_multiple_and_primary_declared(fresh_registry: TypeRegistry):
+def test_get_returns_primary_when_multiple_and_primary_declared(
+    fresh_registry: TypeRegistry,
+) -> None:
     """``get(Model)`` returns the explicit primary when multiple types are registered.
 
     Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
@@ -1529,7 +1536,7 @@ def test_get_returns_primary_when_multiple_and_primary_declared(fresh_registry: 
     assert fresh_registry.get(Item) is ItemType
 
 
-def test_get_returns_none_when_multiple_and_no_primary(fresh_registry: TypeRegistry):
+def test_get_returns_none_when_multiple_and_no_primary(fresh_registry: TypeRegistry) -> None:
     """``get(Model)`` returns ``None`` when multi-type and no primary declared.
 
     Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
@@ -1553,7 +1560,9 @@ def test_get_returns_none_when_multiple_and_no_primary(fresh_registry: TypeRegis
     assert fresh_registry.types_for(Item) == (ItemType, AdminItemType)
 
 
-def test_primary_for_returns_none_when_only_implicit_single_type(fresh_registry: TypeRegistry):
+def test_primary_for_returns_none_when_only_implicit_single_type(
+    fresh_registry: TypeRegistry,
+) -> None:
     """``primary_for`` is strictly ``_primaries``; the single-type convenience lives on ``get``.
 
     Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
@@ -1571,7 +1580,7 @@ def test_primary_for_returns_none_when_only_implicit_single_type(fresh_registry:
     assert fresh_registry.get(Item) is ItemType
 
 
-def test_types_for_preserves_registration_order(fresh_registry: TypeRegistry):
+def test_types_for_preserves_registration_order(fresh_registry: TypeRegistry) -> None:
     """``types_for`` returns registrations in the order they happened.
 
     Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
@@ -1600,7 +1609,7 @@ def test_types_for_preserves_registration_order(fresh_registry: TypeRegistry):
 
 def test_iter_types_yields_each_type_once_when_multiple_registered_for_same_model(
     fresh_registry: TypeRegistry,
-):
+) -> None:
     """``iter_types`` yields one pair per registered type; multi-type models appear repeatedly.
 
     Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
@@ -1623,7 +1632,7 @@ def test_iter_types_yields_each_type_once_when_multiple_registered_for_same_mode
     assert pairs == [(Item, A), (Item, B)]
 
 
-def test_register_same_type_against_two_models_still_raises(fresh_registry: TypeRegistry):
+def test_register_same_type_against_two_models_still_raises(fresh_registry: TypeRegistry) -> None:
     """Reverse-collision contract is preserved by the multi-type registry.
 
     Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
@@ -1639,7 +1648,7 @@ def test_register_same_type_against_two_models_still_raises(fresh_registry: Type
         fresh_registry.register(Item, SharedType)
 
 
-def test_clear_resets_primaries(fresh_registry: TypeRegistry):
+def test_clear_resets_primaries(fresh_registry: TypeRegistry) -> None:
     """``clear()`` wipes ``_primaries`` alongside the other registry maps.
 
     Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
@@ -1658,7 +1667,7 @@ def test_clear_resets_primaries(fresh_registry: TypeRegistry):
 
 def test_models_with_multiple_types_yields_only_models_with_two_or_more(
     fresh_registry: TypeRegistry,
-):
+) -> None:
     """``models_with_multiple_types`` reports only models with ``>= 2`` registered types.
 
     Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
@@ -1710,7 +1719,7 @@ def test_models_with_multiple_types_yields_only_models_with_two_or_more(
 # ---------------------------------------------------------------------------
 
 
-def test_finalize_raises_when_model_has_multiple_types_no_primary():
+def test_finalize_raises_when_model_has_multiple_types_no_primary() -> None:
     """``finalize_django_types`` raises when a model has 2+ types and no primary.
 
     Registry lifecycle: ``_audit_primary_ambiguity`` inside ``finalize_django_types``. A live
@@ -1742,7 +1751,7 @@ def test_finalize_raises_when_model_has_multiple_types_no_primary():
     assert "ItemTypeB" in msg
 
 
-def test_finalize_ambiguity_error_message_contains_actionable_fix():
+def test_finalize_ambiguity_error_message_contains_actionable_fix() -> None:
     """The ambiguity error message ends with the actionable ``Declare Meta.primary`` sentence.
 
     Registry lifecycle: ``_audit_primary_ambiguity`` inside ``finalize_django_types``. A live
@@ -1774,7 +1783,7 @@ def test_finalize_ambiguity_error_message_contains_actionable_fix():
     )
 
 
-def test_audit_runs_once_per_build(monkeypatch: pytest.MonkeyPatch):
+def test_audit_runs_once_per_build(monkeypatch: pytest.MonkeyPatch) -> None:
     """The ambiguity audit runs exactly once per finalize-cycle build.
 
     Pins that ``_audit_primary_ambiguity`` sits *below* the ``registry.is_finalized()``
@@ -1788,7 +1797,7 @@ def test_audit_runs_once_per_build(monkeypatch: pytest.MonkeyPatch):
     calls: list[None] = []
     original = registry.models_with_multiple_types
 
-    def spy():
+    def spy() -> Iterator[type[models.Model]]:
         calls.append(None)
         return original()
 
@@ -1816,7 +1825,9 @@ def test_audit_runs_once_per_build(monkeypatch: pytest.MonkeyPatch):
 # ---------------------------------------------------------------------------
 
 
-def test_unregister_removes_from_types_models_primaries_definitions(fresh_registry: TypeRegistry):
+def test_unregister_removes_from_types_models_primaries_definitions(
+    fresh_registry: TypeRegistry,
+) -> None:
     """``unregister`` drops the type from every registry map.
 
     Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
@@ -1839,7 +1850,7 @@ def test_unregister_removes_from_types_models_primaries_definitions(fresh_regist
     assert fresh_registry.get_definition(ItemType) is None
 
 
-def test_unregister_evicts_connection_type_cache_entry(fresh_registry: TypeRegistry):
+def test_unregister_evicts_connection_type_cache_entry(fresh_registry: TypeRegistry) -> None:
     """``unregister`` drops the type's generated-connection-class cache entry.
 
     ``clear()`` already purges the whole identity-keyed cache; ``unregister`` promises "all traces"
@@ -1881,7 +1892,9 @@ def test_unregister_evicts_connection_type_cache_entry(fresh_registry: TypeRegis
         _connection_type_cache.pop(CategoryType, None)
 
 
-def test_unregister_tolerates_unimportable_connection_submodule(fresh_registry: TypeRegistry):
+def test_unregister_tolerates_unimportable_connection_submodule(
+    fresh_registry: TypeRegistry,
+) -> None:
     """``unregister``'s connection-cache ``except ImportError`` guard is best-effort.
 
     Unregister twin of ``test_clear_tolerates_unimportable_connection_submodule`` - same
@@ -1904,7 +1917,9 @@ def test_unregister_tolerates_unimportable_connection_submodule(fresh_registry: 
         assert fresh_registry.model_for_type(ItemType) is None
 
 
-def test_unregister_removes_pending_relations_sourced_from_type(fresh_registry: TypeRegistry):
+def test_unregister_removes_pending_relations_sourced_from_type(
+    fresh_registry: TypeRegistry,
+) -> None:
     """``unregister`` discards pending relations whose ``source_type`` matches.
 
     Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
@@ -1944,7 +1959,7 @@ def test_unregister_removes_pending_relations_sourced_from_type(fresh_registry: 
     assert remaining == [pending_keep]
 
 
-def test_unregister_keeps_siblings_intact_in_multi_type_case(fresh_registry: TypeRegistry):
+def test_unregister_keeps_siblings_intact_in_multi_type_case(fresh_registry: TypeRegistry) -> None:
     """``unregister`` of one type for a model leaves siblings registered.
 
     When the unregistered type was the primary, the model loses its primary slot - the caller is
@@ -1979,7 +1994,7 @@ def test_unregister_keeps_siblings_intact_in_multi_type_case(fresh_registry: Typ
     assert fresh_registry.model_for_type(ItemTypeC) is Item
 
 
-def test_unregister_of_primary_leaves_state_that_audit_rejects():
+def test_unregister_of_primary_leaves_state_that_audit_rejects() -> None:
     """``unregister(primary_for_multi)`` leaves a state the finalize audit refuses.
 
     Pins the contract narrated by ``unregister``'s docstring at
@@ -2034,7 +2049,7 @@ def test_unregister_of_primary_leaves_state_that_audit_rejects():
     )
 
 
-def test_unregister_is_noop_on_unknown_type(fresh_registry: TypeRegistry):
+def test_unregister_is_noop_on_unknown_type(fresh_registry: TypeRegistry) -> None:
     """``unregister`` returns silently when ``type_cls`` was never registered.
 
     Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
@@ -2050,7 +2065,7 @@ def test_unregister_is_noop_on_unknown_type(fresh_registry: TypeRegistry):
     assert fresh_registry.types_for(Item) == ()
 
 
-def test_unregister_raises_after_finalize():
+def test_unregister_raises_after_finalize() -> None:
     """``unregister`` honours ``_check_mutable``: post-finalize calls raise.
 
     The finalized registry is the runtime lookup source for optimizer planning, the schema audit,
@@ -2072,7 +2087,7 @@ def test_unregister_raises_after_finalize():
         registry.unregister(CategoryType)
 
 
-def test_clear_tolerates_unimportable_filter_submodules(fresh_registry: TypeRegistry):
+def test_clear_tolerates_unimportable_filter_submodules(fresh_registry: TypeRegistry) -> None:
     """``clear()`` itself imports nothing, so a broken ``sys.modules`` cannot break it.
 
     Every subsystem binds its own teardown callback at ITS import time via
@@ -2105,7 +2120,7 @@ def test_clear_tolerates_unimportable_filter_submodules(fresh_registry: TypeRegi
         assert fresh_registry.get(Category) is None
 
 
-def test_clear_tolerates_unimportable_order_submodules(fresh_registry: TypeRegistry):
+def test_clear_tolerates_unimportable_order_submodules(fresh_registry: TypeRegistry) -> None:
     """``clear()`` itself imports nothing, so a broken ``sys.modules`` cannot break it.
 
     Order twin of ``test_clear_tolerates_unimportable_filter_submodules``. Every subsystem binds
@@ -2139,7 +2154,7 @@ def test_clear_tolerates_unimportable_order_submodules(fresh_registry: TypeRegis
         assert fresh_registry.get(Category) is None
 
 
-def test_clear_tolerates_unimportable_connection_submodule(fresh_registry: TypeRegistry):
+def test_clear_tolerates_unimportable_connection_submodule(fresh_registry: TypeRegistry) -> None:
     """``clear()`` itself imports nothing, so a poisoned ``connection`` entry cannot break it.
 
     Connection twin of ``test_clear_tolerates_unimportable_order_submodules``. ``connection.py``
@@ -2167,7 +2182,7 @@ def test_clear_tolerates_unimportable_connection_submodule(fresh_registry: TypeR
         assert fresh_registry.get(Category) is None
 
 
-def test_clear_tolerates_unimportable_relay_module(fresh_registry: TypeRegistry):
+def test_clear_tolerates_unimportable_relay_module(fresh_registry: TypeRegistry) -> None:
     """``clear()`` itself imports nothing, so a poisoned ``relay`` entry cannot break it.
 
     Relay twin of ``test_clear_tolerates_unimportable_connection_submodule``. The top-level

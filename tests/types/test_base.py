@@ -16,7 +16,7 @@ definition-order independence path is covered in
 ``tests/types/test_definition_order.py`` and
 ``tests/types/test_definition_order_schema.py``.
 
-Meta-validation tests avoid ``fields = \"__all__\"`` on ``Category``:
+Meta-validation tests avoid ``fields = "__all__"`` on ``Category``:
 they either declare related types up front (so the registry resolves
 ``items`` / ``properties``) or use an explicit fields list to keep the
 test focused on the behaviour under examination. ``CATEGORY_SCALAR_FIELDS``
@@ -29,6 +29,7 @@ import itertools
 import sys
 import types
 from collections.abc import Collection, Sequence
+from typing import NoReturn
 
 import pytest
 import pytest_django
@@ -90,11 +91,11 @@ pytestmark = pytest.mark.usefixtures("isolate_global_registry")
 # ---------------------------------------------------------------------------
 
 
-def test_registry_get_returns_none_for_unregistered_model():
+def test_registry_get_returns_none_for_unregistered_model() -> None:
     assert registry.get(Category) is None
 
 
-def test_registry_collision_raises_configuration_error():
+def test_registry_collision_raises_configuration_error() -> None:
     class CategoryTypeA(DjangoType):
         class Meta:
             model = Category
@@ -105,7 +106,10 @@ def test_registry_collision_raises_configuration_error():
 
     with pytest.raises(
         ConfigurationError,
-        match=r"Cannot register CategoryTypeB as primary for Category;.*CategoryTypeA is already the primary type",
+        match=(
+            r"Cannot register CategoryTypeB as primary for Category;"
+            r".*CategoryTypeA is already the primary type"
+        ),
     ):
 
         @definition_raises
@@ -116,7 +120,7 @@ def test_registry_collision_raises_configuration_error():
                 primary = True
 
 
-def test_registry_clear_drops_types_and_enums():
+def test_registry_clear_drops_types_and_enums() -> None:
     class CategoryType(DjangoType):
         class Meta:
             model = Category
@@ -132,7 +136,7 @@ def test_registry_clear_drops_types_and_enums():
 # ---------------------------------------------------------------------------
 
 
-def test_subclass_without_meta_passes_through():
+def test_subclass_without_meta_passes_through() -> None:
     """Intermediate abstract subclasses (no Meta) skip the pipeline."""
 
     class AbstractType(DjangoType):
@@ -143,14 +147,14 @@ def test_subclass_without_meta_passes_through():
     assert AbstractType.has_custom_get_queryset() is False
 
 
-def test_detect_custom_get_queryset_returns_false_for_non_djangotype_class():
+def test_detect_custom_get_queryset_returns_false_for_non_djangotype_class() -> None:
     """The helper is defensive for classes and objects outside the DjangoType hierarchy."""
 
     class PlainType:
         pass
 
     class PlainTypeWithGetQueryset:
-        def get_queryset(self):
+        def get_queryset(self) -> None:
             pass
 
     assert _detect_custom_get_queryset(PlainType) is False
@@ -160,8 +164,8 @@ def test_detect_custom_get_queryset_returns_false_for_non_djangotype_class():
     assert _detect_custom_get_queryset("not_a_type") is False
 
 
-def test_meta_required_model_raises_when_missing():
-    with pytest.raises(ConfigurationError, match="Meta.model is required"):
+def test_meta_required_model_raises_when_missing() -> None:
+    with pytest.raises(ConfigurationError, match=r"Meta\.model is required"):
 
         @definition_raises
         class T(DjangoType):
@@ -169,8 +173,8 @@ def test_meta_required_model_raises_when_missing():
                 fields = CATEGORY_SCALAR_FIELDS
 
 
-def test_meta_model_must_be_django_model_class():
-    with pytest.raises(ConfigurationError, match="Meta.model must be a Django model class"):
+def test_meta_model_must_be_django_model_class() -> None:
+    with pytest.raises(ConfigurationError, match=r"Meta\.model must be a Django model class"):
 
         @definition_raises
         class T(DjangoType):
@@ -188,14 +192,18 @@ def test_meta_model_must_be_django_model_class():
         ("exclude", "name", "Meta.exclude must be a non-string sequence"),
     ],
 )
-def test_meta_field_selectors_must_have_valid_shapes(attr: str, value: object, message: str):
+def test_meta_field_selectors_must_have_valid_shapes(
+    attr: str,
+    value: object,
+    message: str,
+) -> None:
     meta_cls = type("Meta", (), {"model": Category, attr: value})
     with pytest.raises(ConfigurationError, match=message):
         type("T", (DjangoType,), {"Meta": meta_cls})
 
 
-def test_meta_optimizer_hints_must_be_mapping_when_declared():
-    with pytest.raises(ConfigurationError, match="Meta.optimizer_hints must be a mapping"):
+def test_meta_optimizer_hints_must_be_mapping_when_declared() -> None:
+    with pytest.raises(ConfigurationError, match=r"Meta\.optimizer_hints must be a mapping"):
 
         @definition_raises
         class T(DjangoType):
@@ -205,10 +213,10 @@ def test_meta_optimizer_hints_must_be_mapping_when_declared():
                 optimizer_hints = []
 
 
-def test_meta_optimizer_hints_rejects_non_string_keys():
+def test_meta_optimizer_hints_rejects_non_string_keys() -> None:
     with pytest.raises(
         ConfigurationError,
-        match="Meta.optimizer_hints keys must be field name strings",
+        match=r"Meta\.optimizer_hints keys must be field name strings",
     ):
 
         @definition_raises
@@ -219,10 +227,10 @@ def test_meta_optimizer_hints_rejects_non_string_keys():
                 optimizer_hints = {123: OptimizerHint.prefetch_related()}
 
 
-def test_meta_optimizer_hints_rejects_mixed_non_string_keys_safely():
+def test_meta_optimizer_hints_rejects_mixed_non_string_keys_safely() -> None:
     with pytest.raises(
         ConfigurationError,
-        match="Meta.optimizer_hints keys must be field name strings",
+        match=r"Meta\.optimizer_hints keys must be field name strings",
     ):
 
         @definition_raises
@@ -240,7 +248,7 @@ class _HostileMetaValue:
     """A malformed Meta value whose diagnostic representation raises."""
 
     @override
-    def __repr__(self):
+    def __repr__(self) -> str:
         raise RuntimeError("repr should not escape")
 
 
@@ -252,17 +260,16 @@ class _HostileMetaSequence(Sequence[object]):
     """
 
     @override
-    def __getitem__(self, index: int | slice):
+    def __getitem__(self, index: int | slice) -> NoReturn:
         raise RuntimeError("sequence access should not escape")
 
     @override
-    def __len__(self):
+    def __len__(self) -> int:
         raise RuntimeError("sequence length should not escape")
 
 
-def test_meta_validator_diagnostics_survive_hostile_values():
+def test_meta_validator_diagnostics_survive_hostile_values() -> None:
     """Malformed Meta values cannot replace ConfigurationError with repr failures."""
-
     hostile = _HostileMetaValue()
 
     class InterfaceMeta:
@@ -282,24 +289,22 @@ def test_meta_validator_diagnostics_survive_hostile_values():
             validator()
 
 
-def test_meta_connection_unknown_keys_are_typed_for_mixed_and_hostile_keys():
+def test_meta_connection_unknown_keys_are_typed_for_mixed_and_hostile_keys() -> None:
     """Unknown connection keys cannot leak sorting or repr exceptions."""
-
     with pytest.raises(ConfigurationError, match="unknown sub-keys"):
         _validate_connection(Category, {1: True, "bogus": False}, relay_shaped=False)
     with pytest.raises(ConfigurationError, match="unknown sub-keys"):
         _validate_connection(Category, {_HostileMetaValue(): True}, relay_shaped=False)
 
 
-def test_meta_cursor_field_hostile_sequence_is_typed():
+def test_meta_cursor_field_hostile_sequence_is_typed() -> None:
     """A broken sequence descriptor cannot escape as a raw runtime exception."""
-
     with pytest.raises(ConfigurationError, match="non-empty non-string sequence"):
         _validate_cursor_field(Category, _HostileMetaSequence(), relay_shaped=True)
 
 
 @pytest.mark.parametrize("key", ["fields", "exclude"])
-def test_meta_field_collections_wrap_hostile_iteration(key: str):
+def test_meta_field_collections_wrap_hostile_iteration(key: str) -> None:
     """A field collection that raises while iterating stays a typed shape error."""
     meta_cls = type("Meta", (), {"model": Category, key: _HostileMetaSequence()})
 
@@ -307,7 +312,7 @@ def test_meta_field_collections_wrap_hostile_iteration(key: str):
         type("T", (DjangoType,), {"Meta": meta_cls})
 
 
-def test_meta_name_rejects_an_empty_string():
+def test_meta_name_rejects_an_empty_string() -> None:
     """An empty ``Meta.name`` is rejected at type creation."""
     with pytest.raises(ConfigurationError, match="empty name"):
 
@@ -319,17 +324,17 @@ def test_meta_name_rejects_an_empty_string():
                 name = ""
 
 
-def test_meta_name_rejects_hostile_values_at_type_creation():
+def test_meta_name_rejects_hostile_values_at_type_creation() -> None:
     """A malformed ``Meta.name`` cannot survive to Strawberry schema creation."""
 
     class HostileName:
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr should not escape")
 
     with pytest.raises(
         ConfigurationError,
-        match="Meta.name must be a non-empty string; got <unprintable HostileName>",
+        match=r"Meta\.name must be a non-empty string; got <unprintable HostileName>",
     ):
 
         @definition_raises
@@ -340,7 +345,7 @@ def test_meta_name_rejects_hostile_values_at_type_creation():
                 name = HostileName()
 
 
-def test_meta_name_rejects_invalid_graphql_names_at_type_creation():
+def test_meta_name_rejects_invalid_graphql_names_at_type_creation() -> None:
     """A syntactically invalid GraphQL name cannot leak Strawberry's GraphQLError."""
     with pytest.raises(ConfigurationError, match="valid GraphQL name"):
 
@@ -352,32 +357,32 @@ def test_meta_name_rejects_invalid_graphql_names_at_type_creation():
                 name = "bad-name"
 
 
-def test_globalid_callable_wraps_non_signature_inspection_errors():
+def test_globalid_callable_wraps_non_signature_inspection_errors() -> None:
     """A ``__signature__`` descriptor that raises is a typed configuration failure."""
 
     class _UnreadableSignature:
         @property
-        def __signature__(self):
+        def __signature__(self) -> NoReturn:
             raise RuntimeError("signature exploded")
 
         def __call__(
             self,
-            type_cls: type[DjangoType],
-            model: type[models.Model],
-            root: object,
-        ):
+            _type_cls: type[DjangoType],
+            _model: type[models.Model],
+            _root: object,
+        ) -> str:
             return "value"
 
     with pytest.raises(ConfigurationError, match="could not be inspected"):
         _validate_globalid_callable("Meta.globalid_strategy", _UnreadableSignature())
 
 
-def test_meta_globalid_callable_hostile_descriptor_is_typed():
+def test_meta_globalid_callable_hostile_descriptor_is_typed() -> None:
     """A broken callable descriptor cannot escape GlobalID strategy validation."""
 
     class HostileCallable:
         @property
-        def __call__(self):
+        def __call__(self) -> NoReturn:
             raise RuntimeError("callable descriptor should not escape")
 
     with pytest.raises(ConfigurationError, match="could not be inspected"):
@@ -394,14 +399,14 @@ def test_meta_globalid_callable_hostile_descriptor_is_typed():
         "filesystem_path_fields",
     ],
 )
-def test_meta_name_collections_reject_non_string_entries(attr: str):
+def test_meta_name_collections_reject_non_string_entries(attr: str) -> None:
     """All field-name collections reject unhashable entries before set operations."""
     meta = type("Meta", (), {"model": Category, attr: (["name"],)})
     with pytest.raises(ConfigurationError, match=f"Meta.{attr} must contain field name strings"):
         type("InvalidNamesType", (DjangoType,), {"Meta": meta})
 
 
-def test_meta_fields_and_exclude_mutually_exclusive():
+def test_meta_fields_and_exclude_mutually_exclusive() -> None:
     with pytest.raises(ConfigurationError, match="mutually exclusive"):
 
         @definition_raises
@@ -412,7 +417,7 @@ def test_meta_fields_and_exclude_mutually_exclusive():
                 exclude = ["description"]
 
 
-def test_meta_fields_and_exclude_mutually_exclusive_via_inheritance():
+def test_meta_fields_and_exclude_mutually_exclusive_via_inheritance() -> None:
     """A ``fields`` value inherited from a parent ``Meta`` still trips the guard.
 
     Pins the ``getattr(meta, ..., None) is not None`` semantics: an earlier
@@ -438,7 +443,7 @@ def test_meta_fields_and_exclude_mutually_exclusive_via_inheritance():
     "deferred_key",
     ["aggregate_class", "fields_class", "search_fields"],
 )
-def test_meta_rejects_each_deferred_key(deferred_key: str):
+def test_meta_rejects_each_deferred_key(deferred_key: str) -> None:
     """Every key in DEFERRED_META_KEYS must raise until the spec that owns it ships."""
     meta_attrs = {"model": Category, "fields": CATEGORY_SCALAR_FIELDS, deferred_key: object()}
     meta_cls = type("Meta", (), meta_attrs)
@@ -446,7 +451,7 @@ def test_meta_rejects_each_deferred_key(deferred_key: str):
         type("T", (DjangoType,), {"Meta": meta_cls})
 
 
-def test_definition_fields_class_slot_is_reserved_but_unpopulated():
+def test_definition_fields_class_slot_is_reserved_but_unpopulated() -> None:
     """``FieldSet`` has a metadata slot, while ``Meta.fields_class`` stays deferred."""
 
     class CategoryType(DjangoType):
@@ -460,7 +465,7 @@ def test_definition_fields_class_slot_is_reserved_but_unpopulated():
     assert definition.fields_class is None
 
 
-def test_meta_filterset_class_is_promoted_to_allowed_meta_keys():
+def test_meta_filterset_class_is_promoted_to_allowed_meta_keys() -> None:
     """``Meta.filterset_class`` ships per spec-027 Decision 7 (promotion gate)."""
     from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
 
@@ -468,7 +473,7 @@ def test_meta_filterset_class_is_promoted_to_allowed_meta_keys():
     assert "filterset_class" not in DEFERRED_META_KEYS
 
 
-def test_meta_orderset_class_is_promoted_to_allowed_meta_keys():
+def test_meta_orderset_class_is_promoted_to_allowed_meta_keys() -> None:
     """``Meta.orderset_class`` ships in spec-028 (Decision-7 promotion gate)."""
     from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
 
@@ -476,7 +481,7 @@ def test_meta_orderset_class_is_promoted_to_allowed_meta_keys():
     assert "orderset_class" not in DEFERRED_META_KEYS
 
 
-def _declare_category_type_with_interface(entry: object):
+def _declare_category_type_with_interface(entry: object) -> None:
     """Declare a ``DjangoType`` subclass with ``entry`` in ``Meta.interfaces``.
 
     Shared boilerplate for the six named-rejection tests and the
@@ -494,7 +499,7 @@ def _declare_category_type_with_interface(entry: object):
     assert registry.get(Category) is CategoryType
 
 
-def test_interfaces_rejects_relay_globalid_named():
+def test_interfaces_rejects_relay_globalid_named() -> None:
     """``relay.GlobalID`` in ``Meta.interfaces`` is rejected by name (Decision 8)."""
     with pytest.raises(ConfigurationError) as excinfo:
         _declare_category_type_with_interface(relay.GlobalID)
@@ -504,7 +509,7 @@ def test_interfaces_rejects_relay_globalid_named():
     assert "`id: GlobalID!` automatically from `relay.Node`" in message
 
 
-def test_interfaces_rejects_relay_nodeid_named():
+def test_interfaces_rejects_relay_nodeid_named() -> None:
     """``relay.NodeID`` (an ``Annotated`` alias, not a class) is rejected by name."""
     with pytest.raises(ConfigurationError) as excinfo:
         _declare_category_type_with_interface(relay.NodeID)
@@ -514,7 +519,7 @@ def test_interfaces_rejects_relay_nodeid_named():
     assert "add `relay.Node` to `Meta.interfaces` instead" in message
 
 
-def test_interfaces_rejects_relay_connection_named():
+def test_interfaces_rejects_relay_connection_named() -> None:
     """``relay.Connection`` rejection names ``Meta.connection`` / ``DjangoConnectionField``."""
     with pytest.raises(ConfigurationError) as excinfo:
         _declare_category_type_with_interface(relay.Connection)
@@ -525,7 +530,7 @@ def test_interfaces_rejects_relay_connection_named():
     assert "DjangoConnectionField" in message
 
 
-def test_interfaces_rejects_relay_listconnection_named():
+def test_interfaces_rejects_relay_listconnection_named() -> None:
     """``relay.ListConnection`` carries the same connection-surface remediation."""
     with pytest.raises(ConfigurationError) as excinfo:
         _declare_category_type_with_interface(relay.ListConnection)
@@ -536,7 +541,7 @@ def test_interfaces_rejects_relay_listconnection_named():
     assert "DjangoConnectionField" in message
 
 
-def test_interfaces_rejects_relay_edge_named():
+def test_interfaces_rejects_relay_edge_named() -> None:
     """``relay.Edge`` rejection says the connection machinery instantiates it."""
     with pytest.raises(ConfigurationError) as excinfo:
         _declare_category_type_with_interface(relay.Edge)
@@ -546,7 +551,7 @@ def test_interfaces_rejects_relay_edge_named():
     assert "not consumer-declarable" in message
 
 
-def test_interfaces_rejects_relay_pageinfo_named():
+def test_interfaces_rejects_relay_pageinfo_named() -> None:
     """``relay.PageInfo`` rejection says it is a generated pagination type."""
     with pytest.raises(ConfigurationError) as excinfo:
         _declare_category_type_with_interface(relay.PageInfo)
@@ -556,7 +561,7 @@ def test_interfaces_rejects_relay_pageinfo_named():
     assert "add `relay.Node` to `Meta.interfaces` instead" in message
 
 
-def test_interfaces_rejects_non_interface_class_named():
+def test_interfaces_rejects_non_interface_class_named() -> None:
     """Re-affirmation pin: a plain ``@strawberry.type`` class takes the generic branch.
 
     Pins spec-015 Decision 4's generic non-interface rejection and its
@@ -574,7 +579,7 @@ def test_interfaces_rejects_non_interface_class_named():
     assert "is not a Strawberry interface" in message
 
 
-def test_connection_key_requires_relay_node():
+def test_connection_key_requires_relay_node() -> None:
     """Re-affirmation pin: ``Meta.connection`` on a non-Relay-Node type raises.
 
     No behavior change (spec-030 Decision 8 gate); pins the full documented
@@ -594,7 +599,7 @@ def test_connection_key_requires_relay_node():
     assert "add `relay.Node` to `Meta.interfaces` or inherit `relay.Node` directly." in message
 
 
-def test_meta_relation_shapes_in_allowed_meta_keys():
+def test_meta_relation_shapes_in_allowed_meta_keys() -> None:
     """``relation_shapes`` is a shipped Meta key (spec-032 Decision 7), not deferred.
 
     Mirrors ``test_interfaces_is_shipped_not_deferred`` below: a net-new
@@ -613,7 +618,7 @@ def _declare_relation_shapes_type(
     *,
     relay_node: bool = True,
     namespace_extra: dict[str, object] | None = None,
-):
+) -> type[DjangoType]:
     """Declare a throwaway ``DjangoType`` carrying ``Meta.relation_shapes``.
 
     Shared by the validation-matrix and consumer-authored tests; every case
@@ -732,9 +737,10 @@ def test_relation_shapes_validation_matrix(
     model: type[models.Model],
     fields: Sequence[str],
     relation_shapes: object,
+    *,
     relay_node: bool,
     expected: str,
-):
+) -> None:
     """Every illegal ``Meta.relation_shapes`` declaration raises at type creation.
 
     Spec-032 Decision 7 / Error shapes: shape, key-name, and gate failures all
@@ -747,7 +753,7 @@ def test_relation_shapes_validation_matrix(
     assert expected in str(excinfo.value)
 
 
-def test_relation_shapes_on_consumer_annotated_relation_raises():
+def test_relation_shapes_on_consumer_annotated_relation_raises() -> None:
     """An explicit key naming a consumer-ANNOTATED relation raises at type creation.
 
     Spec-032 Decision 7: the consumer annotation owns the
@@ -767,7 +773,7 @@ def test_relation_shapes_on_consumer_annotated_relation_raises():
     assert "owns that field's shape" in message
 
 
-def test_relation_shapes_on_consumer_assigned_relation_raises():
+def test_relation_shapes_on_consumer_assigned_relation_raises() -> None:
     """An explicit key naming a consumer-ASSIGNED relation raises at type creation.
 
     The ``strawberry.field(resolver=...)`` corner of the four-corner override
@@ -789,7 +795,7 @@ def test_relation_shapes_on_consumer_assigned_relation_raises():
     assert "owns that field's shape" in message
 
 
-def test_interfaces_is_shipped_not_deferred():
+def test_interfaces_is_shipped_not_deferred() -> None:
     """``interfaces`` is a shipped Meta key (in ``ALLOWED_META_KEYS``), not deferred.
 
     Guards against the prior regression where ``test_meta_rejects_each_deferred_key``
@@ -805,7 +811,7 @@ def test_interfaces_is_shipped_not_deferred():
     assert "interfaces" not in DEFERRED_META_KEYS
 
 
-def test_select_fields_signature_accepts_validated_specs():
+def test_select_fields_signature_accepts_validated_specs() -> None:
     """``_select_fields`` consumes the already-normalized specs from ``_ValidatedMeta``.
 
     The function does not re-run ``_normalize_fields_spec`` /
@@ -827,7 +833,7 @@ def test_select_fields_signature_accepts_validated_specs():
     assert "name" in {f.name for f in excluded}
 
 
-def test_meta_filterset_class_rejects_non_filterset_value():
+def test_meta_filterset_class_rejects_non_filterset_value() -> None:
     """``_validate_filterset_class`` rejects non-``FilterSet`` values."""
     with pytest.raises(ConfigurationError, match="must be a FilterSet subclass"):
 
@@ -839,7 +845,7 @@ def test_meta_filterset_class_rejects_non_filterset_value():
                 filterset_class = object
 
 
-def test_filterset_and_orderset_meta_validators_ride_validate_set_sidecar():
+def test_filterset_and_orderset_meta_validators_ride_validate_set_sidecar() -> None:
     """Both DjangoType sidecar Meta gates share ``_validate_set_sidecar``.
 
     The wrappers keep the cycle-safe local imports; the subclass check
@@ -860,7 +866,7 @@ def test_filterset_and_orderset_meta_validators_ride_validate_set_sidecar():
     assert "OrderSet" not in vars(base_mod)
 
 
-def test_meta_filterset_class_accepts_filterset_subclass():
+def test_meta_filterset_class_accepts_filterset_subclass() -> None:
     """A real ``FilterSet`` subclass is accepted and stored on the definition."""
     from django_strawberry_framework.filters import FilterSet
 
@@ -879,7 +885,7 @@ def test_meta_filterset_class_accepts_filterset_subclass():
     assert definition.filterset_class is CategoryFilter
 
 
-def test_meta_connection_in_allowed_meta_keys():
+def test_meta_connection_in_allowed_meta_keys() -> None:
     """``Meta.connection`` ships in spec-030 - a net-new ALLOWED key.
 
     Net-new ALLOWED, NOT a DEFERRED_META_KEYS promotion (spec-030 Decision 8;
@@ -891,7 +897,7 @@ def test_meta_connection_in_allowed_meta_keys():
     assert "connection" not in DEFERRED_META_KEYS
 
 
-def test_meta_connection_non_dict_raises():
+def test_meta_connection_non_dict_raises() -> None:
     """``Meta.connection`` must be a dict; a non-dict value raises ``ConfigurationError``."""
     from strawberry import relay
 
@@ -906,7 +912,7 @@ def test_meta_connection_non_dict_raises():
                 connection = "nope"
 
 
-def test_meta_connection_unknown_subkey_raises():
+def test_meta_connection_unknown_subkey_raises() -> None:
     """An unrecognized ``Meta.connection`` sub-key raises (typo guard)."""
     from strawberry import relay
 
@@ -921,7 +927,7 @@ def test_meta_connection_unknown_subkey_raises():
                 connection = {"total_count": True, "bogus": 1}
 
 
-def test_meta_connection_non_bool_total_count_raises():
+def test_meta_connection_non_bool_total_count_raises() -> None:
     """``Meta.connection['total_count']`` must be a bool; a non-bool raises."""
     from strawberry import relay
 
@@ -936,9 +942,9 @@ def test_meta_connection_non_bool_total_count_raises():
                 connection = {"total_count": "yes"}
 
 
-def test_meta_connection_non_relay_type_raises():
+def test_meta_connection_non_relay_type_raises() -> None:
     """``Meta.connection`` on a type whose ``interfaces`` omits ``relay.Node`` raises."""
-    with pytest.raises(ConfigurationError, match="relay.Node"):
+    with pytest.raises(ConfigurationError, match=r"relay\.Node"):
 
         @definition_raises
         class CategoryType(DjangoType):
@@ -948,7 +954,7 @@ def test_meta_connection_non_relay_type_raises():
                 connection = {"total_count": True}
 
 
-def test_meta_connection_accepts_direct_relay_node_inheritance():
+def test_meta_connection_accepts_direct_relay_node_inheritance() -> None:
     """``Meta.connection`` opt-in works on a direct ``relay.Node`` subclass.
 
     ``spec-030-connection_field-0_0_9``: the Relay-shape gate for
@@ -973,7 +979,7 @@ def test_meta_connection_accepts_direct_relay_node_inheritance():
     assert definition.connection == {"total_count": True}
 
 
-def test_meta_connection_stored_on_definition():
+def test_meta_connection_stored_on_definition() -> None:
     """The normalized ``Meta.connection`` value lands on ``definition.connection``."""
     from strawberry import relay
 
@@ -988,7 +994,7 @@ def test_meta_connection_stored_on_definition():
     assert definition.connection == {"total_count": True}
 
 
-def test_meta_connection_is_snapshotted_on_definition():
+def test_meta_connection_is_snapshotted_on_definition() -> None:
     """Mutating the consumer's config dict cannot rewrite registered type metadata."""
     from strawberry import relay
 
@@ -1012,7 +1018,7 @@ def test_meta_connection_is_snapshotted_on_definition():
     assert definition.connection is not connection
 
 
-def test_meta_connection_absent_leaves_definition_none():
+def test_meta_connection_absent_leaves_definition_none() -> None:
     """A type without ``Meta.connection`` leaves ``definition.connection`` at its ``None`` default."""
     from strawberry import relay
 
@@ -1031,7 +1037,7 @@ def test_meta_connection_absent_leaves_definition_none():
 # ---------------------------------------------------------------------------
 
 
-def test_meta_globalid_strategy_in_allowed_meta_keys():
+def test_meta_globalid_strategy_in_allowed_meta_keys() -> None:
     """``Meta.globalid_strategy`` ships in spec-031 - a net-new ALLOWED key.
 
     Net-new ALLOWED, NOT a ``DEFERRED_META_KEYS`` promotion (spec-031 Decision 6;
@@ -1043,7 +1049,7 @@ def test_meta_globalid_strategy_in_allowed_meta_keys():
     assert "globalid_strategy" not in DEFERRED_META_KEYS
 
 
-def test_meta_globalid_strategy_unknown_string_raises():
+def test_meta_globalid_strategy_unknown_string_raises() -> None:
     """A typo'd strategy string raises ``ConfigurationError`` (typo guard)."""
     from strawberry import relay
 
@@ -1058,9 +1064,9 @@ def test_meta_globalid_strategy_unknown_string_raises():
                 globalid_strategy = "modle"
 
 
-def test_meta_globalid_strategy_non_relay_type_raises():
+def test_meta_globalid_strategy_non_relay_type_raises() -> None:
     """``Meta.globalid_strategy`` on a type whose ``interfaces`` omits ``relay.Node`` raises."""
-    with pytest.raises(ConfigurationError, match="relay.Node"):
+    with pytest.raises(ConfigurationError, match=r"relay\.Node"):
 
         @definition_raises
         class CategoryType(DjangoType):
@@ -1070,7 +1076,7 @@ def test_meta_globalid_strategy_non_relay_type_raises():
                 globalid_strategy = "model"
 
 
-def test_meta_globalid_strategy_wrong_type_raises():
+def test_meta_globalid_strategy_wrong_type_raises() -> None:
     """A non-string, non-callable value (e.g. ``42``) raises ``ConfigurationError``."""
     from strawberry import relay
 
@@ -1085,11 +1091,11 @@ def test_meta_globalid_strategy_wrong_type_raises():
                 globalid_strategy = 42
 
 
-def test_meta_globalid_strategy_callable_accepted_and_stored():
+def test_meta_globalid_strategy_callable_accepted_and_stored() -> None:
     """A well-formed sync three-arg encoder validates and is stored on the definition."""
     from strawberry import relay
 
-    def encode(_type_cls: type[DjangoType], _model: type[models.Model], _root: object):
+    def encode(_type_cls: type[DjangoType], _model: type[models.Model], _root: object) -> str:
         return "custom"
 
     class CategoryType(DjangoType):
@@ -1103,11 +1109,11 @@ def test_meta_globalid_strategy_callable_accepted_and_stored():
     assert definition.globalid_strategy is encode
 
 
-def test_meta_globalid_strategy_callable_wrong_arity_raises():
+def test_meta_globalid_strategy_callable_wrong_arity_raises() -> None:
     """A wrong-arity encoder is rejected at type creation (the ``inspect.signature`` check)."""
     from strawberry import relay
 
-    def encode(_type_cls: type[DjangoType], _model: type[models.Model]):
+    def encode(_type_cls: type[DjangoType], _model: type[models.Model]) -> str:
         return "custom"
 
     with pytest.raises(ConfigurationError, match=r"\(type_cls, model, root\)"):
@@ -1121,7 +1127,7 @@ def test_meta_globalid_strategy_callable_wrong_arity_raises():
                 globalid_strategy = encode
 
 
-def test_meta_globalid_strategy_callable_old_four_arg_signature_rejected():
+def test_meta_globalid_strategy_callable_old_four_arg_signature_rejected() -> None:
     """The pre-1.0 4-arg ``(type_cls, model, root, info)`` encoder is now rejected.
 
     ``info`` was dropped from the callable-encoder contract; a callable that still
@@ -1136,7 +1142,7 @@ def test_meta_globalid_strategy_callable_old_four_arg_signature_rejected():
         _model: type[models.Model],
         _root: object,
         _info: object,
-    ):
+    ) -> str:
         return "custom"
 
     with pytest.raises(ConfigurationError, match=r"\(type_cls, model, root\)"):
@@ -1150,11 +1156,15 @@ def test_meta_globalid_strategy_callable_old_four_arg_signature_rejected():
                 globalid_strategy = encode
 
 
-def test_meta_globalid_strategy_async_callable_raises():
+def test_meta_globalid_strategy_async_callable_raises() -> None:
     """An ``async def`` encoder is rejected at type creation (the sync-ness check)."""
     from strawberry import relay
 
-    async def encode(_type_cls: type[DjangoType], _model: type[models.Model], _root: object):
+    async def encode(
+        _type_cls: type[DjangoType],
+        _model: type[models.Model],
+        _root: object,
+    ) -> str:
         return "custom"
 
     with pytest.raises(ConfigurationError, match="must be sync"):
@@ -1168,7 +1178,7 @@ def test_meta_globalid_strategy_async_callable_raises():
                 globalid_strategy = encode
 
 
-def test_meta_globalid_strategy_async_callable_object_raises():
+def test_meta_globalid_strategy_async_callable_object_raises() -> None:
     """A callable *instance* whose ``__call__`` is ``async def`` is rejected too.
 
     ``inspect.iscoroutinefunction`` returns ``False`` for the instance itself, so
@@ -1181,10 +1191,10 @@ def test_meta_globalid_strategy_async_callable_object_raises():
     class Encoder:
         async def __call__(
             self,
-            type_cls: type[DjangoType],
-            model: type[models.Model],
-            root: object,
-        ):
+            _type_cls: type[DjangoType],
+            _model: type[models.Model],
+            _root: object,
+        ) -> str:
             return "custom.label"
 
     with pytest.raises(ConfigurationError, match="must be sync"):
@@ -1198,7 +1208,7 @@ def test_meta_globalid_strategy_async_callable_object_raises():
                 globalid_strategy = Encoder()
 
 
-def test_meta_globalid_strategy_partial_wrapped_async_callable_raises():
+def test_meta_globalid_strategy_partial_wrapped_async_callable_raises() -> None:
     """A ``functools.partial`` around an async callable instance is rejected too.
 
     ``inspect.iscoroutinefunction`` only unwraps a partial whose ``.func`` is an
@@ -1212,10 +1222,10 @@ def test_meta_globalid_strategy_partial_wrapped_async_callable_raises():
     class Encoder:
         async def __call__(
             self,
-            type_cls: type[DjangoType],
-            model: type[models.Model],
-            root: object,
-        ):
+            _type_cls: type[DjangoType],
+            _model: type[models.Model],
+            _root: object,
+        ) -> str:
             return "custom.label"
 
     with pytest.raises(ConfigurationError, match="must be sync"):
@@ -1229,7 +1239,7 @@ def test_meta_globalid_strategy_partial_wrapped_async_callable_raises():
                 globalid_strategy = functools.partial(Encoder())
 
 
-def test_meta_globalid_strategy_stored_on_definition():
+def test_meta_globalid_strategy_stored_on_definition() -> None:
     """The normalized string strategy lands on ``definition.globalid_strategy``."""
     from strawberry import relay
 
@@ -1244,7 +1254,7 @@ def test_meta_globalid_strategy_stored_on_definition():
     assert definition.globalid_strategy == "model"
 
 
-def test_meta_globalid_strategy_absent_leaves_definition_none():
+def test_meta_globalid_strategy_absent_leaves_definition_none() -> None:
     """A Relay-Node type without the key leaves the raw slot at its ``None`` default."""
     from strawberry import relay
 
@@ -1258,7 +1268,7 @@ def test_meta_globalid_strategy_absent_leaves_definition_none():
     assert definition.globalid_strategy is None
 
 
-def test_resolve_globalid_strategy_precedence(settings: pytest_django.Settings):
+def test_resolve_globalid_strategy_precedence(settings: pytest_django.Settings) -> None:
     """``_resolve_globalid_strategy`` is pure precedence: Meta -> snapshot -> ``"model"``.
 
     The resolver no longer reads or validates the setting - it takes the
@@ -1311,7 +1321,7 @@ def test_resolve_globalid_strategy_precedence(settings: pytest_django.Settings):
         _validated_globalid_setting()
 
 
-def test_meta_rejects_unknown_key():
+def test_meta_rejects_unknown_key() -> None:
     """Typo guard: keys outside the allowed/deferred sets raise."""
     with pytest.raises(ConfigurationError, match="Unknown Meta keys"):
 
@@ -1323,7 +1333,7 @@ def test_meta_rejects_unknown_key():
                 bogus_key = "value"
 
 
-def test_meta_fields_unknown_name_raises():
+def test_meta_fields_unknown_name_raises() -> None:
     """A typo in ``Meta.fields`` raises ``ConfigurationError`` rather than silently dropping."""
     with pytest.raises(ConfigurationError, match="unknown fields"):
 
@@ -1334,7 +1344,7 @@ def test_meta_fields_unknown_name_raises():
                 fields = ("id", "nmae")  # typo: "nmae" instead of "name"
 
 
-def test_meta_fields_unknown_name_includes_model_and_available():
+def test_meta_fields_unknown_name_includes_model_and_available() -> None:
     """The error names the model and lists available fields so the typo is obvious."""
     with pytest.raises(ConfigurationError) as exc_info:
 
@@ -1351,7 +1361,7 @@ def test_meta_fields_unknown_name_includes_model_and_available():
     assert "name" in msg
 
 
-def test_meta_exclude_unknown_name_raises():
+def test_meta_exclude_unknown_name_raises() -> None:
     """A typo in ``Meta.exclude`` raises rather than silently keeping the field."""
     with pytest.raises(ConfigurationError, match="unknown fields"):
 
@@ -1362,7 +1372,7 @@ def test_meta_exclude_unknown_name_raises():
                 exclude = ("descriptoin",)  # typo
 
 
-def test_meta_optimizer_hints_for_excluded_field_raises():
+def test_meta_optimizer_hints_for_excluded_field_raises() -> None:
     """A hint for a real Django field that is *excluded* from the type raises.
 
     Without this check the consumer's optimization intent is
@@ -1379,7 +1389,7 @@ def test_meta_optimizer_hints_for_excluded_field_raises():
                 optimizer_hints = {"items": OptimizerHint.prefetch_related()}
 
 
-def test_meta_optimizer_hints_for_selected_scalar_field_raises():
+def test_meta_optimizer_hints_for_selected_scalar_field_raises() -> None:
     with pytest.raises(ConfigurationError, match="optimizer_hints names unknown fields"):
 
         @definition_raises
@@ -1390,7 +1400,7 @@ def test_meta_optimizer_hints_for_selected_scalar_field_raises():
                 optimizer_hints = {"name": OptimizerHint.SKIP}
 
 
-def test_meta_optimizer_hints_with_empty_field_selection_raises_configuration_error():
+def test_meta_optimizer_hints_with_empty_field_selection_raises_configuration_error() -> None:
     """``optimizer_hints`` on an exclude-all selection raises ``ConfigurationError``, not ``IndexError``.
 
     Earlier shapes inferred the model from ``fields[0].model``; when
@@ -1422,7 +1432,7 @@ def test_meta_optimizer_hints_with_empty_field_selection_raises_configuration_er
 # ---------------------------------------------------------------------------
 
 
-def test_meta_primary_true_registers_type_as_primary():
+def test_meta_primary_true_registers_type_as_primary() -> None:
     """``Meta.primary = True`` makes ``registry.primary_for(model)`` return the type."""
 
     class ItemType(DjangoType):
@@ -1434,7 +1444,7 @@ def test_meta_primary_true_registers_type_as_primary():
     assert registry.primary_for(Item) is ItemType
 
 
-def test_meta_primary_false_does_not_register_primary():
+def test_meta_primary_false_does_not_register_primary() -> None:
     """An explicit ``Meta.primary = False`` is treated identically to absent."""
 
     class ItemType(DjangoType):
@@ -1449,7 +1459,7 @@ def test_meta_primary_false_does_not_register_primary():
     assert registry.get(Item) is ItemType
 
 
-def test_meta_primary_absent_does_not_register_primary():
+def test_meta_primary_absent_does_not_register_primary() -> None:
     """No ``Meta.primary`` key is the default ``False`` path."""
 
     class ItemType(DjangoType):
@@ -1472,7 +1482,7 @@ def test_meta_primary_absent_does_not_register_primary():
         1.0,
     ],
 )
-def test_meta_primary_non_bool_raises_configuration_error(bad: object):
+def test_meta_primary_non_bool_raises_configuration_error(bad: object) -> None:
     """``Meta.primary`` must be a ``bool``; any other shape raises.
 
     ``isinstance(1, bool)`` is ``False`` (``bool`` is a subclass of ``int``,
@@ -1489,7 +1499,7 @@ def test_meta_primary_non_bool_raises_configuration_error(bad: object):
                 primary = bad
 
 
-def test_meta_primary_propagates_to_definition():
+def test_meta_primary_propagates_to_definition() -> None:
     """The ``primary`` flag is stored on ``DjangoTypeDefinition`` for introspection."""
 
     class ItemTypePrimary(DjangoType):
@@ -1503,7 +1513,7 @@ def test_meta_primary_propagates_to_definition():
     assert definition.primary is True
 
 
-def test_meta_primary_absent_definition_primary_defaults_false():
+def test_meta_primary_absent_definition_primary_defaults_false() -> None:
     """Absent ``Meta.primary`` lands ``False`` on the dataclass default."""
 
     class ItemType(DjangoType):
@@ -1516,7 +1526,7 @@ def test_meta_primary_absent_definition_primary_defaults_false():
     assert definition.primary is False
 
 
-def test_two_types_same_model_one_primary_both_register_successfully():
+def test_two_types_same_model_one_primary_both_register_successfully() -> None:
     """Two ``DjangoType`` subclasses on one model, exactly one primary, both register."""
 
     class ItemType(DjangoType):
@@ -1537,7 +1547,7 @@ def test_two_types_same_model_one_primary_both_register_successfully():
     assert registry.get(Item) is AdminItemType
 
 
-def test_two_primary_types_same_model_raises():
+def test_two_primary_types_same_model_raises() -> None:
     """Two ``Meta.primary = True`` declarations for the same model raise at class creation."""
 
     class ItemType(DjangoType):
@@ -1566,7 +1576,7 @@ def test_two_primary_types_same_model_raises():
 # ---------------------------------------------------------------------------
 
 
-def test_scalar_mapping_against_category_textfields_booleanfields_datetimefields():
+def test_scalar_mapping_against_category_textfields_booleanfields_datetimefields() -> None:
     class CategoryType(DjangoType):
         class Meta:
             model = Category
@@ -1581,7 +1591,7 @@ def test_scalar_mapping_against_category_textfields_booleanfields_datetimefields
     assert a["updated_date"] is datetime.datetime
 
 
-def test_meta_fields_explicit_list_filters_concrete_fields():
+def test_meta_fields_explicit_list_filters_concrete_fields() -> None:
     class CategoryType(DjangoType):
         class Meta:
             model = Category
@@ -1590,7 +1600,7 @@ def test_meta_fields_explicit_list_filters_concrete_fields():
     assert set(CategoryType.__annotations__) == {"id", "name"}
 
 
-def test_meta_exclude_filters_concrete_fields():
+def test_meta_exclude_filters_concrete_fields() -> None:
     """Excluding scalars + reverse rels yields a clean scalar-only annotation set."""
 
     class CategoryType(DjangoType):
@@ -1622,7 +1632,7 @@ def test_meta_exclude_filters_concrete_fields():
 # ---------------------------------------------------------------------------
 
 
-def test_category_type_is_a_strawberry_type():
+def test_category_type_is_a_strawberry_type() -> None:
     class CategoryType(DjangoType):
         class Meta:
             model = Category
@@ -1633,7 +1643,7 @@ def test_category_type_is_a_strawberry_type():
     assert get_object_definition(CategoryType, strict=True).name == "CategoryType"
 
 
-def test_meta_name_overrides_graphql_type_name():
+def test_meta_name_overrides_graphql_type_name() -> None:
     class CategoryType(DjangoType):
         class Meta:
             model = Category
@@ -1646,7 +1656,7 @@ def test_meta_name_overrides_graphql_type_name():
 
 
 @pytest.mark.parametrize("description", [5, b"bytes", ["a"]])
-def test_meta_description_rejects_a_non_string_at_type_creation(description: object):
+def test_meta_description_rejects_a_non_string_at_type_creation(description: object) -> None:
     """A non-string ``Meta.description`` is a typed error, not a schema-build ``TypeError``."""
     meta_cls = type(
         "Meta",
@@ -1656,12 +1666,12 @@ def test_meta_description_rejects_a_non_string_at_type_creation(description: obj
 
     with pytest.raises(
         ConfigurationError,
-        match="Meta.description must be a string or a lazy translation string",
+        match=r"Meta\.description must be a string or a lazy translation string",
     ):
         type("BadDescriptionType", (DjangoType,), {"Meta": meta_cls})
 
 
-def test_meta_description_lazy_translation_renders_to_str_at_finalize():
+def test_meta_description_lazy_translation_renders_to_str_at_finalize() -> None:
     """A ``gettext_lazy`` description stays lazy on the definition and finalizes as plain text."""
 
     class CategoryType(DjangoType):
@@ -1681,7 +1691,7 @@ def test_meta_description_lazy_translation_renders_to_str_at_finalize():
     assert description == "A Faker provider."
 
 
-def test_meta_description_str_subclass_keeps_its_plain_text():
+def test_meta_description_str_subclass_keeps_its_plain_text() -> None:
     """A ``str`` subclass's own ``__str__`` never runs; the text it holds is the description."""
 
     class LoudText(str):
@@ -1701,7 +1711,7 @@ def test_meta_description_str_subclass_keeps_its_plain_text():
     assert definition.description == "A Faker provider."
 
 
-def test_meta_description_threads_through_to_strawberry():
+def test_meta_description_threads_through_to_strawberry() -> None:
     class CategoryType(DjangoType):
         class Meta:
             model = Category
@@ -1718,7 +1728,7 @@ def test_meta_description_threads_through_to_strawberry():
 # ---------------------------------------------------------------------------
 
 
-def test_get_queryset_default_returns_input_unchanged():
+def test_get_queryset_default_returns_input_unchanged() -> None:
     class CategoryType(DjangoType):
         class Meta:
             model = Category
@@ -1728,7 +1738,7 @@ def test_get_queryset_default_returns_input_unchanged():
     assert CategoryType.get_queryset(qs, info=None) is qs
 
 
-def test_has_custom_get_queryset_false_when_using_default():
+def test_has_custom_get_queryset_false_when_using_default() -> None:
     """A subclass that does not override ``get_queryset`` reports False."""
 
     class CategoryType(DjangoType):
@@ -1740,7 +1750,7 @@ def test_has_custom_get_queryset_false_when_using_default():
     assert CategoryType.has_custom_get_queryset() is False
 
 
-def test_has_custom_get_queryset_true_when_overridden():
+def test_has_custom_get_queryset_true_when_overridden() -> None:
     """A subclass that overrides ``get_queryset`` flips the sentinel and reports True."""
 
     class CategoryType(DjangoType):
@@ -1750,14 +1760,19 @@ def test_has_custom_get_queryset_true_when_overridden():
 
         @classmethod
         @override
-        def get_queryset(cls, queryset: models.QuerySet[Category], info: object, **kwargs: object):
+        def get_queryset(
+            cls,
+            queryset: models.QuerySet[Category],
+            info: object,
+            **kwargs: object,
+        ) -> models.QuerySet[Category]:
             return queryset.filter(is_private=False)
 
     assert CategoryType._is_default_get_queryset is False
     assert CategoryType.has_custom_get_queryset() is True
 
 
-def test_has_custom_get_queryset_inherits_through_intermediate_base():
+def test_has_custom_get_queryset_inherits_through_intermediate_base() -> None:
     """A subclass without its own ``get_queryset`` whose parent overrides one still reports True.
 
     The sentinel sits on the class itself - Python's normal attribute
@@ -1773,7 +1788,12 @@ def test_has_custom_get_queryset_inherits_through_intermediate_base():
 
         @classmethod
         @override
-        def get_queryset(cls, queryset: models.QuerySet[Category], info: object, **kwargs: object):
+        def get_queryset(
+            cls,
+            queryset: models.QuerySet[Category],
+            info: object,
+            **kwargs: object,
+        ) -> models.QuerySet[Category]:
             return queryset.filter(is_private=False)
 
     # Drop the registry collision so we can subclass cleanly.
@@ -1789,7 +1809,7 @@ def test_has_custom_get_queryset_inherits_through_intermediate_base():
     assert ChildCategoryType.has_custom_get_queryset() is True
 
 
-def test_has_custom_get_queryset_inherits_through_abstract_base_without_meta():
+def test_has_custom_get_queryset_inherits_through_abstract_base_without_meta() -> None:
     """A concrete subclass inherits override-detection from an abstract base that has no ``Meta``.
 
     The abstract-shared-base pattern is documented as supported - the
@@ -1814,7 +1834,7 @@ def test_has_custom_get_queryset_inherits_through_abstract_base_without_meta():
             queryset: models.QuerySet[models.Model],
             info: object,
             **kwargs: object,
-        ):
+        ) -> models.QuerySet[models.Model]:
             return queryset.filter(is_private=False)
 
     # The abstract base flipped its own sentinel even without Meta.
@@ -1836,7 +1856,7 @@ def test_has_custom_get_queryset_inherits_through_abstract_base_without_meta():
 # ---------------------------------------------------------------------------
 
 
-def test_convert_scalar_raises_on_unsupported_field_type(monkeypatch: pytest.MonkeyPatch):
+def test_convert_scalar_raises_on_unsupported_field_type(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unsupported field types fail loudly with a message naming the field."""
     monkeypatch.delitem(converters.SCALAR_MAP, models.TextField)
     name_field = Category._meta.get_field("name")
@@ -1850,7 +1870,7 @@ def test_convert_scalar_raises_on_unsupported_field_type(monkeypatch: pytest.Mon
 # ---------------------------------------------------------------------------
 
 
-def test_relation_fk_to_target_djangotype():
+def test_relation_fk_to_target_djangotype() -> None:
     """Forward FK on Item maps to the registered ``CategoryType`` post-finalize."""
 
     class CategoryType(DjangoType):
@@ -1868,7 +1888,7 @@ def test_relation_fk_to_target_djangotype():
     assert ItemType.__annotations__["category"] is CategoryType
 
 
-def test_relation_reverse_fk_returns_list():
+def test_relation_reverse_fk_returns_list() -> None:
     """Reverse FK on Category maps to ``list[ItemType]`` and ``list[PropertyType]``."""
 
     class ItemType(DjangoType):
@@ -1897,7 +1917,7 @@ def test_relation_reverse_fk_returns_list():
     assert a["properties"] == list[PropertyType]
 
 
-def test_relation_meta_default_when_neither_fields_nor_exclude_set():
+def test_relation_meta_default_when_neither_fields_nor_exclude_set() -> None:
     """Omitting ``fields``/``exclude`` defaults to ``__all__`` and includes relations."""
 
     class ItemType(DjangoType):
@@ -1926,7 +1946,7 @@ def test_relation_meta_default_when_neither_fields_nor_exclude_set():
     assert a["properties"] == list[PropertyType]
 
 
-def test_relation_unregistered_target_raises():
+def test_relation_unregistered_target_raises() -> None:
     """Referencing an unregistered relation target raises during finalization."""
 
     class ItemType(DjangoType):
@@ -1945,7 +1965,7 @@ def test_relation_unregistered_target_raises():
     assert "no registered DjangoType" in msg
 
 
-def test_relation_full_chain_when_all_targets_registered():
+def test_relation_full_chain_when_all_targets_registered() -> None:
     """Every fakeshop relation resolves cleanly when types are declared in order."""
 
     class CategoryType(DjangoType):
@@ -1984,7 +2004,7 @@ def test_relation_full_chain_when_all_targets_registered():
 
 def test_resolved_relation_annotation_nullable_fk_widens_to_optional(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Nullable forward FK widens to ``T | None``.
 
     No fakeshop FK declares ``null=True``, so monkeypatch the Item.category
@@ -2032,7 +2052,7 @@ def _unique_override_app_label() -> str:
 _OVERRIDE_STATUS_CHOICES = (("active", "Active"), ("archived", "Archived"))
 
 
-def _make_override_model():
+def _make_override_model() -> type[models.Model]:
     """Return a synthetic model with a non-null + a nullable scalar, a relation, and choices.
 
     The two choice columns (``status`` non-null, ``nullable_status`` null=True)
@@ -2072,7 +2092,7 @@ def _make_override_type(
     *,
     namespace: dict[str, object] | None = None,
     **meta_attrs: object,
-):
+) -> type[DjangoType]:
     """Build an ``OverrideType`` subclass for ``model`` with the given Meta attrs.
 
     Uses ``type(...)`` construction (mirroring ``test_meta_rejects_each_deferred_key``)
@@ -2084,7 +2104,7 @@ def _make_override_type(
     return type("OverrideType", (DjangoType,), {"Meta": meta_cls, **(namespace or {})})
 
 
-def test_nullable_overrides_in_allowed_meta_keys():
+def test_nullable_overrides_in_allowed_meta_keys() -> None:
     """Both override keys are net-new ALLOWED keys, NOT deferred (Decision 6)."""
     from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
 
@@ -2094,7 +2114,7 @@ def test_nullable_overrides_in_allowed_meta_keys():
     assert "required_overrides" not in DEFERRED_META_KEYS
 
 
-def test_nullable_override_flips_annotation():
+def test_nullable_override_flips_annotation() -> None:
     """``nullable_overrides`` widens a non-null column; ``required_overrides`` narrows a nullable one."""
     override_type = _make_override_type(
         _make_override_model(),
@@ -2109,7 +2129,7 @@ def test_nullable_override_flips_annotation():
     assert override_type.__annotations__["note"] is str
 
 
-def test_override_flips_choice_field_enum_nullability():
+def test_override_flips_choice_field_enum_nullability() -> None:
     """An override flips a choice field's generated ENUM nullability through Meta (Decision 9).
 
     Earns the CHANGELOG "flips a choice field's generated enum nullability for
@@ -2138,7 +2158,7 @@ def test_override_flips_choice_field_enum_nullability():
     assert override_type.__annotations__["nullable_status"] is nullable_status_enum
 
 
-def test_override_unknown_field_raises():
+def test_override_unknown_field_raises() -> None:
     """A name not on the model raises ``ConfigurationError`` (unknown-field path)."""
     with pytest.raises(ConfigurationError, match="unknown fields"):
         _make_override_type(
@@ -2148,7 +2168,7 @@ def test_override_unknown_field_raises():
         )
 
 
-def test_override_excluded_field_raises():
+def test_override_excluded_field_raises() -> None:
     """A name excluded from the selected set raises - distinct from unknown (Decision 8 rule 2)."""
     with pytest.raises(ConfigurationError, match="not in the selected set"):
         # ``note`` exists on the model but is excluded from the type.
@@ -2159,7 +2179,7 @@ def test_override_excluded_field_raises():
         )
 
 
-def test_override_consumer_authored_field_raises():
+def test_override_consumer_authored_field_raises() -> None:
     """A name with a consumer annotation raises (the annotation already controls nullability)."""
     with pytest.raises(ConfigurationError, match="consumer-authored"):
         _make_override_type(
@@ -2170,7 +2190,7 @@ def test_override_consumer_authored_field_raises():
         )
 
 
-def test_override_relation_field_raises():
+def test_override_relation_field_raises() -> None:
     """A relation field name raises - non-relation scope (Decision 10)."""
     with pytest.raises(ConfigurationError, match="relation field"):
         _make_override_type(
@@ -2180,7 +2200,7 @@ def test_override_relation_field_raises():
         )
 
 
-def test_override_relay_suppressed_pk_raises():
+def test_override_relay_suppressed_pk_raises() -> None:
     """Naming the Relay-Node-suppressed pk in an override set raises (Decision 8 rule e)."""
     from strawberry import relay
 
@@ -2195,7 +2215,7 @@ def test_override_relay_suppressed_pk_raises():
                 required_overrides = ("id",)
 
 
-def test_override_both_sets_collision_raises():
+def test_override_both_sets_collision_raises() -> None:
     """The same name in both sets raises at the shape stage, naming the field."""
     with pytest.raises(ConfigurationError, match="both"):
         _make_override_type(
@@ -2206,7 +2226,7 @@ def test_override_both_sets_collision_raises():
         )
 
 
-def test_override_non_sequence_raises():
+def test_override_non_sequence_raises() -> None:
     """A bare-string override is rejected by the non-string-sequence shape guard."""
     with pytest.raises(ConfigurationError, match="non-string sequence"):
         # A bare string is an iterable of characters, not a field-name list.
@@ -2217,7 +2237,7 @@ def test_override_non_sequence_raises():
         )
 
 
-def test_override_redundant_is_no_op():
+def test_override_redundant_is_no_op() -> None:
     """A redundant override (already in the target direction) is accepted, not raised.
 
     ``nullable_overrides`` on an already-nullable column and
@@ -2241,14 +2261,14 @@ def test_override_redundant_is_no_op():
 # ---------------------------------------------------------------------------
 
 
-def _make_file_override_model():
+def _make_file_override_model() -> type[models.Model]:
     """Return ``scalars.MediaSpecimen``, whose ``attachment`` is a required ``FileField``."""
     from apps.scalars.models import MediaSpecimen
 
     return MediaSpecimen
 
 
-def test_consumer_annotation_override_on_file_column_keeps_str_and_no_resolver():
+def test_consumer_annotation_override_on_file_column_keeps_str_and_no_resolver() -> None:
     """A consumer ``attachment: str`` keeps the legacy ``str`` shape and gets no file resolver.
 
     The annotation-only override lands in ``consumer_authored_fields``, so
@@ -2273,7 +2293,7 @@ def test_consumer_annotation_override_on_file_column_keeps_str_and_no_resolver()
     assert "attachment" not in override_type.__dict__
 
 
-def test_no_override_file_column_gets_generated_resolver():
+def test_no_override_file_column_gets_generated_resolver() -> None:
     """Without an override, the file column DOES get a generated ``resolve_attachment``.
 
     The control case for the override test above: it pins that the absence of a
@@ -2289,7 +2309,7 @@ def test_no_override_file_column_gets_generated_resolver():
     assert attr.__name__ == "resolve_attachment"
 
 
-def test_consumer_assigned_field_resolver_on_file_column_is_not_clobbered():
+def test_consumer_assigned_field_resolver_on_file_column_is_not_clobbered() -> None:
     """A consumer-assigned ``strawberry.field(resolver=...)`` on a file column survives.
 
     The assigned-override path also lands in ``consumer_authored_fields``, so the
@@ -2321,7 +2341,7 @@ def _make_file_override_model_type(
     model: type[models.Model],
     *,
     namespace: dict[str, object] | None = None,
-):
+) -> type[DjangoType]:
     """Build an ``OverrideType`` over ``model`` selecting only ``id`` + ``attachment``."""
     meta_cls = type("Meta", (), {"model": model, "fields": ("id", "attachment")})
     return type("OverrideType", (DjangoType,), {"Meta": meta_cls, **(namespace or {})})
@@ -2333,7 +2353,7 @@ def _make_file_override_model_type(
 # unnamed sibling for.
 
 
-def test_meta_required_overrides_forces_non_null_file_output():
+def test_meta_required_overrides_forces_non_null_file_output() -> None:
     """``Meta.required_overrides`` on a ``FileField`` yields the BARE ``DjangoFileType``.
 
     The file/image output object is nullable by default (spec-037 Decision 4), and
@@ -2355,7 +2375,7 @@ def test_meta_required_overrides_forces_non_null_file_output():
     assert override_type.__annotations__["image"] == (DjangoImageType | None)
 
 
-def test_meta_required_overrides_forces_non_null_image_output():
+def test_meta_required_overrides_forces_non_null_image_output() -> None:
     """The override reaches an ``ImageField`` too, so the branch is not ``FileField``-only.
 
     ``attachment`` is the control in the mirrored direction: the unnamed file
@@ -2369,7 +2389,7 @@ def test_meta_required_overrides_forces_non_null_image_output():
     assert override_type.__annotations__["attachment"] == (DjangoFileType | None)
 
 
-def test_meta_nullable_overrides_on_a_file_column_is_a_no_op():
+def test_meta_nullable_overrides_on_a_file_column_is_a_no_op() -> None:
     """``nullable_overrides`` on an already-nullable file column changes nothing.
 
     The redundant-declaration direction for the file branch, matching
@@ -2389,7 +2409,7 @@ def test_meta_nullable_overrides_on_a_file_column_is_a_no_op():
 # ---------------------------------------------------------------------------
 
 
-def _make_path_optin_model():
+def _make_path_optin_model() -> type[models.Model]:
     """Return ``scalars.MediaSpecimen``: a file column, an image column, and a text ``label``."""
     from apps.scalars.models import MediaSpecimen
 
@@ -2402,7 +2422,7 @@ def _make_path_optin_type(
     namespace: dict[str, object] | None = None,
     fields: Sequence[str] | None = None,
     **meta_attrs: object,
-):
+) -> type[DjangoType]:
     """Build a ``PathOptInType`` over ``model`` with the given Meta attrs."""
     meta_cls = type(
         "Meta",
@@ -2422,7 +2442,7 @@ def _make_path_optin_type(
     return type("PathOptInType", (DjangoType,), {"Meta": meta_cls, **(namespace or {})})
 
 
-def test_filesystem_path_fields_is_a_net_new_allowed_meta_key():
+def test_filesystem_path_fields_is_a_net_new_allowed_meta_key() -> None:
     """``Meta.filesystem_path_fields`` is ALLOWED and not a deferred-key promotion."""
     from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
 
@@ -2430,7 +2450,7 @@ def test_filesystem_path_fields_is_a_net_new_allowed_meta_key():
     assert "filesystem_path_fields" not in DEFERRED_META_KEYS
 
 
-def test_filesystem_path_fields_opts_an_image_column_into_the_image_sibling():
+def test_filesystem_path_fields_opts_an_image_column_into_the_image_sibling() -> None:
     """An ``ImageField`` opt-in keeps its dimensions and gains the path."""
     model = _make_path_optin_model()
     optin_type = _make_path_optin_type(model, filesystem_path_fields=("image",))
@@ -2439,14 +2459,14 @@ def test_filesystem_path_fields_opts_an_image_column_into_the_image_sibling():
     assert optin_type.__annotations__["image"] == (DjangoImagePathType | None)
 
 
-def test_filesystem_path_fields_rejects_an_unknown_field():
+def test_filesystem_path_fields_rejects_an_unknown_field() -> None:
     """A name the model does not have raises the shared unknown-field error."""
     model = _make_path_optin_model()
     with pytest.raises(ConfigurationError, match="filesystem_path_fields"):
         _make_path_optin_type(model, filesystem_path_fields=("does_not_exist",))
 
 
-def test_filesystem_path_fields_rejects_a_field_outside_the_selected_set():
+def test_filesystem_path_fields_rejects_a_field_outside_the_selected_set() -> None:
     """A real but unselected column raises rather than silently doing nothing.
 
     A silent no-op here reads to a reviewer as either "the path is exposed" or
@@ -2462,14 +2482,14 @@ def test_filesystem_path_fields_rejects_a_field_outside_the_selected_set():
         )
 
 
-def test_filesystem_path_fields_rejects_a_non_file_column():
+def test_filesystem_path_fields_rejects_a_non_file_column() -> None:
     """A scalar column has no path to publish, so naming one raises."""
     model = _make_path_optin_model()
     with pytest.raises(ConfigurationError, match="not a FileField or ImageField"):
         _make_path_optin_type(model, filesystem_path_fields=("label",))
 
 
-def test_filesystem_path_fields_rejects_a_consumer_authored_column():
+def test_filesystem_path_fields_rejects_a_consumer_authored_column() -> None:
     """A consumer-owned column already owns its output type, so the opt-in raises."""
     model = _make_path_optin_model()
     with pytest.raises(ConfigurationError, match="consumer-authored"):
@@ -2480,7 +2500,7 @@ def test_filesystem_path_fields_rejects_a_consumer_authored_column():
         )
 
 
-def test_filesystem_path_fields_rejects_a_bare_string():
+def test_filesystem_path_fields_rejects_a_bare_string() -> None:
     """A bare string reuses the shared collection guard.
 
     A ``str`` is iterable, so accepting one would read a single field name as a
@@ -2488,7 +2508,7 @@ def test_filesystem_path_fields_rejects_a_bare_string():
     reason that names no real mistake.
     """
     model = _make_path_optin_model()
-    with pytest.raises(ConfigurationError, match="Meta.filesystem_path_fields"):
+    with pytest.raises(ConfigurationError, match=r"Meta\.filesystem_path_fields"):
         _make_path_optin_type(model, filesystem_path_fields="attachment")
 
 
@@ -2507,7 +2527,9 @@ def test_filesystem_path_fields_rejects_a_bare_string():
         "set",
     ],
 )
-def test_filesystem_path_fields_accepts_every_collection_literal(declaration: Collection[str]):
+def test_filesystem_path_fields_accepts_every_collection_literal(
+    declaration: Collection[str],
+) -> None:
     """A set of names may be declared as a set (spec-048 Decision 2).
 
     The key names an unordered SET of columns and is normalized to a
@@ -2526,7 +2548,7 @@ def test_filesystem_path_fields_accepts_every_collection_literal(declaration: Co
     "key",
     ["nullable_overrides", "required_overrides", "filesystem_path_fields"],
 )
-def test_the_collection_guard_names_the_key_it_rejected(key: str):
+def test_the_collection_guard_names_the_key_it_rejected(key: str) -> None:
     """One helper serves four ``Meta`` keys, so its message must name the caller's.
 
     The message previously said ``Meta.exclude`` whatever key was written, which
@@ -2540,14 +2562,14 @@ def test_the_collection_guard_names_the_key_it_rejected(key: str):
         _make_path_optin_type(model, **{key: "attachment"})  # pyright: ignore[reportArgumentType]
 
 
-def test_the_collection_guard_still_names_exclude_for_exclude():
+def test_the_collection_guard_still_names_exclude_for_exclude() -> None:
     """``Meta.exclude`` - the first key through the helper - keeps its own message.
 
     Declared without ``Meta.fields``, which the key is mutually exclusive with, so
     the shape gate under test is the one that runs.
     """
     model = _make_path_optin_model()
-    with pytest.raises(ConfigurationError, match="Meta.exclude must be a non-string"):
+    with pytest.raises(ConfigurationError, match=r"Meta\.exclude must be a non-string"):
         type(
             "ExcludeShapeType",
             (DjangoType,),
@@ -2559,7 +2581,7 @@ def test_the_collection_guard_still_names_exclude_for_exclude():
     "key",
     ["nullable_overrides", "required_overrides"],
 )
-def test_the_sibling_collection_keys_accept_a_frozenset_too(key: str):
+def test_the_sibling_collection_keys_accept_a_frozenset_too(key: str) -> None:
     """The sibling keys share the widened guard, so the four cannot drift apart."""
     model = _make_path_optin_model()
     # basedpyright: a dict splat is checked against every keyword of _make_path_optin_type; the
@@ -2568,7 +2590,7 @@ def test_the_sibling_collection_keys_accept_a_frozenset_too(key: str):
     finalize_django_types()
 
 
-def test_exclude_accepts_a_frozenset_too():
+def test_exclude_accepts_a_frozenset_too() -> None:
     """``Meta.exclude`` names an unordered set of columns as well."""
     model = _make_path_optin_model()
     excluded = type(
@@ -2587,7 +2609,7 @@ def test_exclude_accepts_a_frozenset_too():
 # =============================================================================
 
 
-def test_meta_cursor_field_in_allowed_meta_keys():
+def test_meta_cursor_field_in_allowed_meta_keys() -> None:
     """``Meta.cursor_field`` is a net-new ALLOWED key.
 
     Net-new ALLOWED, NOT a DEFERRED_META_KEYS promotion - the feature ships in
@@ -2599,7 +2621,7 @@ def test_meta_cursor_field_in_allowed_meta_keys():
     assert "cursor_field" not in DEFERRED_META_KEYS
 
 
-def test_meta_cursor_field_valid_declaration_lands_on_definition():
+def test_meta_cursor_field_valid_declaration_lands_on_definition() -> None:
     """A valid ``cursor_field`` normalizes to a tuple on the definition."""
     from strawberry import relay
 
@@ -2613,7 +2635,7 @@ def test_meta_cursor_field_valid_declaration_lands_on_definition():
     assert CategoryType.__django_strawberry_definition__.cursor_field == ("-name", "id")
 
 
-def test_meta_cursor_field_rejects_non_sequence_shapes():
+def test_meta_cursor_field_rejects_non_sequence_shapes() -> None:
     """A string / empty / non-string-entry ``cursor_field`` raises the shape error."""
     from strawberry import relay
 
@@ -2631,7 +2653,7 @@ def test_meta_cursor_field_rejects_non_sequence_shapes():
         registry.clear()
 
 
-def test_meta_cursor_field_rejects_malformed_and_traversing_entries():
+def test_meta_cursor_field_rejects_malformed_and_traversing_entries() -> None:
     """A bare ``-``, a ``__`` traversal, and a duplicate column all raise."""
     from strawberry import relay
 
@@ -2654,7 +2676,7 @@ def test_meta_cursor_field_rejects_malformed_and_traversing_entries():
         registry.clear()
 
 
-def test_meta_cursor_field_requires_relay_node_shape():
+def test_meta_cursor_field_requires_relay_node_shape() -> None:
     """``cursor_field`` on a non-Relay-Node type raises the shared gate error."""
     with pytest.raises(ConfigurationError, match="requires a Relay-Node-shaped type"):
 
@@ -2666,7 +2688,7 @@ def test_meta_cursor_field_requires_relay_node_shape():
                 cursor_field = ("name", "id")
 
 
-def test_meta_cursor_field_finalization_validates_columns():
+def test_meta_cursor_field_finalization_validates_columns() -> None:
     """Finalization rejects a shape-valid ``cursor_field`` whose terminal is not unique."""
     from strawberry import relay
 
@@ -2685,12 +2707,12 @@ def test_meta_cursor_field_finalization_validates_columns():
         finalize_django_types()
 
 
-def test_has_custom_get_queryset_with_subclasscheck_without_mro():
+def test_has_custom_get_queryset_with_subclasscheck_without_mro() -> None:
     from django_strawberry_framework.types.base import _detect_custom_get_queryset
 
     class FakeMeta(type):
         @override
-        def __subclasscheck__(cls, subclass: type):
+        def __subclasscheck__(cls, subclass: type) -> bool:
             return True
 
     class FakeType(metaclass=FakeMeta):
@@ -2699,7 +2721,7 @@ def test_has_custom_get_queryset_with_subclasscheck_without_mro():
     assert not _detect_custom_get_queryset(FakeType)
 
 
-def test_post_finalization_registration_raises():
+def test_post_finalization_registration_raises() -> None:
     class FirstCategoryType(DjangoType):
         class Meta:
             model = Category
@@ -2722,10 +2744,10 @@ def test_post_finalization_registration_raises():
                 fields = ("id", "name")
 
 
-def test_optimizer_hints_unknown_field_raises():
+def test_optimizer_hints_unknown_field_raises() -> None:
     with pytest.raises(
         ConfigurationError,
-        match="Category.Meta.optimizer_hints names unknown fields: \\['nonexistent'\\]. Available:",
+        match=r"Category\.Meta\.optimizer_hints names unknown fields: \['nonexistent'\]\. Available:",
     ):
 
         @definition_raises
@@ -2736,10 +2758,13 @@ def test_optimizer_hints_unknown_field_raises():
                 optimizer_hints = {"nonexistent": OptimizerHint.select_related()}
 
 
-def test_optimizer_hints_bad_value_raises():
+def test_optimizer_hints_bad_value_raises() -> None:
     with pytest.raises(
         ConfigurationError,
-        match="optimizer_hints values must be OptimizerHint instances, got non-OptimizerHint for: \\['items'\\]",
+        match=(
+            r"optimizer_hints values must be OptimizerHint instances, "
+            r"got non-OptimizerHint for: \['items'\]"
+        ),
     ):
 
         @definition_raises
@@ -2755,8 +2780,8 @@ def test_optimizer_hints_bad_value_raises():
 # ---------------------------------------------------------------------------
 
 
-def _exec_pep563_module(program: str, module_name: str):
-    """exec ``program`` into a REAL sys.modules entry and return its namespace.
+def _exec_pep563_module(program: str, module_name: str) -> dict[str, type[DjangoType]]:
+    """Execute ``program`` into a REAL sys.modules entry and return its namespace.
 
     Strawberry resolves string annotations through ``sys.modules`` for the
     class's ``__module__``; a real consumer module always has an entry, and
@@ -2768,7 +2793,7 @@ def _exec_pep563_module(program: str, module_name: str):
     return module.__dict__
 
 
-def test_pep563_auto_annotation_synthesizes_model_inferred_type():
+def test_pep563_auto_annotation_synthesizes_model_inferred_type() -> None:
     """`name: auto` in a PEP 563 consumer still synthesizes the model type.
 
     Under ``from __future__ import annotations`` the marker reaches
@@ -2799,10 +2824,10 @@ class PEP563AutoType(DjangoType):
     pep563_type = namespace["PEP563AutoType"]
     assert pep563_type.__annotations__["name"] is str
     finalize_django_types()
-    assert pep563_type.__strawberry_definition__ is not None
+    assert get_object_definition(pep563_type) is not None
 
 
-def test_pep563_dotted_auto_annotation_synthesizes_model_inferred_type():
+def test_pep563_dotted_auto_annotation_synthesizes_model_inferred_type() -> None:
     """`name: strawberry.auto` in a PEP 563 consumer is the same marker.
 
     ``auto`` has two source spellings - the imported name and the dotted
@@ -2835,10 +2860,10 @@ class PEP563DottedAutoType(DjangoType):
     pep563_type = namespace["PEP563DottedAutoType"]
     assert pep563_type.__annotations__["name"] is str
     finalize_django_types()
-    assert pep563_type.__strawberry_definition__ is not None
+    assert get_object_definition(pep563_type) is not None
 
 
-def test_pep563_foreign_dotted_auto_is_not_the_marker():
+def test_pep563_foreign_dotted_auto_is_not_the_marker() -> None:
     """`Something.auto` under a non-``strawberry`` prefix stays consumer-authored.
 
     Only the ``strawberry`` prefix makes a dotted ``.auto`` the infer marker.
@@ -2872,12 +2897,12 @@ class PEP563ForeignDottedType(DjangoType):
     # Untouched by synthesis: the consumer's own annotation string survives.
     assert pep563_type.__annotations__["name"] == "Aliases.auto"
     finalize_django_types()
-    assert pep563_type.__strawberry_definition__ is not None
+    assert get_object_definition(pep563_type) is not None
 
 
-def test_pep563_unselected_dotted_auto_annotation_raises():
+def test_pep563_unselected_dotted_auto_annotation_raises() -> None:
     """The unselected-`auto` guard fires for the dotted spelling too."""
-    with pytest.raises(ConfigurationError, match="not selected in Meta.fields"):
+    with pytest.raises(ConfigurationError, match=r"not selected in Meta\.fields"):
         _exec_pep563_module(
             """
 from __future__ import annotations
@@ -2900,7 +2925,7 @@ class PEP563UnselectedDottedAutoType(DjangoType):
         )
 
 
-def test_pep563_auto_relation_annotation_registers_pending_relation():
+def test_pep563_auto_relation_annotation_registers_pending_relation() -> None:
     """`items: auto` under PEP 563 still defers through a PendingRelation.
 
     The misclassification this pins used to register ZERO pending records -
@@ -2942,12 +2967,12 @@ class PEP563RelationAutoType(DjangoType):
     ]
     assert [pending.field_name for pending in pending_for_type] == ["items"]
     finalize_django_types()
-    assert pep563_type.__strawberry_definition__ is not None
+    assert get_object_definition(pep563_type) is not None
 
 
-def test_pep563_unselected_auto_annotation_raises():
+def test_pep563_unselected_auto_annotation_raises() -> None:
     """The unselected-`auto` guard fires for the PEP 563 string spelling too."""
-    with pytest.raises(ConfigurationError, match="not selected in Meta.fields"):
+    with pytest.raises(ConfigurationError, match=r"not selected in Meta\.fields"):
         _exec_pep563_module(
             """
 from __future__ import annotations
@@ -2969,7 +2994,7 @@ class PEP563UnselectedAutoType(DjangoType):
         )
 
 
-def test_auto_string_spelling_accepted_without_future_import():
+def test_auto_string_spelling_accepted_without_future_import() -> None:
     """An explicit `name: "auto"` asks for the marker without PEP 563."""
 
     class StringAutoType(DjangoType):
@@ -2985,7 +3010,7 @@ def test_auto_string_spelling_accepted_without_future_import():
     assert get_object_definition(StringAutoType) is not None
 
 
-def test_non_string_annotation_keys_raise_configuration_error():
+def test_non_string_annotation_keys_raise_configuration_error() -> None:
     """Metaclass-injected non-string annotation keys are rejected, not leaked.
 
     Class-body syntax can only produce string keys, but a metaclass may
@@ -3003,7 +3028,7 @@ def test_non_string_annotation_keys_raise_configuration_error():
             bases: tuple[type, ...],
             namespace: dict[str, object],
             **kwargs: object,
-        ):
+        ) -> type:
             declared = namespace.get("__annotations__", {})
             assert is_object_dict(declared)
             annotations = dict(declared)
@@ -3021,7 +3046,7 @@ def test_non_string_annotation_keys_raise_configuration_error():
                 fields = ("id",)
 
 
-def test_meta_metaclass_raising_getattr_raises_configuration_error():
+def test_meta_metaclass_raising_getattr_raises_configuration_error() -> None:
     """A Meta metaclass ``__getattr__`` that raises is contained.
 
     ``getattr(meta, key, default)`` only swallows ``AttributeError``; every
@@ -3031,7 +3056,7 @@ def test_meta_metaclass_raising_getattr_raises_configuration_error():
     """
 
     class HostileMeta(type):
-        def __getattr__(cls, item: str):
+        def __getattr__(cls, item: str) -> NoReturn:
             if item in {"fields", "optimizer_hints", "interfaces"}:
                 raise RuntimeError(f"hostile Meta access: {item}")
             raise AttributeError(item)
@@ -3062,8 +3087,9 @@ def test_meta_metaclass_raising_getattr_raises_configuration_error():
 def test_multi_column_forward_foreign_object_maps_to_its_related_type(
     child_name: str,
     fields_spec: Sequence[str],
+    *,
     nullable: bool,
-):
+) -> None:
     """A forward ``ForeignObject`` over two columns is a generated relation field.
 
     Named in ``Meta.fields`` or pulled in through ``"__all__"``, it resolves at

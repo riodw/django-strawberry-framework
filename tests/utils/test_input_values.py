@@ -5,7 +5,8 @@ document. Filter and order input on the wire live in
 ``examples/fakeshop/test_query/test_library_api.py``.
 """
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from typing import NoReturn
 
 import pytest
 import strawberry
@@ -36,7 +37,7 @@ from django_strawberry_framework.utils.inputs import GeneratedInputFieldSpec
 # ---------------------------------------------------------------------------
 
 
-def test_iter_input_items_handles_dict_dataclass_and_non_walkable():
+def test_iter_input_items_handles_dict_dataclass_and_non_walkable() -> None:
     assert iter_input_items({"a": 1}) == [("a", 1)]
     assert iter_input_items({}) == []
     assert iter_input_items(42) is None
@@ -53,7 +54,7 @@ def test_iter_input_items_handles_dict_dataclass_and_non_walkable():
 # ---------------------------------------------------------------------------
 
 
-def test_is_inactive_value_is_identity_based_not_truthiness():
+def test_is_inactive_value_is_identity_based_not_truthiness() -> None:
     # ``None`` is always inactive; a configured sentinel collapses too.
     assert is_inactive_value(None) is True
     assert is_inactive_value(None, unset_sentinel=strawberry.UNSET) is True
@@ -61,7 +62,7 @@ def test_is_inactive_value_is_identity_based_not_truthiness():
     # Falsy-but-supplied values stay ACTIVE (identity, not truthiness).
     assert is_inactive_value(0) is False
     assert is_inactive_value("") is False
-    assert is_inactive_value(False) is False
+    assert is_inactive_value(False) is False  # noqa: FBT003 - the bool is the value under test
     # Order semantics (no sentinel configured): UNSET is a normal active value,
     # so the order normalizer never needs to reference ``strawberry.UNSET``.
     assert is_inactive_value(strawberry.UNSET) is False
@@ -72,7 +73,7 @@ def test_is_inactive_value_is_identity_based_not_truthiness():
 # ---------------------------------------------------------------------------
 
 
-def test_iter_active_fields_classifies_and_skips_inactive():
+def test_iter_active_fields_classifies_and_skips_inactive() -> None:
     related_obj = RelatedFilter("ShelfFilter", field_name="shelf")
 
     class _Set(FilterSet):
@@ -120,7 +121,7 @@ def test_iter_active_fields_classifies_and_skips_inactive():
     assert by_attr["and_"].spec is None
 
 
-def test_iter_active_fields_dict_and_dataclass_classify_identically():
+def test_iter_active_fields_dict_and_dataclass_classify_identically() -> None:
     """The dataclass and raw-dict shapes yield the same records."""
 
     class _Set:
@@ -151,7 +152,7 @@ def test_iter_active_fields_dict_and_dataclass_classify_identically():
     assert dataclass_view == dict_view == [("title", LEAF), ("shelf", RELATED)]
 
 
-def test_iter_active_fields_flattens_top_level_list_only_when_configured():
+def test_iter_active_fields_flattens_top_level_list_only_when_configured() -> None:
     class _Set:
         related_orders = {}
 
@@ -170,7 +171,7 @@ def test_iter_active_fields_flattens_top_level_list_only_when_configured():
     assert list(iter_active_fields(_Set, [{"title": "a"}], no_list)) == []
 
 
-def test_iter_active_fields_inactive_or_non_walkable_top_level_yields_nothing():
+def test_iter_active_fields_inactive_or_non_walkable_top_level_yields_nothing() -> None:
     class _Set:
         related_orders = {}
 
@@ -184,16 +185,16 @@ def test_iter_active_fields_inactive_or_non_walkable_top_level_yields_nothing():
     assert list(iter_active_fields(_Set, 42, config)) == []
 
 
-def test_dict_subclass_overrides_cannot_replace_the_shared_walk():
+def test_dict_subclass_overrides_cannot_replace_the_shared_walk() -> None:
     """The traversal uses the real dict operations, not consumer overrides."""
 
     class _HostileDict(dict[str, object]):
         @override
-        def items(self):
+        def items(self) -> NoReturn:
             raise RuntimeError("hostile items")
 
         @override
-        def get(self, key: str, default: object = None):
+        def get(self, key: str, default: object = None) -> NoReturn:
             raise RuntimeError("hostile get")
 
     value = _HostileDict(name="x")
@@ -201,30 +202,30 @@ def test_dict_subclass_overrides_cannot_replace_the_shared_walk():
     assert input_field_value(value, "name") == "x"
 
 
-def test_malformed_dataclass_metadata_fails_closed_with_configuration_error():
+def test_malformed_dataclass_metadata_fails_closed_with_configuration_error() -> None:
     """An unreadable ``__dataclass_fields__`` is a typed traversal error, not a raw one."""
 
     class _HostileMetadata:
         @property
-        def __dataclass_fields__(self):
+        def __dataclass_fields__(self) -> dict[str, object]:
             raise RuntimeError("hostile metadata")
 
     with pytest.raises(ConfigurationError, match="dataclass metadata could not be read"):
         iter_input_items(_HostileMetadata())
 
 
-def test_non_string_input_keys_fail_closed_before_permission_dispatch():
+def test_non_string_input_keys_fail_closed_before_permission_dispatch() -> None:
     """Input field names must be strings; a non-string key is refused at the walk."""
     with pytest.raises(ConfigurationError, match="field names must be strings"):
         iter_input_items({1: "unexpected"})
 
 
-def test_hostile_list_iteration_cannot_escape_the_order_walk():
+def test_hostile_list_iteration_cannot_escape_the_order_walk() -> None:
     """The top-level-list walk reads real list elements, not a subclass iterator."""
 
     class _HostileList(list[object]):
         @override
-        def __iter__(self):
+        def __iter__(self) -> Iterator[object]:
             raise RuntimeError("hostile list iterator")
 
     class _Set:
@@ -240,7 +241,7 @@ def test_hostile_list_iteration_cannot_escape_the_order_walk():
     assert [(field.python_attr, field.raw_value) for field in fields] == [("title", "x")]
 
 
-def test_nested_order_lists_fail_closed_instead_of_recursing_or_no_oping():
+def test_nested_order_lists_fail_closed_instead_of_recursing_or_no_oping() -> None:
     """A list element must be a mapping or dataclass; a nested list is rejected."""
 
     class _Set:
@@ -255,12 +256,12 @@ def test_nested_order_lists_fail_closed_instead_of_recursing_or_no_oping():
         list(iter_active_fields(_Set, [[{"title": "x"}]], config))
 
 
-def test_hostile_field_spec_mapping_fails_closed_with_configuration_error():
+def test_hostile_field_spec_mapping_fails_closed_with_configuration_error() -> None:
     """A field-spec mapping that cannot answer a lookup aborts the walk with a typed error."""
 
     class _HostileMap(dict[tuple[type[FilterSet], str], GeneratedInputFieldSpec]):
         @override
-        def get(self, key: tuple[type[FilterSet], str], default: object = None):
+        def get(self, key: tuple[type[FilterSet], str], default: object = None) -> NoReturn:
             raise RuntimeError("hostile field-spec lookup")
 
     class _Set:
@@ -275,7 +276,7 @@ def test_hostile_field_spec_mapping_fails_closed_with_configuration_error():
         list(iter_active_fields(_Set, [{"title": "x"}], config))
 
 
-def test_dataclass_metadata_must_be_an_enumerable_mapping():
+def test_dataclass_metadata_must_be_an_enumerable_mapping() -> None:
     """``__dataclass_fields__`` must be a mapping and must enumerate without raising."""
 
     class _NotAMapping:
@@ -283,15 +284,15 @@ def test_dataclass_metadata_must_be_an_enumerable_mapping():
 
     class _UnreadableMapping(Mapping[str, object]):
         @override
-        def __getitem__(self, key: str):
+        def __getitem__(self, key: str) -> object:
             raise KeyError(key)
 
         @override
-        def __iter__(self):
+        def __iter__(self) -> Iterator[str]:
             raise RuntimeError("hostile field enumeration")
 
         @override
-        def __len__(self):
+        def __len__(self) -> int:
             return 1
 
     class _UnreadableDataclass:
@@ -303,19 +304,19 @@ def test_dataclass_metadata_must_be_an_enumerable_mapping():
         iter_input_items(_UnreadableDataclass())
 
 
-def test_dataclass_and_object_field_read_failures_are_typed():
+def test_dataclass_and_object_field_read_failures_are_typed() -> None:
     """Both the dataclass walk and the single-field read report their own typed failure."""
 
     class _UnreadableDataclass:
         __dataclass_fields__ = {"name": object()}
 
         @property
-        def name(self):
+        def name(self) -> NoReturn:
             raise RuntimeError("hostile dataclass field")
 
     class _UnreadableObject:
         @override
-        def __getattribute__(self, name: str):
+        def __getattribute__(self, name: str) -> object:
             if name == "name":
                 raise RuntimeError("hostile object field")
             return super().__getattribute__(name)
@@ -326,26 +327,26 @@ def test_dataclass_and_object_field_read_failures_are_typed():
         input_field_value(_UnreadableObject(), "name")
 
 
-def test_active_field_configuration_and_related_metadata_fail_closed():
+def test_active_field_configuration_and_related_metadata_fail_closed() -> None:
     """An unreadable traversal config, or unreadable/non-mapping related declarations, raise."""
 
     class _UnreadableConfig:
         @property
-        def handle_top_level_list(self):
+        def handle_top_level_list(self) -> NoReturn:
             raise RuntimeError("hostile traversal config")
 
         unset_sentinel = None
 
     class _UnreadableSentinelConfig:
         @property
-        def unset_sentinel(self):
+        def unset_sentinel(self) -> NoReturn:
             raise RuntimeError("hostile unset_sentinel")
 
         handle_top_level_list = False
 
     class _HostileSetMeta(type):
         @override
-        def __getattribute__(cls, name: str):
+        def __getattribute__(cls, name: str) -> object:
             if name == "related_orders":
                 raise RuntimeError("hostile related declarations")
             return super().__getattribute__(name)
@@ -373,20 +374,20 @@ def test_active_field_configuration_and_related_metadata_fail_closed():
         list(iter_active_fields(_InvalidSet, {"name": "x"}, config))
 
 
-def test_active_field_related_mapping_operations_fail_closed():
+def test_active_field_related_mapping_operations_fail_closed() -> None:
     """Membership and lookup on a related-declaration mapping each fail as typed errors."""
 
     class _UnreadableContains(Mapping[str, object]):
         @override
-        def __getitem__(self, key: str):
+        def __getitem__(self, key: str) -> object:
             return object()
 
         @override
-        def __iter__(self):
+        def __iter__(self) -> Iterator[str]:
             return iter(("name",))
 
         @override
-        def __len__(self):
+        def __len__(self) -> int:
             return 1
 
         @override
@@ -395,11 +396,11 @@ def test_active_field_related_mapping_operations_fail_closed():
 
     class _UnreadableGetitem(_UnreadableContains):
         @override
-        def __contains__(self, key: object):
+        def __contains__(self, key: object) -> bool:
             return True
 
         @override
-        def __getitem__(self, key: str):
+        def __getitem__(self, key: str) -> object:
             raise RuntimeError("hostile related lookup")
 
     config = SetInputTraversal(field_specs={}, related_attr="related_orders")
@@ -412,7 +413,7 @@ def test_active_field_related_mapping_operations_fail_closed():
         list(iter_active_fields(lookup_set, {"name": "x"}, config))
 
 
-def test_active_field_list_skips_inactive_elements_and_accepts_none_related_mapping():
+def test_active_field_list_skips_inactive_elements_and_accepts_none_related_mapping() -> None:
     """Inactive list elements are dropped; an absent related mapping leaves every field a leaf."""
 
     class _Set:
@@ -429,7 +430,7 @@ def test_active_field_list_skips_inactive_elements_and_accepts_none_related_mapp
     assert [(field.python_attr, field.kind) for field in fields] == [("name", LEAF)]
 
 
-def test_input_field_value_reads_dict_and_dataclass_fields():
+def test_input_field_value_reads_dict_and_dataclass_fields() -> None:
     """``input_field_value`` reads single fields or returns None for missing fields/non-walkable inputs."""
     assert input_field_value({"a": 10}, "a") == 10
     assert input_field_value({"a": 10}, "missing") is None
@@ -444,12 +445,12 @@ def test_input_field_value_reads_dict_and_dataclass_fields():
     assert input_field_value(_In(), "missing") is None
 
 
-def test_field_name_bypasses_hostile_str_subclass_str_override():
+def test_field_name_bypasses_hostile_str_subclass_str_override() -> None:
     """``_field_name`` safely normalizes string subclass keys without calling overridden __str__."""
 
     class _HostileStr(str):
         @override
-        def __str__(self):
+        def __str__(self) -> str:
             raise RuntimeError("hostile __str__ override")
 
     key = _HostileStr("field_name")
@@ -457,7 +458,7 @@ def test_field_name_bypasses_hostile_str_subclass_str_override():
     assert input_field_value({key: "value"}, key) == "value"
 
 
-def test_order_list_elements_reject_primitive_values():
+def test_order_list_elements_reject_primitive_values() -> None:
     """When handle_top_level_list is True, non-mapping list elements raise ConfigurationError."""
 
     class _Set:
@@ -481,7 +482,7 @@ def test_order_list_elements_reject_primitive_values():
         list(iter_active_fields(_Set, [123], config))
 
 
-def test_default_set_input_traversal_depth():
+def test_default_set_input_traversal_depth() -> None:
     """DEFAULT_SET_INPUT_TRAVERSAL_DEPTH provides a neutral recursion ceiling across set families."""
     assert DEFAULT_SET_INPUT_TRAVERSAL_DEPTH == 8
     assert FilterSet._MAX_LOGIC_DEPTH == DEFAULT_SET_INPUT_TRAVERSAL_DEPTH
@@ -492,7 +493,7 @@ def test_default_set_input_traversal_depth():
 # ---------------------------------------------------------------------------
 
 
-def test_related_declaration_mapping_treats_absent_and_none_as_no_declarations():
+def test_related_declaration_mapping_treats_absent_and_none_as_no_declarations() -> None:
     """An absent or explicitly-``None`` declaration is "no related fields", not an error."""
 
     class _Absent:
@@ -521,7 +522,7 @@ def test_related_declaration_mapping_treats_absent_and_none_as_no_declarations()
         set[object](),
     ],
 )
-def test_related_declaration_mapping_rejects_non_mappings(bad: object):
+def test_related_declaration_mapping_rejects_non_mappings(bad: object) -> None:
     """A present declaration that is not a Mapping is rejected before any indexing."""
 
     class _Set:
@@ -532,12 +533,12 @@ def test_related_declaration_mapping_rejects_non_mappings(bad: object):
     assert excinfo.value.kind == "not_mapping"
 
 
-def test_related_declaration_mapping_wraps_an_unreadable_class_attribute():
+def test_related_declaration_mapping_wraps_an_unreadable_class_attribute() -> None:
     """A class attribute read that raises is wrapped, chaining the original cause."""
 
     class _HostileMeta(type):
         @override
-        def __getattribute__(cls, name: str):
+        def __getattribute__(cls, name: str) -> object:
             if name == "related_orders":
                 raise RuntimeError("hostile class read")
             return super().__getattribute__(name)
@@ -551,7 +552,7 @@ def test_related_declaration_mapping_wraps_an_unreadable_class_attribute():
     assert isinstance(excinfo.value.__cause__, RuntimeError)
 
 
-def test_iter_active_fields_contains_a_hostile_config_related_attr_read():
+def test_iter_active_fields_contains_a_hostile_config_related_attr_read() -> None:
     """The traversal config's attribute NAME read is contained like every other read.
 
     ``related_declaration_mapping`` contains the class-side read; the config-side
@@ -565,7 +566,7 @@ def test_iter_active_fields_contains_a_hostile_config_related_attr_read():
         handle_top_level_list = False
 
         @property
-        def related_attr(self):
+        def related_attr(self) -> NoReturn:
             raise RuntimeError("hostile config related_attr")
 
     with pytest.raises(
@@ -582,7 +583,7 @@ def test_iter_active_fields_contains_a_hostile_config_related_attr_read():
 # ---------------------------------------------------------------------------
 
 
-def test_set_traversal_depth_cap_resolves_the_family_budget():
+def test_set_traversal_depth_cap_resolves_the_family_budget() -> None:
     """A declared int knob is honored; absent/None/non-int knobs take the neutral default."""
 
     class _OrderLike:
@@ -603,7 +604,7 @@ def test_set_traversal_depth_cap_resolves_the_family_budget():
     assert set_traversal_depth_cap(_Garbage) == DEFAULT_SET_INPUT_TRAVERSAL_DEPTH
 
 
-def test_assert_set_traversal_depth_enforces_the_declared_budget():
+def test_assert_set_traversal_depth_enforces_the_declared_budget() -> None:
     """Depths within budget pass silently; past budget raises the shared typed sentence."""
 
     class _Set:
@@ -614,7 +615,7 @@ def test_assert_set_traversal_depth_enforces_the_declared_budget():
         assert_set_traversal_depth(_Set, 5, branch="related-branch", input_noun="related")
 
 
-def test_assert_set_traversal_depth_words_knobless_sets_with_the_default_sentence():
+def test_assert_set_traversal_depth_words_knobless_sets_with_the_default_sentence() -> None:
     """A set with no ``_MAX_LOGIC_DEPTH`` knob is capped at the neutral default."""
 
     class _OrderLike:
@@ -632,12 +633,12 @@ def test_assert_set_traversal_depth_words_knobless_sets_with_the_default_sentenc
         )
 
 
-def test_depth_cap_error_label_reads_qualname_defensively():
+def test_depth_cap_error_label_reads_qualname_defensively() -> None:
     """A hostile ``__qualname__`` read falls back to the safe type name without escaping."""
 
     class _HostileMeta(type):
         @override
-        def __getattribute__(cls, name: str):
+        def __getattribute__(cls, name: str) -> object:
             if name == "__qualname__":
                 raise RuntimeError("hostile qualname")
             return super().__getattribute__(name)

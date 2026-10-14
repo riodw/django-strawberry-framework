@@ -128,7 +128,7 @@ def _isolate_registry() -> Iterator[None]:
 # ---------------------------------------------------------------------------
 
 
-def test_lookup_name_map_full_table_matches_spec():
+def test_lookup_name_map_full_table_matches_spec() -> None:
     """Pin the spec-027 Decision 3 Layer-5 table verbatim against accidental drift."""
     expected = {
         "exact": ("exact", "exact"),
@@ -166,7 +166,7 @@ def test_lookup_name_map_full_table_matches_spec():
 # ---------------------------------------------------------------------------
 
 
-def test_build_logic_fields_uses_inside_list_annotated_for_and_or():
+def test_build_logic_fields_uses_inside_list_annotated_for_and_or() -> None:
     """`Annotated[...]` lives INSIDE the `list[...]`, not outside."""
     triples = _build_logic_fields("DemoFilterInputType")
     by_attr = {python_attr: (annotation, kwargs) for python_attr, annotation, kwargs in triples}
@@ -201,7 +201,7 @@ def test_build_logic_fields_uses_inside_list_annotated_for_and_or():
     )
 
 
-def test_build_logic_fields_emits_strawberry_field_name_for_python_keywords():
+def test_build_logic_fields_emits_strawberry_field_name_for_python_keywords() -> None:
     """`and` / `or` / `not` are Python keywords -- they ride through `strawberry.field(name=...)`.
 
     Each carries an explicit ``default=None`` so it stays OPTIONAL: an
@@ -214,7 +214,7 @@ def test_build_logic_fields_emits_strawberry_field_name_for_python_keywords():
     assert by_attr["not_"] == {"name": "not", "default": None}
 
 
-def test_build_logic_fields_tracks_logic_operators():
+def test_build_logic_fields_tracks_logic_operators() -> None:
     """Emission order and ``(python_attr, wire_name)`` pairs must match ``LOGIC_OPERATORS``.
 
     ``FilterSet._normalize_input`` maps the same constant onto django-filter
@@ -227,7 +227,7 @@ def test_build_logic_fields_tracks_logic_operators():
     ]
 
 
-def test_logic_operator_descriptors_and_mappings():
+def test_logic_operator_descriptors_and_mappings() -> None:
     """Descriptors encapsulate python attr, wire name, sequence cardinality, and Q compose."""
     from types import MappingProxyType
 
@@ -253,7 +253,7 @@ def test_logic_operator_descriptors_and_mappings():
     assert LOGIC_OP_NOT.is_sequence is False
 
 
-def test_logic_operator_composition_semantics():
+def test_logic_operator_composition_semantics() -> None:
     """Each operator compose function builds the expected Django Q structure."""
     q1 = models.Q(name="a")
     q2 = models.Q(name="b")
@@ -277,7 +277,7 @@ def test_logic_operator_composition_semantics():
 # ---------------------------------------------------------------------------
 
 
-def test_build_input_class_returns_strawberry_input_decorated_dataclass():
+def test_build_input_class_returns_strawberry_input_decorated_dataclass() -> None:
     """The constructed class is a Strawberry input AND a dataclass."""
     cls = build_input_class(
         "ScratchInput",
@@ -290,7 +290,7 @@ def test_build_input_class_returns_strawberry_input_decorated_dataclass():
     assert hasattr(cls, "__strawberry_definition__")
 
 
-def test_build_input_class_emits_strawberry_field_name_alias():
+def test_build_input_class_emits_strawberry_field_name_alias() -> None:
     """`name=...` field kwarg lands as the Strawberry field's GraphQL alias."""
     cls = build_input_class(
         "AliasedInput",
@@ -309,7 +309,7 @@ def test_build_input_class_emits_strawberry_field_name_alias():
 
 
 @pytest.mark.django_db
-def test_build_input_fields_populates_field_specs_table():
+def test_build_input_fields_populates_field_specs_table() -> None:
     class GalaxyFilter(FilterSet):
         class Meta:
             model = library_models.Branch
@@ -323,7 +323,7 @@ def test_build_input_fields_populates_field_specs_table():
 
 
 @pytest.mark.django_db
-def test_field_spec_maps_galaxy_name_flat_field_to_django_source_path():
+def test_field_spec_maps_galaxy_name_flat_field_to_django_source_path() -> None:
     """A flat ``galaxy__name`` field carries the source path verbatim."""
 
     class ShelfFilter(FilterSet):
@@ -341,7 +341,7 @@ def test_field_spec_maps_galaxy_name_flat_field_to_django_source_path():
 
 
 @pytest.mark.django_db
-def test_build_input_fields_pins_every_lookup_name_to_its_camel_name():
+def test_build_input_fields_pins_every_lookup_name_to_its_camel_name() -> None:
     """The operator-bag wire name is pinned to ``graphql_camel_name`` for EVERY lookup.
 
     The shared input builder pins ``exact`` -> ``exact`` even though the optional-field
@@ -380,10 +380,12 @@ def test_build_input_fields_pins_every_lookup_name_to_its_camel_name():
 
 
 @pytest.mark.django_db
-def test_build_input_fields_handles_field_name_in_lookup_name_map():
-    """Verify that when a traversed relation field has a name that matches a key in LOOKUP_NAME_MAP,
-    e.g. `branch__year`, but the filter lookup expression is different, e.g. `exact`,
-    we don't incorrectly group it as field `branch` with lookup `year`.
+def test_build_input_fields_handles_field_name_in_lookup_name_map() -> None:
+    """A relation field named like a ``LOOKUP_NAME_MAP`` key is not grouped as field plus lookup.
+
+    When a traversed relation field is named like a ``LOOKUP_NAME_MAP`` key, e.g. ``branch__year``,
+    but the filter lookup differs, e.g. ``exact``, it must not be grouped as field ``branch`` with
+    lookup ``year``.
     """
 
     class YearFilter(FilterSet):
@@ -401,7 +403,7 @@ def test_build_input_fields_handles_field_name_in_lookup_name_map():
     assert "branch" not in by_attr
 
 
-def test_declared_filter_name_ending_in_lookup_keeps_its_form_key():
+def test_declared_filter_name_ending_in_lookup_keeps_its_form_key() -> None:
     """A declared ``name__exact`` filter must not collapse onto the ``name`` field.
 
     The declaration name is the django-filter form key. If grouping treats its
@@ -429,7 +431,7 @@ def test_declared_filter_name_ending_in_lookup_keeps_its_form_key():
     ) == {"name__exact": "alpha"}
 
 
-def test_declared_non_exact_filter_keeps_its_form_key():
+def test_declared_non_exact_filter_keeps_its_form_key() -> None:
     """A declared non-``exact`` filter must not gain a generated lookup suffix.
 
     django-filter registers a class-body declaration under its attribute name
@@ -459,7 +461,7 @@ def _bag_lookup_attrs(filterset_cls: type[FilterSet], python_attr: str) -> list[
     return list(bag_class.__dataclass_fields__)
 
 
-def test_overlap_head_emits_one_bag_with_each_lookup_keeping_its_own_form_key():
+def test_overlap_head_emits_one_bag_with_each_lookup_keeping_its_own_form_key() -> None:
     """A declared head that is also a ``Meta.fields`` head emits one bag, two form keys.
 
     The declared ``name`` (``iexact``) and the generated ``name__icontains`` share
@@ -492,7 +494,9 @@ def _normalize_name_mapping(cls: type[FilterSet]) -> object:
         pytest.param(_normalize_name_mapping, id="direct-mapping"),
     ],
 )
-def test_two_filters_on_one_head_lookup_slot_raise(build: Callable[[type[FilterSet]], object]):
+def test_two_filters_on_one_head_lookup_slot_raise(
+    build: Callable[[type[FilterSet]], object],
+) -> None:
     """A declared filter and a generated one claiming one ``(head, lookup)`` slot raise.
 
     The declared ``name`` (``icontains`` over ``city``) and the generated
@@ -517,7 +521,7 @@ def test_two_filters_on_one_head_lookup_slot_raise(build: Callable[[type[FilterS
     )
 
 
-def test_two_heads_flattening_to_one_input_attr_raise():
+def test_two_heads_flattening_to_one_input_attr_raise() -> None:
     """Two ``__`` heads sharing one flattened input attr raise; neither is reachable alone."""
 
     class AliasCollisionBranchFilter(FilterSet):
@@ -538,7 +542,7 @@ def test_two_heads_flattening_to_one_input_attr_raise():
     )
 
 
-def test_expanded_declared_child_filter_is_its_own_head():
+def test_expanded_declared_child_filter_is_its_own_head() -> None:
     """A ``RelatedFilter`` expansion of a child's declared filter keeps its own head.
 
     The child declares ``title`` (``field_name="name"``) and ``name__exact`` beside a
@@ -585,17 +589,17 @@ def test_expanded_declared_child_filter_is_its_own_head():
 # ---------------------------------------------------------------------------
 
 
-def test_convert_filter_to_input_annotation_handles_globalid_filter():
+def test_convert_filter_to_input_annotation_handles_globalid_filter() -> None:
     f = GlobalIDFilter()
     assert convert_filter_to_input_annotation(f, None) == str | None
 
 
-def test_convert_filter_to_input_annotation_handles_globalid_multiple_choice_filter():
+def test_convert_filter_to_input_annotation_handles_globalid_multiple_choice_filter() -> None:
     f = GlobalIDMultipleChoiceFilter()
     assert convert_filter_to_input_annotation(f, None) == list[str] | None
 
 
-def test_convert_filter_to_input_annotation_handles_range_filter():
+def test_convert_filter_to_input_annotation_handles_range_filter() -> None:
     f = RangeFilter(field_name="value")
     model_field: _Int = models.IntegerField()
     annotation = convert_filter_to_input_annotation(f, model_field)
@@ -607,14 +611,14 @@ def test_convert_filter_to_input_annotation_handles_range_filter():
     assert fields == {"start", "end"}
 
 
-def test_convert_filter_to_input_annotation_handles_list_filter():
+def test_convert_filter_to_input_annotation_handles_list_filter() -> None:
     f = ListFilter(field_name="value")
     model_field: _Int = models.IntegerField()
     annotation = convert_filter_to_input_annotation(f, model_field)
     assert annotation == list[int] | None
 
 
-def test_convert_filter_to_input_annotation_handles_choice_filter_via_converter_pipeline():
+def test_convert_filter_to_input_annotation_handles_choice_filter_via_converter_pipeline() -> None:
     """`ChoiceFilter` reaches into ``convert_choices_to_enum`` via the model field."""
     # ``Book.circulation_status`` is a TextChoices field on the example model.
     f = ChoiceFilter()
@@ -627,14 +631,14 @@ def test_convert_filter_to_input_annotation_handles_choice_filter_via_converter_
     assert issubclass(enum_cls, Enum)
 
 
-def test_convert_filter_to_input_annotation_rejects_non_choices_derived_enum():
+def test_convert_filter_to_input_annotation_rejects_non_choices_derived_enum() -> None:
     f = ChoiceFilter()
     model_field: _Char = models.CharField()  # No `choices` attribute set.
     with pytest.raises(ConfigurationError):
         convert_filter_to_input_annotation(f, model_field)
 
 
-def test_convert_filter_to_input_annotation_rejects_unknown_method_filter():
+def test_convert_filter_to_input_annotation_rejects_unknown_method_filter() -> None:
     """A `Filter(method=...)` with no exposed form field raises ConfigurationError."""
 
     # Construct a minimal stub that mimics a `django_filters.Filter` whose
@@ -665,12 +669,12 @@ def test_convert_filter_to_input_annotation_rejects_unknown_method_filter():
         convert_filter_to_input_annotation(f, None)  # pyright: ignore[reportArgumentType]
 
 
-def test_convert_filter_to_input_annotation_keeps_hostile_diagnostics_typed():
+def test_convert_filter_to_input_annotation_keeps_hostile_diagnostics_typed() -> None:
     """Malformed filters with raising ``__repr__`` still raise ConfigurationError."""
 
     class BadRepr:
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr exploded")
 
     class NoFieldFilter:
@@ -686,7 +690,7 @@ def test_convert_filter_to_input_annotation_keeps_hostile_diagnostics_typed():
 
     class BadChoiceFilter(ChoiceFilter):
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr exploded")
 
     # A model field with no ``choices`` is what drives the ChoiceFilter branch to
@@ -695,14 +699,14 @@ def test_convert_filter_to_input_annotation_keeps_hostile_diagnostics_typed():
         convert_filter_to_input_annotation(BadChoiceFilter(), models.CharField())
 
 
-def test_convert_filter_to_input_annotation_wraps_nullable():
+def test_convert_filter_to_input_annotation_wraps_nullable() -> None:
     """``extra['required']=False`` (the default) wraps the annotation in `T | None`."""
     f = CharFilter()
     annotation = convert_filter_to_input_annotation(f, models.CharField())
     assert annotation == str | None
 
 
-def test_convert_filter_to_input_annotation_does_not_wrap_required():
+def test_convert_filter_to_input_annotation_does_not_wrap_required() -> None:
     f = CharFilter(required=True)
     annotation = convert_filter_to_input_annotation(f, models.CharField())
     # Required filters return the scalar without the `| None` wrap.
@@ -714,7 +718,7 @@ def test_convert_filter_to_input_annotation_does_not_wrap_required():
 # ---------------------------------------------------------------------------
 
 
-def test_normalize_input_value_encodes_globalid_object_to_wire_form():
+def test_normalize_input_value_encodes_globalid_object_to_wire_form() -> None:
     """``relay.GlobalID`` OBJECT -> base64 wire string (``type_name`` preserved).
 
     The object keeps its type through normalization so the bound
@@ -730,12 +734,12 @@ def test_normalize_input_value_encodes_globalid_object_to_wire_form():
     assert (round_tripped.type_name, round_tripped.node_id) == ("X", "42")
 
 
-def test_normalize_input_value_passes_string_globalid_through():
+def test_normalize_input_value_passes_string_globalid_through() -> None:
     f = GlobalIDFilter()
     assert normalize_input_value(f, "42") == "42"
 
 
-def test_normalize_input_value_unwraps_enum_member():
+def test_normalize_input_value_unwraps_enum_member() -> None:
     """A Strawberry-enum-member input becomes its `.value`."""
 
     @strawberry.enum
@@ -747,7 +751,7 @@ def test_normalize_input_value_unwraps_enum_member():
     assert normalize_input_value(f, Color.RED) == "red"
 
 
-def test_normalize_input_value_unwraps_enum_member_with_none_value():
+def test_normalize_input_value_unwraps_enum_member_with_none_value() -> None:
     """An enum member whose ``.value`` is ``None`` unwraps to ``None``.
 
     The structural ``isinstance(value, enum.Enum)`` check unwraps it; the prior
@@ -761,7 +765,7 @@ def test_normalize_input_value_unwraps_enum_member_with_none_value():
     assert normalize_input_value(ChoiceFilter(), Tri.UNKNOWN) is None
 
 
-def test_normalize_input_value_range_filter_emits_positional_keys():
+def test_normalize_input_value_range_filter_emits_positional_keys() -> None:
     """RangeFilter -> `{<field>_0: start, <field>_1: end}` positional patch."""
     f = RangeFilter(field_name="lifetime_fines_cents")
 
@@ -774,7 +778,7 @@ def test_normalize_input_value_range_filter_emits_positional_keys():
     assert patch == {"lifetime_fines_cents_0": 1, "lifetime_fines_cents_1": 10}
 
 
-def test_normalize_input_value_range_filter_drops_none_axes_partial_range():
+def test_normalize_input_value_range_filter_drops_none_axes_partial_range() -> None:
     """Partial-range inputs surface only the supplied positional key.
 
     A ``None``-valued axis is "axis not supplied"; emitting ``{<name>_0: None}``
@@ -823,7 +827,7 @@ def test_normalize_input_value_range_filter_drops_none_axes_partial_range():
     assert neither == {}
 
 
-def test_normalize_input_value_range_filter_drops_unset_axes_partial_range():
+def test_normalize_input_value_range_filter_drops_unset_axes_partial_range() -> None:
     """Partial-range inputs drop ``UNSET``-valued axes identically to ``None``."""
     f = RangeFilter(field_name="lifetime_fines_cents")
 
@@ -877,7 +881,7 @@ def test_normalize_input_value_range_filter_drops_unset_axes_partial_range():
     )
 
 
-def test_normalize_input_value_range_filter_unwraps_enum_members():
+def test_normalize_input_value_range_filter_unwraps_enum_members() -> None:
     """RangeFilter unwraps enum members on start and end axes."""
     f = RangeFilter(field_name="status_range")
 
@@ -922,7 +926,7 @@ class _StartEndAttrs:
 def test_normalize_input_value_range_filter_rejects_a_value_it_cannot_read(
     filter_class: type[Filter],
     bad: object,
-):
+) -> None:
     """A range value that is not a ``{start, end}`` mapping or input object raises.
 
     Answering it with an empty or partial patch would drop the caller's
@@ -938,7 +942,7 @@ def test_normalize_input_value_range_filter_rejects_a_value_it_cannot_read(
     )
 
 
-def test_normalize_input_value_range_filter_reads_a_dict_subclass_through_the_base_slots():
+def test_normalize_input_value_range_filter_reads_a_dict_subclass_through_the_base_slots() -> None:
     """A ``dict`` subclass is a mapping: its own ``get`` never decides the axes."""
 
     class _LyingDict(dict[str, object]):
@@ -953,7 +957,7 @@ def test_normalize_input_value_range_filter_reads_a_dict_subclass_through_the_ba
     }
 
 
-def test_normalize_input_value_global_id_list():
+def test_normalize_input_value_global_id_list() -> None:
     """GlobalID OBJECTS keep their ``type_name`` (wire form), not bare node_ids.
 
     Pre-decoding to a bare ``node_id`` here stripped the type *before*
@@ -973,12 +977,12 @@ def test_normalize_input_value_global_id_list():
     assert [(g.type_name, g.node_id) for g in decoded] == [("X", "1"), ("X", "2")]
 
 
-def test_normalize_input_value_none_returns_none():
+def test_normalize_input_value_none_returns_none() -> None:
     f = GlobalIDFilter()
     assert normalize_input_value(f, None) is None
 
 
-def test_normalize_input_value_rejects_dict_on_csv_filter():
+def test_normalize_input_value_rejects_dict_on_csv_filter() -> None:
     """A mapping into a CSV filter fails loud instead of leaking its KEYS.
 
     The ``in`` / ``range`` arms iterate ``raw_value`` element-by-element;
@@ -998,7 +1002,7 @@ def test_normalize_input_value_rejects_dict_on_csv_filter():
         normalize_input_value(f, {"start": 1, "end": 5})
 
 
-def test_normalize_input_value_rejects_scalar_on_list_filter():
+def test_normalize_input_value_rejects_scalar_on_list_filter() -> None:
     """A scalar (string / int) into a list-consuming arm fails loud.
 
     A ``str`` container previously iterated its CHARACTERS -- ``"abc"``
@@ -1011,7 +1015,7 @@ def test_normalize_input_value_rejects_scalar_on_list_filter():
         normalize_input_value(GlobalIDMultipleChoiceFilter(), 42)
 
 
-def test_normalize_input_value_rejects_dict_on_expanded_range_csv():
+def test_normalize_input_value_rejects_dict_on_expanded_range_csv() -> None:
     """The expanded ``__range`` CSV leaf rejects a {start, end} patch shape.
 
     The expanded ``__range`` filter is a ``BaseCSVFilter`` (element-binding
@@ -1029,7 +1033,7 @@ def test_normalize_input_value_rejects_dict_on_expanded_range_csv():
         normalize_input_value(IntRange(), {"start": 1, "end": 5}, field_name="code__range")
 
 
-def test_normalize_input_value_unset_returns_none():
+def test_normalize_input_value_unset_returns_none() -> None:
     """``strawberry.UNSET`` is treated as "not supplied", same as ``None``.
 
     Defensive short-circuit at the entry to ``normalize_input_value``:
@@ -1051,7 +1055,7 @@ def test_normalize_input_value_unset_returns_none():
 # ---------------------------------------------------------------------------
 
 
-def test_construct_search_translates_lookup_prefixes():
+def test_construct_search_translates_lookup_prefixes() -> None:
     """Each `^` / `=` / `@` / `$` prefix maps to its `LOOKUP_PREFIXES` lookup."""
     result = construct_search(
         {
@@ -1072,7 +1076,7 @@ def test_construct_search_translates_lookup_prefixes():
     assert "no_prefix" not in result
 
 
-def test_construct_search_empty_input_returns_empty_dict():
+def test_construct_search_empty_input_returns_empty_dict() -> None:
     assert construct_search({}) == {}
 
 
@@ -1081,7 +1085,7 @@ def test_construct_search_empty_input_returns_empty_dict():
 # ---------------------------------------------------------------------------
 
 
-def test_filter_input_type_returns_annotated_with_lazy_module_path():
+def test_filter_input_type_returns_annotated_with_lazy_module_path() -> None:
     class MyFilter(FilterSet):
         class Meta:
             model = Category
@@ -1094,7 +1098,7 @@ def test_filter_input_type_returns_annotated_with_lazy_module_path():
     assert any(getattr(marker, "module", None) == INPUTS_MODULE_PATH for marker in metadata)
 
 
-def test_filter_input_type_returns_forwardref_in_annotation_args():
+def test_filter_input_type_returns_forwardref_in_annotation_args() -> None:
     """`Annotated[<str_variable>, ...]` wraps the string as a `ForwardRef`."""
 
     class MyFilter(FilterSet):
@@ -1108,7 +1112,7 @@ def test_filter_input_type_returns_forwardref_in_annotation_args():
     assert inner.__forward_arg__ == "MyFilterInputType"
 
 
-def test_filter_input_type_records_filterset_into_helper_referenced_set():
+def test_filter_input_type_records_filterset_into_helper_referenced_set() -> None:
     class MyFilter(FilterSet):
         class Meta:
             model = Category
@@ -1118,7 +1122,7 @@ def test_filter_input_type_records_filterset_into_helper_referenced_set():
     assert MyFilter in _helper_referenced_filtersets
 
 
-def test_filter_input_type_is_idempotent_under_repeated_calls():
+def test_filter_input_type_is_idempotent_under_repeated_calls() -> None:
     """Repeated calls converge on one entry and equivalent ForwardRef args."""
 
     class MyFilter(FilterSet):
@@ -1134,7 +1138,7 @@ def test_filter_input_type_is_idempotent_under_repeated_calls():
     assert get_args(second)[0].__forward_arg__ == get_args(third)[0].__forward_arg__
 
 
-def test_filter_input_type_rejects_non_filterset():
+def test_filter_input_type_rejects_non_filterset() -> None:
     """`int` / non-FilterSet class / `None` all raise TypeError naming the bad value."""
     with pytest.raises(TypeError) as excinfo:
         # basedpyright: the non-class value is the hostile input under test; filter_input_type
@@ -1161,7 +1165,7 @@ def test_filter_input_type_rejects_non_filterset():
 # ---------------------------------------------------------------------------
 
 
-def test_filter_input_subscript_returns_the_filter_input_type_annotation():
+def test_filter_input_subscript_returns_the_filter_input_type_annotation() -> None:
     """`FilterInput[MyFilter]` is the same lazy `Annotated` the call form returns."""
 
     class MyFilter(FilterSet):
@@ -1181,7 +1185,7 @@ def test_filter_input_subscript_returns_the_filter_input_type_annotation():
     ]
 
 
-def test_filter_input_subscript_records_filterset_into_helper_referenced_set():
+def test_filter_input_subscript_records_filterset_into_helper_referenced_set() -> None:
     """The subscript feeds the one ledger the finalizer's orphan check reads."""
 
     class MyFilter(FilterSet):
@@ -1195,7 +1199,7 @@ def test_filter_input_subscript_records_filterset_into_helper_referenced_set():
     assert _helper_referenced_filtersets == {MyFilter}
 
 
-def test_filter_input_subscript_rejects_non_filterset_naming_the_subscript():
+def test_filter_input_subscript_rejects_non_filterset_naming_the_subscript() -> None:
     """A non-FilterSet raises TypeError worded with the spelling the consumer wrote."""
 
     class NotAFilter:
@@ -1227,14 +1231,14 @@ def test_filter_input_subscript_rejects_non_filterset_naming_the_subscript():
         "___",
     ],
 )
-def test_pascal_case_raises_for_no_word_character_input(bad: str):
+def test_pascal_case_raises_for_no_word_character_input(bad: str) -> None:
     """`_pascal_case` raises rather than silently returning `""`."""
     with pytest.raises(ConfigurationError) as excinfo:
         _pascal_case(bad)
     assert repr(bad) in str(excinfo.value)
 
 
-def test_pascal_case_converts_separators():
+def test_pascal_case_converts_separators() -> None:
     assert _pascal_case("galaxy__name") == "GalaxyName"
     assert _pascal_case("email_must_have_at_sign") == "EmailMustHaveAtSign"
 
@@ -1248,7 +1252,7 @@ def test_pascal_case_converts_separators():
         "___",
     ],
 )
-def test_type_name_for_raises_for_no_word_character_field_path(bad: str):
+def test_type_name_for_raises_for_no_word_character_field_path(bad: str) -> None:
     """``type_name_for`` raises rather than silently collapsing to the root name.
 
     The guard is hoisted from ``_pascal_case`` (the direct
@@ -1270,13 +1274,13 @@ def test_type_name_for_raises_for_no_word_character_field_path(bad: str):
     assert repr(bad) in str(excinfo.value)
 
 
-def test_camel_case_returns_input_when_no_word_characters():
+def test_camel_case_returns_input_when_no_word_characters() -> None:
     """`_camel_case` returns the raw string when it has no word tokens."""
     assert _camel_case("") == ""
     assert _camel_case("_") == "_"
 
 
-def test_camel_case_lowercases_head_and_pascals_rest():
+def test_camel_case_lowercases_head_and_pascals_rest() -> None:
     assert _camel_case("galaxy_name") == "galaxyName"
 
 
@@ -1285,7 +1289,7 @@ def test_camel_case_lowercases_head_and_pascals_rest():
 # ---------------------------------------------------------------------------
 
 
-def test_scalar_from_form_field_maps_each_recognized_shape():
+def test_scalar_from_form_field_maps_each_recognized_shape() -> None:
     """Every recognized form-field shape maps to its Python scalar.
 
     Regression pin for the ``django.forms`` hierarchy trap: ``FloatField``
@@ -1318,11 +1322,11 @@ def test_scalar_from_form_field_maps_each_recognized_shape():
 # ---------------------------------------------------------------------------
 
 
-def test_scalar_from_model_field_none_falls_back_to_str():
+def test_scalar_from_model_field_none_falls_back_to_str() -> None:
     assert _scalar_from_model_field(None) is str
 
 
-def test_scalar_from_model_field_maps_each_recognized_shape():
+def test_scalar_from_model_field_maps_each_recognized_shape() -> None:
     import datetime
     import decimal
     import uuid
@@ -1344,7 +1348,7 @@ def test_scalar_from_model_field_maps_each_recognized_shape():
 # ---------------------------------------------------------------------------
 
 
-def test_convert_filter_to_input_annotation_typed_filter_uses_model_scalar():
+def test_convert_filter_to_input_annotation_typed_filter_uses_model_scalar() -> None:
     """A bare ``TypedFilter`` resolves its scalar from the model field."""
     annotation = convert_filter_to_input_annotation(
         TypedFilter(field_name="lifetime_fines_cents"),
@@ -1355,7 +1359,7 @@ def test_convert_filter_to_input_annotation_typed_filter_uses_model_scalar():
     assert annotation == (int | None)
 
 
-def test_filter_convert_and_normalize_ride_shared_kind_table():
+def test_filter_convert_and_normalize_ride_shared_kind_table() -> None:
     """Convert and normalize walk one most-specific-first filter-class table.
 
     The two ladders used to be independent ``isinstance`` chains (spec-053 C3
@@ -1376,7 +1380,7 @@ def test_filter_convert_and_normalize_ride_shared_kind_table():
     assert "internal: filter input dispatch" in str(exc)
 
 
-def test_convert_raw_pk_relation_filters_type_from_the_target_key_column():
+def test_convert_raw_pk_relation_filters_type_from_the_target_key_column() -> None:
     """The raw-pk pair types from the target key column, through a one-to-one primary key.
 
     ``Annotation.profile`` targets ``PatronProfile``, whose key is its ``patron``
@@ -1392,7 +1396,7 @@ def test_convert_raw_pk_relation_filters_type_from_the_target_key_column():
         normalize_input_value(many, 3)
 
 
-def test_convert_raw_pk_filter_on_a_non_relation_names_the_leaf_and_related_filter():
+def test_convert_raw_pk_filter_on_a_non_relation_names_the_leaf_and_related_filter() -> None:
     """A raw-pk filter whose ``field_name`` is not a relation fails at input build.
 
     The message names the leaf and points at ``RelatedFilter``, never at ``SCALAR_MAP``.
@@ -1407,7 +1411,9 @@ def test_convert_raw_pk_filter_on_a_non_relation_names_the_leaf_and_related_filt
     assert "SCALAR_MAP" not in message
 
 
-def test_filter_overrides_model_choice_keys_keep_their_class_and_type_from_the_target_key():
+def test_filter_overrides_model_choice_keys_keep_their_class_and_type_from_the_target_key() -> (
+    None
+):
     """A ``filter_overrides``-selected model-choice key stays the consumer's, typed from its column.
 
     ``exact`` keeps django-filter's ``ModelChoiceFilter`` and ``in`` its
@@ -1458,7 +1464,7 @@ def test_filter_overrides_model_choice_keys_keep_their_class_and_type_from_the_t
         normalize_input_value(in_, 3)
 
 
-def test_declared_model_choice_filter_follows_a_relation_valued_primary_key():
+def test_declared_model_choice_filter_follows_a_relation_valued_primary_key() -> None:
     """A queryset whose model's key is a one-to-one types from the column that key stores.
 
     ``PatronProfile``'s primary key is its ``patron`` one-to-one, so the value the form
@@ -1485,7 +1491,7 @@ def test_declared_model_choice_filter_follows_a_relation_valued_primary_key():
     assert convert_filter_to_input_annotation(leaf, relation) == (int | None)
 
 
-def test_model_choice_filter_with_no_column_source_names_the_filterset_and_the_fix():
+def test_model_choice_filter_with_no_column_source_names_the_filterset_and_the_fix() -> None:
     """A callable queryset on a ``method=`` filter naming no relation fails at input build.
 
     Neither source names a model: the callable queryset has none until a request
@@ -1526,7 +1532,7 @@ def test_model_choice_filter_with_no_column_source_names_the_filterset_and_the_f
     assert "Meta.exclude" not in message
 
 
-def test_normalize_input_value_typed_filter_unwraps_none_enum_value():
+def test_normalize_input_value_typed_filter_unwraps_none_enum_value() -> None:
     """``TypedFilter`` is convert-only; normalize continues and may return ``None``."""
 
     class Tri(Enum):
@@ -1535,7 +1541,7 @@ def test_normalize_input_value_typed_filter_unwraps_none_enum_value():
     assert normalize_input_value(TypedFilter(), Tri.UNKNOWN) is None
 
 
-def test_normalize_input_value_list_filter_unwraps_each_element():
+def test_normalize_input_value_list_filter_unwraps_each_element() -> None:
     """``ListFilter`` / ``ArrayFilter`` values normalize element-by-element."""
     f = ListFilter(field_name="ids")
     assert normalize_input_value(
@@ -1545,7 +1551,7 @@ def test_normalize_input_value_list_filter_unwraps_each_element():
     ) == [1, 2, 3]
 
 
-def test_normalize_input_value_base_csv_filter_unwraps_elements():
+def test_normalize_input_value_base_csv_filter_unwraps_elements() -> None:
     """``BaseCSVFilter`` normalizes element-by-element unwrapping enum members."""
 
     class StatusEnum(Enum):
@@ -1563,7 +1569,9 @@ def test_normalize_input_value_base_csv_filter_unwraps_elements():
     ) == ["a", "b"]
 
 
-def test_convert_filter_to_input_annotation_derives_enum_for_choice_fields_on_list_and_csv_filters():
+def test_convert_filter_to_input_annotation_derives_enum_for_choice_fields_on_list_and_csv_filters() -> (
+    None
+):
     """`_element_annotation` resolves choice enum for TypedFilter, ListFilter, and BaseCSVFilter."""
     model_field: ModelField = library_models.Book._meta.get_field("circulation_status")
 
@@ -1591,7 +1599,7 @@ def test_convert_filter_to_input_annotation_derives_enum_for_choice_fields_on_li
     assert issubclass(get_args(csv_list)[0], Enum)
 
 
-def test_element_annotation_fallback_branches_when_model_field_is_none():
+def test_element_annotation_fallback_branches_when_model_field_is_none() -> None:
     """`_element_annotation` checks form field when model_field is None, fallback to str."""
     from django import forms
 
@@ -1602,7 +1610,7 @@ def test_element_annotation_fallback_branches_when_model_field_is_none():
         @property
         @override
         # basedpyright: deliberately a filter with no form field, the input that takes the fallback
-        def field(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+        def field(self) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
             return None
 
     # Form field present -> resolved via `_scalar_from_form_field`
@@ -1612,7 +1620,7 @@ def test_element_annotation_fallback_branches_when_model_field_is_none():
     assert convert_filter_to_input_annotation(NoFieldTypedFilter(), None) == str | None
 
 
-def test_materialize_input_class_registers_in_module_globals():
+def test_materialize_input_class_registers_in_module_globals() -> None:
     """`materialize_input_class` registers input classes into the module namespace."""
     from django_strawberry_framework.filters import inputs as inputs_mod
 
@@ -1645,7 +1653,7 @@ def _range_owner() -> type[FilterSet]:
 
 
 @pytest.mark.parametrize("owned", [False, True], ids=["unowned", "owned"])
-def test_range_input_class_for_a_filter_defining_eq_without_hash(owned: bool):
+def test_range_input_class_for_a_filter_defining_eq_without_hash(*, owned: bool) -> None:
     """An unhashable ``RangeFilter`` still gets its range input class.
 
     Owned names over HTTP:
@@ -1657,7 +1665,7 @@ def test_range_input_class_for_a_filter_defining_eq_without_hash(owned: bool):
     assert cls.__annotations__["start"] == (int | None)
 
 
-def test_build_range_input_class_name_and_axes_follow_owner_field_and_scalar():
+def test_build_range_input_class_name_and_axes_follow_owner_field_and_scalar() -> None:
     """One filter instance gets the name and axes of each owner, field and scalar it is built for."""
 
     class FirstFilter(FilterSet):
@@ -1676,7 +1684,7 @@ def test_build_range_input_class_name_and_axes_follow_owner_field_and_scalar():
     assert other_field.__name__ == "FirstFilterCostRangeInputType"
 
 
-def test_finalize_accepts_a_range_filter_defining_eq_without_hash():
+def test_finalize_accepts_a_range_filter_defining_eq_without_hash() -> None:
     """A ``Meta.filterset_class`` declaring an unhashable ``RangeFilter`` finalizes."""
 
     class UnhashableRangeFilter(FilterSet):
@@ -1698,7 +1706,7 @@ def test_finalize_accepts_a_range_filter_defining_eq_without_hash():
 
 
 @pytest.mark.parametrize("owned", [False, True], ids=["unowned", "owned"])
-def test_range_input_class_retains_neither_filter_nor_filterset(owned: bool):
+def test_range_input_class_retains_neither_filter_nor_filterset(*, owned: bool) -> None:
     """Building a range input class keeps no reference to its filter or owning filterset."""
 
     def build() -> tuple[weakref.ref[type[FilterSet]], weakref.ref[RangeFilter]]:
@@ -1714,7 +1722,7 @@ def test_range_input_class_retains_neither_filter_nor_filterset(owned: bool):
     assert filter_ref() is None
 
 
-def test_filterset_is_collectable_after_finalize_and_registry_clear():
+def test_filterset_is_collectable_after_finalize_and_registry_clear() -> None:
     """A finalized filterset with a ``RangeFilter`` is released by ``registry.clear()``."""
 
     def build() -> weakref.ref[type[FilterSet]]:
@@ -1741,7 +1749,7 @@ def test_filterset_is_collectable_after_finalize_and_registry_clear():
     assert ref() is None
 
 
-def test_build_range_input_class_name_unqualified_without_filterset():
+def test_build_range_input_class_name_unqualified_without_filterset() -> None:
     """No owning filterset -> the historical ``<Field>RangeInputType`` name is preserved.
 
     Live scoping of owned names:
@@ -1752,7 +1760,7 @@ def test_build_range_input_class_name_unqualified_without_filterset():
 
 
 @pytest.mark.django_db
-def test_range_input_type_name_is_scoped_per_filterset():
+def test_range_input_type_name_is_scoped_per_filterset() -> None:
     """Two filtersets sharing a ``field_name`` mint DISTINCT range sub-input classes.
 
     Pin for the spec-027 collision hazard. Shipped filtersets share one axis
@@ -1788,14 +1796,14 @@ def test_range_input_type_name_is_scoped_per_filterset():
             model = library_models.Branch
             fields = []
 
-    def _range_cls_of(bag: type):
+    def _range_cls_of(bag: type) -> type:
         for annotation in bag.__annotations__.values():
             for arg in get_args(annotation):
                 if getattr(arg, "__name__", "").endswith("RangeInputType"):
                     return arg
         raise AssertionError("no RangeInputType found in operator bag")
 
-    def _bag(triples: list[tuple[str, object, dict[str, object]]]):
+    def _bag(triples: list[tuple[str, object, dict[str, object]]]) -> type:
         by_attr = {p: a for p, a, _ in triples}
         return next(x for x in get_args(by_attr["price"]) if x is not type(None))
 
@@ -1827,7 +1835,7 @@ def test_range_input_type_name_is_scoped_per_filterset():
 
 
 @pytest.mark.django_db
-def test_direct_range_conversion_does_not_poison_owned_input_build():
+def test_direct_range_conversion_does_not_poison_owned_input_build() -> None:
     """An earlier unowned conversion cannot defeat owner-qualified generation."""
     from apps.scalars import models as scalar_models
 
@@ -1859,7 +1867,7 @@ def test_direct_range_conversion_does_not_poison_owned_input_build():
     assert owned_cls is not direct_cls
 
 
-def test_build_input_class_threads_description_into_strawberry_field():
+def test_build_input_class_threads_description_into_strawberry_field() -> None:
     """A ``description`` kwarg is forwarded to ``strawberry.field``."""
     cls = build_input_class(
         "DescribedInputType",
@@ -1877,7 +1885,7 @@ def test_build_input_class_threads_description_into_strawberry_field():
 # ---------------------------------------------------------------------------
 
 
-def test_model_field_for_filter_returns_none_without_model():
+def test_model_field_for_filter_returns_none_without_model() -> None:
     """A filterset-shaped object with no ``_meta.model`` yields ``None``."""
 
     class _NoMeta:
@@ -1888,7 +1896,7 @@ def test_model_field_for_filter_returns_none_without_model():
     assert _model_field_for_filter(_NoMeta, GlobalIDFilter(field_name="id")) is None  # pyright: ignore[reportArgumentType]
 
 
-def test_model_field_for_filter_returns_none_without_field_name():
+def test_model_field_for_filter_returns_none_without_field_name() -> None:
     """A filter with no ``field_name`` yields ``None`` even on a real model."""
     from tests.filters.fixtures.filtersets import ShelfFilter
 
@@ -1897,7 +1905,7 @@ def test_model_field_for_filter_returns_none_without_field_name():
     assert _model_field_for_filter(ShelfFilter, f) is None
 
 
-def test_model_field_for_filter_returns_none_for_unknown_field_name():
+def test_model_field_for_filter_returns_none_for_unknown_field_name() -> None:
     """A typo in ``Filter(field_name=...)`` surfaces as ``None``, not a crash.
 
     Path resolution is ``django_filters.utils.get_model_field`` (shared with
@@ -1909,7 +1917,7 @@ def test_model_field_for_filter_returns_none_for_unknown_field_name():
     assert _model_field_for_filter(ShelfFilter, f) is None
 
 
-def test_model_field_for_filter_walks_related_path():
+def test_model_field_for_filter_walks_related_path() -> None:
     """A ``__``-separated ``field_name`` resolves to the terminal model field."""
     from apps.library import models as library_models
 
@@ -1925,7 +1933,7 @@ def test_model_field_for_filter_walks_related_path():
 # ---------------------------------------------------------------------------
 
 
-def test_build_input_fields_skips_related_filter_with_none_target():
+def test_build_input_fields_skips_related_filter_with_none_target() -> None:
     """A ``RelatedFilter(None, ...)`` placeholder is skipped, not materialized."""
 
     class PlaceholderFilter(FilterSet):
@@ -1948,7 +1956,7 @@ def test_build_input_fields_skips_related_filter_with_none_target():
 
 
 @pytest.mark.django_db
-def test_build_input_fields_keeps_digit_boundary_operator_bags_distinct():
+def test_build_input_fields_keeps_digit_boundary_operator_bags_distinct() -> None:
     """``field_2`` / ``field2`` mint DISTINCT operator-bag GraphQL type names.
 
     ``ClassBasedTypeNameMixin.type_name_for`` routes through ``pascal_case``. A
@@ -1979,7 +1987,7 @@ def test_build_input_fields_keeps_digit_boundary_operator_bags_distinct():
     triples = _build_input_fields(DigitBoundaryFilter)
     by_attr = {python_attr: annotation for python_attr, annotation, _kwargs in triples}
 
-    def _bag(attr: str):
+    def _bag(attr: str) -> type:
         return next(arg for arg in get_args(by_attr[attr]) if arg is not type(None))
 
     bag_underscore = _bag("field_2")
@@ -2005,7 +2013,7 @@ def test_build_input_fields_keeps_digit_boundary_operator_bags_distinct():
 
 
 @pytest.mark.django_db
-def test_range_input_type_name_preserves_digit_boundary_in_field_name():
+def test_range_input_type_name_preserves_digit_boundary_in_field_name() -> None:
     """Range sub-input names keep ``price_2`` distinct from ``price2``."""
     from apps.scalars import models as scalar_models
 
@@ -2031,7 +2039,7 @@ def test_range_input_type_name_preserves_digit_boundary_in_field_name():
 
 
 @pytest.mark.django_db
-def test_build_input_fields_keeps_underscore_edge_operator_bags_distinct():
+def test_build_input_fields_keeps_underscore_edge_operator_bags_distinct() -> None:
     """``price`` / ``price_`` mint DISTINCT operator-bag GraphQL type names.
 
     ``pascal_case`` used to drop leading / trailing underscore runs, so two
@@ -2057,7 +2065,7 @@ def test_build_input_fields_keeps_underscore_edge_operator_bags_distinct():
     triples = _build_input_fields(UnderscoreEdgeFilter)
     by_attr = {python_attr: annotation for python_attr, annotation, _kwargs in triples}
 
-    def _bag(attr: str):
+    def _bag(attr: str) -> type:
         return next(arg for arg in get_args(by_attr[attr]) if arg is not type(None))
 
     bag_plain = _bag("price")
@@ -2086,7 +2094,7 @@ def test_build_input_fields_keeps_underscore_edge_operator_bags_distinct():
 
 
 @pytest.mark.django_db
-def test_range_input_type_name_preserves_leading_underscore_run_in_field_name():
+def test_range_input_type_name_preserves_leading_underscore_run_in_field_name() -> None:
     """Range sub-input names keep ``_price`` distinct from ``price``."""
 
     class LeadingEdgeRangeFilter(FilterSet):
@@ -2127,7 +2135,7 @@ def test_range_input_type_name_preserves_leading_underscore_run_in_field_name():
 # ---------------------------------------------------------------------------
 
 
-def test_clear_filter_input_namespace_tolerates_unimportable_submodules():
+def test_clear_filter_input_namespace_tolerates_unimportable_submodules() -> None:
     """Both submodule lookups on the clear path are best-effort: skip, never raise.
 
     The heavy clear reaches ``FilterArgumentsFactory`` and ``FilterSet``
@@ -2149,7 +2157,7 @@ def test_clear_filter_input_namespace_tolerates_unimportable_submodules():
 # ---------------------------------------------------------------------------
 
 
-def test_iter_filterset_subclasses_dedupes_diamond_inheritance():
+def test_iter_filterset_subclasses_dedupes_diamond_inheritance() -> None:
     """A diamond hierarchy surfaces each subclass once (the dedup `continue`)."""
 
     class A(FilterSet):
@@ -2178,7 +2186,7 @@ def test_iter_filterset_subclasses_dedupes_diamond_inheritance():
 
 
 @pytest.mark.django_db
-def test_relay_relation_isnull_generates_boolean_input_not_globalid_list():
+def test_relay_relation_isnull_generates_boolean_input_not_globalid_list() -> None:
     """A framework-owned Relay-RELATION ``isnull`` lookup generates a Boolean input.
 
     An ``isnull`` lookup on a relation whose target is a Relay node

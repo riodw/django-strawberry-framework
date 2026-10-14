@@ -23,6 +23,7 @@ the fresh-account path; no test hand-rolls a ``User``.
 import json
 import logging
 from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING
 
 import pytest
 import strawberry
@@ -51,6 +52,9 @@ from django_strawberry_framework.optimizer import DjangoOptimizerExtension
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing import AsyncTestClient
 from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
+
+if TYPE_CHECKING:
+    from django.test.client import _MonkeyPatchedWSGIResponse
 
 # A password that passes all four fakeshop ``AUTH_PASSWORD_VALIDATORS`` and is
 # unrelated to any seeded username (the similarity validator must not bite).
@@ -123,7 +127,7 @@ def _login(client: Client, username: str, password: str) -> JSONObject:
 
 
 @pytest.mark.django_db
-def test_login_happy_path_sets_session_and_me_sees_the_user():
+def test_login_happy_path_sets_session_and_me_sees_the_user() -> None:
     """A seeded user logs in: payload node + session cookie + a follow-up ``me``."""
     create_users(1)
     client = Client()
@@ -136,7 +140,7 @@ def test_login_happy_path_sets_session_and_me_sees_the_user():
 
 
 @pytest.mark.django_db
-def test_login_anonymous_to_auth_cycles_key_preserves_anon_data_and_pins_backend():
+def test_login_anonymous_to_auth_cycles_key_preserves_anon_data_and_pins_backend() -> None:
     """Rotation branch 1 (Django HTTP): anonymous->auth cycles the key, keeps anon data.
 
     ``BACKEND_SESSION_KEY`` holds the exact authenticating backend
@@ -157,7 +161,7 @@ def test_login_anonymous_to_auth_cycles_key_preserves_anon_data_and_pins_backend
 
 
 @pytest.mark.django_db
-def test_login_as_different_user_flushes_old_session_and_data():
+def test_login_as_different_user_flushes_old_session_and_data() -> None:
     """Rotation branch 2 (Django HTTP): a different user flushes old data + new key."""
     create_users(1)
     client = Client()
@@ -173,7 +177,7 @@ def test_login_as_different_user_flushes_old_session_and_data():
 
 
 @pytest.mark.django_db
-def test_relogin_same_user_matching_hash_retains_the_session_key():
+def test_relogin_same_user_matching_hash_retains_the_session_key() -> None:
     """Rotation branch 3 (Django HTTP): same user + matching auth hash keeps the key."""
     create_users(1)
     client = Client()
@@ -184,7 +188,7 @@ def test_relogin_same_user_matching_hash_retains_the_session_key():
 
 
 @pytest.mark.django_db
-def test_relogin_same_user_mismatched_hash_flushes_and_replaces():
+def test_relogin_same_user_mismatched_hash_flushes_and_replaces() -> None:
     """Rotation branch 4 (Django HTTP): same user + mismatched auth hash flush+replace."""
     create_users(1)
     client = Client()
@@ -198,7 +202,7 @@ def test_relogin_same_user_mismatched_hash_flushes_and_replaces():
 
 
 @pytest.mark.django_db
-def test_wrong_password_and_unknown_username_return_identical_envelope():
+def test_wrong_password_and_unknown_username_return_identical_envelope() -> None:
     """The enumeration guard: both failures are the byte-identical non-field envelope."""
     create_users(1)
     wrong_password = _login(Client(), "staff_1", "not-the-password")
@@ -217,7 +221,7 @@ def test_wrong_password_and_unknown_username_return_identical_envelope():
 
 
 @pytest.mark.django_db
-def test_inactive_user_gets_the_same_envelope():
+def test_inactive_user_gets_the_same_envelope() -> None:
     """``ModelBackend`` returns ``None`` for ``is_active=False`` - same envelope."""
     create_users(1)
     user = User.objects.get(username="regular_1")
@@ -303,7 +307,7 @@ class RecordingBackend:
 
 
 @pytest.mark.django_db
-def test_backend_raising_permission_denied_returns_the_same_envelope():
+def test_backend_raising_permission_denied_returns_the_same_envelope() -> None:
     """A backend refusing with ``PermissionDenied`` yields the same undifferentiated envelope.
 
     The credentials are VALID for the ``ModelBackend`` listed second, so the only
@@ -331,7 +335,7 @@ def test_backend_raising_permission_denied_returns_the_same_envelope():
 
 
 @pytest.mark.django_db
-def test_backend_order_first_success_wins_model_backend_first():
+def test_backend_order_first_success_wins_model_backend_first() -> None:
     """The first compatible backend wins; ``BACKEND_SESSION_KEY`` is that exact backend."""
     create_users(1)
 
@@ -347,7 +351,7 @@ def test_backend_order_first_success_wins_model_backend_first():
 
 
 @pytest.mark.django_db
-def test_backend_order_first_success_wins_custom_backend_first():
+def test_backend_order_first_success_wins_custom_backend_first() -> None:
     """Reversing the backend list persists the custom backend path on the session."""
     create_users(1)
 
@@ -362,7 +366,7 @@ def test_backend_order_first_success_wins_custom_backend_first():
 
 
 @pytest.mark.django_db
-def test_custom_backend_authenticating_inactive_user_is_honored():
+def test_custom_backend_authenticating_inactive_user_is_honored() -> None:
     """A custom backend may authenticate an inactive user; the framework adds no ``is_active`` rule.
 
     The shipped ``ModelBackend`` refusal of inactive users is
@@ -383,7 +387,7 @@ def test_custom_backend_authenticating_inactive_user_is_honored():
 
 @pytest.mark.django_db
 @override_settings(**_ERROR_POLICY_PASS_THROUGH)
-def test_login_backend_crash_propagates_and_leaves_session_untouched():
+def test_login_backend_crash_propagates_and_leaves_session_untouched() -> None:
     """A backend raising a non-``PermissionDenied`` error is an execution error, not a login."""
     create_users(1)
 
@@ -421,7 +425,7 @@ def test_login_backend_crash_propagates_and_leaves_session_untouched():
         "unicode",
     ],
 )
-def test_storable_weird_credentials_reach_the_backend_unchanged(weird: str):
+def test_storable_weird_credentials_reach_the_backend_unchanged(weird: str) -> None:
     """Storable weird strings are passed to ``authenticate`` verbatim (no trim/normalize/truncate)."""
     create_users(1)
     RecordingBackend.seen = []
@@ -435,7 +439,7 @@ def test_storable_weird_credentials_reach_the_backend_unchanged(weird: str):
 @pytest.mark.django_db
 def test_login_password_never_appears_in_logs_or_error_text(
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     """A wrong-password login never leaks the submitted password into logs or error text."""
     create_users(1)
     secret = "sup3r-secret-verboten-42"
@@ -447,7 +451,7 @@ def test_login_password_never_appears_in_logs_or_error_text(
 
 
 @pytest.mark.django_db
-def test_logout_round_trip_and_anonymous_logout():
+def test_logout_round_trip_and_anonymous_logout() -> None:
     """Logout ends authenticated and anonymous sessions; ``ok`` reports actor state."""
     create_users(1)
     client = Client()
@@ -473,7 +477,7 @@ def test_logout_round_trip_and_anonymous_logout():
 
 
 @pytest.mark.django_db
-def test_register_login_me_logout_round_trip_and_hashed_storage():
+def test_register_login_me_logout_round_trip_and_hashed_storage() -> None:
     """The full fresh-account flow; the stored password is hashed, never the raw string."""
     create_users(1)
     client = Client()
@@ -503,7 +507,7 @@ def test_register_login_me_logout_round_trip_and_hashed_storage():
 
 
 @pytest.mark.django_db
-def test_register_hashes_before_full_clean_so_a_long_password_persists():
+def test_register_hashes_before_full_clean_so_a_long_password_persists() -> None:
     """Hashing precedes ``full_clean``: a >128-char password stores as a hash, not a field error.
 
     The ``password`` column is ``max_length=128``. Assigning the raw value before
@@ -525,7 +529,7 @@ def test_register_hashes_before_full_clean_so_a_long_password_persists():
 
 
 @pytest.mark.django_db
-def test_duplicate_username_register_envelope_keys_to_username():
+def test_duplicate_username_register_envelope_keys_to_username() -> None:
     """The model ``full_clean()`` unique check surfaces on the ``USERNAME_FIELD`` key."""
     create_users(1)
     payload = _graphql_data(
@@ -540,7 +544,7 @@ def test_duplicate_username_register_envelope_keys_to_username():
 
 
 @pytest.mark.django_db
-def test_weak_password_register_envelope_keys_to_password_not_all():
+def test_weak_password_register_envelope_keys_to_password_not_all() -> None:
     """Every failing validator's message lands under the single ``password`` key.
 
     ``validate_password`` raises a LIST-style ``ValidationError`` the generic
@@ -568,6 +572,8 @@ def test_weak_password_register_envelope_keys_to_password_not_all():
 # ``leaf.code`` walk still sees only scalar leaves - pinned here so the manual
 # walk's reliance on that upstream normalization is explicit (hunt 0.0.15).
 class DictFormPasswordValidator:
+    """A password validator that fails with Django's dict-form ``ValidationError``."""
+
     def validate(self, _password: str, _user: User | None = None) -> None:
         from django.core.exceptions import ValidationError
 
@@ -578,7 +584,7 @@ class DictFormPasswordValidator:
 @override_settings(
     AUTH_PASSWORD_VALIDATORS=[{"NAME": "test_auth_api.DictFormPasswordValidator"}],
 )
-def test_dict_form_validator_error_still_keys_to_password_not_a_crash():
+def test_dict_form_validator_error_still_keys_to_password_not_a_crash() -> None:
     """A dict-form validator ``ValidationError`` still yields the password-keyed envelope.
 
     ``validate_password`` wraps every validator-raised ``ValidationError`` in a
@@ -601,7 +607,7 @@ def test_dict_form_validator_error_still_keys_to_password_not_a_crash():
 
 
 @pytest.mark.django_db
-def test_register_decode_failure_returns_the_field_keyed_envelope():
+def test_register_decode_failure_returns_the_field_keyed_envelope() -> None:
     """A register DECODE failure (pre-write) rides the same field-keyed envelope.
 
     An unpaired-surrogate username is rejected by the shared decode walk before
@@ -622,7 +628,7 @@ def test_register_decode_failure_returns_the_field_keyed_envelope():
 
 
 @pytest.mark.django_db
-def test_password_similar_to_username_is_rejected_with_user_context():
+def test_password_similar_to_username_is_rejected_with_user_context() -> None:
     """``validate_password(password, user)`` gets the constructed instance (Decision 6).
 
     The deliberate improvement over upstream's user-less call:
@@ -650,7 +656,7 @@ _SURROGATE = "un\ud800storable"
 
 
 @pytest.mark.django_db
-def test_login_surrogate_username_is_the_undifferentiated_envelope_not_a_crash():
+def test_login_surrogate_username_is_the_undifferentiated_envelope_not_a_crash() -> None:
     """A surrogate username authenticates no one: the byte-identical failed-login envelope."""
     create_users(1)
     surrogate = _login(Client(), _SURROGATE, TEST_USER_PASSWORD)
@@ -665,7 +671,7 @@ def test_login_surrogate_username_is_the_undifferentiated_envelope_not_a_crash()
 
 
 @pytest.mark.django_db
-def test_login_surrogate_password_is_the_undifferentiated_envelope_not_a_crash():
+def test_login_surrogate_password_is_the_undifferentiated_envelope_not_a_crash() -> None:
     """A surrogate password (crashes the hasher if unguarded) is the same envelope."""
     create_users(1)
     surrogate = _login(Client(), "staff_1", _SURROGATE)
@@ -676,8 +682,8 @@ def test_login_surrogate_password_is_the_undifferentiated_envelope_not_a_crash()
 
 
 @pytest.mark.django_db
-def test_register_surrogate_password_keys_to_password_not_a_crash():
-    """A surrogate password bypasses the decode preflight (the register exclusion seam); key it to ``password``.
+def test_register_surrogate_password_keys_to_password_not_a_crash() -> None:
+    """A surrogate password bypasses the decode preflight and is keyed to ``password``.
 
     ``password`` rides the register exclusion seam, so it skips the shared decode's
     scalar unicode preflight; a strong-but-surrogate password passes
@@ -703,7 +709,7 @@ def test_register_surrogate_password_keys_to_password_not_a_crash():
 
 
 @pytest.mark.django_db
-def test_non_string_login_username_fails_validation_before_the_resolver():
+def test_non_string_login_username_fails_validation_before_the_resolver() -> None:
     """``login(username: 123)`` is refused by GraphQL validation; nobody is authenticated.
 
     ``username`` is a ``String!``, so an integer literal fails document validation and
@@ -727,7 +733,7 @@ def test_non_string_login_username_fails_validation_before_the_resolver():
 
 
 @pytest.mark.django_db
-def test_sessionless_login_refuses_with_the_error_naming_both_middleware_stacks():
+def test_sessionless_login_refuses_with_the_error_naming_both_middleware_stacks() -> None:
     """A deployment with no session stack gets the package's actionable refusal, not an ``AttributeError``.
 
     ``login`` probes for the session BEFORE any session mutation, so a stack missing
@@ -757,7 +763,7 @@ def test_sessionless_login_refuses_with_the_error_naming_both_middleware_stacks(
 
 
 @pytest.mark.django_db
-def test_sessionless_logout_refuses_with_the_error_naming_both_middleware_stacks():
+def test_sessionless_logout_refuses_with_the_error_naming_both_middleware_stacks() -> None:
     """``logout`` runs the same probe, for its rejection side effect alone.
 
     The transport prologue is shared: logout discards the session object the probe
@@ -780,7 +786,7 @@ def test_sessionless_logout_refuses_with_the_error_naming_both_middleware_stacks
 
 
 @pytest.mark.django_db
-def test_anonymous_me_is_null_not_an_error():
+def test_anonymous_me_is_null_not_an_error() -> None:
     """An anonymous session is an expected state: ``me`` is ``null`` (Decision 7)."""
     create_users(1)
     assert _graphql_data(_ME)["me"] is None
@@ -789,7 +795,7 @@ def test_anonymous_me_is_null_not_an_error():
 @pytest.mark.django_db
 def test_complete_reload_preserves_the_auth_surface(
     reload_all_project_app_schemas: Callable[[], None],
-):
+) -> None:
     """A ``registry.clear()`` + full reload rebuilds ``login`` / ``logout`` / ``me``.
 
     Pins the ``"apps.accounts.schema"`` ``_PROJECT_APP_SCHEMA_MODULES`` row:
@@ -818,7 +824,7 @@ def _introspect_type(name: str) -> JSONObject:
 
 
 @pytest.mark.django_db
-def test_generated_auth_type_shapes():
+def test_generated_auth_type_shapes() -> None:
     """SDL shapes as pinned in the spec's User-facing API section.
 
     ``node`` is the FAKESHOP-SPECIFIC slot name (the example ``UserType``
@@ -888,7 +894,7 @@ def test_generated_auth_type_shapes():
 
 
 @pytest.mark.django_db
-def test_login_and_logout_face_djangos_real_csrf_check():
+def test_login_and_logout_face_djangos_real_csrf_check() -> None:
     """``login`` / ``logout`` under ``Client(enforce_csrf_checks=True)``.
 
     The deployment guidance tells consumers to exercise the session-auth surface
@@ -909,7 +915,7 @@ def test_login_and_logout_face_djangos_real_csrf_check():
         query: str,
         variables: Mapping[str, object] | None = None,
         **extra: Unpack[_CsrfHeader],
-    ):
+    ) -> "_MonkeyPatchedWSGIResponse":
         return client.post(
             "/graphql/",
             data=json.dumps({"query": query, "variables": variables or {}}),
@@ -982,7 +988,7 @@ async def _post_async_shipped(
 
 
 @pytest.mark.django_db
-def test_user_type_omits_last_login_by_default():
+def test_user_type_omits_last_login_by_default() -> None:
     """The shipped ``UserType`` does not expose ``lastLogin``."""
     create_users(1)
     payload = graphql_payload("{ me { lastLogin } }")
@@ -993,7 +999,7 @@ def test_user_type_omits_last_login_by_default():
 @pytest.mark.django_db
 def test_login_payload_exposes_the_post_login_last_login(
     project_schema_override: Callable[[], None],
-):
+) -> None:
     """Under the last-login flag, the payload object carries the post-login ``lastLogin``.
 
     A user seeded with ``last_login=None`` whose login response's nested
@@ -1017,7 +1023,7 @@ def test_login_payload_exposes_the_post_login_last_login(
 
 
 @pytest.mark.django_db
-def test_logout_without_authentication_middleware_flushes_session_and_reports_anonymous():
+def test_logout_without_authentication_middleware_flushes_session_and_reports_anonymous() -> None:
     """A session-only request (no ``AuthenticationMiddleware``) still receives logout teardown."""
     create_users(1)
     with override_settings(**_NO_AUTHENTICATION_MIDDLEWARE):
@@ -1031,7 +1037,7 @@ def test_logout_without_authentication_middleware_flushes_session_and_reports_an
 
 
 @pytest.mark.django_db
-def test_me_without_authentication_middleware_is_null_not_a_crash():
+def test_me_without_authentication_middleware_is_null_not_a_crash() -> None:
     """An absent ``request.user`` (no ``AuthenticationMiddleware``) resolves ``me`` to ``null``."""
     create_users(1)
     with override_settings(**_NO_AUTHENTICATION_MIDDLEWARE):
@@ -1039,7 +1045,7 @@ def test_me_without_authentication_middleware_is_null_not_a_crash():
 
 
 @pytest.mark.django_db
-def test_login_and_me_skip_user_type_visibility(monkeypatch: pytest.MonkeyPatch):
+def test_login_and_me_skip_user_type_visibility(monkeypatch: pytest.MonkeyPatch) -> None:
     """``login`` / ``me`` return the session actor even when ``UserType.get_queryset`` hides everyone."""
     create_users(1)
     from apps.accounts.schema import UserType
@@ -1062,7 +1068,7 @@ def test_login_and_me_skip_user_type_visibility(monkeypatch: pytest.MonkeyPatch)
 
 @pytest.mark.django_db
 @override_settings(**_ERROR_POLICY_PASS_THROUGH)
-def test_login_signal_failure_compensates_and_leaves_the_caller_anonymous():
+def test_login_signal_failure_compensates_and_leaves_the_caller_anonymous() -> None:
     """A raising ``user_logged_in`` receiver is an execution error; no session is established."""
     create_users(1)
     client = Client()
@@ -1089,7 +1095,7 @@ def test_login_signal_failure_compensates_and_leaves_the_caller_anonymous():
 
 @pytest.mark.django_db
 @override_settings(**_ERROR_POLICY_PASS_THROUGH)
-def test_logout_signal_failure_is_an_error_and_keeps_the_durable_session():
+def test_logout_signal_failure_is_an_error_and_keeps_the_durable_session() -> None:
     """A raising ``user_logged_out`` receiver is not ``ok``; the durable session survives.
 
     The receiver fires before ``flush``, so the next request on the same cookie
@@ -1118,7 +1124,7 @@ def test_logout_signal_failure_is_an_error_and_keeps_the_durable_session():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_login_and_logout_round_trip_the_session():
+async def test_async_login_and_logout_round_trip_the_session() -> None:
     """``login`` over ``/graphql-async/`` establishes the session; ``logout`` ends it."""
     await sync_to_async(create_users)(1)
     client = AsyncClient()
@@ -1141,7 +1147,7 @@ async def test_async_login_and_logout_round_trip_the_session():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_register_stores_only_the_hashed_password():
+async def test_async_register_stores_only_the_hashed_password() -> None:
     """``register`` over ``/graphql-async/`` stores the hash, never the raw password."""
     await sync_to_async(create_users)(1)
     payload = await _post_async_shipped(
@@ -1166,11 +1172,11 @@ async def test_async_register_stores_only_the_hashed_password():
 @pytest.mark.django_db(transaction=True)
 async def test_async_login_payload_exposes_the_post_login_last_login(
     project_schema_override: Callable[[], None],
-):
+) -> None:
     """The async colour of the post-login ``lastLogin`` payload object."""
     await sync_to_async(create_users)(1)
 
-    def _clear_last_login():
+    def _clear_last_login() -> None:
         User.objects.filter(username="staff_1").update(last_login=None)
 
     await sync_to_async(_clear_last_login)()
@@ -1187,7 +1193,7 @@ async def test_async_login_payload_exposes_the_post_login_last_login(
     assert node["lastLogin"] is not None
 
 
-def _unplanned_auth_holder_schema():
+def _unplanned_auth_holder_schema() -> DjangoSchema:
     """Throwaway login/me schema whose user type exposes ``groups``, optimizer raise.
 
     Shipped ``UserType`` has no relation field, and strictness is a schema
@@ -1261,7 +1267,7 @@ def _post_auth_holder(
         clear_url_caches()
 
 
-def _seed_staff_in_group():
+def _seed_staff_in_group() -> User:
     """Seed users, put ``staff_1`` in one named group, and return that user."""
     create_users(1)
     user = User.objects.get(username="staff_1")
@@ -1270,7 +1276,7 @@ def _seed_staff_in_group():
 
 
 @pytest.mark.django_db
-def test_an_unplanned_relation_under_me_is_strictness_visible_over_http():
+def test_an_unplanned_relation_under_me_is_strictness_visible_over_http() -> None:
     """``me`` returns the session actor raw, so a relation under it is unplanned.
 
     Selecting ``groupsConnection`` under ``me`` on a holder whose optimizer is
@@ -1293,7 +1299,7 @@ def test_an_unplanned_relation_under_me_is_strictness_visible_over_http():
 
 
 @pytest.mark.django_db
-def test_an_unplanned_relation_under_login_node_is_strictness_visible_over_http():
+def test_an_unplanned_relation_under_login_node_is_strictness_visible_over_http() -> None:
     """``login``'s payload object is a raw instance, so a relation under it is unplanned."""
     _seed_staff_in_group()
     schema = _unplanned_auth_holder_schema()

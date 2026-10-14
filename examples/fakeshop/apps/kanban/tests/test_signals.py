@@ -57,7 +57,7 @@ def _make_card(
 
 
 @pytest.mark.django_db
-def test_done_card_requires_spec_on_save():
+def test_done_card_requires_spec_on_save() -> None:
     # ``wip`` so ``wip -> done`` is a legal transition and the done-content guard
     # (not the state-machine guard) is what fires.
     card = _make_card(number=1, title="No spec", status="wip")
@@ -69,7 +69,7 @@ def test_done_card_requires_spec_on_save():
 
 
 @pytest.mark.django_db
-def test_done_card_requires_glossary_link_on_save():
+def test_done_card_requires_glossary_link_on_save() -> None:
     card = _make_card(number=1, title="No glossary link", status="wip")
     _spec_for(card)
 
@@ -80,7 +80,7 @@ def test_done_card_requires_glossary_link_on_save():
 
 
 @pytest.mark.django_db
-def test_done_card_last_glossary_link_cannot_be_deleted_or_moved():
+def test_done_card_last_glossary_link_cannot_be_deleted_or_moved() -> None:
     card = _make_card(number=1, title="Protected glossary", status="done")
     other_card = _make_card(number=2, title="Other card")
     link = card.glossary_links.get()
@@ -97,7 +97,7 @@ def test_done_card_last_glossary_link_cannot_be_deleted_or_moved():
 
 
 @pytest.mark.django_db
-def test_done_card_spec_cannot_be_deleted():
+def test_done_card_spec_cannot_be_deleted() -> None:
     card = _make_card(number=1, title="Protected spec", status="done")
 
     with pytest.raises(ValidationError, match="Cannot delete"):
@@ -110,7 +110,7 @@ def test_done_card_spec_cannot_be_deleted():
 
 
 @pytest.mark.django_db
-def test_dependency_reference_surfaces_as_dependency_card_and_back():
+def test_dependency_reference_surfaces_as_dependency_card_and_back() -> None:
     target = _make_card(number=1, title="Target", status="done")
     source = _make_card(number=2, title="Source")
 
@@ -128,7 +128,7 @@ def test_dependency_reference_surfaces_as_dependency_card_and_back():
 
 
 @pytest.mark.django_db
-def test_add_dependency_service_creates_dependency_reference():
+def test_add_dependency_service_creates_dependency_reference() -> None:
     from apps.kanban import services
 
     target = _make_card(number=1, title="Target", status="done")
@@ -143,7 +143,7 @@ def test_add_dependency_service_creates_dependency_reference():
 
 
 @pytest.mark.django_db
-def test_related_card_reference_is_not_a_dependency_edge():
+def test_related_card_reference_is_not_a_dependency_edge() -> None:
     source = _make_card(number=1, title="Source")
     target = _make_card(number=2, title="Target")
 
@@ -157,7 +157,7 @@ def test_related_card_reference_is_not_a_dependency_edge():
 
 
 @pytest.mark.django_db
-def test_dependency_cycle_is_rejected_on_reference_save():
+def test_dependency_cycle_is_rejected_on_reference_save() -> None:
     first = _make_card(number=1, title="First")
     second = _make_card(number=2, title="Second")
     dependency_kind = kf.make_card_reference_kind("dependency")
@@ -177,7 +177,7 @@ def test_dependency_cycle_is_rejected_on_reference_save():
 
 
 @pytest.mark.django_db
-def test_blocked_by_reference_kind_derives_blocked_state():
+def test_blocked_by_reference_kind_derives_blocked_state() -> None:
     dependency = _make_card(number=1, title="Dependency")
     dependent = _make_card(number=2, title="Dependent")
 
@@ -198,7 +198,7 @@ def test_blocked_by_reference_kind_derives_blocked_state():
 
 
 @pytest.mark.django_db
-def test_dependency_edge_must_point_to_an_earlier_card():
+def test_dependency_edge_must_point_to_an_earlier_card() -> None:
     source = _make_card(number=1, title="Source")
     target = _make_card(number=2, title="Target")
 
@@ -211,7 +211,7 @@ def test_dependency_edge_must_point_to_an_earlier_card():
 
 
 @pytest.mark.django_db
-def test_direct_number_edit_on_existing_card_raises():
+def test_direct_number_edit_on_existing_card_raises() -> None:
     """Moving an existing card via save() is rejected; the service is the writer."""
     card = _make_card(number=1, title="First")
     _make_card(number=2, title="Second")
@@ -226,7 +226,7 @@ def test_direct_number_edit_on_existing_card_raises():
 
 
 @pytest.mark.django_db
-def test_direct_number_edit_raises_on_full_save_too():
+def test_direct_number_edit_raises_on_full_save_too() -> None:
     """The guard fires on a full save() (no update_fields) as well."""
     card = _make_card(number=1, title="First")
     _make_card(number=2, title="Second")
@@ -238,7 +238,7 @@ def test_direct_number_edit_raises_on_full_save_too():
 
 
 @pytest.mark.django_db
-def test_card_insert_shifts_existing_numbers():
+def test_card_insert_shifts_existing_numbers() -> None:
     first = _make_card(number=1, title="First")
     second = _make_card(number=2, title="Second")
 
@@ -252,7 +252,7 @@ def test_card_insert_shifts_existing_numbers():
 
 
 @pytest.mark.django_db
-def test_card_insert_rejects_number_gap():
+def test_card_insert_rejects_number_gap() -> None:
     _make_card(number=1, title="First")
     _make_card(number=2, title="Second")
 
@@ -261,7 +261,7 @@ def test_card_insert_rejects_number_gap():
 
 
 @pytest.mark.django_db
-def test_sparse_source_card_numbers_can_be_materialized_directly():
+def test_sparse_source_card_numbers_can_be_materialized_directly() -> None:
     first = _make_card(number=21, title="Source row 21")
     second = _make_card(number=24, title="Source row 24")
 
@@ -270,7 +270,7 @@ def test_sparse_source_card_numbers_can_be_materialized_directly():
 
 
 @pytest.mark.django_db
-def test_unchanged_number_save_is_allowed():
+def test_unchanged_number_save_is_allowed() -> None:
     """A save() that does not change the stored number passes the move guard."""
     card = _make_card(number=1, title="First")
 
@@ -281,7 +281,7 @@ def test_unchanged_number_save_is_allowed():
 
 
 @pytest.mark.django_db
-def test_card_delete_compacts_following_numbers():
+def test_card_delete_compacts_following_numbers() -> None:
     """The post_delete receiver delegates gap-compaction to the service."""
     first = _make_card(number=1, title="First")
     second = _make_card(number=2, title="Second")
@@ -296,7 +296,7 @@ def test_card_delete_compacts_following_numbers():
 
 
 @pytest.mark.django_db
-def test_card_delete_compacts_multiple_following_numbers():
+def test_card_delete_compacts_multiple_following_numbers() -> None:
     """Deleting a low card shifts every higher card down by one (multi-row gap)."""
     cards = [
         _make_card(number=index, title=f"Row {index}")
@@ -326,7 +326,7 @@ def test_card_delete_compacts_multiple_following_numbers():
 
 
 @pytest.mark.django_db
-def test_dependency_reference_retarget_to_valid_card_is_allowed():
+def test_dependency_reference_retarget_to_valid_card_is_allowed() -> None:
     target_a = _make_card(number=1, title="Target A")
     target_b = _make_card(number=2, title="Target B")
     source = _make_card(number=3, title="Source")
@@ -346,7 +346,7 @@ def test_dependency_reference_retarget_to_valid_card_is_allowed():
 
 
 @pytest.mark.django_db
-def test_reference_kind_change_to_dependency_creating_cycle_is_rejected():
+def test_reference_kind_change_to_dependency_creating_cycle_is_rejected() -> None:
     first = _make_card(number=1, title="First")
     second = _make_card(number=2, title="Second")
     dependency_kind = kf.make_card_reference_kind("dependency")
@@ -370,7 +370,7 @@ def test_reference_kind_change_to_dependency_creating_cycle_is_rejected():
 
 
 @pytest.mark.django_db
-def test_updating_dependency_reference_in_place_is_allowed():
+def test_updating_dependency_reference_in_place_is_allowed() -> None:
     """The edge under edit is excluded from its own cycle search (exclude_reference_id)."""
     first = _make_card(number=1, title="First")
     second = _make_card(number=2, title="Second")
@@ -393,7 +393,7 @@ def test_updating_dependency_reference_in_place_is_allowed():
 
 
 @pytest.mark.django_db
-def test_done_card_spec_cannot_be_reassigned():
+def test_done_card_spec_cannot_be_reassigned() -> None:
     done_card = _make_card(number=1, title="Shipped card", status="done")
     other_card = _make_card(number=2, title="Other card")
     spec = done_card.spec
@@ -404,7 +404,7 @@ def test_done_card_spec_cannot_be_reassigned():
 
 
 @pytest.mark.django_db
-def test_done_card_glossary_link_can_be_reassigned_when_another_remains():
+def test_done_card_glossary_link_can_be_reassigned_when_another_remains() -> None:
     """Moving one glossary link off a done card is allowed while a second stays."""
     done_card = _make_card(number=1, title="Two-link card", status="done")
     other_card = _make_card(number=2, title="Recipient card")
@@ -424,7 +424,7 @@ def test_done_card_glossary_link_can_be_reassigned_when_another_remains():
 
 
 @pytest.mark.django_db
-def test_changed_files_add_creates_cardpathlink_uuid_side_row():
+def test_changed_files_add_creates_cardpathlink_uuid_side_row() -> None:
     # A raw M2M .add() inserts the through row with bulk_create (no post_save),
     # so the UUID side-row is created by the m2m_changed post_add receiver.
     card = _make_card(number=1, title="Add-path card")

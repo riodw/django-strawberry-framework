@@ -53,7 +53,7 @@ def _isolate_state() -> Iterator[None]:
 
 
 @pytest.mark.django_db
-def test_filter_arguments_factory_visits_every_reachable_filterset():
+def test_filter_arguments_factory_visits_every_reachable_filterset() -> None:
     """A `Branch -> Shelf` `RelatedFilter` -> both classes appear in `input_object_types`."""
 
     class ShelfFilterA(FilterSet):
@@ -69,13 +69,13 @@ def test_filter_arguments_factory_visits_every_reachable_filterset():
             fields = {"name": ["exact"]}
 
     factory = FilterArgumentsFactory(BranchFilterA)
-    factory.arguments  # trigger build
+    _ = factory.arguments  # trigger build
     assert "BranchFilterAInputType" in FilterArgumentsFactory.input_object_types
     assert "ShelfFilterAInputType" in FilterArgumentsFactory.input_object_types
 
 
 @pytest.mark.django_db
-def test_filter_arguments_factory_bfs_handles_cycle():
+def test_filter_arguments_factory_bfs_handles_cycle() -> None:
     """`A -> B -> A` mutual `RelatedFilter`s do not blow the BFS stack."""
     # Use the package's `tests.filters.fixtures.filtersets` self-referential
     # fixture: the cookbook-style cycle path is exercised by
@@ -85,12 +85,12 @@ def test_filter_arguments_factory_bfs_handles_cycle():
     from tests.filters.fixtures.filtersets import SelfReferentialBranchFilter
 
     factory = FilterArgumentsFactory(SelfReferentialBranchFilter)
-    factory.arguments  # must not recurse forever
+    _ = factory.arguments  # must not recurse forever
     assert "SelfReferentialBranchFilterInputType" in FilterArgumentsFactory.input_object_types
 
 
 @pytest.mark.django_db
-def test_filter_arguments_factory_dedupes_target_enqueued_twice():
+def test_filter_arguments_factory_dedupes_target_enqueued_twice() -> None:
     """A diamond ``A -> {B, C} -> D`` enqueues ``D`` twice; the BFS dedups it.
 
     Unlike the ``A -> B -> A`` cycle (caught by the enqueue-time
@@ -128,7 +128,7 @@ def test_filter_arguments_factory_dedupes_target_enqueued_twice():
             fields = {"name": ["exact"]}
 
     factory = FilterArgumentsFactory(AFilter)
-    factory.arguments  # BFS: D is enqueued by both B and C, deduped at pop.
+    _ = factory.arguments  # BFS: D is enqueued by both B and C, deduped at pop.
     for name in (
         "AFilterInputType",
         "BFilterInputType",
@@ -139,7 +139,7 @@ def test_filter_arguments_factory_dedupes_target_enqueued_twice():
 
 
 @pytest.mark.django_db
-def test_filter_arguments_factory_collision_raises_on_distinct_class_with_same_name():
+def test_filter_arguments_factory_collision_raises_on_distinct_class_with_same_name() -> None:
     """Two distinct `FilterSet`s named `DupFilter` in different modules -> ConfigurationError."""
 
     class DupFilter(FilterSet):
@@ -148,7 +148,7 @@ def test_filter_arguments_factory_collision_raises_on_distinct_class_with_same_n
             fields = {"name": ["exact"]}
 
     factory = FilterArgumentsFactory(DupFilter)
-    factory.arguments  # build the first one
+    _ = factory.arguments  # build the first one
 
     # Synthesize a second class with the same `__name__`.
     DupFilter2 = type(
@@ -164,7 +164,7 @@ def test_filter_arguments_factory_collision_raises_on_distinct_class_with_same_n
     )
     factory2 = FilterArgumentsFactory(DupFilter2)
     with pytest.raises(ConfigurationError) as excinfo:
-        factory2.arguments
+        _ = factory2.arguments
     message = str(excinfo.value)
     assert "DupFilterInputType" in message
     # The shared BFS substrate keeps family-specific wording: the message
@@ -174,7 +174,7 @@ def test_filter_arguments_factory_collision_raises_on_distinct_class_with_same_n
 
 
 @pytest.mark.django_db
-def test_filter_arguments_factory_rejects_flattened_field_collision():
+def test_filter_arguments_factory_rejects_flattened_field_collision() -> None:
     """Two members whose paths flatten to one python attr must fail loud, not drop one.
 
     ``flatten_lookup_path`` maps a relation traversal ``branch__name`` and a
@@ -210,7 +210,7 @@ def test_filter_arguments_factory_rejects_flattened_field_collision():
     # must fail loud instead of silently dropping one.
     factory = FilterArgumentsFactory(ShelfFlattenCollide)
     with pytest.raises(ConfigurationError) as excinfo:
-        factory.arguments
+        _ = factory.arguments
     message = str(excinfo.value)
     assert "branch__name" in message
     assert "branch_name" in message
@@ -218,7 +218,7 @@ def test_filter_arguments_factory_rejects_flattened_field_collision():
 
 
 @pytest.mark.django_db
-def test_filter_arguments_factory_rejects_graphql_name_collision():
+def test_filter_arguments_factory_rejects_graphql_name_collision() -> None:
     """Distinct python attrs that camel-case alike must not share one GraphQL field."""
     from django_filters import CharFilter
 
@@ -235,7 +235,7 @@ def test_filter_arguments_factory_rejects_graphql_name_collision():
 
     factory = FilterArgumentsFactory(ShelfGraphqlCollide)
     with pytest.raises(ConfigurationError) as excinfo:
-        factory.arguments
+        _ = factory.arguments
     message = str(excinfo.value)
     assert "'foo_bar'" in message
     assert "'fooBar'" in message
@@ -243,7 +243,7 @@ def test_filter_arguments_factory_rejects_graphql_name_collision():
 
 
 @pytest.mark.django_db
-def test_filter_arguments_factory_idempotent_repeated_arguments():
+def test_filter_arguments_factory_idempotent_repeated_arguments() -> None:
     """Repeated reads of `.arguments` return the same input class object."""
 
     class IdempotentFilter(FilterSet):
@@ -258,7 +258,7 @@ def test_filter_arguments_factory_idempotent_repeated_arguments():
 
 
 @pytest.mark.django_db
-def test_filter_arguments_factory_input_shape_matches_runtime_filter_for_relay_target():
+def test_filter_arguments_factory_input_shape_matches_runtime_filter_for_relay_target() -> None:
     """A Relay-shaped M2M target -> input annotation forwards to the target's input class.
 
     The input shape is downstream of the resolved filter instance
@@ -316,7 +316,9 @@ def test_filter_arguments_factory_input_shape_matches_runtime_filter_for_relay_t
 
 
 @pytest.mark.django_db
-def test_filter_arguments_factory_input_shape_matches_runtime_filter_for_non_relay_target():
+def test_filter_arguments_factory_input_shape_matches_runtime_filter_for_non_relay_target() -> (
+    None
+):
     """A non-Relay target -> raw-pk runtime filters and a pk-typed input bag.
 
     ``Shelf`` is exposed by a non-Relay ``DjangoType``, so the ``shelf`` key filters by
@@ -354,7 +356,7 @@ def test_filter_arguments_factory_input_shape_matches_runtime_filter_for_non_rel
 
 
 @pytest.mark.django_db
-def test_an_in_lookup_is_not_replaced_by_a_csv_filter():
+def test_an_in_lookup_is_not_replaced_by_a_csv_filter() -> None:
     """The cookbook's ``replace_csv_filters`` rewrap is dropped per spec-027.
 
     `Meta.fields = {"name": ["in"]}` -> the resulting filter is the
@@ -379,7 +381,7 @@ def test_an_in_lookup_is_not_replaced_by_a_csv_filter():
 
 
 @pytest.mark.django_db
-def test_filter_fields_alias_resolves_on_class_meta():
+def test_filter_fields_alias_resolves_on_class_meta() -> None:
     """A declared ``Meta.filter_fields`` resolves to the FilterSet's fields."""
 
     class CategoryFilter(FilterSet):
@@ -390,7 +392,7 @@ def test_filter_fields_alias_resolves_on_class_meta():
     assert CategoryFilter._meta.fields == {"name": ["exact"]}
 
 
-def test_filter_arguments_factory_rejects_subclassing():
+def test_filter_arguments_factory_rejects_subclassing() -> None:
     """Subclassing is rejected at class-creation time (M-filters-3 / H-filters-3).
 
     The class-level ``input_object_types`` / ``_type_filterset_registry``
@@ -408,7 +410,7 @@ def test_filter_arguments_factory_rejects_subclassing():
 
 
 @pytest.mark.django_db
-def test_filter_arguments_factory_empty_filterset_emits_logic_fields():
+def test_filter_arguments_factory_empty_filterset_emits_logic_fields() -> None:
     """A FilterSet with empty fields still emits the and_/or_/not_ logic fields."""
 
     class EmptyFilter(FilterSet):
@@ -423,7 +425,7 @@ def test_filter_arguments_factory_empty_filterset_emits_logic_fields():
 
 
 @pytest.mark.django_db
-def test_filter_arguments_factory_skips_placeholder_related_filter_target():
+def test_filter_arguments_factory_skips_placeholder_related_filter_target() -> None:
     """A RelatedFilter(None, ...) placeholder is skipped during BFS traversal."""
 
     class BranchFilterPlaceholder(FilterSet):

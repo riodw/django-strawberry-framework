@@ -48,7 +48,7 @@ pytestmark = pytest.mark.usefixtures("isolate_global_registry")
 # ---------------------------------------------------------------------------
 
 
-def test_inputs_module_path_constant():
+def test_inputs_module_path_constant() -> None:
     """The hoisted constant matches the actual dotted path of ``inputs.py``."""
     assert INPUTS_MODULE_PATH == "django_strawberry_framework.orders.inputs"
 
@@ -58,7 +58,7 @@ def test_inputs_module_path_constant():
 # ---------------------------------------------------------------------------
 
 
-def test_input_type_name_for_returns_classname_inputtype():
+def test_input_type_name_for_returns_classname_inputtype() -> None:
     """The delegate flows through ``ClassBasedTypeNameMixin.type_name_for``."""
 
     class BookOrder(OrderSet):
@@ -72,7 +72,7 @@ def test_input_type_name_for_returns_classname_inputtype():
 # ---------------------------------------------------------------------------
 
 
-def test_ordering_enum_has_six_members():
+def test_ordering_enum_has_six_members() -> None:
     """All six members from spec-028 Decision 5 are present."""
     assert {m.name for m in Ordering} == {
         "ASC",
@@ -84,7 +84,7 @@ def test_ordering_enum_has_six_members():
     }
 
 
-def test_ordering_member_values_are_string_names():
+def test_ordering_member_values_are_string_names() -> None:
     """Members carry string values matching their names (spec-028 Decision 5)."""
     assert Ordering.ASC.value == "ASC"
     assert Ordering.DESC.value == "DESC"
@@ -94,7 +94,7 @@ def test_ordering_member_values_are_string_names():
     assert Ordering.DESC_NULLS_LAST.value == "DESC_NULLS_LAST"
 
 
-def test_ordering_is_ascending_classifies_all_six_members():
+def test_ordering_is_ascending_classifies_all_six_members() -> None:
     """``is_ascending`` is the single ASC/DESC discriminator (resolve + to-many Min/Max)."""
     assert Ordering.ASC.is_ascending is True
     assert Ordering.ASC_NULLS_FIRST.is_ascending is True
@@ -104,7 +104,7 @@ def test_ordering_is_ascending_classifies_all_six_members():
     assert Ordering.DESC_NULLS_LAST.is_ascending is False
 
 
-def test_ordering_resolve_asc_returns_orderby_with_no_nulls_clause():
+def test_ordering_resolve_asc_returns_orderby_with_no_nulls_clause() -> None:
     """Bare ``ASC`` leaves both ``nulls_first`` and ``nulls_last`` as ``None``."""
     expr = Ordering.ASC.resolve("name")
     assert isinstance(expr, OrderBy)
@@ -113,7 +113,7 @@ def test_ordering_resolve_asc_returns_orderby_with_no_nulls_clause():
     assert expr.nulls_last is None
 
 
-def test_ordering_resolve_desc_returns_orderby_with_descending_true():
+def test_ordering_resolve_desc_returns_orderby_with_descending_true() -> None:
     """Bare ``DESC`` produces ``descending=True`` with no nulls clause."""
     expr = Ordering.DESC.resolve("name")
     assert isinstance(expr, OrderBy)
@@ -122,7 +122,7 @@ def test_ordering_resolve_desc_returns_orderby_with_descending_true():
     assert expr.nulls_last is None
 
 
-def test_ordering_resolve_wraps_value_in_f_expression():
+def test_ordering_resolve_wraps_value_in_f_expression() -> None:
     """``resolve(value)`` produces ``F(value)``-backed expressions."""
     expr = Ordering.ASC.resolve("shelf__code")
     # ``OrderBy.expression`` holds the wrapped ``F("shelf__code")``.
@@ -151,7 +151,7 @@ def _materialization_cleanup() -> Iterator[None]:
 
 
 @pytest.mark.usefixtures("_materialization_cleanup")
-def test_materialize_input_class_writes_to_module_global():
+def test_materialize_input_class_writes_to_module_global() -> None:
     """Materialization pins the class in ``sys.modules[INPUTS_MODULE_PATH]``."""
 
     class Foo:
@@ -164,7 +164,7 @@ def test_materialize_input_class_writes_to_module_global():
 
 
 @pytest.mark.usefixtures("_materialization_cleanup")
-def test_materialize_input_class_is_idempotent_on_same_pair():
+def test_materialize_input_class_is_idempotent_on_same_pair() -> None:
     """Second call with the same ``(name, cls)`` short-circuits to no-op."""
 
     class Foo:
@@ -176,7 +176,7 @@ def test_materialize_input_class_is_idempotent_on_same_pair():
 
 
 @pytest.mark.usefixtures("_materialization_cleanup")
-def test_materialize_input_class_raises_on_collision():
+def test_materialize_input_class_raises_on_collision() -> None:
     """A second class under the same name raises ``ConfigurationError``."""
 
     class FooA:
@@ -198,7 +198,7 @@ def test_materialize_input_class_raises_on_collision():
 # ---------------------------------------------------------------------------
 
 
-def test_convert_order_field_to_input_annotation_returns_ordering_or_none():
+def test_convert_order_field_to_input_annotation_returns_ordering_or_none() -> None:
     """``Ordering | None`` regardless of the ``model_field`` argument."""
     from typing import get_args
 
@@ -224,7 +224,7 @@ def test_convert_order_field_to_input_annotation_returns_ordering_or_none():
 # ---------------------------------------------------------------------------
 
 
-def test_normalize_input_value_walks_nested_relatedorder_into_flat_field_paths():
+def test_normalize_input_value_walks_nested_relatedorder_into_flat_field_paths() -> None:
     """Nested ``RelatedOrder`` input produces ``shelf__code`` flat paths."""
     from apps.library.models import Book, Shelf
 
@@ -254,7 +254,7 @@ def test_normalize_input_value_walks_nested_relatedorder_into_flat_field_paths()
     assert flat == [("shelf__code", Ordering.ASC)]
 
 
-def test_normalize_input_value_passes_through_empty_list():
+def test_normalize_input_value_passes_through_empty_list() -> None:
     """An empty top-level list yields an empty flat list."""
     from apps.library.models import Book
 
@@ -267,11 +267,11 @@ def test_normalize_input_value_passes_through_empty_list():
             model = Book
             fields = ["title"]
 
-    OrderArgumentsFactory(BookOrderEmpty).arguments  # populate _field_specs.
+    _ = OrderArgumentsFactory(BookOrderEmpty).arguments  # populate _field_specs.
     assert normalize_input_value(BookOrderEmpty, []) == []
 
 
-def test_normalize_input_value_skips_null_direction_leaves():
+def test_normalize_input_value_skips_null_direction_leaves() -> None:
     """A leaf with ``direction=None`` is skipped (active-input-only)."""
     from apps.library.models import Book
 
@@ -294,7 +294,7 @@ def test_normalize_input_value_skips_null_direction_leaves():
     assert flat == [("subtitle", Ordering.ASC)]
 
 
-def test_normalize_input_value_handles_top_level_list_of_dataclass_elements():
+def test_normalize_input_value_handles_top_level_list_of_dataclass_elements() -> None:
     """Multi-element top-level lists are flattened in declaration order."""
     from apps.library.models import Book
 
@@ -316,7 +316,7 @@ def test_normalize_input_value_handles_top_level_list_of_dataclass_elements():
     assert flat == [("title", Ordering.ASC), ("subtitle", Ordering.DESC_NULLS_LAST)]
 
 
-def test_normalize_input_value_returns_empty_for_none_input():
+def test_normalize_input_value_returns_empty_for_none_input() -> None:
     """``None`` input -> ``[]``."""
     from django_strawberry_framework.orders import OrderSet
     from django_strawberry_framework.orders.inputs import normalize_input_value
@@ -324,7 +324,7 @@ def test_normalize_input_value_returns_empty_for_none_input():
     assert normalize_input_value(OrderSet, None) == []
 
 
-def test_normalize_input_value_builds_field_specs_for_direct_mapping_input():
+def test_normalize_input_value_builds_field_specs_for_direct_mapping_input() -> None:
     """Direct mapping callers must not silently lose an active order field."""
     from apps.library.models import Book
 
@@ -341,7 +341,7 @@ def test_normalize_input_value_builds_field_specs_for_direct_mapping_input():
     ]
 
 
-def test_normalize_input_value_raw_dict_matches_dataclass_form():
+def test_normalize_input_value_raw_dict_matches_dataclass_form() -> None:
     """A raw-dict order input flattens identically to the dataclass form.
 
     ``normalize_input_value`` routes through the shared
@@ -393,7 +393,7 @@ def test_normalize_input_value_raw_dict_matches_dataclass_form():
 # ---------------------------------------------------------------------------
 
 
-def test_build_input_class_decorates_with_strawberry_input():
+def test_build_input_class_decorates_with_strawberry_input() -> None:
     """The returned class carries Strawberry's ``__strawberry_definition__``."""
     from django_strawberry_framework.orders.inputs import build_input_class
 
@@ -404,7 +404,7 @@ def test_build_input_class_decorates_with_strawberry_input():
     assert "title" in fields
 
 
-def test_build_input_class_handles_python_attr_to_graphql_alias_mapping():
+def test_build_input_class_handles_python_attr_to_graphql_alias_mapping() -> None:
     """``name=`` is preserved through the decorator so ``shelf_code`` -> ``shelfCode``."""
     from django_strawberry_framework.orders.inputs import build_input_class
 
@@ -421,7 +421,7 @@ def test_build_input_class_handles_python_attr_to_graphql_alias_mapping():
 # ---------------------------------------------------------------------------
 
 
-def test_field_specs_populated_by_build_input_fields_for_leaf():
+def test_field_specs_populated_by_build_input_fields_for_leaf() -> None:
     """Leaf field -> ``FieldSpec(python_attr, graphql_name, django_source_path)``."""
     from apps.library.models import Book
 
@@ -445,7 +445,7 @@ def test_field_specs_populated_by_build_input_fields_for_leaf():
     assert spec.django_source_path == "title"
 
 
-def test_field_specs_populated_by_build_input_fields_for_flat_shorthand():
+def test_field_specs_populated_by_build_input_fields_for_flat_shorthand() -> None:
     """``Meta.fields = ["shelf__code"]`` -> python attr ``shelf_code`` + graphql alias ``shelfCode``."""
     from apps.library.models import Book
 
@@ -464,7 +464,7 @@ def test_field_specs_populated_by_build_input_fields_for_flat_shorthand():
     assert spec.django_source_path == "shelf__code"
 
 
-def test_field_specs_populated_by_build_input_fields_for_relatedorder():
+def test_field_specs_populated_by_build_input_fields_for_relatedorder() -> None:
     """``RelatedOrder`` -> ``FieldSpec.django_source_path`` is the relation name."""
     from apps.library.models import Book, Shelf
 
@@ -518,7 +518,7 @@ def _namespace_cleanup() -> Iterator[None]:
 
 
 @pytest.mark.usefixtures("_namespace_cleanup")
-def test_clear_order_input_namespace_resets_materialized_names_ledger():
+def test_clear_order_input_namespace_resets_materialized_names_ledger() -> None:
     """``_materialized_names`` is emptied."""
     from django_strawberry_framework.orders.inputs import (
         _materialized_names,
@@ -536,7 +536,7 @@ def test_clear_order_input_namespace_resets_materialized_names_ledger():
 
 
 @pytest.mark.usefixtures("_namespace_cleanup")
-def test_clear_order_input_namespace_leaves_module_globals_parked():
+def test_clear_order_input_namespace_leaves_module_globals_parked() -> None:
     """The materialized class stays on the module dict per spec-028 Decision 9."""
     from django_strawberry_framework.orders.inputs import (
         INPUTS_MODULE_PATH,
@@ -557,7 +557,7 @@ def test_clear_order_input_namespace_leaves_module_globals_parked():
 
 
 @pytest.mark.usefixtures("_namespace_cleanup")
-def test_clear_order_input_namespace_clears_factory_class_level_caches():
+def test_clear_order_input_namespace_clears_factory_class_level_caches() -> None:
     """``OrderArgumentsFactory`` class-level caches are emptied."""
     from django_strawberry_framework.orders.factories import OrderArgumentsFactory
     from django_strawberry_framework.orders.inputs import clear_order_input_namespace
@@ -576,7 +576,7 @@ def test_clear_order_input_namespace_clears_factory_class_level_caches():
 
 
 @pytest.mark.usefixtures("_namespace_cleanup")
-def test_clear_order_input_namespace_resets_orderset_subclass_binding_state():
+def test_clear_order_input_namespace_resets_orderset_subclass_binding_state() -> None:
     """Every ``OrderSet`` subclass's phase-2.5 binding slots are reset."""
     from collections import OrderedDict
 
@@ -607,7 +607,7 @@ def test_clear_order_input_namespace_resets_orderset_subclass_binding_state():
 # ---------------------------------------------------------------------------
 
 
-def test_order_input_type_returns_element_annotation_for_orderset_subclass():
+def test_order_input_type_returns_element_annotation_for_orderset_subclass() -> None:
     """``order_input_type(MyOrder)`` returns ``Annotated[ForwardRef("MyOrderInputType"), ...]``."""
     from typing import ForwardRef, get_args
 
@@ -626,7 +626,7 @@ def test_order_input_type_returns_element_annotation_for_orderset_subclass():
     assert name == "HelperOrderAInputType"
 
 
-def test_order_input_type_raises_typeerror_for_non_orderset():
+def test_order_input_type_raises_typeerror_for_non_orderset() -> None:
     """Passing a non-``OrderSet`` argument raises ``TypeError``."""
     from django_strawberry_framework.orders import order_input_type
 
@@ -636,7 +636,7 @@ def test_order_input_type_raises_typeerror_for_non_orderset():
         order_input_type(int)  # pyright: ignore[reportArgumentType]
 
 
-def test_order_input_type_records_orderset_into_helper_referenced_set():
+def test_order_input_type_records_orderset_into_helper_referenced_set() -> None:
     """The helper writes its argument into ``_helper_referenced_ordersets``."""
     from django_strawberry_framework.orders import (
         OrderSet,
@@ -654,7 +654,7 @@ def test_order_input_type_records_orderset_into_helper_referenced_set():
     _helper_referenced_ordersets.discard(HelperOrderB)
 
 
-def test_order_input_type_is_idempotent_under_repeated_calls():
+def test_order_input_type_is_idempotent_under_repeated_calls() -> None:
     """Calling the helper multiple times keeps the ledger size at one."""
     from django_strawberry_framework.orders import (
         OrderSet,
@@ -681,7 +681,7 @@ def test_order_input_type_is_idempotent_under_repeated_calls():
 # ---------------------------------------------------------------------------
 
 
-def test_order_input_subscript_returns_the_order_input_type_element_annotation():
+def test_order_input_subscript_returns_the_order_input_type_element_annotation() -> None:
     """``OrderInput[MyOrder]`` is the same lazy ``Annotated`` element the call form returns."""
     from typing import Annotated, ForwardRef, get_args, get_origin
 
@@ -702,7 +702,7 @@ def test_order_input_subscript_returns_the_order_input_type_element_annotation()
     ]
 
 
-def test_order_input_subscript_records_orderset_into_helper_referenced_set():
+def test_order_input_subscript_records_orderset_into_helper_referenced_set() -> None:
     """The subscript feeds the one ledger the finalizer's orphan check reads."""
     from django_strawberry_framework.orders import (
         OrderInput,
@@ -723,7 +723,7 @@ def test_order_input_subscript_records_orderset_into_helper_referenced_set():
     _helper_referenced_ordersets.discard(HelperOrderE)
 
 
-def test_order_input_subscript_rejects_non_orderset_naming_the_subscript():
+def test_order_input_subscript_rejects_non_orderset_naming_the_subscript() -> None:
     """A non-``OrderSet`` raises ``TypeError`` worded with the spelling the consumer wrote."""
     from django_strawberry_framework.orders import (
         OrderInput,
@@ -751,7 +751,7 @@ def test_order_input_subscript_rejects_non_orderset_naming_the_subscript():
 # ---------------------------------------------------------------------------
 
 
-def test_registry_clear_invokes_clear_order_input_namespace():
+def test_registry_clear_invokes_clear_order_input_namespace() -> None:
     """``registry.clear()`` co-clears the order-input namespace ledgers."""
     import subprocess
 
@@ -792,7 +792,7 @@ def test_registry_clear_invokes_clear_order_input_namespace():
     assert subprocess.run is not None
 
 
-def test_registry_clear_clears_helper_referenced_ordersets():
+def test_registry_clear_clears_helper_referenced_ordersets() -> None:
     """``registry.clear()`` empties ``_helper_referenced_ordersets`` (separate block)."""
     from django_strawberry_framework.orders import (
         OrderSet,
@@ -812,7 +812,7 @@ def test_registry_clear_clears_helper_referenced_ordersets():
     assert _helper_referenced_ordersets == set()
 
 
-def test_registry_clear_works_without_orders_imported():
+def test_registry_clear_works_without_orders_imported() -> None:
     """``registry.clear()`` must not raise when orders package was never imported."""
     import subprocess
     from pathlib import Path
@@ -847,7 +847,7 @@ def test_registry_clear_works_without_orders_imported():
 # ---------------------------------------------------------------------------
 
 
-def test_camel_case_returns_input_when_split_yields_no_parts():
+def test_camel_case_returns_input_when_split_yields_no_parts() -> None:
     """Covers the all-underscore passthrough behind the ``_camel_case`` alias.
 
     The guard is ``utils/strings.py::graphql_camel_name`` #"if not core:".
@@ -862,7 +862,7 @@ def test_camel_case_returns_input_when_split_yields_no_parts():
     assert _camel_case("__") == "__"
 
 
-def test_build_input_class_threads_description_through_strawberry_field():
+def test_build_input_class_threads_description_through_strawberry_field() -> None:
     """Covers the ``description`` kwarg threading through ``strawberry.field``.
 
     ``build_input_class`` is the ``orders/inputs.py`` alias of
@@ -881,7 +881,7 @@ def test_build_input_class_threads_description_through_strawberry_field():
     assert fields["foo"].description == "the foo direction"
 
 
-def test_normalize_input_value_returns_empty_for_non_dataclass_non_list_non_none_input():
+def test_normalize_input_value_returns_empty_for_non_dataclass_non_list_non_none_input() -> None:
     """Covers the non-walkable-input short-circuit to an empty list.
 
     ``utils/input_values.py::iter_input_items`` returns ``None`` for a
@@ -900,7 +900,7 @@ def test_normalize_input_value_returns_empty_for_non_dataclass_non_list_non_none
     assert normalize_input_value(_NormalizeNoDataclassOrder, object()) == []
 
 
-def test_normalize_input_value_skips_attrs_with_no_field_spec_entry():
+def test_normalize_input_value_skips_attrs_with_no_field_spec_entry() -> None:
     """Covers ``orders/inputs.py::normalize_input_value`` #"if field.spec is None:".
 
     The defensive skip: when the dataclass input carries an attribute
@@ -930,7 +930,7 @@ def test_normalize_input_value_skips_attrs_with_no_field_spec_entry():
     assert result == []
 
 
-def test_normalize_input_value_builds_field_specs_for_model_free_orderset():
+def test_normalize_input_value_builds_field_specs_for_model_free_orderset() -> None:
     """Model-free OrderSet direct callers must lazily build specs and normalize."""
     from django_strawberry_framework.orders.inputs import (
         clear_order_input_namespace,
@@ -949,7 +949,7 @@ def test_normalize_input_value_builds_field_specs_for_model_free_orderset():
     assert ("shelf__code", Ordering.DESC) in normalized
 
 
-def test_normalize_input_value_ignores_unset_sentinel_in_mappings_and_lists():
+def test_normalize_input_value_ignores_unset_sentinel_in_mappings_and_lists() -> None:
     """strawberry.UNSET values in dicts, lists, and nested structures are inactive."""
     from apps.library.models import Book, Shelf
     from strawberry import UNSET
@@ -986,7 +986,7 @@ def test_normalize_input_value_ignores_unset_sentinel_in_mappings_and_lists():
     ]
 
 
-def test_ensure_field_specs_derives_the_unset_sentinel_from_the_family_declaration():
+def test_ensure_field_specs_derives_the_unset_sentinel_from_the_family_declaration() -> None:
     """The warm-up gate asks the family classifier, not a hardcoded UNSET.
 
     ``_ensure_field_specs`` answers "is anything supplied?" through
@@ -1022,7 +1022,7 @@ def test_ensure_field_specs_derives_the_unset_sentinel_from_the_family_declarati
             fields = ["title"]
 
         @classmethod
-        def check_title_permission(cls, request: object):
+        def check_title_permission(cls, request: object) -> None:
             fired.append(request)
 
     # The override IS the family's unsupplied rule end-to-end.
@@ -1044,7 +1044,7 @@ def test_ensure_field_specs_derives_the_unset_sentinel_from_the_family_declarati
     assert fired == ["request"]
 
 
-def test_normalize_input_value_rejects_invalid_direction_type():
+def test_normalize_input_value_rejects_invalid_direction_type() -> None:
     """Invalid non-Ordering direction values raise ConfigurationError."""
     from apps.library.models import Book
 
@@ -1068,7 +1068,7 @@ def test_normalize_input_value_rejects_invalid_direction_type():
 
 
 @pytest.mark.usefixtures("_namespace_cleanup")
-def test_normalize_input_value_skips_related_branch_when_child_orderset_is_none():
+def test_normalize_input_value_skips_related_branch_when_child_orderset_is_none() -> None:
     """Covers ``orders/inputs.py::normalize_input_value`` #"if child_orderset is None:".
 
     The placeholder-branch skip: when a ``RelatedOrder`` resolves to
@@ -1096,7 +1096,7 @@ def test_normalize_input_value_skips_related_branch_when_child_orderset_is_none(
             fields = ["title"]
 
     # Populate ``_field_specs`` for both ordersets.
-    OrderArgumentsFactory(_ParentNoneChildOrder).arguments
+    _ = OrderArgumentsFactory(_ParentNoneChildOrder).arguments
 
     # Force the related order's target to ``None`` so the
     # ``child_orderset is None`` guard fires.
@@ -1119,7 +1119,7 @@ def test_normalize_input_value_skips_related_branch_when_child_orderset_is_none(
     assert all(not path.startswith("shelf") for path, _ in result)
 
 
-def test_iter_orderset_subclasses_dedupes_diamond_inheritance():
+def test_iter_orderset_subclasses_dedupes_diamond_inheritance() -> None:
     """Covers ``utils/inputs.py::iter_set_subclasses`` #"if cls in seen:".
 
     The dedup runs behind the ``orders/inputs.py``
@@ -1151,7 +1151,7 @@ def test_iter_orderset_subclasses_dedupes_diamond_inheritance():
     assert {_DiamondB, _DiamondC, _DiamondD}.issubset(set(found))
 
 
-def test_clear_order_input_namespace_tolerates_unimportable_submodules():
+def test_clear_order_input_namespace_tolerates_unimportable_submodules() -> None:
     """Covers both best-effort submodule lookups in ONE test.
 
     ``clear_order_input_namespace`` is a thin wrapper over
@@ -1175,7 +1175,7 @@ def test_clear_order_input_namespace_tolerates_unimportable_submodules():
         clear_order_input_namespace()
 
 
-def test_get_concrete_field_names_for_order_direct():
+def test_get_concrete_field_names_for_order_direct() -> None:
     """_get_concrete_field_names_for_order extracts the orderable fields and rejects non-models."""
     from apps.library.models import Book
 
@@ -1196,7 +1196,7 @@ def test_get_concrete_field_names_for_order_direct():
         _get_concrete_field_names_for_order(None)
 
 
-def test_normalize_input_value_handles_3_tier_deep_related_order_chain():
+def test_normalize_input_value_handles_3_tier_deep_related_order_chain() -> None:
     """Normalize walks deeply nested (3 tiers) RelatedOrder hierarchies."""
     from apps.library.models import Book, Shelf
 

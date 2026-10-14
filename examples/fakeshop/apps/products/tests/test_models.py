@@ -11,35 +11,35 @@ from apps.products.services import seed_data
 
 
 @pytest.mark.django_db
-def test_category_str_returns_name():
+def test_category_str_returns_name() -> None:
     seed_data(1)
     cat = Category.objects.earliest("pk")
     assert str(cat) == cat.name
 
 
 @pytest.mark.django_db
-def test_item_str_returns_name():
+def test_item_str_returns_name() -> None:
     seed_data(1)
     item = Item.objects.earliest("pk")
     assert str(item) == item.name
 
 
 @pytest.mark.django_db
-def test_property_str_returns_name():
+def test_property_str_returns_name() -> None:
     seed_data(1)
     prop = Property.objects.earliest("pk")
     assert str(prop) == prop.name
 
 
 @pytest.mark.django_db
-def test_entry_str_returns_value():
+def test_entry_str_returns_value() -> None:
     seed_data(1)
     entry = Entry.objects.earliest("pk")
     assert str(entry) == entry.value
 
 
 @pytest.mark.django_db
-def test_item_hold_str_returns_reason():
+def test_item_hold_str_returns_reason() -> None:
     seed_data(1)
     hold = ItemHold.objects.create(reason="reserved", item=Item.objects.first())
     assert str(hold) == "reserved"

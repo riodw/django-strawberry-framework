@@ -1,7 +1,7 @@
 """Products service tests for Faker discovery, catalog lifecycle, and user lifecycle."""
 
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from types import ModuleType
 from unittest.mock import patch
 
@@ -15,7 +15,7 @@ from apps.products.models import Category, Entry, Item, Property
 
 
 @pytest.fixture(autouse=True)
-def _clear_seed_provider_cache():
+def _clear_seed_provider_cache() -> Iterator[None]:
     """Keep seed-provider cache tests independent while preserving within-test reuse."""
     services._seed_provider_methods.cache_clear()
     yield
@@ -27,32 +27,32 @@ def _clear_seed_provider_cache():
 # ---------------------------------------------------------------------------
 
 
-def test_is_safe_generator_returns_true_for_scalar():
+def test_is_safe_generator_returns_true_for_scalar() -> None:
     fake = Faker()
     # ``name`` returns a str - must be accepted.
     assert services._is_safe_generator(fake, "name") is True
 
 
-def test_is_safe_generator_returns_false_when_method_raises():
+def test_is_safe_generator_returns_false_when_method_raises() -> None:
     fake = Faker()
     # A method name that doesn't exist will raise on attribute access - also a "False" path.
     assert services._is_safe_generator(fake, "no_such_method_xyz_123") is False
 
 
-def test_is_safe_generator_returns_false_for_non_scalar():
+def test_is_safe_generator_returns_false_for_non_scalar() -> None:
     fake = Faker()
     # ``profile()`` returns a dict - non-scalar - must be rejected.
     assert services._is_safe_generator(fake, "profile") is False
 
 
-def test_fake_value_returns_string():
+def test_fake_value_returns_string() -> None:
     fake = Faker()
     out = services._fake_value(fake, "name")
     assert isinstance(out, str)
     assert out  # non-empty
 
 
-def test_discover_providers_returns_dict_of_methods():
+def test_discover_providers_returns_dict_of_methods() -> None:
     """Smoke: discover_providers exercises all branches of the introspection loop."""
     fake = Faker()
     providers = services.discover_providers(fake)
@@ -68,7 +68,7 @@ def test_discover_providers_returns_dict_of_methods():
             assert isinstance(m, str)
 
 
-def test_discover_providers_handles_module_without_provider_class():
+def test_discover_providers_handles_module_without_provider_class() -> None:
     """If a sub-module lacks ``Provider``, discover_providers must skip it gracefully."""
     fake = Faker()
 
@@ -84,12 +84,12 @@ def test_discover_providers_handles_module_without_provider_class():
         bank_module.Provider = original
 
 
-def test_discover_providers_handles_import_error():
+def test_discover_providers_handles_import_error() -> None:
     """If ``__import__`` raises ImportError on a sub-package, discover_providers continues."""
     fake = Faker()
     real_import: Callable[..., ModuleType] = __import__
 
-    def boom_import(name: str, *args: object, **kwargs: object):
+    def boom_import(name: str, *args: object, **kwargs: object) -> ModuleType:
         if name == "faker.providers.bank":
             raise ImportError("synthetic")
         return real_import(name, *args, **kwargs)
@@ -99,12 +99,16 @@ def test_discover_providers_handles_import_error():
     assert "bank" not in result
 
 
-def test_discover_providers_handles_unsignaturable_method():
+def test_discover_providers_handles_unsignaturable_method() -> None:
     """When ``inspect.signature`` raises, discover_providers continues."""
     fake = Faker()
     real_signature: Callable[..., inspect.Signature] = inspect.signature
 
-    def boom_signature(obj: Callable[..., object], *args: object, **kwargs: object):
+    def boom_signature(
+        obj: Callable[..., object],
+        *args: object,
+        **kwargs: object,
+    ) -> inspect.Signature:
         # Trigger only on an arbitrary callable so the rest still runs.
         if getattr(obj, "__name__", "") == "name":
             raise ValueError("synthetic")
@@ -122,7 +126,7 @@ def test_discover_providers_handles_unsignaturable_method():
 
 
 @pytest.mark.django_db
-def test_seed_data_creates_expected_counts():
+def test_seed_data_creates_expected_counts() -> None:
     result = services.seed_data(1)
     assert result["categories"] == Category.objects.count()
     assert result["properties"] == Property.objects.count()
@@ -134,14 +138,16 @@ def test_seed_data_creates_expected_counts():
 
 
 @pytest.mark.django_db
-def test_seed_data_idempotent_on_categories_and_properties(monkeypatch: pytest.MonkeyPatch):
+def test_seed_data_idempotent_on_categories_and_properties(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A second seed at the same X creates 0 new categories/properties (and only fills item shortfall).
 
     Pin a minimal provider shape and prove repeated seed calls discover it only once.
     """
     discovery_calls = 0
 
-    def discover_once(_fake: Faker):
+    def discover_once(_fake: Faker) -> dict[str, list[str]]:
         nonlocal discovery_calls
         discovery_calls += 1
         return {"person": ["name"]}
@@ -158,7 +164,7 @@ def test_seed_data_idempotent_on_categories_and_properties(monkeypatch: pytest.M
 
 
 @pytest.mark.django_db
-def test_seed_data_creates_only_shortfall_when_x_grows(monkeypatch: pytest.MonkeyPatch):
+def test_seed_data_creates_only_shortfall_when_x_grows(monkeypatch: pytest.MonkeyPatch) -> None:
     """Bumping X from 1 to 2 should create exactly one extra item per provider.
 
     Pin a minimal provider shape so this test isolates shortfall behavior.
@@ -184,7 +190,7 @@ def test_seed_data_creates_only_shortfall_when_x_grows(monkeypatch: pytest.Monke
 
 
 @pytest.mark.django_db
-def test_delete_data_int_mode_deletes_first_n_items():
+def test_delete_data_int_mode_deletes_first_n_items() -> None:
     services.seed_data(2)
     items_before = Item.objects.count()
     entries_before = Entry.objects.count()
@@ -201,7 +207,7 @@ def test_delete_data_int_mode_deletes_first_n_items():
 
 
 @pytest.mark.django_db
-def test_delete_data_int_mode_no_data_returns_zeros():
+def test_delete_data_int_mode_no_data_returns_zeros() -> None:
     """When no items exist, the int-mode branch short-circuits before any deletes."""
     result = services.delete_data(5)
     assert result == {
@@ -213,7 +219,7 @@ def test_delete_data_int_mode_no_data_returns_zeros():
 
 
 @pytest.mark.django_db
-def test_delete_data_all_mode_clears_items_and_entries():
+def test_delete_data_all_mode_clears_items_and_entries() -> None:
     services.seed_data(1)
     cat_count = Category.objects.count()
     prop_count = Property.objects.count()
@@ -230,7 +236,7 @@ def test_delete_data_all_mode_clears_items_and_entries():
 
 
 @pytest.mark.django_db
-def test_delete_data_everything_mode_wipes_all_tables():
+def test_delete_data_everything_mode_wipes_all_tables() -> None:
     services.seed_data(1)
     result = services.delete_data("everything")
     assert result["categories"] > 0
@@ -249,7 +255,7 @@ def test_delete_data_everything_mode_wipes_all_tables():
 
 
 @pytest.mark.django_db
-def test_create_users_creates_six_users_per_unit():
+def test_create_users_creates_six_users_per_unit() -> None:
     """One unit = staff + regular + 4 per-permission users = 6 users."""
     result = services.create_users(1)
     assert result["users"] == 6
@@ -265,7 +271,7 @@ def test_create_users_creates_six_users_per_unit():
 
 
 @pytest.mark.django_db
-def test_create_users_is_idempotent():
+def test_create_users_is_idempotent() -> None:
     services.create_users(1)
     second = services.create_users(1)
     assert second["users"] == 0
@@ -273,7 +279,7 @@ def test_create_users_is_idempotent():
 
 
 @pytest.mark.django_db
-def test_delete_users_int_mode_deletes_first_n_non_superusers():
+def test_delete_users_int_mode_deletes_first_n_non_superusers() -> None:
     services.create_users(2)
     User.objects.create_superuser(username="boss", password="boss")
     pre = User.objects.count()
@@ -285,13 +291,13 @@ def test_delete_users_int_mode_deletes_first_n_non_superusers():
 
 
 @pytest.mark.django_db
-def test_delete_users_int_mode_no_data_returns_zero():
+def test_delete_users_int_mode_no_data_returns_zero() -> None:
     result = services.delete_users(5)
     assert result == {"users": 0}
 
 
 @pytest.mark.django_db
-def test_delete_users_all_mode_wipes_non_superusers():
+def test_delete_users_all_mode_wipes_non_superusers() -> None:
     services.create_users(1)
     User.objects.create_superuser(username="boss", password="boss")
     result = services.delete_users("all")
@@ -328,7 +334,7 @@ def _named_fixture_helpers() -> dict[str, Callable[..., object]]:
 
 
 @pytest.mark.django_db
-def test_every_named_fixture_helper_seeds_into_one_database():
+def test_every_named_fixture_helper_seeds_into_one_database() -> None:
     """No two fixture helpers claim the same ``Category`` name.
 
     ``Category.name`` is unique across the whole table, so a category name belongs

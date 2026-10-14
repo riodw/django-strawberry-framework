@@ -25,7 +25,7 @@ from __future__ import annotations
 import inspect
 import itertools
 from collections.abc import Callable, Iterator
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, TypeVar
 from unittest import mock
 
@@ -39,10 +39,11 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Model, QuerySet
 from django.utils import timezone
+from graphql_client import JSONObject
 from strawberry import relay
 from strawberry.types import ExecutionResult
 from strawberry.types.base import has_object_definition
-from typing_extensions import override
+from typing_extensions import Self, override
 
 from django_strawberry_framework import (
     DjangoMutation,
@@ -98,7 +99,7 @@ class _AllowAll:
         _operation: str,
         _data: object,
         _instance: object = None,
-    ):
+    ) -> bool:
         return True
 
 
@@ -128,9 +129,8 @@ def _build_item_schema(
     *,
     category_get_queryset: object | None = None,
     input_cls: object | None = None,
-):
+) -> tuple[strawberry.Schema, tuple[type[DjangoType], type[DjangoType]]]:
     """Declare Item/Category primaries + create/update/delete mutations; return (schema, types)."""
-
     category_body: dict[str, object] = {
         "Meta": type(
             "Meta",
@@ -190,7 +190,11 @@ def _build_item_schema(
     return _schema(Mutation), (CategoryT, ItemT)
 
 
-def assert_mutation_field_error(result: ExecutionResult, payload_key: str, field: str):
+def assert_mutation_field_error(
+    result: ExecutionResult,
+    payload_key: str,
+    field: str,
+) -> JSONObject:
     """Assert the common in-band mutation error envelope.
 
     Pins the shape every in-band failure test shares: no top-level GraphQL errors
@@ -246,7 +250,7 @@ _CATEGORY_DELETE = (
 )
 
 
-def _build_category_node_schema():
+def _build_category_node_schema() -> tuple[strawberry.Schema, type[DjangoType]]:
     """Category primary type with ``name: relay.NodeID[str]`` + update/delete mutations.
 
     The Relay id encodes the non-pk ``name`` column, so the write-side locate must
@@ -285,7 +289,7 @@ def _build_category_node_schema():
 
 
 @pytest.mark.django_db
-def test_update_custom_node_id_resolves_payload_to_real_pk_not_wrong_row():
+def test_update_custom_node_id_resolves_payload_to_real_pk_not_wrong_row() -> None:
     """A write through a custom ``relay.NodeID[str]`` updates the NAME-matched row, not the pk-coincident one.
 
     Shipped ``CategoryType`` uses the pk as Relay id; retargeting it would change
@@ -320,7 +324,7 @@ def test_update_custom_node_id_resolves_payload_to_real_pk_not_wrong_row():
 
 
 @pytest.mark.django_db
-def test_custom_node_id_real_pk_lookup_uses_pinned_alias(monkeypatch: pytest.MonkeyPatch):
+def test_custom_node_id_real_pk_lookup_uses_pinned_alias(monkeypatch: pytest.MonkeyPatch) -> None:
     """A custom NodeID lookup forwards the mutation's pinned database alias.
 
     The NodeID payload identifies a non-pk column, so
@@ -347,8 +351,8 @@ def test_custom_node_id_real_pk_lookup_uses_pinned_alias(monkeypatch: pytest.Mon
 
 
 @pytest.mark.django_db
-def test_delete_custom_node_id_resolves_payload_to_real_pk_not_wrong_row():
-    """A delete through a custom ``relay.NodeID[str]`` removes the NAME-matched row, not the pk-coincident one.
+def test_delete_custom_node_id_resolves_payload_to_real_pk_not_wrong_row() -> None:
+    """A delete through a custom ``relay.NodeID[str]`` removes the NAME-matched row.
 
     The delete twin of the update case: the located instance comes from the resolved
     real pk, so deleting via a GlobalID whose payload is the target's ``name`` removes
@@ -371,7 +375,7 @@ def test_delete_custom_node_id_resolves_payload_to_real_pk_not_wrong_row():
     assert product_models.Category.objects.filter(pk=decoy.pk).exists()
 
 
-def test_unprovided_exclude_keeps_constrained_co_member_drops_unrelated():
+def test_unprovided_exclude_keeps_constrained_co_member_drops_unrelated() -> None:
     """``_unprovided_exclude`` pins the constrained-co-member carve-out on ``Item``.
 
     A ``name``-only provided set keeps ``category`` OUT of the exclude set (the two
@@ -384,7 +388,7 @@ def test_unprovided_exclude_keeps_constrained_co_member_drops_unrelated():
     assert "is_private" in exclude
 
 
-def test_unprovided_exclude_single_field_unique_group_kept():
+def test_unprovided_exclude_single_field_unique_group_kept() -> None:
     """A provided single-``unique`` field is its own group; an unprovided unrelated field is excluded."""
     # ``Category.name`` is ``unique=True`` (a 1-element group). Providing ``name``
     # keeps it validating; the unprovided ``description`` is excluded.
@@ -398,7 +402,7 @@ def test_unprovided_exclude_single_field_unique_group_kept():
     ["5", "not-a-global-id", 5],
     ids=["raw-pk-string", "garbage", "non-string"],
 )
-def test_coerce_lookup_id_rejects_non_globalid(raw_id: str | int):
+def test_coerce_lookup_id_rejects_non_globalid(raw_id: str | int) -> None:
     """A non-GlobalID ``id:`` is a ``FieldError`` on ``id`` before any pk lookup.
 
     Live ``updateItem`` covers the string arms over HTTP
@@ -420,7 +424,7 @@ def test_coerce_lookup_id_rejects_non_globalid(raw_id: str | int):
 
 
 @pytest.mark.django_db
-def test_integrity_error_race_fallback_via_mocked_save():
+def test_integrity_error_race_fallback_via_mocked_save() -> None:
     """A save-time ``IntegrityError`` race maps to the envelope, not a 500."""
     schema, (CategoryT, _ItemT) = _build_item_schema()
     cat = product_models.Category.objects.create(name=_category_name())
@@ -446,7 +450,7 @@ def test_integrity_error_race_fallback_via_mocked_save():
 
 
 @pytest.mark.django_db
-def test_globalid_relation_override_flows_through_visibility_contract():
+def test_globalid_relation_override_flows_through_visibility_contract() -> None:
     """A ``GlobalID`` relation override is still relation-visibility-checked (Decision 10).
 
     The bind-time type-lock (``sets.py::_validate_relation_override_types``) forces a
@@ -466,7 +470,7 @@ def test_globalid_relation_override_flows_through_visibility_contract():
         _cls: type[DjangoType],
         queryset: QuerySet[product_models.Category],
         _info: strawberry.Info,
-    ):
+    ) -> QuerySet[product_models.Category]:
         return queryset.filter(is_private=False)
 
     @strawberry.input
@@ -489,7 +493,7 @@ def test_globalid_relation_override_flows_through_visibility_contract():
 
 
 @pytest.mark.django_db
-def test_sync_misuse_async_get_queryset_from_sync_path():
+def test_sync_misuse_async_get_queryset_from_sync_path() -> None:
     """A sync update over a type with an ``async def get_queryset`` raises ``SyncMisuseError``."""
 
     async def _async_get_queryset(
@@ -497,7 +501,7 @@ def test_sync_misuse_async_get_queryset_from_sync_path():
         queryset: QuerySet[product_models.Item],
         _info: strawberry.Info,
         **_kwargs: object,
-    ):
+    ) -> QuerySet[product_models.Item]:
         return queryset
 
     ItemT = type(
@@ -548,7 +552,7 @@ def test_sync_misuse_async_get_queryset_from_sync_path():
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_async_mutation_does_not_leak_into_later_read_optimizer_execution():
+async def test_async_mutation_does_not_leak_into_later_read_optimizer_execution() -> None:
     """An async mutation must not corrupt a later read-side optimizer execution (spec-036 FV-1).
 
     The durable regression pin for FV-1. ROOT CAUSE (bisected, not the
@@ -614,7 +618,7 @@ async def test_async_mutation_does_not_leak_into_later_read_optimizer_execution(
             queryset: QuerySet[product_models.Category],
             info: strawberry.Info,
             **kwargs: object,
-        ):
+        ) -> QuerySet[product_models.Category]:
             # Narrow the category by a request-user-derived predicate so a leaked
             # row's category (created under a DIFFERENT name) would NOT match,
             # reproducing the read-side ``RelatedObjectDoesNotExist`` FV-1 hit.
@@ -635,7 +639,7 @@ async def test_async_mutation_does_not_leak_into_later_read_optimizer_execution(
             operation = "create"
             permission_classes = [_AllowAll]
 
-    def _all_items():
+    def _all_items() -> QuerySet[product_models.Item]:
         return product_models.Item.objects.all()
 
     # ``from __future__ import annotations`` makes a ``-> list[ItemT]`` string
@@ -707,9 +711,11 @@ async def test_async_mutation_does_not_leak_into_later_read_optimizer_execution(
 # ---------------------------------------------------------------------------
 
 
-def _build_book_schema(*, genre_get_queryset: object | None = None):
+def _build_book_schema(
+    *,
+    genre_get_queryset: object | None = None,
+) -> tuple[strawberry.Schema, tuple[type[DjangoType], type[DjangoType], type[DjangoType]]]:
     """Declare Book/Genre/Shelf primaries + a create mutation over the Book M2M."""
-
     genre_body: dict[str, object] = {
         "Meta": type(
             "Meta",
@@ -748,7 +754,7 @@ def _build_book_schema(*, genre_get_queryset: object | None = None):
     return _schema(Mutation), (GenreT, ShelfT, BookT)
 
 
-def _make_branch_shelf():
+def _make_branch_shelf() -> library_models.Shelf:
     branch = library_models.Branch.objects.create(name="Main")
     return library_models.Shelf.objects.create(code="S1", branch=branch)
 
@@ -760,7 +766,7 @@ _CREATE_BOOK = (
 
 
 @pytest.mark.django_db
-def test_m2m_hidden_related_id_is_field_error():
+def test_m2m_hidden_related_id_is_field_error() -> None:
     """An M2M id for a row the related type hides -> ``FieldError`` on the M2M field.
 
     Live ``createBookViaCustomInput`` covers visible Genre GlobalIDs. Shipped
@@ -775,7 +781,7 @@ def test_m2m_hidden_related_id_is_field_error():
         _cls: type[DjangoType],
         queryset: QuerySet[library_models.Genre],
         _info: strawberry.Info,
-    ):
+    ) -> QuerySet[library_models.Genre]:
         return queryset.exclude(name="Secret")
 
     schema, (GenreT, ShelfT, _BookT) = _build_book_schema(genre_get_queryset=_hide_secret)
@@ -801,7 +807,10 @@ def test_m2m_hidden_related_id_is_field_error():
 # ---------------------------------------------------------------------------
 
 
-def _build_book_raw_m2m_schema():
+def _build_book_raw_m2m_schema() -> tuple[
+    strawberry.Schema,
+    tuple[type[DjangoType], type[DjangoType], type[DjangoType]],
+]:
     """Declare a NON-Relay ``Genre`` primary so ``Book.genres`` is a raw-pk ``list[Int]`` M2M."""
     GenreT = type(
         "GenreT",
@@ -855,7 +864,7 @@ def _build_book_raw_m2m_schema():
 
 
 @pytest.mark.django_db
-def test_update_raw_pk_m2m_nonexistent_id_is_field_error_no_dangling_row():
+def test_update_raw_pk_m2m_nonexistent_id_is_field_error_no_dangling_row() -> None:
     """A nonexistent raw-pk M2M id on update -> ``FieldError`` on the M2M field, set unchanged.
 
     Live ``createShelf`` covers the create arm
@@ -879,7 +888,7 @@ def test_update_raw_pk_m2m_nonexistent_id_is_field_error_no_dangling_row():
 
 
 @pytest.mark.django_db
-def test_raw_pk_m2m_existence_check_coerces_out_of_range_pk_no_overflow():
+def test_raw_pk_m2m_existence_check_coerces_out_of_range_pk_no_overflow() -> None:
     """An out-of-range raw-pk M2M id is treated as not-found, never a raw ``OverflowError``.
 
     ``decode_visible_relation_ids`` type-checks each id through the target pk
@@ -910,7 +919,7 @@ def test_raw_pk_m2m_existence_check_coerces_out_of_range_pk_no_overflow():
 
 
 @pytest.mark.django_db
-def test_single_fk_explicit_null_on_nullable_clears_not_relation_error():
+def test_single_fk_explicit_null_on_nullable_clears_not_relation_error() -> None:
     """An explicit ``null`` on a nullable FK clears (``None``), never a relation error.
 
     Required-FK ``null`` is live
@@ -925,7 +934,7 @@ def test_single_fk_explicit_null_on_nullable_clears_not_relation_error():
     related_model = fk_field.related_model
     assert related_model is not None
     # Temporarily treat the relation as nullable for the clear-signal branch.
-    with mock.patch.object(fk_field, "null", True):
+    with mock.patch.object(fk_field, "null", new=True):
         pk, error = resolvers._decode_single_relation_id(
             None,
             graphql_name="categoryId",
@@ -938,7 +947,7 @@ def test_single_fk_explicit_null_on_nullable_clears_not_relation_error():
 
 
 @pytest.mark.django_db
-def test_raw_pk_relations_with_no_registered_primary_use_default_manager_existence():
+def test_raw_pk_relations_with_no_registered_primary_use_default_manager_existence() -> None:
     """An unregistered raw-pk relation has existence validation but no visibility contract.
 
     Only ``Book`` is registered: the generated ``shelfId`` FK and ``genres`` M2M
@@ -1014,7 +1023,7 @@ def test_raw_pk_relations_with_no_registered_primary_use_default_manager_existen
 _SPEC_UUID = "12345678-1234-5678-1234-567812345678"
 
 
-def _build_scalar_specimen_schema():
+def _build_scalar_specimen_schema() -> tuple[strawberry.Schema, type[DjangoMutation]]:
     """Declare a ScalarSpecimen primary + a create mutation; return (schema, CreateSpec)."""
 
     class SpecT(DjangoType, relay.Node):
@@ -1048,7 +1057,7 @@ def _build_scalar_specimen_schema():
 
 
 @pytest.mark.django_db
-def test_create_omitting_empty_value_default_field_succeeds():
+def test_create_omitting_empty_value_default_field_succeeds() -> None:
     """Omitting a ``JSONField(default=dict)`` (blank=False) on create succeeds.
 
     The field is optional in the input (it has a default), so a client may omit it.
@@ -1081,7 +1090,7 @@ def test_create_omitting_empty_value_default_field_succeeds():
 
 
 @pytest.mark.django_db
-def test_create_naive_datetime_input_is_made_timezone_aware():
+def test_create_naive_datetime_input_is_made_timezone_aware() -> None:
     """A naive datetime input is coerced to an aware datetime on create.
 
     Under ``USE_TZ=True`` a naive datetime would trigger Django's naive-datetime
@@ -1113,7 +1122,7 @@ def test_create_naive_datetime_input_is_made_timezone_aware():
 
 
 @pytest.mark.django_db
-def test_create_unencodable_text_nested_in_a_json_value_is_field_error_before_save():
+def test_create_unencodable_text_nested_in_a_json_value_is_field_error_before_save() -> None:
     """A lone surrogate nested in a ``JSONField`` value is a path-keyed decode error; no row.
 
     The model flavor runs the same storability walk as a top-level string, so a list
@@ -1157,7 +1166,7 @@ def test_create_unencodable_text_nested_in_a_json_value_is_field_error_before_sa
 # ---------------------------------------------------------------------------
 
 
-def _build_tagged_item_schema():
+def _build_tagged_item_schema() -> tuple[strawberry.Schema, type[DjangoType]]:
     """Declare a TaggedItem primary + an update mutation; return (schema, TaggedItemT)."""
 
     class TaggedItemT(DjangoType, relay.Node):
@@ -1181,7 +1190,7 @@ def _build_tagged_item_schema():
 
 
 @pytest.mark.django_db
-def test_partial_update_validates_scalar_field_named_id_suffix():
+def test_partial_update_validates_scalar_field_named_id_suffix() -> None:
     """A scalar field literally named ``<x>_id`` IS validated on partial update (spec-036).
 
     ``TaggedItem.object_id`` is a scalar ``PositiveIntegerField``. A partial update
@@ -1224,7 +1233,7 @@ def test_partial_update_validates_scalar_field_named_id_suffix():
     assert tagged.object_id == branch.pk
 
 
-def test_provided_attr_names_keeps_scalar_id_suffix_field():
+def test_provided_attr_names_keeps_scalar_id_suffix_field() -> None:
     """``_provided_attr_names`` keeps a scalar ``<x>_id`` field under its real name (spec-036).
 
     The FK reversal is index-driven: ``content_type_id`` (a real FK attr) maps to
@@ -1249,7 +1258,7 @@ def test_provided_attr_names_keeps_scalar_id_suffix_field():
     assert provided == {"object_id", "tag", "content_type"}
 
 
-def test_relation_field_index_excludes_generic_foreign_key():
+def test_relation_field_index_excludes_generic_foreign_key() -> None:
     """``_relation_field_index`` does not index a ``GenericForeignKey`` as a FK (spec-036).
 
     A GFK reports ``is_relation=True`` but ``column=None`` / ``related_model=None``,
@@ -1264,7 +1273,7 @@ def test_relation_field_index_excludes_generic_foreign_key():
     assert "content_type_id" in fk_by_attr
 
 
-def test_explicit_null_error_allows_null_on_nullable_column():
+def test_explicit_null_error_allows_null_on_nullable_column() -> None:
     """``_explicit_null_error`` yields no error for ``null`` on a ``null=True`` column.
 
     The complement of the live
@@ -1284,7 +1293,7 @@ def test_explicit_null_error_allows_null_on_nullable_column():
     )
 
 
-def test_validation_error_to_field_errors_non_dict_uses_all_key():
+def test_validation_error_to_field_errors_non_dict_uses_all_key() -> None:
     """A non-dict ``ValidationError`` (``.messages``, no ``.error_dict``) maps under the sentinel.
 
     ``full_clean()`` always raises with an ``error_dict`` (the keyed path), so this
@@ -1304,7 +1313,7 @@ def test_validation_error_to_field_errors_non_dict_uses_all_key():
 # ---------------------------------------------------------------------------
 
 
-def test_validation_error_to_field_errors_preserves_django_codes_and_path():
+def test_validation_error_to_field_errors_preserves_django_codes_and_path() -> None:
     """A Django ``ValidationError``'s ``.code``s -> ``codes``; field name -> ``path``."""
     from django.core.exceptions import ValidationError as DjangoValidationError
 
@@ -1317,7 +1326,7 @@ def test_validation_error_to_field_errors_preserves_django_codes_and_path():
     assert fe.path == ["name"]
 
 
-def test_validation_error_to_field_errors_non_dict_root_has_empty_path():
+def test_validation_error_to_field_errors_non_dict_root_has_empty_path() -> None:
     """A non-dict (model-wide) Django ``ValidationError`` keys ``"__all__"`` with an EMPTY path (#13)."""
     from django.core.exceptions import ValidationError as DjangoValidationError
 
@@ -1337,7 +1346,7 @@ def test_validation_error_to_field_errors_non_dict_root_has_empty_path():
 
 
 @pytest.mark.django_db
-def test_locate_instance_locks_through_base_manager_subquery_by_default():
+def test_locate_instance_locks_through_base_manager_subquery_by_default() -> None:
     """The default locate acquires a visibility-constrained base-manager row lock.
 
     The lock query must NOT be the consumer's visibility queryset with
@@ -1411,7 +1420,7 @@ def _write_located(instance: Model | None, _decoded: object) -> Model | None:
     return instance
 
 
-def test_locate_instance_opt_out_skips_the_lock(monkeypatch: pytest.MonkeyPatch):
+def test_locate_instance_opt_out_skips_the_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     """``select_for_update=False`` locates through the (pinned) visibility queryset, unlocked."""
     from unittest.mock import MagicMock
 
@@ -1446,7 +1455,9 @@ def test_locate_instance_opt_out_skips_the_lock(monkeypatch: pytest.MonkeyPatch)
 # ---------------------------------------------------------------------------
 
 
-def test_write_pipeline_opens_atomic_on_managed_write_alias(monkeypatch: pytest.MonkeyPatch):
+def test_write_pipeline_opens_atomic_on_managed_write_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``run_write_pipeline_sync`` opens ``transaction.atomic(using=<managed alias>)``.
 
     The alias is resolved ONCE (by the ``DjangoSchema`` execution context, from
@@ -1481,13 +1492,13 @@ def test_write_pipeline_opens_atomic_on_managed_write_alias(monkeypatch: pytest.
     captured: dict[str, object] = {}
 
     class _Atomic:
-        def __init__(self, using: str | None = None):
+        def __init__(self, using: str | None = None) -> None:
             captured["using"] = using
 
-        def __enter__(self):
+        def __enter__(self) -> Self:
             return self
 
-        def __exit__(self, *args: object):
+        def __exit__(self, *args: object) -> bool:
             return False
 
     def _refetched(*_args: object, **_kwargs: object) -> MagicMock:
@@ -1522,7 +1533,7 @@ def _pipeline_harness(
     *,
     operation: str = "update",
     authorize: Callable[..., object] | None = None,
-):
+) -> tuple[mock.MagicMock, ModuleType]:
     """Scaffold ``run_write_pipeline_sync`` with mocked locate/authorize/refetch (snapshot tests)."""
     from unittest.mock import MagicMock
 
@@ -1556,7 +1567,9 @@ def _pipeline_harness(
     return mutation_cls, mutation_resolvers
 
 
-def test_pipeline_snapshots_authorized_pk_before_permission_hook(monkeypatch: pytest.MonkeyPatch):
+def test_pipeline_snapshots_authorized_pk_before_permission_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The authorized pk is captured BEFORE the permission hook can touch the mutable instance.
 
     A malicious ``check_permission`` re-pointing ``instance.pk`` at a hidden row must not
@@ -1575,7 +1588,7 @@ def test_pipeline_snapshots_authorized_pk_before_permission_hook(monkeypatch: py
         _meta=SimpleNamespace(concrete_fields=[]),
     )
 
-    def evil_authorize(*_args: object, **_kwargs: object):
+    def evil_authorize(*_args: object, **_kwargs: object) -> None:
         located.pk = 999  # re-point at a hidden row AFTER authorization
 
     mutation_cls, mutation_resolvers = _pipeline_harness(monkeypatch, authorize=evil_authorize)
@@ -1596,7 +1609,9 @@ def test_pipeline_snapshots_authorized_pk_before_permission_hook(monkeypatch: py
         )
 
 
-def test_pipeline_pk_drift_diagnostic_survives_hostile_repr(monkeypatch: pytest.MonkeyPatch):
+def test_pipeline_pk_drift_diagnostic_survives_hostile_repr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A pk forged by a hook cannot replace the typed drift error while formatting it."""
     from unittest.mock import patch
 
@@ -1605,7 +1620,7 @@ def test_pipeline_pk_drift_diagnostic_survives_hostile_repr(monkeypatch: pytest.
 
     class _HostilePk:
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr should never escape")
 
     located = SimpleNamespace(
@@ -1614,7 +1629,7 @@ def test_pipeline_pk_drift_diagnostic_survives_hostile_repr(monkeypatch: pytest.
         _meta=SimpleNamespace(concrete_fields=[]),
     )
 
-    def evil_authorize(*_args: object, **_kwargs: object):
+    def evil_authorize(*_args: object, **_kwargs: object) -> None:
         located.pk = _HostilePk()
 
     mutation_cls, mutation_resolvers = _pipeline_harness(monkeypatch, authorize=evil_authorize)
@@ -1635,7 +1650,9 @@ def test_pipeline_pk_drift_diagnostic_survives_hostile_repr(monkeypatch: pytest.
         )
 
 
-def test_pipeline_publishes_authorized_pk_on_write_context(monkeypatch: pytest.MonkeyPatch):
+def test_pipeline_publishes_authorized_pk_on_write_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The post-locate snapshot is published on the write-pipeline context for the flavors."""
     from types import SimpleNamespace
     from unittest.mock import patch
@@ -1652,7 +1669,7 @@ def test_pipeline_publishes_authorized_pk_on_write_context(monkeypatch: pytest.M
     )
     seen: dict[str, object] = {}
 
-    def probe_authorize(*_args: object, **_kwargs: object):
+    def probe_authorize(*_args: object, **_kwargs: object) -> None:
         seen["authorized_pk"] = require_write_pipeline().authorized_pk
 
     mutation_cls, mutation_resolvers = _pipeline_harness(monkeypatch, authorize=probe_authorize)
@@ -1674,7 +1691,9 @@ def test_pipeline_publishes_authorized_pk_on_write_context(monkeypatch: pytest.M
     assert seen["authorized_pk"] == 7
 
 
-def test_delete_pipeline_rejects_pk_drift_during_authorization(monkeypatch: pytest.MonkeyPatch):
+def test_delete_pipeline_rejects_pk_drift_during_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A delete permission hook re-pointing ``instance.pk`` fails closed before any delete."""
     from types import SimpleNamespace
     from unittest.mock import patch
@@ -1688,7 +1707,7 @@ def test_delete_pipeline_rejects_pk_drift_during_authorization(monkeypatch: pyte
         _meta=SimpleNamespace(concrete_fields=[]),
     )
 
-    def evil_authorize(*_args: object, **_kwargs: object):
+    def evil_authorize(*_args: object, **_kwargs: object) -> None:
         located.pk = 999  # re-point at a hidden row AFTER authorization
 
     mutation_cls, mutation_resolvers = _pipeline_harness(
@@ -1709,7 +1728,7 @@ def test_delete_pipeline_rejects_pk_drift_during_authorization(monkeypatch: pyte
 
 def test_delete_pipeline_pk_drift_diagnostic_survives_hostile_repr(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """A delete-path pk forged by a hook cannot replace the typed drift error while formatting."""
     from types import SimpleNamespace
     from unittest.mock import patch
@@ -1719,7 +1738,7 @@ def test_delete_pipeline_pk_drift_diagnostic_survives_hostile_repr(
 
     class _HostilePk:
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr should never escape")
 
     located = SimpleNamespace(
@@ -1728,7 +1747,7 @@ def test_delete_pipeline_pk_drift_diagnostic_survives_hostile_repr(
         _meta=SimpleNamespace(concrete_fields=[]),
     )
 
-    def evil_authorize(*_args: object, **_kwargs: object):
+    def evil_authorize(*_args: object, **_kwargs: object) -> None:
         located.pk = _HostilePk()
 
     mutation_cls, mutation_resolvers = _pipeline_harness(
@@ -1747,9 +1766,8 @@ def test_delete_pipeline_pk_drift_diagnostic_survives_hostile_repr(
         mutation_resolvers._run_delete(mutation_cls, info=None, id_="ignored")
 
 
-def test_delete_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.MonkeyPatch):
+def test_delete_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.MonkeyPatch) -> None:
     """Delete supplies a snapshot ``tail_step``; locate/auth/atomic live in the skeleton."""
-
     from django_strawberry_framework.mutations import resolvers as mutation_resolvers
 
     seen: dict[str, object] = {}
@@ -1760,12 +1778,11 @@ def test_delete_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.MonkeyP
         data: object,
         id_: object,
         *,
-        # basedpyright: the delete resolver passes the pipeline steps by keyword
-        decode_step: object,  # pyright: ignore[reportUnusedParameter]
-        # basedpyright: the delete resolver passes the pipeline steps by keyword
-        write_step: object,  # pyright: ignore[reportUnusedParameter]
+        decode_step: object,
+        write_step: object,
         tail_step: object = None,
-    ):
+    ) -> str:
+        del decode_step, write_step  # the delete resolver passes the pipeline steps by keyword
         seen["data"] = data
         seen["id"] = id_
         seen["tail_step"] = tail_step
@@ -1795,7 +1812,7 @@ def test_delete_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.MonkeyP
     assert callable(seen["tail_step"])
 
 
-def test_write_flavors_share_resolver_entry_factory():
+def test_write_flavors_share_resolver_entry_factory() -> None:
     """Model, form, and serializer sync entries all come from ``make_resolver_entries``."""
     from django_strawberry_framework.forms.resolvers import resolve_form_sync
     from django_strawberry_framework.rest_framework.resolvers import resolve_serializer_sync
@@ -1809,7 +1826,7 @@ def test_write_flavors_share_resolver_entry_factory():
 
 
 @pytest.mark.django_db
-def test_assign_m2m_integrity_error_contained_in_envelope():
+def test_assign_m2m_integrity_error_contained_in_envelope() -> None:
     """IntegrityError during M2M assignment is returned as the constraint FieldError envelope."""
     from unittest.mock import patch
 
@@ -1851,7 +1868,7 @@ def test_assign_m2m_integrity_error_contained_in_envelope():
 
 
 @pytest.mark.django_db
-def test_delete_integrity_error_contained_in_envelope():
+def test_delete_integrity_error_contained_in_envelope() -> None:
     """IntegrityError during instance.delete() is returned as the constraint FieldError envelope."""
     from unittest.mock import patch
 
@@ -1876,7 +1893,9 @@ def test_delete_integrity_error_contained_in_envelope():
 # ---------------------------------------------------------------------------
 
 
-def _build_link_child_schema(child_model: type[Model]):
+def _build_link_child_schema(
+    child_model: type[Model],
+) -> tuple[strawberry.Schema, type[DjangoType]]:
     """Primaries over ``LnkParent`` and ``child_model`` + all-fields create / update mutations.
 
     The child type exposes every field, its generated ``parent`` relation
@@ -1942,7 +1961,7 @@ _LINK_CHILD_CARRIER_ROWS: list[
 def test_all_fields_mutation_writes_a_foreign_object_through_its_carriers(
     child_name: str,
     carriers: Callable[[_link_models.LnkParent], dict[str, object]],
-):
+) -> None:
     """Create and update set the link by writing its carrier columns; ``parent`` reads it back.
 
     ``pa`` and ``pb`` share ``code="A"``, so the two-column create lands on
@@ -1985,7 +2004,9 @@ def test_all_fields_mutation_writes_a_foreign_object_through_its_carriers(
         assert child_model.objects.get(pk=row.pk).parent == parents["pc"]
 
 
-def _build_link_key_schema(hidden_label: str):
+def _build_link_key_schema(
+    hidden_label: str,
+) -> tuple[strawberry.Schema, type[DjangoType], type[DjangoType], type[DjangoType]]:
     """Relation-input mutations over the ``Lnk*`` links keyed by ``to_field`` columns.
 
     ``CreateSlugChild`` / ``UpdateSlugChild`` write ``LnkSlugChild.parent`` (a
@@ -2007,7 +2028,7 @@ def _build_link_key_schema(hidden_label: str):
             queryset: QuerySet[_link_models.LnkParent],
             info: strawberry.Info,
             **kwargs: object,
-        ):
+        ) -> QuerySet[_link_models.LnkParent]:
             return queryset.exclude(label=hidden_label)
 
     class LnkTagT(DjangoType, relay.Node):
@@ -2103,7 +2124,7 @@ def test_to_field_relation_input_stores_the_key_of_the_visible_row_it_names(
     target: str,
     expected_errors: list[dict[str, object]],
     expected_keys: list[str],
-):
+) -> None:
     """A ``to_field`` FK input names its target by id and stores the target's key column.
 
     The hidden ``pc``'s ``slug`` is ``pa``'s id, so storing the id ``pa`` is named by
@@ -2155,7 +2176,7 @@ def test_to_field_relation_input_stores_the_key_of_the_visible_row_it_names(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_to_field_through_m2m_input_sets_the_key_its_through_rows_store():
+def test_to_field_through_m2m_input_sets_the_key_its_through_rows_store() -> None:
     """An M2M whose through row keys the target by ``to_field`` stores each tag's ``code``.
 
     ``LnkTagging.tag`` is ``ForeignKey(LnkTag, to_field="code")``; the ``tags`` input

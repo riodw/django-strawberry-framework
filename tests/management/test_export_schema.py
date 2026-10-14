@@ -22,7 +22,7 @@ from django.core.management import CommandError, call_command
 from django_strawberry_framework.management.commands.export_schema import Command
 
 
-def _make_test_module(monkeypatch: pytest.MonkeyPatch, **attrs: object):
+def _make_test_module(monkeypatch: pytest.MonkeyPatch, **attrs: object) -> types.ModuleType:
     module = types.ModuleType("test_module")
     for key, value in attrs.items():
         setattr(module, key, value)
@@ -30,7 +30,7 @@ def _make_test_module(monkeypatch: pytest.MonkeyPatch, **attrs: object):
     return module
 
 
-def _make_schema():
+def _make_schema() -> strawberry.Schema:
     @strawberry.type
     class Query:
         hello: str = "world"
@@ -38,12 +38,12 @@ def _make_schema():
     return strawberry.Schema(query=Query)
 
 
-def test_export_schema_raises_command_error_for_missing_positional_argument():
+def test_export_schema_raises_command_error_for_missing_positional_argument() -> None:
     with pytest.raises(CommandError):
         call_command("export_schema")
 
 
-def test_export_schema_raises_command_error_for_a_non_string_schema_location():
+def test_export_schema_raises_command_error_for_a_non_string_schema_location() -> None:
     """A direct ``handle`` call skips argparse's ``type=str``, so ``handle`` guards the selector.
 
     ``call_command`` cannot carry the value: it routes the positional through
@@ -53,19 +53,21 @@ def test_export_schema_raises_command_error_for_a_non_string_schema_location():
         Command().handle(schema=5)
 
 
-def test_export_schema_raises_command_error_when_path_flag_has_no_value():
+def test_export_schema_raises_command_error_when_path_flag_has_no_value() -> None:
     with pytest.raises(CommandError, match="expected one argument"):
         call_command("export_schema", "config.schema:schema", "--path")
 
 
-def test_export_schema_path_help_documents_destructive_utf8_write():
+def test_export_schema_path_help_documents_destructive_utf8_write() -> None:
     parser = Command().create_parser("manage.py", "export_schema")
     path_action = next(action for action in parser._actions if "--path" in action.option_strings)
 
     assert path_action.help == "Write UTF-8 SDL to this file, overwriting it without prompting"
 
 
-def test_export_schema_file_write_disables_newline_translation(monkeypatch: pytest.MonkeyPatch):
+def test_export_schema_file_write_disables_newline_translation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """File output preserves SDL LF bytes on platforms with different native newlines."""
     schema = _make_schema()
     _make_test_module(monkeypatch, schema=schema)
@@ -78,7 +80,7 @@ def test_export_schema_file_write_disables_newline_translation(monkeypatch: pyte
         encoding: str | None = None,
         errors: str | None = None,
         newline: str | None = None,
-    ):
+    ) -> int:
         captured.update(data=data, encoding=encoding, errors=errors, newline=newline)
         return len(data)
 

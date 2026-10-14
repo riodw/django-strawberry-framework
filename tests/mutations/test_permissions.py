@@ -22,15 +22,18 @@ composed schema with the shipped mutation.
 
 from __future__ import annotations
 
-from collections.abc import Generator, Iterator
+from collections.abc import Awaitable, Generator, Iterator
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, ClassVar, NoReturn, Protocol
 
 import pytest
 import strawberry
 from apps.products import models as product_models
 from django.contrib.auth import get_user_model
+from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import AnonymousUser, Permission, User
 from strawberry import relay
+from strawberry.types import ExecutionResult
 from typing_extensions import override
 
 from django_strawberry_framework import (
@@ -54,6 +57,15 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing.relay import global_id_for
 from tests._info import make_info
 
+if TYPE_CHECKING:
+    from django_strawberry_framework.mutations.permissions import _ModelResolvingMutation
+
+    class _CreateItemMutation(_ModelResolvingMutation, Protocol):
+        """A bound create mutation class: what the permission seam and the seal rows both read."""
+
+        _mutation_meta: ClassVar[_ValidatedMutationMeta]
+        _primary_type: ClassVar[type[DjangoType]]
+
 
 @pytest.fixture(autouse=True)
 def _isolate_registry() -> Iterator[None]:
@@ -72,7 +84,7 @@ def _info_for(user: object) -> strawberry.Info[object, object]:
     return make_info(context=SimpleNamespace(request=SimpleNamespace(user=user)))
 
 
-def _create_item_mutation():
+def _create_item_mutation() -> type[_CreateItemMutation]:
     """A ``create`` ``DjangoMutation`` over the products ``Item`` model."""
 
     class CreateItem(DjangoMutation):
@@ -83,7 +95,7 @@ def _create_item_mutation():
     return CreateItem
 
 
-def _user_with_perms(*codenames: str):
+def _user_with_perms(*codenames: str) -> AbstractBaseUser:
     """Create a Django user holding exactly the named products permissions."""
     user = User.objects.create_user(username="perm_probe", password="x")
     for codename in codenames:
@@ -93,7 +105,7 @@ def _user_with_perms(*codenames: str):
     return get_user_model().objects.get(pk=user.pk)
 
 
-def test_operation_action_map_is_pinned():
+def test_operation_action_map_is_pinned() -> None:
     """The operation -> Django-action map matches the spec (create/update/delete)."""
     assert _OPERATION_PERMISSION_ACTION == {
         "create": "add",
@@ -103,7 +115,7 @@ def test_operation_action_map_is_pinned():
 
 
 @pytest.mark.django_db
-def test_anonymous_user_is_denied():
+def test_anonymous_user_is_denied() -> None:
     """An ``AnonymousUser`` holds no perms, so the write is denied (safe default)."""
     mutation = _create_item_mutation()
     info = _info_for(AnonymousUser())
@@ -111,7 +123,7 @@ def test_anonymous_user_is_denied():
 
 
 @pytest.mark.django_db
-def test_user_lacking_perm_is_denied():
+def test_user_lacking_perm_is_denied() -> None:
     """An authenticated user without ``add_item`` is denied for ``create``."""
     mutation = _create_item_mutation()
     user = _user_with_perms()  # no perms
@@ -120,7 +132,7 @@ def test_user_lacking_perm_is_denied():
 
 
 @pytest.mark.django_db
-def test_user_with_add_perm_allowed_for_create():
+def test_user_with_add_perm_allowed_for_create() -> None:
     """A user holding ``add_item`` is allowed for ``create``."""
     mutation = _create_item_mutation()
     user = _user_with_perms("add_item")
@@ -129,7 +141,7 @@ def test_user_with_add_perm_allowed_for_create():
 
 
 @pytest.mark.django_db
-def test_create_perm_does_not_authorize_update_or_delete():
+def test_create_perm_does_not_authorize_update_or_delete() -> None:
     """``add_item`` alone does not authorize ``update`` (needs ``change``) or ``delete``."""
     mutation = _create_item_mutation()
     user = _user_with_perms("add_item")
@@ -139,7 +151,7 @@ def test_create_perm_does_not_authorize_update_or_delete():
 
 
 @pytest.mark.django_db
-def test_change_and_delete_perms_authorize_their_operations():
+def test_change_and_delete_perms_authorize_their_operations() -> None:
     """``change_item`` authorizes ``update``; ``delete_item`` authorizes ``delete``."""
     mutation = _create_item_mutation()
     user = _user_with_perms("change_item", "delete_item")
@@ -171,7 +183,10 @@ class _Query:
 _NO_ERROR_MASKING = {"enabled": False}
 
 
-def _build_auth_schema(*, create_permission_classes: list[type] | None = None):
+def _build_auth_schema(
+    *,
+    create_permission_classes: list[type] | None = None,
+) -> tuple[DjangoSchema, tuple[type[DjangoType], type[DjangoType]]]:
     """Declare Item/Category primaries + create/update/delete mutations; return (schema, types).
 
     ``create_permission_classes`` overrides ``CreateItem.Meta.permission_classes``;
@@ -226,7 +241,7 @@ def _execute(
     query: str,
     user: object,
     variables: dict[str, object],
-):
+) -> ExecutionResult:
     """Execute ``query`` with ``info.context.request.user`` set to ``user``."""
     return schema.execute_sync(
         query,
@@ -239,15 +254,15 @@ _CREATE_Q = "mutation($d: ItemInput!){ createItem(data:$d){ node{ name } errors{
 
 
 @pytest.mark.django_db
-def test_empty_permission_classes_never_resolves_request_auth():
+def test_empty_permission_classes_never_resolves_request_auth() -> None:
     """The explicit allow-any opt-out does not invoke lazy user or auth-backend code."""
 
     class ExplodingUser:
         @property
-        def is_authenticated(self):
+        def is_authenticated(self) -> NoReturn:
             raise AssertionError("permission-free mutations must not resolve auth")
 
-        def get_all_permissions(self):
+        def get_all_permissions(self) -> NoReturn:
             raise AssertionError("permission-free mutations must not call auth backends")
 
     schema, (CategoryT, _ItemT) = _build_auth_schema(create_permission_classes=[])
@@ -264,7 +279,7 @@ def test_empty_permission_classes_never_resolves_request_auth():
 
 
 @pytest.mark.django_db
-def test_permission_classes_override_deny_blocks_permitted_caller():
+def test_permission_classes_override_deny_blocks_permitted_caller() -> None:
     """A custom deny-all override blocks an otherwise-permitted caller (proving the override path)."""
 
     class DenyAll:
@@ -275,7 +290,7 @@ def test_permission_classes_override_deny_blocks_permitted_caller():
             _operation: str,
             _data: object,
             _instance: object = None,
-        ):
+        ) -> bool:
             return False
 
     schema, (CategoryT, _ItemT) = _build_auth_schema(create_permission_classes=[DenyAll])
@@ -292,7 +307,7 @@ def test_permission_classes_override_deny_blocks_permitted_caller():
 
 
 @pytest.mark.django_db
-def test_async_has_permission_is_rejected_not_bypassed():
+def test_async_has_permission_is_rejected_not_bypassed() -> None:
     """An async ``has_permission`` raises SyncMisuseError, never a silent allow.
 
     A coroutine is truthy, so a naive ``if not has_permission(...)`` would treat an
@@ -310,7 +325,7 @@ def test_async_has_permission_is_rejected_not_bypassed():
             _operation: str,
             _data: object,
             _instance: object = None,
-        ):
+        ) -> bool:
             return False
 
     schema, (CategoryT, _ItemT) = _build_auth_schema(create_permission_classes=[AsyncDeny])
@@ -327,7 +342,7 @@ def test_async_has_permission_is_rejected_not_bypassed():
 
 
 @pytest.mark.django_db
-def test_awaitable_has_permission_is_rejected_not_bypassed():
+def test_awaitable_has_permission_is_rejected_not_bypassed() -> None:
     """A custom awaitable permission result cannot be treated as truthy authorization."""
 
     class DeferredDeny:
@@ -343,7 +358,7 @@ def test_awaitable_has_permission_is_rejected_not_bypassed():
             _operation: str,
             _data: object,
             _instance: object = None,
-        ):
+        ) -> DeferredDeny:
             return DeferredDeny()
 
     schema, (CategoryT, _ItemT) = _build_auth_schema(
@@ -363,12 +378,12 @@ def test_awaitable_has_permission_is_rejected_not_bypassed():
 
 
 @pytest.mark.django_db
-def test_hostile_non_bool_permission_result_keeps_configuration_error():
+def test_hostile_non_bool_permission_result_keeps_configuration_error() -> None:
     """A hostile ``__repr__`` cannot replace the typed non-bool auth failure."""
 
     class Hostile:
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr escape")
 
     class HostileResult:
@@ -379,7 +394,7 @@ def test_hostile_non_bool_permission_result_keeps_configuration_error():
             operation: str,
             data: object,
             instance: object = None,
-        ):
+        ) -> Hostile:
             del info, mutation, operation, data, instance
             return Hostile()
 
@@ -402,7 +417,7 @@ def test_hostile_non_bool_permission_result_keeps_configuration_error():
 
 
 @pytest.mark.django_db
-def test_async_check_permission_override_is_rejected_not_bypassed():
+def test_async_check_permission_override_is_rejected_not_bypassed() -> None:
     """An async ``check_permission`` override raises SyncMisuseError, not a silent allow.
 
     The override returns a coroutine; ``authorize_or_raise`` closes it and raises
@@ -437,7 +452,7 @@ def test_async_check_permission_override_is_rejected_not_bypassed():
             operation: str,
             data: object,
             instance: object = None,
-        ):
+        ) -> bool:
             return False
 
     @strawberry.type
@@ -459,7 +474,7 @@ def test_async_check_permission_override_is_rejected_not_bypassed():
 
 
 @pytest.mark.django_db
-def test_awaitable_has_perm_is_rejected_not_bypassed():
+def test_awaitable_has_perm_is_rejected_not_bypassed() -> None:
     """An awaitable ``user.has_perm`` raises SyncMisuseError, never a silent allow.
 
     ``bool(coroutine)`` is True, so a naive ``return bool(user.has_perm(...))``
@@ -472,8 +487,8 @@ def test_awaitable_has_perm_is_rejected_not_bypassed():
     class _AwaitablePermUser:
         is_authenticated = True
 
-        def has_perm(self, _codename: str):
-            async def _deny():
+        def has_perm(self, _codename: str) -> Awaitable[bool]:
+            async def _deny() -> bool:
                 return False
 
             return _deny()
@@ -484,7 +499,7 @@ def test_awaitable_has_perm_is_rejected_not_bypassed():
         DjangoModelPermission().has_permission(info, mutation, "create", data=None)
 
 
-def test_request_without_user_attribute_is_denied():
+def test_request_without_user_attribute_is_denied() -> None:
     """A request carrying no ``user`` attribute is denied (the ``user is None`` guard).
 
     Distinct from the ``AnonymousUser`` case (denied later via ``has_perm``): under a
@@ -498,7 +513,7 @@ def test_request_without_user_attribute_is_denied():
     assert DjangoModelPermission().has_permission(info, mutation, "create", data=None) is False
 
 
-def test_deny_all_always_returns_false():
+def test_deny_all_always_returns_false() -> None:
     """``DenyAll.has_permission`` returns ``False`` unconditionally across all operations."""
     deny = DenyAll()
     info = SimpleNamespace(context=SimpleNamespace(request=SimpleNamespace(user=None)))
@@ -512,7 +527,7 @@ def test_deny_all_always_returns_false():
     assert deny.has_permission(info, mutation, "form", data={"ping": True}, instance=None) is False
 
 
-def test_run_permission_classes_short_circuits_on_first_denial():
+def test_run_permission_classes_short_circuits_on_first_denial() -> None:
     """``run_permission_classes`` evaluates classes sequentially and short-circuits on first False."""
     eval_order: list[str] = []
 
@@ -524,7 +539,7 @@ def test_run_permission_classes_short_circuits_on_first_denial():
             _operation: str,
             _data: object,
             _instance: object = None,
-        ):
+        ) -> bool:
             eval_order.append("AllowingPerm")
             return True
 
@@ -536,7 +551,7 @@ def test_run_permission_classes_short_circuits_on_first_denial():
             _operation: str,
             _data: object,
             _instance: object = None,
-        ):
+        ) -> bool:
             eval_order.append("DenyingPerm")
             return False
 
@@ -548,7 +563,7 @@ def test_run_permission_classes_short_circuits_on_first_denial():
             _operation: str,
             _data: object,
             _instance: object = None,
-        ):
+        ) -> bool:
             eval_order.append("NeverReachedPerm")
             return True
 
@@ -582,7 +597,7 @@ def test_run_permission_classes_short_circuits_on_first_denial():
         object(),
     ],
 )
-def test_require_sync_bool_auth_result_rejects_non_bool_values(invalid_result: object):
+def test_require_sync_bool_auth_result_rejects_non_bool_values(invalid_result: object) -> None:
     """``_require_sync_bool_auth_result`` rejects non-bool values without coercion."""
     with pytest.raises(ConfigurationError, match="must return a bool"):
         _require_sync_bool_auth_result(invalid_result, owner="CustomPerm", method="has_permission")
@@ -594,7 +609,7 @@ def test_require_sync_bool_auth_result_rejects_non_bool_values(invalid_result: o
 # ---------------------------------------------------------------------------
 
 
-def test_walk_ignores_mid_request_pollution_of_the_class_permission_list():
+def test_walk_ignores_mid_request_pollution_of_the_class_permission_list() -> None:
     """A hook emptying the class's permission list cannot flip the in-flight walk.
 
     ``run_permission_classes`` iterates a SNAPSHOT (the tuple captured before the
@@ -616,7 +631,7 @@ def test_walk_ignores_mid_request_pollution_of_the_class_permission_list():
             _operation: str,
             _data: object,
             _instance: object = None,
-        ):
+        ) -> bool:
             # ``mutation`` IS the mutation class the walk passes; the pollution
             # reach is the exact object the walk would iterate live.
             try:
@@ -637,7 +652,7 @@ def test_walk_ignores_mid_request_pollution_of_the_class_permission_list():
             _operation: str,
             _data: object,
             _instance: object = None,
-        ):
+        ) -> bool:
             events.append("Denier")
             return False
 
@@ -691,7 +706,7 @@ def test_walk_ignores_mid_request_pollution_of_the_class_permission_list():
 
 
 @pytest.mark.django_db
-def test_hook_rebinding_the_validated_permission_slot_fails_closed():
+def test_hook_rebinding_the_validated_permission_slot_fails_closed() -> None:
     """A hook reassigning the validated permission set fails the request closed (live tier).
 
     The snapshot walk survives list pollution (above), but pre-hardening a hook
@@ -703,7 +718,6 @@ def test_hook_rebinding_the_validated_permission_slot_fails_closed():
     top-level error, no row), the validated configuration survives untouched,
     and a second identical anonymous request is still denied.
     """
-
     denier_runs: list[str] = []
 
     class AllowAndRebind:
@@ -714,7 +728,7 @@ def test_hook_rebinding_the_validated_permission_slot_fails_closed():
             _operation: str,
             _data: object,
             _instance: object = None,
-        ):
+        ) -> bool:
             # The hook's ``mutation`` IS the mutation class; the plain attribute
             # statement is the pre-fix persistent-bypass shape.
             mutation._mutation_meta.permission_classes = ()
@@ -728,7 +742,7 @@ def test_hook_rebinding_the_validated_permission_slot_fails_closed():
             _operation: str,
             _data: object,
             _instance: object = None,
-        ):
+        ) -> bool:
             denier_runs.append("Denier")
             return False
 
@@ -789,7 +803,7 @@ def test_hook_rebinding_the_validated_permission_slot_fails_closed():
     assert denier_runs == []
 
 
-def test_whole_record_swap_and_deletion_on_a_real_mutation_class_are_sealed():
+def test_whole_record_swap_and_deletion_on_a_real_mutation_class_are_sealed() -> None:
     """A mutation class's validated ``_mutation_meta`` head is write-once (0.0.15 hardening).
 
     The metaclass guard (``make_meta_validating_metaclass.__setattr__`` /
@@ -823,7 +837,7 @@ def test_whole_record_swap_and_deletion_on_a_real_mutation_class_are_sealed():
     assert "_primary_type" not in sealed.__dict__
 
 
-def test_validated_mutation_meta_record_refuses_slot_writes_and_deletes():
+def test_validated_mutation_meta_record_refuses_slot_writes_and_deletes() -> None:
     """The validated snapshot's own slots are sealed once ``__init__`` finishes.
 
     Mirrors the head seal at the record level: the record is the per-request

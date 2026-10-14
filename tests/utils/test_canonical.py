@@ -12,7 +12,7 @@ No GraphQL document can observe those dunders; input SDL lives in
 ``examples/fakeshop/test_query/test_library_api.py``.
 """
 
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Iterator
 
 import pytest
 from typing_extensions import override
@@ -29,75 +29,75 @@ class _LyingDict(dict[str, object]):
 
     @override
     # basedpyright: deliberately lying views, the hooks canonicalization must not dispatch through
-    def items(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def items(self) -> list[tuple[str, str]]:  # pyright: ignore[reportIncompatibleMethodOverride]
         return [("lied", "pair")]
 
     @override
     # basedpyright: deliberately lying views, the hooks canonicalization must not dispatch through
-    def keys(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def keys(self) -> list[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
         return ["lied"]
 
     @override
     # basedpyright: deliberately lying views, the hooks canonicalization must not dispatch through
-    def values(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def values(self) -> list[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
         return ["pair"]
 
     @override
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         return iter(["lied"])
 
     @override
-    def __len__(self):
+    def __len__(self) -> int:
         return 99
 
 
 class _LyingSet(set[object]):
     @override
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         return iter(["lied"])
 
     @override
-    def __len__(self):
+    def __len__(self) -> int:
         return 99
 
 
 class _LyingFrozenSet(frozenset[object]):
     @override
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         return iter(["lied"])
 
     @override
-    def __len__(self):
+    def __len__(self) -> int:
         return 99
 
 
 class _LyingList(list[object]):
     @override
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         return iter(["lied"])
 
     @override
-    def __len__(self):
+    def __len__(self) -> int:
         return 99
 
 
 class _LyingTuple(tuple[object, ...]):
     @override
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         return iter(["lied"])
 
     @override
-    def __len__(self):
+    def __len__(self) -> int:
         return 99
 
 
 class _HostileIterable:
     """A non-base iterable whose ``__iter__`` detonates, recording that it ran."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.iter_calls = 0
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         self.iter_calls += 1
         raise RuntimeError("hostile __iter__ detonated")
 
@@ -105,7 +105,7 @@ class _HostileIterable:
 class _PlainIterable:
     """A well-behaved non-base iterable - still outside the readable domain."""
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         return iter(["a", "b"])
 
 
@@ -113,13 +113,13 @@ class _ConstantRepr:
     """Distinct instances that all render identically, the collapse a bare key allows."""
 
     @override
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "<same>"
 
 
 class _RaisingRepr:
     @override
-    def __repr__(self):
+    def __repr__(self) -> str:
         raise RuntimeError("hostile __repr__ detonated")
 
 
@@ -127,11 +127,11 @@ class _HostileStr(str):
     """A ``str`` subclass that detonates the moment anything renders it."""
 
     @override
-    def __str__(self):
+    def __str__(self) -> str:
         raise RuntimeError("hostile __str__ detonated")
 
     @override
-    def __format__(self, spec: str):
+    def __format__(self, spec: str) -> str:
         raise RuntimeError("hostile __format__ detonated")
 
 
@@ -139,22 +139,22 @@ class _LyingStr(str):
     """A ``str`` subclass whose ``__repr__`` hands back a hostile ``str`` subclass."""
 
     @override
-    def __repr__(self):
+    def __repr__(self) -> str:
         return _HostileStr("forged")
 
 
-def test_base_container_values_reads_a_plain_dicts_items():
+def test_base_container_values_reads_a_plain_dicts_items() -> None:
     assert base_container_values({"a": 1, "b": 2}) == (("a", 1), ("b", 2))
 
 
-def test_base_container_values_reads_plain_members_for_the_other_four_containers():
+def test_base_container_values_reads_plain_members_for_the_other_four_containers() -> None:
     assert base_container_values({"only"}) == ("only",)
     assert base_container_values(frozenset({"only"})) == ("only",)
     assert base_container_values(["a", "b"]) == ("a", "b")
     assert base_container_values(("a", "b")) == ("a", "b")
 
 
-def test_base_container_values_reads_a_dict_subclass_through_the_base_items_slot():
+def test_base_container_values_reads_a_dict_subclass_through_the_base_items_slot() -> None:
     """``dict.items`` is called unbound, so the override cannot decide what is seen."""
     value = _LyingDict({"real": 1})
 
@@ -184,7 +184,7 @@ def test_base_container_values_reads_a_dict_subclass_through_the_base_items_slot
 def test_base_container_values_reads_subclasses_through_the_base_iterator(
     factory: Callable[[], Collection[str]],
     expected: tuple[str, ...],
-):
+) -> None:
     """A subclass's ``__iter__`` / ``__len__`` override is bypassed on every shape."""
     value = factory()
 
@@ -193,7 +193,7 @@ def test_base_container_values_reads_subclasses_through_the_base_iterator(
     assert len(value) == 99
 
 
-def test_base_container_values_refuses_a_non_base_iterable():
+def test_base_container_values_refuses_a_non_base_iterable() -> None:
     """Outside the five built-ins there is no base slot to read, so the answer is typed.
 
     The refusal is the contract both callers already assume: each gates on the
@@ -204,7 +204,7 @@ def test_base_container_values_refuses_a_non_base_iterable():
         base_container_values(_PlainIterable())
 
 
-def test_base_container_values_refuses_a_hostile_iterable_without_running_its_iter():
+def test_base_container_values_refuses_a_hostile_iterable_without_running_its_iter() -> None:
     """A detonating ``__iter__`` never runs: the refusal precedes the dispatch.
 
     Containing the ``RuntimeError`` would be the weaker fix - an ``__iter__`` that
@@ -219,7 +219,7 @@ def test_base_container_values_refuses_a_hostile_iterable_without_running_its_it
     assert value.iter_calls == 0
 
 
-def test_base_container_values_refusal_is_not_chained_to_a_consumer_error():
+def test_base_container_values_refusal_is_not_chained_to_a_consumer_error() -> None:
     """No ``__cause__``: nothing of the consumer's ran, so there is no cause to chain."""
     with pytest.raises(ConfigurationError) as exc_info:
         base_container_values(_HostileIterable())
@@ -227,7 +227,7 @@ def test_base_container_values_refusal_is_not_chained_to_a_consumer_error():
     assert exc_info.value.__cause__ is None
 
 
-def test_canonical_sort_key_totally_orders_mutually_unorderable_types():
+def test_canonical_sort_key_totally_orders_mutually_unorderable_types() -> None:
     """Eight types that ``<`` cannot compare pairwise still sort deterministically."""
     values = [
         1,
@@ -252,7 +252,7 @@ def test_canonical_sort_key_totally_orders_mutually_unorderable_types():
     assert len(first) == len(values)
 
 
-def test_canonical_sort_key_keeps_identical_reprs_distinct():
+def test_canonical_sort_key_keeps_identical_reprs_distinct() -> None:
     """A constant ``__repr__`` cannot collapse two values onto one key.
 
     That collapse is the fail-open the key exists to prevent: on the drift path
@@ -265,7 +265,7 @@ def test_canonical_sort_key_keeps_identical_reprs_distinct():
     assert canonical_sort_key(left) != canonical_sort_key(right)
 
 
-def test_canonical_sort_key_guards_a_raising_repr():
+def test_canonical_sort_key_guards_a_raising_repr() -> None:
     """A detonating ``__repr__`` yields a key instead of breaking the walk."""
     value = _RaisingRepr()
 
@@ -276,7 +276,7 @@ def test_canonical_sort_key_guards_a_raising_repr():
     assert key[1:] == (id(type(value)), id(value))
 
 
-def test_canonical_sort_key_flattens_a_str_subclass_repr_to_the_base_str():
+def test_canonical_sort_key_flattens_a_str_subclass_repr_to_the_base_str() -> None:
     """A ``__repr__`` returning a ``str`` SUBCLASS is stripped to base ``str``.
 
     CPython hands a ``tp_repr`` result back unchanged when it is a ``str``

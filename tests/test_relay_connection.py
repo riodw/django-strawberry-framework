@@ -37,6 +37,7 @@ from django.db.models.expressions import Combinable
 from django.http import HttpRequest
 from strategy_schemas import make_django_type
 from strawberry import relay
+from strawberry.types import ExecutionResult
 from strawberry.types.field import StrawberryField
 from typing_extensions import override
 
@@ -87,7 +88,7 @@ def _synthesized_field() -> StrawberryField:
     return strawberry.field(resolver=lambda: None)  # pyright: ignore[reportReturnType]
 
 
-def _path(*keys: str | int):
+def _path(*keys: str | int) -> object:
     """Build a graphql-core-style linked response path (integer keys are list indexes)."""
     path = None
     for key in keys:
@@ -103,7 +104,11 @@ pytestmark = pytest.mark.usefixtures("isolate_global_registry")
 _make_type = make_django_type
 
 
-def _schema_with_root(declaring_type: type[DjangoType], *, field_name: str = "objs"):
+def _schema_with_root(
+    declaring_type: type[DjangoType],
+    *,
+    field_name: str = "objs",
+) -> strawberry.Schema:
     """Finalize and build a schema exposing ``field_name: [declaring_type!]!``.
 
     The root field lists every row of the declaring type's model in pk order
@@ -128,7 +133,7 @@ def _schema_with_root(declaring_type: type[DjangoType], *, field_name: str = "ob
     return strawberry.Schema(query=query_cls, config=strawberry_config())
 
 
-def _field_args_block(sdl: str, field_name: str):
+def _field_args_block(sdl: str, field_name: str) -> str:
     """Return the SDL argument block of ``field_name``.
 
     The Relay pagination args carry descriptions, so graphql-core prints a
@@ -162,7 +167,7 @@ def _seed_library_books(
 # =============================================================================
 
 
-def test_default_connection_only_covers_both_m2m_directions():
+def test_default_connection_only_covers_both_m2m_directions() -> None:
     """Forward AND reverse M2M relations become connection-only under the default.
 
     ``Book.genres`` (forward M2M) and ``Genre.books`` (reverse M2M) both get
@@ -186,7 +191,7 @@ def test_default_connection_only_covers_both_m2m_directions():
 
 
 @pytest.mark.django_db
-def test_reverse_fk_without_related_name_resolves_list_and_connection():
+def test_reverse_fk_without_related_name_resolves_list_and_connection() -> None:
     """A reverse FK with NO ``related_name`` resolves on both relation surfaces.
 
     ``apps/library/models.py::RepairTicket.venue`` declares no
@@ -240,7 +245,7 @@ def test_reverse_fk_without_related_name_resolves_list_and_connection():
 # =============================================================================
 
 
-def test_shape_list_suppresses_connection():
+def test_shape_list_suppresses_connection() -> None:
     """``"list"`` synthesizes nothing - a construction variant fakeshop does not declare.
 
     Explicit ``relation_shapes = "connection"`` (list sibling dropped) is pinned
@@ -267,7 +272,7 @@ def test_shape_list_suppresses_connection():
 
 
 @pytest.mark.parametrize("shape", ["connection", "both"])
-def test_non_node_target_explicit_raises(shape: str):
+def test_non_node_target_explicit_raises(shape: str) -> None:
     """An explicit ``"connection"`` / ``"both"`` over a non-Node target raises at finalize.
 
     Construction-time ``ConfigurationError``: the silent list-only default is
@@ -294,7 +299,7 @@ def test_non_node_target_explicit_raises(shape: str):
 # =============================================================================
 
 
-def test_consumer_overridden_relation_skipped():
+def test_consumer_overridden_relation_skipped() -> None:
     """A consumer-authored relation is never upgraded under the implicit default.
 
     No ``relation_shapes`` entry for ``items``: the consumer annotation owns
@@ -318,7 +323,7 @@ def test_consumer_overridden_relation_skipped():
     assert "itemsConnection" not in sdl
 
 
-def test_generated_name_collision_raises():
+def test_generated_name_collision_raises() -> None:
     """A consumer attribute named ``<field>_connection`` raises with the opt-out."""
     _make_type("ItemType", Item, ("id", "name", "category"))
     _make_type(
@@ -335,7 +340,7 @@ def test_generated_name_collision_raises():
     assert 'relation_shapes = {"items": "list"}' in message
 
 
-def test_generated_name_graphql_camel_collision_raises():
+def test_generated_name_graphql_camel_collision_raises() -> None:
     """A camelCase consumer attribute collides on the GraphQL surface.
 
     ``itemsConnection`` and the generated ``items_connection`` are distinct
@@ -363,7 +368,7 @@ def test_generated_name_graphql_camel_collision_raises():
 # =============================================================================
 
 
-def test_synthesis_skips_already_attached_on_refinalize():
+def test_synthesis_skips_already_attached_on_refinalize() -> None:
     """A rerun after a post-synthesis finalize failure skips the attached sibling.
 
     The re-entrancy marker path: the first ``finalize_django_types()`` attaches
@@ -398,7 +403,7 @@ def test_synthesis_skips_already_attached_on_refinalize():
     assert sdl.count("itemsConnection(") == 1
 
 
-def test_connection_only_relation_stays_list_suppressed_on_refinalize():
+def test_connection_only_relation_stays_list_suppressed_on_refinalize() -> None:
     """A ``"connection"`` relation survives a partial-finalize rerun list-suppressed.
 
     The first ``finalize_django_types()`` synthesizes ``itemsConnection`` and
@@ -445,7 +450,7 @@ def test_connection_only_relation_stays_list_suppressed_on_refinalize():
 # =============================================================================
 
 
-def test_synthesized_connection_carries_sidecar_args_and_total_count():
+def test_synthesized_connection_carries_sidecar_args_and_total_count() -> None:
     """The synthesized field carries the TARGET's sidecar args and ``totalCount`` opt-in.
 
     Type-level target-driven contract (Decision 6): ``ItemType`` declares
@@ -507,7 +512,7 @@ def test_synthesized_connection_carries_sidecar_args_and_total_count():
     assert "ItemTypeConnection" in sdl
 
 
-def test_registry_clear_preserves_replacement_for_synthesized_connection():
+def test_registry_clear_preserves_replacement_for_synthesized_connection() -> None:
     """Identity-safe teardown leaves a later same-named consumer value untouched."""
     _make_type("ItemType", Item, ("id", "name", "category"))
     category_type = _make_type("CategoryType", Category, ("id", "name", "items"))
@@ -522,7 +527,7 @@ def test_registry_clear_preserves_replacement_for_synthesized_connection():
     assert vars(category_type)["items_connection"] is replacement
 
 
-def test_relation_connection_teardown_restores_owned_annotations_in_place():
+def test_relation_connection_teardown_restores_owned_annotations_in_place() -> None:
     """Teardown preserves the annotation-dict identity held by consumer tooling."""
     annotations: dict[str, object] = {"items": list[Item]}
 
@@ -560,7 +565,7 @@ def test_relation_connection_teardown_restores_owned_annotations_in_place():
     assert definition.relation_connections is None
 
 
-def test_relation_connection_teardown_inverts_a_replaced_annotations_dict():
+def test_relation_connection_teardown_inverts_a_replaced_annotations_dict() -> None:
     """Teardown applies the per-field inverse when the annotations dict was replaced.
 
     On Python <= 3.13 Phase 3 (``strawberry.type`` processing,
@@ -608,7 +613,7 @@ def test_relation_connection_teardown_inverts_a_replaced_annotations_dict():
     assert replaced == {"name": str, "items": list[Item]}
 
 
-def test_relation_connection_teardown_keeps_a_present_relation_annotation():
+def test_relation_connection_teardown_keeps_a_present_relation_annotation() -> None:
     """The replaced-dict inverse never overwrites an already-present relation slot."""
     synthesis_time_annotations: dict[str, object] = {"items": list[Item]}
     consumer_items = object()
@@ -646,7 +651,7 @@ def test_relation_connection_teardown_keeps_a_present_relation_annotation():
     assert replaced == {"items": consumer_items}
 
 
-def test_registry_clear_removes_synthesized_state_before_different_shape_rebuild():
+def test_registry_clear_removes_synthesized_state_before_different_shape_rebuild() -> None:
     """A fresh same-named type rebuild cannot inherit the prior connection shape.
 
     The first lifecycle suppresses ``items`` in favor of ``itemsConnection``.
@@ -698,7 +703,7 @@ def test_registry_clear_removes_synthesized_state_before_different_shape_rebuild
 # installed. The existing ``_schema_with_root`` (a plain list resolver the
 # optimizer never sees) stays the pipeline-path baseline; the ``1 + N`` cost
 # an optimizer-less mount pays is pinned live at
-# ``test_products_visibility_api.py::test_nested_connection_costs_one_query_per_parent_without_the_optimizer``.
+# ``test_products_visibility_api.py::test_nested_connection_costs_one_query_per_parent_without_the_optimizer``.  # noqa: E501 - citation path cannot wrap
 # =============================================================================
 
 
@@ -707,7 +712,7 @@ def _genres_list_schema(
     optimizer: bool = False,
     book_total_count: bool = False,
     strictness: str = "off",
-):
+) -> strawberry.Schema:
     """Build a ``DjangoListField(GenreType)`` root over the M2M ``Genre.books``.
 
     With ``optimizer`` installed the parent ``Genre`` queryset is planned, so
@@ -741,7 +746,7 @@ def _genres_list_schema(
     return strawberry.Schema(query=query_cls, config=strawberry_config(), extensions=extensions)
 
 
-def _genres_filterable_book_schema(*, strictness: str = "raise"):
+def _genres_filterable_book_schema(*, strictness: str = "raise") -> strawberry.Schema:
     """Build the same M2M genres list root but with ``BookType`` carrying a sidecar.
 
     A ``filterset_class`` on ``BookType`` means a nested ``booksConnection(filter:
@@ -786,7 +791,11 @@ def _genres_filterable_book_schema(*, strictness: str = "raise"):
     )
 
 
-def _genres_distinct_book_schema(*, optimizer: bool = True, strictness: str = "off"):
+def _genres_distinct_book_schema(
+    *,
+    optimizer: bool = True,
+    strictness: str = "off",
+) -> strawberry.Schema:
     """M2M genres list root whose ``BookType`` target ``get_queryset`` ``.distinct()``s.
 
     A ``.distinct()``-ing target is a Decision-6 DISTINCT fallback: the window's
@@ -806,7 +815,11 @@ def _genres_distinct_book_schema(*, optimizer: bool = True, strictness: str = "o
 
         @classmethod
         @override
-        def get_queryset(cls, queryset: djmodels.QuerySet[Book], info: object):
+        def get_queryset(
+            cls,
+            queryset: djmodels.QuerySet[Book],
+            info: object,
+        ) -> djmodels.QuerySet[Book]:
             return queryset.filter(genres__isnull=False).distinct()
 
     assert registry.get(Book) is BookType
@@ -827,7 +840,7 @@ def _genres_distinct_book_schema(*, optimizer: bool = True, strictness: str = "o
     return strawberry.Schema(query=query_cls, config=strawberry_config(), extensions=extensions)
 
 
-def _exec(schema: strawberry.Schema, query: str):
+def _exec(schema: strawberry.Schema, query: str) -> ExecutionResult:
     """Execute and return the first parent's ``booksConnection`` dict (no errors)."""
     result = schema.execute_sync(query)
     assert result.errors is None, result.errors
@@ -835,7 +848,9 @@ def _exec(schema: strawberry.Schema, query: str):
 
 
 @pytest.mark.django_db
-def test_fast_path_single_query(django_assert_num_queries: pytest_django.DjangoAssertNumQueries):
+def test_fast_path_single_query(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+) -> None:
     """Parent page + one window query, zero per-parent queries (the cost contract).
 
     The optimizer-on mirror of the optimizer-less ``1 + N`` cost (live at
@@ -870,13 +885,13 @@ def test_fast_path_single_query(django_assert_num_queries: pytest_django.DjangoA
 @pytest.mark.django_db
 def test_fast_path_through_schema_connection_extension(
     django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+) -> None:
     """The fast path survives Strawberry's ``ConnectionExtension.resolve`` wrapper.
 
-    MANDATORY (spec-033 Decision 5, the through-schema mandate): execute the real ``relay.connection(...)`` field
-    end to end. The resolver returns a ``_WindowedConnectionRows`` node wrapper
-    and the generated connection class builds the Relay object - a direct helper
-    call would miss the ``ConnectionExtension`` layer boundary. The fixed query
+    MANDATORY (spec-033 Decision 5, the through-schema mandate): execute the real
+    ``relay.connection(...)`` field end to end. The resolver returns a
+    ``_WindowedConnectionRows`` node wrapper and the generated connection class builds the
+    Relay object - a direct helper call would miss the ``ConnectionExtension`` layer boundary. The fixed query
     count (parent + one window, no per-parent query) proves the fast path fired
     rather than the per-parent pipeline.
     """
@@ -895,7 +910,7 @@ def test_fast_path_through_schema_connection_extension(
 @pytest.mark.django_db
 def test_divergent_aliases_one_window_query_per_alias(
     django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+) -> None:
     """Divergent aliases cost parents + ONE window query per alias.
 
     ``a: booksConnection(first: 2)`` + ``b: booksConnection(first: 5)`` was the
@@ -935,7 +950,7 @@ def test_divergent_aliases_one_window_query_per_alias(
 
 
 @pytest.mark.django_db
-def test_divergent_aliases_wire_parity():
+def test_divergent_aliases_wire_parity() -> None:
     """Divergent aliases: per-key windows and the pipeline are byte-identical.
 
     Full page, short page, cursors, and page flags - the optimizer-on wire
@@ -978,7 +993,7 @@ def test_divergent_aliases_wire_parity():
 
 
 @pytest.mark.django_db
-def test_divergent_alias_per_key_window_preferred_over_shared():
+def test_divergent_alias_per_key_window_preferred_over_shared() -> None:
     """Rows under the per-key attr serve the alias even when the shared attr exists.
 
     The resolver probes ``_dst_books$<key>_connection`` FIRST and only falls
@@ -1031,7 +1046,7 @@ def test_divergent_alias_per_key_window_preferred_over_shared():
 
 
 @pytest.mark.django_db
-def test_divergent_mixed_sidecar_serves_each_alias_correctly():
+def test_divergent_mixed_sidecar_serves_each_alias_correctly() -> None:
     """A sidecar alias resolves per-parent while its divergent sibling is windowed.
 
     ``a`` (filtered) takes the per-parent pipeline and narrows correctly; ``b``
@@ -1056,7 +1071,7 @@ def test_divergent_mixed_sidecar_serves_each_alias_correctly():
 
 
 @pytest.mark.django_db
-def test_divergent_aliases_strictness_raise_planned_keys_silent():
+def test_divergent_aliases_strictness_raise_planned_keys_silent() -> None:
     """Plain divergent aliases are PLANNED - strictness ``"raise"`` stays silent."""
     _seed_library_books(["a", "b", "c"])
     schema = _genres_list_schema(optimizer=True, strictness="raise")
@@ -1074,7 +1089,7 @@ def test_divergent_aliases_strictness_raise_planned_keys_silent():
 
 
 @pytest.mark.django_db
-def test_divergent_mixed_sidecar_strictness_flags_only_the_sidecar_key():
+def test_divergent_mixed_sidecar_strictness_flags_only_the_sidecar_key() -> None:
     """Under ``"raise"``, only the sidecar alias flags - its planned sibling is silent.
 
     Per-key strictness visibility: the sidecar key stays a real,
@@ -1100,7 +1115,7 @@ def test_divergent_mixed_sidecar_strictness_flags_only_the_sidecar_key():
 
 
 @pytest.mark.django_db
-def test_distinct_target_fallback_reports_correct_total_count():
+def test_distinct_target_fallback_reports_correct_total_count() -> None:
     """A ``.distinct()`` target falls back per-parent AND reports the right ``totalCount``.
 
     Earns the executed second clause of the walker's plan-shape pin
@@ -1136,7 +1151,7 @@ def test_distinct_target_fallback_reports_correct_total_count():
     "args",
     ["first: 2", "first: 10", 'first: 2, after: "YXJyYXljb25uZWN0aW9uOjA="'],
 )
-def test_fast_path_wire_parity_with_pipeline(args: str):
+def test_fast_path_wire_parity_with_pipeline(args: str) -> None:
     """Identical edges / cursors / pageInfo for the same data, optimizer on vs off.
 
     The core parity matrix: the fast path (optimizer installed, window consumed)
@@ -1168,7 +1183,7 @@ def test_fast_path_wire_parity_with_pipeline(args: str):
 
 
 @pytest.mark.django_db
-def test_fast_path_wire_parity_last_only():
+def test_fast_path_wire_parity_last_only() -> None:
     """Reversed (``last``-only) window maps to the SAME cursors and page flags.
 
     The planner keeps ``_dst_row_number`` forward (a separate
@@ -1204,7 +1219,11 @@ def test_fast_path_wire_parity_last_only():
     assert fast.data == slow.data
 
 
-def _genres_expression_ordered_schema(*, optimizer: bool = True, auto_camel_case: bool = True):
+def _genres_expression_ordered_schema(
+    *,
+    optimizer: bool = True,
+    auto_camel_case: bool = True,
+) -> strawberry.Schema:
     """``_genres_list_schema`` whose ``BookType`` orders by a bare EXPRESSION.
 
     ``get_queryset`` returns ``queryset.order_by(Lower("title"))``, so the
@@ -1224,7 +1243,11 @@ def _genres_expression_ordered_schema(*, optimizer: bool = True, auto_camel_case
 
         @classmethod
         @override
-        def get_queryset(cls, queryset: djmodels.QuerySet[Book], info: object):
+        def get_queryset(
+            cls,
+            queryset: djmodels.QuerySet[Book],
+            info: object,
+        ) -> djmodels.QuerySet[Book]:
             return queryset.order_by(Lower("title"))
 
     assert registry.get(Book) is BookType
@@ -1252,7 +1275,7 @@ def _genres_expression_ordered_schema(*, optimizer: bool = True, auto_camel_case
 @pytest.mark.django_db
 def test_windowed_last_page_reverses_a_bare_expression_ordering(
     django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+) -> None:
     """A ``last: N`` window under an EXPRESSION ordering serves the partition's TAIL.
 
     ``_reverse_order_by`` builds ``_dst_row_number_reversed``; a term with no
@@ -1298,7 +1321,7 @@ def test_windowed_last_page_reverses_a_bare_expression_ordering(
 @pytest.mark.django_db
 def test_nested_window_count_observers_follow_a_non_camel_case_schema(
     django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+) -> None:
     """``auto_camel_case=False`` renames the count observers; the planner must follow.
 
     The observers are matched by GraphQL name, resolved through the active
@@ -1356,7 +1379,7 @@ def test_nested_window_count_observers_follow_a_non_camel_case_schema(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_fast_path_non_pk_ordering_applies_explicit_deterministic_order_by():
+def test_fast_path_non_pk_ordering_applies_explicit_deterministic_order_by() -> None:
     """A non-pk-ordered child: the windowed prefetch's outer ORDER BY carries the pk tiebreaker.
 
     The shipped parity tests order ``Book`` by pk, where DB-natural (rowid) order
@@ -1432,7 +1455,7 @@ def test_fast_path_non_pk_ordering_applies_explicit_deterministic_order_by():
             "pageInfo { startCursor endCursor } } } }"
         )
 
-        def _build(*, optimizer: bool):
+        def _build(*, optimizer: bool) -> strawberry.Schema:
             declare_django_type(
                 "OConnPostType",
                 {
@@ -1498,7 +1521,7 @@ def test_fast_path_non_pk_ordering_applies_explicit_deterministic_order_by():
 
 
 @pytest.mark.django_db
-def test_fast_path_cursor_round_trips_to_fallback_after():
+def test_fast_path_cursor_round_trips_to_fallback_after() -> None:
     """A fast-path ``endCursor`` fed to ``after:`` on an optimizer-less execution continues.
 
     The cursor-parity invariant's observable proof (Decision 4): the fast path's
@@ -1536,7 +1559,7 @@ def test_fast_path_cursor_round_trips_to_fallback_after():
 @pytest.mark.django_db
 def test_fast_path_fires_for_reverse_fk_without_related_name(
     django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+) -> None:
     """The fast path fires for a reverse FK without ``related_name``.
 
     Decision 5: the resolver receives the relation FIELD NAME
@@ -1598,7 +1621,7 @@ def test_fast_path_fires_for_reverse_fk_without_related_name(
 @pytest.mark.django_db
 def test_fast_path_total_count_from_annotation_no_query(
     django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+) -> None:
     """A fast-path ``totalCount`` reads ``_dst_total_count`` - zero extra COUNT queries."""
     _seed_library_books(
         [
@@ -1622,7 +1645,7 @@ def test_fast_path_total_count_from_annotation_no_query(
 @pytest.mark.django_db
 def test_fast_path_has_next_page_without_edges_on_window(
     django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+) -> None:
     """``hasNextPage`` is correct on the WINDOW path even when ``edges`` is unrequested.
 
     The Relay invariant (spec-032 Goal 4 / DoD: "the connection MUST resolve
@@ -1659,7 +1682,7 @@ def test_fast_path_has_next_page_without_edges_on_window(
 @pytest.mark.django_db
 def test_fast_path_has_no_next_page_at_boundary_without_edges_on_window(
     django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+) -> None:
     """The boundary twin: ``first >= total`` -> ``hasNextPage`` False on the window path.
 
     Pins that the scalar-only window's ``hasNextPage`` is not hard-wired True: 5
@@ -1688,7 +1711,7 @@ def test_fast_path_has_no_next_page_at_boundary_without_edges_on_window(
 @pytest.mark.django_db
 def test_fast_path_total_count_without_edges_on_window(
     django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+) -> None:
     """``totalCount`` alone (no ``edges``) reads ``_dst_total_count`` on the window path.
 
     The totalCount-only sibling of the pageInfo-only pin: a nested
@@ -1716,7 +1739,7 @@ def test_fast_path_total_count_without_edges_on_window(
 
 
 @pytest.mark.django_db
-def test_fast_path_total_count_marker_bypasses_non_queryset_guard():
+def test_fast_path_total_count_marker_bypasses_non_queryset_guard() -> None:
     """``totalCount`` over the wrapper does NOT raise the non-queryset count guard.
 
     The ``_WindowedConnectionRows`` marker is not a ``QuerySet``; the totalCount
@@ -1739,7 +1762,7 @@ def test_fast_path_total_count_marker_bypasses_non_queryset_guard():
 def test_fast_path_ambiguous_empty_served_from_marker_row(
     args: str,
     django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+) -> None:
     """``first: 0`` (``limit == 0``) and overshot ``after:`` (``offset > 0``) serve from markers.
 
     The marker-row disambiguation (spec-033 Decision 5):
@@ -1770,7 +1793,7 @@ def test_fast_path_ambiguous_empty_served_from_marker_row(
 @pytest.mark.django_db(transaction=True)
 async def test_async_fast_path_last_zero_serves_the_first_zero_page(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """``last: 0`` under ASYNC execution is the ``first: 0`` page served from the window.
 
     Driven by ``await schema.execute(...)``: empty ``edges``, the true
@@ -1807,7 +1830,7 @@ async def test_async_fast_path_last_zero_serves_the_first_zero_page(
 
 
 @pytest.mark.django_db
-def test_fast_path_last_zero_serves_the_first_zero_page():
+def test_fast_path_last_zero_serves_the_first_zero_page() -> None:
     """``last: 0`` is the planned ``first: 0`` window, optimizer on and off alike.
 
     The walker plans the ``first: 0`` window for it, so the page is served from
@@ -1840,7 +1863,7 @@ def test_fast_path_last_zero_serves_the_first_zero_page():
 @pytest.mark.django_db
 def test_fast_path_genuinely_empty_parent_serves_zero(
     django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+) -> None:
     """A parent with no related rows is fast-pathed: totalCount 0, no fallback query.
 
     Empty window with ``offset == 0`` and a positive bound proves the parent
@@ -1869,7 +1892,7 @@ def test_fast_path_genuinely_empty_parent_serves_zero(
 def test_fast_path_zero_children_parent_serves_under_ambiguous_shapes(
     args: str,
     django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+) -> None:
     """A zero-children parent is served (not fallen back) under the marker shapes.
 
     The marker contract's serve side (spec-033 Decision 5): with markers
@@ -1902,7 +1925,7 @@ def test_fast_path_zero_children_parent_serves_under_ambiguous_shapes(
 
 
 @pytest.mark.django_db
-def test_fast_path_ignores_window_when_sidecar_kwargs_present():
+def test_fast_path_ignores_window_when_sidecar_kwargs_present() -> None:
     """A ``filter:`` argument makes the resolver ignore the window and run the pipeline.
 
     The defensive belt (Decision 5): even if the walker desyncs and plans a
@@ -1950,7 +1973,7 @@ def test_fast_path_ignores_window_when_sidecar_kwargs_present():
 
 
 @pytest.mark.django_db
-def test_fallback_when_annotations_missing():
+def test_fallback_when_annotations_missing() -> None:
     """A ``to_attr`` list whose rows lack the window annotations is not consumed.
 
     A consumer's own prefetch (or any non-window attribute) at the package-reserved
@@ -1995,7 +2018,7 @@ def test_fallback_when_annotations_missing():
 
 
 @pytest.mark.django_db
-def test_outer_total_count_predicate_ignores_nested_total_count():
+def test_outer_total_count_predicate_ignores_nested_total_count() -> None:
     """A nested connection's ``totalCount`` does not fire the OUTER connection's count.
 
     Re-affirmation (spec-033 Edge cases: the outer-``totalCount`` direct-children-scoped
@@ -2069,7 +2092,7 @@ def test_outer_total_count_predicate_ignores_nested_total_count():
 
 
 @pytest.mark.django_db
-def test_strictness_raise_unplanned_nested_connection():
+def test_strictness_raise_unplanned_nested_connection() -> None:
     """``"raise"`` + optimizer + a fallback nested connection -> ``OptimizerError``.
 
     The flagged message NAMES the generated relation field (the ``field_name``
@@ -2092,7 +2115,7 @@ def test_strictness_raise_unplanned_nested_connection():
 
 
 @pytest.mark.django_db
-def test_strictness_raise_malformed_cursor_surfaces_pagination_error_not_optimizer_error():
+def test_strictness_raise_malformed_cursor_surfaces_pagination_error_not_optimizer_error() -> None:
     """A malformed nested ``after:`` cursor raises the PAGINATION error, not ``OptimizerError``.
 
     Error-locality regression (spec-033 Decision 4 step f / Decision 8): a
@@ -2118,7 +2141,7 @@ def test_strictness_raise_malformed_cursor_surfaces_pagination_error_not_optimiz
 
 
 @pytest.mark.django_db
-def test_sidecar_fallback_is_flagged_with_reason():
+def test_sidecar_fallback_is_flagged_with_reason() -> None:
     """A sidecar fallback's ``"raise"`` message carries an ACTIONABLE reason.
 
     Decision 6 consistency pin (Risks bullet "include the fallback reason in the
@@ -2139,7 +2162,7 @@ def test_sidecar_fallback_is_flagged_with_reason():
 
 
 @pytest.mark.django_db
-def test_strictness_warn_logs_once_per_occurrence(caplog: pytest.LogCaptureFixture):
+def test_strictness_warn_logs_once_per_occurrence(caplog: pytest.LogCaptureFixture) -> None:
     """``"warn"`` + a fallback nested connection -> logged warning, execution CONTINUES.
 
     The query still resolves correctly (warn does not abort); the resolver
@@ -2164,7 +2187,7 @@ def test_strictness_warn_logs_once_per_occurrence(caplog: pytest.LogCaptureFixtu
 
 
 @pytest.mark.django_db
-def test_strictness_warn_nested_fallback_preserves_parent_plan_context():
+def test_strictness_warn_nested_fallback_preserves_parent_plan_context() -> None:
     """A warn-mode nested fallback does not corrupt the parent's PLANNED siblings.
 
     The union-publish foundation: a nested fallback connection's own
@@ -2195,7 +2218,7 @@ def test_strictness_warn_nested_fallback_preserves_parent_plan_context():
 
 
 @pytest.mark.django_db
-def test_nested_fallback_does_not_clobber_fk_id_elisions():
+def test_nested_fallback_does_not_clobber_fk_id_elisions() -> None:
     """A planned forward-FK sibling still elides after a nested fallback publishes.
 
     The ``DST_OPTIMIZER_FK_ID_ELISIONS`` union must survive the nested
@@ -2288,7 +2311,7 @@ def test_nested_fallback_does_not_clobber_fk_id_elisions():
 
 
 @pytest.mark.django_db
-def test_strictness_silent_when_window_served():
+def test_strictness_silent_when_window_served() -> None:
     """``"raise"`` + a WINDOW-PLANNED nested connection -> no raise, no warn.
 
     The fast path served the rows under ``_dst_books_connection`` (the ``to_attr``
@@ -2307,7 +2330,7 @@ def test_strictness_silent_when_window_served():
 
 
 @pytest.mark.django_db
-def test_strictness_silent_when_off():
+def test_strictness_silent_when_off() -> None:
     """``"off"`` (optimizer installed) -> neither raise nor warn on a fallback.
 
     ``strictness == "off"`` is the resolver's no-op: the extension arms that
@@ -2330,7 +2353,7 @@ def test_strictness_silent_when_off():
 
 
 @pytest.mark.django_db
-def test_strictness_silent_no_optimizer():
+def test_strictness_silent_no_optimizer() -> None:
     """No optimizer installed -> strictness reads ``"off"`` -> ``_check_n1`` is a no-op.
 
     The root-shaped no-op: with no extension nothing arms the per-execution
@@ -2352,7 +2375,7 @@ def test_strictness_silent_no_optimizer():
     assert titles == ["apple", "banana"]
 
 
-def test_strictness_silent_when_planned():
+def test_strictness_silent_when_planned() -> None:
     """A planned connection key short-circuits BEFORE the ``to_attr`` probe.
 
     The load-bearing resolver-key parity: the resolver-side ``_check_n1`` builds
@@ -2426,7 +2449,7 @@ def test_strictness_silent_when_planned():
 @pytest.mark.django_db
 def test_fast_path_count_less_window_serves_cheap_page(
     django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
-):
+) -> None:
     """A window planned WITHOUT the count still fast-paths the cheap page shape.
 
     ``edges`` + ``hasPreviousPage`` + cursors derive from ``_dst_row_number``
@@ -2456,7 +2479,7 @@ def test_fast_path_count_less_window_serves_cheap_page(
     assert "_dst_total_count" not in window_sql
 
 
-def test_count_less_window_with_count_observer_falls_back_defensively():
+def test_count_less_window_with_count_observer_falls_back_defensively() -> None:
     """A count-less window whose selection OBSERVES the count returns ``None``.
 
     The conditional-count drift guard in ``_resolve_from_window``, narrowed by
@@ -2527,7 +2550,7 @@ def _shelves_with_consumer_books_schema(
     *,
     strictness: str = "raise",
     books_hint: OptimizerHint | None = None,
-):
+) -> strawberry.Schema:
     """Root ``objs: [ShelfType]`` where the consumer owns ``ShelfType.books``.
 
     The consumer resolver re-queries the relation (``order_by(...)[:2]``), so
@@ -2584,7 +2607,7 @@ def _shelves_with_consumer_books_schema(
 
 
 @pytest.mark.django_db
-def test_consumer_assigned_relation_subtree_n1_visible_under_strictness():
+def test_consumer_assigned_relation_subtree_n1_visible_under_strictness() -> None:
     """The N+1 under a consumer-owned relation FIRES under strictness ``"raise"``.
 
     The consumer-assigned relation fix (strawberry-django #697): the walker used
@@ -2610,7 +2633,7 @@ def test_consumer_assigned_relation_subtree_n1_visible_under_strictness():
 
 
 @pytest.mark.django_db
-def test_consumer_assigned_relation_with_hint_is_planned_and_silent():
+def test_consumer_assigned_relation_with_hint_is_planned_and_silent() -> None:
     """``OptimizerHint.prefetch_related()`` opts the delegating resolver back in.
 
     With the hint declared, the walker plans the relation per the hint and
@@ -2658,7 +2681,7 @@ _COUNT_LESS_WINDOW_ROWS = _window_rows(1)
 
 
 @pytest.mark.django_db
-def test_consume_window_unservable_window_runs_the_sync_fallback():
+def test_consume_window_unservable_window_runs_the_sync_fallback() -> None:
     """The unservable-window tail of ``_consume_window`` is a defensive layer.
 
     No live path produces it (the planner and the resolver share the count
@@ -2695,9 +2718,11 @@ def test_consume_window_unservable_window_runs_the_sync_fallback():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_consume_window_unservable_window_runs_the_async_fallback():
-    """The async sibling: an async-iterable fallback routes through
-    ``_attach_count_async`` (the awaitable arm of ``_consume_fallback``)."""
+async def test_consume_window_unservable_window_runs_the_async_fallback() -> None:
+    """The async sibling: an async-iterable fallback routes through ``_attach_count_async``.
+
+    That is the awaitable arm of ``_consume_fallback``.
+    """
     from django_strawberry_framework.connection import (
         _consume_window,
         _WindowedConnectionRows,
@@ -2725,7 +2750,7 @@ async def test_consume_window_unservable_window_runs_the_async_fallback():
 
 
 @pytest.mark.django_db
-def test_consume_window_offset_unwindowable_shape_propagates():
+def test_consume_window_offset_unwindowable_shape_propagates() -> None:
     """An OFFSET connection never recovers from ``UnwindowableConnection``.
 
     The two bounds derivations share one ``try``, but not one outcome. A keyset
@@ -2735,7 +2760,6 @@ def test_consume_window_offset_unwindowable_shape_propagates():
     refused window is real pagination drift and must surface, not silently
     degrade to the fallback and serve a differently-paginated page.
     """
-
     from strawberry.relay.utils import to_base64
 
     from django_strawberry_framework.connection import (
@@ -2824,7 +2848,7 @@ def _consume_consumer_prefix_window(cursor_prefix: str) -> object:
 
 
 @pytest.mark.django_db
-def test_consume_window_serves_the_connections_own_prefix_cursor():
+def test_consume_window_serves_the_connections_own_prefix_cursor() -> None:
     """A window is bounded by a cursor under the connection's own edge prefix and mints under it."""
     from strawberry.relay.utils import from_base64
 
@@ -2838,7 +2862,7 @@ def test_consume_window_serves_the_connections_own_prefix_cursor():
 
 
 @pytest.mark.django_db
-def test_consume_window_refuses_a_stock_cursor_under_a_consumer_prefix():
+def test_consume_window_refuses_a_stock_cursor_under_a_consumer_prefix() -> None:
     """A stock ``arrayconnection`` cursor is the cursor error, never a position into the window.
 
     It is not a cursor this connection issued, so the window derivation refuses
@@ -2848,6 +2872,6 @@ def test_consume_window_refuses_a_stock_cursor_under_a_consumer_prefix():
 
     with pytest.raises(
         PaginationArgumentError,
-        match="^Argument 'after' contains a non-existing value.$",
+        match=r"^Argument 'after' contains a non-existing value\.$",
     ):
         _consume_consumer_prefix_window(relay.Edge.CURSOR_PREFIX)

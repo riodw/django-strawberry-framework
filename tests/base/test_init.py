@@ -24,13 +24,13 @@ from django_strawberry_framework.scalars import Upload as ScalarsUpload
 from django_strawberry_framework.types import converters
 
 
-def test_version():
+def test_version() -> None:
     # Package version literal; card 050 lands on 0.0.15 where ListArgumentError
     # is exported from the package root.
     assert __version__ == "0.0.15"
 
 
-def test_logger_name_is_django_strawberry_framework():
+def test_logger_name_is_django_strawberry_framework() -> None:
     # The logger name is the consumer-visible key used in Django's
     # ``LOGGING`` config dict. Pin the string so an accidental rename
     # (e.g., to ``"djsf"``) is caught at test time.
@@ -38,7 +38,7 @@ def test_logger_name_is_django_strawberry_framework():
     assert logger.name == "django_strawberry_framework"
 
 
-def test_optimizer_subpackage_reexports_top_level_logger():
+def test_optimizer_subpackage_reexports_top_level_logger() -> None:
     # ``optimizer/__init__.py`` re-exports the top-level package logger
     # rather than declaring a second ``getLogger`` call, so the
     # ``"django_strawberry_framework"`` literal lives in exactly one
@@ -46,7 +46,7 @@ def test_optimizer_subpackage_reexports_top_level_logger():
     assert optimizer_logger is logger
 
 
-def test_public_api_surface_is_pinned():
+def test_public_api_surface_is_pinned() -> None:
     # Pin ``__all__`` so silent surface widening (e.g., accidental
     # re-export of an internal name) shows up at test time. New public
     # names only land when a future spec adds them; a version bump alone
@@ -119,7 +119,7 @@ def test_public_api_surface_is_pinned():
     )
 
 
-def test_file_upload_exports_resolve_to_their_source_definitions():
+def test_file_upload_exports_resolve_to_their_source_definitions() -> None:
     # The three spec-037 root exports are re-exports, not new
     # definitions: ``Upload`` rides through ``.scalars`` (which itself
     # re-exports Strawberry's built-in), and the two output objects are the
@@ -131,7 +131,7 @@ def test_file_upload_exports_resolve_to_their_source_definitions():
     assert DjangoImageType is converters.DjangoImageType
 
 
-def test_dynamic_drf_soft_exports_via_getattr():
+def test_dynamic_drf_soft_exports_via_getattr() -> None:
     """Verify DRF soft exports resolve dynamically through package __getattr__."""
     from django_strawberry_framework import (
         NestedSerializerConfig,
@@ -152,13 +152,13 @@ def test_dynamic_drf_soft_exports_via_getattr():
     assert UploadMetadata is not None
 
 
-def test_dynamic_getattr_non_memoization():
+def test_dynamic_getattr_non_memoization() -> None:
     """Verify package __getattr__ does not pollute module __dict__."""
     _ = django_strawberry_framework.SerializerMutation
     assert "SerializerMutation" not in django_strawberry_framework.__dict__
 
 
-def test_dynamic_getattr_unknown_attribute_error():
+def test_dynamic_getattr_unknown_attribute_error() -> None:
     """Verify unknown attribute access on package root raises AttributeError."""
     import pytest
 
@@ -166,7 +166,7 @@ def test_dynamic_getattr_unknown_attribute_error():
         _ = django_strawberry_framework.unregistered_symbol_xyz
 
 
-def test_star_import_preserves_namespace_hygiene():
+def test_star_import_preserves_namespace_hygiene() -> None:
     """Verify `from django_strawberry_framework import *` only imports __all__."""
     ns: dict[str, object] = {}
     exec("from django_strawberry_framework import *", ns)  # noqa: S102 - star import is module-level syntax; literal source
@@ -179,7 +179,7 @@ def test_star_import_preserves_namespace_hygiene():
         assert sym in ns
 
 
-def test_reexported_types_resolve_to_canonical_subpackage_definitions():
+def test_reexported_types_resolve_to_canonical_subpackage_definitions() -> None:
     """Verify all re-exported symbols on root resolve by identity to their defining modules."""
     from django_strawberry_framework import (
         DjangoErrorPolicyExtension,
@@ -256,7 +256,7 @@ def test_reexported_types_resolve_to_canonical_subpackage_definitions():
     assert DjangoResourcePolicyExtension is ExtResourcePolicy
 
 
-def test_orders_submodule_not_imported_at_package_root():
+def test_orders_submodule_not_imported_at_package_root() -> None:
     """Verify importing django_strawberry_framework alone does not import orders submodule."""
     import subprocess
     import sys
@@ -421,7 +421,7 @@ def _run_without_django_stubs_ext(script: str) -> subprocess.CompletedProcess[st
     )
 
 
-def test_every_module_imports_without_django_stubs_ext_patch():
+def test_every_module_imports_without_django_stubs_ext_patch() -> None:
     """Verify every package module imports in a process ``django_stubs_ext`` never patched.
 
     The fakeshop settings every test loads call ``django_stubs_ext.monkeypatch()``,
@@ -439,7 +439,7 @@ def test_every_module_imports_without_django_stubs_ext_patch():
     assert result.returncode == 0, result.stderr
 
 
-def test_annotations_evaluate_without_django_stubs_ext_patch():
+def test_annotations_evaluate_without_django_stubs_ext_patch() -> None:
     """Verify every package annotation evaluates in a process ``django_stubs_ext`` never patched.
 
     ``from __future__ import annotations`` (and lazy annotations on 3.14) defer a

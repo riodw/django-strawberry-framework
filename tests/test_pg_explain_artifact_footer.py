@@ -30,7 +30,7 @@ from scripts.check_trailing_commas import (
 )
 
 
-def test_footer_constant_has_all_canonical_headers_in_order():
+def test_footer_constant_has_all_canonical_headers_in_order() -> None:
     """The generator's footer constant is a single, correctly ordered scaffold."""
     # Exactly one delimiter -- the whole footer sits under one LINK-DEFINITIONS block.
     assert LINK_DEFINITIONS_FOOTER.count(LINK_DEF_HEADER) == 1
@@ -47,7 +47,7 @@ def test_footer_constant_has_all_canonical_headers_in_order():
     assert _scaffold_in_canonical_order(LINK_DEFINITIONS_FOOTER) is None
 
 
-def test_checked_in_artifact_passes_link_block_validation():
+def test_checked_in_artifact_passes_link_block_validation() -> None:
     """The checked-in artifact validates and its tail matches the emitted footer."""
     text = ARTIFACT_PATH.read_text(encoding="utf-8")
     # Same standing-doc link-block validation ``check_trailing_commas`` runs.

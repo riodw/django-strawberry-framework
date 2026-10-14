@@ -16,7 +16,7 @@ from django_strawberry_framework.utils import strings as strings_module
 from django_strawberry_framework.utils import typing as typing_module
 
 
-def test_utils_package_reexport_surface_is_pinned():
+def test_utils_package_reexport_surface_is_pinned() -> None:
     """The short-spelling surface is exactly these seven names, in ``__all__`` order."""
     assert utils.__all__ == (
         "RelationKind",
@@ -29,7 +29,7 @@ def test_utils_package_reexport_surface_is_pinned():
     )
 
 
-def test_every_reexported_name_is_the_owning_submodules_object():
+def test_every_reexported_name_is_the_owning_submodules_object() -> None:
     """Each re-export forwards; none of them is a second definition under the same name."""
     assert utils.RelationKind is relations_module.RelationKind
     assert utils.is_many_side_relation_kind is relations_module.is_many_side_relation_kind
@@ -40,7 +40,7 @@ def test_every_reexported_name_is_the_owning_submodules_object():
     assert utils.unwrap_return_type is typing_module.unwrap_return_type
 
 
-def test_every_reexported_name_is_actually_reachable_on_the_package():
+def test_every_reexported_name_is_actually_reachable_on_the_package() -> None:
     """``__all__`` cannot list a name the package does not bind (a broken star-import)."""
     for name in utils.__all__:
         assert hasattr(utils, name), name

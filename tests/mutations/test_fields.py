@@ -53,7 +53,7 @@ class _AllowAll:
         _operation: str,
         _data: object,
         _instance: object = None,
-    ):
+    ) -> bool:
         return True
 
 
@@ -64,7 +64,7 @@ class _Query:
         return 1
 
 
-def _declare_item_primaries():
+def _declare_item_primaries() -> tuple[type[DjangoType], type[DjangoType]]:
     class CategoryT(DjangoType, relay.Node):
         class Meta:
             model = product_models.Category
@@ -80,7 +80,7 @@ def _declare_item_primaries():
     return CategoryT, ItemT
 
 
-def _operation_mutations():
+def _operation_mutations() -> tuple[type[DjangoMutation], ...]:
     class CreateItem(DjangoMutation):
         class Meta:
             model = product_models.Item
@@ -110,7 +110,7 @@ def _field_arg_map(schema: strawberry.Schema, field_name: str) -> dict[str, str]
     return {arg_name: str(arg.type) for arg_name, arg in field.args.items()}
 
 
-def test_no_class_attribute_annotation_builds_and_types_payload():
+def test_no_class_attribute_annotation_builds_and_types_payload() -> None:
     """A field assigned with NO annotation builds a schema and types to ``<Name>Payload!``.
 
     The primary-vs-``.field()``-fallback proof (Decision 5 / Decision 7): the
@@ -133,7 +133,7 @@ def test_no_class_attribute_annotation_builds_and_types_payload():
     assert str(mutation_type.fields["createItem"].type) == "CreateItemPayload!"
 
 
-def test_payload_lazy_ref_resolves_to_materialized_payload_after_bind():
+def test_payload_lazy_ref_resolves_to_materialized_payload_after_bind() -> None:
     """The field's return type resolves to the payload materialized at finalize phase 2.5."""
     _declare_item_primaries()
     CreateItem, _UpdateItem, _DeleteItem = _operation_mutations()
@@ -158,7 +158,7 @@ def test_payload_lazy_ref_resolves_to_materialized_payload_after_bind():
 # ---------------------------------------------------------------------------
 
 
-def test_non_mutation_target_raises_at_construction():
+def test_non_mutation_target_raises_at_construction() -> None:
     """``DjangoMutationField`` over a non-``DjangoMutation`` raises naming the factory."""
 
     class NotAMutation:
@@ -170,7 +170,7 @@ def test_non_mutation_target_raises_at_construction():
         DjangoMutationField(NotAMutation)  # pyright: ignore[reportArgumentType]
 
 
-def test_non_class_target_raises_at_construction():
+def test_non_class_target_raises_at_construction() -> None:
     """A non-class value raises at the construction line."""
     with pytest.raises(ConfigurationError, match="DjangoMutationField"):
         # basedpyright: the non-class value is the hostile input under test; DjangoMutationField
@@ -178,12 +178,12 @@ def test_non_class_target_raises_at_construction():
         DjangoMutationField(object())  # pyright: ignore[reportArgumentType]
 
 
-def test_hostile_non_class_target_repr_still_raises_configuration_error():
+def test_hostile_non_class_target_repr_still_raises_configuration_error() -> None:
     """A rejected target's repr cannot replace the construction-time configuration error."""
 
     class HostileTarget:
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr boom")
 
     with pytest.raises(ConfigurationError, match="DjangoMutationField") as exc:
@@ -193,13 +193,13 @@ def test_hostile_non_class_target_repr_still_raises_configuration_error():
     assert "unprintable" in str(exc.value)
 
 
-def test_abstract_base_target_raises_at_construction():
+def test_abstract_base_target_raises_at_construction() -> None:
     """The abstract ``DjangoMutation`` base (no ``Meta`` -> no ``_mutation_meta``) is rejected."""
     with pytest.raises(ConfigurationError, match="abstract base"):
         DjangoMutationField(DjangoMutation)
 
 
-def test_inherited_meta_target_rejected_at_construction():
+def test_inherited_meta_target_rejected_at_construction() -> None:
     """An inherited snapshot cannot make an unregistered child a concrete mutation."""
     from django import forms
 
@@ -302,7 +302,10 @@ def _declare_by_name_mutation(flavor: str) -> type[DjangoMutation | DjangoFormMu
 
 
 @pytest.mark.parametrize(("flavor", "name"), [("model", "CreateItem"), ("form", "Submit")])
-def test_stale_target_equal_to_its_redeclaration_rejected_at_construction(flavor: str, name: str):
+def test_stale_target_equal_to_its_redeclaration_rejected_at_construction(
+    flavor: str,
+    name: str,
+) -> None:
     """Ledger membership is identity, so a metaclass ``__eq__`` cannot pass a drained target.
 
     The class ``registry.clear()`` drained compares equal to its redeclaration in
@@ -333,7 +336,7 @@ class _RaisingEqMutationMetaclass(DjangoMutationMetaclass):
     __hash__ = DjangoMutationMetaclass.__hash__
 
 
-def test_registered_target_with_raising_metaclass_eq_constructs():
+def test_registered_target_with_raising_metaclass_eq_constructs() -> None:
     """The ledger check never compares a target with another declaration."""
 
     class CreateItem(DjangoMutation):
@@ -357,7 +360,7 @@ def test_registered_target_with_raising_metaclass_eq_constructs():
 # ---------------------------------------------------------------------------
 
 
-def test_generalized_target_accepts_modelform_and_plain_form_family():
+def test_generalized_target_accepts_modelform_and_plain_form_family() -> None:
     """``DjangoMutationField`` accepts both form-mutation flavors (the duck-typed target check).
 
     The generalization recognizes the mutation / form family by the
@@ -395,7 +398,7 @@ def test_generalized_target_accepts_modelform_and_plain_form_family():
     assert DjangoMutationField(Submit) is not None
 
 
-def test_model_flavor_dispatch_unchanged():
+def test_model_flavor_dispatch_unchanged() -> None:
     """A ``DjangoMutation`` target still names ``mutations.inputs`` for ``data:`` + routes the model pipeline.
 
     The no-regression pin: the generalized ``data:`` lazy-ref consults the model
@@ -430,7 +433,7 @@ def test_model_flavor_dispatch_unchanged():
 
 
 @pytest.mark.django_db
-def test_django_mutation_field_generalizes_to_serializer_mutation():
+def test_django_mutation_field_generalizes_to_serializer_mutation() -> None:
     """`DjangoMutationField` accepts a `SerializerMutation` and routes its resolver seam (Decision 5).
 
     The spec-038-generalized factory was written "for the 0.0.13 serializer flavor";
@@ -488,7 +491,7 @@ def test_django_mutation_field_generalizes_to_serializer_mutation():
     assert serializer_resolvers.resolve_serializer_sync is not None
 
 
-def test_mutation_field_metadata_passthrough():
+def test_mutation_field_metadata_passthrough() -> None:
     """`DjangoMutationField` forwards description and deprecation_reason to Strawberry."""
     _declare_item_primaries()
     CreateItem, _, _ = _operation_mutations()
@@ -516,7 +519,7 @@ def test_mutation_field_metadata_passthrough():
 
 
 @pytest.mark.parametrize("bare", ["@deprecated", b"@deprecated"])
-def test_bare_string_or_bytes_directives_raise_at_construction(bare: str | bytes):
+def test_bare_string_or_bytes_directives_raise_at_construction(bare: str | bytes) -> None:
     """A bare str / bytes `directives` is rejected at the construction line.
 
     Strawberry consumes field directives lazily at class decoration / SDL render,
@@ -537,7 +540,7 @@ def test_bare_string_or_bytes_directives_raise_at_construction(bare: str | bytes
         DjangoMutationField(CreateItem, directives=bare)
 
 
-def test_hostile_directives_iterator_raises_at_construction():
+def test_hostile_directives_iterator_raises_at_construction() -> None:
     """An iterator that raises midway fails as ConfigurationError, never ValueError."""
     _declare_item_primaries()
     CreateItem, _, _ = _operation_mutations()
@@ -555,7 +558,7 @@ def test_hostile_directives_iterator_raises_at_construction():
     assert isinstance(exc.value.__cause__, ValueError)
 
 
-def test_non_iterable_directives_raise_configuration_error():
+def test_non_iterable_directives_raise_configuration_error() -> None:
     """A non-iterable `directives` value fails loud instead of a raw TypeError."""
     _declare_item_primaries()
     CreateItem, _, _ = _operation_mutations()
@@ -567,7 +570,7 @@ def test_non_iterable_directives_raise_configuration_error():
     assert isinstance(exc.value.__cause__, TypeError)
 
 
-def test_valid_directives_reach_the_built_field():
+def test_valid_directives_reach_the_built_field() -> None:
     """A real directive sequence survives the containment and lands on the field.
 
     The happy-path pin over the containment: the tuple conversion must forward a

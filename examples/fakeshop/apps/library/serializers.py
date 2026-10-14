@@ -71,6 +71,7 @@ class TenantShelfSerializer(serializers.ModelSerializer[Shelf]):
 
     # basedpyright: verbatim forward to ModelSerializer.__init__; object fails its typed params
     def __init__(self, *args: Any, tenant: str | None = None, **kwargs: Any) -> None:  # pyright: ignore[reportExplicitAny]
+        """Bind the runtime ``tenant``, which every construction must supply."""
         # ``tenant`` is required: a no-arg construction (DRF's default ``.fields``
         # discovery) raises here, forcing the get_serializer_for_schema() override.
         if tenant is None:
@@ -88,7 +89,7 @@ class TenantShelfSerializer(serializers.ModelSerializer[Shelf]):
 
 
 class ShelfSerializer(serializers.ModelSerializer[Shelf]):
-    """Plain ``Shelf`` serializer - the subclass-mutation PARENT's serializer (spec-039 subclass validation)."""
+    """Plain ``Shelf`` serializer: the subclass-mutation PARENT's serializer (spec-039)."""
 
     # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
     class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -173,7 +174,9 @@ class RejectingShelfSerializer(serializers.ModelSerializer[Shelf]):
 
 
 class TargetedShelfSerializer(serializers.ModelSerializer[Shelf]):
-    """``Shelf`` serializer whose WRITE-ONLY ``target`` relation is pointed at a RUNTIME-supplied model (spec-039 - the same-serializer hook-shape collision).
+    """``Shelf`` serializer whose WRITE-ONLY ``target`` relation points at a RUNTIME-supplied model.
+
+    The same-serializer hook-shape collision (spec-039).
 
     ONE serializer class backs TWO ``SerializerMutation`` declarations; each constructs it
     with a different ``target_model`` (``Patron`` vs ``Loan``) via BOTH
@@ -207,6 +210,7 @@ class TargetedShelfSerializer(serializers.ModelSerializer[Shelf]):
         # basedpyright: verbatim forward to ModelSerializer.__init__; object fails its typed params
         **kwargs: Any,  # pyright: ignore[reportExplicitAny]
     ) -> None:
+        """Remember the relation target whose decode the generated ``target`` field exercises."""
         self._target_model = target_model
         super().__init__(*args, **kwargs)
 
@@ -237,7 +241,9 @@ class TargetedShelfSerializer(serializers.ModelSerializer[Shelf]):
 def shelf_collision_schema_field_map(
     target_model: type[Model],
 ) -> FieldMap:
-    """Schema-time field map of ``code`` + ``branch`` + the write-only ``target`` relation at ``target_model`` (spec-039).
+    """Return the schema-time field map: ``code`` + ``branch`` + the write-only ``target`` relation.
+
+    The ``target`` relation points at ``target_model`` (spec-039).
 
     The two collision mutations' ``get_serializer_for_schema()`` hooks call this with two
     DIFFERENT ``target_model``s, AGREEING with their ``get_serializer_kwargs`` runtime
@@ -281,6 +287,7 @@ class NoteShelfSerializer(serializers.ModelSerializer[Shelf]):
         # basedpyright: verbatim forward to ModelSerializer.__init__; object fails its typed params
         **kwargs: Any,  # pyright: ignore[reportExplicitAny]
     ) -> None:
+        """Remember the nullability the generated write-only ``note`` field carries."""
         self._note_allow_null = note_allow_null
         super().__init__(*args, **kwargs)
 
@@ -345,7 +352,9 @@ class BlankCodeShelfSerializer(serializers.ModelSerializer[Shelf]):
 
 
 class HookNarrowedShelfSerializer(serializers.ModelSerializer[Shelf]):
-    """``Shelf`` serializer whose default field set carries an UNSUPPORTED field a schema hook narrows away (spec-039 - unsupported-default-field recovery).
+    """``Shelf`` serializer whose default field set carries an UNSUPPORTED field a hook narrows away.
+
+    The unsupported-default-field recovery (spec-039).
 
     Default no-arg discovery SUCCEEDS (the serializer constructs and ``.fields``
     materializes), but its field WALK cannot convert ``alt_branches`` - a
@@ -573,7 +582,9 @@ class BookSerializer(serializers.ModelSerializer[Book]):
 
 
 class StatusStampBookSerializer(serializers.ModelSerializer[Book]):
-    """A ``Book`` serializer with a REQUIRED serializer-only ``status`` a mutation narrows away + INJECTS on UPDATE.
+    """A ``Book`` serializer with a REQUIRED serializer-only ``status`` an UPDATE mutation injects.
+
+    The mutation narrows ``status`` away and INJECTS it.
 
     ``status`` is a serializer-only ``ChoiceField`` (no ``Book`` column) - a WRITE-ONLY,
     REQUIRED upgrade to a generated GraphQL enum. An UPDATE ``SerializerMutation`` narrows the
@@ -668,6 +679,7 @@ class NestedShelfSerializer(serializers.ModelSerializer[Shelf]):
         fields = ("code", "topic", "alt_branches")
 
     def validate_code(self, value: str) -> str:
+        """Refuse the banned shelf code after coercion, so a nested row can fail on a business rule."""
         # A post-coercion nested business rule (a valid String at the GraphQL boundary that DRF
         # rejects) so the live test exercises nested error path flattening (``shelves.0.code``).
         if value == "BANNED":

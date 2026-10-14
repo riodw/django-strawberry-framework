@@ -20,60 +20,80 @@ from . import models
 
 
 class GlossaryStatusOrder(OrderSet):
+    """Orders ``GlossaryStatus`` rows by every column-backed field."""
+
     class Meta:
         model = models.GlossaryStatus
         fields = "__all__"
 
 
 class GlossaryCategoryOrder(OrderSet):
+    """Orders ``GlossaryCategory`` rows by every column-backed field."""
+
     class Meta:
         model = models.GlossaryCategory
         fields = "__all__"
 
 
 class GlossaryTermOrder(OrderSet):
+    """Orders ``GlossaryTerm`` rows by every column-backed field."""
+
     class Meta:
         model = models.GlossaryTerm
         fields = "__all__"
 
 
 class GlossaryAliasOrder(OrderSet):
+    """Orders ``GlossaryAlias`` rows by every column-backed field."""
+
     class Meta:
         model = models.GlossaryAlias
         fields = "__all__"
 
 
 class GlossaryTermLinkKindOrder(OrderSet):
+    """Orders ``GlossaryTermLinkKind`` rows by every column-backed field."""
+
     class Meta:
         model = models.GlossaryTermLinkKind
         fields = "__all__"
 
 
 class GlossaryTermLinkOrder(OrderSet):
+    """Orders ``GlossaryTermLink`` rows by every column-backed field."""
+
     class Meta:
         model = models.GlossaryTermLink
         fields = "__all__"
 
 
 class GlossaryCategoryMembershipOrder(OrderSet):
+    """Orders ``GlossaryCategoryMembership`` rows by every column-backed field."""
+
     class Meta:
         model = models.GlossaryCategoryMembership
         fields = "__all__"
 
 
 class GlossarySpecMentionOrder(OrderSet):
+    """Orders ``GlossarySpecMention`` rows by every column-backed field."""
+
     class Meta:
         model = models.GlossarySpecMention
         fields = "__all__"
 
 
 class GlossarySourceLinkOrder(OrderSet):
+    """Orders ``GlossarySourceLink`` rows by every column-backed field."""
+
     class Meta:
         model = models.GlossarySourceLink
         fields = "__all__"
 
 
 class GlossaryDocumentOrder(OrderSet):
+    """Orders shared ``BoardDoc`` rows by every column-backed field."""
+
     class Meta:
         model = kanban_models.BoardDoc
         fields = "__all__"

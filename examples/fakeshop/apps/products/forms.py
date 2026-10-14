@@ -62,6 +62,7 @@ class ItemModelForm(forms.ModelForm[Item]):
         fields = ("name", "description", "category")
 
     def clean_name(self) -> str:
+        """Reject ``REJECTED_ITEM_NAME`` as a field-level error on ``name``."""
         name = self.cleaned_data["name"]
         if name == REJECTED_ITEM_NAME:
             raise forms.ValidationError("This name is not allowed.")
@@ -82,6 +83,7 @@ class ContactForm(forms.Form):
     email = forms.EmailField()
 
     def clean_subject(self) -> str:
+        """Strip the subject and reject it when blank."""
         subject = self.cleaned_data["subject"].strip()
         if not subject:
             raise forms.ValidationError("Subject must not be blank.")
@@ -117,6 +119,7 @@ class StampedItemModelForm(forms.ModelForm[Item]):
 
     # basedpyright: verbatim forward to ModelForm.__init__; object fails its typed params
     def __init__(self, *args: Any, user: User | AnonymousUser, **kwargs: Any) -> None:  # pyright: ignore[reportExplicitAny]
+        """Keep the injected ``user`` for ``clean`` and ``save``."""
         self._user = user
         super().__init__(*args, **kwargs)
 
@@ -177,6 +180,7 @@ class DefaultCategoryItemModelForm(forms.ModelForm[Item]):
         # basedpyright: verbatim forward to ModelForm.__init__; object fails its typed params
         **kwargs: Any,  # pyright: ignore[reportExplicitAny]
     ) -> None:
+        """Attach the kwarg ``category`` to the unsaved instance when given."""
         super().__init__(*args, **kwargs)
         if category is not None:
             self.instance.category = category

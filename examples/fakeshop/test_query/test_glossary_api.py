@@ -6,7 +6,7 @@ from apps.kanban import models as kanban_models
 from graphql_client import assert_graphql_success as _graphql_data
 
 
-def _seed_glossary():
+def _seed_glossary() -> None:
     shipped = models.GlossaryStatus.objects.create(key="shipped", label="Shipped", order=0)
     planned = models.GlossaryStatus.objects.create(key="planned", label="Planned", order=1)
     filtering = models.GlossaryCategory.objects.create(
@@ -97,7 +97,7 @@ def _seed_glossary():
 
 
 @pytest.mark.django_db
-def test_filter_glossary_terms_by_status_key():
+def test_filter_glossary_terms_by_status_key() -> None:
     _seed_glossary()
 
     assert _graphql_data(
@@ -117,7 +117,7 @@ def test_filter_glossary_terms_by_status_key():
 
 
 @pytest.mark.django_db
-def test_filter_glossary_terms_by_spec_mention_and_select_edges():
+def test_filter_glossary_terms_by_spec_mention_and_select_edges() -> None:
     _seed_glossary()
 
     assert _graphql_data(
@@ -160,7 +160,7 @@ def test_filter_glossary_terms_by_spec_mention_and_select_edges():
 
 
 @pytest.mark.django_db
-def test_glossary_documents_are_shared_board_docs_scoped_to_glossary_namespace():
+def test_glossary_documents_are_shared_board_docs_scoped_to_glossary_namespace() -> None:
     _seed_glossary()
 
     assert _graphql_data(
@@ -189,7 +189,7 @@ def test_glossary_documents_are_shared_board_docs_scoped_to_glossary_namespace()
 
 
 @pytest.mark.django_db
-def test_order_glossary_terms_by_title_desc():
+def test_order_glossary_terms_by_title_desc() -> None:
     """``orderBy: [{ title: DESC }]`` reorders the glossary terms list (DONE-028 order wiring)."""
     _seed_glossary()
     expected = [
@@ -205,7 +205,7 @@ def test_order_glossary_terms_by_title_desc():
 
 
 @pytest.mark.django_db
-def test_anonymous_inline_fragment_under_list_field_resolves():
+def test_anonymous_inline_fragment_under_list_field_resolves() -> None:
     """An anonymous inline fragment (``... { f }``) under a plain list field resolves cleanly.
 
     Regression for the optimizer-folder High: ``allGlossaryTerms`` is a plain

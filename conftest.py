@@ -124,8 +124,7 @@ _install_postgres_connection_tracking()
 
 @pytest.fixture(autouse=True, scope="session")
 def _close_stray_postgres_connections(
-    # basedpyright: requested for its teardown order; pytest rejects usefixtures on a fixture
-    django_db_setup: None,  # pyright: ignore[reportUnusedParameter]  # noqa: ARG001
+    django_db_setup: None,
 ) -> Iterator[None]:
     """Close tracked stray Postgres connections before the test DBs drop.
 
@@ -136,6 +135,9 @@ def _close_stray_postgres_connections(
     still-wrapped handles close idempotently; errors are irrelevant by this
     point and suppressed.
     """
+    del (
+        django_db_setup
+    )  # requested for its teardown order; pytest rejects usefixtures on a fixture
     yield
     while _stray_postgres_connections:
         stray = _stray_postgres_connections.pop()

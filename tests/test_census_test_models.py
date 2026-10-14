@@ -422,7 +422,7 @@ def test_bare_base_names_resolve_by_enclosing_scope(
     source: str,
     models: list[str],
     top_level: set[str],
-):
+) -> None:
     """Each class's bases resolve against its own scope chain, never another scope's class."""
     tree = ast.parse("from django.db import models\n" + source)
     found, top = census._census_tree(tree, None)

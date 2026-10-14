@@ -21,8 +21,8 @@ import datetime
 import enum
 import uuid
 from collections import OrderedDict
-from collections.abc import Callable, Iterable, Iterator, Mapping
-from typing import TYPE_CHECKING, NamedTuple, TypeAlias, TypeVar
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from typing import TYPE_CHECKING, NamedTuple, NoReturn, TypeAlias, TypeVar
 from unittest import mock
 
 import pytest
@@ -107,7 +107,7 @@ from django_strawberry_framework.optimizer.predicates import correlated_inner_ro
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.sets_mixins import collect_related_declarations
 from django_strawberry_framework.types.relay import SyncMisuseError, apply_interfaces
-from django_strawberry_framework.utils.relations import classify_path
+from django_strawberry_framework.utils.relations import ClassifiedPath, classify_path
 from tests._idioms import definition_raises, is_object_dict, pickle_roundtrip
 from tests.optimizer import _link_models
 
@@ -159,7 +159,10 @@ def _provenance(filter_instance: object) -> FilterGenerationProvenance:
     return provenance
 
 
-def _favoring_profile(genre: library_models.Genre, postal_code: str):
+def _favoring_profile(
+    genre: library_models.Genre,
+    postal_code: str,
+) -> library_models.PatronProfile:
     """Create a patron and a profile whose ``favorite_genre`` is ``genre``."""
     patron = library_models.Patron.objects.create(name=f"patron-{postal_code}")
     return library_models.PatronProfile.objects.create(
@@ -299,7 +302,7 @@ def _isolate_registry() -> Iterator[None]:
 class _RequestContext:
     """The `info.context` shape the filter pipeline reads: one `request`."""
 
-    def __init__(self, req: HttpRequest):
+    def __init__(self, req: HttpRequest) -> None:
         super().__init__()
         self.request = req
 
@@ -307,7 +310,7 @@ class _RequestContext:
 class _RequestInfo:
     """The `info` shape the filter pipeline reads: one `context`."""
 
-    def __init__(self, ctx: _RequestContext):
+    def __init__(self, ctx: _RequestContext) -> None:
         super().__init__()
         self.context = ctx
 
@@ -395,13 +398,13 @@ def _seed_medtrics_loan_graph() -> _MedtricsLoanGraph:
 # ---------------------------------------------------------------------------
 
 
-def test_filterset_metaclass_is_django_filter_metaclass_subclass():
+def test_filterset_metaclass_is_django_filter_metaclass_subclass() -> None:
     from django_filters.filterset import FilterSetMetaclass as DjangoFilterMetaclass
 
     assert issubclass(FilterSetMetaclass, DjangoFilterMetaclass)
 
 
-def test_filterset_metaclass_collects_related_filters():
+def test_filterset_metaclass_collects_related_filters() -> None:
     class ShelfFilter(FilterSet):
         class Meta:
             model = library_models.Shelf
@@ -419,7 +422,7 @@ def test_filterset_metaclass_collects_related_filters():
     assert BranchFilter.related_filters["shelves"].bound_filterset is BranchFilter
 
 
-def test_filterset_metaclass_none_removal_survives_diamond_inheritance():
+def test_filterset_metaclass_none_removal_survives_diamond_inheritance() -> None:
     """An earlier base's ``None`` tombstone prevents later-base resurrection."""
 
     class ShelfFilter(FilterSet):
@@ -458,7 +461,7 @@ def test_filterset_metaclass_none_removal_survives_diamond_inheritance():
     assert "shelves" in BaseFilter.related_filters
 
 
-def test_filterset_metaclass_aliases_filter_fields_to_fields():
+def test_filterset_metaclass_aliases_filter_fields_to_fields() -> None:
     class ShelfFilter(FilterSet):
         class Meta:
             model = library_models.Shelf
@@ -470,7 +473,7 @@ def test_filterset_metaclass_aliases_filter_fields_to_fields():
     assert ShelfFilter.Meta.filter_fields == {"code": ["exact"]}
 
 
-def test_filterset_metaclass_fields_alias_sees_inherited_meta_fields():
+def test_filterset_metaclass_fields_alias_sees_inherited_meta_fields() -> None:
     """``hasattr`` (not ``__dict__``) is the class-Meta alias presence contract.
 
     A consumer Meta that subclasses another Meta already carrying ``fields``
@@ -489,7 +492,7 @@ def test_filterset_metaclass_fields_alias_sees_inherited_meta_fields():
     assert ShelfFilter._meta.fields == {"code": ["exact"]}
 
 
-def test_filterset_metaclass_does_not_expand_at_class_creation():
+def test_filterset_metaclass_does_not_expand_at_class_creation() -> None:
     class ShelfFilter(FilterSet):
         # `RelatedFilter("SiblingFilter")` references a class declared LATER.
         class Meta:
@@ -513,7 +516,7 @@ def test_filterset_metaclass_does_not_expand_at_class_creation():
 # ---------------------------------------------------------------------------
 
 
-def test_filterset_get_filters_triggers_expansion():
+def test_filterset_get_filters_triggers_expansion() -> None:
     class ShelfFilter(FilterSet):
         class Meta:
             model = library_models.Shelf
@@ -533,7 +536,7 @@ def test_filterset_get_filters_triggers_expansion():
     assert "shelves__code__icontains" in filters
 
 
-def test_filterset_get_filters_caches_after_full_resolution():
+def test_filterset_get_filters_caches_after_full_resolution() -> None:
     class ShelfFilter(FilterSet):
         class Meta:
             model = library_models.Shelf
@@ -552,7 +555,7 @@ def test_filterset_get_filters_caches_after_full_resolution():
     assert BranchFilter.__dict__.get("_expanded_filters") is first
 
 
-def test_filterset_get_filters_resets_expansion_guard():
+def test_filterset_get_filters_resets_expansion_guard() -> None:
     class ShelfFilter(FilterSet):
         class Meta:
             model = library_models.Shelf
@@ -569,7 +572,7 @@ def test_filterset_get_filters_resets_expansion_guard():
     assert BranchFilter._is_expanding_filters is False
 
 
-def test_filterset_get_filters_does_not_cache_when_string_filterset_remains():
+def test_filterset_get_filters_does_not_cache_when_string_filterset_remains() -> None:
     class BranchFilter(FilterSet):
         # Reference to a non-existent class - `expand_related_filter` raises.
         bogus = RelatedFilter("DefinitelyDoesNotExistFilter", field_name="shelves")
@@ -659,7 +662,9 @@ _DESK_RING_FILTERS = {
 
 
 @pytest.mark.parametrize("first", sorted(_DESK_RING_FILTERS))
-def test_a_related_filter_cycle_expands_each_set_alike_whichever_set_expands_first(first: str):
+def test_a_related_filter_cycle_expands_each_set_alike_whichever_set_expands_first(
+    first: str,
+) -> None:
     """Each set of a ``RelatedFilter`` cycle has one surface, whichever set's ``get_filters`` runs first.
 
     Expanding one member builds the others' expansions while it is still
@@ -674,7 +679,7 @@ def test_a_related_filter_cycle_expands_each_set_alike_whichever_set_expands_fir
 @pytest.mark.parametrize("first", sorted(_DESK_RING_FILTERS))
 def test_a_related_filter_cycle_publishes_one_flat_input_per_set_in_every_registration_order(
     first: str,
-):
+) -> None:
     """Finalizing types registered in any order publishes the same filter input fields per set.
 
     ``finalize_django_types`` expands the wired sets in type-registration order.
@@ -752,7 +757,7 @@ def test_a_related_filter_cycle_publishes_one_flat_input_per_set_in_every_regist
 @pytest.mark.parametrize("paused", sorted(_DESK_RING_FILTERS))
 def test_a_get_filters_call_reentering_a_set_mid_build_gets_the_surface_the_build_publishes(
     paused: str,
-):
+) -> None:
     """A second thread reading a cycle member while its first expansion runs gets the whole surface.
 
     The reentry guard is class-level, so the second call sees the set mid-build;
@@ -797,7 +802,7 @@ def test_a_get_filters_call_reentering_a_set_mid_build_gets_the_surface_the_buil
 @pytest.mark.parametrize("member", sorted(_DESK_RING_FILTERS))
 def test_a_get_filters_call_reentering_a_set_from_its_own_build_gets_the_surface_the_build_publishes(
     member: str,
-):
+) -> None:
     """A cycle member's build reading the member again gets the surface the build then publishes.
 
     ``get_fields`` runs inside the member's own expansion, so its ``get_filters`` call
@@ -877,7 +882,7 @@ _PLACEHOLDER_CYCLE_FILTERS = {
 def test_a_related_filter_cycle_through_a_set_with_a_placeholder_declaration_expands_each_set(
     owner: str,
     first: str,
-):
+) -> None:
     """A ``RelatedFilter(None)`` placeholder inside a cycle reaches no set and expands nothing.
 
     The cycle still ends where a path reaches a set already on it, whichever set
@@ -911,7 +916,7 @@ def test_a_related_filter_cycle_through_a_set_with_a_placeholder_declaration_exp
 # ---------------------------------------------------------------------------
 
 
-def test_filterset_get_fields_includes_pk_for_all_fields_shorthand():
+def test_filterset_get_fields_includes_pk_for_all_fields_shorthand() -> None:
     class ItemFilter(FilterSet):
         class Meta:
             model = Item
@@ -927,7 +932,7 @@ def test_filterset_get_fields_includes_pk_for_all_fields_shorthand():
     assert pk_name in fields
 
 
-def test_filterset_get_fields_excludes_m2m_for_all_fields_shorthand():
+def test_filterset_get_fields_excludes_m2m_for_all_fields_shorthand() -> None:
     class BookFilter(FilterSet):
         class Meta:
             model = library_models.Book
@@ -938,7 +943,7 @@ def test_filterset_get_fields_excludes_m2m_for_all_fields_shorthand():
     assert "genres" not in fields
 
 
-def test_filterset_get_fields_does_not_alter_explicit_dict_meta():
+def test_filterset_get_fields_does_not_alter_explicit_dict_meta() -> None:
     class ItemFilter(FilterSet):
         class Meta:
             model = Item
@@ -954,7 +959,7 @@ def test_filterset_get_fields_does_not_alter_explicit_dict_meta():
 # ---------------------------------------------------------------------------
 
 
-def test_filterset_get_fields_rejects_one_shot_iterator_at_class_creation():
+def test_filterset_get_fields_rejects_one_shot_iterator_at_class_creation() -> None:
     """``Meta.fields`` as a one-shot iterator fails closed at class creation.
 
     ``FilterSetOptions`` stores the declaration verbatim and upstream
@@ -986,7 +991,7 @@ def test_filterset_get_fields_rejects_one_shot_iterator_at_class_creation():
     assert "not a one-shot iterator or generator" in message
 
 
-def test_filterset_get_fields_rejects_builtin_iterator_too():
+def test_filterset_get_fields_rejects_builtin_iterator_too() -> None:
     with pytest.raises(ConfigurationError):
 
         @definition_raises
@@ -996,9 +1001,12 @@ def test_filterset_get_fields_rejects_builtin_iterator_too():
                 fields = iter(["code"])
 
 
-def test_filterset_fields_alias_carried_generator_hits_the_gate():
-    """``filter_fields`` promotes onto ``Meta.fields`` at the metaclass, so an
-    alias-carried one-shot iterator must hit the same re-readability gate."""
+def test_filterset_fields_alias_carried_generator_hits_the_gate() -> None:
+    """An alias-carried one-shot ``filter_fields`` iterator hits the re-readability gate.
+
+    ``filter_fields`` promotes onto ``Meta.fields`` at the metaclass, so the alias
+    carries the same one-shot iterator the gate refuses.
+    """
     with pytest.raises(ConfigurationError):
 
         @definition_raises
@@ -1009,7 +1017,7 @@ def test_filterset_fields_alias_carried_generator_hits_the_gate():
 
 
 @pytest.mark.parametrize("declared_fields", ["__all__", ["title"], {"title": ["exact"]}])
-def test_filterset_rejects_an_abstract_model_at_class_build(declared_fields: object):
+def test_filterset_rejects_an_abstract_model_at_class_build(declared_fields: object) -> None:
     """An abstract ``Meta.model`` fails at the class statement, naming the model.
 
     django-filter resolves every generated lookup through the model's default
@@ -1025,9 +1033,11 @@ def test_filterset_rejects_an_abstract_model_at_class_build(declared_fields: obj
                 fields = declared_fields
 
 
-def test_filterset_get_fields_re_readables_still_expand():
-    """Positive control: every shipped ``Meta.fields`` shape keeps expanding
-    (the gate has no false positives)."""
+def test_filterset_get_fields_re_readables_still_expand() -> None:
+    """Positive control: every shipped ``Meta.fields`` shape keeps expanding.
+
+    The gate has no false positives.
+    """
 
     class ListForm(FilterSet):
         class Meta:
@@ -1073,7 +1083,7 @@ def test_filterset_get_fields_re_readables_still_expand():
     assert set(ExcludeOnlyForm.get_fields())  # exclude-only implies the rest
 
 
-def test_filterset_accepts_a_computed_re_readable_collection():
+def test_filterset_accepts_a_computed_re_readable_collection() -> None:
     """A ``dict`` view or a custom ``Collection`` is a legal declaration.
 
     The contract is re-readability, not membership of a builtin allow-list: a
@@ -1083,17 +1093,17 @@ def test_filterset_accepts_a_computed_re_readable_collection():
     """
 
     class _NameSet:
-        def __init__(self, *names: str):
+        def __init__(self, *names: str) -> None:
             super().__init__()
             self._names = names
 
-        def __iter__(self):
+        def __iter__(self) -> Iterator[str]:
             return iter(self._names)
 
-        def __len__(self):
+        def __len__(self) -> int:
             return len(self._names)
 
-        def __contains__(self, item: object):
+        def __contains__(self, item: object) -> bool:
             return item in self._names
 
     class KeysViewForm(FilterSet):
@@ -1119,7 +1129,7 @@ def test_filterset_accepts_a_computed_re_readable_collection():
 # ---------------------------------------------------------------------------
 
 
-def test_filter_for_field_on_a_model_less_set_adds_no_fan_out_distinct():
+def test_filter_for_field_on_a_model_less_set_adds_no_fan_out_distinct() -> None:
     """A set without ``Meta.model`` has no relation path to classify, so no ``distinct`` is added."""
 
     class ModelLessProbe(FilterSet):
@@ -1131,7 +1141,7 @@ def test_filter_for_field_on_a_model_less_set_adds_no_fan_out_distinct():
     assert generated.distinct is False
 
 
-def test_filter_for_field_preserves_upstream_none_contract_for_unrecognized_field():
+def test_filter_for_field_preserves_upstream_none_contract_for_unrecognized_field() -> None:
     """An unrecognized model field returns ``None`` under WARN / IGNORE behavior.
 
     django-filter's ``filter_for_field`` returns ``None`` for a model field
@@ -1171,7 +1181,7 @@ def test_filter_for_field_preserves_upstream_none_contract_for_unrecognized_fiel
 
 
 @pytest.mark.django_db
-def test_ignore_unknown_field_filterset_still_filters_declared_columns():
+def test_ignore_unknown_field_filterset_still_filters_declared_columns() -> None:
     """End-to-end: an IGNORE-behavior filterset still filters its real columns.
 
     The unrecognized ``FileField`` leaf is skipped; the surviving ``name``
@@ -1197,7 +1207,7 @@ def test_ignore_unknown_field_filterset_still_filters_declared_columns():
     assert [item.name for item in queryset] == ["Probe Alpha"]
 
 
-def test_filter_for_field_picks_global_id_multiple_choice_filter_for_relay_m2m_target():
+def test_filter_for_field_picks_global_id_multiple_choice_filter_for_relay_m2m_target() -> None:
     """An M2M to a Relay-Node-shaped target maps to `GlobalIDMultipleChoiceFilter`.
 
     Decision 4 ports BOTH `GlobalIDFilter` (single-valued) and
@@ -1233,7 +1243,7 @@ def test_filter_for_field_picks_global_id_multiple_choice_filter_for_relay_m2m_t
     assert isinstance(resolved, GlobalIDMultipleChoiceFilter)
 
 
-def test_filter_for_field_picks_global_id_filter_for_relay_forward_fk_target():
+def test_filter_for_field_picks_global_id_filter_for_relay_forward_fk_target() -> None:
     """A forward FK to a Relay-Node-shaped target maps to `GlobalIDFilter`.
 
     Complement of the M2M case above - single-valued relations pick the
@@ -1265,7 +1275,7 @@ def test_filter_for_field_picks_global_id_filter_for_relay_forward_fk_target():
     assert not isinstance(resolved, GlobalIDMultipleChoiceFilter)
 
 
-def test_filter_for_field_marks_non_pk_to_field_relation_globalid_with_pk_path():
+def test_filter_for_field_marks_non_pk_to_field_relation_globalid_with_pk_path() -> None:
     """A forward FK on a non-pk ``to_field`` gets the pk-qualification flag.
 
     The generated ``GlobalIDFilter`` must carry the boolean
@@ -1293,7 +1303,7 @@ def test_filter_for_field_marks_non_pk_to_field_relation_globalid_with_pk_path()
     assert getattr(resolved, _GLOBALID_RELATION_PK_ATTR, None) is True
 
 
-def test_filter_for_field_fk_to_pk_relation_globalid_carries_no_marker():
+def test_filter_for_field_fk_to_pk_relation_globalid_carries_no_marker() -> None:
     """An ordinary FK-to-pk GlobalID relation filter must NOT carry the marker."""
 
     class ShelfType(DjangoType):
@@ -1327,7 +1337,7 @@ def test_filter_for_field_fk_to_pk_relation_globalid_carries_no_marker():
 # ---------------------------------------------------------------------------
 
 
-def test_generated_forward_fk_in_is_multiple_choice_over_fk_to_pk():
+def test_generated_forward_fk_in_is_multiple_choice_over_fk_to_pk() -> None:
     """Forward Relay FK ``in`` over an ordinary FK-to-pk generates a list filter.
 
     The generated ``shelf__in`` leaf must be ``GlobalIDMultipleChoiceFilter`` with a
@@ -1364,7 +1374,7 @@ def test_generated_forward_fk_in_is_multiple_choice_over_fk_to_pk():
 
 
 @pytest.mark.django_db
-def test_generated_forward_fk_in_execution_matches_requested_targets():
+def test_generated_forward_fk_in_execution_matches_requested_targets() -> None:
     """The generated forward-FK ``in`` leaf unions the requested targets.
 
     Also pins the package's established list semantics for the generated leaf: an
@@ -1418,7 +1428,7 @@ def test_generated_forward_fk_in_execution_matches_requested_targets():
         )
 
 
-def test_generated_forward_fk_to_field_in_is_pk_qualified_multiple_choice():
+def test_generated_forward_fk_to_field_in_is_pk_qualified_multiple_choice() -> None:
     """Forward Relay FK ``in`` over a non-pk ``to_field`` is pk-qualified.
 
     ``PatronProfile.favorite_genre`` binds on ``Genre.name`` (a non-pk column), so the
@@ -1464,8 +1474,9 @@ def test_generated_forward_fk_to_field_in_is_pk_qualified_multiple_choice():
 )
 def test_generated_forward_foreign_object_globalid_filter_matches_by_decoded_pk(
     child_name: str,
+    *,
     marked: bool,
-):
+) -> None:
     """A forward ``ForeignObject`` whose link targets non-pk columns is pk-qualified.
 
     The link stores ``p_slug`` (or ``(p_tenant, p_code)``) while a Relay GlobalID
@@ -1510,10 +1521,11 @@ def test_generated_forward_foreign_object_globalid_filter_matches_by_decoded_pk(
     ids=["second_tenant", "first_tenant"],
 )
 def test_all_fields_filterset_matches_a_two_column_forward_foreign_object_on_both_columns(
+    *,
     node: bool,
     label: str,
     names: list[str],
-):
+) -> None:
     """A ``"__all__"`` FilterSet's generated ``parent`` leaf selects the encoded parent's children.
 
     ``pa`` and ``pb`` share ``code="A"`` under different tenants, so the leaf
@@ -1581,7 +1593,7 @@ def test_all_fields_filterset_matches_a_two_column_forward_foreign_object_on_bot
 
 
 @pytest.mark.django_db
-def test_generated_forward_fk_to_field_in_execution_matches_by_decoded_pk():
+def test_generated_forward_fk_to_field_in_execution_matches_by_decoded_pk() -> None:
     """The generated non-pk-``to_field`` ``in`` leaf unions targets by decoded pk.
 
     The FK stores / joins on ``name`` but a Relay GlobalID carries the genre's pk, so
@@ -1636,7 +1648,7 @@ def test_generated_forward_fk_to_field_in_execution_matches_by_decoded_pk():
 
 
 @pytest.mark.django_db
-def test_expanded_related_filter_derives_pk_path_from_live_field_name():
+def test_expanded_related_filter_derives_pk_path_from_live_field_name() -> None:
     """An expanded ``to_field`` GlobalID leaf compiles against the rebased path.
 
     ``_expand_related_filter`` deepcopies a child leaf and rebases its
@@ -1729,7 +1741,7 @@ def test_expanded_related_filter_derives_pk_path_from_live_field_name():
 # ---------------------------------------------------------------------------
 
 
-def _register_relay_target(model: type[django_models.Model]):
+def _register_relay_target(model: type[django_models.Model]) -> type[DjangoType]:
     """Register ``model`` as a Relay-Node-shaped ``DjangoType`` for relation resolution.
 
     Mirrors the inline pattern in the ``filter_for_field`` relation tests above:
@@ -1746,7 +1758,7 @@ def _register_relay_target(model: type[django_models.Model]):
     return django_type
 
 
-def _register_plain_types(*models: type[django_models.Model]):
+def _register_plain_types(*models: type[django_models.Model]) -> None:
     """Register a plain ``DjangoType`` per model, the visibility a declared hop's target needs.
 
     A flat leaf walking a declared ``RelatedFilter`` hop applies the target
@@ -1761,7 +1773,7 @@ def _register_plain_types(*models: type[django_models.Model]):
         )
 
 
-def test_framework_relay_forward_fk_unsupported_lookup_raises_at_build():
+def test_framework_relay_forward_fk_unsupported_lookup_raises_at_build() -> None:
     """An unsupported ordering lookup on a framework-owned forward FK is rejected."""
     _register_relay_target(library_models.Shelf)
 
@@ -1780,7 +1792,7 @@ def test_framework_relay_forward_fk_unsupported_lookup_raises_at_build():
         assert lookup in message
 
 
-def test_framework_relay_m2m_unsupported_lookup_raises_at_build():
+def test_framework_relay_m2m_unsupported_lookup_raises_at_build() -> None:
     """An unsupported pattern lookup on a framework-owned M2M relation is rejected."""
     _register_relay_target(library_models.Genre)
 
@@ -1798,7 +1810,7 @@ def test_framework_relay_m2m_unsupported_lookup_raises_at_build():
     assert "icontains" in message
 
 
-def test_framework_relay_reverse_relation_unsupported_lookup_raises_at_build():
+def test_framework_relay_reverse_relation_unsupported_lookup_raises_at_build() -> None:
     """An unsupported ordering lookup on a framework-owned reverse relation is rejected."""
     _register_relay_target(library_models.Loan)
 
@@ -1816,7 +1828,7 @@ def test_framework_relay_reverse_relation_unsupported_lookup_raises_at_build():
     assert "gt" in message
 
 
-def test_framework_raw_pk_relation_unsupported_lookup_raises_at_build():
+def test_framework_raw_pk_relation_unsupported_lookup_raises_at_build() -> None:
     """An ordering lookup on a non-Relay relation key fails at build and points at RelatedFilter."""
     with pytest.raises(ConfigurationError) as exc_info:
 
@@ -1835,7 +1847,7 @@ def test_framework_raw_pk_relation_unsupported_lookup_raises_at_build():
     assert "SCALAR_MAP" not in message
 
 
-def test_related_filter_target_relay_relation_unsupported_lookup_raises_at_build():
+def test_related_filter_target_relay_relation_unsupported_lookup_raises_at_build() -> None:
     """A RelatedFilter target declaring an unsupported relay-relation lookup fails at build.
 
     The parent references the child (the expansion target) by string, so it
@@ -1872,7 +1884,7 @@ def test_related_filter_target_relay_relation_unsupported_lookup_raises_at_build
     assert "gt" in message
 
 
-def test_framework_relay_relation_supported_lookups_generate_without_raising():
+def test_framework_relay_relation_supported_lookups_generate_without_raising() -> None:
     """Positive controls: exact/in/isnull on framework-owned relay relations still build.
 
     ``exact`` is cardinality-selected (``GlobalIDFilter`` single-valued /
@@ -1906,7 +1918,7 @@ def test_framework_relay_relation_supported_lookups_generate_without_raising():
         assert not isinstance(isnull_leaf, (GlobalIDFilter, GlobalIDMultipleChoiceFilter))
 
 
-def test_consumer_override_relation_nonstandard_lookup_not_rejected():
+def test_consumer_override_relation_nonstandard_lookup_not_rejected() -> None:
     """A consumer-owned relation override implementing a nonstandard lookup is NOT rejected.
 
     Ownership is decided before the wire-shape policy: a ``Meta.filter_overrides``
@@ -1944,7 +1956,7 @@ def test_consumer_override_relation_nonstandard_lookup_not_rejected():
 
 
 @pytest.mark.django_db
-def test_traversal_to_field_leaf_routes_pk_qualified_through_correlated_exists():
+def test_traversal_to_field_leaf_routes_pk_qualified_through_correlated_exists() -> None:
     """A traversal non-pk-``to_field`` GlobalID leaf routes and compiles ``__pk``.
 
     Exercises the ``Meta.fields`` traversal ``favoring_profiles__favorite_genre``
@@ -1991,7 +2003,7 @@ def test_traversal_to_field_leaf_routes_pk_qualified_through_correlated_exists()
     encoded = strawberry.relay.to_base64("GenreType", str(t1.pk))
     outer = library_models.Genre.objects.order_by("id")
 
-    def _build_fs():
+    def _build_fs() -> FilterSet:
         return ParentFilter(
             data={"favoring_profiles__favorite_genre": encoded},
             queryset=outer,
@@ -2008,7 +2020,7 @@ def test_traversal_to_field_leaf_routes_pk_qualified_through_correlated_exists()
 
 
 @pytest.mark.django_db
-def test_traversal_to_field_in_leaf_routes_through_correlated_exists():
+def test_traversal_to_field_in_leaf_routes_through_correlated_exists() -> None:
     """The traversal non-pk-``to_field`` ``in`` leaf through the adapter.
 
     Composes three mechanisms at once -- lookup-aware ``in``, non-pk
@@ -2093,7 +2105,7 @@ def test_traversal_to_field_in_leaf_routes_through_correlated_exists():
 
 
 @pytest.mark.django_db
-def test_expanded_to_field_leaf_answers_pk_qualified_through_its_branch():
+def test_expanded_to_field_leaf_answers_pk_qualified_through_its_branch() -> None:
     """An expanded non-pk-``to_field`` GlobalID leaf keeps ``__pk`` when it runs as its branch.
 
     ``favoring_profiles__favorite_genre`` walks the declared ``favoring_profiles``
@@ -2133,7 +2145,7 @@ def test_expanded_to_field_leaf_answers_pk_qualified_through_its_branch():
     library_models.Genre.objects.create(name="C3")
     assert str(t1.pk) != t1.name
 
-    def _pks(data: dict[str, object]):
+    def _pks(data: dict[str, object]) -> list[object]:
         qs = ParentFilter(
             data=data,
             queryset=library_models.Genre.objects.order_by("id"),
@@ -2162,7 +2174,7 @@ def test_expanded_to_field_leaf_answers_pk_qualified_through_its_branch():
 # ---------------------------------------------------------------------------
 
 
-def test_direct_m2m_relation_override_on_relay_target_is_honored():
+def test_direct_m2m_relation_override_on_relay_target_is_honored() -> None:
     """A ``Meta.filter_overrides`` M2M relation filter over a Relay target is kept."""
     import django_filters
     from django.db import models as django_models
@@ -2197,7 +2209,7 @@ def test_direct_m2m_relation_override_on_relay_target_is_honored():
     assert "genres" not in snapshot.candidates
 
 
-def test_direct_forward_fk_relation_override_on_relay_target_is_honored():
+def test_direct_forward_fk_relation_override_on_relay_target_is_honored() -> None:
     """A ``Meta.filter_overrides`` forward-FK filter over a Relay target is kept."""
     import django_filters
     from django.db import models as django_models
@@ -2231,7 +2243,7 @@ def test_direct_forward_fk_relation_override_on_relay_target_is_honored():
     assert "shelf" not in snapshot.candidates
 
 
-def test_filter_defaults_shadow_relation_override_on_relay_target_is_honored():
+def test_filter_defaults_shadow_relation_override_on_relay_target_is_honored() -> None:
     """A shadowed class-level ``FILTER_DEFAULTS`` relation override is honored too.
 
     A ``FILTER_DEFAULTS`` shadow makes the class non-capable
@@ -2284,7 +2296,7 @@ def test_filter_defaults_shadow_relation_override_on_relay_target_is_honored():
     assert "genres" not in snapshot.candidates
 
 
-def test_related_filter_expansion_preserves_child_relation_override():
+def test_related_filter_expansion_preserves_child_relation_override() -> None:
     """An expanded ``<related>__<relation>`` leaf inherits the child's override.
 
     The child ``BookFilter`` overrides its own Relay-node M2M relation
@@ -2333,7 +2345,7 @@ def test_related_filter_expansion_preserves_child_relation_override():
 
 
 @pytest.mark.django_db
-def test_honored_override_runs_outer_with_no_reserved_alias():
+def test_honored_override_runs_outer_with_no_reserved_alias() -> None:
     """End-to-end: the honored consumer M2M filter runs OUTER, not through EXISTS.
 
     ``Book.genres`` is a to-many hop, so a framework GlobalID replacement would be
@@ -2402,7 +2414,7 @@ def test_honored_override_runs_outer_with_no_reserved_alias():
     assert set(result.values_list("title", flat=True)) == {"book-1", "book-3"}
 
 
-def test_filter_for_field_picks_scalar_filter_for_non_relay_target():
+def test_filter_for_field_picks_scalar_filter_for_non_relay_target() -> None:
     """A non-Relay `DjangoType` target yields the raw-pk pair, typed from the target pk column."""
 
     class ShelfType(DjangoType):
@@ -2432,7 +2444,7 @@ def test_filter_for_field_picks_scalar_filter_for_non_relay_target():
     assert convert_filter_to_input_annotation(resolved_in, field) == (list[int] | None)
 
 
-def test_filter_for_field_types_raw_pk_when_target_model_not_registered():
+def test_filter_for_field_types_raw_pk_when_target_model_not_registered() -> None:
     """No registered `DjangoType` for the target -> the raw-pk filter, typed from the pk column."""
 
     class BookFilter(FilterSet):
@@ -2457,7 +2469,7 @@ def test_filter_for_field_types_raw_pk_when_target_model_not_registered():
 def test_filter_for_field_marks_generated_to_many_paths_distinct(
     model_class: type[django_models.Model],
     field_name: str,
-):
+) -> None:
     class GeneratedFilter(FilterSet):
         class Meta:
             model = model_class
@@ -2468,7 +2480,7 @@ def test_filter_for_field_marks_generated_to_many_paths_distinct(
     assert filter_instance.distinct is True
 
 
-def test_filter_for_field_keeps_generated_to_one_path_non_distinct():
+def test_filter_for_field_keeps_generated_to_one_path_non_distinct() -> None:
     class BookFilter(FilterSet):
         class Meta:
             model = library_models.Book
@@ -2490,7 +2502,7 @@ def test_filter_for_field_keeps_generated_to_one_path_non_distinct():
 
 
 @pytest.mark.django_db
-def test_medtrics_ordered_sequence_baseline_freezes_fanout():
+def test_medtrics_ordered_sequence_baseline_freezes_fanout() -> None:
     """Document the raw-ORM fan-out the production adapter avoids.
 
     This case never routes through ``FilterSet``; it is the PERMANENT raw-ORM
@@ -2530,7 +2542,7 @@ def test_medtrics_ordered_sequence_baseline_freezes_fanout():
 
 
 @pytest.mark.django_db
-def test_generated_deep_to_many_path_correctness_is_row_preserving():
+def test_generated_deep_to_many_path_correctness_is_row_preserving() -> None:
     """A generated deep to-many leaf is row-preserving via correlated EXISTS.
 
     A framework-generated deep lookup crossing a to-many
@@ -2588,7 +2600,7 @@ def test_generated_deep_to_many_path_correctness_is_row_preserving():
 
 
 @pytest.mark.django_db
-def test_flattened_related_filter_leaf_is_row_preserving():
+def test_flattened_related_filter_leaf_is_row_preserving() -> None:
     """A flattened ``RelatedFilter`` leaf does not duplicate the parent row.
 
     ``_expand_related_filter`` deep-copies a filter generated against the CHILD
@@ -2639,7 +2651,7 @@ def test_flattened_related_filter_leaf_is_row_preserving():
 # ---------------------------------------------------------------------------
 
 
-def _seed_two_matching_genres_on_one_book():
+def _seed_two_matching_genres_on_one_book() -> tuple[library_models.Book, library_models.Book]:
     """One book with two genres both matching "cardio", plus a non-matching book."""
     branch = library_models.Branch.objects.create(name="Adapter Branch")
     shelf = library_models.Shelf.objects.create(branch=branch, code="ADP-1")
@@ -2654,7 +2666,7 @@ def _seed_two_matching_genres_on_one_book():
 
 
 @pytest.mark.django_db
-def test_eligible_m2m_candidate_has_no_outer_or_inner_distinct():
+def test_eligible_m2m_candidate_has_no_outer_or_inner_distinct() -> None:
     """An eligible M2M candidate composes with no outer DISTINCT and no inner SELECT DISTINCT."""
 
     class BookGenreFilter(FilterSet):
@@ -2682,7 +2694,7 @@ def test_eligible_m2m_candidate_has_no_outer_or_inner_distinct():
 
 
 @pytest.mark.django_db
-def test_invoke_suppressing_helper_restores_distinct_after_success():
+def test_invoke_suppressing_helper_restores_distinct_after_success() -> None:
     """The helper restores the per-instance ``distinct`` flag after a successful apply."""
 
     class BookGenreFilter(FilterSet):
@@ -2711,7 +2723,7 @@ def test_invoke_suppressing_helper_restores_distinct_after_success():
 
 
 @pytest.mark.django_db
-def test_invoke_suppressing_helper_restores_distinct_after_exception():
+def test_invoke_suppressing_helper_restores_distinct_after_exception() -> None:
     """The helper restores ``distinct`` even when the wrapped invocation raises."""
 
     class BookGenreFilter(FilterSet):
@@ -2729,8 +2741,8 @@ def test_invoke_suppressing_helper_restores_distinct_after_exception():
 
     boom = RuntimeError("decode failure mid-invocation")
 
-    # basedpyright: assigned over Filter.filter, whose typed signature fixes the parameter names
-    def _raising_filter(qs: QuerySet[django_models.Model], value: object):  # pyright: ignore[reportUnusedParameter]
+    def _raising_filter(qs: QuerySet[django_models.Model], value: object) -> NoReturn:
+        del qs, value  # assigned over Filter.filter, whose typed signature fixes both names
         # The flag is suppressed at this point; prove it, then blow up.
         assert filter_instance.distinct is False
         raise boom
@@ -2744,7 +2756,7 @@ def test_invoke_suppressing_helper_restores_distinct_after_exception():
 
 
 @pytest.mark.django_db
-def test_inactive_candidates_attach_nothing():
+def test_inactive_candidates_attach_nothing() -> None:
     """With many to-many candidates but ONE active, exactly one EXISTS + one reserved alias."""
 
     class MultiBookFilter(FilterSet):
@@ -2772,7 +2784,7 @@ def test_inactive_candidates_attach_nothing():
 
 
 @pytest.mark.django_db
-def test_many_inactive_candidates_match_empty_filter_sql(monkeypatch: pytest.MonkeyPatch):
+def test_many_inactive_candidates_match_empty_filter_sql(monkeypatch: pytest.MonkeyPatch) -> None:
     """N inactive-but-eligible to-many leaves build inner roots yet attach empty-filter SQL.
 
     Pins the cost-boundary contract documented on ``FilterSet._apply_flat_leaves``:
@@ -2816,7 +2828,7 @@ def test_many_inactive_candidates_match_empty_filter_sql(monkeypatch: pytest.Mon
     real_inner_root = correlated_inner_root
     builds = {"n": 0}
 
-    def _counting_inner_root(queryset: QuerySet[_M]):
+    def _counting_inner_root(queryset: QuerySet[_M]) -> QuerySet[_M]:
         builds["n"] += 1
         return real_inner_root(queryset)
 
@@ -2842,7 +2854,7 @@ def test_many_inactive_candidates_match_empty_filter_sql(monkeypatch: pytest.Mon
 
 
 @pytest.mark.django_db
-def test_restrictive_empty_in_composes_as_exists_over_none():
+def test_restrictive_empty_in_composes_as_exists_over_none() -> None:
     """A restrictive membership on a to-many path matches no rows via ``Exists(none)``.
 
     The RESTRICTIVE-empty shape (a non-empty membership whose every value is out of
@@ -2877,7 +2889,7 @@ def test_restrictive_empty_in_composes_as_exists_over_none():
 
 
 @pytest.mark.django_db
-def test_pre_snapshot_filterset_degrades_to_old_behavior(monkeypatch: pytest.MonkeyPatch):
+def test_pre_snapshot_filterset_degrades_to_old_behavior(monkeypatch: pytest.MonkeyPatch) -> None:
     """A filterset with no expansion snapshot runs every leaf's original outer invocation.
 
     The traversal ``genres__name__icontains`` walks no declared hop, so only its
@@ -2915,7 +2927,7 @@ def test_pre_snapshot_filterset_degrades_to_old_behavior(monkeypatch: pytest.Mon
 
 
 @pytest.mark.django_db
-def test_not_branch_over_to_many_related_branch_is_row_preserving():
+def test_not_branch_over_to_many_related_branch_is_row_preserving() -> None:
     """A ``not`` tree position over a to-many related branch keeps ``_q_for_branch`` intact.
 
     Branch negation composes through the outer ``Q(pk__in=...)`` (``_q_for_branch``),
@@ -2946,7 +2958,7 @@ def test_not_branch_over_to_many_related_branch_is_row_preserving():
     assert list(qs.values_list("pk", flat=True)) == [neuro.pk]
 
 
-def _routed_genre_filter():
+def _routed_genre_filter() -> type[FilterSet]:
     """A ``Genre`` filter set whose reverse-M2M ``books__title`` leaf routes.
 
     ``books__title`` is a ``Meta.fields`` traversal and no ``RelatedFilter``
@@ -2963,7 +2975,7 @@ def _routed_genre_filter():
 
 
 @pytest.mark.django_db
-def test_eligible_leaf_in_and_tree_position_is_row_preserving():
+def test_eligible_leaf_in_and_tree_position_is_row_preserving() -> None:
     """An ELIGIBLE to-many leaf inside an ``and`` branch stays row-preserving.
 
     The eligible reverse-M2M ``books__title`` leaf (``_routed_genre_filter``) is
@@ -3005,7 +3017,7 @@ def test_eligible_leaf_in_and_tree_position_is_row_preserving():
 
 
 @pytest.mark.django_db
-def test_eligible_leaf_in_or_tree_position_is_row_preserving():
+def test_eligible_leaf_in_or_tree_position_is_row_preserving() -> None:
     """An ELIGIBLE to-many leaf inside an ``or`` branch stays row-preserving.
 
     The eligible reverse-M2M ``books__title`` leaf (``_routed_genre_filter``) is
@@ -3048,7 +3060,7 @@ def test_eligible_leaf_in_or_tree_position_is_row_preserving():
 
 
 @pytest.mark.django_db
-def test_qs_and_apply_sync_and_async_over_eligible_candidate():
+def test_qs_and_apply_sync_and_async_over_eligible_candidate() -> None:
     """``.qs``, ``apply_sync``, and ``apply_async`` all filter an eligible candidate correctly.
 
     Uses the flat reverse-M2M leaf ``books__title`` (``_routed_genre_filter``, an
@@ -3147,13 +3159,16 @@ def test_qs_and_apply_sync_and_async_over_eligible_candidate():
 # ---------------------------------------------------------------------------
 
 
-def _library_shelf():
+def _library_shelf() -> library_models.Shelf:
     """Create a throwaway ``Branch`` + ``Shelf`` for library-model C.4 fixtures."""
     branch = library_models.Branch.objects.create(name="C4 Branch")
     return library_models.Shelf.objects.create(branch=branch, code="C4-1")
 
 
-def _make_scalar_specimen(label: str, parent: scalar_models.ScalarSpecimen | None = None):
+def _make_scalar_specimen(
+    label: str,
+    parent: scalar_models.ScalarSpecimen | None = None,
+) -> scalar_models.ScalarSpecimen:
     """Create a ``ScalarSpecimen`` with all required non-null scalar fields set."""
     return scalar_models.ScalarSpecimen.objects.create(
         label=label,
@@ -3166,7 +3181,7 @@ def _make_scalar_specimen(label: str, parent: scalar_models.ScalarSpecimen | Non
 
 
 @pytest.mark.django_db
-def test_c4_reverse_fk_loans_note_is_row_preserving():
+def test_c4_reverse_fk_loans_note_is_row_preserving() -> None:
     """Matrix row 1 (reverse FK) + row 14 (ordinary generated ``CharFilter``).
 
     ``Book`` root, generated ``loans__note`` ``icontains`` leaf (a plain upstream
@@ -3211,7 +3226,7 @@ def test_c4_reverse_fk_loans_note_is_row_preserving():
 
 
 @pytest.mark.django_db
-def test_c4_forward_m2m_multiple_parents_is_row_preserving():
+def test_c4_forward_m2m_multiple_parents_is_row_preserving() -> None:
     """Matrix row 2 (forward M2M) gap: MULTIPLE parents, one direct, one via dups.
 
     ``Book`` root over the forward M2M ``Book.genres``. One book matches through a
@@ -3250,7 +3265,7 @@ def test_c4_forward_m2m_multiple_parents_is_row_preserving():
 
 
 @pytest.mark.django_db
-def test_c4_reverse_m2m_genre_books_title_is_row_preserving():
+def test_c4_reverse_m2m_genre_books_title_is_row_preserving() -> None:
     """Matrix row 3 (reverse M2M): ``Genre`` root over ``books__title``.
 
     A genre linked to two matching books is returned once; ordered equivalence
@@ -3287,7 +3302,7 @@ def test_c4_reverse_m2m_genre_books_title_is_row_preserving():
 
 
 @pytest.mark.django_db
-def test_c4_generic_relation_branch_tags_is_row_preserving():
+def test_c4_generic_relation_branch_tags_is_row_preserving() -> None:
     """Matrix row 4 (``GenericRelation``): ``Branch`` root over ``tags__tag``.
 
     ``Meta.fields = {"tags__tag": ["icontains"]}`` DOES generate through
@@ -3327,7 +3342,7 @@ def test_c4_generic_relation_branch_tags_is_row_preserving():
 
 
 @pytest.mark.django_db
-def test_c4_isnull_on_nullable_child_field_is_row_preserving():
+def test_c4_isnull_on_nullable_child_field_is_row_preserving() -> None:
     """Matrix row 5 (``isnull`` on a nullable child field over a to-many hop).
 
     ``Genre`` root over ``books__subtitle`` (``subtitle`` is nullable). Both
@@ -3367,7 +3382,7 @@ def test_c4_isnull_on_nullable_child_field_is_row_preserving():
 
 
 @pytest.mark.django_db
-def test_c4_nullable_intermediate_to_one_hop_is_row_preserving():
+def test_c4_nullable_intermediate_to_one_hop_is_row_preserving() -> None:
     """Matrix row 6 (nullable intermediate to-one hop in the multiplying chain).
 
     ``ScalarSpecimen`` root over ``parent__children__label`` - a nullable self-FK
@@ -3405,7 +3420,7 @@ def test_c4_nullable_intermediate_to_one_hop_is_row_preserving():
 
 
 @pytest.mark.django_db
-def test_c4_to_field_reverse_to_many_children_is_row_preserving():
+def test_c4_to_field_reverse_to_many_children_is_row_preserving() -> None:
     """Matrix row 7 (``to_field`` FK-to-non-pk hop), now executable.
 
     ``Genre`` root over its reverse to-many ``favoring_profiles__postal_code`` --
@@ -3460,7 +3475,7 @@ def test_c4_to_field_reverse_to_many_children_is_row_preserving():
 
 
 @pytest.mark.django_db
-def test_c4_two_active_leaves_same_relation_cross_row_and():
+def test_c4_two_active_leaves_same_relation_cross_row_and() -> None:
     """Matrix row 8 (two active leaves on one relation, cross-row AND).
 
     ``Book`` root with TWO active leaves on the M2M ``genres`` relation matching
@@ -3509,7 +3524,7 @@ def test_c4_two_active_leaves_same_relation_cross_row_and():
 
 
 @pytest.mark.django_db
-def test_c4_range_binds_to_single_child_row():
+def test_c4_range_binds_to_single_child_row() -> None:
     """Matrix row 9 (positive multi-lookup single-invocation binding).
 
     A ``range`` leaf on ``Book.loans__id``: both bounds must bind to ONE child row
@@ -3552,7 +3567,7 @@ def test_c4_range_binds_to_single_child_row():
 
 
 @pytest.mark.django_db
-def test_c4_negated_split_across_rows_range_counterexample():
+def test_c4_negated_split_across_rows_range_counterexample() -> None:
     """Matrix row 10 (negated split-across-rows range counterexample).
 
     The framework's generated FLAT leaves never carry ``exclude=True`` (proven
@@ -3599,9 +3614,8 @@ def test_c4_negated_split_across_rows_range_counterexample():
     assert oracle == production
 
 
-def test_generated_flat_leaves_never_carry_exclude():
-    """Row 10 invariant, proven executably: no framework-GENERATED flat leaf
-    carries ``exclude=True``.
+def test_generated_flat_leaves_never_carry_exclude() -> None:
+    """No framework-GENERATED flat leaf carries ``exclude=True`` (row 10 invariant).
 
     Negation is a logic-tree ``not_`` concern (``_q_for_branch``), never baked
     into a generated leaf, so the flat-leaf correlated-``EXISTS`` adapter never
@@ -3630,7 +3644,7 @@ def test_generated_flat_leaves_never_carry_exclude():
 
 
 @pytest.mark.django_db
-def test_c4_integer_in_over_to_many_path():
+def test_c4_integer_in_over_to_many_path() -> None:
     """Matrix row 11 (integer ``in`` semantics over an eligible to-many path).
 
     ``Genre`` root over ``books__id`` ``in``: an explicit empty list is the empty
@@ -3659,7 +3673,7 @@ def test_c4_integer_in_over_to_many_path():
         "mixed-valid-invalid": ([b1.pk, 99999999], [g1.pk]),
         "all-invalid": ([88888888, 99999999], []),
     }
-    for _label, (value, expected) in cases.items():
+    for value, expected in cases.values():
         GenreBookInFilter.get_filters()
         result = GenreBookInFilter(
             data={"books__id__in": value},
@@ -3670,7 +3684,7 @@ def test_c4_integer_in_over_to_many_path():
         assert production == expected
 
 
-def test_flat_relay_m2m_leaf_builds_form_field_without_model_choice_extras():
+def test_flat_relay_m2m_leaf_builds_form_field_without_model_choice_extras() -> None:
     """The Relay M2M replacement strips model-choice extras so its field builds.
 
     Regression: upstream's M2M default carries a ``queryset`` extra; forwarding
@@ -3699,7 +3713,7 @@ def test_flat_relay_m2m_leaf_builds_form_field_without_model_choice_extras():
         assert isinstance(leaf.field, _GlobalIDMultipleChoiceField)
 
 
-def test_flat_relay_fk_leaf_builds_form_field_without_model_choice_extras():
+def test_flat_relay_fk_leaf_builds_form_field_without_model_choice_extras() -> None:
     """The single-valued Relay FK replacement strips the extras too.
 
     Upstream's FK default carries ``queryset`` AND ``to_field_name`` /
@@ -3722,11 +3736,11 @@ def test_flat_relay_fk_leaf_builds_form_field_without_model_choice_extras():
     leaf = FlatLoanFilter.get_filters()["book"]
     assert isinstance(leaf, GlobalIDFilter)
     assert _MODEL_CHOICE_ONLY_EXTRAS.isdisjoint(leaf.extra)
-    leaf.field
+    _ = leaf.field
 
 
 @pytest.mark.django_db
-def test_c4_global_id_list_over_flat_relay_m2m_is_row_preserving():
+def test_c4_global_id_list_over_flat_relay_m2m_is_row_preserving() -> None:
     """Matrix row 11, GlobalID-list sub-case: decode + row-preserving apply.
 
     A flat Relay M2M ``in`` leaf decodes real ``global_id_for``-minted ids and
@@ -3782,7 +3796,7 @@ def test_c4_global_id_list_over_flat_relay_m2m_is_row_preserving():
 
 
 @pytest.mark.django_db
-def test_c4_untouched_surfaces_attach_no_reserved_alias():
+def test_c4_untouched_surfaces_attach_no_reserved_alias() -> None:
     """Matrix row 12 (untouched surfaces): declared / method / custom / overrides.
 
     Each ineligible surface must run today's unchanged path: no reserved
@@ -3826,7 +3840,7 @@ def test_c4_untouched_surfaces_attach_no_reserved_alias():
             queryset: QuerySet[library_models.Book],
             _name: str,
             value: object,
-        ):
+        ) -> QuerySet[library_models.Book]:
             return queryset.filter(loans__note__icontains=value).distinct()
 
     MethodFilter.get_filters()
@@ -3905,7 +3919,7 @@ def test_c4_untouched_surfaces_attach_no_reserved_alias():
 _BOOK_GENRE_LEAF_SHAPES = ("routed", "branch")
 
 
-def _seed_multiset_book_genre_graph():
+def _seed_multiset_book_genre_graph() -> tuple[int, int, int]:
     """Three books over the ``genres__name`` icontains candidate.
 
     ``book_two_genres`` matches "cardio" via TWO genres (its own occurrences
@@ -3929,7 +3943,10 @@ def _seed_multiset_book_genre_graph():
     return book_two_genres.pk, book_one_genre.pk, book_no_match.pk
 
 
-def _apply_book_genre_leaf(queryset: QuerySet[library_models.Book], shape: str):
+def _apply_book_genre_leaf(
+    queryset: QuerySet[library_models.Book],
+    shape: str,
+) -> QuerySet[library_models.Book]:
     """Apply the ``genres__name`` icontains leaf via the consumer-shaped-queryset seam.
 
     Constructing the filter set with ``queryset=<shaped input>`` is exactly the
@@ -3958,7 +3975,7 @@ def _apply_book_genre_leaf(queryset: QuerySet[library_models.Book], shape: str):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("shape", _BOOK_GENRE_LEAF_SHAPES)
-def test_c4_multiset_non_fanned_input_each_row_once(shape: str):
+def test_c4_multiset_non_fanned_input_each_row_once(shape: str) -> None:
     """(a) Non-fanned input: each matching book exactly once, consumer order kept."""
     two, one, _no = _seed_multiset_book_genre_graph()
 
@@ -3973,7 +3990,7 @@ def test_c4_multiset_non_fanned_input_each_row_once(shape: str):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("shape", _BOOK_GENRE_LEAF_SHAPES)
-def test_c4_multiset_pre_fanned_consumer_input_multiplicity_survives(shape: str):
+def test_c4_multiset_pre_fanned_consumer_input_multiplicity_survives(shape: str) -> None:
     """(b) Pre-fanned consumer input: existing duplicates that match survive; non-matches drop.
 
     The consumer deliberately fans the queryset on ``genres__name icontains
@@ -4004,7 +4021,7 @@ def test_c4_multiset_pre_fanned_consumer_input_multiplicity_survives(shape: str)
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("shape", _BOOK_GENRE_LEAF_SHAPES)
-def test_c4_multiset_consumer_distinct_input_is_preserved(shape: str):
+def test_c4_multiset_consumer_distinct_input_is_preserved(shape: str) -> None:
     """(c) Explicitly consumer-distinct input: consumer's own distinct collapses duplicates."""
     two, one, _no = _seed_multiset_book_genre_graph()
 
@@ -4022,7 +4039,7 @@ def test_c4_multiset_consumer_distinct_input_is_preserved(shape: str):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("shape", _BOOK_GENRE_LEAF_SHAPES)
-def test_c4_multiset_custom_filter_produced_input_multiplicity_survives(shape: str):
+def test_c4_multiset_custom_filter_produced_input_multiplicity_survives(shape: str) -> None:
     """(d) Custom-filter-produced input: the fanned multiplicity from a declared leaf survives.
 
     A consumer-declared ``CharFilter`` with ``distinct=False`` on a to-many
@@ -4073,7 +4090,7 @@ def test_c4_multiset_custom_filter_produced_input_multiplicity_survives(shape: s
 # ---------------------------------------------------------------------------
 
 
-def _routed_deep_loan_filter():
+def _routed_deep_loan_filter() -> type[FilterSet]:
     """A ``Loan`` filter set whose deep ``book__loans__patron__email`` leaf routes."""
 
     class RoutedDeepLoanFilter(FilterSet):
@@ -4085,7 +4102,7 @@ def _routed_deep_loan_filter():
 
 
 @pytest.mark.django_db
-def test_c4_medtrics_loanfilter_deep_leaf_sql_shape():
+def test_c4_medtrics_loanfilter_deep_leaf_sql_shape() -> None:
     """The Medtrics deep leaf composes as ONE correlated EXISTS with no root fan-out."""
     DeepLoanFilter = _routed_deep_loan_filter()
 
@@ -4120,7 +4137,7 @@ def test_c4_medtrics_loanfilter_deep_leaf_sql_shape():
 
 
 @pytest.mark.django_db
-def test_c4_medtrics_loanfilter_deep_leaf_package_tier_pagination():
+def test_c4_medtrics_loanfilter_deep_leaf_package_tier_pagination() -> None:
     """Two-edge page-size-1 boundary over the filtered loans (package-tier slicing).
 
     ``all_library_loans`` is a plain list field (no connection surface), so
@@ -4151,7 +4168,7 @@ def test_c4_medtrics_loanfilter_deep_leaf_package_tier_pagination():
 # ---------------------------------------------------------------------------
 
 
-def test_request_from_info_uses_context_request_attribute():
+def test_request_from_info_uses_context_request_attribute() -> None:
     class CategoryFilter(FilterSet):
         class Meta:
             model = Category
@@ -4162,14 +4179,14 @@ def test_request_from_info_uses_context_request_attribute():
     assert CategoryFilter._request_from_info(info) is request
 
 
-def test_request_from_info_falls_back_to_bare_http_request():
+def test_request_from_info_falls_back_to_bare_http_request() -> None:
     class CategoryFilter(FilterSet):
         class Meta:
             model = Category
             fields = {"name": ["exact"]}
 
     class _Info:
-        def __init__(self):
+        def __init__(self) -> None:
             super().__init__()
             self.context = HttpRequest()
 
@@ -4177,7 +4194,7 @@ def test_request_from_info_falls_back_to_bare_http_request():
     assert CategoryFilter._request_from_info(info) is info.context
 
 
-def test_request_from_info_raises_for_unsupported_context_shape():
+def test_request_from_info_raises_for_unsupported_context_shape() -> None:
     class CategoryFilter(FilterSet):
         class Meta:
             model = Category
@@ -4195,7 +4212,7 @@ def test_request_from_info_raises_for_unsupported_context_shape():
 # ---------------------------------------------------------------------------
 
 
-def test_normalize_input_returns_empty_dict_for_none():
+def test_normalize_input_returns_empty_dict_for_none() -> None:
     class CategoryFilter(FilterSet):
         class Meta:
             model = Category
@@ -4204,7 +4221,7 @@ def test_normalize_input_returns_empty_dict_for_none():
     assert CategoryFilter._normalize_input(None) == {}
 
 
-def test_normalize_input_skips_none_valued_attrs():
+def test_normalize_input_skips_none_valued_attrs() -> None:
     class CategoryFilter(FilterSet):
         class Meta:
             model = Category
@@ -4214,7 +4231,7 @@ def test_normalize_input_skips_none_valued_attrs():
     assert data == {"description__icontains": "foo"}
 
 
-def test_normalize_input_maps_in_python_attr_to_in_form_data_key():
+def test_normalize_input_maps_in_python_attr_to_in_form_data_key() -> None:
     class CategoryFilter(FilterSet):
         class Meta:
             model = Category
@@ -4224,7 +4241,7 @@ def test_normalize_input_maps_in_python_attr_to_in_form_data_key():
     assert data == {"name__in": ["a", "b"]}
 
 
-def test_normalize_input_maps_logic_keys_to_short_form():
+def test_normalize_input_maps_logic_keys_to_short_form() -> None:
     class CategoryFilter(FilterSet):
         class Meta:
             model = Category
@@ -4238,7 +4255,7 @@ def test_normalize_input_maps_logic_keys_to_short_form():
     assert data["not"] == {"name": "baz"}
 
 
-def test_normalize_input_signature_takes_only_input_value():
+def test_normalize_input_signature_takes_only_input_value() -> None:
     """``_normalize_input`` accepts only ``input_value``; no dead owner parameter.
 
     GlobalID type-name validation happens at queryset-evaluation time
@@ -4255,7 +4272,7 @@ def test_normalize_input_signature_takes_only_input_value():
     assert list(sig.parameters) == ["input_value"]
 
 
-def test_normalize_input_walks_strawberry_dataclass():
+def test_normalize_input_walks_strawberry_dataclass() -> None:
     """A dataclass-shaped input (Strawberry input) is walked via `__dataclass_fields__`."""
 
     @strawberry.input
@@ -4274,7 +4291,7 @@ def test_normalize_input_walks_strawberry_dataclass():
     assert data.get("name") == "hello"
 
 
-def test_normalize_input_inner_bag_loop_skips_unset_lookups():
+def test_normalize_input_inner_bag_loop_skips_unset_lookups() -> None:
     """Partial operator bags don't leak ``UNSET`` into form data.
 
     Strawberry input dataclasses default every operator-bag lookup
@@ -4311,7 +4328,7 @@ def test_normalize_input_inner_bag_loop_skips_unset_lookups():
     assert data.get("name__icontains") == "foo"
 
 
-def test_normalize_input_skips_strawberry_unset_attrs():
+def test_normalize_input_skips_strawberry_unset_attrs() -> None:
     """``strawberry.UNSET`` attrs are skipped the same as ``None``.
 
     Strawberry input dataclasses default unsupplied fields to ``UNSET``
@@ -4338,7 +4355,7 @@ def test_normalize_input_skips_strawberry_unset_attrs():
 # ---------------------------------------------------------------------------
 
 
-def test_validate_form_or_raise_raises_on_invalid_form():
+def test_validate_form_or_raise_raises_on_invalid_form() -> None:
     class CategoryFilter(FilterSet):
         class Meta:
             model = Category
@@ -4354,7 +4371,7 @@ def test_validate_form_or_raise_raises_on_invalid_form():
     assert "id" in error.extensions["errors"]
 
 
-def test_validate_form_or_raise_passes_for_valid_form():
+def test_validate_form_or_raise_passes_for_valid_form() -> None:
     class CategoryFilter(FilterSet):
         class Meta:
             model = Category
@@ -4370,7 +4387,7 @@ def test_validate_form_or_raise_passes_for_valid_form():
 # ---------------------------------------------------------------------------
 
 
-def test_run_permission_checks_fires_only_for_active_input_fields():
+def test_run_permission_checks_fires_only_for_active_input_fields() -> None:
     fired: list[str] = []
 
     class CategoryFilter(FilterSet):
@@ -4378,7 +4395,7 @@ def test_run_permission_checks_fires_only_for_active_input_fields():
             model = Category
             fields = {"name": ["exact"]}
 
-        def check_name_permission(self, _request: object):
+        def check_name_permission(self, _request: object) -> None:
             fired.append("name")
 
     CategoryFilter._run_permission_checks({}, request=HttpRequest())
@@ -4388,7 +4405,7 @@ def test_run_permission_checks_fires_only_for_active_input_fields():
     assert fired == ["name"]
 
 
-def test_run_permission_checks_skips_unset_related_branch():
+def test_run_permission_checks_skips_unset_related_branch() -> None:
     """``strawberry.UNSET`` on a related branch is treated as "not supplied".
 
     Strawberry input dataclasses default unsupplied fields to ``UNSET``
@@ -4416,14 +4433,14 @@ def test_run_permission_checks_skips_unset_related_branch():
             model = library_models.Branch
             fields = {"name": ["exact"]}
 
-        def check_shelves_permission(self, _request: object):
+        def check_shelves_permission(self, _request: object) -> None:
             fired.append("shelves")
 
     BranchFilter._run_permission_checks(BranchInput(), request=HttpRequest())
     assert fired == []
 
 
-def test_run_permission_checks_recurses_into_active_related_branch():
+def test_run_permission_checks_recurses_into_active_related_branch() -> None:
     fired: list[str] = []
 
     class ShelfFilter(FilterSet):
@@ -4431,7 +4448,7 @@ def test_run_permission_checks_recurses_into_active_related_branch():
             model = library_models.Shelf
             fields = {"code": ["exact"]}
 
-        def check_code_permission(self, _request: object):
+        def check_code_permission(self, _request: object) -> None:
             fired.append("shelf.code")
 
     class BranchFilter(FilterSet):
@@ -4451,7 +4468,7 @@ def test_run_permission_checks_recurses_into_active_related_branch():
     assert "shelf.code" in fired
 
 
-def test_run_permission_checks_recurses_into_logical_branches():
+def test_run_permission_checks_recurses_into_logical_branches() -> None:
     """Per-call dedup: a gate fires once even when the field appears in many branches.
 
     The recursion correctly walks ``and`` / ``or`` / ``not`` sub-trees
@@ -4469,7 +4486,7 @@ def test_run_permission_checks_recurses_into_logical_branches():
             model = Category
             fields = {"name": ["exact"]}
 
-        def check_name_permission(self, _request: object):
+        def check_name_permission(self, _request: object) -> None:
             fired.append("name")
 
     # ``and`` with the same field in two arms fires the gate ONCE.
@@ -4502,7 +4519,7 @@ def test_run_permission_checks_recurses_into_logical_branches():
     assert fired == ["name"]
 
 
-def test_run_permission_checks_rejects_malformed_logical_branch_before_hooks():
+def test_run_permission_checks_rejects_malformed_logical_branch_before_hooks() -> None:
     """Malformed logical input is rejected before check_*_permission gates fire."""
     fired: list[str] = []
 
@@ -4511,7 +4528,7 @@ def test_run_permission_checks_rejects_malformed_logical_branch_before_hooks():
             model = Category
             fields = {"name": ["exact"]}
 
-        def check_name_permission(self, _request: object):
+        def check_name_permission(self, _request: object) -> None:
             fired.append("name")
 
     # Sequence operator given a dict container
@@ -4539,7 +4556,7 @@ def test_run_permission_checks_rejects_malformed_logical_branch_before_hooks():
     assert fired == []
 
 
-def test_run_permission_checks_dedups_child_gate_across_sibling_branches():
+def test_run_permission_checks_dedups_child_gate_across_sibling_branches() -> None:
     """A child filterset gate fires once even when entered from sibling ``or`` arms.
 
     The ``_fired`` map is keyed by ``FilterSet`` class and shared across
@@ -4557,7 +4574,7 @@ def test_run_permission_checks_dedups_child_gate_across_sibling_branches():
             model = library_models.Shelf
             fields = {"code": ["exact"]}
 
-        def check_code_permission(self, _request: object):
+        def check_code_permission(self, _request: object) -> None:
             fired.append("shelf.code")
 
     class BranchFilter(FilterSet):
@@ -4567,7 +4584,7 @@ def test_run_permission_checks_dedups_child_gate_across_sibling_branches():
             model = library_models.Branch
             fields = {"name": ["exact"]}
 
-        def check_shelves_permission(self, _request: object):
+        def check_shelves_permission(self, _request: object) -> None:
             fired.append("branch.shelves")
 
     BranchFilter._run_permission_checks(
@@ -4582,7 +4599,7 @@ def test_run_permission_checks_dedups_child_gate_across_sibling_branches():
     assert fired.count("shelf.code") == 1
 
 
-def test_run_permission_checks_caps_logical_branch_nesting():
+def test_run_permission_checks_caps_logical_branch_nesting() -> None:
     """Pathologically-deep nesting raises ``ConfigurationError`` instead of stack-overflow.
 
     ``_MAX_LOGIC_DEPTH`` caps the recursion so a malicious or
@@ -4605,7 +4622,7 @@ def test_run_permission_checks_caps_logical_branch_nesting():
     assert "_MAX_LOGIC_DEPTH" in str(excinfo.value)
 
 
-def test_max_logic_depth_is_overridable_classvar():
+def test_max_logic_depth_is_overridable_classvar() -> None:
     """A subclass can raise ``_MAX_LOGIC_DEPTH`` without monkey-patching.
 
     The cap is a ``ClassVar`` on ``FilterSet`` so a consumer with a
@@ -4639,7 +4656,7 @@ def test_max_logic_depth_is_overridable_classvar():
 
 
 @pytest.mark.django_db
-def test_evaluate_logic_tree_preserves_request_context():
+def test_evaluate_logic_tree_preserves_request_context() -> None:
     captured_requests: list[object] = []
 
     class CategoryFilter(FilterSet):
@@ -4648,7 +4665,7 @@ def test_evaluate_logic_tree_preserves_request_context():
             fields = {"name": ["exact"]}
 
         @override
-        def filter_queryset(self, queryset: QuerySet[_M]):
+        def filter_queryset(self, queryset: QuerySet[_M]) -> QuerySet[_M]:
             captured_requests.append(self.request)
             return super().filter_queryset(queryset)
 
@@ -4673,7 +4690,7 @@ def test_evaluate_logic_tree_preserves_request_context():
 
 
 @pytest.mark.django_db
-def test_permission_checks_run_only_through_apply_entrypoint():
+def test_permission_checks_run_only_through_apply_entrypoint() -> None:
     """``apply_*`` is the sole permission-aware entry; the bare ``.qs`` path does not gate.
 
     Permission hooks fire from ``_run_permission_checks``, which
@@ -4694,7 +4711,7 @@ def test_permission_checks_run_only_through_apply_entrypoint():
             model = Category
             fields = {"name": ["exact"]}
 
-        def check_name_permission(self, _request: object):
+        def check_name_permission(self, _request: object) -> None:
             fired.append("name")
 
     Category.objects.create(name="alpha")
@@ -4715,7 +4732,7 @@ def test_permission_checks_run_only_through_apply_entrypoint():
 
 
 @pytest.mark.django_db
-def test_apply_sync_nested_related_gate_fires_once_not_per_level():
+def test_apply_sync_nested_related_gate_fires_once_not_per_level() -> None:
     """A nested ``RelatedFilter`` child gate fires exactly once through ``apply_sync``.
 
     Call-count has no wire shape. Nested denial over HTTP:
@@ -4760,7 +4777,7 @@ def test_apply_sync_nested_related_gate_fires_once_not_per_level():
             model = library_models.Book
             fields = {"title": ["exact", "icontains"]}
 
-        def check_title_permission(self, _request: object):
+        def check_title_permission(self, _request: object) -> None:
             fired.append("title")
 
     class ShelfFilter(FilterSet):
@@ -4770,7 +4787,7 @@ def test_apply_sync_nested_related_gate_fires_once_not_per_level():
             model = library_models.Shelf
             fields = {"code": ["exact"]}
 
-        def check_books_permission(self, _request: object):
+        def check_books_permission(self, _request: object) -> None:
             fired.append("shelf.books")
 
     class BranchFilter(FilterSet):
@@ -4780,7 +4797,7 @@ def test_apply_sync_nested_related_gate_fires_once_not_per_level():
             model = library_models.Branch
             fields = {"name": ["exact"]}
 
-        def check_shelves_permission(self, _request: object):
+        def check_shelves_permission(self, _request: object) -> None:
             fired.append("branch.shelves")
 
     # One level of relation nesting: the child ``code`` gate is absent, but
@@ -4808,7 +4825,7 @@ def test_apply_sync_nested_related_gate_fires_once_not_per_level():
 
 
 @pytest.mark.django_db
-def test_apply_async_nested_related_gate_fires_once_and_still_denies():
+def test_apply_async_nested_related_gate_fires_once_and_still_denies() -> None:
     """The async related derivation neither duplicates nor bypasses nested gates.
 
     Call-count (fires once) has no wire shape. Nested denial over HTTP is
@@ -4832,7 +4849,7 @@ def test_apply_async_nested_related_gate_fires_once_and_still_denies():
             model = library_models.Shelf
             fields = {"code": ["exact", "icontains"]}
 
-        def check_code_permission(self, _request: object):
+        def check_code_permission(self, _request: object) -> None:
             fired.append("code")
 
     class BranchFilter(FilterSet):
@@ -4857,7 +4874,7 @@ def test_apply_async_nested_related_gate_fires_once_and_still_denies():
             model = library_models.Shelf
             fields = {"code": ["exact"]}
 
-        def check_code_permission(self, _request: object):
+        def check_code_permission(self, _request: object) -> NoReturn:
             raise GraphQLError("denied async shelf code")
 
     class DenyingBranchFilter(FilterSet):
@@ -4882,7 +4899,7 @@ def test_apply_async_nested_related_gate_fires_once_and_still_denies():
 # ---------------------------------------------------------------------------
 
 
-def test_apply_dispatcher_rethrows_sync_misuse_with_clearer_message():
+def test_apply_dispatcher_rethrows_sync_misuse_with_clearer_message() -> None:
     """A ``SyncMisuseError`` from ``apply_sync`` becomes ``RuntimeError``.
 
     Class-based dispatch: the dispatcher catches the typed subclass
@@ -4897,7 +4914,7 @@ def test_apply_dispatcher_rethrows_sync_misuse_with_clearer_message():
 
         @classmethod
         @override
-        def apply_sync(cls, *args: object, **kwargs: object):
+        def apply_sync(cls, *args: object, **kwargs: object) -> NoReturn:
             raise SyncMisuseError("FakeType.get_queryset returned a coroutine.")
 
     with pytest.raises(RuntimeError) as excinfo:
@@ -4905,7 +4922,7 @@ def test_apply_dispatcher_rethrows_sync_misuse_with_clearer_message():
     assert "apply_async" in str(excinfo.value)
 
 
-def test_apply_dispatcher_propagates_other_configuration_errors():
+def test_apply_dispatcher_propagates_other_configuration_errors() -> None:
     class CategoryFilter(FilterSet):
         class Meta:
             model = Category
@@ -4913,14 +4930,14 @@ def test_apply_dispatcher_propagates_other_configuration_errors():
 
         @classmethod
         @override
-        def apply_sync(cls, *args: object, **kwargs: object):
+        def apply_sync(cls, *args: object, **kwargs: object) -> NoReturn:
             raise ConfigurationError("totally unrelated configuration problem")
 
     with pytest.raises(ConfigurationError):
         CategoryFilter.apply(None, Category.objects.all(), _make_info())
 
 
-def test_apply_dispatcher_propagates_other_runtime_errors():
+def test_apply_dispatcher_propagates_other_runtime_errors() -> None:
     class CategoryFilter(FilterSet):
         class Meta:
             model = Category
@@ -4928,7 +4945,7 @@ def test_apply_dispatcher_propagates_other_runtime_errors():
 
         @classmethod
         @override
-        def apply_sync(cls, *args: object, **kwargs: object):
+        def apply_sync(cls, *args: object, **kwargs: object) -> NoReturn:
             raise RuntimeError("not a sync-misuse error")
 
     with pytest.raises(RuntimeError) as excinfo:
@@ -4942,7 +4959,7 @@ def test_apply_dispatcher_propagates_other_runtime_errors():
 
 
 @pytest.mark.django_db
-def test_apply_related_constraints_runs_active_branch_only():
+def test_apply_related_constraints_runs_active_branch_only() -> None:
     branch = library_models.Branch.objects.create(name="alpha")
     library_models.Shelf.objects.create(branch=branch, code="active")
     library_models.Shelf.objects.create(branch=branch, code="hidden")
@@ -4992,7 +5009,7 @@ def test_apply_related_constraints_runs_active_branch_only():
 
 
 @pytest.mark.django_db
-def test_active_related_branch_without_registered_target_raises():
+def test_active_related_branch_without_registered_target_raises() -> None:
     """An active related branch with no registered target type fails loud.
 
     ``_iter_visibility_steps`` raises ``ConfigurationError`` instead of
@@ -5040,7 +5057,7 @@ def test_active_related_branch_without_registered_target_raises():
 
 
 @pytest.mark.django_db
-def test_dict_operator_bag_filters_through_apply_sync():
+def test_dict_operator_bag_filters_through_apply_sync() -> None:
     """A dict-shaped operator bag filters end-to-end via ``apply_sync``.
 
     Pins the ``_operator_bag_items`` dict-walk: before it, a dict bag
@@ -5064,7 +5081,7 @@ def test_dict_operator_bag_filters_through_apply_sync():
 
 
 @pytest.mark.django_db
-def test_apply_related_constraints_model_mismatch_raises_configuration_error():
+def test_apply_related_constraints_model_mismatch_raises_configuration_error() -> None:
     """A divergent-model ``RelatedFilter(queryset=...)`` surfaces ``ConfigurationError``.
 
     Django raises ``AssertionError: Cannot combine queries on two
@@ -5110,7 +5127,7 @@ def test_apply_related_constraints_model_mismatch_raises_configuration_error():
 
 
 @pytest.mark.django_db
-def test_apply_related_constraints_proxy_model_is_rejected():
+def test_apply_related_constraints_proxy_model_is_rejected() -> None:
     """Proxy models are rejected because Django's ``&`` rejects them.
 
     Django's ``Query.combine`` compares ``self.model != rhs.model``
@@ -5160,7 +5177,7 @@ def test_apply_related_constraints_proxy_model_is_rejected():
 
 
 @pytest.mark.django_db
-def test_apply_sync_passes_constrained_queryset_to_filterset_instance():
+def test_apply_sync_passes_constrained_queryset_to_filterset_instance() -> None:
     """Pipeline ordering - constraints land in `self.queryset`.
 
     `apply_sync` must apply `_apply_related_constraints` BEFORE
@@ -5267,7 +5284,7 @@ def test_apply_sync_passes_constrained_queryset_to_filterset_instance():
 # ---------------------------------------------------------------------------
 
 
-def test_get_filters_skips_none_target_related_filter():
+def test_get_filters_skips_none_target_related_filter() -> None:
     """A ``RelatedFilter(None, ...)`` placeholder expands to nothing.
 
     ``_expand_related_filter`` returns an empty mapping when the target
@@ -5286,7 +5303,7 @@ def test_get_filters_skips_none_target_related_filter():
     assert not any(name.startswith("rel__") for name in filters)
 
 
-def test_normalize_input_rejects_non_walkable_input():
+def test_normalize_input_rejects_non_walkable_input() -> None:
     """A non-walkable top-level input fails loud instead of normalizing to ``{}``.
 
     The old contract normalized any non-dict / non-dataclass input to
@@ -5316,14 +5333,13 @@ def test_normalize_input_rejects_non_walkable_input():
 
 
 @pytest.mark.django_db
-def test_apply_sync_scalar_top_level_input_fails_loud():
+def test_apply_sync_scalar_top_level_input_fails_loud() -> None:
     """``apply_sync("name", ...)`` raises instead of returning every row.
 
     End-to-end proof of the non-walkable-input guard through the public
     apply surface: the scalar input used to normalize to ``{}`` and the
     resolver returned the unfiltered queryset while skipping every gate.
     """
-
     fired: list[str] = []
 
     class CategoryFilter(FilterSet):
@@ -5331,7 +5347,7 @@ def test_apply_sync_scalar_top_level_input_fails_loud():
             model = Category
             fields = {"name": ["exact"]}
 
-        def check_name_permission(self, _request: object):
+        def check_name_permission(self, _request: object) -> None:
             fired.append("name")
 
     Category.objects.create(name="alpha")
@@ -5343,7 +5359,7 @@ def test_apply_sync_scalar_top_level_input_fails_loud():
     assert fired == []
 
 
-def test_normalize_input_rejects_dict_value_on_scalar_filter():
+def test_normalize_input_rejects_dict_value_on_scalar_filter() -> None:
     """A dict value on a non-range filter fails loud instead of splatting form keys.
 
     The scalar-branch merge (``data.update(normalized)``) used to splat any
@@ -5373,7 +5389,7 @@ def test_normalize_input_rejects_dict_value_on_scalar_filter():
 
 
 @pytest.mark.django_db
-def test_apply_sync_dict_valued_scalar_filter_fails_loud():
+def test_apply_sync_dict_valued_scalar_filter_fails_loud() -> None:
     """A dict value under a known lookup fails loud through the full apply pipeline.
 
     ``{"name": {"exact": {"k": "v"}}}`` used to normalize to
@@ -5397,7 +5413,7 @@ def test_apply_sync_dict_valued_scalar_filter_fails_loud():
     assert "single scalar form key" in str(excinfo.value)
 
 
-def test_range_patch_dict_values_still_merge_positional_keys():
+def test_range_patch_dict_values_still_merge_positional_keys() -> None:
     """The dict-value rejection exempts the two range primitives.
 
     ``FilterSet._reject_dict_form_value`` must never fire for the framework
@@ -5435,7 +5451,7 @@ def test_range_patch_dict_values_still_merge_positional_keys():
     assert data == {"lifetime_fines_cents__range_0": 1, "lifetime_fines_cents__range_1": 5}
 
 
-def test_operator_bag_items_walks_lookup_attr_dict():
+def test_operator_bag_items_walks_lookup_attr_dict() -> None:
     """``_operator_bag_items`` walks a dict whose keys are all lookup attrs.
 
     The old dict rejection routed a dict-shaped bag down the scalar
@@ -5455,7 +5471,7 @@ def test_operator_bag_items_walks_lookup_attr_dict():
     assert CategoryFilter._operator_bag_items({"i_contains": "y"}) == [("i_contains", "y")]
 
 
-def test_operator_bag_items_returns_none_for_non_lookup_key_dict():
+def test_operator_bag_items_returns_none_for_non_lookup_key_dict() -> None:
     """A multi-key filter VALUE (e.g. a range ``{start, end}``) is not a bag.
 
     ``start`` / ``end`` are not lookup attrs, so the dict must fall
@@ -5475,7 +5491,7 @@ def test_operator_bag_items_returns_none_for_non_lookup_key_dict():
     assert CategoryFilter._operator_bag_items({"exact": "x", "start": 1}) is None
 
 
-def test_operator_bag_items_still_returns_none_for_scalars():
+def test_operator_bag_items_still_returns_none_for_scalars() -> None:
     """Scalar and sequence values are not operator bags."""
 
     class CategoryFilter(FilterSet):
@@ -5487,7 +5503,7 @@ def test_operator_bag_items_still_returns_none_for_scalars():
     assert CategoryFilter._operator_bag_items(["x"]) is None
 
 
-def test_extract_branch_value_returns_none_for_none_input():
+def test_extract_branch_value_returns_none_for_none_input() -> None:
     """``_extract_branch_value(None, ...)`` short-circuits to ``None``."""
 
     class CategoryFilter(FilterSet):
@@ -5498,7 +5514,7 @@ def test_extract_branch_value_returns_none_for_none_input():
     assert CategoryFilter._extract_branch_value(None, "shelves") is None
 
 
-def test_request_from_info_raises_when_context_missing():
+def test_request_from_info_raises_when_context_missing() -> None:
     """``_request_from_info`` raises when ``info.context`` is ``None``."""
 
     class CategoryFilter(FilterSet):
@@ -5514,7 +5530,7 @@ def test_request_from_info_raises_when_context_missing():
     assert "info.context" in str(excinfo.value)
 
 
-def test_run_permission_checks_short_circuits_on_none_and_unset():
+def test_run_permission_checks_short_circuits_on_none_and_unset() -> None:
     """A ``None`` / ``UNSET`` input is a no-op (no gate fires, no crash)."""
     import strawberry
 
@@ -5525,7 +5541,7 @@ def test_run_permission_checks_short_circuits_on_none_and_unset():
             model = Category
             fields = {"name": ["exact"]}
 
-        def check_name_permission(self, _request: object):
+        def check_name_permission(self, _request: object) -> None:
             fired.append("name")
 
     CategoryFilter._run_permission_checks(None, request=HttpRequest())
@@ -5534,7 +5550,7 @@ def test_run_permission_checks_short_circuits_on_none_and_unset():
 
 
 @pytest.mark.django_db
-def test_check_permissions_walks_explicit_requested_fields():
+def test_check_permissions_walks_explicit_requested_fields() -> None:
     """The explicit-``requested_fields`` path fires each named gate directly."""
     fired: list[str] = []
 
@@ -5543,7 +5559,7 @@ def test_check_permissions_walks_explicit_requested_fields():
             model = Category
             fields = {"name": ["exact"]}
 
-        def check_name_permission(self, _request: object):
+        def check_name_permission(self, _request: object) -> None:
             fired.append("name")
 
     instance = CategoryFilter(data={}, queryset=Category.objects.all())
@@ -5552,7 +5568,7 @@ def test_check_permissions_walks_explicit_requested_fields():
     assert fired == ["name"]
 
 
-def test_evaluate_logic_tree_caps_recursion_depth():
+def test_evaluate_logic_tree_caps_recursion_depth() -> None:
     """``_evaluate_logic_tree`` raises past ``_MAX_LOGIC_DEPTH``.
 
     The depth guard is independent of the ``_run_permission_checks``
@@ -5574,7 +5590,7 @@ def test_evaluate_logic_tree_caps_recursion_depth():
 
 
 @pytest.mark.django_db
-def test_evaluate_logic_tree_skips_inactive_or_arms():
+def test_evaluate_logic_tree_skips_inactive_or_arms() -> None:
     """``or: [real, None|UNSET]`` must equal ``or: [real]``, not widen to all rows.
 
     ``_collect_nested_visibility_querysets_async`` already skips inactive
@@ -5608,7 +5624,7 @@ def test_evaluate_logic_tree_skips_inactive_or_arms():
         assert sorted(mixed.values_list("name", flat=True)) == ["alpha"], inactive
 
 
-def test_evaluate_logic_tree_and_direct_branch_treat_inactive_values_as_identity():
+def test_evaluate_logic_tree_and_direct_branch_treat_inactive_values_as_identity() -> None:
     """Inactive AND arms and direct branch calls return the identity query."""
 
     class CategoryFilter(FilterSet):
@@ -5621,7 +5637,7 @@ def test_evaluate_logic_tree_and_direct_branch_treat_inactive_values_as_identity
     assert CategoryFilter._q_for_branch(queryset, strawberry.UNSET) == Q()
 
 
-def test_collect_nested_visibility_querysets_async_caps_recursion_depth():
+def test_collect_nested_visibility_querysets_async_caps_recursion_depth() -> None:
     """``_collect_nested_visibility_querysets_async`` raises past ``_MAX_LOGIC_DEPTH``.
 
     Third site of the shared ``_raise_logic_depth_exceeded`` helper -- the async
@@ -5649,7 +5665,7 @@ def test_collect_nested_visibility_querysets_async_caps_recursion_depth():
     assert "CategoryFilter" in str(excinfo.value)
 
 
-def test_target_type_for_related_filter_returns_none_without_child_model():
+def test_target_type_for_related_filter_returns_none_without_child_model() -> None:
     """A ``RelatedFilter`` whose filterset has no model resolves to ``None``."""
 
     class CategoryFilter(FilterSet):
@@ -5660,7 +5676,7 @@ def test_target_type_for_related_filter_returns_none_without_child_model():
     assert CategoryFilter._target_type_for_related_filter(RelatedFilter(None)) is None
 
 
-def test_is_own_pk_under_relay_owner_false_for_relation_field():
+def test_is_own_pk_under_relay_owner_false_for_relation_field() -> None:
     """An ``is_relation`` field never takes the own-PK Relay branch."""
 
     class BookType(DjangoType):
@@ -5683,7 +5699,7 @@ def test_is_own_pk_under_relay_owner_false_for_relation_field():
     assert BookFilter._is_own_pk_under_relay_owner(relation_field) is False
 
 
-def test_is_own_pk_under_relay_owner_false_when_model_missing():
+def test_is_own_pk_under_relay_owner_false_when_model_missing() -> None:
     """A non-relation field with a model-less filterset returns ``False``."""
     from types import SimpleNamespace
 
@@ -5707,7 +5723,7 @@ def test_is_own_pk_under_relay_owner_false_when_model_missing():
     assert CategoryFilter._is_own_pk_under_relay_owner(non_relation) is False
 
 
-def test_filter_for_lookup_rejects_unsupported_lookup_on_relay_owner_pk():
+def test_filter_for_lookup_rejects_unsupported_lookup_on_relay_owner_pk() -> None:
     """An explicit unsupported lookup on a Relay owner's PK raises.
 
     The ``get_fields`` ``"__all__"`` narrowing only covers the generated
@@ -5750,7 +5766,7 @@ def test_filter_for_lookup_rejects_unsupported_lookup_on_relay_owner_pk():
     assert isnull_class is not GlobalIDFilter
 
 
-def test_resolve_relation_target_type_uses_owner_related_target_for():
+def test_resolve_relation_target_type_uses_owner_related_target_for() -> None:
     """When the owner resolves the relation, its target type is returned.
 
     The owner's ``related_target_for`` pair carries a ``DjangoTypeDefinition``,
@@ -5783,7 +5799,7 @@ def test_resolve_relation_target_type_uses_owner_related_target_for():
     assert resolved is ShelfType
 
 
-def test_resolve_relation_target_type_returns_none_without_related_model():
+def test_resolve_relation_target_type_returns_none_without_related_model() -> None:
     """A relation field with no ``related_model`` and no owner resolves to ``None``."""
     from types import SimpleNamespace
 
@@ -5796,7 +5812,7 @@ def test_resolve_relation_target_type_returns_none_without_related_model():
     assert CategoryFilter._resolve_relation_target_type(field, None) is None
 
 
-def test_resolve_relation_target_type_registry_fallback_prefers_declared_primary():
+def test_resolve_relation_target_type_registry_fallback_prefers_declared_primary() -> None:
     """The registry fallback resolves the declared primary when two types share a model.
 
     Pins the consolidation contract relied upon at
@@ -5838,7 +5854,7 @@ def test_resolve_relation_target_type_registry_fallback_prefers_declared_primary
     assert resolved is AdminShelfType
 
 
-def test_target_type_for_related_filter_registry_fallback_prefers_declared_primary():
+def test_target_type_for_related_filter_registry_fallback_prefers_declared_primary() -> None:
     """The unbound-child fallback resolves the declared primary for the child model.
 
     Twin of
@@ -5878,7 +5894,7 @@ def test_target_type_for_related_filter_registry_fallback_prefers_declared_prima
 
 
 @pytest.mark.django_db
-def test_apply_related_constraints_skips_branch_without_qs_or_explicit():
+def test_apply_related_constraints_skips_branch_without_qs_or_explicit() -> None:
     """An active branch with neither child qs nor explicit qs is skipped."""
 
     class ShelfFilter(FilterSet):
@@ -5908,7 +5924,7 @@ def test_apply_related_constraints_skips_branch_without_qs_or_explicit():
 
 
 @pytest.mark.django_db
-def test_derive_related_visibility_querysets_async_scopes_active_branch():
+def test_derive_related_visibility_querysets_async_scopes_active_branch() -> None:
     """The async visibility derive runs the target ``get_queryset`` per active branch."""
     import asyncio
 
@@ -5940,7 +5956,7 @@ def test_derive_related_visibility_querysets_async_scopes_active_branch():
     assert result["shelves"].model is library_models.Shelf
 
 
-def test_normalize_input_operator_bag_rejects_a_lookup_the_field_lacks():
+def test_normalize_input_operator_bag_rejects_a_lookup_the_field_lacks() -> None:
     """An operator-bag lookup with no backing filter raises instead of applying nothing."""
     import dataclasses
 
@@ -5963,7 +5979,7 @@ def test_normalize_input_operator_bag_rejects_a_lookup_the_field_lacks():
 
 
 @pytest.mark.django_db
-def test_normalize_input_operator_bag_dict_value_merges_into_form_data():
+def test_normalize_input_operator_bag_dict_value_merges_into_form_data() -> None:
     """A dict-valued operator-bag lookup is merged into the form data via ``update``.
 
     Exercises the operator-bag ``isinstance(normalized, dict)`` ->
@@ -6005,7 +6021,7 @@ def test_normalize_input_operator_bag_dict_value_merges_into_form_data():
 
 
 @pytest.mark.django_db
-def test_normalize_input_operator_bag_exact_resolves_explicit_suffixed_key():
+def test_normalize_input_operator_bag_exact_resolves_explicit_suffixed_key() -> None:
     """A filter declared under ``<field>__exact`` normalizes to that literal form key.
 
     ``django-filter`` strips the ``__exact`` suffix from *generated* exact
@@ -6041,7 +6057,7 @@ def test_normalize_input_operator_bag_exact_resolves_explicit_suffixed_key():
 
 
 @pytest.mark.django_db
-def test_normalize_input_top_level_range_filter_merges_positional_keys():
+def test_normalize_input_top_level_range_filter_merges_positional_keys() -> None:
     """A top-level ``RangeFilter`` attribute expands to positional keys."""
     from django_strawberry_framework.filters import RangeFilter
 
@@ -6115,7 +6131,7 @@ def test_normalize_input_overlap_head_binds_each_lookup_to_its_own_filter(
     bag: dict[str, object],
     form_data: dict[str, object],
     oracle: Q,
-):
+) -> None:
     """A head both declared and generated binds every bag lookup to its own form key.
 
     ``name`` is the declared ``iexact`` filter AND the head of the generated
@@ -6152,7 +6168,7 @@ def test_normalize_input_declared_head_with_its_own_field_name(
     bag: dict[str, object],
     form_data: dict[str, object],
     oracle: Q,
-):
+) -> None:
     """A declared head over another column keeps its lookup apart from the generated one."""
     _seed_dune_branches()
 
@@ -6169,7 +6185,7 @@ def test_normalize_input_declared_head_with_its_own_field_name(
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("lookup", ["i_exact", "in_"])
-def test_normalize_input_declared_fk_head_keeps_the_generated_in_lookup(lookup: str):
+def test_normalize_input_declared_fk_head_keeps_the_generated_in_lookup(lookup: str) -> None:
     """A declared head over a relation column keeps the generated ``__in`` lookup's own key."""
     alpha = library_models.Branch.objects.create(name="Alpha")
     beta = library_models.Branch.objects.create(name="Beta")
@@ -6219,7 +6235,7 @@ def test_normalize_input_flat_expanded_children_bind_their_expanded_form_keys(
     filter_input: dict[str, object],
     form_data: dict[str, object],
     oracle: Q,
-):
+) -> None:
     """Each flat ``RelatedFilter`` expansion binds its own expanded ``get_filters()`` name."""
     _register_plain_types(library_models.Branch)
     alpha = library_models.Branch.objects.create(name="Alpha")
@@ -6271,7 +6287,7 @@ def test_normalize_input_flat_expanded_children_bind_their_expanded_form_keys(
 def test_normalize_input_direct_mapping_without_a_built_input_class(
     filter_input: dict[str, object],
     form_data: dict[str, object],
-):
+) -> None:
     """A hand-built mapping on a never-built filter set reads the same lookup table."""
 
     class DirectShelfFilter(FilterSet):
@@ -6308,7 +6324,7 @@ def test_normalize_input_direct_mapping_without_a_built_input_class(
 def test_normalize_input_rejects_what_the_lookup_table_does_not_hold(
     filter_input: dict[str, object],
     message: str,
-):
+) -> None:
     """A field or lookup with no filter behind it raises instead of applying nothing."""
 
     class TwoLookupCategoryFilter(FilterSet):
@@ -6334,7 +6350,7 @@ def test_normalize_input_rejects_what_the_lookup_table_does_not_hold(
 )
 def test_apply_sync_rejects_an_unknown_filter_field_at_every_depth(
     filter_input: dict[str, object],
-):
+) -> None:
     """An unknown field raises wherever the mapping carries it, never applying nothing."""
     with pytest.raises(ConfigurationError) as excinfo:
         BookFilter.apply_sync(filter_input, library_models.Book.objects.all(), _make_info())
@@ -6390,7 +6406,7 @@ def test_apply_sync_rejects_a_range_value_it_cannot_read_at_every_depth(
     fines_input: object,
     received: str,
     depth: str,
-):
+) -> None:
     """A hand-built range value the range filter cannot read raises, never applying nothing.
 
     A misspelled lookup under a range head reaches the range filter as the
@@ -6413,7 +6429,7 @@ def test_apply_sync_rejects_a_range_value_it_cannot_read_at_every_depth(
 
 
 @pytest.mark.django_db
-def test_apply_async_rejects_a_misspelled_lookup_under_a_range_head():
+def test_apply_async_rejects_a_misspelled_lookup_under_a_range_head() -> None:
     """``apply_async`` reads a hand-built range value through the same guard."""
     import asyncio
 
@@ -6432,7 +6448,7 @@ def test_apply_async_rejects_a_misspelled_lookup_under_a_range_head():
 
 
 @pytest.mark.django_db
-def test_check_permissions_falls_back_to_active_input_when_no_requested_fields():
+def test_check_permissions_falls_back_to_active_input_when_no_requested_fields() -> None:
     """``check_permissions`` with no explicit set routes through the active-input path."""
 
     class CategoryFilter(FilterSet):
@@ -6446,7 +6462,7 @@ def test_check_permissions_falls_back_to_active_input_when_no_requested_fields()
     instance.check_permissions(HttpRequest())
 
 
-def test_derive_related_visibility_querysets_async_raises_for_unregistered_target():
+def test_derive_related_visibility_querysets_async_raises_for_unregistered_target() -> None:
     """The async derive raises for an active branch whose target type is unregistered.
 
     The old contract skipped the branch (``result == {}``), which dropped
@@ -6482,7 +6498,7 @@ def test_derive_related_visibility_querysets_async_raises_for_unregistered_targe
 
 
 @pytest.mark.django_db
-def test_iter_visibility_steps_yields_pre_await_tuple_for_active_branches():
+def test_iter_visibility_steps_yields_pre_await_tuple_for_active_branches() -> None:
     """``_iter_visibility_steps`` yields the shared pre-await state both derive methods consume.
 
     Pins the consolidation: both
@@ -6525,7 +6541,7 @@ def test_iter_visibility_steps_yields_pre_await_tuple_for_active_branches():
 
 
 @pytest.mark.django_db
-def test_iter_visibility_steps_raises_for_branch_without_resolved_target():
+def test_iter_visibility_steps_raises_for_branch_without_resolved_target() -> None:
     """``_iter_visibility_steps`` fails loud for an active-but-unresolvable branch.
 
     The guard lives in the helper so each derive method stays a tight
@@ -6558,9 +6574,11 @@ def test_iter_visibility_steps_raises_for_branch_without_resolved_target():
 
 
 @pytest.mark.django_db
-def test_apply_async_nested_or_branch_with_async_get_queryset_does_not_raise_sync_misuse():
-    """``apply_async`` pre-derives nested visibility so an async-only ``get_queryset`` hook
-    does not raise ``SyncMisuseError`` mid-``.qs`` from a nested ``or_`` branch.
+def test_apply_async_nested_or_branch_with_async_get_queryset_does_not_raise_sync_misuse() -> None:
+    """An async-only ``get_queryset`` hook does not raise ``SyncMisuseError`` mid-``.qs``.
+
+    ``apply_async`` pre-derives nested visibility, so a nested ``or_`` branch never
+    reaches the sync derivation.
 
     Before the Medium-#2 fix, ``_q_for_branch`` called
     ``_derive_related_visibility_querysets_sync`` unconditionally, which
@@ -6597,7 +6615,7 @@ def test_apply_async_nested_or_branch_with_async_get_queryset_does_not_raise_syn
             queryset: QuerySet[library_models.Shelf],
             info: object,
             **kwargs: object,
-        ):
+        ) -> QuerySet[library_models.Shelf]:
             # Async-only hook: pre-merge ``_q_for_branch`` would raise
             # ``SyncMisuseError`` when its sync derive walked into this.
             return await sync_to_async(lambda: queryset)()
@@ -6631,10 +6649,11 @@ def test_apply_async_nested_or_branch_with_async_get_queryset_does_not_raise_syn
 
 
 @pytest.mark.django_db
-def test_apply_async_runs_permission_checks_off_event_loop_thread():
-    """``apply_async`` routes finalize (incl. permission checks) through
-    ``run_in_one_sync_boundary`` so a blocking ``check_*_permission`` hook
-    does not block the event loop.
+def test_apply_async_runs_permission_checks_off_event_loop_thread() -> None:
+    """A blocking ``check_*_permission`` hook does not block the event loop.
+
+    ``apply_async`` routes finalize (incl. permission checks) through
+    ``run_in_one_sync_boundary``.
 
     Asserts the permission method observed a thread ident DIFFERENT from
     the event-loop thread ident -- which is what
@@ -6652,7 +6671,7 @@ def test_apply_async_runs_permission_checks_off_event_loop_thread():
             model = Category
             fields = {"name": ["exact"]}
 
-        def check_name_permission(self, _request: object):
+        def check_name_permission(self, _request: object) -> None:
             captured["permission_thread"] = threading.get_ident()
 
     async def _run() -> int:
@@ -6669,9 +6688,10 @@ def test_apply_async_runs_permission_checks_off_event_loop_thread():
 
 
 @pytest.mark.django_db
-def test_apply_async_collect_nested_visibility_querysets_pre_derives_or_branch():
-    """``_collect_nested_visibility_querysets_async`` keys the awaited map on
-    ``id(child_input)`` for every nested ``or`` arm.
+def test_apply_async_collect_nested_visibility_querysets_pre_derives_or_branch() -> None:
+    """The nested-visibility pre-walk keys its awaited map on ``id(child_input)`` per ``or`` arm.
+
+    The pre-walk is ``_collect_nested_visibility_querysets_async``.
 
     Unit-level pin on the new helper -- given an ``or_`` input shape with
     one inner branch carrying an active ``RelatedFilter``, the helper
@@ -6717,7 +6737,7 @@ def test_apply_async_collect_nested_visibility_querysets_pre_derives_or_branch()
 # ---------------------------------------------------------------------------
 
 
-def test_active_permission_leaf_paths_covers_input_shapes():
+def test_active_permission_leaf_paths_covers_input_shapes() -> None:
     """``_active_permission_targets``' leaf half resolves source paths, skips the rest."""
     import dataclasses
 
@@ -6759,7 +6779,7 @@ def test_active_permission_leaf_paths_covers_input_shapes():
 # ---------------------------------------------------------------------------
 
 
-def test_lookups_for_field_returns_concrete_lookups_and_excludes_transforms():
+def test_lookups_for_field_returns_concrete_lookups_and_excludes_transforms() -> None:
     """`_lookups_for_field` returns concrete lookups and drops Transforms."""
     name_field = Category._meta.get_field("name")  # TextField
     date_field = Category._meta.get_field("created_date")  # DateTimeField
@@ -6806,19 +6826,17 @@ def test_lookups_for_field_returns_concrete_lookups_and_excludes_transforms():
 # ``_normalize_input`` accepts both dict and dataclass shapes.
 
 
-def test_iter_input_items_returns_pairs_for_plain_dict():
+def test_iter_input_items_returns_pairs_for_plain_dict() -> None:
     """Dict input walks to ``list(input.items())`` verbatim."""
-
     assert FilterSet._iter_input_items({"name": "x", "id": 1}) == [("name", "x"), ("id", 1)]
 
 
-def test_iter_input_items_returns_empty_list_for_empty_dict():
+def test_iter_input_items_returns_empty_list_for_empty_dict() -> None:
     """Walkable-but-empty dict returns ``[]`` (sentinel-distinct from None)."""
-
     assert FilterSet._iter_input_items({}) == []
 
 
-def test_iter_input_items_walks_strawberry_input_dataclass_via_attribute_sniff():
+def test_iter_input_items_walks_strawberry_input_dataclass_via_attribute_sniff() -> None:
     """``__dataclass_fields__`` sniff unpacks Strawberry-input shapes."""
 
     @strawberry.input
@@ -6830,9 +6848,8 @@ def test_iter_input_items_walks_strawberry_input_dataclass_via_attribute_sniff()
     assert items == [("name", "y"), ("count", 7)]
 
 
-def test_iter_input_items_returns_none_for_non_walkable_shapes():
+def test_iter_input_items_returns_none_for_non_walkable_shapes() -> None:
     """Non-dict / non-dataclass shapes return ``None`` (not ``[]``)."""
-
     assert FilterSet._iter_input_items(object()) is None
     assert FilterSet._iter_input_items("scalar") is None
     assert FilterSet._iter_input_items(42) is None
@@ -6851,7 +6868,7 @@ def test_iter_input_items_returns_none_for_non_walkable_shapes():
 # ---------------------------------------------------------------------------
 
 
-def test_collect_nested_visibility_querysets_async_returns_empty_for_none_input():
+def test_collect_nested_visibility_querysets_async_returns_empty_for_none_input() -> None:
     """``_collect_nested_visibility_querysets_async(None, ...)`` short-circuits to ``{}``.
 
     The ``input_value is None or input_value is UNSET`` guard returns the
@@ -6871,7 +6888,7 @@ def test_collect_nested_visibility_querysets_async_returns_empty_for_none_input(
     assert result == {}
 
 
-def test_collect_nested_visibility_querysets_async_skips_none_child_branch():
+def test_collect_nested_visibility_querysets_async_skips_none_child_branch() -> None:
     """A ``None`` child inside a logical branch is skipped without a derive.
 
     ``{"or": [None]}`` yields a single ``None`` child; the child loop's
@@ -6891,7 +6908,9 @@ def test_collect_nested_visibility_querysets_async_skips_none_child_branch():
     assert result == {}
 
 
-def test_collect_nested_visibility_querysets_async_rejects_malformed_logical_branch_before_hooks():
+def test_collect_nested_visibility_querysets_async_rejects_malformed_logical_branch_before_hooks() -> (
+    None
+):
     """Malformed logical input on the async path is rejected before related visibility queries run."""
     import asyncio
 
@@ -6904,7 +6923,11 @@ def test_collect_nested_visibility_querysets_async_rejects_malformed_logical_bra
 
         @classmethod
         @override
-        def get_queryset(cls, queryset: QuerySet[library_models.Shelf], info: object):
+        def get_queryset(
+            cls,
+            queryset: QuerySet[library_models.Shelf],
+            info: object,
+        ) -> QuerySet[library_models.Shelf]:
             visibility_called.append("shelf")
             return queryset
 
@@ -6953,7 +6976,7 @@ def test_collect_nested_visibility_querysets_async_rejects_malformed_logical_bra
 
 
 @pytest.mark.django_db
-def test_q_for_branch_falls_back_to_sync_derive_on_stash_miss():
+def test_q_for_branch_falls_back_to_sync_derive_on_stash_miss() -> None:
     """``_q_for_branch`` with a present-but-missing stash uses the sync-derive fallback.
 
     Under ``apply_async`` the nested visibility map is pre-derived and threaded
@@ -6992,12 +7015,12 @@ def test_q_for_branch_falls_back_to_sync_derive_on_stash_miss():
     assert isinstance(q, Q)
 
 
-def test_collect_related_declarations_honors_base_tombstone():
+def test_collect_related_declarations_honors_base_tombstone() -> None:
     """A direct base's non-related declaration removes a later inherited candidate."""
 
     class Declaration(RelatedFilter):
         @override
-        def _bind_owner(self, owner: object):
+        def _bind_owner(self, owner: object) -> NoReturn:
             raise AssertionError(f"removed declaration was bound to {owner!r}")
 
     declaration = Declaration("ShelfFilter")
@@ -7028,7 +7051,7 @@ def test_collect_related_declarations_honors_base_tombstone():
 
 
 @pytest.mark.django_db
-def test_iter_visibility_steps_threads_parent_db_alias():
+def test_iter_visibility_steps_threads_parent_db_alias() -> None:
     """The child visibility base is pinned to the parent request's DB alias.
 
     The cascade-permission path builds its base with
@@ -7067,7 +7090,7 @@ def test_iter_visibility_steps_threads_parent_db_alias():
 
 
 @pytest.mark.django_db
-def test_related_visibility_hook_receives_parent_db_alias():
+def test_related_visibility_hook_receives_parent_db_alias() -> None:
     """The child ``get_queryset`` visibility hook runs against the parent's alias."""
     seen: list[str] = []
 
@@ -7078,7 +7101,11 @@ def test_related_visibility_hook_receives_parent_db_alias():
 
         @classmethod
         @override
-        def get_queryset(cls, queryset: QuerySet[library_models.Shelf], info: object):
+        def get_queryset(
+            cls,
+            queryset: QuerySet[library_models.Shelf],
+            info: object,
+        ) -> QuerySet[library_models.Shelf]:
             seen.append(queryset.db)
             return queryset
 
@@ -7110,7 +7137,7 @@ def test_related_visibility_hook_receives_parent_db_alias():
 
 
 @pytest.mark.django_db
-def test_apply_sync_caps_related_recursion_depth():
+def test_apply_sync_caps_related_recursion_depth() -> None:
     """``apply_sync`` raises a typed error past the shared depth budget (Defect 5).
 
     The visibility derivation re-enters ``apply_sync`` once per related hop, so a
@@ -7134,7 +7161,7 @@ def test_apply_sync_caps_related_recursion_depth():
 
 
 @pytest.mark.django_db
-def test_apply_async_caps_related_recursion_depth():
+def test_apply_async_caps_related_recursion_depth() -> None:
     """Async sibling of ``test_apply_sync_caps_related_recursion_depth``."""
     import asyncio
 
@@ -7156,7 +7183,7 @@ def test_apply_async_caps_related_recursion_depth():
 
 
 @pytest.mark.django_db
-def test_apply_async_caps_related_recursion_nested_under_logical_branches():
+def test_apply_async_caps_related_recursion_nested_under_logical_branches() -> None:
     """The async nested pre-walk shares the related-recursion depth budget.
 
     A logical branch wrapped around the real self-referential
@@ -7193,7 +7220,7 @@ def test_apply_async_caps_related_recursion_nested_under_logical_branches():
 
 
 @pytest.mark.django_db
-def test_normalize_input_rejects_malformed_logical_containers():
+def test_normalize_input_rejects_malformed_logical_containers() -> None:
     """``and`` / ``or`` demand a list; ``not`` demands a single input (Defect 4).
 
     A mapping supplied where a list is expected is otherwise iterated as its
@@ -7213,7 +7240,7 @@ def test_normalize_input_rejects_malformed_logical_containers():
 
 
 @pytest.mark.django_db
-def test_evaluate_logic_tree_rejects_malformed_direct_construction():
+def test_evaluate_logic_tree_rejects_malformed_direct_construction() -> None:
     """A directly-constructed malformed logical tree fails loud at query build."""
 
     class CategoryFilter(FilterSet):
@@ -7229,7 +7256,7 @@ def test_evaluate_logic_tree_rejects_malformed_direct_construction():
         _ = fs.qs
 
 
-def test_validate_logic_branch_shape_accepts_inactive_value():
+def test_validate_logic_branch_shape_accepts_inactive_value() -> None:
     """An inactive (``None``) logical value is a no-op, not a shape error (Defect 4)."""
 
     class CategoryFilter(FilterSet):
@@ -7242,7 +7269,7 @@ def test_validate_logic_branch_shape_accepts_inactive_value():
     CategoryFilter._validate_logic_branch_shape("not", None)
 
 
-def test_normalize_input_rejects_scalar_logical_elements():
+def test_normalize_input_rejects_scalar_logical_elements() -> None:
     """A scalar where a filter input belongs is rejected at normalize (Defect 4).
 
     ``not: "name"``, ``or: ["name"]``, ``and: [42]`` all have the RIGHT container
@@ -7264,7 +7291,7 @@ def test_normalize_input_rejects_scalar_logical_elements():
         CategoryFilter._normalize_input({"and_": [42]})
 
 
-def test_normalize_input_rejects_scalar_logical_element_with_hostile_repr():
+def test_normalize_input_rejects_scalar_logical_element_with_hostile_repr() -> None:
     """A malformed logical element cannot replace its typed error via ``__repr__``."""
 
     class CategoryFilter(FilterSet):
@@ -7274,7 +7301,7 @@ def test_normalize_input_rejects_scalar_logical_element_with_hostile_repr():
 
     class HostileRepr:
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr should never escape")
 
     with pytest.raises(ConfigurationError, match="must be a mapping or filter-input"):
@@ -7282,7 +7309,7 @@ def test_normalize_input_rejects_scalar_logical_element_with_hostile_repr():
 
 
 @pytest.mark.django_db
-def test_evaluate_logic_tree_rejects_scalar_logical_elements():
+def test_evaluate_logic_tree_rejects_scalar_logical_elements() -> None:
     """Scalar logical elements fail loud at query build too (Defect 4, second seam)."""
 
     class CategoryFilter(FilterSet):
@@ -7296,7 +7323,7 @@ def test_evaluate_logic_tree_rejects_scalar_logical_elements():
             _ = fs.qs
 
 
-def test_validate_logic_branch_shape_accepts_inactive_list_element():
+def test_validate_logic_branch_shape_accepts_inactive_list_element() -> None:
     """An inactive (``None``) element inside an ``and`` / ``or`` list is a no-op arm."""
 
     class CategoryFilter(FilterSet):
@@ -7309,7 +7336,7 @@ def test_validate_logic_branch_shape_accepts_inactive_list_element():
     CategoryFilter._validate_logic_branch_shape("and", [{"name": {"exact": "x"}}, None])
 
 
-def test_iter_logic_branches_walks_active_branches_and_filters_inactive():
+def test_iter_logic_branches_walks_active_branches_and_filters_inactive() -> None:
     """``_iter_logic_branches`` yields (operator, children) across formats and drops inactive."""
 
     class CategoryFilter(FilterSet):
@@ -7365,7 +7392,7 @@ def test_iter_logic_branches_walks_active_branches_and_filters_inactive():
 # ---------------------------------------------------------------------------
 
 
-def test_generation_provenance_framework_default_for_generated_leaf():
+def test_generation_provenance_framework_default_for_generated_leaf() -> None:
     """A plainly generated CharFilter leaf is ``framework_default``, no distinct."""
 
     class BookFilter(FilterSet):
@@ -7382,7 +7409,7 @@ def test_generation_provenance_framework_default_for_generated_leaf():
     )
 
 
-def test_generation_provenance_package_replacement_for_own_pk_global_id():
+def test_generation_provenance_package_replacement_for_own_pk_global_id() -> None:
     """The own-PK GlobalID branch stamps ``package_replacement`` on the new instance."""
 
     class CategoryType(DjangoType):
@@ -7408,7 +7435,7 @@ def test_generation_provenance_package_replacement_for_own_pk_global_id():
     assert record.framework_added_distinct is False
 
 
-def test_generation_provenance_package_replacement_for_relay_relation():
+def test_generation_provenance_package_replacement_for_relay_relation() -> None:
     """The Relay-relation branch stamps ``package_replacement`` on the new instance."""
 
     class GenreType(DjangoType):
@@ -7433,7 +7460,7 @@ def test_generation_provenance_package_replacement_for_relay_relation():
     assert record.framework_added_distinct is True
 
 
-def test_generation_provenance_declared_for_consumer_declared_filter():
+def test_generation_provenance_declared_for_consumer_declared_filter() -> None:
     """A consumer-declared filter attribute is ``declared``."""
     import django_filters
 
@@ -7449,7 +7476,7 @@ def test_generation_provenance_declared_for_consumer_declared_filter():
     assert record == FilterGenerationProvenance(origin="declared")
 
 
-def test_generation_provenance_override_generated_for_meta_filter_overrides():
+def test_generation_provenance_override_generated_for_meta_filter_overrides() -> None:
     """A leaf produced through ``Meta.filter_overrides`` is ``override_generated``.
 
     The override must GENUINELY diverge from the package policy: ownership is now a
@@ -7486,7 +7513,7 @@ def test_generation_provenance_override_generated_for_meta_filter_overrides():
     assert record.origin == "override_generated"
 
 
-def test_generation_provenance_framework_added_distinct_for_to_many_path():
+def test_generation_provenance_framework_added_distinct_for_to_many_path() -> None:
     """A generated to-many path leaf records ``framework_added_distinct=True``."""
 
     class BookFilter(FilterSet):
@@ -7502,7 +7529,7 @@ def test_generation_provenance_framework_added_distinct_for_to_many_path():
     assert leaf.distinct is True
 
 
-def test_generation_provenance_framework_added_distinct_false_for_to_one_path():
+def test_generation_provenance_framework_added_distinct_false_for_to_one_path() -> None:
     """A generated to-one path leaf records ``framework_added_distinct=False``."""
 
     class BookFilter(FilterSet):
@@ -7517,7 +7544,7 @@ def test_generation_provenance_framework_added_distinct_false_for_to_one_path():
     assert leaf.distinct is False
 
 
-def test_generation_provenance_expanded_leaf_inherits_generated_child_origin():
+def test_generation_provenance_expanded_leaf_inherits_generated_child_origin() -> None:
     """An expanded leaf inherits the child leaf's origin + appends a breadcrumb."""
 
     class GenreFilter(FilterSet):
@@ -7539,7 +7566,7 @@ def test_generation_provenance_expanded_leaf_inherits_generated_child_origin():
     assert record.expanded_from == ("name__icontains",)
 
 
-def test_generation_provenance_expanded_leaf_of_declared_child_stays_declared():
+def test_generation_provenance_expanded_leaf_of_declared_child_stays_declared() -> None:
     """Appearing in expansion output does not make a DECLARED child expanded-generated."""
     import django_filters
 
@@ -7564,7 +7591,7 @@ def test_generation_provenance_expanded_leaf_of_declared_child_stays_declared():
     assert record.expanded_from == ("label",)
 
 
-def test_generation_provenance_expanded_leaf_of_unstamped_child_stays_none():
+def test_generation_provenance_expanded_leaf_of_unstamped_child_stays_none() -> None:
     """An expanded copy of an UNSTAMPED child leaf inherits no record (fail closed)."""
     import django_filters
 
@@ -7576,7 +7603,7 @@ def test_generation_provenance_expanded_leaf_of_unstamped_child_stays_none():
             field: ModelField,
             field_name: str,
             lookup_expr: str | None = None,
-        ):
+        ) -> CharFilter:
             # Returns its OWN object, so the child leaf carries no framework record.
             return django_filters.CharFilter(field_name=field_name)
 
@@ -7595,7 +7622,7 @@ def test_generation_provenance_expanded_leaf_of_unstamped_child_stays_none():
     assert filter_generation_provenance(leaf) is None
 
 
-def test_generation_provenance_none_for_consumer_overridden_filter_for_field():
+def test_generation_provenance_none_for_consumer_overridden_filter_for_field() -> None:
     """A consumer ``filter_for_field`` returning its OWN object yields no record."""
     import django_filters
 
@@ -7607,7 +7634,7 @@ def test_generation_provenance_none_for_consumer_overridden_filter_for_field():
             field: ModelField,
             field_name: str,
             lookup_expr: str | None = None,
-        ):
+        ) -> CharFilter:
             return django_filters.CharFilter(field_name=field_name)
 
         class Meta:
@@ -7618,7 +7645,7 @@ def test_generation_provenance_none_for_consumer_overridden_filter_for_field():
     assert filter_generation_provenance(leaf) is None
 
 
-def test_generation_provenance_survives_deepcopy_and_per_request_instance():
+def test_generation_provenance_survives_deepcopy_and_per_request_instance() -> None:
     """The record survives ``copy.deepcopy`` and the per-request instance filters."""
     import copy
 
@@ -7644,7 +7671,7 @@ def test_generation_provenance_survives_deepcopy_and_per_request_instance():
     assert instance_record.framework_added_distinct is True
 
 
-def test_generation_provenance_declared_never_restamped_by_later_machinery():
+def test_generation_provenance_declared_never_restamped_by_later_machinery() -> None:
     """A declared filter's record is stamped once and never overwritten."""
     import django_filters
 
@@ -7681,7 +7708,7 @@ def test_generation_provenance_declared_never_restamped_by_later_machinery():
 
 
 @pytest.mark.django_db
-def test_borrowed_generated_leaf_becomes_declared_and_fails_closed():
+def test_borrowed_generated_leaf_becomes_declared_and_fails_closed() -> None:
     """A borrowed eligible generated leaf fails closed.
 
     django-filter's declarative machinery lets a consumer deepcopy a filter
@@ -7748,7 +7775,7 @@ def test_borrowed_generated_leaf_becomes_declared_and_fails_closed():
     assert list(result.order_by("id").values_list("pk", flat=True)) == [matched_pk]
 
 
-def test_inherited_declared_filter_retains_declared_record_unchanged():
+def test_inherited_declared_filter_retains_declared_record_unchanged() -> None:
     """Positive control: an INHERITED declared filter keeps its ``declared`` record.
 
     A subclass that does not re-declare the filter must not restamp or mangle the
@@ -7778,7 +7805,7 @@ def test_inherited_declared_filter_retains_declared_record_unchanged():
     assert filter_generation_provenance(inherited) == FilterGenerationProvenance(origin="declared")
 
 
-def test_inherited_declaration_without_record_is_backfilled():
+def test_inherited_declaration_without_record_is_backfilled() -> None:
     """The ``if provenance is None`` fallback backfills a record-less inheritance.
 
     The fallback is kept for an inherited declaration that somehow reaches
@@ -7823,7 +7850,7 @@ def test_inherited_declaration_without_record_is_backfilled():
 # ---------------------------------------------------------------------------
 
 
-def test_candidate_snapshot_rows_cover_direct_leaves_only():
+def test_candidate_snapshot_rows_cover_direct_leaves_only() -> None:
     """A direct to-many leaf's row is eligible, a direct to-one leaf's is not, an expansion has none."""
 
     class ShelfFilter(FilterSet):
@@ -7865,7 +7892,7 @@ def test_candidate_snapshot_rows_cover_direct_leaves_only():
     assert "shelf__code__icontains" not in snapshot.candidates
 
 
-def test_candidate_snapshot_omits_declared_and_method_filters():
+def test_candidate_snapshot_omits_declared_and_method_filters() -> None:
     """Declared filters (incl. method filters) are ``declared`` origin -> no row."""
     import django_filters
 
@@ -7885,7 +7912,7 @@ def test_candidate_snapshot_omits_declared_and_method_filters():
             queryset: QuerySet[library_models.Book],
             _name: str,
             _value: object,
-        ):
+        ) -> QuerySet[library_models.Book]:
             return queryset
 
     BookFilter.get_filters()
@@ -7898,7 +7925,7 @@ def test_candidate_snapshot_omits_declared_and_method_filters():
     assert "note_method" not in snapshot.candidates
 
 
-def test_candidate_snapshot_omits_override_generated_leaf():
+def test_candidate_snapshot_omits_override_generated_leaf() -> None:
     """A ``Meta.filter_overrides`` product is ``override_generated`` -> no row.
 
     The override must GENUINELY diverge from the package policy (a consumer ``extra``
@@ -7928,7 +7955,7 @@ def test_candidate_snapshot_omits_override_generated_leaf():
     assert "title" not in snapshot.candidates
 
 
-def test_candidate_snapshot_includes_package_replacement_global_id_leaf():
+def test_candidate_snapshot_includes_package_replacement_global_id_leaf() -> None:
     """An own-PK GlobalID ``package_replacement`` leaf gets a row (ineligible per path)."""
 
     class GenreType(DjangoType):
@@ -7955,7 +7982,7 @@ def test_candidate_snapshot_includes_package_replacement_global_id_leaf():
     assert id_row.path_plan.first_many_index is None
 
 
-def test_candidate_metadata_helper_raises_on_unclassifiable_framework_leaf():
+def test_candidate_metadata_helper_raises_on_unclassifiable_framework_leaf() -> None:
     """A framework-generated leaf with an unresolvable path is a defect -> RAISES.
 
     Unreachable through the public pipeline (``get_model_field`` guards
@@ -7979,7 +8006,7 @@ def test_candidate_metadata_helper_raises_on_unclassifiable_framework_leaf():
         _candidate_metadata_for(library_models.Book, leaf)
 
 
-def test_candidate_metadata_helper_never_classifies_declared_leaf():
+def test_candidate_metadata_helper_never_classifies_declared_leaf() -> None:
     """A declared leaf with a garbage path returns ``None`` and is NEVER classified."""
     import django_filters
 
@@ -7994,7 +8021,7 @@ def test_candidate_metadata_helper_never_classifies_declared_leaf():
     assert _candidate_metadata_for(library_models.Book, leaf) is None
 
 
-def test_candidate_metadata_helper_returns_none_for_unstamped_leaf():
+def test_candidate_metadata_helper_returns_none_for_unstamped_leaf() -> None:
     """An unstamped (consumer-returned) leaf has no record -> no row, fail closed."""
     import django_filters
 
@@ -8004,7 +8031,7 @@ def test_candidate_metadata_helper_returns_none_for_unstamped_leaf():
     assert _candidate_metadata_for(library_models.Book, leaf) is None
 
 
-def test_expansion_snapshot_build_failure_publishes_nothing_then_retry_recovers():
+def test_expansion_snapshot_build_failure_publishes_nothing_then_retry_recovers() -> None:
     """A mid-build classification failure publishes NOTHING; a retry republishes both."""
     from django_strawberry_framework.exceptions import PathResolutionError
     from django_strawberry_framework.filters import sets as sets_module
@@ -8017,7 +8044,7 @@ def test_expansion_snapshot_build_failure_publishes_nothing_then_retry_recovers(
     real_classify = classify_path
     calls = {"n": 0}
 
-    def flaky_classify(model: type[django_models.Model], field_path: str):
+    def flaky_classify(model: type[django_models.Model], field_path: str) -> ClassifiedPath:
         calls["n"] += 1
         if calls["n"] >= 2:
             raise PathResolutionError(model, field_path, field_path)
@@ -8043,7 +8070,7 @@ def test_expansion_snapshot_build_failure_publishes_nothing_then_retry_recovers(
     assert "genres__name__icontains" in snapshot.candidates
 
 
-def test_expansion_snapshot_is_isolated_per_subclass():
+def test_expansion_snapshot_is_isolated_per_subclass() -> None:
     """A subclass builds its OWN snapshot and never observes its parent's."""
 
     class BaseBookFilter(FilterSet):
@@ -8067,7 +8094,7 @@ def test_expansion_snapshot_is_isolated_per_subclass():
     assert BaseBookFilter._expansion_snapshot() is parent_snapshot
 
 
-def test_expansion_snapshot_absent_for_unresolved_lazy_target():
+def test_expansion_snapshot_absent_for_unresolved_lazy_target() -> None:
     """A ``RelatedFilter`` naming a not-registered target caches no snapshot; each call rebuilds."""
 
     class BranchFilter(FilterSet):
@@ -8090,7 +8117,7 @@ def test_expansion_snapshot_absent_for_unresolved_lazy_target():
     assert BranchFilter._expansion_snapshot() is None
 
 
-def test_expansion_snapshot_none_before_build_is_the_fail_closed_hook():
+def test_expansion_snapshot_none_before_build_is_the_fail_closed_hook() -> None:
     """Pre-finalization (no snapshot built), the accessor returns None for the adapter."""
 
     class ShelfFilter(FilterSet):
@@ -8119,7 +8146,7 @@ def test_expansion_snapshot_none_before_build_is_the_fail_closed_hook():
     assert type(instance)._expansion_snapshot() is None
 
 
-def test_expansion_snapshot_reset_by_registry_clear_and_rebuilt_fresh():
+def test_expansion_snapshot_reset_by_registry_clear_and_rebuilt_fresh() -> None:
     """``registry.clear()`` resets filters + metadata together; the next build republishes."""
 
     class GenreFilter(FilterSet):
@@ -8176,7 +8203,7 @@ def test_expansion_snapshot_reset_by_registry_clear_and_rebuilt_fresh():
 # ---------------------------------------------------------------------------
 
 
-def _seed_two_books_one_cardio_loan():
+def _seed_two_books_one_cardio_loan() -> tuple[int, int]:
     """Seed a ``Matched`` book (one ``Cardio`` loan) and an ``Other`` book (routine).
 
     Returns ``(matched_pk, other_pk)``. Each book has exactly ONE loan so an
@@ -8198,13 +8225,13 @@ def _seed_two_books_one_cardio_loan():
     return matched.pk, other.pk
 
 
-def _reserved_aliases(queryset: QuerySet[django_models.Model]):
+def _reserved_aliases(queryset: QuerySet[django_models.Model]) -> list[str]:
     """Return the reserved ``_dst_predicate_`` EXISTS aliases attached to ``queryset``."""
     return [n for n in queryset.query.annotations if n.startswith("_dst_predicate_")]
 
 
 @pytest.mark.django_db
-def test_capability_gate_init_override_fails_closed():
+def test_capability_gate_init_override_fails_closed() -> None:
     """Seam 4: a consumer ``__init__`` override is not capable.
 
     ``__init__`` is the standard place a consumer replaces or mutates
@@ -8249,7 +8276,7 @@ def test_capability_gate_init_override_fails_closed():
 
 
 @pytest.mark.django_db
-def test_capability_gate_filter_for_field_override_super_mutate_fails_closed():
+def test_capability_gate_filter_for_field_override_super_mutate_fails_closed() -> None:
     """Seam 1: ``filter_for_field`` super()+mutate -> not capable -> outer, not routed.
 
     The subclass calls ``super().filter_for_field`` (keeping the framework stamp)
@@ -8274,7 +8301,7 @@ def test_capability_gate_filter_for_field_override_super_mutate_fails_closed():
             field: ModelField,
             field_name: str,
             lookup_expr: str | None = None,
-        ):
+        ) -> Filter:
             leaf = super().filter_for_field(field, field_name, lookup_expr)
             assert leaf is not None
             leaf.exclude = True  # consumer mutation of the framework-stamped leaf
@@ -8297,7 +8324,7 @@ def test_capability_gate_filter_for_field_override_super_mutate_fails_closed():
 
 
 @pytest.mark.django_db
-def test_filter_override_distinct_is_preserved_on_to_many_path():
+def test_filter_override_distinct_is_preserved_on_to_many_path() -> None:
     """A consumer ``distinct=True`` override reaches the leaf without a framework stamp.
 
     The override owns the selection, so the to-many path grants no framework
@@ -8325,7 +8352,7 @@ def test_filter_override_distinct_is_preserved_on_to_many_path():
     assert provenance.framework_added_distinct is False
 
 
-def test_filter_for_lookup_override_own_relay_pk_is_preserved():
+def test_filter_for_lookup_override_own_relay_pk_is_preserved() -> None:
     """A consumer ``filter_for_lookup`` override is not replaced with GlobalID."""
     import strawberry
 
@@ -8360,7 +8387,7 @@ def test_filter_for_lookup_override_own_relay_pk_is_preserved():
     assert provenance.framework_added_distinct is False
 
 
-def test_filter_override_extra_only_does_not_add_distinct_on_to_many_path():
+def test_filter_override_extra_only_does_not_add_distinct_on_to_many_path() -> None:
     """An extra-only consumer override keeps the default distinct value."""
     from django.db import models as django_models
 
@@ -8386,7 +8413,7 @@ def test_filter_override_extra_only_does_not_add_distinct_on_to_many_path():
     assert "loans__note__icontains" not in snapshot.candidates
 
 
-def test_filter_override_own_relay_pk_is_preserved():
+def test_filter_override_own_relay_pk_is_preserved() -> None:
     """A consumer own-PK override is not replaced with a GlobalID filter."""
     import strawberry
     from django.db import models as django_models
@@ -8419,7 +8446,7 @@ def test_filter_override_own_relay_pk_is_preserved():
 
 
 @pytest.mark.django_db
-def test_capability_gate_filter_for_lookup_override_fails_closed():
+def test_capability_gate_filter_for_lookup_override_fails_closed() -> None:
     """Seam 2: ``filter_for_lookup`` returning a custom generated class -> not capable."""
     import django_filters
 
@@ -8435,7 +8462,11 @@ def test_capability_gate_filter_for_lookup_override_fails_closed():
 
         @classmethod
         @override
-        def filter_for_lookup(cls, field: ModelField, lookup_type: str):
+        def filter_for_lookup(
+            cls,
+            field: ModelField,
+            lookup_type: str,
+        ) -> tuple[type[Filter] | None, dict[str, object]]:
             _default_class, params = super().filter_for_lookup(field, lookup_type)
             return CustomGenerated, params
 
@@ -8456,7 +8487,7 @@ def test_capability_gate_filter_for_lookup_override_fails_closed():
 
 
 @pytest.mark.django_db
-def test_capability_gate_class_level_filter_defaults_override_fails_closed():
+def test_capability_gate_class_level_filter_defaults_override_fails_closed() -> None:
     """Seam 3: a class-level ``FILTER_DEFAULTS`` shadow -> not capable -> outer."""
     matched_pk, _other_pk = _seed_two_books_one_cardio_loan()
 
@@ -8484,7 +8515,7 @@ def test_capability_gate_class_level_filter_defaults_override_fails_closed():
 
 
 @pytest.mark.django_db
-def test_capability_gate_replaces_instance_at_init_fails_closed():
+def test_capability_gate_replaces_instance_at_init_fails_closed() -> None:
     """Seam 4 (ReplacesAtInit): a consumer ``__init__`` swaps in a different filter.
 
     ``__init__`` is the standard place a consumer replaces ``self.filters`` per
@@ -8541,7 +8572,7 @@ def test_capability_gate_replaces_instance_at_init_fails_closed():
 
 
 @pytest.mark.django_db
-def test_capability_gate_positive_control_unmodified_leaf_is_routed():
+def test_capability_gate_positive_control_unmodified_leaf_is_routed() -> None:
     """Positive control: an unmodified package eligible to-many leaf IS routed.
 
     Proves the gate does not over-block: a capable class's frozen row is routable,
@@ -8572,7 +8603,7 @@ def test_capability_gate_positive_control_unmodified_leaf_is_routed():
     assert list(result.order_by("id").values_list("pk", flat=True)) == [matched_pk]
 
 
-def test_is_generation_capable_true_for_unmodified_subclass():
+def test_is_generation_capable_true_for_unmodified_subclass() -> None:
     """A plain package ``FilterSet`` subclass with no seam override IS capable."""
 
     class PlainFilter(FilterSet):
@@ -8584,7 +8615,7 @@ def test_is_generation_capable_true_for_unmodified_subclass():
     assert PlainFilter.FILTER_DEFAULTS is FilterSet.FILTER_DEFAULTS
 
 
-def test_is_generation_capable_false_for_plain_function_seam_override():
+def test_is_generation_capable_false_for_plain_function_seam_override() -> None:
     """A plain-function ``filter_for_field`` (no ``__func__``) -> False, never raises.
 
     A consumer that shadows the generation seam with a plain function (or a
@@ -8595,7 +8626,11 @@ def test_is_generation_capable_false_for_plain_function_seam_override():
     keeps class creation from invoking the shadowed seam during ``get_filters``.
     """
 
-    def _plain_seam(_field: ModelField, _field_name: str, _lookup_expr: str | None = None):
+    def _plain_seam(
+        _field: ModelField,
+        _field_name: str,
+        _lookup_expr: str | None = None,
+    ) -> NoReturn:
         raise AssertionError("never invoked")
 
     class PlainSeamFilter(FilterSet):
@@ -8625,7 +8660,7 @@ def test_is_generation_capable_false_for_plain_function_seam_override():
 # ---------------------------------------------------------------------------
 
 
-def _seed_matched_book_two_cardio_loans():
+def _seed_matched_book_two_cardio_loans() -> library_models.Book:
     """Create a ``Matched`` book with TWO ``Cardio`` loans; return the book.
 
     Two matching loans make a flattened to-many leaf's OUTER (fan-out) result
@@ -8648,7 +8683,7 @@ def _seed_matched_book_two_cardio_loans():
 
 
 @pytest.mark.django_db
-def test_capability_gate_related_filter_expands_non_capable_child_fails_closed():
+def test_capability_gate_related_filter_expands_non_capable_child_fails_closed() -> None:
     """Expansion boundary: a non-capable CHILD's leaf expanded into a capable PARENT.
 
     A CHILD ``FilterSet`` overriding ``filter_for_lookup`` (so the
@@ -8678,7 +8713,11 @@ def test_capability_gate_related_filter_expands_non_capable_child_fails_closed()
 
         @classmethod
         @override
-        def filter_for_lookup(cls, field: ModelField, lookup_type: str):
+        def filter_for_lookup(
+            cls,
+            field: ModelField,
+            lookup_type: str,
+        ) -> tuple[type[Filter] | None, dict[str, object]]:
             _default_class, params = super().filter_for_lookup(field, lookup_type)
             return CustomChildGenerated, params
 
@@ -8710,7 +8749,7 @@ def test_capability_gate_related_filter_expands_non_capable_child_fails_closed()
 
 
 @pytest.mark.django_db
-def test_capability_gate_related_filter_expands_capable_child_runs_as_branch():
+def test_capability_gate_related_filter_expands_capable_child_runs_as_branch() -> None:
     """A capable PARENT + capable CHILD over a to-many path: the expansion runs as its branch.
 
     The mirror of the fail-closed expansion test. With a fully capable child
@@ -8766,7 +8805,7 @@ def test_capability_gate_related_filter_expands_capable_child_runs_as_branch():
 # ---------------------------------------------------------------------------
 
 
-def test_origin_isnull_boolean_override_on_many_side_is_override_generated():
+def test_origin_isnull_boolean_override_on_many_side_is_override_generated() -> None:
     """A BooleanField override selected by ``isnull`` -> override_generated.
 
     ``Loan.note`` is a ``TextField``; the ``isnull`` lookup resolves the SELECTION
@@ -8798,7 +8837,7 @@ def test_origin_isnull_boolean_override_on_many_side_is_override_generated():
     assert "loans__note__isnull" not in _snapshot(BookFilter).candidates
 
 
-def test_origin_transform_output_field_selects_override_is_override_generated():
+def test_origin_transform_output_field_selects_override_is_override_generated() -> None:
     """A transform whose OUTPUT field selects an override -> override_generated.
 
     ``ScalarSpecimen.occurred_on`` is a ``DateField``; the ``year`` transform
@@ -8825,7 +8864,7 @@ def test_origin_transform_output_field_selects_override_is_override_generated():
     assert _provenance(leaf).origin == "override_generated"
 
 
-def test_origin_precision_plain_many_side_leaf_stays_framework_default_and_eligible():
+def test_origin_precision_plain_many_side_leaf_stays_framework_default_and_eligible() -> None:
     """An unmatched leaf on an override-bearing class stays framework_default.
 
     On the SAME class that carries a ``BooleanField`` override, the plain
@@ -8860,7 +8899,7 @@ def test_origin_precision_plain_many_side_leaf_stays_framework_default_and_eligi
     assert row.routable is True
 
 
-def test_generation_origin_oracle_fails_closed_on_unresolvable_lookup():
+def test_generation_origin_oracle_fails_closed_on_unresolvable_lookup() -> None:
     """``_generation_origin_for_field`` returns override_generated when resolve_field raises.
 
     A lookup that cannot be resolved raises ``FieldLookupError`` upstream before
@@ -8908,7 +8947,7 @@ class _R5PreFanBookFilter(FilterSet):
         fields = {"genres": ["exact"]}
 
 
-def _r5_prefan_candidate():
+def _r5_prefan_candidate() -> CandidateFilterMetadata:
     _R5PreFanBookFilter.get_filters()
     candidate = _snapshot(_R5PreFanBookFilter).candidates["genres"]
     assert candidate.eligible is True
@@ -8916,7 +8955,7 @@ def _r5_prefan_candidate():
     return candidate
 
 
-def _seed_r5_prefan_genre_book():
+def _seed_r5_prefan_genre_book() -> tuple[library_models.Book, library_models.Genre]:
     """One ``Book`` pre-fanned by TWO loans (distinct patrons).
 
     A relation JOIN to ``loans`` with no ``distinct`` makes the one book appear
@@ -8944,11 +8983,16 @@ def _seed_r5_prefan_genre_book():
     return book, genre
 
 
-def _r5_prefanned_books():
+def _r5_prefanned_books() -> QuerySet[library_models.Book]:
     return library_models.Book.objects.filter(loans__isnull=False).order_by("id")
 
 
-def _r5_prefan_setup():
+def _r5_prefan_setup() -> tuple[
+    CandidateFilterMetadata,
+    library_models.Book,
+    library_models.Genre,
+    _R5PreFanBookFilter,
+]:
     """Frozen candidate + a pre-fanned Book/Genre + an unvalidated request filterset.
 
     The row-preservation scaffold: the eligible frozen candidate, the two-loan
@@ -8965,7 +9009,7 @@ def _r5_prefan_setup():
     return candidate, book, genre, fs
 
 
-def test_method_owned_leaf_is_ineligible_on_framework_many_side_path():
+def test_method_owned_leaf_is_ineligible_on_framework_many_side_path() -> None:
     """A framework-origin many-side leaf carrying a consumer ``method`` is INELIGIBLE.
 
     ``_candidate_metadata_for`` eligibility requires ``method is None`` -- a set method
@@ -8993,7 +9037,7 @@ def test_method_owned_leaf_is_ineligible_on_framework_many_side_path():
 
 
 @pytest.mark.django_db
-def test_routed_leaf_preserves_prefanned_multiplicity():
+def test_routed_leaf_preserves_prefanned_multiplicity() -> None:
     """Positive control: a routed leaf PRESERVES incoming pre-fanned row multiplicity.
 
     The row-preserving guarantee stated positively. The incoming outer queryset is
@@ -9021,7 +9065,7 @@ def test_routed_leaf_preserves_prefanned_multiplicity():
 # ======================================================================
 
 
-def _register_relay(model: type[django_models.Model]):
+def _register_relay(model: type[django_models.Model]) -> type[DjangoType]:
     # Build the Relay-node type dynamically so each call gets a fresh type bound to
     # ``model`` (the autouse registry-isolation fixture clears it between tests).
     meta = type("Meta", (), {"model": model, "interfaces": (strawberry.relay.Node,)})
@@ -9036,7 +9080,7 @@ def _extra_only_shadow_filter(
     extra_fn: Callable[[ModelField], dict[str, object]],
     meta_fields: object,
     name: str = "BookFilter",
-):
+) -> type[FilterSet]:
     """Build a FilterSet whose ``FILTER_DEFAULTS`` shadows ONE field class.
 
     The shared shape of these tests: an ordinary
@@ -9062,7 +9106,7 @@ def _extra_only_shadow_filter(
 
 
 @pytest.mark.django_db
-def test_m2m_extra_only_shadow_is_consumer_owned():
+def test_m2m_extra_only_shadow_is_consumer_owned() -> None:
     """Same base M2M class + a consumer ``extra`` (restricted queryset) is honored."""
     import django_filters
     from django.db import models as dj_models
@@ -9071,7 +9115,7 @@ def test_m2m_extra_only_shadow_is_consumer_owned():
     BookFilter = _extra_only_shadow_filter(
         library_models.Book,
         dj_models.ManyToManyField,
-        lambda f: {"queryset": library_models.Genre.objects.none()},
+        lambda _f: {"queryset": library_models.Genre.objects.none()},
         {"genres": ["exact"]},
     )
 
@@ -9091,7 +9135,7 @@ def test_m2m_extra_only_shadow_is_consumer_owned():
 
 
 @pytest.mark.django_db
-def test_fk_extra_only_shadow_is_consumer_owned():
+def test_fk_extra_only_shadow_is_consumer_owned() -> None:
     """Same base FK class + a consumer ``extra`` (non-default to_field_name) is kept."""
     import django_filters
     from django.db import models as dj_models
@@ -9100,7 +9144,7 @@ def test_fk_extra_only_shadow_is_consumer_owned():
     BookFilter = _extra_only_shadow_filter(
         library_models.Book,
         dj_models.ForeignKey,
-        lambda f: {"queryset": library_models.Shelf.objects.all(), "to_field_name": "code"},
+        lambda _f: {"queryset": library_models.Shelf.objects.all(), "to_field_name": "code"},
         {"shelf": ["exact"]},
     )
 
@@ -9117,7 +9161,7 @@ def test_fk_extra_only_shadow_is_consumer_owned():
 
 
 @pytest.mark.django_db
-def test_extra_only_shadow_survives_related_filter_expansion():
+def test_extra_only_shadow_survives_related_filter_expansion() -> None:
     """An ``extra``-only shadow on a child survives ``RelatedFilter`` expansion."""
     import django_filters
     from django.db import models as dj_models
@@ -9126,7 +9170,7 @@ def test_extra_only_shadow_survives_related_filter_expansion():
     ChildBookFilter = _extra_only_shadow_filter(
         library_models.Book,
         dj_models.ManyToManyField,
-        lambda f: {"queryset": library_models.Genre.objects.none()},
+        lambda _f: {"queryset": library_models.Genre.objects.none()},
         {"genres": ["exact"]},
         name="ChildBookFilter",
     )
@@ -9151,7 +9195,7 @@ def test_extra_only_shadow_survives_related_filter_expansion():
 
 
 @pytest.mark.django_db
-def test_extra_only_shadow_runs_outer_with_no_reserved_alias():
+def test_extra_only_shadow_runs_outer_with_no_reserved_alias() -> None:
     """End-to-end: the honored ``extra``-only shadow runs OUTER, not through EXISTS."""
     from django.db import models as dj_models
 
@@ -9159,7 +9203,7 @@ def test_extra_only_shadow_runs_outer_with_no_reserved_alias():
     BookFilter = _extra_only_shadow_filter(
         library_models.Book,
         dj_models.ManyToManyField,
-        lambda f: {"queryset": library_models.Genre._default_manager.all()},
+        lambda _f: {"queryset": library_models.Genre._default_manager.all()},
         {"genres": ["exact"]},
     )
 
@@ -9190,10 +9234,10 @@ def test_extra_only_shadow_runs_outer_with_no_reserved_alias():
 
 
 @pytest.mark.django_db
-def test_shallow_copy_untouched_entry_stays_framework_default():
-    """Positive control: an untouched entry in a shallow-copied defaults map is NOT
+def test_shallow_copy_untouched_entry_stays_framework_default() -> None:
+    """Positive control: an untouched entry in a shallow-copied defaults map stays framework-owned.
 
-    falsely treated as consumer-owned. A ``{**base, M2M: {...}}`` shadow that changes
+    It is NOT falsely treated as consumer-owned. A ``{**base, M2M: {...}}`` shadow that changes
     ONLY the M2M entry reuses the SAME nested object for the untouched forward-FK
     entry, so the FK relation stays ``framework_default`` and is still converted to
     the package GlobalID primitive, while the changed M2M entry is
@@ -9206,7 +9250,7 @@ def test_shallow_copy_untouched_entry_stays_framework_default():
     BookFilter = _extra_only_shadow_filter(
         library_models.Book,
         dj_models.ManyToManyField,
-        lambda f: {"queryset": library_models.Genre.objects.none()},
+        lambda _f: {"queryset": library_models.Genre.objects.none()},
         {"genres": ["exact"], "shelf": ["exact"]},
     )
 
@@ -9237,7 +9281,7 @@ def test_shallow_copy_untouched_entry_stays_framework_default():
 # ======================================================================
 
 
-def test_public_filter_defaults_is_deepcopyable():
+def test_public_filter_defaults_is_deepcopyable() -> None:
     """``copy.deepcopy(FilterSet.FILTER_DEFAULTS)`` works and the copy is independent.
 
     The public table is a plain ``dict`` of plain ``dict`` entries (the ``extra``
@@ -9270,7 +9314,7 @@ def test_public_filter_defaults_is_deepcopyable():
     assert isinstance(PlainFilter.get_filters()["title"], CharFilter)
 
 
-def test_private_baseline_is_immutable_and_independent():
+def test_private_baseline_is_immutable_and_independent() -> None:
     """The PRIVATE normalized baseline is immutable and a distinct object graph.
 
     ``_PACKAGE_POLICY_BASELINE`` is a ``MappingProxyType`` (mutating it raises
@@ -9306,7 +9350,7 @@ def test_private_baseline_is_immutable_and_independent():
         public_entry["filter_class"] = original
 
 
-def test_normalize_policy_entry_none_returns_none():
+def test_normalize_policy_entry_none_returns_none() -> None:
     """``_normalize_policy_entry(None)`` returns ``None`` (the symmetric-absence case).
 
     The ownership oracle normalizes the merged selection with ``_normalize_policy_entry``
@@ -9320,7 +9364,7 @@ def test_normalize_policy_entry_none_returns_none():
     assert present == _NormalizedPolicyEntry(CharFilter, None)
 
 
-def test_inherited_defaults_identity():
+def test_inherited_defaults_identity() -> None:
     """A pristine subclass inherits ``_PUBLIC_PACKAGE_FILTER_DEFAULTS`` by identity.
 
     An unmodified subclass does not reassign ``FILTER_DEFAULTS``, so its
@@ -9337,7 +9381,7 @@ def test_inherited_defaults_identity():
     assert InheritedDefaultsFilter._is_generation_capable() is True
 
 
-def test_public_filter_defaults_matches_upstream_django_filter_table():
+def test_public_filter_defaults_matches_upstream_django_filter_table() -> None:
     """Drift guard: the package table's SHAPE matches upstream ``FILTER_FOR_DBFIELD_DEFAULTS``.
 
     The package table is a package-AUTHORED copy, not a snapshot of django-filter's
@@ -9379,7 +9423,7 @@ def test_public_filter_defaults_matches_upstream_django_filter_table():
     # the same live-field attributes as upstream's lambdas is what keeps generation
     # identical to using django-filter's own table; a representative field per relation
     # kind proves the mirror still reads what upstream reads.
-    def _first_field(predicate: Callable[[object], bool]):
+    def _first_field(predicate: Callable[[object], bool]) -> object | None:
         for model in apps.get_models():
             for field in model._meta.get_fields():
                 if predicate(field):
@@ -9435,7 +9479,7 @@ def test_public_filter_defaults_matches_upstream_django_filter_table():
 # ======================================================================
 
 
-def test_import_order_does_not_capture_consumer_global_mutation():
+def test_import_order_does_not_capture_consumer_global_mutation() -> None:
     """Fresh-process: a pre-import mutation of django-filter's global is NOT captured.
 
     Snapshotting ``filterset.BaseFilterSet.FILTER_DEFAULTS`` at
@@ -9484,7 +9528,7 @@ def test_import_order_does_not_capture_consumer_global_mutation():
 
 
 @pytest.mark.django_db
-def test_ordering_override_on_to_many_path_is_override_generated_and_unroutable():
+def test_ordering_override_on_to_many_path_is_override_generated_and_unroutable() -> None:
     """A consumer ordering CharFilter on a to-many path is consumer-owned and runs outer.
 
     The ordering attack: a custom filter whose OUTER ``.filter`` invocation
@@ -9499,7 +9543,7 @@ def test_ordering_override_on_to_many_path_is_override_generated_and_unroutable(
 
     class ConsumerOrderingCharFilter(CharFilter):
         @override
-        def filter(self, qs: QuerySet[_M], value: object):
+        def filter(self, qs: QuerySet[_M], value: object) -> QuerySet[_M]:
             return qs.order_by("-title")
 
     class BookFilter(FilterSet):
@@ -9528,7 +9572,7 @@ def test_ordering_override_on_to_many_path_is_override_generated_and_unroutable(
 
 
 @pytest.mark.django_db
-def test_exclude_extra_override_refused_and_pristine_never_excludes():
+def test_exclude_extra_override_refused_and_pristine_never_excludes() -> None:
     """An ``exclude=True`` ``extra`` provider is refused; pristine candidates never exclude.
 
     An ``extra`` provider that yields ``{"exclude": True}`` installed via
@@ -9573,7 +9617,7 @@ def test_exclude_extra_override_refused_and_pristine_never_excludes():
 
 
 @pytest.mark.django_db
-def test_pristine_defaults_produce_routable_candidate():
+def test_pristine_defaults_produce_routable_candidate() -> None:
     """Positive control: a pristine framework to-many leaf is still ROUTABLE.
 
     Proves pristine package defaults still generate routable candidates, so the
@@ -9593,7 +9637,7 @@ def test_pristine_defaults_produce_routable_candidate():
 
 
 @pytest.mark.django_db
-def test_reverse_o2o_relation_generation_uses_package_reverse_o2o_provider():
+def test_reverse_o2o_relation_generation_uses_package_reverse_o2o_provider() -> None:
     """Generating a reverse-O2O filter exercises the package-owned ``_reverse_o2o_extra``.
 
     ``Patron.card`` is the reverse of ``MembershipCard.patron`` (a ``OneToOneRel``), so
@@ -9617,7 +9661,7 @@ def test_reverse_o2o_relation_generation_uses_package_reverse_o2o_provider():
     assert "queryset" not in leaf.extra
 
 
-def test_replacement_shadow_does_not_contaminate_other_filtersets():
+def test_replacement_shadow_does_not_contaminate_other_filtersets() -> None:
     """Cross-filterset isolation: A's replaced M2M entry cannot alter unmodified B.
 
     Filterset A legitimately REPLACES the M2M entry (a new dict with a restricted
@@ -9675,7 +9719,7 @@ def test_replacement_shadow_does_not_contaminate_other_filtersets():
 
 
 @pytest.mark.django_db
-def test_replacement_preserves_restricted_queryset_and_wire_shape():
+def test_replacement_preserves_restricted_queryset_and_wire_shape() -> None:
     """Observable: a REPLACED M2M entry keeps its restricted queryset AND wire shape.
 
     Genre is a Relay node, so a framework default over ``Book.genres`` WOULD convert to
@@ -9723,7 +9767,7 @@ def test_replacement_preserves_restricted_queryset_and_wire_shape():
     assert leaf.field.required is True
 
 
-def test_positive_controls_unchanged_converts_replacement_preserved():
+def test_positive_controls_unchanged_converts_replacement_preserved() -> None:
     """Positive controls: an UNCHANGED canonical entry converts; a REPLACEMENT is kept.
 
     An unmodified ``FilterSet`` on a Relay-relation model classifies the M2M entry
@@ -9781,7 +9825,7 @@ def test_positive_controls_unchanged_converts_replacement_preserved():
 
 
 @pytest.mark.django_db
-def test_r6_relation_isnull_stays_boolean_m2m():
+def test_r6_relation_isnull_stays_boolean_m2m() -> None:
     """A to-many M2M ``isnull`` under a Relay target is a BooleanFilter, not a GlobalID."""
     from django_filters import BooleanFilter
 
@@ -9798,7 +9842,7 @@ def test_r6_relation_isnull_stays_boolean_m2m():
 
 
 @pytest.mark.django_db
-def test_r6_relation_isnull_stays_boolean_fk():
+def test_r6_relation_isnull_stays_boolean_fk() -> None:
     """A forward-FK ``isnull`` under a Relay target is a BooleanFilter, not a GlobalID."""
     from django_filters import BooleanFilter
 
@@ -9815,7 +9859,7 @@ def test_r6_relation_isnull_stays_boolean_fk():
 
 
 @pytest.mark.django_db
-def test_r6_relation_isnull_filters_correctly_no_500():
+def test_r6_relation_isnull_filters_correctly_no_500() -> None:
     """End-to-end: a Relay-target relation ``isnull`` filters rows instead of raising.
 
     Before the fix the leaf was a ``GlobalIDMultipleChoiceFilter``, so a boolean
@@ -9863,7 +9907,7 @@ def test_r6_relation_isnull_filters_correctly_no_500():
 
 
 @pytest.mark.django_db
-def test_r6_override_shadowed_by_more_derived_default_stays_framework():
+def test_r6_override_shadowed_by_more_derived_default_stays_framework() -> None:
     """A ``filter_overrides`` entry shadowed by a more-derived default does NOT govern.
 
     ``MembershipCard.patron`` is a ``OneToOneField``; base ``FILTER_DEFAULTS`` has a
@@ -9894,7 +9938,7 @@ def test_r6_override_shadowed_by_more_derived_default_stays_framework():
 
 
 @pytest.mark.django_db
-def test_r6_override_that_actually_governs_is_consumer_owned():
+def test_r6_override_that_actually_governs_is_consumer_owned() -> None:
     """Positive control: an override that WINS the merged walk stays consumer-owned.
 
     A ``filter_overrides`` entry keyed on the EXACT field class (``OneToOneField``)
@@ -9926,7 +9970,7 @@ def test_r6_override_that_actually_governs_is_consumer_owned():
 
 
 @pytest.mark.django_db
-def test_r6_benign_base_override_does_not_block_to_many_routing():
+def test_r6_benign_base_override_does_not_block_to_many_routing() -> None:
     """A shadowed override must NOT drop a genuine framework to-many leaf from routing.
 
     ``Loan.note`` is a ``TextField`` with its own base ``FILTER_DEFAULTS`` entry; a
@@ -9975,7 +10019,7 @@ class _UnknownFamilyFilter(Filter):
     """
 
     @override
-    def filter(self, qs: QuerySet[_M], value: object):
+    def filter(self, qs: QuerySet[_M], value: object) -> QuerySet[_M]:
         self._outer_called = True
         return qs
 
@@ -10006,7 +10050,7 @@ def _genuine_dynamic_csv_class(lookup: str) -> type[Filter]:
     list(_FILTER_FAMILY_REGISTRY),
     ids=[cls.__name__ for cls in _FILTER_FAMILY_REGISTRY],
 )
-def test_every_registered_family_resolves_to_its_profile(family_cls: type[Filter]):
+def test_every_registered_family_resolves_to_its_profile(family_cls: type[Filter]) -> None:
     """Each registered family class resolves BY EXACT TYPE to its own profile.
 
     Uses ``object.__new__`` so no per-family constructor arguments are needed --
@@ -10016,7 +10060,7 @@ def test_every_registered_family_resolves_to_its_profile(family_cls: type[Filter
     assert _family_profile_for(instance) is _FILTER_FAMILY_REGISTRY[family_cls]
 
 
-def test_genuine_dynamic_concrete_in_and_range_resolve_to_sequence_profile():
+def test_genuine_dynamic_concrete_in_and_range_resolve_to_sequence_profile() -> None:
     """django-filter's genuine dynamic ``in`` / ``range`` CSV classes route.
 
     These are real django-filter products (a NEW class object per ``filter_for_lookup``
@@ -10059,8 +10103,8 @@ def test_genuine_dynamic_concrete_in_and_range_resolve_to_sequence_profile():
     assert _family_profile_for(object.__new__(_WrapperWithBody)) is None
 
 
-def test_in_lookup_inherited_as_a_non_base_in_filter_fails_at_build():
-    """An inherited ``in`` class that is not a ``BaseInFilter`` never generates a filter without ``[]``'s rule.
+def test_in_lookup_inherited_as_a_non_base_in_filter_fails_at_build() -> None:
+    """An inherited non-``BaseInFilter`` ``in`` class never generates a filter that skips ``[]``.
 
     A cooperative ``BaseFilterSet`` mixin behind ``FilterSet`` returns the bare scalar
     class for ``in``; the package refuses it at build instead of generating a filter
@@ -10101,7 +10145,7 @@ def test_in_lookup_inherited_as_a_non_base_in_filter_fails_at_build():
 def test_exact_match_keeps_registered_subclass_and_base_distinct(
     specific: type[Filter],
     base: type[Filter],
-):
+) -> None:
     """A registered subclass and its registered base resolve to their OWN profiles.
 
     The retired "MRO most-specific" premise is gone: each is an exact registry key, so
@@ -10115,7 +10159,7 @@ def test_exact_match_keeps_registered_subclass_and_base_distinct(
     assert specific_profile is not base_profile
 
 
-def test_integer_in_resolves_by_exact_type_and_bare_base_in_is_unregistered():
+def test_integer_in_resolves_by_exact_type_and_bare_base_in_is_unregistered() -> None:
     """``IntegerInFilter`` resolves by exact key; the removed ``BaseInFilter`` base is None.
 
     ``BaseInFilter`` / ``BaseRangeFilter`` are no longer registry keys (their MRO-walk job
@@ -10138,7 +10182,7 @@ def test_integer_in_resolves_by_exact_type_and_bare_base_in_is_unregistered():
     [CharFilter, ModelMultipleChoiceFilter, BaseInFilter],
     ids=["CharFilter", "ModelMultipleChoiceFilter", "BaseInFilter"],
 )
-def test_unregistered_subclass_of_registered_category_fails_closed(base_cls: type[Filter]):
+def test_unregistered_subclass_of_registered_category_fails_closed(base_cls: type[Filter]) -> None:
     """An unaudited subclass of EACH broad registered category resolves to NO profile.
 
     The dangerous case: a subclass of a registered base (with an overridden
@@ -10152,13 +10196,13 @@ def test_unregistered_subclass_of_registered_category_fails_closed(base_cls: typ
         extra_state = True
 
         @override
-        def filter(self, qs: QuerySet[_M], value: object):
+        def filter(self, qs: QuerySet[_M], value: object) -> QuerySet[_M]:
             return qs
 
     assert _family_profile_for(object.__new__(_UnauditedSubclass)) is None
 
 
-def test_dynamic_csv_subclass_with_added_behavior_fails_closed():
+def test_dynamic_csv_subclass_with_added_behavior_fails_closed() -> None:
     """A dynamic-CSV-shaped class with ONE added body member fails closed.
 
     The structural validator accepts ONLY genuine empty-body dynamic classes over an
@@ -10179,7 +10223,7 @@ def test_dynamic_csv_subclass_with_added_behavior_fails_closed():
             self,
             qs: QuerySet[_M],
             value: object,
-        ):  # a non-dunder own key -> extra name -> fails.
+        ) -> QuerySet[_M]:  # a non-dunder own key -> extra name -> fails.
             return qs
 
     class _EvilRangeAddedState(BaseRangeFilter, NumberFilter):
@@ -10190,14 +10234,17 @@ def test_dynamic_csv_subclass_with_added_behavior_fails_closed():
 
     class _EvilInDunderBehavior(BaseInFilter, CharFilter):
         @override
-        def __getattribute__(self, name: str):  # a DUNDER-named own method -> extra name -> fails.
+        def __getattribute__(
+            self,
+            name: str,
+        ) -> object:  # a DUNDER-named own method -> extra name -> fails.
             return object.__getattribute__(self, name)
 
     class _EvilInInitSubclass(BaseInFilter, CharFilter):
         def __init_subclass__(
             cls,
             **kwargs: object,
-        ):  # a DUNDER-named hook -> extra name -> fails.
+        ) -> None:  # a DUNDER-named hook -> extra name -> fails.
             super().__init_subclass__(**kwargs)
 
     class _EvilRangeSlots(BaseRangeFilter, NumberFilter):
@@ -10228,7 +10275,7 @@ def test_dynamic_csv_subclass_with_added_behavior_fails_closed():
         assert _family_profile_for(object.__new__(cls)) is None, cls.__name__
 
 
-def test_empty_body_dynamic_csv_reference_matches_genuine_class_own_names():
+def test_empty_body_dynamic_csv_reference_matches_genuine_class_own_names() -> None:
     """The empty-body reference name-set equals a GENUINE dynamic CSV class's own ``vars``.
 
     ``_EMPTY_BODY_DYNAMIC_CSV_ATTRS`` is derived from a live ``pass``-body ``class`` statement,
@@ -10244,7 +10291,7 @@ def test_empty_body_dynamic_csv_reference_matches_genuine_class_own_names():
         assert frozenset(vars(genuine)) == _EMPTY_BODY_DYNAMIC_CSV_ATTRS, lookup
 
 
-def test_registry_is_a_closed_exact_allowlist():
+def test_registry_is_a_closed_exact_allowlist() -> None:
     """Inverse assertion: every registry class is audited; no ancestry is accepted.
 
     Every EXACT class in ``_FILTER_FAMILY_REGISTRY`` maps to a KNOWN family identity (one of
@@ -10261,7 +10308,7 @@ def test_registry_is_a_closed_exact_allowlist():
         assert _family_profile_for(object.__new__(generated_subclass)) is None, cls.__name__
 
 
-def test_future_django_filter_default_subclass_is_not_routable():
+def test_future_django_filter_default_subclass_is_not_routable() -> None:
     """Upgrading django-filter cannot add a routable default class through inheritance.
 
     Simulates a future release placing a new ``CharFilter`` subclass into its defaults:
@@ -10271,13 +10318,13 @@ def test_future_django_filter_default_subclass_is_not_routable():
     assert _family_profile_for(object.__new__(future_default)) is None
 
 
-def test_bare_filter_base_is_not_a_registered_family():
+def test_bare_filter_base_is_not_a_registered_family() -> None:
     """The universal ``Filter`` base resolves to NO profile (not a catch-all key)."""
     assert Filter not in _FILTER_FAMILY_REGISTRY
     assert _family_profile_for(object.__new__(Filter)) is None
 
 
-def test_unknown_family_leaf_is_ineligible_on_framework_many_side_path():
+def test_unknown_family_leaf_is_ineligible_on_framework_many_side_path() -> None:
     """An unknown family behind a framework origin on a many-side path fails CLOSED.
 
     Mirrors the ``_candidate_metadata_for`` provenance tests: a synthetic filter with
@@ -10331,7 +10378,7 @@ def test_unknown_family_leaf_is_ineligible_on_framework_many_side_path():
         ("", False),  # empty -> FAIL CLOSED
     ],
 )
-def test_release_is_audited_range_edges(raw_version: str, audited: bool):
+def test_release_is_audited_range_edges(raw_version: str, *, audited: bool) -> None:
     """``_release_is_audited`` is an inclusive-lower / exclusive-upper numeric compare.
 
     Pure-string parsing, so the edges are testable without touching global state.
@@ -10343,7 +10390,7 @@ def test_release_is_audited_range_edges(raw_version: str, audited: bool):
     assert _release_is_audited(raw_version) is audited
 
 
-def test_installed_django_filter_is_inside_the_audited_range():
+def test_installed_django_filter_is_inside_the_audited_range() -> None:
     """CI tripwire: the INSTALLED django-filter must be inside the audited range.
 
     Deliberately couples the lock to the audit. When the dependency moves to a family
@@ -10362,7 +10409,7 @@ def test_installed_django_filter_is_inside_the_audited_range():
 
 
 @pytest.mark.django_db
-def test_unaudited_release_disables_routing_without_changing_results():
+def test_unaudited_release_disables_routing_without_changing_results() -> None:
     """On an UNAUDITED release every leaf runs outer -- same rows, different SQL shape.
 
     The fail-closed degrade. With the audited verdict forced ``False``, an otherwise
@@ -10384,7 +10431,7 @@ def test_unaudited_release_disables_routing_without_changing_results():
     other = library_models.Book.objects.create(shelf=shelf, title="Other")
     other.genres.add(library_models.Genre.objects.create(name="neurology"))
 
-    def _run(audited: bool):
+    def _run(*, audited: bool) -> tuple[CandidateFilterMetadata, QuerySet[library_models.Book]]:
         # The verdict is frozen during ``get_filters()``, so the class must be BUILT
         # inside the patch context for the patched value to take effect.
         with mock.patch.object(sets_module, "_DJANGO_FILTER_OPTIMIZER_AUDITED", audited):
@@ -10403,8 +10450,8 @@ def test_unaudited_release_disables_routing_without_changing_results():
             ).qs
             return row, queryset
 
-    audited_row, audited_qs = _run(True)
-    unaudited_row, unaudited_qs = _run(False)
+    audited_row, audited_qs = _run(audited=True)
+    unaudited_row, unaudited_qs = _run(audited=False)
 
     # Eligibility is leaf-intrinsic and unchanged; only routability differs.
     assert audited_row.eligible is True
@@ -10449,7 +10496,7 @@ def _patron_child_with_method_string() -> type[FilterSet]:
             queryset: QuerySet[library_models.Patron],
             _name: str,
             value: object,
-        ):
+        ) -> QuerySet[library_models.Patron]:
             return queryset.filter(email=value)
 
     return Child
@@ -10515,26 +10562,34 @@ class _OwnerBoundCase(NamedTuple):
 
 
 _OWNER_BOUND_CASES = {
-    "method_string": _OwnerBoundCase(_patron_child_with_method_string, "email", True),
-    "method_callable": _OwnerBoundCase(_patron_child_with_method_callable, "email", True),
+    "method_string": _OwnerBoundCase(_patron_child_with_method_string, "email", projected=True),
+    "method_callable": _OwnerBoundCase(
+        _patron_child_with_method_callable,
+        "email",
+        projected=True,
+    ),
     "init_override_generated": _OwnerBoundCase(
         _patron_child_with_init_override,
         "name__icontains",
-        True,
+        projected=True,
     ),
-    "init_override_declared": _OwnerBoundCase(_patron_child_with_init_override, "email", True),
+    "init_override_declared": _OwnerBoundCase(
+        _patron_child_with_init_override,
+        "email",
+        projected=True,
+    ),
     "init_override_related_branch": _OwnerBoundCase(
         _patron_child_with_init_override,
         "loans",
-        False,
+        projected=False,
     ),
-    "declared_plain": _OwnerBoundCase(_patron_child_plain, "email", False),
-    "generated_plain": _OwnerBoundCase(_patron_child_plain, "name__icontains", False),
+    "declared_plain": _OwnerBoundCase(_patron_child_plain, "email", projected=False),
+    "generated_plain": _OwnerBoundCase(_patron_child_plain, "name__icontains", projected=False),
 }
 
 
 @pytest.mark.parametrize("label", list(_OWNER_BOUND_CASES))
-def test_expand_related_filter_projects_owner_bound_children_only(label: str):
+def test_expand_related_filter_projects_owner_bound_children_only(label: str) -> None:
     """A child leaf is projected iff its behavior belongs to the child filter set.
 
     A ``method=`` (string or callable) and every leaf of a child overriding
@@ -10567,7 +10622,7 @@ def test_expand_related_filter_projects_owner_bound_children_only(label: str):
         assert "filter" not in vars(projected)
 
 
-def test_customizes_instances_is_the_init_seam():
+def test_customizes_instances_is_the_init_seam() -> None:
     """``_customizes_instances`` is the ``__init__`` half of ``_is_generation_capable``."""
     plain = _patron_child_plain()
     customized = _patron_child_with_init_override()
@@ -10577,7 +10632,11 @@ def test_customizes_instances_is_the_init_seam():
     assert customized._is_generation_capable() is False
 
 
-def _seed_loans_for_two_patrons():
+def _seed_loans_for_two_patrons() -> tuple[
+    library_models.Book,
+    library_models.Loan,
+    library_models.Loan,
+]:
     """One book with two loans: patron ``p1@x`` (note alpha) and ``p2@x`` (note beta)."""
     shelf = _library_shelf()
     book = library_models.Book.objects.create(shelf=shelf, title="Two loans")
@@ -10588,7 +10647,7 @@ def _seed_loans_for_two_patrons():
     return book, alpha, beta
 
 
-def test_projected_leaf_form_field_is_the_child_instance_field():
+def test_projected_leaf_form_field_is_the_child_instance_field() -> None:
     """The flat copy validates with the field the child instance builds.
 
     ``PatronFilter.__init__`` appends the ``missing_at_sign`` validator to its
@@ -10621,7 +10680,7 @@ def test_projected_leaf_form_field_is_the_child_instance_field():
 
 
 @pytest.mark.django_db
-def test_projected_leaf_filters_through_the_child_filterset():
+def test_projected_leaf_filters_through_the_child_filterset() -> None:
     """The child's ``method=`` runs on the child rows; the parent keeps the rows reaching a match.
 
     The ORM oracle is the ``<relation>__in`` projection. A value django-filter
@@ -10637,7 +10696,7 @@ def test_projected_leaf_filters_through_the_child_filterset():
         note="gamma",
     )
 
-    def _rows(value: object):
+    def _rows(value: object) -> list[object]:
         return list(
             LoanFilter(
                 data={"patron__email_must_have_at_sign": value},
@@ -10658,7 +10717,7 @@ def test_projected_leaf_filters_through_the_child_filterset():
 
 
 @pytest.mark.django_db
-def test_projected_leaf_matches_nothing_when_the_child_filter_matches_nothing():
+def test_projected_leaf_matches_nothing_when_the_child_filter_matches_nothing() -> None:
     """A child filter narrowing to no row (not the identity skip) projects to no parent."""
 
     class Child(FilterSet):
@@ -10673,7 +10732,7 @@ def test_projected_leaf_matches_nothing_when_the_child_filter_matches_nothing():
             queryset: QuerySet[library_models.Patron],
             _name: str,
             _value: object,
-        ):
+        ) -> QuerySet[library_models.Patron]:
             return queryset.none()
 
     class Parent(FilterSet):
@@ -10695,7 +10754,7 @@ def test_projected_leaf_matches_nothing_when_the_child_filter_matches_nothing():
 
 
 @pytest.mark.django_db
-def test_projected_leaf_reprojects_at_the_next_hop_and_stays_its_own_predicate():
+def test_projected_leaf_reprojects_at_the_next_hop_and_stays_its_own_predicate() -> None:
     """A projected copy expanded again is projected through the intermediate child.
 
     ``Book -> loans -> Loan -> patron -> Patron.email (method)``: the grandparent's
@@ -10729,7 +10788,7 @@ def test_projected_leaf_reprojects_at_the_next_hop_and_stays_its_own_predicate()
     book, _alpha, _beta = _seed_loans_for_two_patrons()
     library_models.Book.objects.create(shelf=book.shelf, title="Unloaned")
 
-    def _titles(data: dict[str, object]):
+    def _titles(data: dict[str, object]) -> list[str]:
         return list(
             BookParent(
                 data=data,
@@ -10747,7 +10806,7 @@ def test_projected_leaf_reprojects_at_the_next_hop_and_stays_its_own_predicate()
     assert _titles({"loans__patron__email": ""}) == ["Two loans", "Unloaned"]
 
 
-def test_projected_leaf_gets_no_candidate_row():
+def test_projected_leaf_gets_no_candidate_row() -> None:
     """A projected generated many-side leaf gets no candidate row.
 
     Its class is the projected subclass, which no audited family names, and it is
@@ -10785,7 +10844,7 @@ def test_projected_leaf_gets_no_candidate_row():
     assert "loans__note__icontains" not in snapshot.candidates
 
 
-def test_projected_leaf_child_runs_on_the_parents_database_with_its_request():
+def test_projected_leaf_child_runs_on_the_parents_database_with_its_request() -> None:
     """One child instance per parent instance, built on first use, on the parent's alias.
 
     Every projected leaf of one parent instance expanded from ``PatronFilter``
@@ -10820,7 +10879,7 @@ def test_projected_leaf_child_runs_on_the_parents_database_with_its_request():
 
 
 @pytest.mark.parametrize("how", ["pickle", "deepcopy"])
-def test_projected_leaf_copies_keep_their_projected_class_and_projection(how: str):
+def test_projected_leaf_copies_keep_their_projected_class_and_projection(how: str) -> None:
     """A projected template survives ``pickle`` and ``deepcopy`` as the same class.
 
     The projected class is built at runtime, so pickle cannot import it by name;
@@ -10835,7 +10894,7 @@ def test_projected_leaf_copies_keep_their_projected_class_and_projection(how: st
     assert "filter" not in vars(restored)
 
 
-def test_flat_expanded_declared_child_fires_the_gates_its_nested_twin_fires():
+def test_flat_expanded_declared_child_fires_the_gates_its_nested_twin_fires() -> None:
     """``shelf__home_branch`` reaches the child's ``check_home_branch_permission`` flat as nested."""
     fired: list[str] = []
 
@@ -10849,10 +10908,10 @@ def test_flat_expanded_declared_child_fires_the_gates_its_nested_twin_fires():
             model = library_models.Shelf
             fields = {"code": ["exact"]}
 
-        def check_home_branch_permission(self, _request: object):
+        def check_home_branch_permission(self, _request: object) -> None:
             fired.append("child.home_branch")
 
-        def check_branch_permission(self, _request: object):
+        def check_branch_permission(self, _request: object) -> None:
             fired.append("child.branch")
 
     class ParentBookFilter(FilterSet):
@@ -10862,13 +10921,13 @@ def test_flat_expanded_declared_child_fires_the_gates_its_nested_twin_fires():
             model = library_models.Book
             fields = []
 
-        def check_shelf_permission(self, _request: object):
+        def check_shelf_permission(self, _request: object) -> None:
             fired.append("parent.shelf")
 
-        def check_shelf_home_branch_permission(self, _request: object):
+        def check_shelf_home_branch_permission(self, _request: object) -> None:
             fired.append("parent.shelf_home_branch")
 
-        def check_shelf_branch_permission(self, _request: object):
+        def check_shelf_branch_permission(self, _request: object) -> None:
             fired.append("parent.shelf_branch")
 
     ParentBookFilter.get_filters()
@@ -10889,7 +10948,9 @@ def test_flat_expanded_declared_child_fires_the_gates_its_nested_twin_fires():
 # ---------------------------------------------------------------------------
 
 
-def _shelf_and_branch_filters(shelf_type_get_queryset: Callable[..., object] | None = None):
+def _shelf_and_branch_filters(
+    shelf_type_get_queryset: Callable[..., object] | None = None,
+) -> type[FilterSet]:
     """``BranchFilter.shelves -> ShelfFilter`` plus a ``ShelfType`` whose ``get_queryset`` is given.
 
     ``ShelfFilter.code_is`` is a ``method=`` filter, so ``shelves__code_is`` is a
@@ -10918,7 +10979,7 @@ def _shelf_and_branch_filters(shelf_type_get_queryset: Callable[..., object] | N
             queryset: QuerySet[library_models.Shelf],
             _name: str,
             value: object,
-        ):
+        ) -> QuerySet[library_models.Shelf]:
             return queryset.filter(code=value)
 
     class BranchFilter(FilterSet):
@@ -10932,7 +10993,7 @@ def _shelf_and_branch_filters(shelf_type_get_queryset: Callable[..., object] | N
     return BranchFilter
 
 
-def _seed_open_and_secret_match_shelves():
+def _seed_open_and_secret_match_shelves() -> None:
     """``alpha`` owns an open ``match`` shelf, ``beta`` a secret one."""
     alpha = library_models.Branch.objects.create(name="alpha")
     library_models.Shelf.objects.create(branch=alpha, code="match", topic="open")
@@ -10948,7 +11009,7 @@ def _seed_open_and_secret_match_shelves():
 )
 def test_flat_leaf_hop_with_no_registered_target_type_raises_like_its_nested_twin(
     filter_input: dict[str, object],
-):
+) -> None:
     """An active hop whose target has no registered ``DjangoType`` fails loud, flat as nested."""
     branch_filter = _shelf_and_branch_filters()
     with pytest.raises(
@@ -10965,7 +11026,7 @@ def test_flat_leaf_hop_with_no_registered_target_type_raises_like_its_nested_twi
 
 
 @pytest.mark.django_db
-def test_flat_traversal_under_a_placeholder_branch_raises():
+def test_flat_traversal_under_a_placeholder_branch_raises() -> None:
     """A ``Meta.fields`` traversal walking a ``RelatedFilter(None)`` hop cannot be scoped, so it raises.
 
     The placeholder declares an explicit ``queryset=`` so its own form field builds.
@@ -11009,7 +11070,9 @@ def test_flat_traversal_under_a_placeholder_branch_raises():
         "projected-in-nested-arm",
     ],
 )
-def test_apply_async_awaits_async_get_queryset_of_every_flat_hop(filter_input: dict[str, object]):
+def test_apply_async_awaits_async_get_queryset_of_every_flat_hop(
+    filter_input: dict[str, object],
+) -> None:
     """``apply_async`` awaits each flat hop's async-only ``get_queryset`` before the sync ``.qs`` read.
 
     The hidden ``secret`` shelf matches too, so the result proves the hook ran;
@@ -11024,7 +11087,7 @@ def test_apply_async_awaits_async_get_queryset_of_every_flat_hop(filter_input: d
         queryset: QuerySet[library_models.Shelf],
         _info: object,
         **_kwargs: object,
-    ):
+    ) -> QuerySet[library_models.Shelf]:
         return await sync_to_async(lambda: queryset.exclude(topic="secret"))()
 
     branch_filter = _shelf_and_branch_filters(_visible_shelves)
@@ -11072,7 +11135,7 @@ def test_flat_hop_visibility_runs_once_per_request_and_never_for_an_inactive_lea
     derivations: dict[str, int],
     names: list[str],
     mode: str,
-):
+) -> None:
     """A hop's ``get_queryset`` runs once per request however many leaves and arms walk it.
 
     An inactive leaf (django-filter's empty-value skip returns its input by
@@ -11090,7 +11153,7 @@ def test_flat_hop_visibility_runs_once_per_request_and_never_for_an_inactive_lea
         queryset: QuerySet[library_models.Shelf],
         info: object,
         **_kwargs: object,
-    ):
+    ) -> QuerySet[library_models.Shelf]:
         calls.append(info)
         return queryset.exclude(topic="secret")
 
@@ -11110,7 +11173,7 @@ def test_flat_hop_visibility_runs_once_per_request_and_never_for_an_inactive_lea
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("spelling", ["flat", "nested"])
-def test_projected_leaf_walking_a_hop_of_its_child_set_scopes_both_hops(spelling: str):
+def test_projected_leaf_walking_a_hop_of_its_child_set_scopes_both_hops(spelling: str) -> None:
     """A projected child leaf that walks a declared hop of the child set answers as its nested twin.
 
     ``PatronChild`` overrides ``__init__``, so ``LoanParent.patron__loans__note``
@@ -11124,7 +11187,7 @@ def test_projected_leaf_walking_a_hop_of_its_child_set_scopes_both_hops(spelling
         queryset: QuerySet[library_models.Patron],
         _info: object,
         **_kwargs: object,
-    ):
+    ) -> QuerySet[library_models.Patron]:
         return queryset.exclude(name="hidden")
 
     def _visible_loans(
@@ -11132,7 +11195,7 @@ def test_projected_leaf_walking_a_hop_of_its_child_set_scopes_both_hops(spelling
         queryset: QuerySet[library_models.Loan],
         _info: object,
         **_kwargs: object,
-    ):
+    ) -> QuerySet[library_models.Loan]:
         return queryset.exclude(note__startswith="secret")
 
     for model, hook in (
@@ -11192,7 +11255,7 @@ def test_projected_leaf_walking_a_hop_of_its_child_set_scopes_both_hops(spelling
         note="open",
     )
 
-    def _pks(note: str):
+    def _pks(note: str) -> list[object]:
         filter_input = (
             {"patron__loans__note": note}
             if spelling == "flat"
@@ -11222,7 +11285,7 @@ def test_projected_leaf_walking_a_hop_of_its_child_set_scopes_both_hops(spelling
 # ---------------------------------------------------------------------------
 
 
-def _hide(model: type[django_models.Model], fields: object = "__all__", **lookups: object):
+def _hide(model: type[django_models.Model], fields: object = "__all__", **lookups: object) -> None:
     """Register a type for ``model`` whose ``get_queryset`` hides the rows matching ``lookups``."""
 
     def get_queryset(
@@ -11230,7 +11293,7 @@ def _hide(model: type[django_models.Model], fields: object = "__all__", **lookup
         queryset: QuerySet[django_models.Model],
         _info: object,
         **_kwargs: object,
-    ):
+    ) -> QuerySet[django_models.Model]:
         return queryset.exclude(**lookups)
 
     type(
@@ -11249,7 +11312,7 @@ def _absent_world(
     *,
     exclude: bool = False,
     hidden: Iterable[QuerySet[django_models.Model]] = (),
-):
+) -> set[object]:
     """Django's own answer for ``lookups`` on ``model`` once every ``hidden`` row is deleted."""
     from django.db import transaction
 
@@ -11270,7 +11333,7 @@ def _applied(
     filterset: type[FilterSet],
     filter_input: object,
     base: QuerySet[django_models.Model],
-):
+) -> set[object]:
     """The pks ``filterset.apply_sync`` keeps for ``filter_input`` over ``base``."""
     return set(filterset.apply_sync(filter_input, base, _make_info()).values_list("pk", flat=True))
 
@@ -11281,7 +11344,7 @@ def _book(
     subtitle: str | None = None,
     hidden: bool = False,
     shelf: library_models.Shelf | None = None,
-):
+) -> library_models.Book:
     """Create a ``Book`` on its own shelf (or ``shelf``), ``repair`` when ``hidden``."""
     if shelf is None:
         branch = library_models.Branch.objects.create(name=f"branch-{uuid.uuid4().hex}")
@@ -11330,7 +11393,7 @@ def _genre_world(
     return genres, {"visible_x": visible_x, "hidden_x": hidden_x, "hidden_y": hidden_y}
 
 
-def _genre_parent(*, declared: bool = True):
+def _genre_parent(*, declared: bool = True) -> type[FilterSet]:
     """Genres filtered through ``books``, declared as ``visible_books`` unless ``declared`` is off."""
 
     class BookChild(FilterSet):
@@ -11381,8 +11444,9 @@ def _genre_parent(*, declared: bool = True):
 def test_reverse_m2m_flat_leaf_answers_as_if_hidden_books_were_absent(
     filter_input: dict[str, object],
     lookups: dict[str, object],
+    *,
     exclude: bool,
-):
+) -> None:
     """Each walked leaf over ``Genre.books`` matches Django's answer with the hidden books deleted."""
     _genre_world()
     expected = _absent_world(
@@ -11399,8 +11463,9 @@ def test_reverse_m2m_flat_leaf_answers_as_if_hidden_books_were_absent(
 @pytest.mark.parametrize("book", ["visible_x", "hidden_x", "hidden_y"])
 def test_reverse_m2m_relation_key_membership_never_matches_a_hidden_book(
     book: str,
+    *,
     declared: bool,
-):
+) -> None:
     """``books: [pk]`` matches a genre only through a visible book; a hidden pk matches nothing.
 
     Whether or not a ``RelatedFilter`` declares ``books``: an undeclared relation
@@ -11423,7 +11488,7 @@ def test_reverse_m2m_relation_key_membership_never_matches_a_hidden_book(
 
 
 @pytest.mark.django_db
-def test_isnull_and_exclude_leaves_differ_from_their_existential_nested_twins():
+def test_isnull_and_exclude_leaves_differ_from_their_existential_nested_twins() -> None:
     """The nested spelling stays existential; the flat ``isnull`` / ``exclude`` spellings do not.
 
     ``visible_books: {subtitle: {isNull: true}}`` is "has a visible book with no
@@ -11445,7 +11510,7 @@ def test_isnull_and_exclude_leaves_differ_from_their_existential_nested_twins():
 
 
 @pytest.mark.django_db
-def test_exclude_leaf_compiles_not_exists_so_a_null_key_cannot_empty_it():
+def test_exclude_leaf_compiles_not_exists_so_a_null_key_cannot_empty_it() -> None:
     """An excluding walked leaf is ``NOT EXISTS``: a visible matching book in no genre changes nothing.
 
     A child-side ``NOT IN (SELECT <genre key> ...)`` projects that book's missing
@@ -11469,7 +11534,7 @@ def test_exclude_leaf_compiles_not_exists_so_a_null_key_cannot_empty_it():
 
 
 @pytest.mark.django_db
-def test_walked_leaf_restriction_is_one_correlated_exists_per_leaf_with_no_parent_rescan():
+def test_walked_leaf_restriction_is_one_correlated_exists_per_leaf_with_no_parent_rescan() -> None:
     """Each walked leaf adds one ``EXISTS`` built from the visible books, correlated to the genre.
 
     No leaf re-reads the genre table or embeds an earlier leaf's restriction, and
@@ -11506,7 +11571,7 @@ def test_visible_world_leaves_inside_logic_arms(
     filter_input: dict[str, object],
     names: list[str],
     mode: str,
-):
+) -> None:
     """``isnull`` / ``exclude`` / relation-key leaves keep their visible-world answer inside every arm."""
     import asyncio
 
@@ -11538,7 +11603,7 @@ def test_visible_world_leaves_inside_logic_arms(
 )
 def test_apply_async_awaits_the_hop_of_relation_key_and_exclude_leaves(
     filter_input: dict[str, object],
-):
+) -> None:
     """An async-only ``get_queryset`` behind a relation-key or excluding leaf is awaited before ``.qs``."""
     import asyncio
 
@@ -11551,7 +11616,7 @@ def test_apply_async_awaits_the_hop_of_relation_key_and_exclude_leaves(
         queryset: QuerySet[library_models.Book],
         info: object,
         **_kwargs: object,
-    ):
+    ) -> QuerySet[library_models.Book]:
         calls.append(info)
         return await sync_to_async(lambda: queryset.exclude(circulation_status="repair"))()
 
@@ -11574,7 +11639,7 @@ def test_apply_async_awaits_the_hop_of_relation_key_and_exclude_leaves(
 
 
 @pytest.mark.django_db
-def test_inactive_relation_key_leaf_runs_no_get_queryset():
+def test_inactive_relation_key_leaf_runs_no_get_queryset() -> None:
     """A relation-key leaf the filter skips (an omitted value) constrains nothing and derives nothing."""
     calls: list[object] = []
 
@@ -11583,7 +11648,7 @@ def test_inactive_relation_key_leaf_runs_no_get_queryset():
         queryset: QuerySet[library_models.Book],
         info: object,
         **_kwargs: object,
-    ):
+    ) -> QuerySet[library_models.Book]:
         calls.append(info)
         return queryset
 
@@ -11630,8 +11695,9 @@ def test_to_many_relation_key_filters_compare_the_visible_target_key(
     filter_name: str,
     value: Callable[[library_models.Book], object],
     book: str,
+    *,
     declared: bool,
-):
+) -> None:
     """Model-choice, ``in`` and GlobalID relation keys over ``Genre.books`` match only a visible book.
 
     Each cleans to model instances, a list, a queryset, or a node id; each is
@@ -11725,7 +11791,7 @@ def _world_of_genre_favorites() -> tuple[
     return {"open": open_genre, "secret": secret}, profiles
 
 
-def _profile_parent(*, declared: bool = True):
+def _profile_parent(*, declared: bool = True) -> type[FilterSet]:
     """Profiles filtered through ``favorite_genre``, declared as ``favorite`` unless ``declared`` is off."""
 
     class GenreChild(FilterSet):
@@ -11781,9 +11847,10 @@ def _profile_parent(*, declared: bool = True):
 def test_nullable_to_field_forward_fk_leaf_answers_as_if_hidden_genres_were_absent(
     filter_input: dict[str, object],
     lookups: dict[str, object],
+    *,
     exclude: bool,
     declared: bool,
-):
+) -> None:
     """A ``to_field`` FK leaf matches Django's answer once the hidden genre is deleted (``SET_NULL``)."""
     _genres, _profiles = _world_of_genre_favorites()
     expected = _absent_world(
@@ -11807,8 +11874,9 @@ def test_nullable_to_field_forward_fk_leaf_answers_as_if_hidden_genres_were_abse
 def test_forward_relation_key_membership_reads_the_visible_target(
     filter_name: str,
     genre: str,
+    *,
     declared: bool,
-):
+) -> None:
     """A raw-key, model-choice or excluding key over a ``to_field`` FK treats a hidden genre as no genre."""
     genres, _profiles = _world_of_genre_favorites()
     pk = genres[genre].pk
@@ -11829,7 +11897,16 @@ def test_forward_relation_key_membership_reads_the_visible_target(
     assert got == expected
 
 
-def _relation_kind_case(kind: str, *, declared: bool = True):
+_RelationKindCases: TypeAlias = Sequence[tuple[Mapping[str, object], Mapping[str, object], bool]]
+_RelationKindCase: TypeAlias = tuple[
+    type[FilterSet],
+    type[django_models.Model],
+    Sequence[QuerySet[django_models.Model]],
+    _RelationKindCases,
+]
+
+
+def _relation_kind_case(kind: str, *, declared: bool = True) -> _RelationKindCase:
     """Seed one relation kind; return ``(parent filterset, parent model, hidden rows, cases)``.
 
     Each case is ``(filter_input, lookups, exclude)``: the leaf, and the Django
@@ -11950,8 +12027,12 @@ def _relation_kind_case(kind: str, *, declared: bool = True):
         "nullable-fk-hidden-reverse-mti-outer",
     ],
 )
-def test_every_relation_kind_answers_as_if_hidden_rows_were_absent(kind: str, declared: bool):
-    """Positive, excluding and relation-key leaves over each relation kind match Django with the rows deleted."""
+def test_every_relation_kind_answers_as_if_hidden_rows_were_absent(
+    kind: str,
+    *,
+    declared: bool,
+) -> None:
+    """Positive, excluding and relation-key leaves match Django with the hidden rows deleted."""
     parent, parent_model, hidden, cases = _relation_kind_case(kind, declared=declared)
     for filter_input, lookups, exclude in cases:
         expected = _absent_world(parent_model, lookups, exclude=exclude, hidden=hidden)
@@ -11981,8 +12062,9 @@ def test_every_relation_kind_answers_as_if_hidden_rows_were_absent(kind: str, de
 def test_undeclared_reverse_m2m_leaf_answers_as_if_hidden_books_were_absent(
     filter_input: dict[str, object],
     lookups: dict[str, object],
+    *,
     exclude: bool,
-):
+) -> None:
     """With no ``RelatedFilter`` over ``Genre.books``, each leaf still reads ``BookType``'s rows.
 
     The relation is an undeclared hop whose target type comes from the registry,
@@ -12020,7 +12102,7 @@ def test_undeclared_globalid_relation_key_still_validates_against_the_target_typ
     filter_cls: type[Filter],
     lookup: str,
     wrap: Callable[[str], object],
-):
+) -> None:
     """An undeclared GlobalID key runs over the target rows yet rejects another type's id."""
     _genres, books = _genre_world(register_type=False)
 
@@ -12065,7 +12147,7 @@ def test_undeclared_globalid_relation_key_still_validates_against_the_target_typ
     [False, True],
     ids=["unregistered-target", "identity-hook-target"],
 )
-def test_undeclared_relation_no_type_scopes_is_not_walked(register: bool):
+def test_undeclared_relation_no_type_scopes_is_not_walked(*, register: bool) -> None:
     """A relation whose target no type scopes keeps Django's own join: the leaf walks no hop.
 
     Neither an unregistered target model nor a type keeping the identity
@@ -12089,7 +12171,7 @@ def test_undeclared_relation_no_type_scopes_is_not_walked(register: bool):
     assert BranchKeys._flat_leaf_walk(filters["alt_shelves__code"]) is None
 
 
-def test_undeclared_relation_to_a_hooked_type_walks_one_hop_per_relation():
+def test_undeclared_relation_to_a_hooked_type_walks_one_hop_per_relation() -> None:
     """Each relation segment past the declared hops is one undeclared hop; a column ends the walk."""
     _hide(library_models.Book, circulation_status="repair")
 
@@ -12116,7 +12198,7 @@ def test_undeclared_relation_to_a_hooked_type_walks_one_hop_per_relation():
 @pytest.mark.django_db
 @pytest.mark.parametrize("shelf", ["open", "secret"])
 @pytest.mark.parametrize("book", ["visible", "hidden"])
-def test_relation_key_past_two_undeclared_hops_reads_both_targets(book: str, shelf: str):
+def test_relation_key_past_two_undeclared_hops_reads_both_targets(book: str, shelf: str) -> None:
     """``books__shelf`` on a genre matches only a visible shelf of a visible book."""
     _hide(library_models.Book, circulation_status="repair")
     _hide(library_models.Shelf, topic="secret")
@@ -12161,7 +12243,7 @@ def test_branch_declared_over_a_non_relation_path_is_refused_at_expansion(
     parent_model: type[django_models.Model],
     field_name: str,
     segment: str,
-):
+) -> None:
     """A ``RelatedFilter`` whose ``field_name`` crosses a non-relation fails when the expansion builds.
 
     The check reads the parent model only: the unresolvable string target is
@@ -12187,7 +12269,7 @@ def _branch_parent(
     field_name: str,
     child_model: type[django_models.Model],
     child_field: str = "id",
-):
+) -> type[FilterSet]:
     """A ``parent_model`` set declaring ``branch = RelatedFilter(<set on child_model>, field_name)``."""
     child = type(
         "Child",
@@ -12305,7 +12387,7 @@ def test_branch_whose_target_set_model_the_relation_cannot_correlate_is_refused(
     field_name: str,
     child_model: type[django_models.Model],
     reached: type[django_models.Model],
-):
+) -> None:
     """A target set keyed on a model whose rows the relation's columns do not name fails at expansion.
 
     The branch correlates the target set's rows by the relation's own link
@@ -12327,7 +12409,7 @@ def test_branch_whose_target_set_model_the_relation_cannot_correlate_is_refused(
         parent.get_filters()
 
 
-def test_branch_whose_target_set_declares_no_model_is_refused():
+def test_branch_whose_target_set_declares_no_model_is_refused() -> None:
     """A target set with no ``Meta.model`` has no rows to correlate, so the expansion refuses it."""
     child = type("Child", (FilterSet,), {"name": CharFilter(field_name="name")})
     parent = type(
@@ -12376,7 +12458,7 @@ def test_branch_whose_target_set_model_the_relation_correlates_expands(
     parent_model: type[django_models.Model],
     field_name: str,
     child_model: type[django_models.Model],
-):
+) -> None:
     """The target, a proxy on its table, an MTI descendant, or a forward link's MTI ancestor expands."""
     parent = _branch_parent(parent_model, field_name, child_model)
     assert "branch__id" in parent.get_filters()
@@ -12384,7 +12466,9 @@ def test_branch_whose_target_set_model_the_relation_correlates_expands(
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("name", ["kiosk", "other kiosk", "plain"])
-def test_branch_across_a_forward_link_with_a_set_on_the_ancestor_answers_like_the_join(name: str):
+def test_branch_across_a_forward_link_with_a_set_on_the_ancestor_answers_like_the_join(
+    name: str,
+) -> None:
     """A ``Venue`` set reached through ``lendingdesk_ptr`` matches the venue row of each kiosk's desk.
 
     The forward parent link references the desk, whose key is stored in the
@@ -12411,7 +12495,7 @@ def test_branch_across_a_forward_link_with_a_set_on_the_ancestor_answers_like_th
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("patron", ["open", "secret"])
-def test_pk_segment_on_a_model_keyed_by_a_relation_is_that_relation(patron: str):
+def test_pk_segment_on_a_model_keyed_by_a_relation_is_that_relation(patron: str) -> None:
     """``pk`` on a model whose primary key is a one-to-one is the relation it names.
 
     ``PatronProfile`` is keyed by ``patron``: a ``pk`` filter is a forward key over
@@ -12454,7 +12538,7 @@ def test_undeclared_hop_before_a_transform_reads_its_target_visibility(
     filter_name: str,
     value: int,
     venue: str,
-):
+) -> None:
     """A path that runs past an undeclared relation into a transform still walks the relation.
 
     ``venue__opened_on__year`` / ``__month`` do not classify whole (``opened_on`` is a
@@ -12481,7 +12565,9 @@ def test_undeclared_hop_before_a_transform_reads_its_target_visibility(
     assert got == ({ticket.pk} if venue == "open" else set())
 
 
-def _books_through_shelf_branches(shelf_hook: Callable[..., object] | None = None):
+def _books_through_shelf_branches(
+    shelf_hook: Callable[..., object] | None = None,
+) -> tuple[type[FilterSet], dict[str, library_models.Book]]:
     """Books whose ``branch`` branch is declared over ``shelf__branch``; ``secret`` shelves are hidden.
 
     ``open`` sits on an open shelf, ``on_secret`` on a secret shelf; both shelves
@@ -12494,7 +12580,7 @@ def _books_through_shelf_branches(shelf_hook: Callable[..., object] | None = Non
         queryset: QuerySet[library_models.Shelf],
         _info: object,
         **_kwargs: object,
-    ):
+    ) -> QuerySet[library_models.Shelf]:
         return queryset.exclude(topic="secret")
 
     type(
@@ -12552,7 +12638,7 @@ _THROUGH_SHELF_IDS = [
 @pytest.mark.parametrize("filter_input", _THROUGH_SHELF_INPUTS, ids=_THROUGH_SHELF_IDS)
 def test_multi_relation_branch_passes_only_through_visible_intermediate_rows(
     filter_input: dict[str, object],
-):
+) -> None:
     """``RelatedFilter(field_name="shelf__branch")`` never reaches a branch through a hidden shelf."""
     parent, books = _books_through_shelf_branches()
     expected = _absent_world(
@@ -12566,7 +12652,9 @@ def test_multi_relation_branch_passes_only_through_visible_intermediate_rows(
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("filter_input", _THROUGH_SHELF_INPUTS, ids=_THROUGH_SHELF_IDS)
-def test_apply_async_awaits_the_intermediate_model_get_queryset(filter_input: dict[str, object]):
+def test_apply_async_awaits_the_intermediate_model_get_queryset(
+    filter_input: dict[str, object],
+) -> None:
     """An async-only intermediate ``get_queryset`` is awaited up front, nested, flat and in arms."""
     import asyncio
 
@@ -12577,7 +12665,7 @@ def test_apply_async_awaits_the_intermediate_model_get_queryset(filter_input: di
         queryset: QuerySet[library_models.Shelf],
         _info: object,
         **_kwargs: object,
-    ):
+    ) -> QuerySet[library_models.Shelf]:
         return await sync_to_async(lambda: queryset.exclude(topic="secret"))()
 
     parent, books = _books_through_shelf_branches(hide_secret_async)
@@ -12605,7 +12693,9 @@ def test_apply_async_awaits_the_intermediate_model_get_queryset(filter_input: di
         "key-and-column",
     ],
 )
-def test_apply_async_awaits_the_undeclared_hop_get_queryset(filter_input: dict[str, object]):
+def test_apply_async_awaits_the_undeclared_hop_get_queryset(
+    filter_input: dict[str, object],
+) -> None:
     """An async-only ``get_queryset`` behind an undeclared hop is awaited before the ``.qs`` read."""
     import asyncio
 
@@ -12616,7 +12706,7 @@ def test_apply_async_awaits_the_undeclared_hop_get_queryset(filter_input: dict[s
         queryset: QuerySet[library_models.Shelf],
         _info: object,
         **_kwargs: object,
-    ):
+    ) -> QuerySet[library_models.Shelf]:
         return await sync_to_async(lambda: queryset.exclude(topic="secret"))()
 
     type(
@@ -12662,7 +12752,9 @@ def test_apply_async_awaits_the_undeclared_hop_get_queryset(filter_input: dict[s
         "key-of-private",
     ],
 )
-def test_undeclared_path_reentering_the_root_model_reads_the_bound_types_hook(spelling: str):
+def test_undeclared_path_reentering_the_root_model_reads_the_bound_types_hook(
+    spelling: str,
+) -> None:
     """A path back into the set's own model reads the type the set is bound to, not the primary.
 
     ``ShelfKeys`` is bound to the secondary type, which hides ``private`` shelves;
@@ -12726,7 +12818,13 @@ def test_undeclared_path_reentering_the_root_model_reads_the_bound_types_hook(sp
     assert _applied(ShelfKeys, filter_input, library_models.Shelf.objects.all()) == expected
 
 
-def _shelf_branch_world():
+def _shelf_branch_world() -> tuple[
+    type[FilterSet],
+    dict[str, library_models.Shelf],
+    library_models.Branch,
+    library_models.Branch,
+    dict[str, library_models.Book],
+]:
     """Books on shelves on branches: ``secret`` shelves and ``restricted`` branches are hidden.
 
     ``open`` sits on an open shelf of an open branch, ``on_secret`` on a hidden
@@ -12814,7 +12912,7 @@ _EXCLUDED_EMPTY_MEMBERSHIP_CASES: list[tuple[dict[str, object], set[str]]] = [
 def test_declared_excluded_empty_membership_is_every_row_inside_logical_arms(
     filter_input: dict[str, object],
     expected: set[str],
-):
+) -> None:
     """``exclude=True`` over ``[]`` is a constraint matching every row, never an inert arm.
 
     As Django's ``exclude(x__in=[])`` / ``exclude(rel__x__in=[])``: every parent,
@@ -12857,7 +12955,7 @@ def test_declared_excluded_empty_membership_is_every_row_inside_logical_arms(
 
 
 @pytest.mark.django_db
-def test_consumer_qs_override_runs_inside_a_logical_arm():
+def test_consumer_qs_override_runs_inside_a_logical_arm() -> None:
     """A ``FilterSet.qs`` override (django-filter's seam) shapes a logical arm as it does the root.
 
     The override keeps only worn shelves when the input names ``worn_only``; a
@@ -12908,7 +13006,7 @@ def test_consumer_qs_override_runs_inside_a_logical_arm():
 
 
 @pytest.mark.django_db
-def test_two_hop_forward_leaves_treat_a_hidden_hop_as_no_related_row():
+def test_two_hop_forward_leaves_treat_a_hidden_hop_as_no_related_row() -> None:
     """A book on a hidden shelf, or on a shelf of a hidden branch, has no visible shelf / branch.
 
     ``shelf: {branch: {isNull: true}}`` style leaves therefore match it,
@@ -12939,8 +13037,8 @@ def test_two_hop_forward_leaves_treat_a_hidden_hop_as_no_related_row():
 
 
 @pytest.mark.django_db
-def test_forward_key_leaf_of_the_parent_keeps_its_own_filter_invocation():
-    """A relation-key leaf of the parent's own forward relation runs on the parent rows, then checks visibility.
+def test_forward_key_leaf_of_the_parent_keeps_its_own_filter_invocation() -> None:
+    """A parent's own forward relation-key leaf runs on the parent rows, then checks visibility.
 
     The filter's consumer ``distinct`` reaches the parent queryset as it does for
     a leaf walking no hop; the hidden-target check is one ``EXISTS``.
@@ -12957,7 +13055,7 @@ def test_forward_key_leaf_of_the_parent_keeps_its_own_filter_invocation():
 
 
 @pytest.mark.django_db
-def test_mti_target_rows_correlate_by_primary_key():
+def test_mti_target_rows_correlate_by_primary_key() -> None:
     """A branch whose target set is a multi-table-inheritance child matches only through visible child rows.
 
     The relation targets ``Venue``; the child set reads ``LendingDesk`` rows, whose
@@ -12995,7 +13093,7 @@ def test_mti_target_rows_correlate_by_primary_key():
 
 
 @pytest.mark.django_db
-def test_self_referential_through_model_m2m_correlates_through_its_link_table():
+def test_self_referential_through_model_m2m_correlates_through_its_link_table() -> None:
     """``GlossaryTerm.related_terms`` (explicit ``through``, self-referential) reads only visible targets."""
     from apps.glossary import models as glossary_models
 
@@ -13003,7 +13101,7 @@ def test_self_referential_through_model_m2m_correlates_through_its_link_table():
     status = glossary_models.GlossaryStatus.objects.create(key="impl2-status", label="s")
     kind = glossary_models.GlossaryTermLinkKind.objects.create(key="impl2-kind", label="k")
 
-    def term(title: str):
+    def term(title: str) -> glossary_models.GlossaryTerm:
         return glossary_models.GlossaryTerm.objects.create(
             title=title,
             title_sort=title,
@@ -13054,7 +13152,7 @@ def test_self_referential_through_model_m2m_correlates_through_its_link_table():
 
 
 @pytest.mark.django_db
-def test_explicit_queryset_boundary_counts_as_absent_for_isnull_and_exclude():
+def test_explicit_queryset_boundary_counts_as_absent_for_isnull_and_exclude() -> None:
     """A row the declaration's explicit ``queryset=`` excludes is as absent as one the type hides."""
     _hide(library_models.Shelf)
     branch = library_models.Branch.objects.create(name="b")
@@ -13088,7 +13186,7 @@ def test_explicit_queryset_boundary_counts_as_absent_for_isnull_and_exclude():
 
 
 @pytest.mark.parametrize("declared", [True, False], ids=["declared", "undeclared"])
-def test_walked_leaf_restriction_compiles_on_the_parent_database_alias(declared: bool):
+def test_walked_leaf_restriction_compiles_on_the_parent_database_alias(*, declared: bool) -> None:
     """The visibility seed and every correlated link of a walked leaf read the parent queryset's alias.
 
     A declared hop and an undeclared one alike.
@@ -13100,7 +13198,7 @@ def test_walked_leaf_restriction_compiles_on_the_parent_database_alias(declared:
         queryset: QuerySet[library_models.Shelf],
         _info: object,
         **_kwargs: object,
-    ):
+    ) -> QuerySet[library_models.Shelf]:
         seen.append(queryset.db)
         return queryset
 
@@ -13128,7 +13226,7 @@ def test_walked_leaf_restriction_compiles_on_the_parent_database_alias(declared:
     assert seen == ["shard_b"] * 3
 
 
-def _book_genre_book_parent(*, customize_child: bool):
+def _book_genre_book_parent(*, customize_child: bool) -> type[FilterSet]:
     """``BookParent.genres -> GenreChild.books -> BookChild``; ``GenreChild`` declares an excluding leaf.
 
     With ``customize_child`` the genre set overrides ``__init__``, so every
@@ -13146,7 +13244,7 @@ def _book_genre_book_parent(*, customize_child: bool):
         queryset: QuerySet[library_models.Genre],
         _name: str,
         value: object,
-    ):
+    ) -> QuerySet[library_models.Genre]:
         return queryset.filter(name=value)
 
     attrs: dict[str, object] = {
@@ -13197,9 +13295,10 @@ def _book_genre_book_parent(*, customize_child: bool):
 def test_child_set_excluding_and_isnull_leaves_negate_at_the_outermost_parent(
     filter_input: dict[str, object],
     lookups: dict[str, object],
+    *,
     exclude: bool,
     customize_child: bool,
-):
+) -> None:
     """A child set's ``exclude=True`` / ``isnull`` leaf reached flat answers at the parent, projected or not.
 
     ``genresWithoutBookTitled: "x"`` keeps the books with no visible genre that
@@ -13241,8 +13340,8 @@ def test_child_set_excluding_and_isnull_leaves_negate_at_the_outermost_parent(
 
 
 @pytest.mark.django_db
-def test_projected_method_filter_stays_existential_whatever_its_exclude_flag():
-    """django-filter hands a ``method=`` filter its value and applies no lookup, so ``exclude`` changes nothing."""
+def test_projected_method_filter_stays_existential_whatever_its_exclude_flag() -> None:
+    """A ``method=`` filter gets its value and no lookup from django-filter, so ``exclude`` is moot."""
     _hide(library_models.Book)
     _hide(library_models.Genre, name__startswith="secret")
     parent = _book_genre_book_parent(customize_child=True)
@@ -13259,7 +13358,7 @@ def test_projected_method_filter_stays_existential_whatever_its_exclude_flag():
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("name", ["open", "secret"])
-def test_to_many_relation_key_on_a_to_field_compares_the_target_to_field_column(name: str):
+def test_to_many_relation_key_on_a_to_field_compares_the_target_to_field_column(name: str) -> None:
     """A raw key over a to-many path ending in a ``to_field`` FK compares the target's ``to_field``.
 
     ``favoring_profiles__favorite_genre`` reaches genres through their profiles;
@@ -13292,7 +13391,7 @@ def test_to_many_relation_key_on_a_to_field_compares_the_target_to_field_column(
     assert bool(got) is (name == "open")
 
 
-def _desk_ticket_parent():
+def _desk_ticket_parent() -> type[FilterSet]:
     """``TicketParent.desk`` targets ``Venue`` (``field_name="venue"``) with a child set on ``LendingDesk``.
 
     ``LendingDesk`` is a multi-table-inheritance child of ``Venue``, so the
@@ -13317,7 +13416,7 @@ def _desk_ticket_parent():
 
 
 @pytest.mark.django_db
-def test_expanded_leaf_under_an_mti_subclass_child_set_runs_where_its_path_resolves():
+def test_expanded_leaf_under_an_mti_subclass_child_set_runs_where_its_path_resolves() -> None:
     """``desk__window_count`` probes and runs over ``LendingDesk`` rows, never the parent's relation.
 
     Active it matches only through a visible desk, as its nested twin does;
@@ -13330,7 +13429,7 @@ def test_expanded_leaf_under_an_mti_subclass_child_set_runs_where_its_path_resol
         queryset: QuerySet[library_models.Genre],
         info: object,
         **_kwargs: object,
-    ):
+    ) -> QuerySet[library_models.Genre]:
         calls.append(info)
         return queryset.exclude(name__startswith="secret")
 
@@ -13362,7 +13461,7 @@ def test_expanded_leaf_under_an_mti_subclass_child_set_runs_where_its_path_resol
     assert _applied(parent, {"desk": {"window_count": 0}}, base) == set()
 
 
-def _gated_branch_parent(branch_attr: str):
+def _gated_branch_parent(branch_attr: str) -> type[FilterSet]:
     """``BranchParent`` declares ``branch_attr`` over ``shelves`` with a gate denying ``request.denied``.
 
     ``has_code`` is a declared filter whose ``field_name`` walks the branch;
@@ -13376,7 +13475,7 @@ def _gated_branch_parent(branch_attr: str):
             model = library_models.Shelf
             fields = {"code": ["exact"]}
 
-    def branch_gate(_self: FilterSet, request: object):
+    def branch_gate(_self: FilterSet, request: object) -> None:
         if getattr(request, "denied", False):
             raise GraphQLError(f"{branch_attr} denied")
 
@@ -13385,7 +13484,7 @@ def _gated_branch_parent(branch_attr: str):
         queryset: QuerySet[library_models.Branch],
         _name: str,
         value: object,
-    ):
+    ) -> QuerySet[library_models.Branch]:
         return queryset.filter(shelves__code=value)
 
     parent = type(
@@ -13415,7 +13514,7 @@ class _GateProbeRequest(HttpRequest):
     fired: set[str]
 
 
-def _gate_outcome(filterset: type[FilterSet], filter_input: object, *, denied: bool):
+def _gate_outcome(filterset: type[FilterSet], filter_input: object, *, denied: bool) -> str:
     """``"denied"`` when a gate refuses ``filter_input`` for the request, else ``"allowed"``."""
     request = _GateProbeRequest()
     request.denied = denied
@@ -13446,8 +13545,9 @@ def _gate_outcome(filterset: type[FilterSet], filter_input: object, *, denied: b
 def test_declared_filter_walking_a_branch_fires_the_branch_gate_its_nested_twin_fires(
     branch_attr: str,
     spelling: str,
+    *,
     gated: bool,
-):
+) -> None:
     """A declared filter whose ``field_name`` walks a declared branch is gated like the nested branch.
 
     A ``method=`` filter declared on the parent receives the parent queryset and
@@ -13461,7 +13561,7 @@ def test_declared_filter_walking_a_branch_fires_the_branch_gate_its_nested_twin_
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("spelling", ["projected", "nested"])
-def test_projected_leaf_fires_the_child_set_branch_gate_its_chain_walks(spelling: str):
+def test_projected_leaf_fires_the_child_set_branch_gate_its_chain_walks(spelling: str) -> None:
     """A projected child filter walking the child set's own branch fires that branch's gate.
 
     ``GenreChild`` overrides ``__init__``, so ``genres__named`` is a
@@ -13493,7 +13593,7 @@ def test_projected_leaf_fires_the_child_set_branch_gate_its_chain_walks(spelling
         ) -> None:
             super().__init__(data=data, queryset=queryset, request=request, prefix=prefix)
 
-        def check_books_permission(self, request: object):
+        def check_books_permission(self, request: object) -> None:
             if getattr(request, "denied", False):
                 raise GraphQLError("books denied")
 
@@ -13512,7 +13612,7 @@ def test_projected_leaf_fires_the_child_set_branch_gate_its_chain_walks(spelling
         else {"genres": {"books": {"title": "x"}}}
     )
 
-    def outcome(denied: bool):
+    def outcome(*, denied: bool) -> str:
         request = _GateProbeRequest()
         request.denied = denied
         try:
@@ -13531,10 +13631,10 @@ def test_projected_leaf_fires_the_child_set_branch_gate_its_chain_walks(spelling
     assert outcome(denied=True) == "denied"
 
 
-def _gate(label: str):
+def _gate(label: str) -> Callable[[FilterSet, _GateProbeRequest], None]:
     """A ``check_*_permission`` that records ``label`` on the request it is handed."""
 
-    def check(_self: FilterSet, request: _GateProbeRequest):
+    def check(_self: FilterSet, request: _GateProbeRequest) -> None:
         request.fired.add(label)
 
     return check
@@ -13552,7 +13652,7 @@ def _fired_gates(
     return request.fired
 
 
-def _gate_recording_branch_parent(branch_attr: str):
+def _gate_recording_branch_parent(branch_attr: str) -> type[FilterSet]:
     """``BranchParent.<branch_attr>`` over ``shelves``; every set records each gate it fires."""
     _register_plain_types(library_models.Shelf)
 
@@ -13569,7 +13669,7 @@ def _gate_recording_branch_parent(branch_attr: str):
         queryset: QuerySet[library_models.Branch],
         _name: str,
         value: object,
-    ):
+    ) -> QuerySet[library_models.Branch]:
         return queryset.filter(shelves__code=value)
 
     declared = {
@@ -13622,7 +13722,7 @@ def test_declared_walked_leaf_fires_exactly_its_nested_twins_gates_plus_its_own(
     leaf: str,
     value: object,
     twin: dict[str, object],
-):
+) -> None:
     """A declared leaf walking a branch fires the twin's branch AND target field gates, plus its own."""
     parent = _gate_recording_branch_parent(branch_attr)
     root = library_models.Branch.objects.all()
@@ -13633,8 +13733,8 @@ def test_declared_walked_leaf_fires_exactly_its_nested_twins_gates_plus_its_own(
 
 
 @pytest.mark.django_db
-def test_parent_method_filter_fires_only_its_own_gate():
-    """A ``method=`` filter declared on the parent owns its scoping: it walks no branch, fires no twin gate."""
+def test_parent_method_filter_fires_only_its_own_gate() -> None:
+    """A ``method=`` filter declared on the parent owns its scoping, walking no branch or twin gate."""
     parent = _gate_recording_branch_parent("shelves")
     fired = _fired_gates(parent, {"code_by_method": "x"}, library_models.Branch.objects.all())
     assert fired == {"Branch.code_by_method"}
@@ -13654,8 +13754,9 @@ def test_parent_method_filter_fires_only_its_own_gate():
 def test_child_set_leaf_reached_flat_fires_exactly_its_nested_twins_gates(
     leaf: str,
     twin: dict[str, object],
+    *,
     customize_child: bool,
-):
+) -> None:
     """A child set's leaf reached flat fires the branch gate, the child filter's gate and its own walk's.
 
     Projected (the child overrides ``__init__``) or expanded as a plain copy,
@@ -13714,7 +13815,7 @@ def test_child_set_leaf_reached_flat_fires_exactly_its_nested_twins_gates(
     assert _fired_gates(BookParent, {leaf: value}, root) == _fired_gates(BookParent, twin, root)
 
 
-def test_expansion_origin_reads_the_branch_and_child_name_off_an_expanded_copy():
+def test_expansion_origin_reads_the_branch_and_child_name_off_an_expanded_copy() -> None:
     """A copy resolves to its child set and child filter; a copy held under another name does not."""
     _register_plain_types(library_models.Genre, library_models.Book)
     parent = _book_genre_book_parent(customize_child=False)
@@ -13728,7 +13829,7 @@ def test_expansion_origin_reads_the_branch_and_child_name_off_an_expanded_copy()
     assert parent._expansion_origin("title", parent.get_filters()["title"]) is None
 
 
-def test_enum_choice_filter_resolves_to_the_choice_family_profile():
+def test_enum_choice_filter_resolves_to_the_choice_family_profile() -> None:
     """The generated choice ``exact`` class shares ``ChoiceFilter``'s audited family.
 
     ``EnumChoiceFilter`` only adds the enum-member-is-a-value predicate, so it is an exact
@@ -13739,7 +13840,7 @@ def test_enum_choice_filter_resolves_to_the_choice_family_profile():
     assert _family_profile_for(instance) is _FILTER_FAMILY_REGISTRY[ChoiceFilter]
 
 
-def test_generated_choice_exact_over_to_many_path_is_an_eligible_enum_choice_leaf():
+def test_generated_choice_exact_over_to_many_path_is_an_eligible_enum_choice_leaf() -> None:
     """A generated to-many choice ``exact`` is an eligible ``EnumChoiceFilter`` leaf."""
 
     class BranchConditionFilter(FilterSet):
@@ -13774,7 +13875,7 @@ class _GradedSpecimen(django_models.Model):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("column", ["text", "integer"])
-def test_raw_empty_choice_form_value_applies_no_filter(column: str):
+def test_raw_empty_choice_form_value_applies_no_filter(column: str) -> None:
     """A raw ``""`` (a DRF ``?field=`` querystring) keeps django-filter's empty-value skip.
 
     Only the GraphQL ``BLANK`` member, normalized to ``EnumMemberValue("")``, filters ``= ''``; a
@@ -13840,7 +13941,7 @@ def _condition_filter_name(lookup: str) -> str:
 
 
 @pytest.mark.parametrize("lookup", ["exact", *_TEXT_CHOICE_SINGLE_VALUE_LOOKUPS])
-def test_every_text_choice_lookup_resolves_to_an_enum_member_filter(lookup: str):
+def test_every_text_choice_lookup_resolves_to_an_enum_member_filter(lookup: str) -> None:
     """A text choice column's single-value lookups are the enum-member filter classes.
 
     ``exact`` is ``EnumChoiceFilter`` under the choice family and every other single-value
@@ -13948,7 +14049,7 @@ def _nullable_condition_codes(data: dict[str, object]) -> list[str]:
 def test_blank_member_is_applied_as_empty_string_on_every_text_choice_lookup(
     lookup: str,
     expected: list[str],
-):
+) -> None:
     """The ``BLANK`` member is the predicate ``condition__<lookup> ''`` on every lookup.
 
     No row keeps the ``NULL`` row, which only the empty-value skip (no predicate) would keep:
@@ -13964,7 +14065,7 @@ def test_blank_member_is_applied_as_empty_string_on_every_text_choice_lookup(
 @pytest.mark.parametrize("lookup", ["exact", *_TEXT_CHOICE_SINGLE_VALUE_LOOKUPS])
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("nullable_condition_rows")
-def test_raw_empty_form_value_on_every_text_choice_lookup_applies_no_filter(lookup: str):
+def test_raw_empty_form_value_on_every_text_choice_lookup_applies_no_filter(lookup: str) -> None:
     """A raw ``""`` in form data keeps django-filter's empty-value skip on every lookup.
 
     Only an enum member reaches a generated choice-column filter as an ``EnumMemberValue``;
@@ -13980,7 +14081,7 @@ def test_raw_empty_form_value_on_every_text_choice_lookup_applies_no_filter(look
 
 
 @pytest.mark.django_db
-def test_flat_to_many_choice_iexact_blank_routes_through_correlated_exists():
+def test_flat_to_many_choice_iexact_blank_routes_through_correlated_exists() -> None:
     """A flat to-many ``iexact`` leaf on a choice column routes ``BLANK`` through ``EXISTS``.
 
     ``EnumLookupFilter`` is an audited family, so the leaf is a routable candidate and the
@@ -14017,7 +14118,7 @@ def test_flat_to_many_choice_iexact_blank_routes_through_correlated_exists():
 
 
 @pytest.mark.django_db
-def test_free_text_form_value_on_a_text_choice_lookup_validates_and_filters():
+def test_free_text_form_value_on_a_text_choice_lookup_validates_and_filters() -> None:
     """A raw ``?condition__icontains=wo`` is free text, validated and applied as ``CharFilter``."""
     branch = library_models.Branch.objects.create(name="free-text")
     library_models.Shelf.objects.create(code="good", branch=branch, condition="good")
@@ -14073,7 +14174,7 @@ def _status_where_lookup(data: dict[str, object]) -> Lookup[object]:
 
 
 @pytest.mark.parametrize(("name", "lookup"), [("status", "exact"), ("status__iexact", "iexact")])
-def test_null_valued_enum_member_is_a_value_not_is_null(name: str, lookup: str):
+def test_null_valued_enum_member_is_a_value_not_is_null(name: str, lookup: str) -> None:
     """A ``"null"``-valued enum member filters ``= 'null'``, never ``IS NULL``.
 
     ``ChoiceFilter`` reads its ``null_value`` (``"null"``) as the null choice; the normalizer
@@ -14088,7 +14189,7 @@ def test_null_valued_enum_member_is_a_value_not_is_null(name: str, lookup: str):
     assert where.rhs == "null"
 
 
-def test_raw_null_form_value_keeps_choice_filter_is_null():
+def test_raw_null_form_value_keeps_choice_filter_is_null() -> None:
     """A raw ``"null"`` in form data keeps ``ChoiceFilter``'s ``IS NULL`` branch."""
     where = _status_where_lookup({"status": "null"})
     assert where.lookup_name == "isnull"
@@ -14096,7 +14197,7 @@ def test_raw_null_form_value_keeps_choice_filter_is_null():
 
 
 @pytest.mark.parametrize(("name", "lookup"), [("status", "exact"), ("status__iexact", "iexact")])
-def test_whitespace_bearing_enum_member_value_is_not_stripped(name: str, lookup: str):
+def test_whitespace_bearing_enum_member_value_is_not_stripped(name: str, lookup: str) -> None:
     """An enum member's value reaches the predicate verbatim; ``CharField`` never strips it."""
     leaf = _StatusLookupFilter.get_filters()[name]
     where = _status_where_lookup({name: normalize_input_value(leaf, _StatusMember.PADDED)})
@@ -14105,7 +14206,7 @@ def test_whitespace_bearing_enum_member_value_is_not_stripped(name: str, lookup:
 
 
 @pytest.mark.parametrize("clone", [copy.deepcopy, pickle_roundtrip])
-def test_enum_member_value_survives_copy_and_pickle(clone: Callable[[object], object]):
+def test_enum_member_value_survives_copy_and_pickle(clone: Callable[[object], object]) -> None:
     """The marker is matched by type and compared by value, so a copied one still applies.
 
     A deep copy or a pickle round trip of ``EnumMemberValue("")`` is equal to the original

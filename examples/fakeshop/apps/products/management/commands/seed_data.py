@@ -7,6 +7,8 @@ from apps.products.services import seed_data
 
 
 class Command(BaseCommand):
+    """Create catalog rows up to a requested count per Faker provider."""
+
     help = "Ensures at least N items exist per Faker provider (only creates the shortfall)"
 
     @override

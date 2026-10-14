@@ -54,7 +54,7 @@ def create_item() -> type[DjangoMutation]:
 
 
 @pytest.mark.django_db
-def test_list_decode_product_reaches_the_write_step(create_item: type[DjangoMutation]):
+def test_list_decode_product_reaches_the_write_step(create_item: type[DjangoMutation]) -> None:
     """A decode step whose product is a list is a success, not an error envelope."""
     seed_data(1)
     row = product_models.Item.objects.order_by("pk").first()
@@ -80,7 +80,9 @@ def test_list_decode_product_reaches_the_write_step(create_item: type[DjangoMuta
 
 
 @pytest.mark.django_db
-def test_step_failure_short_circuits_to_the_error_envelope(create_item: type[DjangoMutation]):
+def test_step_failure_short_circuits_to_the_error_envelope(
+    create_item: type[DjangoMutation],
+) -> None:
     """A ``StepFailure`` from the decode step is the error envelope; the write never runs."""
     error = field_error("name", "Bad name.")
     written: list[object] = []

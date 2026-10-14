@@ -65,7 +65,7 @@ def _simulate_drf_absent() -> Iterator[None]:
         yield
 
 
-def test_fresh_root_package_import_and_star_import_succeed_without_drf():
+def test_fresh_root_package_import_and_star_import_succeed_without_drf() -> None:
     """A fresh process imports the root and its ``__all__`` while DRF is absent."""
     script = """
 import sys
@@ -100,28 +100,28 @@ else:
 @pytest.mark.usefixtures("_simulate_drf_absent")
 def test_each_root_serializer_surface_lookup_raises_install_hint(
     name: str,
-):
+) -> None:
     """Every root serializer export stays lazy and raises the guarded install hint."""
     with pytest.raises(ImportError, match=_HINT_SUBSTRING):
         getattr(django_strawberry_framework, name)
 
 
 @pytest.mark.usefixtures("_simulate_drf_absent")
-def test_rest_framework_package_import_raises_install_hint():
+def test_rest_framework_package_import_raises_install_hint() -> None:
     """``import django_strawberry_framework.rest_framework`` raises the same guarded hint."""
     with pytest.raises(ImportError, match=_HINT_SUBSTRING):
         importlib.import_module("django_strawberry_framework.rest_framework")
 
 
 @pytest.mark.usefixtures("_simulate_drf_absent")
-def test_rest_framework_sets_import_raises_install_hint():
+def test_rest_framework_sets_import_raises_install_hint() -> None:
     """``import django_strawberry_framework.rest_framework.sets`` raises the same guarded hint."""
     with pytest.raises(ImportError, match=_HINT_SUBSTRING):
         importlib.import_module("django_strawberry_framework.rest_framework.sets")
 
 
 @pytest.mark.usefixtures("_simulate_drf_absent")
-def test_star_import_stays_drf_free_and_binds_no_serializer_surface():
+def test_star_import_stays_drf_free_and_binds_no_serializer_surface() -> None:
     """``from django_strawberry_framework import *`` succeeds and binds no DRF surface."""
     namespace: dict[str, object] = {}
     exec("from django_strawberry_framework import *", namespace)  # noqa: S102 - star import is module-level syntax; literal source
@@ -130,14 +130,14 @@ def test_star_import_stays_drf_free_and_binds_no_serializer_surface():
     assert "DjangoMutation" in namespace  # a normal eager export still binds
 
 
-def test_other_attribute_miss_raises_attribute_error():
+def test_other_attribute_miss_raises_attribute_error() -> None:
     """A non-``SerializerMutation`` attribute miss raises the normal ``AttributeError`` (not ImportError)."""
     with pytest.raises(AttributeError, match="DefinitelyNotAName"):
         _ = django_strawberry_framework.DefinitelyNotAName
 
 
 @pytest.mark.parametrize("name", tuple(django_strawberry_framework._DRF_SOFT_EXPORTS))
-def test_successful_lookup_does_not_memoize(name: str):
+def test_successful_lookup_does_not_memoize(name: str) -> None:
     """A successful serializer-surface access (DRF present) does not bind into root globals.
 
     Non-memoization (Decision 12): the resolved class is NOT written into the root
@@ -152,7 +152,7 @@ def test_successful_lookup_does_not_memoize(name: str):
     assert name not in vars(django_strawberry_framework)
 
 
-def test_getattr_return_annotation_admits_function_valued_exports():
+def test_getattr_return_annotation_admits_function_valued_exports() -> None:
     """The PEP 562 hook's return annotation must not claim ``type`` for every soft export.
 
     Two of the ``_DRF_SOFT_EXPORTS`` targets (``register_serializer_field_converter`` /

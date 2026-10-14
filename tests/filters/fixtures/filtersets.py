@@ -14,6 +14,8 @@ from django_strawberry_framework.filters import FilterSet, RelatedFilter
 
 
 class ShelfFilter(FilterSet):
+    """Filters ``Shelf`` rows by ``code`` with ``exact`` and ``icontains``."""
+
     class Meta:
         model = models.Shelf
         fields = {"code": ["exact", "icontains"]}

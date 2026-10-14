@@ -37,15 +37,17 @@ from collections.abc import (
     Callable,
     Generator,
     Iterable,
+    Iterator,
 )
 from functools import partial
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, NoReturn, TypedDict
 
 import pytest
 import strawberry
 from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.types import ExecutionContext, ExecutionResult
+from strawberry.types.execution import PreExecutionError
 from typing_extensions import override
 
 from django_strawberry_framework import DjangoSchema
@@ -112,7 +114,7 @@ class _Probe(_OperationBoundExtension[OperationState]):
         self.seen: list[ExecutionContext | tuple[str, ExecutionContext | None] | None] = []
 
     @override
-    def on_operation(self):
+    def on_operation(self) -> Iterator[None]:
         """Record the context bound for this operation, on both halves."""
         self.seen.append(self.execution_context)
         yield
@@ -137,7 +139,7 @@ class _SilentProbe(_OperationBoundExtension[OperationState]):
     """
 
     @override
-    def on_operation(self):
+    def on_operation(self) -> Iterator[None]:
         """Bind for the operation and keep no part of it."""
         yield
 
@@ -151,7 +153,7 @@ class _Unbuilt(_OperationBoundExtension[OperationState]):
         pass
 
 
-def test_a_subclass_that_skipped_the_base_constructor_is_refused_not_approximated():
+def test_a_subclass_that_skipped_the_base_constructor_is_refused_not_approximated() -> None:
     """No carrier means no place to bind, and reading the last operation's is the defect.
 
     An extension whose ``__init__`` never ran this package's would have nowhere
@@ -163,7 +165,7 @@ def test_a_subclass_that_skipped_the_base_constructor_is_refused_not_approximate
         _ = extension.execution_context
 
 
-def test_an_assignment_under_a_django_schema_records_nothing_to_be_read_later():
+def test_an_assignment_under_a_django_schema_records_nothing_to_be_read_later() -> None:
     """The engine's assignment is compatibility glue, not a source of state.
 
     Upstream assigns on every resolved member and then hands the runner the same
@@ -182,7 +184,7 @@ def test_an_assignment_under_a_django_schema_records_nothing_to_be_read_later():
     assert extension.__dict__.get("_compatibility_state") is None
 
 
-def test_the_runner_builds_every_state_from_the_context_it_is_handed():
+def test_the_runner_builds_every_state_from_the_context_it_is_handed() -> None:
     """No assignment is needed for the runner to answer for the operation.
 
     The runner's argument is the same object upstream assigned, so an extension
@@ -207,7 +209,7 @@ def test_the_runner_builds_every_state_from_the_context_it_is_handed():
     [None, "forged"],
     ids=["none", "a-forged-context-naming-the-real-schema"],
 )
-def test_a_resolver_assigning_a_context_records_and_retains_nothing(assigned: str | None):
+def test_a_resolver_assigning_a_context_records_and_retains_nothing(assigned: str | None) -> None:
     """A resolver holds the extension, so the setter is reachable from a request.
 
     Assigning a context of its own - including one naming the real schema, which
@@ -234,7 +236,7 @@ def test_a_resolver_assigning_a_context_records_and_retains_nothing(assigned: st
     assert shared.execution_context is None
 
 
-def test_result_collection_reads_the_operations_own_state():
+def test_result_collection_reads_the_operations_own_state() -> None:
     """Upstream collects results after the synchronous operation teardown unwound.
 
     Without a binding around collection, an extension whose payload is operation
@@ -260,7 +262,7 @@ def test_result_collection_reads_the_operations_own_state():
 
 
 @pytest.mark.asyncio
-async def test_result_collection_reads_the_operations_own_state_on_the_async_path():
+async def test_result_collection_reads_the_operations_own_state_on_the_async_path() -> None:
     """The async twin, whose collection can also run inside an early-return scope."""
     probe_holder: list[_Probe] = []
 
@@ -278,7 +280,7 @@ async def test_result_collection_reads_the_operations_own_state_on_the_async_pat
     assert probe.execution_context is None
 
 
-def test_a_failure_between_the_runner_and_the_operation_retains_nothing():
+def test_a_failure_between_the_runner_and_the_operation_retains_nothing() -> None:
     """The regression that proves the handoff is cleaned up during runner construction.
 
     A consumer extension whose middleware capability check raises fails upstream
@@ -317,7 +319,7 @@ def test_a_failure_between_the_runner_and_the_operation_retains_nothing():
     assert schema_without_the_hostile_entry.execute_sync("{ hello }").errors is None
 
 
-def test_a_binding_that_fails_partway_unwinds_the_ones_already_made():
+def test_a_binding_that_fails_partway_unwinds_the_ones_already_made() -> None:
     """All-or-nothing, so a half-bound operation never runs.
 
     The second extension has no carrier, so binding it raises after the first
@@ -335,7 +337,7 @@ def test_a_binding_that_fails_partway_unwinds_the_ones_already_made():
 
 
 @pytest.mark.asyncio
-async def test_a_binding_that_fails_partway_unwinds_on_the_async_path_too():
+async def test_a_binding_that_fails_partway_unwinds_on_the_async_path_too() -> None:
     """The async twin: one primitive, two protocol adapters, one decision."""
     good = _Probe()
     schema = DjangoSchema(query=_Query, extensions=[lambda: good, partial(_Unbuilt)])
@@ -347,7 +349,7 @@ async def test_a_binding_that_fails_partway_unwinds_on_the_async_path_too():
     assert good._operation_state() is None
 
 
-def test_a_hook_that_raises_while_setting_up_still_resets_every_binding():
+def test_a_hook_that_raises_while_setting_up_still_resets_every_binding() -> None:
     """The wrapped scope failing is not the binding failing, and both have to unwind."""
 
     class _RaisingSetup(SchemaExtension):
@@ -366,7 +368,7 @@ def test_a_hook_that_raises_while_setting_up_still_resets_every_binding():
     assert shared._operation_state() is None
 
 
-def test_a_reset_that_fails_strands_no_lease_and_no_other_binding():
+def test_a_reset_that_fails_strands_no_lease_and_no_other_binding() -> None:
     """One reset raising still closes every lease and attempts every other reset.
 
     A token this context cannot reset is a bookkeeping defect, raised as Python's own
@@ -389,12 +391,12 @@ def test_a_reset_that_fails_strands_no_lease_and_no_other_binding():
 
 
 @pytest.mark.asyncio
-async def test_a_hook_that_raises_while_setting_up_resets_on_the_async_path_too():
+async def test_a_hook_that_raises_while_setting_up_resets_on_the_async_path_too() -> None:
     """The async twin of the wrapped-scope failure."""
 
     class _RaisingSetup(SchemaExtension):
         @override
-        async def on_operation(self):
+        async def on_operation(self) -> AsyncIterator[None]:
             raise RuntimeError("setup refused")
             # basedpyright: the yield only makes this hook an async generator; it never runs
             yield  # pyright: ignore[reportUnreachable]
@@ -410,7 +412,7 @@ async def test_a_hook_that_raises_while_setting_up_resets_on_the_async_path_too(
 
 
 @pytest.mark.asyncio
-async def test_a_closed_stream_leaves_no_state_bound_and_the_next_operation_is_clean():
+async def test_a_closed_stream_leaves_no_state_bound_and_the_next_operation_is_clean() -> None:
     """The streaming runner outlives the operation scope, and its binding must not.
 
     A generator closed before it completes still unwinds its ``finally``, so the
@@ -435,7 +437,7 @@ async def test_a_closed_stream_leaves_no_state_bound_and_the_next_operation_is_c
 
 
 @pytest.mark.asyncio
-async def test_a_cancelled_stream_leaves_no_state_bound_either():
+async def test_a_cancelled_stream_leaves_no_state_bound_either() -> None:
     """Cancellation unwinds the generator's ``finally``, and the binding resets there.
 
     A transport that drops a subscription cancels the task driving it rather than
@@ -447,7 +449,7 @@ async def test_a_cancelled_stream_leaves_no_state_bound_either():
     schema = DjangoSchema(query=_Query, extensions=[lambda: shared])
     started = asyncio.Event()
 
-    async def _drive():
+    async def _drive() -> None:
         stream = await schema.stream("{ hello }")
         async for _frame in stream:
             started.set()
@@ -479,7 +481,7 @@ async def test_a_cancelled_stream_leaves_no_state_bound_either():
 def test_rerunning_a_constructor_on_an_accepted_extension_is_refused(
     factory: type[SchemaExtension],
     refusal: str,
-):
+) -> None:
     """An accepted instance is reachable from every resolver, and so is its ``__init__``.
 
     A second call would mint a second binding carrier, leaving the runner
@@ -491,7 +493,7 @@ def test_rerunning_a_constructor_on_an_accepted_extension_is_refused(
         extension.__init__()
 
 
-def test_rerunning_the_optimizer_constructor_is_refused():
+def test_rerunning_the_optimizer_constructor_is_refused() -> None:
     """The same refusal for the extension whose documented shape IS a singleton.
 
     Written on its own rather than as a row of the table above: the class may
@@ -527,7 +529,7 @@ _CARRIER_ATTACK_IDS = ["assign-the-context", "inject-a-carrier", "rerun-the-cons
 def test_a_resolver_cannot_reach_the_binding_carrier(
     attack: Callable[[_Probe], object],
     expected: str,
-):
+) -> None:
     """The mechanism that CARRIES operation state is state in its own right.
 
     Distinct from the configuration-tamper rows: those are about the policy a
@@ -573,7 +575,7 @@ def test_a_resolver_cannot_reach_the_binding_carrier(
     assert shared._operation_state() is None
 
 
-def test_a_carrier_is_settled_once_per_extension_and_dies_with_it():
+def test_a_carrier_is_settled_once_per_extension_and_dies_with_it() -> None:
     """The carrier is held for the extension, not by anything that outlives it."""
     extension = _Probe()
     assert _OPERATION_CARRIERS.settled(extension)
@@ -585,7 +587,7 @@ def test_a_carrier_is_settled_once_per_extension_and_dies_with_it():
     assert reference() is None
 
 
-def test_a_plain_strawberry_schema_gets_operation_local_state_from_the_instance():
+def test_a_plain_strawberry_schema_gets_operation_local_state_from_the_instance() -> None:
     """No package runner, so the fresh instance itself is the operation.
 
     A class entry and a fresh factory build one extension per operation on any
@@ -608,12 +610,12 @@ def test_a_plain_strawberry_schema_gets_operation_local_state_from_the_instance(
     assert extension._operation_state() is None
 
 
-def test_a_context_that_refuses_to_say_which_schema_it_belongs_to_takes_the_local_path():
+def test_a_context_that_refuses_to_say_which_schema_it_belongs_to_takes_the_local_path() -> None:
     """An unreadable ``schema`` is not a claim that a package runner is coming."""
 
     class _Hostile:
         @property
-        def schema(self):
+        def schema(self) -> NoReturn:
             raise RuntimeError("no")
 
     extension = _Probe()
@@ -627,7 +629,7 @@ def test_a_context_that_refuses_to_say_which_schema_it_belongs_to_takes_the_loca
     assert extension.execution_context is context
 
 
-def test_nested_execution_restores_the_outer_operations_state():
+def test_nested_execution_restores_the_outer_operations_state() -> None:
     """The inner operation binds its own state and the outer one gets its own back."""
     shared = _Probe()
     outer_during: list[tuple[object, object]] = []
@@ -668,7 +670,7 @@ class _RefusingAssignment(SchemaExtension):
 
     @property
     @override
-    def execution_context(self):
+    def execution_context(self) -> ExecutionContext | None:
         """Whatever this extension was last given, which is nothing while armed."""
         return self.__dict__.get("_context")
 
@@ -686,17 +688,17 @@ class _RequestContext:
     """A request context value a weak reference can be taken of."""
 
 
-async def _run_execute_sync(schema: DjangoSchema, context_value: object):
+async def _run_execute_sync(schema: DjangoSchema, context_value: object) -> None:
     """Run one synchronous operation, awaited like its two siblings."""
     schema.execute_sync("{ hello }", context_value=context_value)
 
 
-async def _run_execute(schema: DjangoSchema, context_value: object):
+async def _run_execute(schema: DjangoSchema, context_value: object) -> None:
     """Run one asynchronous operation."""
     await schema.execute("{ hello }", context_value=context_value)
 
 
-async def _run_stream(schema: DjangoSchema, context_value: object):
+async def _run_stream(schema: DjangoSchema, context_value: object) -> None:
     """Consume one streamed operation, which is where its assignment loop runs."""
     stream = await schema.stream("{ hello }", context_value=context_value)
     async for _frame in stream:
@@ -711,7 +713,7 @@ async def _run_stream(schema: DjangoSchema, context_value: object):
 @pytest.mark.asyncio
 async def test_a_setter_raising_in_the_engines_assignment_loop_leaves_no_request_behind(
     run: Callable[[DjangoSchema, object], Awaitable[None]],
-):
+) -> None:
     """Upstream spells the assignment loop three times, and all three run before the runner.
 
     A later entry's setter raising there is a failure with no operation teardown
@@ -740,7 +742,7 @@ async def test_a_setter_raising_in_the_engines_assignment_loop_leaves_no_request
     assert shared.execution_context is None
 
 
-def test_a_state_constructor_that_raises_retains_neither_the_context_nor_a_partial_set():
+def test_a_state_constructor_that_raises_retains_neither_the_context_nor_a_partial_set() -> None:
     """Runner construction is in the same window, and fails the same way.
 
     A subclass may build its own operation state, so its constructor is consumer
@@ -753,7 +755,7 @@ def test_a_state_constructor_that_raises_retains_neither_the_context_nor_a_parti
         """An operation-bound extension whose state constructor refuses."""
 
         @override
-        def _new_operation_state(self, execution_context: ExecutionContext):
+        def _new_operation_state(self, execution_context: ExecutionContext) -> NoReturn:
             raise RuntimeError("state refused")
 
     shared = _Probe()
@@ -790,7 +792,11 @@ async def _await_spawned_task(seen: dict[str, object]) -> None:
     await task
 
 
-def _spawning_schema(shared: _SilentProbe, seen: dict[str, object], release: asyncio.Event):
+def _spawning_schema(
+    shared: _SilentProbe,
+    seen: dict[str, object],
+    release: asyncio.Event,
+) -> DjangoSchema:
     """A schema whose resolver starts a task that reads the extension now and later.
 
     The child's first read happens while the operation is still bound and is
@@ -803,7 +809,7 @@ def _spawning_schema(shared: _SilentProbe, seen: dict[str, object], release: asy
     class SpawningQuery:
         @strawberry.field
         async def spawn(self) -> str:
-            async def child():
+            async def child() -> None:
                 seen["bound_during"] = shared._operation_state() is not None
                 await release.wait()
                 seen["state"] = shared._operation_state()
@@ -818,7 +824,7 @@ def _spawning_schema(shared: _SilentProbe, seen: dict[str, object], release: asy
 
 
 @pytest.mark.asyncio
-async def test_a_task_started_inside_the_operation_reads_nothing_once_it_ends():
+async def test_a_task_started_inside_the_operation_reads_nothing_once_it_ends() -> None:
     """Resetting a token repairs the task that bound it, and only that task.
 
     A task created while a binding is in force gets a COPY of the context, which
@@ -850,7 +856,7 @@ async def test_a_task_started_inside_the_operation_reads_nothing_once_it_ends():
 
 
 @pytest.mark.asyncio
-async def test_a_surviving_task_that_starts_its_own_operation_ends_with_nothing_bound():
+async def test_a_surviving_task_that_starts_its_own_operation_ends_with_nothing_bound() -> None:
     """The copied binding is not an outer scope for the task's own operation.
 
     Restoring a token in that task must return it to no state rather than to the
@@ -868,7 +874,7 @@ async def test_a_surviving_task_that_starts_its_own_operation_ends_with_nothing_
     class SpawningQuery:
         @strawberry.field
         async def spawn(self, info: strawberry.Info) -> str:
-            async def child():
+            async def child() -> None:
                 await release.wait()
                 seen["before"] = operation_is_nested()
                 inner = await info.schema.execute("{ spawnHello }")
@@ -902,7 +908,7 @@ async def test_a_surviving_task_that_starts_its_own_operation_ends_with_nothing_
 
 
 @pytest.mark.asyncio
-async def test_a_child_released_during_result_collection_reads_a_closed_binding():
+async def test_a_child_released_during_result_collection_reads_a_closed_binding() -> None:
     """The runner still owns the state; the copy taken inside the operation does not.
 
     Upstream collects an async operation's extension results after the operation
@@ -934,7 +940,7 @@ async def test_a_child_released_during_result_collection_reads_a_closed_binding(
     class SpawningQuery:
         @strawberry.field
         async def spawn(self) -> str:
-            async def child():
+            async def child() -> None:
                 await release.wait()
                 seen["child_state"] = shared._operation_state()
                 seen["child_nested"] = operation_is_nested()
@@ -952,7 +958,7 @@ async def test_a_child_released_during_result_collection_reads_a_closed_binding(
 
 
 @pytest.mark.asyncio
-async def test_a_task_outliving_a_cancelled_stream_reads_nothing_either():
+async def test_a_task_outliving_a_cancelled_stream_reads_nothing_either() -> None:
     """A dropped subscription cancels the task driving it, and its children remain.
 
     A streamed operation is bound around each frame, in the task that pulls it
@@ -971,7 +977,7 @@ async def test_a_task_outliving_a_cancelled_stream_reads_nothing_either():
     request: dict[str, object] = {"context": _RequestContext()}
     reference = weakref.ref(request["context"])
 
-    async def _drive():
+    async def _drive() -> None:
         request["stream"] = await schema.stream(
             "{ spawn }",
             context_value=request["context"],
@@ -1008,7 +1014,7 @@ async def test_a_task_outliving_a_cancelled_stream_reads_nothing_either():
 
 
 @pytest.mark.asyncio
-async def test_result_collection_is_inside_the_operation_it_collects_for():
+async def test_result_collection_is_inside_the_operation_it_collects_for() -> None:
     """The latest scope a runner owns, and an operation started there is still inside.
 
     Upstream collects an async operation's extension results after the operation
@@ -1033,7 +1039,7 @@ async def test_result_collection_is_inside_the_operation_it_collects_for():
         """Records the nesting answer of whichever operation it runs in."""
 
         @override
-        def on_operation(self):
+        def on_operation(self) -> Iterator[None]:
             """Record what the operation about to run answers, once per operation."""
             seen["nested_rows"].append(operation_is_nested())
             yield
@@ -1045,8 +1051,8 @@ async def test_result_collection_is_inside_the_operation_it_collects_for():
     assert seen["nested_rows"] == [False, True]
 
 
-def test_a_nested_runner_knows_it_is_inside_another_operation():
-    """ "Nested" is a fact about runners, not about which hook is running.
+def test_a_nested_runner_knows_it_is_inside_another_operation() -> None:
+    """Whether an operation is "nested" is a fact about runners, not about which hook is running.
 
     The optimizer reads this to decide whether the request's context object is
     its own to clear and publish to
@@ -1060,7 +1066,7 @@ def test_a_nested_runner_knows_it_is_inside_another_operation():
         """A consumer extension that runs its own operation at teardown."""
 
         @override
-        def on_operation(self):
+        def on_operation(self) -> Iterator[None]:
             """Run one inner operation once the outer operation's hooks are done."""
             yield
             if seen["ran"]:
@@ -1072,7 +1078,7 @@ def test_a_nested_runner_knows_it_is_inside_another_operation():
         """Records the nesting answer of whichever operation it runs in."""
 
         @override
-        def on_operation(self):
+        def on_operation(self) -> Iterator[None]:
             """Record what the operation about to run answers, once per operation."""
             seen["nested_rows"].append(operation_is_nested())
             yield
@@ -1099,7 +1105,7 @@ def _ticking_schema(
     frames: int = 3,
     extensions: Iterable[Callable[[], SchemaExtension]] = (),
     rows: int | None = None,
-):
+) -> DjangoSchema:
     """A subscription whose resolver records what each frame is bound to."""
 
     @strawberry.type
@@ -1146,13 +1152,13 @@ def _read_in_the_copied_context(seen: dict[str, object]) -> dict[str, object]:
     return read
 
 
-async def _frame_in_its_own_task(stream: AsyncIterator[ExecutionResult]):
+async def _frame_in_its_own_task(stream: AsyncIterator[ExecutionResult]) -> ExecutionResult:
     """Pull one frame from ``stream`` in a task of its own."""
     return await asyncio.ensure_future(stream.__anext__())
 
 
 @pytest.mark.asyncio
-async def test_a_stream_frame_produced_in_another_task_is_bound_to_its_operation():
+async def test_a_stream_frame_produced_in_another_task_is_bound_to_its_operation() -> None:
     """Python resumes an async generator in the CALLER's context, not the producer's.
 
     A transport advances the iterator from whatever task holds it, so every
@@ -1176,7 +1182,7 @@ async def test_a_stream_frame_produced_in_another_task_is_bound_to_its_operation
 
 
 @pytest.mark.asyncio
-async def test_a_stream_resumed_with_asend_from_another_task_is_bound_the_same_way():
+async def test_a_stream_resumed_with_asend_from_another_task_is_bound_the_same_way() -> None:
     """``asend`` is the other way to advance an iterator, and transports use it.
 
     A started async generator is resumed by ``asend`` exactly as by ``__anext__``
@@ -1202,7 +1208,7 @@ async def test_a_stream_resumed_with_asend_from_another_task_is_bound_the_same_w
 
 
 @pytest.mark.asyncio
-async def test_a_stream_closed_from_another_task_leaves_every_scope_terminal():
+async def test_a_stream_closed_from_another_task_leaves_every_scope_terminal() -> None:
     """The close is the operation's teardown, and it runs wherever the closer is.
 
     A cancelled subscription is closed by the connection rather than by the task
@@ -1236,7 +1242,7 @@ async def test_a_stream_closed_from_another_task_leaves_every_scope_terminal():
 
 
 @pytest.mark.asyncio
-async def test_a_stream_cancelled_in_one_task_is_closable_from_another():
+async def test_a_stream_cancelled_in_one_task_is_closable_from_another() -> None:
     """Cancellation leaves the generator suspended; the close still has to work.
 
     The frame the cancelled task was waiting for never arrives, so the operation
@@ -1262,7 +1268,7 @@ async def test_a_stream_cancelled_in_one_task_is_closable_from_another():
 
 
 @pytest.mark.asyncio
-async def test_a_stream_thrown_into_from_another_task_tears_down_its_own_operation():
+async def test_a_stream_thrown_into_from_another_task_tears_down_its_own_operation() -> None:
     """``athrow`` is the other way a transport ends a stream, and it binds the same.
 
     Upstream renders the thrown exception as the stream's last frame rather than
@@ -1277,7 +1283,7 @@ async def test_a_stream_thrown_into_from_another_task_tears_down_its_own_operati
     stream = await schema.subscribe("subscription { ticks }")
     await _frame_in_its_own_task(stream)
 
-    async def _throw_and_close():
+    async def _throw_and_close() -> PreExecutionError | ExecutionResult:
         final = await stream.athrow(RuntimeError("dropped"))
         await stream.aclose()
         return final
@@ -1293,14 +1299,14 @@ async def test_a_stream_thrown_into_from_another_task_tears_down_its_own_operati
     assert read["nested_scope"].held() is None
 
 
-def _armed_rows():
+def _armed_rows() -> int | None:
     """The ``max_list_rows`` armed in this task right now, or ``None``."""
     armed = armed_resource_policy()
     return None if armed is None else armed.max_list_rows
 
 
 @pytest.mark.asyncio
-async def test_a_paused_stream_leaves_no_binding_in_the_task_that_drove_it():
+async def test_a_paused_stream_leaves_no_binding_in_the_task_that_drove_it() -> None:
     """A frame is handed over, and the operation is not.
 
     The budget is armed DURING the first frame, so a resume that bound only what
@@ -1331,7 +1337,7 @@ async def test_a_paused_stream_leaves_no_binding_in_the_task_that_drove_it():
 
 
 @pytest.mark.asyncio
-async def test_two_streams_interleaved_in_one_task_each_keep_their_own_budget():
+async def test_two_streams_interleaved_in_one_task_each_keep_their_own_budget() -> None:
     """Frames from two operations alternate in one task, and neither leaks into it.
 
     Each resolver has to see its own ceiling, the caller has to see none between
@@ -1359,7 +1365,7 @@ async def test_two_streams_interleaved_in_one_task_each_keep_their_own_budget():
 
 
 @pytest.mark.asyncio
-async def test_a_stream_driven_inside_an_operation_restores_the_outer_budget():
+async def test_a_stream_driven_inside_an_operation_restores_the_outer_budget() -> None:
     """Between inner frames the caller gets its enclosing operation back, not nothing.
 
     Clearing the variable on the way out of a resume would lose the outer
@@ -1392,7 +1398,7 @@ async def test_a_stream_driven_inside_an_operation_restores_the_outer_budget():
 
 
 @pytest.mark.asyncio
-async def test_a_child_started_after_a_frame_was_yielded_copies_no_live_budget():
+async def test_a_child_started_after_a_frame_was_yielded_copies_no_live_budget() -> None:
     """Transport code between frames is where a background job is started from.
 
     Its context is a copy of the driving task's, so anything the resume left
@@ -1431,7 +1437,7 @@ class _RefusingToSaySchema:
     """A value whose ``.schema`` raises, which the setter must not depend on."""
 
     @property
-    def schema(self):
+    def schema(self) -> NoReturn:
         """Refuse to say which schema this context belongs to."""
         raise RuntimeError("no schema here")
 
@@ -1453,7 +1459,7 @@ class _RefusingToSaySchema:
 )
 def test_a_resolver_assigning_to_a_managed_extension_leaves_nothing_behind(
     forge: Callable[[], object],
-):
+) -> None:
     """The engine's assignment is the package's signal, not the consumer's channel.
 
     A shared extension is reachable from every resolver the schema serves, and
@@ -1493,7 +1499,7 @@ def test_a_resolver_assigning_to_a_managed_extension_leaves_nothing_behind(
 
 
 @pytest.mark.asyncio
-async def test_a_surviving_task_cannot_give_a_managed_extension_state_either():
+async def test_a_surviving_task_cannot_give_a_managed_extension_state_either() -> None:
     """The assignment a background task makes is the same assignment, later.
 
     Nothing about the tamper needs the request to still be running: a task that
@@ -1510,7 +1516,7 @@ async def test_a_surviving_task_cannot_give_a_managed_extension_state_either():
         async def spawn(self) -> str:
             """Start a task that assigns to the shared extension after the request."""
 
-            async def child():
+            async def child() -> None:
                 await release.wait()
                 forged = _Forged()
                 seen["reference"] = weakref.ref(forged)
@@ -1534,7 +1540,7 @@ async def test_a_surviving_task_cannot_give_a_managed_extension_state_either():
     assert reference() is None
 
 
-def test_an_extension_a_raw_schema_used_first_is_managed_once_a_django_schema_runs_it():
+def test_an_extension_a_raw_schema_used_first_is_managed_once_a_django_schema_runs_it() -> None:
     """The mark is one-way, because the question it answers is.
 
     A raw ``strawberry.Schema`` has no runner, so the setter is the only signal
@@ -1562,7 +1568,7 @@ def test_an_extension_a_raw_schema_used_first_is_managed_once_a_django_schema_ru
 # The operation's executor mode
 
 
-def _mode_schema(seen: dict[str, object]):
+def _mode_schema(seen: dict[str, object]) -> tuple[DjangoSchema, type]:
     """A schema whose resolver records the mode, and can start a nested operation."""
 
     @strawberry.type
@@ -1578,7 +1584,7 @@ def _mode_schema(seen: dict[str, object]):
     return DjangoSchema(query=ModeQuery), ModeQuery
 
 
-def test_a_chain_that_declares_no_mode_binds_none():
+def test_a_chain_that_declares_no_mode_binds_none() -> None:
     """The runner is a class, and a chain it did not build declares nothing.
 
     ``DjangoSchema`` puts the executor mode in every chain it assembles, but the
@@ -1597,7 +1603,7 @@ def test_a_chain_that_declares_no_mode_binds_none():
 
 
 @pytest.mark.asyncio
-async def test_a_nested_operation_restores_the_outer_mode_on_the_way_out():
+async def test_a_nested_operation_restores_the_outer_mode_on_the_way_out() -> None:
     """Mode is a token, so the enclosing operation gets its own answer back.
 
     A synchronous operation started from inside an asynchronous one is the shape
@@ -1629,7 +1635,7 @@ async def test_a_nested_operation_restores_the_outer_mode_on_the_way_out():
 
 
 @pytest.mark.asyncio
-async def test_a_task_that_copied_an_operations_context_reads_no_mode():
+async def test_a_task_that_copied_an_operations_context_reads_no_mode() -> None:
     """The binding is a lease, so a copied context stops answering when the scope ends.
 
     A token reset repairs the context that made it and nothing else, so a
@@ -1651,7 +1657,7 @@ async def test_a_task_that_copied_an_operations_context_reads_no_mode():
 
 
 @pytest.mark.asyncio
-async def test_every_frame_of_a_stream_carries_the_operations_mode():
+async def test_every_frame_of_a_stream_carries_the_operations_mode() -> None:
     """A frame produced in another task is the same operation as the one before it.
 
     Python resumes an async generator in the caller's context, so the mode bound
@@ -1685,7 +1691,7 @@ async def test_every_frame_of_a_stream_carries_the_operations_mode():
 
 
 @pytest.mark.asyncio
-async def test_a_cancelled_stream_leaves_no_mode_bound():
+async def test_a_cancelled_stream_leaves_no_mode_bound() -> None:
     """Cancellation unwinds the generator's ``finally``, and the mode resets there.
 
     A transport that drops a subscription cancels the task driving it. The
@@ -1708,7 +1714,7 @@ async def test_a_cancelled_stream_leaves_no_mode_bound():
     schema = DjangoSchema(query=_Query, subscription=TickingSubscription)
     started = asyncio.Event()
 
-    async def _drive():
+    async def _drive() -> None:
         stream = await schema.subscribe("subscription { ticks }")
         async for _frame in stream:
             started.set()
@@ -1727,7 +1733,7 @@ async def test_a_cancelled_stream_leaves_no_mode_bound():
 
 
 @pytest.mark.asyncio
-async def test_an_operation_that_fails_in_front_of_its_hooks_binds_no_mode_either():
+async def test_an_operation_that_fails_in_front_of_its_hooks_binds_no_mode_either() -> None:
     """A failure before the operation scope opens leaves the mode unbound.
 
     The mode rides the same binding list as every other value the runner owns,

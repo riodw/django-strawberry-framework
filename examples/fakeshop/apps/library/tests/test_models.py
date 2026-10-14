@@ -40,7 +40,7 @@ from apps.library.models import (
 
 
 @pytest.mark.django_db
-def test_str_representations_and_relations():
+def test_str_representations_and_relations() -> None:
     branch = Branch.objects.create(name="Central", city="Metropolis")
     shelf = Shelf.objects.create(code="A-1", branch=branch, topic="scifi")
     genre = Genre.objects.create(name="Speculative")
@@ -69,7 +69,7 @@ def test_str_representations_and_relations():
 
 
 @pytest.mark.django_db
-def test_book_title_unique_per_shelf():
+def test_book_title_unique_per_shelf() -> None:
     branch = Branch.objects.create(name="B1")
     shelf = Shelf.objects.create(code="X", branch=branch)
     Book.objects.create(title="Dune", shelf=shelf)
@@ -78,7 +78,7 @@ def test_book_title_unique_per_shelf():
 
 
 @pytest.mark.django_db
-def test_branch_note_str_and_proxy_targeted_relation():
+def test_branch_note_str_and_proxy_targeted_relation() -> None:
     """``BranchNote.branch`` is declared to the ``ProxyBranch`` proxy, not ``Branch``.
 
     The forward side resolves to a proxy instance and the reverse ``notes``
@@ -98,7 +98,7 @@ def test_branch_note_str_and_proxy_targeted_relation():
 
 
 @pytest.mark.django_db
-def test_venue_inheritance_chain_shares_the_venue_row():
+def test_venue_inheritance_chain_shares_the_venue_row() -> None:
     """Each ``Venue`` subclass level adds a table; the inherited columns stay on ``Venue``."""
     kiosk = SelfServeDesk.objects.create(
         name="Lobby Kiosk",
@@ -116,7 +116,7 @@ def test_venue_inheritance_chain_shares_the_venue_row():
 
 
 @pytest.mark.django_db
-def test_open_venue_manager_hides_unopened_venues():
+def test_open_venue_manager_hides_unopened_venues() -> None:
     """The ``OpenVenue`` proxy's default manager keeps only venues with an opening date."""
     opened = Venue.objects.create(name="Annex", opened_on=datetime.date(2020, 1, 1))
     Venue.objects.create(name="Planned Wing")
@@ -127,7 +127,7 @@ def test_open_venue_manager_hides_unopened_venues():
 
 
 @pytest.mark.django_db
-def test_venue_reverse_relations_use_default_accessors_and_close_a_nullable_cycle():
+def test_venue_reverse_relations_use_default_accessors_and_close_a_nullable_cycle() -> None:
     """No ``related_name`` on the three reverse relations; ``lead_ticket`` points back."""
     venue = Venue.objects.create(name="Annex")
     ticket = RepairTicket.objects.create(code="T-1", venue=venue)
@@ -153,7 +153,7 @@ def test_venue_reverse_relations_use_default_accessors_and_close_a_nullable_cycl
 
 
 @pytest.mark.django_db
-def test_visible_branch_manager_filters_while_the_forward_descriptor_does_not():
+def test_visible_branch_manager_filters_while_the_forward_descriptor_does_not() -> None:
     """``BranchSignage.branch`` loads a city-less branch the proxy's manager hides."""
     branch = Branch.objects.create(name="Outpost", city="")
     sign = BranchSignage.objects.create(code="S-1", branch_id=branch.pk)
@@ -165,7 +165,7 @@ def test_visible_branch_manager_filters_while_the_forward_descriptor_does_not():
 
 
 @pytest.mark.django_db
-def test_circulation_desk_carries_every_relation_kind():
+def test_circulation_desk_carries_every_relation_kind() -> None:
     """Forward FK / O2O / M2M, a generic key, a generic relation, and named reverses."""
     branch = Branch.objects.create(name="Main", city="Metro")
     shelf = Shelf.objects.create(code="A-1", branch=branch)
@@ -189,7 +189,7 @@ def test_circulation_desk_carries_every_relation_kind():
 
 
 @pytest.mark.django_db
-def test_book_archive_genres_is_not_editable():
+def test_book_archive_genres_is_not_editable() -> None:
     """``archive_genres`` is a forward M2M kept out of forms by ``editable=False``."""
     branch = Branch.objects.create(name="B1")
     book = Book.objects.create(title="Dune", shelf=Shelf.objects.create(code="X", branch=branch))
@@ -202,7 +202,7 @@ def test_book_archive_genres_is_not_editable():
 
 
 @pytest.mark.django_db
-def test_distributor_mixed_case_names_are_its_django_names_and_columns():
+def test_distributor_mixed_case_names_are_its_django_names_and_columns() -> None:
     """``displayName``, ``distributorRef`` and ``consignmentItems`` keep their mixed case."""
     distributor = Distributor.objects.create(displayName="Northern Books")
     consignment = Consignment.objects.create(label="Spring list", distributorRef=distributor)
@@ -219,7 +219,7 @@ def test_distributor_mixed_case_names_are_its_django_names_and_columns():
 
 
 @pytest.mark.django_db
-def test_reading_list_entry_clears_its_abstract_parents_ordering_and_passes_checks():
+def test_reading_list_entry_clears_its_abstract_parents_ordering_and_passes_checks() -> None:
     """``ordering = None`` drops ``TitledEntry``'s title order; ``ReadingList`` keeps it."""
     reading_list = ReadingList.objects.create(title="Classics")
     entry = ReadingListEntry.objects.create(reading_list=reading_list, title="Solaris")

@@ -49,9 +49,17 @@ import contextvars
 import copy
 import math
 import time
-from collections.abc import AsyncGenerator, Callable, Generator, Iterable, Iterator, Mapping
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Generator,
+    Iterable,
+    Iterator,
+    Mapping,
+)
 from types import MappingProxyType, SimpleNamespace
-from typing import NewType, SupportsIndex, TypeVar, overload
+from typing import NewType, NoReturn, SupportsIndex, TypeVar, overload
 
 import pytest
 import pytest_django
@@ -65,7 +73,7 @@ from graphql import GraphQLError, GraphQLSchema, StringValueNode, ValueNode, par
 from graphql.language.token_kind import TokenKind
 from strawberry.extensions import ValidationCache
 from strawberry.extensions.base_extension import SchemaExtension
-from strawberry.types import Info
+from strawberry.types import ExecutionResult, Info
 from typing_extensions import override
 
 from django_strawberry_framework import DjangoSchema, Upload, strawberry_config
@@ -139,7 +147,7 @@ _QuerySetT = TypeVar("_QuerySetT", bound="QuerySet[Model, object]")
         "bool",
     ],
 )
-def test_a_non_positive_integer_bound_is_rejected_at_construction(value: object):
+def test_a_non_positive_integer_bound_is_rejected_at_construction(value: object) -> None:
     """``True`` is in this list on purpose: ``isinstance(True, int)`` is ``True``.
 
     A bound accepting ``True`` would silently become ``1``, which is a bound so
@@ -172,7 +180,7 @@ def test_a_non_positive_integer_bound_is_rejected_at_construction(value: object)
         "oversized-integer",
     ],
 )
-def test_an_invalid_execution_deadline_is_rejected(value: object):
+def test_an_invalid_execution_deadline_is_rejected(value: object) -> None:
     with pytest.raises(ConfigurationError, match="execution_deadline_seconds"):
         # basedpyright: each invalid deadline is the hostile input under test; ResourcePolicy
         # types the parameter as float | None
@@ -180,7 +188,7 @@ def test_an_invalid_execution_deadline_is_rejected(value: object):
 
 
 @pytest.mark.parametrize("value", [None, 1, 0.5])
-def test_a_valid_execution_deadline_is_accepted(value: float | None):
+def test_a_valid_execution_deadline_is_accepted(value: float | None) -> None:
     """The deadline is the one optional bound, and it accepts a float.
 
     The positive control for ``_is_valid_deadline``: without it the rejection
@@ -189,29 +197,30 @@ def test_a_valid_execution_deadline_is_accepted(value: float | None):
     assert ResourcePolicy(execution_deadline_seconds=value).execution_deadline_seconds == value
 
 
-def test_a_hostile_numeric_deadline_subclass_is_typed_rejected():
-    """A deployment-supplied numeric SUBCLASS whose comparison raises is a hostile
-    configuration object: the domain check cannot classify it, so the answer is
-    the typed ``ConfigurationError``, never the raw arithmetic error leaking out
-    of schema construction.
+def test_a_hostile_numeric_deadline_subclass_is_typed_rejected() -> None:
+    """A numeric SUBCLASS whose comparison raises is rejected as a typed error.
+
+    It is a hostile configuration object: the domain check cannot classify it, so
+    the answer is the typed ``ConfigurationError``, never the raw arithmetic
+    error leaking out of schema construction.
     """
 
     class HostileFloat(float):
         @override
-        def __gt__(self, other: object):
+        def __gt__(self, other: object) -> NoReturn:
             raise RuntimeError("hostile __gt__ detonated")
 
     with pytest.raises(ConfigurationError, match="execution_deadline_seconds"):
         ResourcePolicy(execution_deadline_seconds=HostileFloat(1.0))
 
 
-def test_a_huge_int_deadline_overflows_the_finite_check_into_the_typed_rejection():
+def test_a_huge_int_deadline_overflows_the_finite_check_into_the_typed_rejection() -> None:
     """``isfinite(float(10**600))`` overflows; the rejection must stay typed."""
     with pytest.raises(ConfigurationError, match="execution_deadline_seconds"):
         ResourcePolicy(execution_deadline_seconds=10**600)
 
 
-def test_the_package_default_policy_is_bounded_on_every_axis():
+def test_the_package_default_policy_is_bounded_on_every_axis() -> None:
     """The fail-closed claim, asserted rather than assumed.
 
     There is no spelling of a bound that disables it, so the default policy must
@@ -225,14 +234,14 @@ def test_the_package_default_policy_is_bounded_on_every_axis():
         assert value >= 1, name
 
 
-def test_a_policy_is_frozen():
+def test_a_policy_is_frozen() -> None:
     with pytest.raises(Exception, match="cannot assign to field"):
         # basedpyright: the write to the frozen dataclass field is the mutation under test; the
         # checker rejects assignment to a frozen field
         DEFAULT_RESOURCE_POLICY.max_page_size = 1  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def test_a_bound_at_the_representable_maximum_is_accepted_and_can_reject():
+def test_a_bound_at_the_representable_maximum_is_accepted_and_can_reject() -> None:
     """The largest accepted bound must still reach SQL and render its own rejection.
 
     A ceiling is only real if the configuration at it works end to end, so this
@@ -260,7 +269,7 @@ def test_a_bound_at_the_representable_maximum_is_accepted_and_can_reject():
     [MAX_RESOURCE_BOUND + 1, 10**10000],
     ids=["one-past-the-maximum", "unrenderable-magnitude"],
 )
-def test_a_bound_past_the_representable_maximum_is_rejected_at_construction(value: int):
+def test_a_bound_past_the_representable_maximum_is_rejected_at_construction(value: int) -> None:
     """A bound no query and no rejection can carry fails the deployment at startup.
 
     ``10**10000`` is the shape that made this a defect rather than a curiosity:
@@ -272,7 +281,7 @@ def test_a_bound_past_the_representable_maximum_is_rejected_at_construction(valu
         ResourcePolicy(max_list_rows=value)
 
 
-def test_a_field_declared_collection_bound_shares_the_representable_maximum():
+def test_a_field_declared_collection_bound_shares_the_representable_maximum() -> None:
     """The two spellings of one bound domain reject the same magnitudes."""
     validate_collection_bound(MAX_RESOURCE_BOUND, field="max_rows")
     with pytest.raises(ConfigurationError, match="must be at most"):
@@ -286,7 +295,7 @@ def test_a_field_declared_collection_bound_shares_the_representable_maximum():
 # ---------------------------------------------------------------------------
 
 
-def test_an_explicit_policy_instance_is_taken_as_a_private_duplicate():
+def test_an_explicit_policy_instance_is_taken_as_a_private_duplicate() -> None:
     """The argument supplies values; the object every bound is read from is the package's."""
     policy = ResourcePolicy(max_depth=3)
     resolved = resolve_resource_policy(policy)
@@ -294,13 +303,13 @@ def test_an_explicit_policy_instance_is_taken_as_a_private_duplicate():
     assert resolved is not policy
 
 
-def test_an_explicit_mapping_is_applied_over_the_package_defaults():
+def test_an_explicit_mapping_is_applied_over_the_package_defaults() -> None:
     policy = resolve_resource_policy({"max_depth": 3})
     assert policy.max_depth == 3
     assert policy.max_page_size == DEFAULT_RESOURCE_POLICY.max_page_size
 
 
-def test_no_source_at_all_resolves_to_the_package_defaults():
+def test_no_source_at_all_resolves_to_the_package_defaults() -> None:
     """The values of the exported template, in an object the exported name is not.
 
     A deployment that configures nothing is on exactly the same footing as one
@@ -312,7 +321,7 @@ def test_no_source_at_all_resolves_to_the_package_defaults():
     assert resolved is not DEFAULT_RESOURCE_POLICY
 
 
-def test_a_written_exported_default_reaches_no_resolution():
+def test_a_written_exported_default_reaches_no_resolution() -> None:
     """The exported constant is a value template, never the object a bound is read from.
 
     ``DEFAULT_RESOURCE_POLICY`` is a public export, so consumer code holds it, and
@@ -337,7 +346,7 @@ def test_a_written_exported_default_reaches_no_resolution():
 
 def test_an_instance_through_the_setting_slot_resolves_on_the_same_terms(
     settings: pytest_django.Settings,
-):
+) -> None:
     """The setting slot and the explicit argument are one ladder with two spellings.
 
     A ``ResourcePolicy`` behind ``RESOURCE_POLICY`` is the same declaration the
@@ -355,30 +364,32 @@ def test_an_instance_through_the_setting_slot_resolves_on_the_same_terms(
     assert resolved is not policy
 
 
-def test_the_setting_supplies_the_policy_when_no_argument_does(settings: pytest_django.Settings):
+def test_the_setting_supplies_the_policy_when_no_argument_does(
+    settings: pytest_django.Settings,
+) -> None:
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RESOURCE_POLICY": {"max_depth": 4}}
     assert resolve_resource_policy(None).max_depth == 4
 
 
-def test_an_explicit_argument_outranks_the_setting(settings: pytest_django.Settings):
+def test_an_explicit_argument_outranks_the_setting(settings: pytest_django.Settings) -> None:
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RESOURCE_POLICY": {"max_depth": 4}}
     assert resolve_resource_policy({"max_depth": 9}).max_depth == 9
 
 
-def test_a_non_mapping_policy_setting_is_rejected(settings: pytest_django.Settings):
+def test_a_non_mapping_policy_setting_is_rejected(settings: pytest_django.Settings) -> None:
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RESOURCE_POLICY": 12}
     with pytest.raises(ConfigurationError, match="must be a ResourcePolicy or a mapping"):
         resolve_resource_policy(None)
 
 
-def test_a_non_mapping_policy_argument_is_rejected():
+def test_a_non_mapping_policy_argument_is_rejected() -> None:
     with pytest.raises(ConfigurationError, match="must be a ResourcePolicy or a mapping"):
         # basedpyright: the non-mapping policy is the hostile input under test;
         # resolve_resource_policy types the parameter as ResourcePolicy | Mapping[str, object] | None
         resolve_resource_policy(12)  # pyright: ignore[reportArgumentType]
 
 
-def test_an_unknown_bound_name_is_rejected_with_the_valid_vocabulary():
+def test_an_unknown_bound_name_is_rejected_with_the_valid_vocabulary() -> None:
     """Naming the valid bounds in the message is what makes a typo self-correcting."""
     with pytest.raises(ConfigurationError, match="Unknown resource-policy bound\\(s\\): max_deth"):
         resolve_resource_policy({"max_deth": 3})
@@ -391,21 +402,21 @@ def test_an_unknown_bound_name_is_rejected_with_the_valid_vocabulary():
 # ---------------------------------------------------------------------------
 
 
-def test_narrowing_a_bound_returns_a_tighter_policy():
+def test_narrowing_a_bound_returns_a_tighter_policy() -> None:
     assert DEFAULT_RESOURCE_POLICY.narrowed(max_page_size=5).max_page_size == 5
 
 
-def test_widening_a_bound_is_refused():
+def test_widening_a_bound_is_refused() -> None:
     with pytest.raises(ConfigurationError, match="may only be narrowed"):
         DEFAULT_RESOURCE_POLICY.narrowed(max_page_size=10_000)
 
 
-def test_narrowing_an_unknown_bound_is_refused():
+def test_narrowing_an_unknown_bound_is_refused() -> None:
     with pytest.raises(ConfigurationError, match="no bound named 'nope'"):
         DEFAULT_RESOURCE_POLICY.narrowed(nope=1)
 
 
-def test_a_deadline_narrows_from_absent_to_present_but_never_back():
+def test_a_deadline_narrows_from_absent_to_present_but_never_back() -> None:
     """``None`` means "no deadline", so restoring it is the widest move there is."""
     with_deadline = DEFAULT_RESOURCE_POLICY.narrowed(execution_deadline_seconds=5)
     assert with_deadline.execution_deadline_seconds == 5
@@ -416,13 +427,13 @@ def test_a_deadline_narrows_from_absent_to_present_but_never_back():
         with_deadline.narrowed(execution_deadline_seconds=6)
 
 
-def test_narrowing_validates_override_domains_before_comparing_them():
+def test_narrowing_validates_override_domains_before_comparing_them() -> None:
     """An invalid override is a configuration error, not a comparison ``TypeError``."""
     with pytest.raises(ConfigurationError, match="max_page_size must be a positive integer"):
         DEFAULT_RESOURCE_POLICY.narrowed(max_page_size="five")
 
 
-def test_effective_bound_takes_the_tighter_of_the_two_unless_trusted():
+def test_effective_bound_takes_the_tighter_of_the_two_unless_trusted() -> None:
     assert effective_bound(100, None) == 100
     assert effective_bound(100, 5) == 5
     assert effective_bound(5, 100) == 5
@@ -439,7 +450,9 @@ def test_effective_bound_takes_the_tighter_of_the_two_unless_trusted():
         object(),
     ],
 )
-def test_only_the_literal_true_widens_a_declared_bound_past_the_request_policy(trusted: object):
+def test_only_the_literal_true_widens_a_declared_bound_past_the_request_policy(
+    trusted: object,
+) -> None:
     """A merely TRUTHY opt-in narrows like every other caller.
 
     This is the one primitive whose answer may exceed the request's own
@@ -462,7 +475,7 @@ def test_only_the_literal_true_widens_a_declared_bound_past_the_request_policy(t
         [],
     ],
 )
-def test_a_falsy_non_bool_opt_in_also_narrows(trusted: object):
+def test_a_falsy_non_bool_opt_in_also_narrows(trusted: object) -> None:
     """The narrowing answer is the same for every non-``True`` value, truthy or not."""
     # basedpyright: each falsy non-bool flag is the hostile input under test; effective_bound
     # types the parameter as bool
@@ -480,7 +493,7 @@ def test_a_falsy_non_bool_opt_in_also_narrows(trusted: object):
         [],
     ],
 )
-def test_a_trusted_flag_must_be_exactly_true_or_false(value: object):
+def test_a_trusted_flag_must_be_exactly_true_or_false(value: object) -> None:
     with pytest.raises(
         ConfigurationError,
         match="probe trusted_max_rows must be exactly True or False",
@@ -489,7 +502,7 @@ def test_a_trusted_flag_must_be_exactly_true_or_false(value: object):
 
 
 @pytest.mark.parametrize("value", [True, False])
-def test_an_exact_boolean_trusted_flag_is_accepted(value: bool):
+def test_an_exact_boolean_trusted_flag_is_accepted(*, value: bool) -> None:
     assert validate_trusted_flag(value, field="probe trusted_max_rows") is None
 
 
@@ -502,7 +515,7 @@ def test_an_exact_boolean_trusted_flag_is_accepted(value: bool):
         "9",
     ],
 )
-def test_a_field_declared_collection_bound_must_be_a_positive_integer(value: object):
+def test_a_field_declared_collection_bound_must_be_a_positive_integer(value: object) -> None:
     with pytest.raises(ConfigurationError, match="probe max_rows must be a positive integer"):
         validate_collection_bound(value, field="probe max_rows")
 
@@ -525,7 +538,7 @@ def _frozen_context() -> MappingProxyType[str, object]:
 )
 def test_the_policy_round_trips_or_fails_closed_on_every_context_shape(
     context_factory: Callable[[], object],
-):
+) -> None:
     """A frozen context cannot hold the published mirror, and still gets a BOUNDED policy.
 
     The policy is read after its operation ended, so the mirror is all that
@@ -542,13 +555,13 @@ def test_the_policy_round_trips_or_fails_closed_on_every_context_shape(
     assert read is not DEFAULT_RESOURCE_POLICY
 
 
-def test_a_non_policy_value_under_the_key_is_ignored():
+def test_a_non_policy_value_under_the_key_is_ignored() -> None:
     """A consumer key collision must not become "the request has no bounds"."""
     context = {DST_RESOURCE_POLICY: "not a policy"}
     assert policy_from_info(SimpleNamespace(context=context)) == DEFAULT_RESOURCE_POLICY
 
 
-def test_nested_sync_schema_restores_the_outer_policy_and_deadline():
+def test_nested_sync_schema_restores_the_outer_policy_and_deadline() -> None:
     """An inner schema must not widen later outer collection work."""
 
     @strawberry.type
@@ -584,7 +597,7 @@ def test_nested_sync_schema_restores_the_outer_policy_and_deadline():
     assert result.data["nested"] == "1:1:1:60:60:None"
 
 
-async def test_nested_async_schema_restores_the_outer_policy_and_deadline():
+async def test_nested_async_schema_restores_the_outer_policy_and_deadline() -> None:
     """The same context restoration contract holds across awaited inner execution."""
 
     @strawberry.type
@@ -627,17 +640,17 @@ async def test_nested_async_schema_restores_the_outer_policy_and_deadline():
 # ---------------------------------------------------------------------------
 
 
-def test_no_stashed_deadline_leaves_the_request_running():
+def test_no_stashed_deadline_leaves_the_request_running() -> None:
     check_deadline(SimpleNamespace(context={}))
 
 
-def test_a_non_numeric_stashed_deadline_leaves_the_request_running():
+def test_a_non_numeric_stashed_deadline_leaves_the_request_running() -> None:
     check_deadline(SimpleNamespace(context={DST_RESOURCE_DEADLINE: True}))
 
 
 def test_a_future_deadline_leaves_the_request_running(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     context: dict[str, object] = {}
     arm_resource_budget(context, ResourcePolicy(execution_deadline_seconds=60))
     check_deadline(SimpleNamespace(context=context))
@@ -645,7 +658,7 @@ def test_a_future_deadline_leaves_the_request_running(
 
 def test_a_passed_deadline_reports_the_configured_seconds_not_the_clock(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """``limit`` is the bound the deployment configured, never a monotonic timestamp.
 
     The elapsed time and the absolute deadline are process-internal timings a
@@ -663,7 +676,7 @@ def test_a_passed_deadline_reports_the_configured_seconds_not_the_clock(
     assert "2.5 seconds" in caught.value.message
 
 
-def test_a_passed_deadline_with_no_policy_behind_it_still_rejects():
+def test_a_passed_deadline_with_no_policy_behind_it_still_rejects() -> None:
     """A hand-written deadline key has no configured budget to report - and still rejects.
 
     Fail-closed: the deadline HAS passed, so the answer is a rejection whose
@@ -676,7 +689,7 @@ def test_a_passed_deadline_with_no_policy_behind_it_still_rejects():
     assert "unknown" in caught.value.message
 
 
-def test_a_numeric_subclass_deadline_fails_closed_instead_of_being_asked():
+def test_a_numeric_subclass_deadline_fails_closed_instead_of_being_asked() -> None:
     """A numeric SUBCLASS cannot certify a budget, so it is never asked to.
 
     The deadline stash is a process-internal derived value, but the context is
@@ -689,22 +702,22 @@ def test_a_numeric_subclass_deadline_fails_closed_instead_of_being_asked():
 
     class HostileFloat(float):
         @override
-        def __gt__(self, other: object):
+        def __gt__(self, other: object) -> NoReturn:
             raise RuntimeError("hostile __gt__")
 
         @override
-        def __lt__(self, other: object):
+        def __lt__(self, other: object) -> NoReturn:
             raise RuntimeError("hostile __lt__")
 
         @override
-        def __le__(self, other: object):
+        def __le__(self, other: object) -> NoReturn:
             # ``monotonic >= stash`` dispatches to the REFLECTED ``__le__``
             # first (a float subclass wins the reversed slot), so this is the
             # dunder a seam that compared the value would run.
             raise RuntimeError("hostile __le__ detonated")
 
         @override
-        def __ge__(self, other: object):
+        def __ge__(self, other: object) -> NoReturn:
             raise RuntimeError("hostile __ge__ detonated")
 
     context = {DST_RESOURCE_DEADLINE: HostileFloat(time.monotonic())}
@@ -715,7 +728,7 @@ def test_a_numeric_subclass_deadline_fails_closed_instead_of_being_asked():
     assert "unknown" in caught.value.message
 
 
-def test_an_integer_deadline_too_large_for_the_clock_fails_closed():
+def test_an_integer_deadline_too_large_for_the_clock_fails_closed() -> None:
     """An instant the conversion to a double overflows is one no comparison can place."""
     context = {DST_RESOURCE_DEADLINE: 10**400}
     with pytest.raises(ResourceLimitExceeded) as caught:
@@ -723,7 +736,7 @@ def test_an_integer_deadline_too_large_for_the_clock_fails_closed():
     assert caught.value.bound == "execution_deadline_seconds"
 
 
-def test_a_benign_comparison_int_subclass_is_still_refused_a_policy_field():
+def test_a_benign_comparison_int_subclass_is_still_refused_a_policy_field() -> None:
     """Rejecting only the subclasses that DETONATE would store the quiet ones.
 
     A subclass whose ``<`` answers normally passes a value check and is then
@@ -735,7 +748,7 @@ def test_a_benign_comparison_int_subclass_is_still_refused_a_policy_field():
 
     class QuietInt(int):
         @override
-        def __format__(self, spec: str):
+        def __format__(self, spec: str) -> str:
             raise RuntimeError("hostile __format__ detonated")
 
     with pytest.raises(ConfigurationError, match="max_list_rows must be a positive integer"):
@@ -744,16 +757,16 @@ def test_a_benign_comparison_int_subclass_is_still_refused_a_policy_field():
         validate_collection_bound(QuietInt(2), field="probe max_rows")
 
 
-def test_a_hostile_int_subclass_narrowing_a_bound_is_typed_rejected():
+def test_a_hostile_int_subclass_narrowing_a_bound_is_typed_rejected() -> None:
     """The narrowing comparison runs on values the policy owns, so it cannot detonate."""
 
     class HostileInt(int):
         @override
-        def __gt__(self, other: object):
+        def __gt__(self, other: object) -> NoReturn:
             raise RuntimeError("hostile __gt__ detonated")
 
         @override
-        def __lt__(self, other: object):
+        def __lt__(self, other: object) -> NoReturn:
             raise RuntimeError("hostile __lt__ detonated")
 
     with pytest.raises(ConfigurationError, match="max_list_rows must be a positive integer"):
@@ -762,7 +775,7 @@ def test_a_hostile_int_subclass_narrowing_a_bound_is_typed_rejected():
 
 def test_a_float_subclass_cannot_reach_the_derived_deadline_arithmetic(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """A reflected ``__radd__`` wins over ``float``'s, so it must never be stored.
 
     ``begin_resource_budget`` derives the absolute deadline as
@@ -775,7 +788,7 @@ def test_a_float_subclass_cannot_reach_the_derived_deadline_arithmetic(
 
     class PoisonFloat(float):
         @override
-        def __radd__(self, other: object):
+        def __radd__(self, other: object) -> float:
             return math.nan
 
     with pytest.raises(ConfigurationError, match="execution_deadline_seconds"):
@@ -793,7 +806,7 @@ def test_a_float_subclass_cannot_reach_the_derived_deadline_arithmetic(
     [math.nan, math.inf, -math.inf],
     ids=["nan", "infinity", "negative-infinity"],
 )
-def test_a_non_finite_deadline_with_no_budget_armed_fails_closed(written: float):
+def test_a_non_finite_deadline_with_no_budget_armed_fails_closed(written: float) -> None:
     """No configured policy derives these, and no comparison can certify them.
 
     A ``nan`` is neither absent nor non-numeric: it compares false against every
@@ -823,7 +836,7 @@ def _armed(context: object, policy: ResourcePolicy) -> Generator[None, None, Non
         end_resource_budget(token)
 
 
-def test_an_armed_budget_outranks_a_policy_a_resolver_writes_over_it():
+def test_an_armed_budget_outranks_a_policy_a_resolver_writes_over_it() -> None:
     """The published key is a mirror; replacing it does not move any bound.
 
     ``info.context`` belongs to the consumer, so every resolver in the request
@@ -842,7 +855,7 @@ def test_an_armed_budget_outranks_a_policy_a_resolver_writes_over_it():
         assert len(rows) == 5
 
 
-def test_a_policy_written_without_arming_one_still_answers():
+def test_a_policy_written_without_arming_one_still_answers() -> None:
     """The mirror is the fallback where nothing armed a budget.
 
     A plain ``strawberry.Schema`` that never installed the extension leaves the
@@ -859,7 +872,9 @@ def test_a_policy_written_without_arming_one_still_answers():
     [None, math.nan, math.inf],
     ids=["cleared", "nan", "infinity"],
 )
-def test_an_armed_deadline_cannot_be_widened_or_cleared_from_the_context(written: float | None):
+def test_an_armed_deadline_cannot_be_widened_or_cleared_from_the_context(
+    written: float | None,
+) -> None:
     """A resolver cannot buy itself more wall clock by writing the deadline key."""
     context: dict[str, object] = {}
     info = SimpleNamespace(context=context)
@@ -872,7 +887,7 @@ def test_an_armed_deadline_cannot_be_widened_or_cleared_from_the_context(written
     assert caught.value.limit == 1
 
 
-def test_deleting_the_deadline_key_outright_does_not_disarm_the_budget():
+def test_deleting_the_deadline_key_outright_does_not_disarm_the_budget() -> None:
     """Absent is not "no deadline" while a budget is armed; it is no narrowing."""
     context: dict[str, object] = {}
     info = SimpleNamespace(context=context)
@@ -883,7 +898,7 @@ def test_deleting_the_deadline_key_outright_does_not_disarm_the_budget():
             check_deadline(info)
 
 
-def test_a_resolver_may_shorten_its_own_request():
+def test_a_resolver_may_shorten_its_own_request() -> None:
     """The positive control for the narrowing rule, and what the live async row rides.
 
     Without it the widening refusals above would still pass if the seam simply
@@ -900,7 +915,7 @@ def test_a_resolver_may_shorten_its_own_request():
     assert caught.value.limit == 30
 
 
-def test_a_narrowing_deadline_arrives_where_the_operation_configured_none():
+def test_a_narrowing_deadline_arrives_where_the_operation_configured_none() -> None:
     """A budget armed with no deadline still honours a consumer that sets one."""
     context: dict[str, object] = {}
     info = SimpleNamespace(context=context)
@@ -916,7 +931,7 @@ class _UnorderableDeadline(float):
     """A written deadline no comparison can order against the armed one."""
 
     @override
-    def __lt__(self, other: object):
+    def __lt__(self, other: object) -> NoReturn:
         raise RuntimeError("hostile __lt__ detonated")
 
 
@@ -928,11 +943,11 @@ class _NarrowsThenNeverExpires(float):
     """
 
     @override
-    def __lt__(self, other: object):
+    def __lt__(self, other: object) -> bool:
         return True
 
     @override
-    def __le__(self, other: object):
+    def __le__(self, other: object) -> bool:
         # ``time.monotonic() >= deadline`` dispatches to the REFLECTED operand
         # first, so this is the comparison that decides whether time is up.
         return False
@@ -949,7 +964,7 @@ _HOSTILE_DEADLINE_IDS = ["unorderable", "narrows-then-never-expires"]
 )
 def test_a_numeric_subclass_written_deadline_leaves_the_armed_ceiling_standing(
     hostile: type[float],
-):
+) -> None:
     """A value outside the deadline domain cannot be shown to narrow the budget."""
     context: dict[str, object] = {}
     info = SimpleNamespace(context=context)
@@ -965,7 +980,7 @@ def test_a_numeric_subclass_written_deadline_leaves_the_armed_ceiling_standing(
 )
 def test_a_numeric_subclass_written_deadline_cannot_outlive_an_expired_budget(
     hostile: type[float],
-):
+) -> None:
     """The escape a narrowing rule alone leaves open once the domain is not exact.
 
     A subclass answers BOTH comparisons this seam makes - the one deciding
@@ -985,7 +1000,7 @@ def test_a_numeric_subclass_written_deadline_cannot_outlive_an_expired_budget(
     assert caught.value.bound == "execution_deadline_seconds"
 
 
-def test_ending_a_budget_restores_the_one_it_was_opened_inside():
+def test_ending_a_budget_restores_the_one_it_was_opened_inside() -> None:
     """A nested execution must hand the outer operation its own budget back."""
     context: dict[str, object] = {}
     info = SimpleNamespace(context=context)
@@ -1001,7 +1016,7 @@ def test_ending_a_budget_restores_the_one_it_was_opened_inside():
     assert policy_from_info(info) == DEFAULT_RESOURCE_POLICY
 
 
-async def test_the_armed_budget_reaches_a_sync_to_async_worker_thread():
+async def test_the_armed_budget_reaches_a_sync_to_async_worker_thread() -> None:
     """The bound must not evaporate where a resolver hands work to the executor.
 
     ``sync_to_async`` runs its callable in a worker thread, which is exactly
@@ -1029,7 +1044,7 @@ async def test_the_armed_budget_reaches_a_sync_to_async_worker_thread():
 
 def test_bounded_rows_slices_a_sequence_to_the_policy_bound(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     info = SimpleNamespace(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     assert bounded_rows(list(range(10)), info) == [0, 1]
@@ -1037,13 +1052,13 @@ def test_bounded_rows_slices_a_sequence_to_the_policy_bound(
 
 def test_bounded_rows_bounds_a_non_subscriptable_iterable(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """The unsliceable shape must still be bounded, not waved through."""
     info = SimpleNamespace(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
 
     class _Rows:
-        def __iter__(self):
+        def __iter__(self) -> Iterator[int]:
             return iter(range(10))
 
     assert bounded_rows(_Rows(), info) == [0, 1]
@@ -1057,7 +1072,7 @@ def test_bounded_rows_bounds_a_non_subscriptable_iterable(
 def test_bounded_rows_bounds_a_mapping_shaped_result(
     mapping_cls: type[dict[str, object]] | None,
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """A MAPPING-shaped result is bounded via ``islice``, never a raw ``KeyError``.
 
     A mapping answers a slice subscript with ``KeyError`` on interpreters where
@@ -1071,7 +1086,7 @@ def test_bounded_rows_bounds_a_mapping_shaped_result(
 
     class _GuardedDict(dict[str, object]):
         @override
-        def __getitem__(self, key: str):
+        def __getitem__(self, key: str) -> NoReturn:
             raise KeyError("guarded")
 
     info = SimpleNamespace(context={})
@@ -1120,7 +1135,7 @@ class _SliceEscapingTuple(tuple[int, ...]):
 def test_bounded_rows_does_not_let_a_sequence_subclass_answer_its_own_slice(
     container: type[_SliceEscapingList | _SliceEscapingTuple],
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """A sequence type may override ``__getitem__``; the bound must not run through it.
 
     ``result[:limit]`` is the operation the raw-list ceiling is made of, and on a
@@ -1144,7 +1159,7 @@ def test_a_windowed_sequence_subclass_is_bounded_on_every_coordinate(
     limit: int | None,
     expected: list[int],
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """The offset window and the zero-width window bound the hostile shape too.
 
     ``result[start:start]`` is as much a consumer call as ``result[start:stop]``,
@@ -1155,7 +1170,7 @@ def test_a_windowed_sequence_subclass_is_bounded_on_every_coordinate(
     class _Escape(list[object]):
         @override
         # basedpyright: deliberately answers a slice with a list, the shape the ceiling must not trust
-        def __getitem__(self, key: int | slice):  # pyright: ignore[reportIncompatibleMethodOverride]
+        def __getitem__(self, key: int | slice) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]
             if isinstance(key, slice):
                 return list(self)
             return super().__getitem__(key)
@@ -1169,12 +1184,12 @@ def test_a_windowed_sequence_subclass_is_bounded_on_every_coordinate(
 
 def test_bounded_rows_bounds_a_hostile_mapping_subclass(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """A ``dict`` subclass is counted, never subscripted, so its guard cannot matter."""
 
     class _Escape(dict[str, object]):
         @override
-        def __getitem__(self, key: str):
+        def __getitem__(self, key: str) -> object:
             return list(self)
 
     info = SimpleNamespace(context={})
@@ -1184,7 +1199,7 @@ def test_bounded_rows_bounds_a_hostile_mapping_subclass(
 
 def test_bounded_rows_honours_a_trusted_widening(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     info = SimpleNamespace(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     assert bounded_rows(list(range(10)), info, 4, trusted=True) == [
@@ -1205,7 +1220,7 @@ async def test_the_exported_raw_list_bound_takes_no_client_window(
     color: str,
     coordinate: str,
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """A client page window is not on the exported surface, so an importer cannot widen it.
 
     A supplied window is a claim the bounding seam cannot check, and the one that
@@ -1234,21 +1249,21 @@ async def test_the_exported_raw_list_bound_takes_no_client_window(
 
 async def test_bounded_rows_async_closes_after_the_effective_prefix(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     class Rows:
-        def __init__(self):
+        def __init__(self) -> None:
             self.value = 0
             self.closed = False
 
-        def __aiter__(self):
+        def __aiter__(self) -> Rows:
             return self
 
-        async def __anext__(self):
+        async def __anext__(self) -> int:
             value = self.value
             self.value += 1
             return value
 
-        async def aclose(self):
+        async def aclose(self) -> None:
             self.closed = True
 
     info = SimpleNamespace(context={})
@@ -1259,15 +1274,15 @@ async def test_bounded_rows_async_closes_after_the_effective_prefix(
     assert rows.closed is True
 
 
-async def test_bounded_rows_async_preserves_source_errors_when_cleanup_fails():
+async def test_bounded_rows_async_preserves_source_errors_when_cleanup_fails() -> None:
     class BrokenRows:
-        def __aiter__(self):
+        def __aiter__(self) -> BrokenRows:
             return self
 
-        async def __anext__(self):
+        async def __anext__(self) -> NoReturn:
             raise ValueError("source failed")
 
-        async def aclose(self):
+        async def aclose(self) -> NoReturn:
             raise RuntimeError("cleanup failed")
 
     with pytest.raises(ValueError, match="source failed") as caught:
@@ -1278,7 +1293,7 @@ async def test_bounded_rows_async_preserves_source_errors_when_cleanup_fails():
     assert any("cleanup failed" in note for note in getattr(caught.value, "__notes__", []))
 
 
-async def test_bounded_rows_async_survives_a_hostile_notes_list_on_the_source_error():
+async def test_bounded_rows_async_survives_a_hostile_notes_list_on_the_source_error() -> None:
     """A hostile non-iterable ``__notes__`` on the source error must not mask it.
 
     The cleanup failure is attached as a note so the source error stays primary;
@@ -1295,17 +1310,17 @@ async def test_bounded_rows_async_survives_a_hostile_notes_list_on_the_source_er
         pass
 
     class HostileNotesRows:
-        def __aiter__(self):
+        def __aiter__(self) -> HostileNotesRows:
             return self
 
-        async def __anext__(self):
+        async def __anext__(self) -> NoReturn:
             error = SourceError("source failed")
             # basedpyright: the non-list __notes__ is the hostile input under test; typeshed types
             # __notes__ as list[str]
             error.__notes__ = 42  # pyright: ignore[reportAttributeAccessIssue]
             raise error
 
-        async def aclose(self):
+        async def aclose(self) -> NoReturn:
             raise RuntimeError("cleanup failed")
 
     with pytest.raises(SourceError) as caught:
@@ -1317,22 +1332,22 @@ async def test_bounded_rows_async_survives_a_hostile_notes_list_on_the_source_er
     assert getattr(caught.value, "__notes__", None) == 42
 
 
-async def test_bounded_rows_async_hostile_notes_property_getter_does_not_mask_the_source():
+async def test_bounded_rows_async_hostile_notes_property_getter_does_not_mask_the_source() -> None:
     """An unreadable ``__notes__`` descriptor must not replace the source error."""
 
     class HostileError(Exception):
         # basedpyright: a raising descriptor replaces the ``list[str]`` slot on purpose; the test
         # proves an unreadable ``__notes__`` does not mask the source error
-        __notes__ = property(lambda self: (_ for _ in ()).throw(RuntimeError("getter")))  # pyright: ignore[reportAssignmentType]
+        __notes__ = property(lambda _self: (_ for _ in ()).throw(RuntimeError("getter")))  # pyright: ignore[reportAssignmentType]
 
     class BrokenRows:
-        def __aiter__(self):
+        def __aiter__(self) -> BrokenRows:
             return self
 
-        async def __anext__(self):
+        async def __anext__(self) -> NoReturn:
             raise HostileError("source failed")
 
-        async def aclose(self):
+        async def aclose(self) -> NoReturn:
             raise RuntimeError("cleanup failed")
 
     # No ``match=`` here for the same reason: pytest's matcher reads
@@ -1344,19 +1359,19 @@ async def test_bounded_rows_async_hostile_notes_property_getter_does_not_mask_th
 
 async def test_bounded_rows_async_surfaces_cleanup_failure_without_a_source_error(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     class BrokenCleanupRows:
-        def __init__(self):
+        def __init__(self) -> None:
             self.value = 0
 
-        def __aiter__(self):
+        def __aiter__(self) -> BrokenCleanupRows:
             return self
 
-        async def __anext__(self):
+        async def __anext__(self) -> int:
             self.value += 1
             return self.value
 
-        async def aclose(self):
+        async def aclose(self) -> NoReturn:
             raise RuntimeError("cleanup failed")
 
     info = SimpleNamespace(context={})
@@ -1365,18 +1380,18 @@ async def test_bounded_rows_async_surfaces_cleanup_failure_without_a_source_erro
         await bounded_rows_async(BrokenCleanupRows(), info)
 
 
-async def test_bounded_rows_async_hostile_aclose_lookup_does_not_mask_the_source():
+async def test_bounded_rows_async_hostile_aclose_lookup_does_not_mask_the_source() -> None:
     """A hostile aclose attribute lookup must not replace the source error."""
 
     class HostileAcloseLookupRows:
-        def __aiter__(self):
+        def __aiter__(self) -> HostileAcloseLookupRows:
             return self
 
-        async def __anext__(self):
+        async def __anext__(self) -> NoReturn:
             raise ValueError("source failed")
 
         @override
-        def __getattribute__(self, name: str):
+        def __getattribute__(self, name: str) -> object:
             if name == "aclose":
                 raise RuntimeError("hostile aclose lookup")
             return super().__getattribute__(name)
@@ -1389,22 +1404,22 @@ async def test_bounded_rows_async_hostile_aclose_lookup_does_not_mask_the_source
 
 async def test_bounded_rows_async_hostile_aclose_lookup_surfaces_without_source_error(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """A hostile aclose attribute lookup raises directly when iteration succeeded."""
 
     class HostileAcloseLookupRows:
-        def __init__(self):
+        def __init__(self) -> None:
             self.value = 0
 
-        def __aiter__(self):
+        def __aiter__(self) -> HostileAcloseLookupRows:
             return self
 
-        async def __anext__(self):
+        async def __anext__(self) -> int:
             self.value += 1
             return self.value
 
         @override
-        def __getattribute__(self, name: str):
+        def __getattribute__(self, name: str) -> object:
             if name == "aclose":
                 raise RuntimeError("hostile aclose lookup")
             return super().__getattribute__(name)
@@ -1417,7 +1432,7 @@ async def test_bounded_rows_async_hostile_aclose_lookup_surfaces_without_source_
 
 def test_bounded_rows_preserves_none(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     info = SimpleNamespace(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     assert bounded_rows(None, info) is None
@@ -1425,7 +1440,7 @@ def test_bounded_rows_preserves_none(
 
 def test_bounded_rows_checks_deadline_before_preserving_none(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     info = SimpleNamespace(context={})
     arm_resource_budget(
         info.context,
@@ -1439,7 +1454,7 @@ def test_bounded_rows_checks_deadline_before_preserving_none(
 
 async def test_bounded_rows_async_closes_a_source_the_deadline_rejects_before_any_row(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """A passed deadline abandons the source, so the seam closes it on the way out.
 
     The clock is read after the resolver has already produced its source, so this
@@ -1450,18 +1465,18 @@ async def test_bounded_rows_async_closes_a_source_the_deadline_rejects_before_an
     """
 
     class Rows:
-        def __init__(self):
+        def __init__(self) -> None:
             self.advances = 0
             self.closes = 0
 
-        def __aiter__(self):
+        def __aiter__(self) -> Rows:
             return self
 
-        async def __anext__(self):
+        async def __anext__(self) -> NoReturn:
             self.advances += 1
             raise StopAsyncIteration
 
-        async def aclose(self):
+        async def aclose(self) -> None:
             self.closes += 1
 
     info = SimpleNamespace(context={})
@@ -1482,7 +1497,7 @@ async def test_bounded_rows_async_closes_a_source_the_deadline_rejects_before_an
 async def test_bounded_rows_async_keeps_the_deadline_primary_when_the_close_fails(
     requested_limit: int | None,
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """A failing ``aclose`` on the rejected source annotates the rejection, never replaces it.
 
     The complete resource error is what the client acts on; a cleanup that blows
@@ -1492,13 +1507,13 @@ async def test_bounded_rows_async_keeps_the_deadline_primary_when_the_close_fail
     """
 
     class BrokenCleanupRows:
-        def __aiter__(self):
+        def __aiter__(self) -> BrokenCleanupRows:
             return self
 
-        async def __anext__(self):
+        async def __anext__(self) -> NoReturn:
             raise AssertionError("a rejected source must never be advanced")
 
-        async def aclose(self):
+        async def aclose(self) -> NoReturn:
             raise RuntimeError("cleanup failed")
 
     info = SimpleNamespace(context={})
@@ -1531,7 +1546,7 @@ async def test_cleanup_rejected_async_iterable_notes_an_iterator_acquisition_fai
     """
 
     class UnacquirableAsyncIterable:
-        def __aiter__(self):
+        def __aiter__(self) -> NoReturn:
             raise RuntimeError("aiter exploded")
 
     primary = GraphQLError("rejected")
@@ -1555,12 +1570,12 @@ async def test_cleanup_rejected_async_iterable_survives_an_unannotatable_error()
     """
 
     class UnacquirableAsyncIterable:
-        def __aiter__(self):
+        def __aiter__(self) -> NoReturn:
             raise RuntimeError("aiter exploded")
 
     class NoteHostileError(Exception):
         @override
-        def __setattr__(self, name: str, value: object):
+        def __setattr__(self, name: str, value: object) -> None:
             raise RuntimeError("notes refused")
 
     primary = NoteHostileError("primary")
@@ -1574,7 +1589,7 @@ async def test_cleanup_rejected_async_iterable_survives_an_unannotatable_error()
 
 async def test_bounded_rows_async_lets_a_cancellation_during_cleanup_reach_the_task(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """A cancellation arriving while ``aclose`` runs outranks the source error it interrupts.
 
     Every other cleanup failure is demoted to a note so the source error stays
@@ -1587,13 +1602,13 @@ async def test_bounded_rows_async_lets_a_cancellation_during_cleanup_reach_the_t
     source_error = ValueError("source failed")
 
     class CancelledDuringCleanupRows:
-        def __aiter__(self):
+        def __aiter__(self) -> CancelledDuringCleanupRows:
             return self
 
-        async def __anext__(self):
+        async def __anext__(self) -> NoReturn:
             raise source_error
 
-        async def aclose(self):
+        async def aclose(self) -> None:
             closing.set()
             await asyncio.sleep(3600)
 
@@ -1611,7 +1626,7 @@ async def test_bounded_rows_async_lets_a_cancellation_during_cleanup_reach_the_t
     assert not getattr(source_error, "__notes__", [])
 
 
-async def test_cleanup_rejected_async_iterable_lets_a_cancelled_acquisition_through():
+async def test_cleanup_rejected_async_iterable_lets_a_cancelled_acquisition_through() -> None:
     """Acquisition interrupted by cancellation propagates instead of annotating the rejection.
 
     The pre-iteration cleanup runs while a rejection is already on its way out,
@@ -1621,7 +1636,7 @@ async def test_cleanup_rejected_async_iterable_lets_a_cancelled_acquisition_thro
     """
 
     class CancellingAsyncIterable:
-        def __aiter__(self):
+        def __aiter__(self) -> NoReturn:
             raise asyncio.CancelledError
 
     primary = GraphQLError("rejected")
@@ -1636,7 +1651,7 @@ async def test_cleanup_rejected_async_iterable_lets_a_cancelled_acquisition_thro
 
 async def test_bounded_rows_async_preserves_none(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     info = SimpleNamespace(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     assert await bounded_rows_async(None, info) is None
@@ -1644,25 +1659,25 @@ async def test_bounded_rows_async_preserves_none(
 
 async def test_bounded_rows_async_exhausted_iterator_without_truncation(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """An async iterator yielding fewer items than the bound exhausts normally without early aclose."""
 
     class ShortRows:
-        def __init__(self):
+        def __init__(self) -> None:
             self.items = [1, 2]
             self.closed = False
 
-        def __aiter__(self):
+        def __aiter__(self) -> ShortRows:
             self.iter = iter(self.items)
             return self
 
-        async def __anext__(self):
+        async def __anext__(self) -> int:
             try:
                 return next(self.iter)
             except StopIteration:
                 raise StopAsyncIteration from None
 
-        async def aclose(self):
+        async def aclose(self) -> None:
             self.closed = True
 
     info = SimpleNamespace(context={})
@@ -1674,7 +1689,7 @@ async def test_bounded_rows_async_exhausted_iterator_without_truncation(
 
 def test_bounded_rows_slices_with_offset_and_requested_limit(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     info = SimpleNamespace(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
@@ -1687,12 +1702,12 @@ def test_bounded_rows_slices_with_offset_and_requested_limit(
 
 def test_bounded_rows_slices_unsliceable_iterable_with_offset_and_requested_limit(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     info = SimpleNamespace(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
     class _Rows:
-        def __iter__(self):
+        def __iter__(self) -> Iterator[int]:
             return iter(range(10))
 
     assert _windowed_rows(_Rows(), info, offset=3, requested_limit=4) == [
@@ -1705,12 +1720,12 @@ def test_bounded_rows_slices_unsliceable_iterable_with_offset_and_requested_limi
 
 def test_bounded_rows_zero_window_does_not_advance_generator(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """A zero window returns an empty list without consuming or advancing unsliceable iterators."""
     info = SimpleNamespace(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
-    def _gen():
+    def _gen() -> Iterator[int]:
         yield 1
         yield 2
 
@@ -1725,21 +1740,21 @@ def test_bounded_rows_zero_window_does_not_advance_generator(
 
 async def test_bounded_rows_async_slices_with_offset_and_requested_limit(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     class Rows:
-        def __init__(self):
+        def __init__(self) -> None:
             self.value = 0
             self.closed = False
 
-        def __aiter__(self):
+        def __aiter__(self) -> Rows:
             return self
 
-        async def __anext__(self):
+        async def __anext__(self) -> int:
             value = self.value
             self.value += 1
             return value
 
-        async def aclose(self):
+        async def aclose(self) -> None:
             self.closed = True
 
     info = SimpleNamespace(context={})
@@ -1752,22 +1767,22 @@ async def test_bounded_rows_async_slices_with_offset_and_requested_limit(
 
 async def test_bounded_rows_async_zero_window_closes_without_next(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """A zero window on an async iterator closes it immediately without calling __anext__."""
 
     class Rows:
-        def __init__(self):
+        def __init__(self) -> None:
             self.next_called = False
             self.closed = False
 
-        def __aiter__(self):
+        def __aiter__(self) -> Rows:
             return self
 
-        async def __anext__(self):
+        async def __anext__(self) -> int:
             self.next_called = True
             return 1
 
-        async def aclose(self):
+        async def aclose(self) -> None:
             self.closed = True
 
     info = SimpleNamespace(context={})
@@ -1780,10 +1795,10 @@ async def test_bounded_rows_async_zero_window_closes_without_next(
 
 
 class _MatrixUnsliceable:
-    def __init__(self, items: Iterable[int]):
+    def __init__(self, items: Iterable[int]) -> None:
         self._items = items
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[int]:
         return iter(self._items)
 
 
@@ -1864,10 +1879,11 @@ def test_bounded_rows_window_parameter_matrix(
     offset: int | None,
     requested_limit: int | None,
     declared: int | None,
+    *,
     trusted: bool,
     expected: list[int],
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """Parametrize sequences and non-subscriptable iterables across window parameters."""
     info = SimpleNamespace(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
@@ -1891,12 +1907,12 @@ def test_bounded_rows_window_parameter_matrix(
 
 async def test_bounded_rows_async_positive_offset_arithmetic(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """Positive-offset arithmetic over an async iterator at helper seam (spec-050 Decision 8)."""
     info = SimpleNamespace(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
-    async def _gen():
+    async def _gen() -> AsyncIterator[int]:
         for i in range(20):
             yield i
 
@@ -1911,7 +1927,7 @@ async def test_bounded_rows_async_positive_offset_arithmetic(
 
 def test_bounded_rows_declined_sync_cleanup_resumable(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """Pin the declined sync cleanup contract: truncated sync generator stays suspended and resumable."""
     finally_ran = False
 
@@ -1941,21 +1957,21 @@ def test_bounded_rows_declined_sync_cleanup_resumable(
 def test_bounded_rows_unsliceable_iterable_exact_consumption(
     monkeypatch: pytest.MonkeyPatch,
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """Counters around __iter__/__next__ and patched islice seam verify exact consumption."""
     from itertools import islice
 
     class CountedUnsliceable:
-        def __init__(self, count: int):
+        def __init__(self, count: int) -> None:
             self.count = count
             self.iter_calls = 0
             self.next_calls = 0
 
-        def __iter__(self):
+        def __iter__(self) -> CountedUnsliceable:
             self.iter_calls += 1
             return self
 
-        def __next__(self):
+        def __next__(self) -> int:
             if self.next_calls >= self.count:
                 raise StopIteration
             val = self.next_calls
@@ -1992,7 +2008,7 @@ def test_bounded_rows_unsliceable_iterable_exact_consumption(
 
 async def test_bounded_rows_async_exact_consumption_and_cleanup_matrix(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """Async-only exact consumption, iterator acquisition, and cleanup counts matrix."""
 
     class TrackedAsyncIterable:
@@ -2000,8 +2016,9 @@ async def test_bounded_rows_async_exact_consumption_and_cleanup_matrix(
             self,
             items: list[int],
             fail_at: int | None = None,
+            *,
             fail_close: bool = False,
-        ):
+        ) -> None:
             self.items = items
             self.fail_at = fail_at
             self.fail_close = fail_close
@@ -2009,11 +2026,11 @@ async def test_bounded_rows_async_exact_consumption_and_cleanup_matrix(
             self.anext_calls = 0
             self.aclose_calls = 0
 
-        def __aiter__(self):
+        def __aiter__(self) -> TrackedAsyncIterable:
             self.iter_acquired += 1
             return self
 
-        async def __anext__(self):
+        async def __anext__(self) -> int:
             self.anext_calls += 1
             if self.fail_at is not None and self.anext_calls == self.fail_at:
                 raise ValueError("Source failure")
@@ -2021,7 +2038,7 @@ async def test_bounded_rows_async_exact_consumption_and_cleanup_matrix(
                 raise StopAsyncIteration
             return self.items[self.anext_calls - 1]
 
-        async def aclose(self):
+        async def aclose(self) -> None:
             self.aclose_calls += 1
             if self.fail_close:
                 raise RuntimeError("Cleanup failure")
@@ -2089,7 +2106,7 @@ async def test_bounded_rows_async_exact_consumption_and_cleanup_matrix(
 def test_bounded_rows_shared_policy_seams_spy(
     monkeypatch: pytest.MonkeyPatch,
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """Spy on check_deadline and effective_bound at bounded_rows seam."""
     import django_strawberry_framework.resource_policy as rp
 
@@ -2099,12 +2116,12 @@ def test_bounded_rows_shared_policy_seams_spy(
     orig_check = rp.check_deadline
     orig_bound = rp.effective_bound
 
-    def spy_check(info: object):
+    def spy_check(info: object) -> None:
         nonlocal check_deadline_calls
         check_deadline_calls += 1
         return orig_check(info)
 
-    def spy_bound(policy_value: int, declared: int | None, *, trusted: bool = False):
+    def spy_bound(policy_value: int, declared: int | None, *, trusted: bool = False) -> int:
         nonlocal effective_bound_calls
         effective_bound_calls += 1
         return orig_bound(policy_value, declared, trusted=trusted)
@@ -2149,7 +2166,7 @@ class _EscapingQuerySet(QuerySet[Category]):
 
     @override
     # basedpyright: deliberately answers a slice with a list, the shape the ceiling must not trust
-    def __getitem__(self, key: int | slice):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def __getitem__(self, key: int | slice) -> list[Category]:  # pyright: ignore[reportIncompatibleMethodOverride]
         return list(Category.objects.all())
 
 
@@ -2163,20 +2180,20 @@ class _ClaimsToBeAQuerySet:
     @property
     @override
     # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def __class__(self) -> type[QuerySet[Category]]:  # pyright: ignore[reportIncompatibleMethodOverride]
         return QuerySet
 
-    def __getitem__(self, key: object):
+    def __getitem__(self, key: object) -> list[int]:
         return list(range(50))
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[int]:
         return iter(range(50))
 
 
 @pytest.mark.django_db
 def test_a_queryset_subclass_cannot_answer_its_own_row_bound(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """The ceiling is a slice, so a subclass owning that slice owns the ceiling.
 
     ``isinstance(value, QuerySet)`` admitted every subclass to the SQL-slice
@@ -2197,7 +2214,7 @@ def test_a_queryset_subclass_cannot_answer_its_own_row_bound(
 @pytest.mark.django_db(transaction=True)
 async def test_a_queryset_subclass_cannot_answer_its_own_row_bound_when_awaited(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """The awaited helper reaches the same seam, so it carries the same ceiling."""
     await sync_to_async(seed_data)(6)
     info = SimpleNamespace(context={})
@@ -2211,7 +2228,7 @@ async def test_a_queryset_subclass_cannot_answer_its_own_row_bound_when_awaited(
 @pytest.mark.django_db
 def test_a_windowed_queryset_subclass_is_windowed_on_the_rebuilt_queryset(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """The coordinate window is taken on the rebuild, not on the source's subscript."""
     seed_data(6)
     info = SimpleNamespace(context={})
@@ -2227,7 +2244,7 @@ def test_a_windowed_queryset_subclass_is_windowed_on_the_rebuilt_queryset(
 @pytest.mark.django_db
 def test_a_zero_width_window_on_a_queryset_subclass_returns_no_rows(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """A zero-width window is a subscript the source must not be asked to answer."""
     seed_data(6)
     info = SimpleNamespace(context={})
@@ -2240,7 +2257,7 @@ def test_a_zero_width_window_on_a_queryset_subclass_returns_no_rows(
 @pytest.mark.django_db(transaction=True)
 async def test_a_zero_width_window_on_a_queryset_subclass_returns_no_rows_when_awaited(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """The awaited window seam delegates here, so the zero-width arm is the same one."""
     await sync_to_async(seed_data)(6)
     info = SimpleNamespace(context={})
@@ -2253,7 +2270,7 @@ async def test_a_zero_width_window_on_a_queryset_subclass_returns_no_rows_when_a
 @pytest.mark.django_db
 def test_an_exact_queryset_still_carries_the_row_bound_into_sql(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """The common shape pays nothing and keeps the ``LIMIT`` the bound exists to push."""
     seed_data(6)
     info = SimpleNamespace(context={})
@@ -2268,7 +2285,7 @@ def test_an_exact_queryset_still_carries_the_row_bound_into_sql(
 @pytest.mark.django_db
 def test_a_sealable_queryset_subclass_keeps_the_row_bound_in_sql(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """A rebuilt subclass is still a queryset, so the bound stays a ``LIMIT``.
 
     Counting a sealable subclass into a Python list would restore the row
@@ -2290,7 +2307,7 @@ def test_a_sealable_queryset_subclass_keeps_the_row_bound_in_sql(
 @pytest.mark.django_db
 def test_a_queryset_subclass_that_cannot_be_sealed_is_refused_not_sliced(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """An unrebuildable source fails closed; it never falls back to its own slice."""
     seed_data(2)
     info = SimpleNamespace(context={})
@@ -2308,7 +2325,7 @@ def test_a_queryset_subclass_that_cannot_be_sealed_is_refused_not_sliced(
 @pytest.mark.django_db
 def test_a_queryset_subclass_carrying_a_consumer_expression_names_what_the_bound_can_rebuild(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """The raw-list refusal names the seal's full cause list and its own result-cache rule."""
     seed_data(1)
     info = SimpleNamespace(context={})
@@ -2332,7 +2349,7 @@ def test_a_queryset_subclass_carrying_a_consumer_expression_names_what_the_bound
 
 def test_a_value_that_only_claims_to_be_a_queryset_cannot_reach_the_slice(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """``__class__`` is consumer code, so the shape is read from ``type(value)``.
 
     An object that answers ``isinstance`` with ``QuerySet`` reached the SQL-slice
@@ -2348,7 +2365,7 @@ def test_a_value_that_only_claims_to_be_a_queryset_cannot_reach_the_slice(
 
 def test_a_queryset_subclass_whose_state_is_unreadable_is_refused(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """State is read through ``object.__getattribute__``, and that read can still fail.
 
     A class is free to define ``__dict__`` as a descriptor that raises, and the
@@ -2365,7 +2382,7 @@ def test_a_queryset_subclass_whose_state_is_unreadable_is_refused(
         @override
         # basedpyright: the hostile shape under test, a ``__dict__`` property whose read raises;
         # the checker rejects any property overriding a base class attribute
-        def __dict__(self):  # pyright: ignore[reportIncompatibleVariableOverride]
+        def __dict__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleVariableOverride]
             """Refuse to hand over the instance state the rebuild reads."""
             raise RuntimeError("no state")
 
@@ -2376,7 +2393,7 @@ def test_a_queryset_subclass_whose_state_is_unreadable_is_refused(
 
 def test_a_queryset_subclass_without_a_model_class_is_refused(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """The model a source declares is a slot, and the rebuild needs a real class there.
 
     A raw-list source is validated against no registered type, so the model it
@@ -2394,7 +2411,7 @@ def test_a_queryset_subclass_without_a_model_class_is_refused(
 
 
 @pytest.mark.django_db
-def test_rows_a_source_already_fetched_are_read_from_the_frameworks_own_slot():
+def test_rows_a_source_already_fetched_are_read_from_the_frameworks_own_slot() -> None:
     """A prefetch cache's rows come out of Django's slot on an exact queryset."""
     seed_data(3)
     warm = Category.objects.all()
@@ -2403,8 +2420,8 @@ def test_rows_a_source_already_fetched_are_read_from_the_frameworks_own_slot():
 
 
 @pytest.mark.django_db
-def test_a_queryset_subclass_is_never_asked_what_it_has_already_fetched():
-    """This read is Django's own slot on an exact queryset, so a subclass answers nothing.
+def test_a_queryset_subclass_is_never_asked_what_it_has_already_fetched() -> None:
+    """The read is Django's own slot on an exact queryset, so a subclass answers nothing.
 
     Reading ``_result_cache`` off the relation cache with ``getattr`` is a
     consumer dispatch point on exactly the value the bound is about to be
@@ -2438,10 +2455,10 @@ class _ProjectQuerySet(QuerySet[_M]):
 class _LyingResultCache:
     """A populated result cache that is not a list and answers every subscript with everything."""
 
-    def __getitem__(self, key: object):
+    def __getitem__(self, key: object) -> list[Category]:
         return list(Category.objects.all())
 
-    def __len__(self):
+    def __len__(self) -> int:
         return 50
 
 
@@ -2461,7 +2478,7 @@ def _held_rows(source: QuerySet[Category]) -> list[object]:
 def test_an_evaluated_exact_queryset_is_windowed_from_the_rows_it_holds(
     django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """A source that arrives evaluated is windowed from its own rows, not re-queried."""
     seed_data(6)
     info = SimpleNamespace(context={})
@@ -2481,7 +2498,7 @@ def test_an_evaluated_exact_queryset_is_windowed_from_the_rows_it_holds(
 def test_an_evaluated_project_queryset_class_is_windowed_from_the_rows_it_holds(
     django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """The rebuild carries the fetched rows, so a project queryset class costs no query.
 
     The subclass is rebuilt - that is what makes the window an operation this
@@ -2509,7 +2526,7 @@ def test_an_evaluated_project_queryset_class_is_windowed_from_the_rows_it_holds(
 def test_a_coordinate_window_over_an_evaluated_project_queryset_class_reads_carried_rows(
     django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """The offset window is taken over the carried rows, so it too costs nothing."""
     seed_data(6)
     info = SimpleNamespace(context={})
@@ -2530,7 +2547,7 @@ def test_a_coordinate_window_over_an_evaluated_project_queryset_class_reads_carr
 @pytest.mark.django_db(transaction=True)
 async def test_an_evaluated_exact_queryset_is_windowed_from_its_own_rows_when_awaited(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """The awaited seam reaches the same window, so it reads the same held rows.
 
     A query count is not the instrument here: the awaited call runs on the event
@@ -2555,7 +2572,7 @@ async def test_an_evaluated_exact_queryset_is_windowed_from_its_own_rows_when_aw
 @pytest.mark.django_db(transaction=True)
 async def test_an_evaluated_project_queryset_class_is_windowed_from_its_own_rows_when_awaited(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """The awaited seam takes the rebuilt source's carried rows rather than a second fetch."""
     await sync_to_async(seed_data)(6)
     info = SimpleNamespace(context={})
@@ -2573,7 +2590,7 @@ async def test_an_evaluated_project_queryset_class_is_windowed_from_its_own_rows
 @pytest.mark.django_db
 def test_a_result_cache_that_is_not_a_list_is_refused_rather_than_carried(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """A cache Django did not build answers the window with its own subscript, so it is refused.
 
     The carried rows are windowed by subscripting them. An exact ``list`` is the
@@ -2598,7 +2615,7 @@ def test_a_result_cache_that_is_not_a_list_is_refused_rather_than_carried(
 @pytest.mark.django_db(transaction=True)
 async def test_a_result_cache_that_is_not_a_list_is_refused_when_awaited(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """The awaited seam refuses the same cache, so neither color carries one."""
     await sync_to_async(seed_data)(6)
     info = SimpleNamespace(context={})
@@ -2617,7 +2634,7 @@ async def test_a_result_cache_that_is_not_a_list_is_refused_when_awaited(
 @pytest.mark.django_db
 def test_a_relation_source_from_a_project_queryset_class_keeps_its_relation_predicate(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
-):
+) -> None:
     """A relation's pending predicate is baked onto the rebuild, whatever class carries it.
 
     Django's own ``_apply_rel_filters`` builds the source, so the pending state
@@ -2652,7 +2669,7 @@ def test_a_relation_source_from_a_project_queryset_class_keeps_its_relation_pred
 # ---------------------------------------------------------------------------
 
 
-def test_an_absent_document_charges_nothing():
+def test_an_absent_document_charges_nothing() -> None:
     scan_document_text(DEFAULT_RESOURCE_POLICY, None)
     scan_document_text(DEFAULT_RESOURCE_POLICY, "")
 
@@ -2678,7 +2695,7 @@ def test_an_absent_document_charges_nothing():
         "bool",
     ],
 )
-def test_a_non_string_query_is_declined_not_scanned(hostile: object):
+def test_a_non_string_query_is_declined_not_scanned(hostile: object) -> None:
     """A non-string query is declined, never handed to the lexer.
 
     Handing a truthy non-string to the lexer raised a raw ``TypeError`` /
@@ -2693,7 +2710,7 @@ def test_a_non_string_query_is_declined_not_scanned(hostile: object):
     scan_document_text(DEFAULT_RESOURCE_POLICY, hostile)  # pyright: ignore[reportArgumentType]
 
 
-def test_structural_delimiter_pairs_derivation():
+def test_structural_delimiter_pairs_derivation() -> None:
     """_OPEN_TOKEN_KINDS and _CLOSE_TOKEN_KINDS derive from _STRUCTURAL_DELIMITER_PAIRS."""
     assert _STRUCTURAL_DELIMITER_PAIRS == (
         (TokenKind.BRACE_L, TokenKind.BRACE_R),
@@ -2729,7 +2746,12 @@ def test_structural_delimiter_pairs_derivation():
         "nested_brackets_passes",
     ],
 )
-def test_pre_parse_scan_depth_across_delimiter_families(doc: str, limit: int, should_exceed: bool):
+def test_pre_parse_scan_depth_across_delimiter_families(
+    doc: str,
+    limit: int,
+    *,
+    should_exceed: bool,
+) -> None:
     """The pre-parse scan tracks depth across braces, parens, and brackets."""
     policy = ResourcePolicy(max_depth=limit)
     if should_exceed:
@@ -2841,7 +2863,7 @@ def _charge(
     variables: Mapping[str, object] | None = None,
     operation_name: str | None = None,
     policy: ResourcePolicy | None = None,
-):
+) -> None:
     charge_document(
         policy or DEFAULT_RESOURCE_POLICY,
         _PROBE_SCHEMA._schema,
@@ -2855,7 +2877,7 @@ def _charge_write(
     document: str,
     variables: Mapping[str, object] | None = None,
     policy: ResourcePolicy | None = None,
-):
+) -> None:
     """Charge a mutation document against the plain-schema probe (no bind specs)."""
     charge_document(
         policy or DEFAULT_RESOURCE_POLICY,
@@ -2866,7 +2888,7 @@ def _charge_write(
     )
 
 
-def test_an_id_list_in_a_plain_mutation_charges_the_relation_fallback():
+def test_an_id_list_in_a_plain_mutation_charges_the_relation_fallback() -> None:
     """The ID-scalar fallback keeps charging relation ids without bind specs.
 
     The spec rule only ever ADDS a classification signal for writes the
@@ -2885,12 +2907,12 @@ def test_an_id_list_in_a_plain_mutation_charges_the_relation_fallback():
     assert caught.value.charged == 2
 
 
-def test_an_absent_optional_argument_value_is_charged_as_nothing():
+def test_an_absent_optional_argument_value_is_charged_as_nothing() -> None:
     """A ``None`` argument value (an omitted optional variable) charges no leaves."""
     _charge("query T($t: [String!]) { echo(tags: $t) }", {"t": None})
 
 
-def test_an_operation_kind_the_schema_does_not_define_is_skipped():
+def test_an_operation_kind_the_schema_does_not_define_is_skipped() -> None:
     """A mutation against a query-only schema has no root type to walk.
 
     Live sibling: named-operation rows on ``/rp-shape/`` (fakeshop defines both
@@ -2899,7 +2921,7 @@ def test_an_operation_kind_the_schema_does_not_define_is_skipped():
     _charge("mutation { echo }")
 
 
-def test_an_unknown_fragment_spread_is_skipped():
+def test_an_unknown_fragment_spread_is_skipped() -> None:
     """Validation would reject it; the walker must not crash on a missing fragment.
 
     Live sibling: fragment-expansion charging on ``/rp-shape/``.
@@ -2907,7 +2929,7 @@ def test_an_unknown_fragment_spread_is_skipped():
     _charge("{ ...Missing }")
 
 
-def test_a_cyclic_fragment_set_terminates():
+def test_a_cyclic_fragment_set_terminates() -> None:
     """Validation rejects a fragment cycle; the walker must not depend on that.
 
     A schema that disabled validation would hand this document straight to the
@@ -2916,11 +2938,11 @@ def test_a_cyclic_fragment_set_terminates():
     _charge("{ ...A } fragment A on Query { ...B } fragment B on Query { ...A }")
 
 
-def test_an_inline_fragment_without_a_type_condition_keeps_its_parent():
+def test_an_inline_fragment_without_a_type_condition_keeps_its_parent() -> None:
     _charge("{ ... { echo } }")
 
 
-def test_an_inline_fragment_names_its_own_type_condition():
+def test_an_inline_fragment_names_its_own_type_condition() -> None:
     _charge("{ ... on Query { echo } }")
 
 
@@ -2962,7 +2984,7 @@ def _spy_result(
     document: str,
     variables: dict[str, object] | None = None,
     operation_name: str | None = None,
-):
+) -> ExecutionResult:
     """Execute ``document`` on a DjangoSchema whose policy admits eight scalar bytes."""
     schema = DjangoSchema(
         query=_SpyQuery,
@@ -2977,7 +2999,7 @@ def _spy_result(
     )
 
 
-def test_a_literal_in_an_unselected_operation_is_refused_before_its_scalar_parses_it():
+def test_a_literal_in_an_unselected_operation_is_refused_before_its_scalar_parses_it() -> None:
     result = _spy_result(
         'query A { hello } query B { echo(text: "%s") }' % ("x" * 9),
         operation_name="A",
@@ -2989,7 +3011,7 @@ def test_a_literal_in_an_unselected_operation_is_refused_before_its_scalar_parse
     assert _literal_parses == []
 
 
-def test_a_shadowed_variable_default_is_refused_before_its_scalar_parses_it():
+def test_a_shadowed_variable_default_is_refused_before_its_scalar_parses_it() -> None:
     result = _spy_result(
         'query Q($t: SpyText = "%s") { echo(text: $t) }' % ("x" * 9),
         {"t": "small"},
@@ -3001,7 +3023,7 @@ def test_a_shadowed_variable_default_is_refused_before_its_scalar_parses_it():
     assert _literal_parses == []
 
 
-def test_an_untyped_container_inside_a_scalar_is_still_charged():
+def test_an_untyped_container_inside_a_scalar_is_still_charged() -> None:
     """A JSON-shaped scalar's contents are nodes too, or they are a free payload."""
     with pytest.raises(ResourceLimitExceeded) as caught:
         _charge(
@@ -3012,12 +3034,12 @@ def test_an_untyped_container_inside_a_scalar_is_still_charged():
     assert caught.value.bound == "max_input_nodes"
 
 
-def test_a_scalar_where_a_list_is_declared_is_charged_as_one_item():
+def test_a_scalar_where_a_list_is_declared_is_charged_as_one_item() -> None:
     """GraphQL coerces a bare value into a single-item list; the charge follows."""
     _charge("query T($t: [String!]) { echo(tags: $t) }", {"t": "solo"})
 
 
-def test_scalar_list_coercion_charges_synthetic_lists_as_input_nodes():
+def test_scalar_list_coercion_charges_synthetic_lists_as_input_nodes() -> None:
     """The coerced one-item list itself counts toward the input-node budget."""
     with pytest.raises(ResourceLimitExceeded) as caught:
         _charge(
@@ -3028,7 +3050,7 @@ def test_scalar_list_coercion_charges_synthetic_lists_as_input_nodes():
     assert caught.value.bound == "max_input_nodes"
 
 
-def test_scalar_list_coercion_charges_each_declared_list_level():
+def test_scalar_list_coercion_charges_each_declared_list_level() -> None:
     """A bare variable is coerced to one item at every declared list level."""
     document = "query T($t: [[String!]]) { nested(tags: $t) }"
     _charge(document, {"t": "solo"}, policy=ResourcePolicy(max_value_depth=2))
@@ -3037,7 +3059,7 @@ def test_scalar_list_coercion_charges_each_declared_list_level():
     assert caught.value.bound == "max_value_depth"
 
 
-def test_a_container_referenced_twice_is_charged_per_reference():
+def test_a_container_referenced_twice_is_charged_per_reference() -> None:
     """A charge fires per REFERENCE; only a cycle back onto an ancestor is skipped.
 
     Two references to one list are two lists' worth of work for the coercer, the
@@ -3059,7 +3081,7 @@ def test_a_container_referenced_twice_is_charged_per_reference():
     assert caught.value.bound == "max_input_nodes"
 
 
-def test_a_self_referential_value_terminates():
+def test_a_self_referential_value_terminates() -> None:
     """A mapping that contains itself is a cycle, not an unbounded walk.
 
     Live sibling: ``test_one_variable_spliced_into_two_mutation_fields_is_charged_twice``
@@ -3070,21 +3092,21 @@ def test_a_self_referential_value_terminates():
     _charge("query B($p: JSON!) { blob(payload: $p) }", {"p": payload})
 
 
-def test_a_self_referential_list_terminates():
+def test_a_self_referential_list_terminates() -> None:
     """Both container families are cycle-guarded, not only mappings."""
     payload: list[object] = []
     payload.append(payload)
     _charge("query B($p: JSON!) { blob(payload: $p) }", {"p": payload})
 
 
-def test_a_cycle_deeper_than_its_own_container_terminates():
+def test_a_cycle_deeper_than_its_own_container_terminates() -> None:
     """The guard is the whole ancestor PATH, not just the immediate parent."""
     outer: dict[str, dict[str, object]] = {"inner": {}}
     outer["inner"]["back"] = outer
     _charge("query B($p: JSON!) { blob(payload: $p) }", {"p": outer})
 
 
-def test_two_distinct_but_equal_containers_are_both_charged():
+def test_two_distinct_but_equal_containers_are_both_charged() -> None:
     """Identity is by ``is``: equality is arbitrary consumer code, not a cycle."""
     payload = {"one": ["a"], "two": ["a"]}
     with pytest.raises(ResourceLimitExceeded):
@@ -3106,21 +3128,21 @@ class _AmountNoBoundCanExceed(int):
     """
 
     @override
-    def __gt__(self, other: object):
+    def __gt__(self, other: object) -> bool:
         return False
 
     @override
     # basedpyright: deliberately a NaN-producing int, the page bound the package must not own
-    def __radd__(self, other: object):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def __radd__(self, other: object) -> float:  # pyright: ignore[reportIncompatibleMethodOverride]
         return math.nan
 
     @override
     # basedpyright: deliberately a NaN-producing int, the page bound the package must not own
-    def __rmul__(self, other: object):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def __rmul__(self, other: object) -> float:  # pyright: ignore[reportIncompatibleMethodOverride]
         return math.nan
 
 
-def test_a_page_size_variable_outside_the_integers_narrows_nothing():
+def test_a_page_size_variable_outside_the_integers_narrows_nothing() -> None:
     """A page bound is a charge, so the value that sets it must be one the package owns.
 
     ``first`` narrows the rows a connection selection is charged. Supplied as an
@@ -3139,7 +3161,7 @@ def test_a_page_size_variable_outside_the_integers_narrows_nothing():
     _charge(document, {"n": 10}, policy=policy)
 
 
-def test_a_type_that_merely_has_an_edges_field_is_not_a_connection():
+def test_a_type_that_merely_has_an_edges_field_is_not_a_connection() -> None:
     """The connection exemption makes a list FREE, so it must match the edge shape.
 
     A connection's own ``edges`` is exempt from collection cost because the
@@ -3158,7 +3180,7 @@ def test_a_type_that_merely_has_an_edges_field_is_not_a_connection():
     assert caught.value.charged == 10_100
 
 
-def test_a_type_whose_edges_field_is_not_a_list_is_not_a_connection():
+def test_a_type_whose_edges_field_is_not_a_list_is_not_a_connection() -> None:
     """A connection charges a full page; a type that merely borrowed the name must not.
 
     Charged as a connection, ``scalarEdges`` would cost a whole page against the
@@ -3178,12 +3200,12 @@ def test_a_type_whose_edges_field_is_not_a_list_is_not_a_connection():
 class _CountingList(list[object]):
     """A sequence that reports no members, yields all of them, and counts advances."""
 
-    def __init__(self, members: Iterable[object]):
+    def __init__(self, members: Iterable[object]) -> None:
         super().__init__(members)
         self.advances = 0
 
     @override
-    def __len__(self):
+    def __len__(self) -> int:
         return 0
 
     @override
@@ -3193,7 +3215,7 @@ class _CountingList(list[object]):
             yield member
 
 
-def test_a_container_is_charged_for_what_it_yields_not_for_what_it_reports():
+def test_a_container_is_charged_for_what_it_yields_not_for_what_it_reports() -> None:
     """A width-shaped bound must not be settled by the container's own ``__len__``.
 
     An in-process caller's ``variable_values`` can hand the walk a ``list``
@@ -3216,7 +3238,7 @@ def test_a_container_is_charged_for_what_it_yields_not_for_what_it_reports():
     assert value.advances == 2
 
 
-def test_a_container_within_the_bound_is_charged_the_width_it_yields():
+def test_a_container_within_the_bound_is_charged_the_width_it_yields() -> None:
     """Under the bound the charge is the real width, and the walk queues those members.
 
     The reader stops one past the limit, so a container that fits was read in
@@ -3241,7 +3263,7 @@ def test_a_container_within_the_bound_is_charged_the_width_it_yields():
     assert caught.value.bound == "max_input_nodes"
 
 
-def test_a_container_is_not_advanced_once_its_width_is_already_proven():
+def test_a_container_is_not_advanced_once_its_width_is_already_proven() -> None:
     """Measuring an over-wide container costs what the bound allows, not what it holds.
 
     Copying the container first charged the request for every member of an input
@@ -3254,7 +3276,7 @@ def test_a_container_is_not_advanced_once_its_width_is_already_proven():
     """
     advances: list[int] = []
 
-    def _members():
+    def _members() -> Iterator[int]:
         for member in (1, 2, 3):
             advances.append(member)
             yield member
@@ -3262,7 +3284,7 @@ def test_a_container_is_not_advanced_once_its_width_is_already_proven():
 
     class _Endless(list[object]):
         @override
-        def __iter__(self):
+        def __iter__(self) -> Iterator[int]:
             return _members()
 
     with pytest.raises(ResourceLimitExceeded) as caught:
@@ -3283,7 +3305,7 @@ def test_a_container_is_not_advanced_once_its_width_is_already_proven():
 )
 def test_a_custom_sequence_is_measurable_at_the_largest_bound_a_policy_admits(
     value: _CountingList,
-):
+) -> None:
     """The reader's lookahead has to reach the whole domain the bound declares.
 
     ``MAX_RESOURCE_BOUND`` is ``sys.maxsize``, so a reader that asks for one
@@ -3299,7 +3321,7 @@ def test_a_custom_sequence_is_measurable_at_the_largest_bound_a_policy_admits(
     )
 
 
-def test_a_custom_mapping_is_measurable_at_the_largest_bound_a_policy_admits():
+def test_a_custom_mapping_is_measurable_at_the_largest_bound_a_policy_admits() -> None:
     """The mapping half reads through the same bounded reader and the same bound."""
 
     class _CountingMapping(dict[str, object]):
@@ -3315,12 +3337,12 @@ def test_a_custom_mapping_is_measurable_at_the_largest_bound_a_policy_admits():
     )
 
 
-def test_a_container_that_cannot_be_read_is_refused_rather_than_raised():
+def test_a_container_that_cannot_be_read_is_refused_rather_than_raised() -> None:
     """A member the framework cannot obtain is unmeasurable, which is a refusal."""
 
     class _Unreadable(list[object]):
         @override
-        def __iter__(self):
+        def __iter__(self) -> NoReturn:
             raise RuntimeError("iteration exploded")
 
     with pytest.raises(ResourceLimitExceeded) as caught:
@@ -3333,7 +3355,7 @@ def test_a_container_that_cannot_be_read_is_refused_rather_than_raised():
     assert caught.value.charged == 5
 
 
-def test_a_container_whose_length_raises_is_still_measured():
+def test_a_container_whose_length_raises_is_still_measured() -> None:
     """The width comes from the members, so a raising ``__len__`` is never consulted.
 
     Materializing the container asked it for a size hint first, which turned a
@@ -3344,7 +3366,7 @@ def test_a_container_whose_length_raises_is_still_measured():
 
     class _LengthBomb(list[object]):
         @override
-        def __len__(self):
+        def __len__(self) -> int:
             raise RuntimeError("length exploded")
 
     _charge(
@@ -3362,13 +3384,13 @@ def test_a_container_whose_length_raises_is_still_measured():
     assert caught.value.charged == 3
 
 
-def test_a_mapping_is_charged_for_the_entries_the_walk_queues():
+def test_a_mapping_is_charged_for_the_entries_the_walk_queues() -> None:
     """The mapping half of the same rule, on a ``dict`` subclass."""
     advances: list[tuple[str, object]] = []
 
     class _LyingWidth(dict[str, object]):
         @override
-        def __len__(self):
+        def __len__(self) -> int:
             return 0
 
         @override
@@ -3389,7 +3411,7 @@ def test_a_mapping_is_charged_for_the_entries_the_walk_queues():
     assert len(advances) == 2
 
 
-def test_an_ordinary_container_still_charges_its_own_width():
+def test_an_ordinary_container_still_charges_its_own_width() -> None:
     """The control: an exact ``list`` or ``dict`` is measured by the interpreter.
 
     At an exact type ``len`` is the package's own answer, so the container is
@@ -3410,7 +3432,7 @@ def test_an_ordinary_container_still_charges_its_own_width():
     assert caught.value.charged == 3
 
 
-def test_a_text_leaf_is_measured_by_the_built_in_encoding_not_its_own():
+def test_a_text_leaf_is_measured_by_the_built_in_encoding_not_its_own() -> None:
     """``max_scalar_bytes`` measures the text, not what the text says about itself.
 
     A ``str`` SUBCLASS carries its own ``encode``, and the byte count the bound
@@ -3421,7 +3443,7 @@ def test_a_text_leaf_is_measured_by_the_built_in_encoding_not_its_own():
 
     class _LyingEncode(str):
         @override
-        def encode(self, *args: object, **kwargs: object):
+        def encode(self, *args: object, **kwargs: object) -> bytes:
             return b"x"
 
     with pytest.raises(ResourceLimitExceeded) as caught:
@@ -3434,7 +3456,7 @@ def test_a_text_leaf_is_measured_by_the_built_in_encoding_not_its_own():
     assert caught.value.charged == 100
 
 
-def test_a_buffer_leaf_is_measured_through_the_buffer_protocol():
+def test_a_buffer_leaf_is_measured_through_the_buffer_protocol() -> None:
     """A buffer's size comes from the C protocol, never from a Python ``__len__``.
 
     Reaching for it as ``getattr(value, "nbytes", len(value))`` evaluates the
@@ -3445,7 +3467,7 @@ def test_a_buffer_leaf_is_measured_through_the_buffer_protocol():
 
     class _RaisingLength(bytes):
         @override
-        def __len__(self):
+        def __len__(self) -> int:
             raise RuntimeError("length exploded")
 
     _charge(
@@ -3471,7 +3493,7 @@ def test_a_buffer_leaf_is_measured_through_the_buffer_protocol():
 def test_every_buffer_shape_keeps_charging_its_real_size(
     value: bytes | bytearray | memoryview,
     expected: int,
-):
+) -> None:
     """The control for the three buffer types the leaf charge admits.
 
     Live sibling: ``test_a_scalar_larger_than_the_byte_bound_is_rejected`` (a
@@ -3499,13 +3521,13 @@ def test_every_buffer_shape_keeps_charging_its_real_size(
 # ---------------------------------------------------------------------------
 
 
-def test_an_explicit_policy_outranks_the_schemas():
+def test_an_explicit_policy_outranks_the_schemas() -> None:
     extension = DjangoResourcePolicyExtension(policy=ResourcePolicy(max_depth=2))
     extension.execution_context = make_execution_context()
     assert extension._resolved_policy().max_depth == 2
 
 
-def test_a_schema_without_a_policy_falls_back_to_the_package_defaults():
+def test_a_schema_without_a_policy_falls_back_to_the_package_defaults() -> None:
     """A plain ``strawberry.Schema`` carries no ``resource_policy`` attribute."""
     extension = DjangoResourcePolicyExtension()
     extension.execution_context = make_execution_context()
@@ -3514,7 +3536,7 @@ def test_a_schema_without_a_policy_falls_back_to_the_package_defaults():
     assert resolved is not DEFAULT_RESOURCE_POLICY
 
 
-def test_an_operation_with_no_parsed_document_charges_no_document_budget():
+def test_an_operation_with_no_parsed_document_charges_no_document_budget() -> None:
     """The admission hook runs even when the parse produced nothing to walk."""
     extension = DjangoResourcePolicyExtension()
     extension.execution_context = make_execution_context()  # unparsed: no graphql_document
@@ -3524,7 +3546,7 @@ def test_an_operation_with_no_parsed_document_charges_no_document_budget():
         next(hook)
 
 
-def test_a_verdict_recorded_outside_an_operation_is_not_kept():
+def test_a_verdict_recorded_outside_an_operation_is_not_kept() -> None:
     """There is no operation for it to belong to, and no later one inherits it."""
     record_admission_rejection(
         ResourceLimitExceeded("max_container_width", 1, 2, "a list argument is too wide"),
@@ -3534,7 +3556,7 @@ def test_a_verdict_recorded_outside_an_operation_is_not_kept():
         assert admission_rejection() is None
 
 
-def test_an_operation_the_budget_rejected_does_not_begin_executing():
+def test_an_operation_the_budget_rejected_does_not_begin_executing() -> None:
     """A rejection means nothing runs, restated where running starts.
 
     Publishing is what makes validation stand down, and every seam that reads a
@@ -3557,7 +3579,7 @@ def test_an_operation_the_budget_rejected_does_not_begin_executing():
     assert caught.value is rejection
 
 
-def test_an_operation_the_budget_admitted_executes():
+def test_an_operation_the_budget_admitted_executes() -> None:
     """The other verdict: an admitted operation passes the same hook untouched."""
     extension = DjangoResourcePolicyExtension()
 
@@ -3574,7 +3596,7 @@ class _StreamWitness(SchemaExtension):
     entered: list[str] = []
 
     @override
-    def on_execute(self):
+    def on_execute(self) -> Iterator[None]:
         _StreamWitness.entered.append(self.execution_context.query or "")
         yield
 
@@ -3606,7 +3628,7 @@ class _StreamedSubscription:
 async def test_the_streaming_path_carries_the_same_admission_verdict(
     extensions: list[type[SchemaExtension]],
     verdict: str,
-):
+) -> None:
     """One verdict per request, on the entry point that yields frames rather than a body.
 
     A streaming transport drives the schema's own generator, so a refusal that
@@ -3651,7 +3673,7 @@ async def test_the_streaming_path_carries_the_same_admission_verdict(
 )
 def test_a_rejection_an_extension_erased_is_restated_before_execution_is_decided(
     extension_type: type[DjangoResourcePolicyExtension | AdmissionGuard],
-):
+) -> None:
     """The published error is a mutable field; the verdict is what survives it.
 
     A validation extension that runs its own pass assigns the result over
@@ -3682,7 +3704,7 @@ def test_a_rejection_an_extension_erased_is_restated_before_execution_is_decided
 )
 def test_an_admitted_operation_keeps_whatever_validation_published(
     extension_type: type[DjangoResourcePolicyExtension | AdmissionGuard],
-):
+) -> None:
     """The restatement is a restatement, not an unconditional write."""
     extension = extension_type()
     validation_error = GraphQLError("Cannot query field 'nope'.")
@@ -3697,7 +3719,7 @@ def test_an_admitted_operation_keeps_whatever_validation_published(
     assert extension.execution_context.pre_execution_errors == [validation_error]
 
 
-def test_the_context_is_cleared_even_when_the_document_scan_rejects():
+def test_the_context_is_cleared_even_when_the_document_scan_rejects() -> None:
     """A rejection must not leave a policy (or a deadline) on a reused context."""
     extension = DjangoResourcePolicyExtension(policy=ResourcePolicy(max_document_tokens=1))
     context: dict[str, object] = {}
@@ -3717,7 +3739,7 @@ class _DriftingPolicy(ResourcePolicy):
     """
 
     @override
-    def __getattribute__(self, name: str):
+    def __getattribute__(self, name: str) -> object:
         state = object.__getattribute__(self, "__dict__")
         if name == "max_document_tokens" and state.get("_armed"):
             state["_reads"] = state.get("_reads", 0) + 1
@@ -3725,7 +3747,7 @@ class _DriftingPolicy(ResourcePolicy):
         return object.__getattribute__(self, name)
 
 
-def test_an_explicit_extension_policy_is_read_out_once_when_it_is_accepted():
+def test_an_explicit_extension_policy_is_read_out_once_when_it_is_accepted() -> None:
     """One operation is bounded by ONE policy, whatever its configuration answers.
 
     The extension used to return its explicit ``_policy`` raw from every hook:
@@ -3757,7 +3779,7 @@ def test_an_explicit_extension_policy_is_read_out_once_when_it_is_accepted():
     assert object.__getattribute__(drifting, "__dict__")["_reads"] == 1
 
 
-def test_an_explicit_extension_policy_is_stored_as_an_exact_policy():
+def test_an_explicit_extension_policy_is_stored_as_an_exact_policy() -> None:
     """What the extension holds after construction is the package's own class."""
     drifting = _DriftingPolicy()
     extension = DjangoResourcePolicyExtension(policy=drifting)
@@ -3765,7 +3787,7 @@ def test_an_explicit_extension_policy_is_stored_as_an_exact_policy():
     assert extension._policy is not drifting
 
 
-def test_an_explicit_extension_policy_cannot_be_replaced_or_written():
+def test_an_explicit_extension_policy_cannot_be_replaced_or_written() -> None:
     """On a plain schema an instance entry stays reachable, so what it holds cannot be a seam.
 
     ``strawberry.Schema`` hands every resolver its entries through
@@ -3807,7 +3829,7 @@ _INSTANCE_WRITE_ATTACKS: list[Callable[[DjangoResourcePolicyExtension], object]]
 )
 def test_an_accepted_extension_policy_survives_every_write_to_the_instance(
     attack: Callable[[DjangoResourcePolicyExtension], object],
-):
+) -> None:
     """The accepted policy is held where no name on the extension answers with it.
 
     Nothing written onto the instance can stand in for it and nothing removed
@@ -3833,7 +3855,7 @@ def test_an_accepted_extension_policy_survives_every_write_to_the_instance(
 )
 def test_an_accepted_extension_cannot_be_reconfigured_by_running_its_constructor(
     accepted: ResourcePolicy | None,
-):
+) -> None:
     """An accepted entry is reachable from every resolver, and so is its ``__init__``.
 
     A second call would nominate the budget for every later operation, which is
@@ -3853,7 +3875,7 @@ def test_an_accepted_extension_cannot_be_reconfigured_by_running_its_constructor
     assert extension._policy == accepted
 
 
-def test_an_extension_configured_with_no_policy_reads_the_schemas():
+def test_an_extension_configured_with_no_policy_reads_the_schemas() -> None:
     """The absent case the preservation rule must not swallow."""
     extension = DjangoResourcePolicyExtension()
     extension.execution_context = make_execution_context()
@@ -3864,7 +3886,7 @@ def test_an_extension_configured_with_no_policy_reads_the_schemas():
     assert resolved is not DEFAULT_RESOURCE_POLICY
 
 
-def test_a_refused_reconstruction_leaves_an_inheriting_extension_inheriting():
+def test_a_refused_reconstruction_leaves_an_inheriting_extension_inheriting() -> None:
     """Closing the constructor must not pin what the extension was never given.
 
     Recording the construction of an extension that has no override records
@@ -3890,7 +3912,7 @@ def test_a_refused_reconstruction_leaves_an_inheriting_extension_inheriting():
         assert extension._resolved_policy().max_list_rows == 2
 
 
-def test_a_class_entry_is_constructed_fresh_and_bounded_for_every_operation():
+def test_a_class_entry_is_constructed_fresh_and_bounded_for_every_operation() -> None:
     """A schema builds its own resource extension per operation, from its own record.
 
     The entry is the supported spelling that declares the automatic extension,
@@ -3926,12 +3948,12 @@ def test_a_class_entry_is_constructed_fresh_and_bounded_for_every_operation():
     [DjangoResourcePolicyExtension, DjangoResourcePolicyExtension()],
     ids=["class", "instance"],
 )
-def test_a_directly_supplied_extension_does_not_travel_as_an_entry(supplied: object):
+def test_a_directly_supplied_extension_does_not_travel_as_an_entry(supplied: object) -> None:
     """The schema installs its own of each kind, so keeping this one would be two."""
     assert _consumer_extension_entries([supplied]) == ([], None)
 
 
-def test_an_entry_declaring_a_policy_is_read_into_the_record():
+def test_an_entry_declaring_a_policy_is_read_into_the_record() -> None:
     """An instance built with a policy declares it; the record is where it lands."""
     entries, declared = _consumer_extension_entries(
         [DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=2))],
@@ -3940,23 +3962,23 @@ def test_an_entry_declaring_a_policy_is_read_into_the_record():
     assert declared == ResourcePolicy(max_list_rows=2)
 
 
-def test_entry_normalization_does_not_call_consumer_iterable_truthiness():
+def test_entry_normalization_does_not_call_consumer_iterable_truthiness() -> None:
     """A stateful list subclass cannot suppress or break the read of the entries."""
 
     class _HostileTruthiness(list[object]):
-        def __bool__(self):
+        def __bool__(self) -> bool:
             raise RuntimeError("bool exploded")
 
     marker = object()
     assert _consumer_extension_entries(_HostileTruthiness([marker])) == ([marker], None)
 
 
-def test_an_unrelated_extension_is_preserved_as_an_entry():
+def test_an_unrelated_extension_is_preserved_as_an_entry() -> None:
     marker = object()
     assert _consumer_extension_entries([marker]) == ([marker], None)
 
 
-def test_a_resource_rejection_is_catchable_as_a_graphql_error():
+def test_a_resource_rejection_is_catchable_as_a_graphql_error() -> None:
     """The wire identity: one ``GraphQLError`` needing no per-transport translation."""
     error = ResourceLimitExceeded("max_depth", 1, 2, "detail")
     assert isinstance(error, GraphQLError)
@@ -3964,7 +3986,7 @@ def test_a_resource_rejection_is_catchable_as_a_graphql_error():
     assert error.extensions["code"] == "RESOURCE_LIMIT_EXCEEDED"
 
 
-def test_a_selection_under_a_leaf_field_has_no_field_definition_to_charge():
+def test_a_selection_under_a_leaf_field_has_no_field_definition_to_charge() -> None:
     """Validation rejects it; a walk that ran before validation must not crash on it.
 
     ``echo`` returns ``String``, so its "children" have a scalar parent - which is
@@ -3990,7 +4012,7 @@ def test_a_selection_under_a_leaf_field_has_no_field_definition_to_charge():
         "int-subclass",
     ],
 )
-def test_an_upload_that_cannot_report_its_size_is_rejected(size: object):
+def test_an_upload_that_cannot_report_its_size_is_rejected(size: object) -> None:
     """Guard the ANSWER, not one spelling of the missing input.
 
     An unmeasurable file charged as zero bytes would be an unbounded upload that
@@ -4008,7 +4030,7 @@ def test_an_upload_that_cannot_report_its_size_is_rejected(size: object):
     assert caught.value.bound == "max_upload_file_bytes"
 
 
-def test_a_buffer_that_advertises_its_own_byte_count_is_measured_anyway():
+def test_a_buffer_that_advertises_its_own_byte_count_is_measured_anyway() -> None:
     """A charge is an amount the package produced, never one the value announced.
 
     An attribute a buffer carries is consumer code answering for a number, and
@@ -4032,10 +4054,10 @@ def test_a_buffer_that_advertises_its_own_byte_count_is_measured_anyway():
     assert caught.value.charged == 10
 
 
-def test_an_upload_size_descriptor_that_raises_is_rejected():
+def test_an_upload_size_descriptor_that_raises_is_rejected() -> None:
     class BrokenUpload:
         @property
-        def size(self):
+        def size(self) -> NoReturn:
             raise RuntimeError("size unavailable")
 
     with pytest.raises(ResourceLimitExceeded) as caught:
@@ -4046,7 +4068,7 @@ def test_an_upload_size_descriptor_that_raises_is_rejected():
     assert caught.value.bound == "max_upload_file_bytes"
 
 
-def test_a_measurable_upload_is_charged_its_bytes():
+def test_a_measurable_upload_is_charged_its_bytes() -> None:
     _charge("query U($f: Upload!) { stash(document: $f) }", {"f": SimpleNamespace(size=10)})
     with pytest.raises(ResourceLimitExceeded) as caught:
         _charge(
@@ -4057,7 +4079,7 @@ def test_a_measurable_upload_is_charged_its_bytes():
     assert caught.value.charged == 10
 
 
-def test_resource_limit_exceeded_pickle_and_copy_fidelity():
+def test_resource_limit_exceeded_pickle_and_copy_fidelity() -> None:
     """ResourceLimitExceeded roundtrips through pickle, copy, and deepcopy preserving attributes."""
     exc = ResourceLimitExceeded("max_depth", 10, 15, "query depth 15 exceeds 10")
     # basedpyright: the undeclared attribute is the extra instance state the roundtrip must carry;
@@ -4092,7 +4114,7 @@ def test_resource_limit_exceeded_pickle_and_copy_fidelity():
     assert getattr(deep_copied, "custom_tag", None) == "tagged"
 
 
-def test_an_untyped_container_list_is_not_classified_as_membership_list():
+def test_an_untyped_container_list_is_not_classified_as_membership_list() -> None:
     """An untyped JSON list is not a typed GraphQL list, so it carries no membership bound."""
     document = "query B($p: JSON!) { blob(payload: $p) }"
     # 4 items > max_membership_items (2), but <= max_container_width (10)
@@ -4125,7 +4147,7 @@ def test_an_untyped_container_list_is_not_classified_as_membership_list():
     assert caught.value.bound == "max_container_width"
 
 
-def test_charge_document_accepts_none_variables():
+def test_charge_document_accepts_none_variables() -> None:
     """charge_document safely accepts variables=None."""
     charge_document(
         DEFAULT_RESOURCE_POLICY,
@@ -4136,7 +4158,7 @@ def test_charge_document_accepts_none_variables():
     )
 
 
-def test_field_definition_with_none_parent_type():
+def test_field_definition_with_none_parent_type() -> None:
     """_field_definition safely handles None parent_type when schema query_type is None."""
     from django_strawberry_framework.extensions.resource_policy import _field_definition
 
@@ -4145,7 +4167,7 @@ def test_field_definition_with_none_parent_type():
     assert _field_definition(schema, None, "__schema") is None
 
 
-def test_memoryview_multibyte_buffer_charged_by_nbytes():
+def test_memoryview_multibyte_buffer_charged_by_nbytes() -> None:
     """Multibyte memoryview payloads are bounded by true byte size (nbytes), not element count.
 
     Live sibling: ``test_a_scalar_larger_than_the_byte_bound_is_rejected`` (a
@@ -4180,7 +4202,7 @@ class _LiesAfterValidating(ResourcePolicy):
     armed = False
 
     @override
-    def __getattribute__(self, name: str):
+    def __getattribute__(self, name: str) -> object:
         if name == "max_list_rows" and object.__getattribute__(type(self), "armed"):
             return _AmountNoBoundCanExceed(3)
         return object.__getattribute__(self, name)
@@ -4193,11 +4215,11 @@ class _UnreadablePolicy(ResourcePolicy):
     @override
     # basedpyright: the hostile shape under test, a ``max_list_rows`` property whose read raises;
     # the checker rejects any property overriding a base class attribute
-    def max_list_rows(self):  # pyright: ignore[reportIncompatibleVariableOverride]
+    def max_list_rows(self) -> NoReturn:  # pyright: ignore[reportIncompatibleVariableOverride]
         raise RuntimeError("hostile read detonated")
 
 
-def test_a_policy_subclass_is_replaced_by_an_exact_instance_at_schema_construction():
+def test_a_policy_subclass_is_replaced_by_an_exact_instance_at_schema_construction() -> None:
     """``isinstance`` admits a subclass, whose every field read is consumer code.
 
     Reading it out once here and building an exact instance is what keeps a read
@@ -4214,7 +4236,7 @@ def test_a_policy_subclass_is_replaced_by_an_exact_instance_at_schema_constructi
         _LiesAfterValidating.armed = False
 
 
-def test_a_policy_whose_bound_cannot_be_read_is_a_typed_configuration_error():
+def test_a_policy_whose_bound_cannot_be_read_is_a_typed_configuration_error() -> None:
     """A read that raises during canonicalization is a deployment fault, named as one."""
     with pytest.raises(ConfigurationError) as caught:
         DjangoSchema(query=_Probe, resource_policy=object.__new__(_UnreadablePolicy))
@@ -4222,7 +4244,7 @@ def test_a_policy_whose_bound_cannot_be_read_is_a_typed_configuration_error():
     assert "max_list_rows" in str(caught.value)
 
 
-def test_the_armed_budget_is_not_the_policy_the_caller_armed_it_with():
+def test_the_armed_budget_is_not_the_policy_the_caller_armed_it_with() -> None:
     """``begin_resource_budget`` snapshots, so the caller keeps no handle on the ceiling."""
     policy = ResourcePolicy(max_list_rows=2)
     context: dict[str, object] = {}
@@ -4236,7 +4258,7 @@ def test_the_armed_budget_is_not_the_policy_the_caller_armed_it_with():
         end_resource_budget(token)
 
 
-def test_the_published_mirror_is_not_the_object_any_bound_is_read_from():
+def test_the_published_mirror_is_not_the_object_any_bound_is_read_from() -> None:
     """The mirror is documented for consumers to read, so it cannot be the authority."""
     context: dict[str, object] = {}
     token = begin_resource_budget(context, ResourcePolicy(max_list_rows=2))
@@ -4249,7 +4271,7 @@ def test_the_published_mirror_is_not_the_object_any_bound_is_read_from():
         end_resource_budget(token)
 
 
-def test_policy_from_info_answers_twice_with_two_objects():
+def test_policy_from_info_answers_twice_with_two_objects() -> None:
     """Every read is a duplicate, so one reader's write is invisible to the next."""
     context: dict[str, object] = {}
     token = begin_resource_budget(context, ResourcePolicy(max_list_rows=2))
@@ -4264,7 +4286,7 @@ def test_policy_from_info_answers_twice_with_two_objects():
         end_resource_budget(token)
 
 
-def test_disarming_with_a_token_from_another_variable_is_not_swallowed():
+def test_disarming_with_a_token_from_another_variable_is_not_swallowed() -> None:
     """The cross-context tolerance is for WHERE teardown ran, not for the wrong token.
 
     ``ContextVar.reset`` answers two different mistakes with ``ValueError``: a
@@ -4294,7 +4316,7 @@ def test_disarming_with_a_token_from_another_variable_is_not_swallowed():
         end_resource_budget(scope)
 
 
-def test_the_package_default_is_never_the_object_a_miss_hands_back():
+def test_the_package_default_is_never_the_object_a_miss_hands_back() -> None:
     """The fail-closed baseline is process-lived; handing it out would let one write widen it."""
     info = SimpleNamespace(context={})
 
@@ -4305,7 +4327,7 @@ def test_the_package_default_is_never_the_object_a_miss_hands_back():
     assert policy_from_info(info).max_list_rows == DEFAULT_RESOURCE_POLICY.max_list_rows
 
 
-def test_a_mirror_holding_a_policy_subclass_reads_back_as_the_package_default():
+def test_a_mirror_holding_a_policy_subclass_reads_back_as_the_package_default() -> None:
     """The unarmed fallback admits the exact class only; a subclass's reads are not ours."""
     info = SimpleNamespace(context={DST_RESOURCE_POLICY: _LiesAfterValidating()})
 
@@ -4353,7 +4375,7 @@ def _read_budget_in_a_copied_context(context: object, policy: ResourcePolicy) ->
     return read
 
 
-def test_a_context_copied_from_an_armed_operation_reads_no_budget_once_it_ends():
+def test_a_context_copied_from_an_armed_operation_reads_no_budget_once_it_ends() -> None:
     """Token reset repairs the context that armed; it cannot reach a copy of it.
 
     A resolver's background task holds a copy of the context the operation armed
@@ -4373,7 +4395,7 @@ def test_a_context_copied_from_an_armed_operation_reads_no_budget_once_it_ends()
     assert read["deadline_raised"] is False
 
 
-def test_a_copied_context_answers_policy_from_info_with_the_context_it_is_handed():
+def test_a_copied_context_answers_policy_from_info_with_the_context_it_is_handed() -> None:
     """The fallback is the point: outside an operation, ``info`` is the authority.
 
     A task reading a completed request's ceiling is not merely stale - it
@@ -4395,7 +4417,7 @@ def test_a_copied_context_answers_policy_from_info_with_the_context_it_is_handed
     assert read["rows"] == 7
 
 
-def test_an_expired_deadline_stops_expiring_once_its_operation_is_over():
+def test_an_expired_deadline_stops_expiring_once_its_operation_is_over() -> None:
     """A deadline is one request's, and a copied context keeps answering with it.
 
     The armed instant belongs to the operation that derived it from the policy

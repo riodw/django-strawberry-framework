@@ -19,7 +19,7 @@ installed still pays ``1 + N`` for a nested connection.
 """
 
 from collections.abc import Callable
-from typing import Literal, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
 import pytest
 import strawberry
@@ -46,6 +46,9 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing import AsyncTestClient
 from django_strawberry_framework.testing.relay import global_id_for
 from django_strawberry_framework.views import AsyncDjangoGraphQLView
+
+if TYPE_CHECKING:
+    from django.test.client import _MonkeyPatchedASGIResponse
 
 _ItemGetQueryset: TypeAlias = Callable[
     [type[DjangoType], QuerySet[Item], strawberry.Info[object, object]],
@@ -104,7 +107,7 @@ def test_unoptimized_relation_hides_private_child_over_http() -> None:
         clear_url_caches()
 
 
-def _build_async_visibility_schema():
+def _build_async_visibility_schema() -> strawberry.Schema:
     category = Category.objects.first()
     assert category is not None
     item = Item.objects.filter(category=category).first()
@@ -124,7 +127,7 @@ def _build_async_visibility_schema():
     return strawberry.Schema(query=Query)
 
 
-async def _post_async_visibility_query():
+async def _post_async_visibility_query() -> "_MonkeyPatchedASGIResponse":
     schema = await sync_to_async(_build_async_visibility_schema)()
     _CURRENT["schema"] = schema
     try:
@@ -142,7 +145,7 @@ async def _post_async_visibility_query():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_unoptimized_relation_hides_private_child_over_http():
+async def test_async_unoptimized_relation_hides_private_child_over_http() -> None:
     await sync_to_async(services.seed_data)(1)
     response = await _post_async_visibility_query()
     assert response.status_code == 200
@@ -248,7 +251,7 @@ def test_forward_fk_target_visibility_holds_with_the_optimizer_installed() -> No
     assert optimized["errors"] == unoptimized["errors"]
 
 
-def _build_async_forward_fk_schema():
+def _build_async_forward_fk_schema() -> strawberry.Schema:
     """Schema whose async root select_relateds the FK, so it loads WITHOUT a query.
 
     The visibility re-check needs the related object in hand, and a forward-FK
@@ -274,7 +277,7 @@ def _build_async_forward_fk_schema():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_forward_fk_target_visibility_hides_a_private_target_over_http():
+async def test_async_forward_fk_target_visibility_hides_a_private_target_over_http() -> None:
     """The async single-object visibility re-check runs on a real async request.
 
     ``_visible_related_object`` takes its ``await``-ing branch here, and a hidden
@@ -404,7 +407,7 @@ def test_staff_is_served_the_same_joined_forward_fk_target() -> None:
     }
 
 
-def _strictness_armed_nullable_fk_schema():
+def _strictness_armed_nullable_fk_schema() -> strawberry.Schema:
     """The same armed-but-unplanned mount over a NULLABLE forward key.
 
     ``ItemType.category`` is non-null, so a hidden target there is a loud
@@ -719,6 +722,7 @@ def _holder_patron_card_schema(
 @pytest.mark.django_db
 def test_reverse_one_to_one_custom_visibility_matches_with_and_without_optimizer(
     root: Literal["queryset", "list"],
+    *,
     optimizer: bool,
 ) -> None:
     """Hidden reverse-O2O cards collapse to ``null`` whether or not the relation was planned.
@@ -763,7 +767,7 @@ def test_reverse_one_to_one_custom_visibility_matches_with_and_without_optimizer
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_async_reverse_one_to_one_custom_visibility_over_http():
+async def test_async_reverse_one_to_one_custom_visibility_over_http() -> None:
     """Async reverse-O2O re-checks the card hook and nulls a hidden barcode."""
     from apps.library.models import MembershipCard, Patron
 
@@ -837,7 +841,7 @@ async def test_async_reverse_one_to_one_custom_visibility_over_http():
 
 
 @pytest.mark.django_db
-def test_relay_id_only_connection_page_costs_one_query_and_emits_decodable_ids():
+def test_relay_id_only_connection_page_costs_one_query_and_emits_decodable_ids() -> None:
     """An id-only connection page reads the table once and every id decodes to its row.
 
     ``{ allCategories(first: 5) { edges { node { id } } } }`` selects nothing but
@@ -875,7 +879,7 @@ def test_relay_id_only_connection_page_costs_one_query_and_emits_decodable_ids()
 
 
 @pytest.mark.django_db
-def test_relay_id_and_name_selection_is_clean_under_strictness_raise_over_http():
+def test_relay_id_and_name_selection_is_clean_under_strictness_raise_over_http() -> None:
     """Selecting ``id`` and ``name`` on shipped ``CategoryType`` does not lazy-load under ``raise``.
 
     Holder mount with ``DjangoOptimizerExtension(strictness="raise")``. The root
@@ -912,7 +916,7 @@ def test_relay_id_and_name_selection_is_clean_under_strictness_raise_over_http()
 
 
 @pytest.mark.django_db
-def test_cascading_target_hook_blocks_fk_id_elision_over_http():
+def test_cascading_target_hook_blocks_fk_id_elision_over_http() -> None:
     """A cascading target hook costs a second query rather than eliding the FK read.
 
     An id-only forward-FK selection would normally round-trip the source row's FK
@@ -1027,7 +1031,7 @@ def _connection_page(node: JSONObject) -> list[str]:
 
 
 @pytest.mark.django_db
-def test_anonymous_planned_list_relation_omits_the_targets_private_rows():
+def test_anonymous_planned_list_relation_omits_the_targets_private_rows() -> None:
     """A planned ``items`` prefetch carries the target's visibility scope into its own query.
 
     The plan is the only thing scoping a planned relation: its resolver stands
@@ -1048,7 +1052,7 @@ def test_anonymous_planned_list_relation_omits_the_targets_private_rows():
 
 
 @pytest.mark.django_db
-def test_staff_planned_list_relation_keeps_every_row():
+def test_staff_planned_list_relation_keeps_every_row() -> None:
     """The same planned prefetch returns the hidden rows once the viewer is staff.
 
     The scoping above is the hook's anonymous branch, not the plan refusing to
@@ -1067,7 +1071,7 @@ def test_staff_planned_list_relation_keeps_every_row():
 
 
 @pytest.mark.django_db
-def test_anonymous_planned_relation_connection_window_omits_the_targets_private_rows():
+def test_anonymous_planned_relation_connection_window_omits_the_targets_private_rows() -> None:
     """The same proof over the connection vocabulary, whose page is one partitioned window.
 
     ``itemsConnection`` is a synthesized relation connection: every parent's page
@@ -1086,7 +1090,7 @@ def test_anonymous_planned_relation_connection_window_omits_the_targets_private_
 
 
 @pytest.mark.django_db
-def test_staff_planned_relation_connection_window_keeps_every_row():
+def test_staff_planned_relation_connection_window_keeps_every_row() -> None:
     """The window partitions over every row once the viewer is staff, still in one query."""
     services.seed_data(2)
     hidden_parent, hidden_names = _hide_one_parents_items()
@@ -1100,7 +1104,7 @@ def test_staff_planned_relation_connection_window_keeps_every_row():
     assert pages[hidden_parent] == hidden_names
 
 
-def _child_routing_schema(child_hook: _ItemGetQueryset):
+def _child_routing_schema(child_hook: _ItemGetQueryset) -> strawberry.Schema:
     """A live ``categories { items }`` schema whose CHILD type carries ``child_hook``.
 
     The root hands back a queryset under a mounted optimizer, so the walker plans
@@ -1155,7 +1159,7 @@ def test_planned_prefetch_child_may_not_pin_its_own_connection() -> None:
     services.seed_data(1)
 
     payload = _post_visibility_query(
-        _child_routing_schema(lambda cls, queryset, info: queryset.using("default")),
+        _child_routing_schema(lambda _cls, queryset, _info: queryset.using("default")),
         _CHILD_ROUTING_QUERY,
     )
 
@@ -1176,7 +1180,7 @@ def test_planned_prefetch_child_still_serves_rows_when_the_hook_only_narrows() -
     Item.objects.filter(pk=hidden.pk).update(is_private=True, name="hidden-from-planned-child")
 
     payload = _post_visibility_query(
-        _child_routing_schema(lambda cls, queryset, info: queryset.filter(is_private=False)),
+        _child_routing_schema(lambda _cls, queryset, _info: queryset.filter(is_private=False)),
         _CHILD_ROUTING_QUERY,
     )
 

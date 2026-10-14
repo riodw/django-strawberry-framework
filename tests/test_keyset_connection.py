@@ -1,4 +1,7 @@
-"""Package-side keyset connection tests for class-cached cursor state, defensive window fallbacks, order-state derivation, and nested-planner helpers.
+"""Package-side keyset connection tests for cursor state, window fallbacks and planner helpers.
+
+Covers class-cached cursor state, defensive window fallbacks, order-state derivation,
+and nested-planner helpers.
 
 Consumer-visible keyset behaviour lives in
 ``examples/fakeshop/test_query/test_keyset_api.py`` (root and nested
@@ -60,6 +63,7 @@ from django.test.utils import CaptureQueriesContext
 from graphql import GraphQLError
 from strategy_schemas import make_django_type
 from strawberry.schema.config import StrawberryConfig
+from strawberry.types import ExecutionResult
 
 from django_strawberry_framework import DjangoConnectionField, DjangoType, finalize_django_types
 from django_strawberry_framework.connection import (
@@ -116,7 +120,7 @@ def _issue_connection_of(node_type: type[DjangoType]) -> type[DjangoConnection[D
     return _connection_type_for(node_type, node_type.__django_strawberry_definition__)
 
 
-def _issue_state(issue_type: type):
+def _issue_state(issue_type: type) -> CursorState | None:
     finalize_django_types()
     return _keyset_connection_context(_issue_connection_of(issue_type))
 
@@ -126,7 +130,7 @@ def _issue_state(issue_type: type):
 # =============================================================================
 
 
-def test_keyset_connection_context_resolves_and_caches():
+def test_keyset_connection_context_resolves_and_caches() -> None:
     issue_type = _make_issue_type()
     finalize_django_types()
     connection_type = _issue_connection_of(issue_type)
@@ -138,7 +142,7 @@ def test_keyset_connection_context_resolves_and_caches():
     assert _keyset_connection_context(connection_type) is state
 
 
-def test_keyset_connection_context_is_none_for_offset_types():
+def test_keyset_connection_context_is_none_for_offset_types() -> None:
     plain_type = make_django_type("PlainIssueNode", Issue, ("id", "number"))
     finalize_django_types()
     connection_type = _issue_connection_of(plain_type)
@@ -147,7 +151,7 @@ def test_keyset_connection_context_is_none_for_offset_types():
     assert _keyset_connection_context(connection_type) is None
 
 
-def test_keyset_connection_context_resolves_without_connection_opt_in():
+def test_keyset_connection_context_resolves_without_connection_opt_in() -> None:
     """A ``cursor_field`` type with no ``Meta.connection`` is still keyset-mode.
 
     ``Meta.connection`` only opts into ``totalCount``. Keyset vocabulary is
@@ -164,7 +168,7 @@ def test_keyset_connection_context_resolves_without_connection_opt_in():
     assert state.cursor_field == ISSUE_ORDER
 
 
-def test_declared_cursor_state_for_definition_resolves_the_declared_vocabulary():
+def test_declared_cursor_state_for_definition_resolves_the_declared_vocabulary() -> None:
     issue_type = _make_issue_type()
     definition = issue_type.__django_strawberry_definition__
     state = declared_cursor_state_for_definition(definition)
@@ -175,7 +179,7 @@ def test_declared_cursor_state_for_definition_resolves_the_declared_vocabulary()
     assert state.fingerprint == order_fingerprint(ISSUE_ORDER)
 
 
-def test_declared_cursor_state_for_definition_none_without_cursor_field():
+def test_declared_cursor_state_for_definition_none_without_cursor_field() -> None:
     plain_type = make_django_type("PlainIssueNode2", Issue, ("id", "number"))
     assert (
         declared_cursor_state_for_definition(plain_type.__django_strawberry_definition__) is None
@@ -189,7 +193,7 @@ def test_declared_cursor_state_for_definition_none_without_cursor_field():
 
 
 @pytest.mark.django_db
-def test_backward_args_over_a_window_wrapper_fall_back_to_the_keyset_slicer():
+def test_backward_args_over_a_window_wrapper_fall_back_to_the_keyset_slicer() -> None:
     issue_type = _make_issue_type("KeysetBackwardWindowNode")
     finalize_django_types()
     connection_type = _issue_connection_of(issue_type)
@@ -222,7 +226,7 @@ def test_backward_args_over_a_window_wrapper_fall_back_to_the_keyset_slicer():
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("seek", [False, True], ids=["first-page", "after-page"])
-def test_keyset_window_without_a_published_vocabulary_is_served_per_parent(seek: bool):
+def test_keyset_window_without_a_published_vocabulary_is_served_per_parent(*, seek: bool) -> None:
     """A keyset wrapper carrying no planned vocabulary never mints from its rows.
 
     The window rows (one decoy row here) were ordered and seeked under a
@@ -269,7 +273,7 @@ def test_keyset_window_without_a_published_vocabulary_is_served_per_parent(seek:
 
 
 @pytest.mark.django_db
-def test_counted_keyset_window_without_seek_count_falls_back():
+def test_counted_keyset_window_without_seek_count_falls_back() -> None:
     issue_type = _make_issue_type("KeysetCountDriftNode")
     state = _issue_state(issue_type)
     connection_type = _issue_connection_of(issue_type)
@@ -298,7 +302,7 @@ def test_counted_keyset_window_without_seek_count_falls_back():
 # =============================================================================
 
 
-def _issue_order_state():
+def _issue_order_state() -> CursorState:
     issue_type = _make_issue_type("KeysetOrderStateNode")
     state = _issue_state(issue_type)
     assert state is not None
@@ -318,7 +322,7 @@ def _state_stub(model: type[Model], cursor_field: tuple[str, ...]) -> CursorStat
 
 
 @pytest.mark.django_db
-def test_keyset_order_state_default_order_reuses_declared_columns():
+def test_keyset_order_state_default_order_reuses_declared_columns() -> None:
     state = _issue_order_state()
     columns, fingerprint, _queryset = _keyset_order_state(
         state,
@@ -334,7 +338,7 @@ def test_keyset_order_state_default_order_reuses_declared_columns():
 
 
 @pytest.mark.django_db
-def test_keyset_order_state_rejects_expression_orders():
+def test_keyset_order_state_rejects_expression_orders() -> None:
     state = _issue_order_state()
     aggregated = Issue.objects.annotate(loan_count=Count("periodical")).order_by("loan_count")
     with pytest.raises(GraphQLError, match="cannot anchor stable cursors"):
@@ -342,7 +346,7 @@ def test_keyset_order_state_rejects_expression_orders():
 
 
 @pytest.mark.django_db
-def test_keyset_order_state_rejects_explicit_nulls_positioning():
+def test_keyset_order_state_rejects_explicit_nulls_positioning() -> None:
     state = _issue_order_state()
     positioned = Issue.objects.order_by(F("title").asc(nulls_last=True))
     with pytest.raises(GraphQLError, match="cannot anchor stable cursors"):
@@ -350,7 +354,7 @@ def test_keyset_order_state_rejects_explicit_nulls_positioning():
 
 
 @pytest.mark.django_db
-def test_keyset_order_state_rejects_nullable_columns():
+def test_keyset_order_state_rejects_nullable_columns() -> None:
     # A hand-built state over Book (whose ``subtitle`` is nullable) - the
     # arm is unreachable over Issue, whose columns are all non-null.
     state_stub = _state_stub(Book, ("title", "id"))
@@ -359,7 +363,7 @@ def test_keyset_order_state_rejects_nullable_columns():
 
 
 @pytest.mark.django_db
-def test_keyset_order_state_rejects_json_columns():
+def test_keyset_order_state_rejects_json_columns() -> None:
     state_stub = _state_stub(ScalarSpecimen, ("label",))
     with pytest.raises(GraphQLError, match="ordering differs between database backends"):
         _keyset_order_state(
@@ -374,7 +378,9 @@ def test_keyset_order_state_rejects_json_columns():
     [("card__barcode", "id"), ("loans__note", "id")],
     ids=["optional-o2o", "multivalued-reverse"],
 )
-def test_keyset_order_state_rejects_optional_or_multivalued_related_paths(order: tuple[str, str]):
+def test_keyset_order_state_rejects_optional_or_multivalued_related_paths(
+    order: tuple[str, str],
+) -> None:
     state_stub = _state_stub(Patron, ("name",))
     with pytest.raises(GraphQLError, match="cannot anchor stable cursors"):
         _keyset_order_state(state_stub, Patron.objects.order_by(*order))
@@ -384,9 +390,10 @@ def test_keyset_order_state_rejects_optional_or_multivalued_related_paths(order:
 @pytest.mark.parametrize("spelling", ["flat", "nested"])
 @pytest.mark.parametrize("hides", [True, False], ids=["hiding-target", "identity-target"])
 def test_keyset_order_state_rejects_a_related_value_read_through_a_hiding_type(
+    *,
     hides: bool,
     spelling: str,
-):
+) -> None:
     """A related ``orderBy:`` value through a type that hides rows is nullable, so refused.
 
     ``OrderSet`` reads ``periodical__name`` as ``NULL`` for a periodical the
@@ -444,7 +451,7 @@ def test_keyset_order_state_rejects_a_related_value_read_through_a_hiding_type(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_keyset_pages_a_foreign_object_term_by_seeking_over_its_carriers():
+def test_keyset_pages_a_foreign_object_term_by_seeking_over_its_carriers() -> None:
     """A ``ForeignObject`` ``orderBy:`` term pages by value cursors over each carrier column.
 
     ``LnkPairChild.parent`` is held in ``p_tenant`` and ``p_code``, so the term
@@ -476,7 +483,7 @@ def test_keyset_pages_a_foreign_object_term_by_seeking_over_its_carriers():
 
     schema = strawberry.Schema(query=Query)
 
-    def page(order: str, after: str | None = None):
+    def page(order: str, after: str | None = None) -> tuple[ExecutionResult, list[str]]:
         cursor = "" if after is None else f', after: "{after}"'
         with CaptureQueriesContext(connection) as captured:
             result = schema.execute_sync(
@@ -508,7 +515,7 @@ def test_keyset_pages_a_foreign_object_term_by_seeking_over_its_carriers():
     assert "invalid cursor" in str(replayed.errors[0]), replayed.errors
 
 
-def test_keyset_order_ref_parses_strings_and_rejects_nulls():
+def test_keyset_order_ref_parses_strings_and_rejects_nulls() -> None:
     assert _keyset_order_ref("-number") == ("-number", "number", True)
     assert _keyset_order_ref(F("number").asc()) == ("number", "number", False)
     assert _keyset_order_ref(F("number").desc(nulls_first=True)) is None
@@ -522,7 +529,7 @@ def _resolved_name(model: type[Model], path: str) -> str:
     return field.name
 
 
-def test_resolve_order_path_field_arms(monkeypatch: pytest.MonkeyPatch):
+def test_resolve_order_path_field_arms(monkeypatch: pytest.MonkeyPatch) -> None:
     # Local column; pk alias; related path terminal.
     assert _resolved_name(Issue, "number") == "number"
     assert _resolved_name(Issue, "pk") == "id"
@@ -563,7 +570,7 @@ def test_resolve_order_path_field_arms(monkeypatch: pytest.MonkeyPatch):
     assert _resolve_order_path_field(Issue, "virtual") is None
 
 
-def test_resolve_order_path_field_accepts_mti_parent_link():
+def test_resolve_order_path_field_accepts_mti_parent_link() -> None:
     """A concrete auto-created parent link is a safe non-null forward hop."""
     parent_link = LendingDesk._meta.pk
     assert parent_link.name == "venue_ptr"
@@ -577,7 +584,7 @@ def test_resolve_order_path_field_accepts_mti_parent_link():
 
 
 @pytest.mark.django_db
-def test_keyset_window_slice_from_arguments_arms():
+def test_keyset_window_slice_from_arguments_arms() -> None:
     issue_type = _make_issue_type("KeysetWalkerSliceNode")
     finalize_django_types()
     state = declared_cursor_state_for_definition(issue_type.__django_strawberry_definition__)
@@ -665,7 +672,7 @@ def test_keyset_window_slice_from_arguments_arms():
 
 
 @pytest.mark.django_db
-def test_extend_only_projection_passthrough_arms():
+def test_extend_only_projection_passthrough_arms() -> None:
     """Identity / no-op arms of ``_extend_only_projection`` have no wire shape.
 
     Restoring a deferred or ``only()``-masked cursor column is live:

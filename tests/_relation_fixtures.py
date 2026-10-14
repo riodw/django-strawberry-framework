@@ -27,6 +27,8 @@ from django.db import models
 from django.db.backends.base.base import BaseDatabaseWrapper
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     from django.db.models.expressions import Combinable
     from django.db.models.fields.related_descriptors import RelatedManager
 
@@ -95,7 +97,7 @@ class RpCompositeChild(models.Model):
 
 
 @contextlib.contextmanager
-def relation_fixture_tables(connection: BaseDatabaseWrapper):
+def relation_fixture_tables(connection: BaseDatabaseWrapper) -> Generator[None, None, None]:
     """Create the ``Rp*`` fixture tables via ``schema_editor``; drop on exit.
 
     The models are ``managed = False``, so their tables never exist until a

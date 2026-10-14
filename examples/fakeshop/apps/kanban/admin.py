@@ -33,6 +33,8 @@ for _model in (
 
 @admin.register(models.Actor)
 class ActorAdmin(admin.ModelAdmin[models.Actor]):
+    """Administer actors, the humans and agents that move cards."""
+
     list_display = (
         "key",
         "label",
@@ -46,6 +48,8 @@ class ActorAdmin(admin.ModelAdmin[models.Actor]):
 
 @admin.register(models.CardTransition)
 class CardTransitionAdmin(admin.ModelAdmin[models.CardTransition]):
+    """Administer the status transitions recorded on cards."""
+
     list_display = (
         "card",
         "from_status",
@@ -60,6 +64,8 @@ class CardTransitionAdmin(admin.ModelAdmin[models.CardTransition]):
 
 @admin.register(models.WorkAttempt)
 class WorkAttemptAdmin(admin.ModelAdmin[models.WorkAttempt]):
+    """Administer the work attempts recorded against cards."""
+
     list_display = (
         "card",
         "actor",
@@ -74,6 +80,8 @@ class WorkAttemptAdmin(admin.ModelAdmin[models.WorkAttempt]):
 
 @admin.register(models.Decision)
 class DecisionAdmin(admin.ModelAdmin[models.Decision]):
+    """Administer the decisions recorded against cards."""
+
     list_display = (
         "question",
         "choice",
@@ -93,6 +101,8 @@ class DecisionAdmin(admin.ModelAdmin[models.Decision]):
 
 @admin.register(models.TargetVersion)
 class TargetVersionAdmin(admin.ModelAdmin[models.TargetVersion]):
+    """Administer target versions and the milestone each belongs to."""
+
     list_display = ("number", "milestone")
     list_filter = ("milestone",)
     search_fields = ("number",)
@@ -100,6 +110,8 @@ class TargetVersionAdmin(admin.ModelAdmin[models.TargetVersion]):
 
 @admin.register(models.SpecDoc)
 class SpecDocAdmin(admin.ModelAdmin[models.SpecDoc]):
+    """Administer the spec documents a card links to."""
+
     list_display = ("name", "card", "url")
     search_fields = ("name", "url", "card__title")
     autocomplete_fields = ("card",)
@@ -107,23 +119,31 @@ class SpecDocAdmin(admin.ModelAdmin[models.SpecDoc]):
 
 @admin.register(models.TrackedPath)
 class TrackedPathAdmin(admin.ModelAdmin[models.TrackedPath]):
+    """Administer the tracked repository paths cards point at."""
+
     list_display = ("path", "state", "is_directory")
     list_filter = ("state", "is_directory")
     search_fields = ("path",)
 
 
 class CardItemInline(admin.TabularInline[models.CardItem, models.Card]):
+    """Edit a card's items inline on the card."""
+
     model = models.CardItem
     extra = 0
     show_change_link = True
 
 
 class ParityClaimInline(admin.TabularInline[models.ParityClaim, models.Card]):
+    """Edit a card's parity claims inline on the card."""
+
     model = models.ParityClaim
     extra = 0
 
 
 class CardReferenceInline(admin.TabularInline[models.CardReference, models.Card]):
+    """Edit a card's outgoing references inline on the card."""
+
     model = models.CardReference
     fk_name = "source_card"
     extra = 0
@@ -132,6 +152,8 @@ class CardReferenceInline(admin.TabularInline[models.CardReference, models.Card]
 
 
 class CardGlossaryTermInline(admin.TabularInline[models.CardGlossaryTerm, models.Card]):
+    """Edit a card's glossary term links inline on the card."""
+
     model = models.CardGlossaryTerm
     extra = 0
     show_change_link = True
@@ -139,6 +161,8 @@ class CardGlossaryTermInline(admin.TabularInline[models.CardGlossaryTerm, models
 
 
 class CardPathLinkInline(admin.TabularInline[models.CardPathLink, models.Card]):
+    """Edit a card's tracked path links inline on the card."""
+
     model = models.CardPathLink
     extra = 0
     show_change_link = True
@@ -147,6 +171,8 @@ class CardPathLinkInline(admin.TabularInline[models.CardPathLink, models.Card]):
 
 @admin.register(models.Card)
 class CardAdmin(admin.ModelAdmin[models.Card]):
+    """Administer cards with their items, claims and links inline."""
+
     list_display = (
         "number",
         "title",
@@ -181,6 +207,8 @@ class CardAdmin(admin.ModelAdmin[models.Card]):
 
 @admin.register(models.CardReference)
 class CardReferenceAdmin(admin.ModelAdmin[models.CardReference]):
+    """Administer references from one card to another."""
+
     list_display = (
         "source_card",
         "target_card",
@@ -194,6 +222,8 @@ class CardReferenceAdmin(admin.ModelAdmin[models.CardReference]):
 
 @admin.register(models.CardGlossaryTerm)
 class CardGlossaryTermAdmin(admin.ModelAdmin[models.CardGlossaryTerm]):
+    """Administer the links from cards to glossary terms."""
+
     list_display = (
         "card",
         "term",
@@ -206,6 +236,8 @@ class CardGlossaryTermAdmin(admin.ModelAdmin[models.CardGlossaryTerm]):
 
 @admin.register(models.CardItem)
 class CardItemAdmin(admin.ModelAdmin[models.CardItem]):
+    """Administer the items that make up a card's sections."""
+
     list_display = (
         "card",
         "section",
@@ -220,6 +252,8 @@ class CardItemAdmin(admin.ModelAdmin[models.CardItem]):
 class BoardDocCardReferenceInline(
     admin.TabularInline[models.BoardDocCardReference, models.BoardDoc],
 ):
+    """Edit a board document's card references inline."""
+
     model = models.BoardDocCardReference
     extra = 0
     show_change_link = True
@@ -228,6 +262,8 @@ class BoardDocCardReferenceInline(
 
 @admin.register(models.BoardDoc)
 class BoardDocAdmin(admin.ModelAdmin[models.BoardDoc]):
+    """Administer board documents and their card references."""
+
     list_display = (
         "namespace",
         "key",
@@ -244,6 +280,8 @@ class BoardDocAdmin(admin.ModelAdmin[models.BoardDoc]):
 
 @admin.register(models.BoardDocCardReference)
 class BoardDocCardReferenceAdmin(admin.ModelAdmin[models.BoardDocCardReference]):
+    """Administer the card references inside board documents."""
+
     list_display = (
         "doc",
         "card",
@@ -262,16 +300,22 @@ class BoardDocCardReferenceAdmin(admin.ModelAdmin[models.BoardDocCardReference])
 
 @admin.register(models.ParityClaim)
 class ParityClaimAdmin(admin.ModelAdmin[models.ParityClaim]):
+    """Administer parity claims against the upstream projects."""
+
     list_display = ("card", "upstream", "level")
     list_filter = ("upstream", "level")
 
 
 @admin.register(models.Label)
 class LabelAdmin(admin.ModelAdmin[models.Label]):
+    """Administer the labels cards can carry."""
+
     list_display = ("key", "color")
     search_fields = ("key",)
 
 
 @admin.register(models.UUIDModel)
 class UUIDModelAdmin(admin.ModelAdmin[models.UUIDModel]):
+    """Administer the central UUID registry that links to every board model."""
+
     list_display = ("id",)

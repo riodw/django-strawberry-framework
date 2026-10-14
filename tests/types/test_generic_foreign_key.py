@@ -29,7 +29,7 @@ def _isolate_registry() -> Iterator[None]:
     registry.clear()
 
 
-def test_generic_foreign_key_raises_configuration_error():
+def test_generic_foreign_key_raises_configuration_error() -> None:
     with pytest.raises(ConfigurationError, match="cannot be auto-mapped to a single GraphQL type"):
 
         @definition_raises
@@ -39,7 +39,7 @@ def test_generic_foreign_key_raises_configuration_error():
                 fields = "__all__"
 
 
-def test_generic_foreign_key_works_if_excluded():
+def test_generic_foreign_key_works_if_excluded() -> None:
     class ContentTypeType(DjangoType):
         class Meta:
             model = ContentType
@@ -67,7 +67,7 @@ def test_generic_foreign_key_works_if_excluded():
     } <= field_names
 
 
-def test_generic_relation_reverse_side_finalizes_to_list_target():
+def test_generic_relation_reverse_side_finalizes_to_list_target() -> None:
     class BranchType(DjangoType):
         class Meta:
             model = Branch

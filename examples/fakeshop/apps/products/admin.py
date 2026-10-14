@@ -20,6 +20,11 @@ admin.site.unregister(User)
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin[AbstractBaseUser]):
+    """The stock user admin, plus changelist query parameters that seed and delete test users.
+
+    ``?create_users=N`` seeds ``N`` users; ``?delete_users=N`` (or ``all``) deletes them.
+    """
+
     list_display = (
         "id",
         "username",
@@ -90,12 +95,16 @@ class UserAdmin(BaseUserAdmin[AbstractBaseUser]):
 
 
 class ItemInline(admin.TabularInline[Item, Category]):
+    """A category's items, editable inline on the category page."""
+
     model = Item
     extra = 0
     show_change_link = True
 
 
 class PropertyInline(admin.TabularInline[Property, Category]):
+    """A category's properties, editable inline on the category page."""
+
     model = Property
     extra = 0
     show_change_link = True
@@ -103,6 +112,8 @@ class PropertyInline(admin.TabularInline[Property, Category]):
 
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin[Category]):
+    """Administers categories with their properties and items inline."""
+
     list_display = (
         "name",
         "description",
@@ -114,6 +125,8 @@ class CategoryAdmin(admin.ModelAdmin[Category]):
 
 
 class EntryInline(admin.TabularInline[Entry, Item]):
+    """An item's property values, editable inline on the item page."""
+
     model = Entry
     extra = 1
     autocomplete_fields = ["property"]
@@ -121,6 +134,8 @@ class EntryInline(admin.TabularInline[Entry, Item]):
 
 @admin.register(Item)
 class ItemAdmin(admin.ModelAdmin[Item]):
+    """Administers items with their property entries inline."""
+
     list_display = (
         "name",
         "description",
@@ -195,6 +210,8 @@ class ItemAdmin(admin.ModelAdmin[Item]):
 
 @admin.register(Property)
 class PropertyAdmin(admin.ModelAdmin[Property]):
+    """Administers the properties a category defines for its items."""
+
     list_display = (
         "name",
         "description",
@@ -209,6 +226,8 @@ class PropertyAdmin(admin.ModelAdmin[Property]):
 
 @admin.register(Entry)
 class EntryAdmin(admin.ModelAdmin[Entry]):
+    """Administers the value an item holds for one property."""
+
     list_display = (
         "value",
         "description",

@@ -35,7 +35,7 @@ local view that answers with the canned JSON payload the transport attached.
 import json
 import unittest
 from collections import UserDict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
@@ -58,6 +58,7 @@ from django_strawberry_framework.testing import (
 )
 
 if TYPE_CHECKING:
+    from django.test.client import _MonkeyPatchedASGIResponse, _MonkeyPatchedWSGIResponse
     from django_stubs_ext import StrOrPromise
 
 # ---------------------------------------------------------------------------
@@ -84,7 +85,7 @@ urlpatterns = [re_path(r"^.*$", _canned_view)]
 
 
 @pytest.fixture(autouse=True)
-def _canned_transport_urlconf():
+def _canned_transport_urlconf() -> Iterator[None]:
     """Route the real Django clients below to ``_canned_view`` with no middleware in the way."""
     with override_settings(ROOT_URLCONF=__name__, MIDDLEWARE=[]):
         yield
@@ -100,7 +101,7 @@ class _RecordingDjangoClient(Client):
     could never detect a change to it.
     """
 
-    def __init__(self, payload: dict[str, object] | None = None):
+    def __init__(self, payload: dict[str, object] | None = None) -> None:
         super().__init__()
         self.posts: list[tuple[str, dict[str, object]]] = []
         self.responses: list[HttpResponseBase] = []
@@ -118,7 +119,7 @@ class _RecordingDjangoClient(Client):
         headers: Mapping[str, str] | None = None,
         query_params: Mapping[object, object] | None = None,
         **extra: object,
-    ):
+    ) -> "_MonkeyPatchedWSGIResponse":
         self.posts.append(
             (str(path), {"data": data, "content_type": content_type, "headers": headers}),
         )
@@ -139,7 +140,7 @@ class _RecordingDjangoClient(Client):
 class _RecordingAsyncTransport(AsyncClient):
     """A real ``django.test.AsyncClient`` whose awaited ``post`` records its target."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.posts: list[tuple[str, dict[str, object]]] = []
         self.responses: list[HttpResponseBase] = []
@@ -156,7 +157,7 @@ class _RecordingAsyncTransport(AsyncClient):
         headers: Mapping[str, str] | None = None,
         query_params: Mapping[object, object] | None = None,
         **extra: object,
-    ):
+    ) -> "_MonkeyPatchedASGIResponse":
         self.posts.append(
             (str(path), {"data": data, "content_type": content_type, "headers": headers}),
         )
@@ -177,21 +178,21 @@ class _RecordingAsyncTransport(AsyncClient):
 class _FalsySyncClient(_RecordingDjangoClient):
     """Falsy through ``__bool__``."""
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return False
 
 
 class _BoolFalsyAsyncTransport(_RecordingAsyncTransport):
     """Falsy through ``__bool__``."""
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return False
 
 
 class _LenFalsyAsyncTransport(_RecordingAsyncTransport):
     """Falsy through an empty ``__len__`` - the other spelling of falsiness."""
 
-    def __len__(self):
+    def __len__(self) -> int:
         return 0
 
 
@@ -204,10 +205,10 @@ class _MixinProbe(GraphQLTestMixin):
 
     client: Client
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.client = _RecordingDjangoClient()
 
-    def assertEqual(
+    def assertEqual(  # noqa: N802 - unittest host method name
         self,
         first: object,
         second: object,
@@ -216,11 +217,11 @@ class _MixinProbe(GraphQLTestMixin):
         """Fail unless ``first == second``."""
         assert first == second, msg
 
-    def assertIsNone(self, obj: object, msg: object = None) -> None:
+    def assertIsNone(self, obj: object, msg: object = None) -> None:  # noqa: N802 - unittest host method name
         """Fail unless ``obj is None``."""
         assert obj is None, msg
 
-    def assertTrue(self, expr: object, msg: object = None) -> None:
+    def assertTrue(self, expr: object, msg: object = None) -> None:  # noqa: N802 - unittest host method name
         """Fail unless ``expr`` is truthy."""
         assert expr, msg
 
@@ -236,12 +237,12 @@ class _AltProbe(_MixinProbe):
 # ---------------------------------------------------------------------------
 
 
-def test_default_endpoint_is_graphql_with_trailing_slash():
+def test_default_endpoint_is_graphql_with_trailing_slash() -> None:
     """No settings key -> ``"/graphql/"`` (fakeshop's mount, slash kept)."""
     assert TestClient().path == "/graphql/"
 
 
-def test_settings_key_sets_the_endpoint_and_the_default_restores_after_override():
+def test_settings_key_sets_the_endpoint_and_the_default_restores_after_override() -> None:
     """The ``TESTING_ENDPOINT`` key is read at construction, on both clients.
 
     The second half pins the ``conf.py`` ``setting_changed`` receiver: after the
@@ -254,7 +255,7 @@ def test_settings_key_sets_the_endpoint_and_the_default_restores_after_override(
     assert TestClient().path == "/graphql/"
 
 
-def test_constructor_path_outranks_the_settings_key():
+def test_constructor_path_outranks_the_settings_key() -> None:
     """Constructor rung: an explicit ``path=`` wins over the settings key.
 
     The resolved endpoint is also forwarded to the engine base, so the
@@ -267,7 +268,7 @@ def test_constructor_path_outranks_the_settings_key():
     assert client.url == "/explicit/"  # the base's attribute, kept in sync
 
 
-def test_per_call_url_outranks_the_constructor_and_never_persists():
+def test_per_call_url_outranks_the_constructor_and_never_persists() -> None:
     """Per-call rung: ``query(url=)`` wins for ONE request; ``self.path`` is untouched.
 
     Driven through the real ``TestClient.request``: the recording transport
@@ -302,7 +303,7 @@ def test_per_call_url_outranks_the_constructor_and_never_persists():
 class _FalsyDict(dict[str, object]):
     """A ``dict`` subclass that reads falsy however many keys it carries."""
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return False
 
 
@@ -313,7 +314,7 @@ class _FalsyDict(dict[str, object]):
 )
 def test_files_without_variables_raises_the_placeholder_guard(
     variables: dict[str, object] | None,
-):
+) -> None:
     """``files=`` with no ``variables`` member in the built envelope raises before any request.
 
     The owned ``_build_body``'s explicit ``AssertionError`` (not the engine
@@ -331,7 +332,7 @@ def test_files_without_variables_raises_the_placeholder_guard(
 
 
 @pytest.mark.asyncio
-async def test_async_files_without_variables_raises_the_same_guard():
+async def test_async_files_without_variables_raises_the_same_guard() -> None:
     """The async color shares the owned builder, so the same guard fires before any await.
 
     ``_build_body`` is called from both ``query()`` colors; only the sync color
@@ -343,7 +344,7 @@ async def test_async_files_without_variables_raises_the_same_guard():
         await AsyncTestClient().query("mutation { x }", files={"file": object()})
 
 
-def test_files_placeholder_missing_top_level_path_raises():
+def test_files_placeholder_missing_top_level_path_raises() -> None:
     """A top-level ``files=`` path with no matching key in variables raises, naming the path.
 
     The owned builder validates each ``files=`` path against ``variables`` before
@@ -359,7 +360,7 @@ def test_files_placeholder_missing_top_level_path_raises():
         )
 
 
-def test_files_placeholder_missing_nested_key_raises():
+def test_files_placeholder_missing_nested_key_raises() -> None:
     """A nested ``files=`` path whose leaf key is absent raises, naming the path."""
     with pytest.raises(AssertionError, match="no key"):
         TestClient().query(
@@ -387,7 +388,7 @@ def test_files_placeholder_missing_nested_key_raises():
 def test_files_placeholder_cannot_descend_into_a_scalar_raises(
     variables: dict[str, object],
     key: str,
-):
+) -> None:
     """A ``files=`` path that descends through a non-container value raises.
 
     Every non-container mid-path value is rejected alike - a string, a number,
@@ -414,7 +415,7 @@ def test_files_placeholder_cannot_descend_into_a_scalar_raises(
         "1" * 5000,
     ],
 )
-def test_files_placeholder_noncanonical_list_index_raises(index: str):
+def test_files_placeholder_noncanonical_list_index_raises(index: str) -> None:
     """Every invalid ``object-path`` list index uses the placeholder guard's error type."""
     with pytest.raises(AssertionError, match="valid index"):
         TestClient().query(
@@ -431,7 +432,7 @@ def test_files_placeholder_noncanonical_list_index_raises(index: str):
         )
 
 
-def test_files_placeholder_out_of_range_list_index_raises():
+def test_files_placeholder_out_of_range_list_index_raises() -> None:
     """A list-path index past the end of the list raises."""
     with pytest.raises(AssertionError, match="valid index"):
         TestClient().query(
@@ -441,7 +442,7 @@ def test_files_placeholder_out_of_range_list_index_raises():
         )
 
 
-def test_files_placeholder_present_but_not_none_raises():
+def test_files_placeholder_present_but_not_none_raises() -> None:
     """A ``files=`` path resolving to a non-``None`` value raises: it must be a placeholder."""
     with pytest.raises(AssertionError, match="None placeholder"):
         TestClient().query(
@@ -451,12 +452,12 @@ def test_files_placeholder_present_but_not_none_raises():
         )
 
 
-def test_files_placeholder_hostile_repr_keeps_assertion_error_boundary():
+def test_files_placeholder_hostile_repr_keeps_assertion_error_boundary() -> None:
     """A malformed value's broken ``repr`` cannot replace the placeholder guard."""
 
     class _HostileRepr:
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr exploded")
 
     with pytest.raises(AssertionError, match="None placeholder"):
@@ -467,7 +468,7 @@ def test_files_placeholder_hostile_repr_keeps_assertion_error_boundary():
         )
 
 
-def test_files_placeholder_hostile_repr_key_keeps_assertion_error_boundary():
+def test_files_placeholder_hostile_repr_key_keeps_assertion_error_boundary() -> None:
     """A ``files=`` KEY whose ``repr`` explodes cannot replace the placeholder guard.
 
     Every rejection branch renders the offending path into its message, so an
@@ -479,7 +480,7 @@ def test_files_placeholder_hostile_repr_key_keeps_assertion_error_boundary():
 
     class _HostileKey(str):
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr exploded")
 
     with pytest.raises(AssertionError, match="no key") as excinfo:
@@ -502,7 +503,7 @@ def test_files_placeholder_hostile_repr_key_keeps_assertion_error_boundary():
 def test_files_placeholder_empty_segment_raises_instead_of_emitting(
     variables: dict[str, object],
     key: str,
-):
+) -> None:
     """An empty dotted segment raises at the source instead of emitting a spec-invalid map.
 
     A map entry built over an empty segment (the ``""`` key's ``variables.``
@@ -520,7 +521,7 @@ def test_files_placeholder_empty_segment_raises_instead_of_emitting(
         )
 
 
-def test_files_placeholder_tuple_arrays_walk_and_map_like_lists():
+def test_files_placeholder_tuple_arrays_walk_and_map_like_lists() -> None:
     """A ``tuple`` of placeholders is an array on the wire and walks exactly like a list.
 
     ``json.dumps`` renders list AND tuple values as JSON arrays - the same closed
@@ -554,7 +555,7 @@ def test_files_placeholder_tuple_arrays_walk_and_map_like_lists():
 
 
 @pytest.mark.parametrize("container", [list, tuple])
-def test_files_placeholder_hostile_len_container_fails_closed(container: type):
+def test_files_placeholder_hostile_len_container_fails_closed(container: type) -> None:
     """A container with an unreadable ``len`` raises the uniform guard, not a raw escape.
 
     The walker reads ``len`` for the index range check and the error message, so
@@ -566,7 +567,7 @@ def test_files_placeholder_hostile_len_container_fails_closed(container: type):
     # basedpyright: parametrized over list and tuple; a class statement cannot take a
     # union base, so the base is typed only as ``type`` and the checker cannot type it
     class _HostileLen(container):  # pyright: ignore[reportUntypedBaseClass]
-        def __len__(self):
+        def __len__(self) -> int:
             raise RuntimeError("hostile __len__ detonated")
 
     with pytest.raises(AssertionError, match="unreadable length") as excinfo:
@@ -588,7 +589,7 @@ def test_files_placeholder_hostile_len_container_fails_closed(container: type):
     ],
     ids=["operations", "map", "both"],
 )
-def test_files_key_shadowing_a_reserved_envelope_field_raises(reserved: tuple[str, ...]):
+def test_files_key_shadowing_a_reserved_envelope_field_raises(reserved: tuple[str, ...]) -> None:
     """A ``files=`` key named ``operations`` or ``map`` raises instead of clobbering the envelope.
 
     Each ``files`` key becomes a multipart field name and ``**files`` spreads
@@ -609,7 +610,7 @@ def test_files_key_shadowing_a_reserved_envelope_field_raises(reserved: tuple[st
     assert str(sorted(reserved)) in str(excinfo.value)
 
 
-def test_empty_files_dict_is_a_plain_json_post():
+def test_empty_files_dict_is_a_plain_json_post() -> None:
     """``files={}`` is falsy on every switch: JSON body, JSON content type, JSON decode.
 
     The three ``files`` gates (body build, content-type selection, decode mode)
@@ -626,7 +627,7 @@ def test_empty_files_dict_is_a_plain_json_post():
     assert res.data == {"ok": True}
 
 
-def test_build_body_map_rule_is_uniform_across_path_shapes():
+def test_build_body_map_rule_is_uniform_across_path_shapes() -> None:
     """The owned builder's one rule - ``map[key] = ["variables." + key]`` - for every shape.
 
     The nested input-object shape is earned live (``test_uploads_api.py``); no
@@ -665,7 +666,7 @@ def test_build_body_map_rule_is_uniform_across_path_shapes():
 @pytest.mark.parametrize("wrap", [MappingProxyType, UserDict], ids=["mappingproxy", "userdict"])
 def test_build_body_multipart_accepts_a_non_dict_variables_mapping(
     wrap: Callable[[dict[str, object]], Mapping[str, object]],
-):
+) -> None:
     """A non-``dict`` ``Mapping`` for ``variables=`` walks and encodes like a ``dict``.
 
     ``query()`` annotates ``variables`` as ``Mapping[str, object]``, so a
@@ -689,7 +690,7 @@ def test_build_body_multipart_accepts_a_non_dict_variables_mapping(
     assert body["file"] is upload
 
 
-def test_build_body_sends_empty_operation_name_instead_of_dropping_it():
+def test_build_body_sends_empty_operation_name_instead_of_dropping_it() -> None:
     """An explicit ``operation_name=""`` rides the body; the default ``None`` omits the key.
 
     The owned ``_build_body`` gates ``operationName`` on ``is not None``, not
@@ -710,7 +711,7 @@ def test_build_body_sends_empty_operation_name_instead_of_dropping_it():
     assert "operationName" not in absent
 
 
-def test_response_extensions_surface_decoded_or_none():
+def test_response_extensions_surface_decoded_or_none() -> None:
     """Scenario 1's ``extensions`` leg: the decoded value when present, ``None`` when absent.
 
     The engine ``_decode`` hands back the raw JSON body; the package
@@ -719,7 +720,6 @@ def test_response_extensions_surface_decoded_or_none():
     reads ``None`` (fakeshop's live responses carry none, hence the canned
     transport here).
     """
-
     with_extensions = TestClient(
         client=_RecordingDjangoClient({"data": {"ok": True}, "extensions": {"traceId": "t-1"}}),
     ).query("{ ok }")
@@ -734,7 +734,7 @@ def test_response_extensions_surface_decoded_or_none():
 # ---------------------------------------------------------------------------
 
 
-def test_clients_carry_the_pytest_collection_guard():
+def test_clients_carry_the_pytest_collection_guard() -> None:
     """``__test__ is False`` on both ``Test*``-named classes.
 
     Without the guard, pytest collects the imported class as a suite and warns -
@@ -748,9 +748,8 @@ def test_clients_carry_the_pytest_collection_guard():
 @pytest.mark.parametrize("client_class", [TestClient, AsyncTestClient])
 def test_clients_preserve_an_explicit_falsy_transport(
     client_class: type[TestClient] | type[AsyncTestClient],
-):
+) -> None:
     """An explicitly supplied client is selected by presence, not truthiness."""
-
     if client_class is TestClient:
         supplied = _FalsySyncClient()
         client = TestClient(client=supplied)
@@ -760,7 +759,7 @@ def test_clients_preserve_an_explicit_falsy_transport(
     assert client.client is supplied
 
 
-def test_async_client_defaults_to_djangos_async_transport():
+def test_async_client_defaults_to_djangos_async_transport() -> None:
     """With no transport supplied, the async twin builds an ``AsyncClient``, not a sync one.
 
     The default arm of the async selection: the awaited ``post`` the async
@@ -780,7 +779,7 @@ def test_async_client_defaults_to_djangos_async_transport():
 )
 async def test_async_client_posts_a_real_query_through_a_falsy_transport(
     transport_class: type[_RecordingAsyncTransport],
-):
+) -> None:
     """A falsy async transport carries a real awaited operation, whichever way it is falsy.
 
     Presence, not truthiness, pinned behaviourally rather than by identity: the
@@ -799,7 +798,7 @@ async def test_async_client_posts_a_real_query_through_a_falsy_transport(
     assert res.response is transport.responses[0]
 
 
-def test_export_surface_is_the_testing_root_not_the_package_root():
+def test_export_surface_is_the_testing_root_not_the_package_root() -> None:
     """The six names live on ``testing``'s ``__all__``; the package root has none.
 
     The no-root-export contract is pinned by its two accurate shapes (spec-043
@@ -837,7 +836,7 @@ def test_export_surface_is_the_testing_root_not_the_package_root():
 # ---------------------------------------------------------------------------
 
 
-def test_mixin_query_delegates_to_the_test_cases_own_client():
+def test_mixin_query_delegates_to_the_test_cases_own_client() -> None:
     """The mixin's delegate ``TestClient`` posts through ``self.client``, JSON-typed.
 
     The state-free contract: the mixin reads only ``self.client`` and its own
@@ -855,7 +854,7 @@ def test_mixin_query_delegates_to_the_test_cases_own_client():
     assert res.data == {"ok": True}
 
 
-def test_mixin_class_attr_rung_beats_the_settings_key_and_the_default():
+def test_mixin_class_attr_rung_beats_the_settings_key_and_the_default() -> None:
     """Rung 3 through the mixin: ``GRAPHQL_URL`` outranks the settings key and the default.
 
     One rung per node id, so a rung that stops working is distinguishable from
@@ -868,7 +867,7 @@ def test_mixin_class_attr_rung_beats_the_settings_key_and_the_default():
     assert alt.client.posts[-1][0] == "/classattr/"
 
 
-def test_mixin_per_call_url_rung_beats_the_class_attr():
+def test_mixin_per_call_url_rung_beats_the_class_attr() -> None:
     """Rung 1 through the mixin: a per-call ``url=`` outranks ``GRAPHQL_URL``."""
     alt = _AltProbe()
     alt.query("{ ok }", url="/percall/")
@@ -876,7 +875,7 @@ def test_mixin_per_call_url_rung_beats_the_class_attr():
     assert alt.client.posts[-1][0] == "/percall/"
 
 
-def test_mixin_settings_rung_applies_when_the_class_attr_is_unset():
+def test_mixin_settings_rung_applies_when_the_class_attr_is_unset() -> None:
     """Rung 4 through the mixin: the settings key, read at call time.
 
     The mixin constructs its delegate per call, so a settings override observed
@@ -914,17 +913,17 @@ class AssertionHelperFailureDirectionTests(GraphQLTestMixin, unittest.TestCase):
         errors: list[GraphQLFormattedError] | None,
         data: dict[str, object] | None,
         status_code: int = 200,
-    ):
+    ) -> Response:
         raw = JsonResponse({"data": data}, status=status_code)
         return Response(errors=errors, data=data, extensions=None, response=raw)
 
-    def test_assert_response_no_errors_fails_on_an_errors_response(self):
+    def test_assert_response_no_errors_fails_on_an_errors_response(self) -> None:
         res = self._canned(errors=[{"message": "nope"}], data=None)
         with pytest.raises(AssertionError) as ctx:
             self.assertResponseNoErrors(res)
         assert "nope" in str(ctx.value)  # the decoded errors ride the message
 
-    def test_assert_response_no_errors_fails_readably_on_a_non_200_without_errors(self):
+    def test_assert_response_no_errors_fails_readably_on_a_non_200_without_errors(self) -> None:
         # A transport failure whose JSON body has no ``errors`` key: the status
         # check fails and the message still carries the decoded content (both
         # fields), never a bare ``None``.
@@ -933,18 +932,18 @@ class AssertionHelperFailureDirectionTests(GraphQLTestMixin, unittest.TestCase):
             self.assertResponseNoErrors(res)
         assert "boom" in str(ctx.value)
 
-    def test_assert_response_no_errors_fails_with_custom_msg(self):
+    def test_assert_response_no_errors_fails_with_custom_msg(self) -> None:
         res = self._canned(errors=[{"message": "nope"}], data=None)
         with pytest.raises(AssertionError) as ctx:
             self.assertResponseNoErrors(res, msg="custom no-errors failure")
         assert "custom no-errors failure" in str(ctx.value)
 
-    def test_assert_response_has_errors_fails_on_a_clean_response(self):
+    def test_assert_response_has_errors_fails_on_a_clean_response(self) -> None:
         res = self._canned(errors=None, data={"__typename": "Query"})
         with pytest.raises(AssertionError):
             self.assertResponseHasErrors(res)
 
-    def test_assert_response_has_errors_fails_with_custom_msg(self):
+    def test_assert_response_has_errors_fails_with_custom_msg(self) -> None:
         res = self._canned(errors=None, data={"__typename": "Query"})
         with pytest.raises(AssertionError) as ctx:
             self.assertResponseHasErrors(res, msg="custom has-errors failure")

@@ -65,6 +65,7 @@ class ShelfRelationsForm(forms.ModelForm[models.Shelf]):
 
     # basedpyright: verbatim forward to ModelForm.__init__; object fails its typed params
     def __init__(self, *args: Any, **kwargs: Any) -> None:  # pyright: ignore[reportExplicitAny]
+        """Point the ``branch`` choice field at every branch."""
         super().__init__(*args, **kwargs)
         branch = self.fields["branch"]
         if not isinstance(branch, forms.ModelChoiceField):
@@ -73,8 +74,9 @@ class ShelfRelationsForm(forms.ModelForm[models.Shelf]):
 
 
 class BookGenresModelForm(forms.ModelForm[models.Book]):
-    """A ``Book`` ``ModelForm`` carrying the required ``genres`` M2M + optional
-    ``subtitle``, for the live FORM partial-update preservation cases.
+    """A ``Book`` ``ModelForm`` with a required ``genres`` M2M and an optional ``subtitle``.
+
+    It serves the live FORM partial-update preservation cases.
 
     ``Book`` is the Relay-Node ``BookType`` primary (so the update ``id`` is a
     decodable ``GlobalID`` - unlike the non-Relay ``Shelf``, which supports create

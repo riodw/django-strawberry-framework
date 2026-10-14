@@ -12,7 +12,7 @@ and
 import pytest
 from apps.library.models import Book, Branch, Genre, Loan, Shelf
 from django.db import connection, router
-from django.db.models import CompositePrimaryKey, Model, QuerySet, Value
+from django.db.models import CompositePrimaryKey, Model, Q, QuerySet, Value
 from django.db.models.lookups import Lookup
 
 from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
@@ -32,19 +32,22 @@ from tests._relation_fixtures import (
 pytestmark = pytest.mark.django_db
 
 
-def _compose(outer: QuerySet[Model], child_predicate: dict[str, object]):
+def _compose(
+    outer: QuerySet[Model],
+    child_predicate: dict[str, object],
+) -> tuple[QuerySet[Model], Q, QuerySet[Model]]:
     """Mirror the real caller shape: correlate, filter the inner, attach, apply."""
     inner = correlated_inner_root(outer).filter(**child_predicate)
     qs, cond = attach_exists(outer, inner)
     return qs, cond, qs.filter(cond)
 
 
-def _shelf():
+def _shelf() -> Shelf:
     branch = Branch.objects.create(name="Central")
     return Shelf.objects.create(code="A1", branch=branch)
 
 
-def test_reserved_alias_not_selected():
+def test_reserved_alias_not_selected() -> None:
     shelf = _shelf()
     book = Book.objects.create(title="One", shelf=shelf)
     book.genres.add(Genre.objects.create(name="science fiction"))
@@ -58,7 +61,7 @@ def test_reserved_alias_not_selected():
     assert "_dst_predicate_0" not in select_clause
 
 
-def test_primitive_injects_no_distinct():
+def test_primitive_injects_no_distinct() -> None:
     shelf = _shelf()
     book = Book.objects.create(title="One", shelf=shelf)
     book.genres.add(Genre.objects.create(name="science fiction"))
@@ -68,7 +71,7 @@ def test_primitive_injects_no_distinct():
     assert "SELECT DISTINCT" not in str(result.query).upper()
 
 
-def test_alias_allocation():
+def test_alias_allocation() -> None:
     shelf = _shelf()
     Book.objects.create(title="One", shelf=shelf)
 
@@ -105,21 +108,24 @@ def test_alias_allocation():
     assert qs_o.filter(cond_o).count() == 0
 
 
-def test_same_model_guard():
+def test_same_model_guard() -> None:
     with pytest.raises(OptimizerError, match="does not"):
         attach_exists(Book.objects.all(), correlated_inner_root(Loan.objects.all()))
 
 
-def test_same_alias_guard():
+def test_same_alias_guard() -> None:
     # Building with .using() does not hit the DB, so no second database is needed.
     inner = correlated_inner_root(Book.objects.all()).using("nonexistent")
     with pytest.raises(OptimizerError, match="database-alias mismatch"):
         attach_exists(Book.objects.all(), inner)
 
 
-def test_alias_mismatch_message_reports_the_compared_values(monkeypatch: pytest.MonkeyPatch):
-    """The mismatch guard snapshots both ``.db`` resolutions before comparing
-    and formats its message from the snapshots.
+def test_alias_mismatch_message_reports_the_compared_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The mismatch guard snapshots both ``.db`` resolutions before comparing.
+
+    It formats its message from the snapshots.
 
     ``.db`` re-resolves through the router on every read of a hint-less
     queryset, so a stateful router whose answers change between reads must see
@@ -129,7 +135,7 @@ def test_alias_mismatch_message_reports_the_compared_values(monkeypatch: pytest.
     """
     reads = {"n": 0}
 
-    def flip(_model_instance: object = None, **_hints: object):
+    def flip(_model_instance: object = None, **_hints: object) -> str:
         reads["n"] += 1
         return "default" if reads["n"] % 2 else "nonexistent"
 
@@ -150,11 +156,11 @@ def test_alias_mismatch_message_reports_the_compared_values(monkeypatch: pytest.
     assert reads["n"] - reads_after_build == 1, message
 
 
-def test_database_alias_preserved():
+def test_database_alias_preserved() -> None:
     assert correlated_inner_root(Book.objects.using("nonexistent")).db == "nonexistent"
 
 
-def test_combinator_guard_names_combinator():
+def test_combinator_guard_names_combinator() -> None:
     combined = Book.objects.filter(pk=1).union(Book.objects.filter(pk=2))
     inner = correlated_inner_root(Book.objects.all())
     with pytest.raises(OptimizerError, match="union") as exc:
@@ -162,7 +168,7 @@ def test_combinator_guard_names_combinator():
     assert "union" in str(exc.value)
 
 
-def test_evaluated_outer_parity():
+def test_evaluated_outer_parity() -> None:
     shelf = _shelf()
     matching = Book.objects.create(title="One", shelf=shelf)
     Book.objects.create(title="Two", shelf=shelf)
@@ -179,9 +185,10 @@ def test_evaluated_outer_parity():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_composite_pk_correlation_executes_on_composite_fixture():
-    """Composite pks share the single ``pk=OuterRef("pk")`` correlation, now
-    PROVEN executing against a real composite-primary-key table.
+def test_composite_pk_correlation_executes_on_composite_fixture() -> None:
+    """Composite pks share the single ``pk=OuterRef("pk")`` correlation, proven on a real table.
+
+    The proof executes against a real composite-primary-key table.
 
     The ``RpCompositeParent`` fixture (``CompositePrimaryKey("tenant_id",
     "code")``) supplies the DB-backed composite table the fakeshop apps lack, so
@@ -225,14 +232,14 @@ def test_composite_pk_correlation_executes_on_composite_fixture():
         assert "EXISTS" in str(result.query).upper()
 
 
-def test_base_manager_start_does_not_leak_outer_filters():
+def test_base_manager_start_does_not_leak_outer_filters() -> None:
     inner = correlated_inner_root(Book.objects.filter(title="x"))
     # Only the OuterRef correlation is present; the outer's filters never leak in.
     assert len(inner.query.where.children) == 1
 
 
 @pytest.mark.django_db(transaction=True)
-def test_related_rows_exist_correlates_both_directions_of_a_multi_column_link():
+def test_related_rows_exist_correlates_both_directions_of_a_multi_column_link() -> None:
     """A two-column ``ForeignObject`` correlates on both column pairs, forward and reverse.
 
     Each parent matches only through its own children: a child sharing one of
@@ -266,7 +273,7 @@ def test_related_rows_exist_correlates_both_directions_of_a_multi_column_link():
         assert list(children.values_list("name", flat=True)) == ["other"]
 
 
-def test_related_rows_exist_rejects_a_segment_without_link_columns():
+def test_related_rows_exist_rejects_a_segment_without_link_columns() -> None:
     """A ``GenericForeignKey`` names no link columns, so nothing could correlate it: it raises."""
     from apps.library.models import TaggedItem
 

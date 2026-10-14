@@ -29,7 +29,7 @@ from apps.kanban.signals import UUID_LINKED_MODELS
 # ---------------------------------------------------------------------------
 
 
-def test_one_hot_link_count_deconstruct_is_flat():
+def test_one_hot_link_count_deconstruct_is_flat() -> None:
     """``deconstruct()`` returns the flat field-name list, not the nested Case tower."""
     expression = OneHotLinkCount("milestone", "status", "priority")
 
@@ -40,7 +40,7 @@ def test_one_hot_link_count_deconstruct_is_flat():
     assert kwargs == {}
 
 
-def test_one_hot_link_count_requires_at_least_one_field():
+def test_one_hot_link_count_requires_at_least_one_field() -> None:
     with pytest.raises(ValueError, match="at least one field name"):
         OneHotLinkCount()
 
@@ -51,13 +51,13 @@ def test_one_hot_link_count_requires_at_least_one_field():
 
 
 @pytest.mark.django_db
-def test_uuid_row_with_zero_links_violates_constraint():
+def test_uuid_row_with_zero_links_violates_constraint() -> None:
     with pytest.raises(IntegrityError), transaction.atomic():
         models.UUIDModel.objects.create()
 
 
 @pytest.mark.django_db
-def test_uuid_row_with_two_links_violates_constraint():
+def test_uuid_row_with_two_links_violates_constraint() -> None:
     milestone = kf.make_milestone("alpha")
     status = kf.make_status("todo")
     # Each domain row already owns an auto-created side-row (create_uuid_row).
@@ -117,7 +117,7 @@ def _make_instance(model: type[Model]) -> _UUIDLinked:
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("model", UUID_LINKED_MODELS, ids=lambda m: m._meta.model_name)
-def test_create_uuid_row_materializes_side_row_for_every_linked_model(model: type[Model]):
+def test_create_uuid_row_materializes_side_row_for_every_linked_model(model: type[Model]) -> None:
     instance = _make_instance(model)
 
     side_row = instance.uuid
@@ -130,10 +130,11 @@ def test_create_uuid_row_materializes_side_row_for_every_linked_model(model: typ
 
 
 @pytest.mark.django_db
-def test_cardpathlink_m2m_add_creates_uuid_side_row():
-    """A raw M2M ``.add()`` inserts the through row via bulk_create (no post_save),
+def test_cardpathlink_m2m_add_creates_uuid_side_row() -> None:
+    """A raw M2M ``.add()`` has the ``m2m_changed`` receiver backfill the side-row.
 
-    so the ``m2m_changed`` receiver -- not ``create_uuid_row`` -- backfills the
+    ``.add()`` inserts the through row via bulk_create (no post_save), so the
+    ``m2m_changed`` receiver -- not ``create_uuid_row`` -- backfills the
     ``CardPathLink`` side-row.
     """
     card = kf.make_card()

@@ -21,7 +21,7 @@ int/str/UUID round-trips through the helper (kanban UUID types are non-Relay).
 
 import uuid
 from collections.abc import Callable, Iterator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 import pytest
 import strawberry
@@ -101,7 +101,7 @@ _ROW_ID_QUERY = "{ row { id } }"
 
 
 @pytest.mark.django_db
-def test_global_id_for_type_strategy():
+def test_global_id_for_type_strategy() -> None:
     """``type`` strategy: live id equals helper output; payload is the Meta name."""
     services.seed_data(1)
     category_node = _make_node_type("CategoryNode", strategy="type")
@@ -118,7 +118,7 @@ def test_global_id_for_type_strategy():
 
 
 @pytest.mark.django_db
-def test_global_id_for_type_plus_model_strategy():
+def test_global_id_for_type_plus_model_strategy() -> None:
     """``type+model`` strategy: live id equals helper output; payload is the model label."""
     services.seed_data(1)
     category_node = _make_node_type("CategoryNode", strategy="type+model")
@@ -143,7 +143,7 @@ class _ApiPrefix(NameConverter):
 
 
 @pytest.mark.django_db
-def test_global_id_for_type_strategy_with_schema_mints_the_published_name():
+def test_global_id_for_type_strategy_with_schema_mints_the_published_name() -> None:
     """Under a renaming converter, ``schema=`` mints the live id; schema-less keeps the default spelling."""
     services.seed_data(1)
     category_node = _make_node_type("CategoryNode", strategy="type")
@@ -161,14 +161,14 @@ def test_global_id_for_type_strategy_with_schema_mints_the_published_name():
     assert decode_global_id(live_id, schema=schema) == (category_node, str(row.pk))
 
 
-def test_global_id_for_model_label_strategy_ignores_the_schema():
+def test_global_id_for_model_label_strategy_ignores_the_schema() -> None:
     """A model-label payload is the same with or without ``schema=``."""
     category_node = _make_node_type("CategoryNode", strategy="type+model")
     schema = _schema_with_row(category_node, Category, converter=_ApiPrefix())
     assert global_id_for(category_node, 5, schema=schema) == global_id_for(category_node, 5)
 
 
-def test_global_id_for_type_strategy_refuses_a_schema_not_publishing_the_type():
+def test_global_id_for_type_strategy_refuses_a_schema_not_publishing_the_type() -> None:
     """``schema=`` must publish the type; a schema that does not is a ``ConfigurationError``."""
     category_node = _make_node_type("CategoryNode", strategy="type")
     item_node = _make_node_type("ItemNode", model=Item, strategy="type")
@@ -188,7 +188,7 @@ def test_global_id_for_type_strategy_refuses_a_schema_not_publishing_the_type():
 def _callable_strategy_type() -> type[DjangoType]:
     """A Relay type whose ``Meta.globalid_strategy`` is a consumer callable."""
 
-    def _encoder(_type_cls: type[DjangoType], _model: type[models.Model], _root: object):
+    def _encoder(_type_cls: type[DjangoType], _model: type[models.Model], _root: object) -> str:
         return "products.category"
 
     return _make_node_type("CategoryNode", strategy=_encoder)
@@ -204,7 +204,7 @@ def _custom_override_type() -> type[DjangoType]:
             interfaces = (relay.Node,)
 
         @classmethod
-        def resolve_typename(cls, _root: object, _info: strawberry.Info[object, object]):
+        def resolve_typename(cls, _root: object, _info: strawberry.Info[object, object]) -> str:
             return "ConsumerOwned"
 
     return CategoryNode
@@ -218,7 +218,7 @@ def _custom_override_type() -> type[DjangoType]:
 def test_global_id_for_callable_or_custom_raises(
     build_type: Callable[[], type[DjangoType]],
     expected_classification: str,
-):
+) -> None:
     """``callable`` / ``custom`` encoders need a live root -> raise."""
     type_cls = build_type()
     finalize_django_types()
@@ -232,7 +232,7 @@ def test_global_id_for_callable_or_custom_raises(
     assert repr(expected_classification) in message
 
 
-def test_global_id_for_unfinalized_raises():
+def test_global_id_for_unfinalized_raises() -> None:
     """A Relay-shaped type defined but never finalized raises finalize-first."""
     type_cls = _make_node_type("CategoryNode")
     with pytest.raises(ConfigurationError) as excinfo:
@@ -243,7 +243,7 @@ def test_global_id_for_unfinalized_raises():
     assert "first (directly, or by importing a schema module that calls it)" in message
 
 
-def test_global_id_for_non_node_raises():
+def test_global_id_for_non_node_raises() -> None:
     """A finalized non-Relay DjangoType raises the Relay gate; a plain class is rejected too."""
     type_cls = _make_node_type("CategoryType", interfaces=())
     finalize_django_types()
@@ -259,12 +259,12 @@ def test_global_id_for_non_node_raises():
     assert "not a registered DjangoType subclass" in str(excinfo.value)
 
 
-def test_global_id_for_non_node_hostile_repr_keeps_configuration_error_boundary():
+def test_global_id_for_non_node_hostile_repr_keeps_configuration_error_boundary() -> None:
     """A malformed input's broken ``repr`` cannot replace the typed rejection."""
 
     class _HostileRepr:
         @override
-        def __repr__(self):
+        def __repr__(self) -> str:
             raise RuntimeError("repr exploded")
 
     with pytest.raises(ConfigurationError, match="not a registered DjangoType subclass"):
@@ -273,7 +273,7 @@ def test_global_id_for_non_node_hostile_repr_keeps_configuration_error_boundary(
         global_id_for(_HostileRepr(), 1)  # pyright: ignore[reportArgumentType]
 
 
-def test_global_id_for_rejects_inherited_or_stale_definitions():
+def test_global_id_for_rejects_inherited_or_stale_definitions() -> None:
     """Only the active registry's own definition may mint a GlobalID."""
     type_cls = _make_node_type("CategoryNode")
     finalize_django_types()
@@ -289,7 +289,9 @@ def test_global_id_for_rejects_inherited_or_stale_definitions():
         global_id_for(type_cls, 1)
 
 
-def test_global_id_for_strategy_stamped_but_unfinalized_raises(monkeypatch: pytest.MonkeyPatch):
+def test_global_id_for_strategy_stamped_but_unfinalized_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A Phase-3 failure leaves the strategy stamped but ``finalized=False`` -> raise.
 
     ``install_globalid_typename_resolver`` stamps ``effective_globalid_strategy``
@@ -300,7 +302,7 @@ def test_global_id_for_strategy_stamped_but_unfinalized_raises(monkeypatch: pyte
     """
     category_node = _make_node_type("CategoryNode")
 
-    def _boom(*_args: object, **_kwargs: object):
+    def _boom(*_args: object, **_kwargs: object) -> NoReturn:
         raise RuntimeError("phase-3 boom")
 
     monkeypatch.setattr(strawberry, "type", _boom)
@@ -324,7 +326,7 @@ def test_global_id_for_strategy_stamped_but_unfinalized_raises(monkeypatch: pyte
 # ---------------------------------------------------------------------------
 
 
-def test_public_decode_round_trip_primary_and_type_name():
+def test_public_decode_round_trip_primary_and_type_name() -> None:
     """Round-trip identity for a lone model-label type and a ``type``-strategy type."""
     model_type = _make_node_type("CategoryNode")
     type_type = _make_node_type("ItemNode", model=Item, strategy="type")
@@ -335,11 +337,11 @@ def test_public_decode_round_trip_primary_and_type_name():
     assert testing_relay.decode_global_id is types_relay.decode_global_id
 
 
-def test_global_id_for_hostile_getattr_keeps_configuration_error_boundary():
+def test_global_id_for_hostile_getattr_keeps_configuration_error_boundary() -> None:
     """An input whose __getattr__ raises is handled cleanly and raises ConfigurationError."""
 
     class _HostileGetattrMeta(type):
-        def __getattr__(cls, name: str):
+        def __getattr__(cls, name: str) -> object:
             raise RuntimeError("attribute access exploded")
 
     class _HostileClass(metaclass=_HostileGetattrMeta):
@@ -349,7 +351,7 @@ def test_global_id_for_hostile_getattr_keeps_configuration_error_boundary():
         global_id_for(_HostileClass, 1)
 
 
-def test_global_id_for_accepts_various_id_types_and_round_trips():
+def test_global_id_for_accepts_various_id_types_and_round_trips() -> None:
     """global_id_for accepts int, str, and UUID objects, and round-trips through decode_global_id."""
     category_node = _make_node_type("CategoryNode")
     finalize_django_types()

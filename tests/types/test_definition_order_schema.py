@@ -23,7 +23,7 @@ def _isolate_registry() -> Iterator[None]:
     registry.clear()
 
 
-def test_manual_strawberry_type_before_finalization_surfaces_sentinel_repr():
+def test_manual_strawberry_type_before_finalization_surfaces_sentinel_repr() -> None:
     """If Strawberry sees an unresolved relation sentinel, the error names the finalizer."""
 
     class ItemType(DjangoType):

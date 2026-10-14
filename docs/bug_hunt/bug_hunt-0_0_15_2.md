@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 62 done, 150 to do.
+Progress: 63 done, 152 to do.
 
 ## Done
 
@@ -160,6 +160,11 @@ Progress: 62 done, 150 to do.
   silent re-link to that row (including one the related type hides); the refill now reads `model_to_dict` only when the
   form field's key names the column the FK stores, and otherwise rebinds the related row by the field's own key, as a
   provided value decodes (this commit). Released in 0.0.13 and 0.0.14: item 214
+- [x] 61. `RelatedFilter` cycles (two or more `FilterSet`s, and sets pointing into one) published flat filters decided by
+  which type registered first: the first-expanded set's re-entry fallback was cached into every other member, so a flat
+  filter validated in one registration order and was unknown in another (fakeshop's library inputs moved with it). A flat
+  path now follows `RelatedFilter`s until it reaches a filter set already on it, whose own filters end it there, so each set
+  publishes one surface in every order, the largest any order published (`6b5d43d4`); CHANGELOG item 215; filed 216, 217
 
 ## Outside review of the fixes
 
@@ -451,7 +456,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## To do: holes found re-checking the fixes
 
-- [ ] 61. Three `FilterSet`s in a `RelatedFilter` cycle: the flat filters exposed depend on type declaration order
 - [ ] 63. `after` cursor at `sys.maxsize - 1 - page` with `first: 0` / `last: 0` raises Strawberry's assert instead of an empty page
 - [ ] 64. Two cursor-decoder guards no test pins (`isascii`, the nested-window decode)
 - [ ] 66. Index advisory on a multi-table-inheritance child names an order column that lives on the parent table
@@ -547,6 +551,9 @@ not real bugs and just get deleted from t3. One checkbox per area:
   `to_field_name` over a `ForeignKey(to_field=...)` / `OneToOneField(to_field=...)` keeps the stored relation (it failed
   "Select a valid choice", or re-linked the row whose pk equals the stored key); an omitted generated relation field no
   longer reads the related row
+- [ ] 215. CHANGELOG entry for item 61: through a `RelatedFilter` cycle each filter set publishes the same flat filters
+  whichever type is registered first (a flat path ends at the first set it reaches twice); flat filter inputs on cycle
+  members grow (fakeshop: +965 flat fields), none is removed
 - [ ] 196. CHANGELOG entries for items 6 (combined querysets served as their pk set), 12 (the deadline message reads "before
   this field reached the database"; login, logout, me and `relay.node()` reject past the deadline), 50 and 83 (planned
   `.only()` writers no longer drop selected columns), 74 (a consumer `select_related` the selection never reads no
@@ -579,6 +586,11 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 207. Earlier open questions with no row: which name `FieldError.field` carries, whether a multi-column `ForeignObject` is
   a supported shape (the reverse fallback was kept), nullable payloads (card 056), and the HUNT negative-offset cursor fix
   on list sources being off by one
+- [ ] 216. A dense `RelatedFilter` graph publishes a flat surface factorial in its size (path-relative expansion over every
+  simple path: six sets each related to every other give about 11k flat keys per set, seven about 94k); decide a stated
+  bound or a per-declaration opt-out of flat copies
+- [ ] 217. A subclass of a `FilterSet` in a `RelatedFilter` cycle publishes one lap more than its parent (the cycle closes at
+  the parent class, not the subclass); decide whether a subclass should close the cycle at itself
 
 ## Hunt not finished in t3
 

@@ -550,6 +550,37 @@ def _shelf_label_texts(
     return texts, _sql_from_table(captured, "library_shelflabel")
 
 
+#: Every ``Ordering`` member: the bare pair defers ``NULL`` placement to the
+#: database, the four ``NULLS`` members fix it on every backend.
+_DIRECTIONS = (
+    "ASC",
+    "ASC_NULLS_FIRST",
+    "ASC_NULLS_LAST",
+    "DESC",
+    "DESC_NULLS_FIRST",
+    "DESC_NULLS_LAST",
+)
+
+
+def _ordered_with_missing(direction: str, present: list[str], missing: str) -> list[str]:
+    """``present`` (given ascending) in ``direction``, with the row ordering as ``NULL`` placed.
+
+    A ``NULLS`` member places it where it says. A bare ``ASC`` / ``DESC`` leaves
+    it to the database (``orders/inputs.py::Ordering``), which Django names
+    ``nulls_order_largest``: PostgreSQL sorts ``NULL`` above every value, so
+    last ascending and first descending, and SQLite below every value.
+    """
+    ascending = direction.startswith("ASC")
+    if direction.endswith("NULLS_FIRST"):
+        missing_first = True
+    elif direction.endswith("NULLS_LAST"):
+        missing_first = False
+    else:
+        missing_first = ascending != connection.features.nulls_order_largest
+    ordered = present if ascending else present[::-1]
+    return [missing, *ordered] if missing_first else [*ordered, missing]
+
+
 def test_shelf_label_order_input_publishes_the_foreign_object_beside_its_carriers() -> None:
     """``"__all__"`` publishes the multi-column ``shelf`` relation as an order leaf.
 
@@ -622,96 +653,37 @@ def test_shelf_labels_order_by_shelf_sorts_by_both_carriers(
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize(
-    ("direction", "expected"),
-    [
-        (
-            "ASC",
-            [
-                "annex-s9",
-                "central-a1",
-                "central-c3",
-                "annex-b2",
-            ],
-        ),
-        (
-            "ASC_NULLS_LAST",
-            [
-                "central-a1",
-                "central-c3",
-                "annex-b2",
-                "annex-s9",
-            ],
-        ),
-        (
-            "DESC",
-            [
-                "annex-b2",
-                "central-c3",
-                "central-a1",
-                "annex-s9",
-            ],
-        ),
-    ],
-    ids=["asc", "asc_nulls_last", "desc"],
-)
-def test_shelf_labels_order_a_hidden_shelf_as_a_missing_one(
-    direction: str,
-    expected: list[str],
-) -> None:
+@pytest.mark.parametrize("direction", _DIRECTIONS)
+def test_shelf_labels_order_a_hidden_shelf_as_a_missing_one(direction: str) -> None:
     """A label on a shelf ``ShelfType`` hides from the viewer sorts as one with no shelf.
 
     Anonymous viewers do not see the ``secret`` shelf, so both of
-    ``annex-s9``'s carriers order as ``NULL``: first under SQLite's ``ASC``,
-    last under ``ASC_NULLS_LAST`` and ``DESC``. The label itself stays listed.
+    ``annex-s9``'s carriers order as ``NULL``, where the direction places a
+    ``NULL``. The label itself stays listed.
     """
     _seed_shelf_labels()
 
     texts, label_sql = _shelf_label_texts(direction)
 
-    assert texts == expected, texts
+    assert texts == _ordered_with_missing(
+        direction,
+        ["central-a1", "central-c3", "annex-b2"],
+        "annex-s9",
+    ), texts
     assert len(label_sql) == 1, label_sql
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize(
-    ("direction", "expected"),
-    [
-        (
-            "ASC",
-            [
-                "central-zz",
-                "central-a1",
-                "central-c3",
-                "annex-b2",
-                "annex-s9",
-            ],
-        ),
-        (
-            "DESC",
-            [
-                "annex-s9",
-                "annex-b2",
-                "central-c3",
-                "central-a1",
-                "central-zz",
-            ],
-        ),
-    ],
-    ids=["asc", "desc"],
-)
-def test_shelf_labels_keep_a_label_naming_no_shelf_and_sort_it_as_missing(
-    direction: str,
-    expected: list[str],
-) -> None:
+@pytest.mark.parametrize("direction", _DIRECTIONS)
+def test_shelf_labels_keep_a_label_naming_no_shelf_and_sort_it_as_missing(direction: str) -> None:
     """A label whose ``(branch, shelf_code)`` matches no shelf stays listed and sorts as missing.
 
     No database constraint holds a ``ForeignObject``, so ``central-zz`` names a
     shelf that does not exist. ``ShelfType`` declares ``get_queryset``, so each
     carrier is read under a visibility test; the test correlates on the link's
     carrier / target columns, adds no join to ``library_shelf`` and so drops no
-    label, and the label with no shelf reads ``NULL`` on both carriers: first
-    under SQLite's ``ASC``, last under ``DESC``. The viewer is staff, so every
+    label, and the label with no shelf reads ``NULL`` on both carriers, placed
+    where the direction places a ``NULL``. The viewer is staff, so every
     existing shelf keeps its value.
     """
     create_users(1)
@@ -726,20 +698,24 @@ def test_shelf_labels_keep_a_label_naming_no_shelf_and_sort_it_as_missing(
 
     texts, label_sql = _shelf_label_texts(direction, staff_client)
 
-    assert texts == expected, texts
+    assert texts == _ordered_with_missing(
+        direction,
+        [
+            "central-a1",
+            "central-c3",
+            "annex-b2",
+            "annex-s9",
+        ],
+        "central-zz",
+    ), texts
     assert len(label_sql) == 1, label_sql
     assert "JOIN" not in label_sql[0], label_sql[0]
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize(
-    ("direction", "expected"),
-    [("ASC", ["Vault", "Central", "Annex"]), ("DESC", ["Annex", "Central", "Vault"])],
-    ids=["asc", "desc"],
-)
+@pytest.mark.parametrize("direction", _DIRECTIONS)
 def test_branches_order_by_label_shelves_aggregate_each_carrier_behind_the_labels(
     direction: str,
-    expected: list[str],
 ) -> None:
     """``shelfLabels: { shelf: ... }`` orders branches by one aggregate per carrier, keeping every branch.
 
@@ -750,8 +726,8 @@ def test_branches_order_by_label_shelves_aggregate_each_carrier_behind_the_label
     shelf's ``(branch, code)`` to the label's own carriers through the label
     join, adding no join to ``library_shelf``: ``Vault``'s only label names a
     shelf that does not exist, so both its aggregates are ``NULL`` and it sorts
-    first under SQLite's ``ASC`` and last under ``DESC``, still listed. One
-    statement serves the page.
+    where the direction places a ``NULL``, still listed. One statement serves
+    the page.
     """
     _seed_shelf_labels()
     vault = models.Branch.objects.create(name="Vault")
@@ -763,7 +739,11 @@ def test_branches_order_by_label_shelves_aggregate_each_carrier_behind_the_label
             "{ name } }",
         )
 
-    assert [row["name"] for row in data["allLibraryBranches"]] == expected, data
+    assert [row["name"] for row in data["allLibraryBranches"]] == _ordered_with_missing(
+        direction,
+        ["Central", "Annex"],
+        "Vault",
+    ), data
     assert len(captured.captured_queries) == 1, captured.captured_queries
     # Django 6 quotes the subquery alias (``"U0"``); 5.2 does not.
     branch_sql = captured.captured_queries[0]["sql"].replace('"U0"', "U0")

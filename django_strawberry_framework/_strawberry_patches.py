@@ -186,7 +186,8 @@ established by
 ``_django_patches._AUDITED_REMOVE_DATABASES_FAILURES_SOURCES``) so an
 upstream body change fails loudly at ``apply()`` time instead of being
 silently superseded. The shield shares the envelope guard's lifecycle:
-retire both together when upstream #3398 lands.
+retire both together once upstream guards both ``.get()`` sites (see
+"Upstream status" below).
 
 A third gap: structurally-invalid multipart maps
 -------------------------------------------------
@@ -237,22 +238,24 @@ change fails loudly so that retirement is deliberate.
 
 The second gap (non-object body) is likewise unfixed through 0.327.7 (the
 same ``parse_http_body`` bodies in every published release from 0.322.2 on)
-and on ``main`` when last checked (2026-06-19). ``parse_http_body`` still
-handles only the ``list`` (batch) branch and then calls
-``data.get("query")`` with no ``isinstance(data, dict)`` guard, and the
-batch branch still does ``item.get(...)`` with no per-element
+and on ``main`` when last checked (2026-10-14, the 0.335.0 tag).
+``parse_http_body`` still handles only the ``list`` (batch) branch and then
+calls ``data.get("query")`` with no ``isinstance(data, dict)`` guard, and
+the batch branch still does ``item.get(...)`` with no per-element
 ``isinstance(item, dict)`` guard:
 <https://github.com/strawberry-graphql/strawberry/blob/e7d4a8235a11a4c4fd2b9fa605c437c9f86e5fb7/strawberry/http/sync_base_view.py>
-(and the ``async_base_view.py`` sibling). It is tracked by the **open**
-issue #3398, "AttributeError when query passed is a list and not a dict"
-(opened 2024-02-27 against 0.219.2, no merged PR):
-<https://github.com/strawberry-graphql/strawberry/issues/3398>. The
-issue's title says *list* because at 0.219.2 a top-level list was
-unguarded too; current versions intercept lists in the batch branch, so
-the still-unhandled triggers are the JSON *scalar* case and the
-*non-object batch element* case - the same ``.get()``-on-a-non-dict root
-cause. Retire the envelope guard once #3398 lands ``isinstance`` checks
-(or equivalent) ahead of both ``data.get("query")`` and each batch
+(and the ``async_base_view.py`` sibling). The defect was reported as issue
+#3398, "AttributeError when query passed is a list and not a dict" (opened
+2024-02-27 against 0.219.2):
+<https://github.com/strawberry-graphql/strawberry/issues/3398>. Its title
+says *list* because at 0.219.2 a top-level list reached ``data.get`` too.
+A maintainer closed it as completed on 2026-07-18, citing PR #3755 ("Add
+Query Batching Support", merged 2025-07-19). That PR added the ``list``
+branch, which is what stops a top-level list; it added no ``isinstance``
+guard, so the JSON *scalar* case and the *non-object batch element* case
+still raise the same ``.get()``-on-a-non-dict ``AttributeError``, and no
+open upstream issue tracks them. Retire the envelope guard once upstream
+rejects a non-object ahead of both ``data.get("query")`` and each batch
 ``item.get(...)``.
 
 The third gap is present in the installed upstream multipart utility:
@@ -275,9 +278,10 @@ independent upstream *bugs* that do not retire together:
    (``ValueError`` subsumes the decode error; the recursion escape needs
    its own clause).
 2. **The body-envelope guard and its ``parse_query_params`` shield** -
-   retirable together once upstream #3398 lands the ``isinstance``
-   checks; the shield exists only to keep the guard off the GET path, so
-   it has no independent lifecycle.
+   retirable together once upstream rejects a non-object body and a
+   non-object batch element before calling ``.get()`` on them (#3398 is
+   closed without that fix); the shield exists only to keep the guard off
+   the GET path, so it has no independent lifecycle.
 3. **The sync and async multipart delegates** - retirable once upstream
    validates malformed ``map`` containers and paths before the upload
    utility traverses them.

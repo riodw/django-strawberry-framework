@@ -584,6 +584,329 @@ def test_filterset_get_filters_does_not_cache_when_string_filterset_remains():
     assert BranchFilter.__dict__.get("_expanded_filters") is None
 
 
+def _desk_ring(base: type[FilterSet] = FilterSet) -> dict[str, type[FilterSet]]:
+    """Three filter sets in one ``RelatedFilter`` cycle: branch -> desk -> shelf -> branch.
+
+    Each target is a factory, so the cycle closes over sets declared later in this scope.
+    Every set subclasses ``base``.
+    """
+
+    class RingBranchFilter(base):
+        desks = RelatedFilter(lambda: RingDeskFilter, field_name="circulation_desks")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"], "city": ["exact"]}
+
+    class RingDeskFilter(base):
+        shelf = RelatedFilter(lambda: RingShelfFilter, field_name="shelf")
+
+        class Meta:
+            model = library_models.CirculationDesk
+            fields = {"name": ["exact"]}
+
+    class RingShelfFilter(base):
+        branch = RelatedFilter(lambda: RingBranchFilter, field_name="branch")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"], "topic": ["exact"]}
+
+    return {"branch": RingBranchFilter, "desk": RingDeskFilter, "shelf": RingShelfFilter}
+
+
+# Each set follows the cycle until it reaches a set already on the path, whose
+# own filters (its ``RelatedFilter`` head included) end the path there.
+_DESK_RING_FILTERS = {
+    "branch": {
+        "name",
+        "city",
+        "desks",
+        "desks__name",
+        "desks__shelf",
+        "desks__shelf__code",
+        "desks__shelf__topic",
+        "desks__shelf__branch",
+        "desks__shelf__branch__name",
+        "desks__shelf__branch__city",
+        "desks__shelf__branch__desks",
+    },
+    "desk": {
+        "name",
+        "shelf",
+        "shelf__code",
+        "shelf__topic",
+        "shelf__branch",
+        "shelf__branch__name",
+        "shelf__branch__city",
+        "shelf__branch__desks",
+        "shelf__branch__desks__name",
+        "shelf__branch__desks__shelf",
+    },
+    "shelf": {
+        "code",
+        "topic",
+        "branch",
+        "branch__name",
+        "branch__city",
+        "branch__desks",
+        "branch__desks__name",
+        "branch__desks__shelf",
+        "branch__desks__shelf__code",
+        "branch__desks__shelf__topic",
+        "branch__desks__shelf__branch",
+    },
+}
+
+
+@pytest.mark.parametrize("first", sorted(_DESK_RING_FILTERS))
+def test_a_related_filter_cycle_expands_each_set_alike_whichever_set_expands_first(first: str):
+    """Each set of a ``RelatedFilter`` cycle has one surface, whichever set's ``get_filters`` runs first.
+
+    Expanding one member builds the others' expansions while it is still
+    expanding; none of them depends on which member that was.
+    """
+    ring = _desk_ring()
+    ring[first].get_filters()
+
+    assert {name: set(fs.get_filters()) for name, fs in ring.items()} == _DESK_RING_FILTERS
+
+
+@pytest.mark.parametrize("first", sorted(_DESK_RING_FILTERS))
+def test_a_related_filter_cycle_publishes_one_flat_input_per_set_in_every_registration_order(
+    first: str,
+):
+    """Finalizing types registered in any order publishes the same filter input fields per set.
+
+    ``finalize_django_types`` expands the wired sets in type-registration order.
+    """
+    from strawberry.types.base import get_object_definition
+
+    from django_strawberry_framework import finalize_django_types
+    from django_strawberry_framework.filters.factories import FilterArgumentsFactory
+
+    ring = _desk_ring()
+    models = {
+        "branch": library_models.Branch,
+        "desk": library_models.CirculationDesk,
+        "shelf": library_models.Shelf,
+    }
+    order = sorted(ring, key=lambda name: name != first)
+    for name in order:
+        meta = {"model": models[name], "fields": ("id",), "filterset_class": ring[name]}
+        type(f"Ring{name.title()}Type", (DjangoType,), {"Meta": type("Meta", (), meta)})
+    finalize_django_types()
+
+    assert {name: set(fs.get_filters()) for name, fs in ring.items()} == _DESK_RING_FILTERS
+    flat = {
+        name: {
+            field.graphql_name or field.python_name
+            for field in get_object_definition(
+                FilterArgumentsFactory(fs).arguments,
+                strict=True,
+            ).fields
+        }
+        for name, fs in ring.items()
+    }
+    assert flat == {
+        "branch": {
+            "name",
+            "city",
+            "desks",
+            "desksName",
+            "desksShelfCode",
+            "desksShelfTopic",
+            "desksShelfBranchName",
+            "desksShelfBranchCity",
+            "and",
+            "or",
+            "not",
+        },
+        "desk": {
+            "name",
+            "shelf",
+            "shelfCode",
+            "shelfTopic",
+            "shelfBranchName",
+            "shelfBranchCity",
+            "shelfBranchDesksName",
+            "and",
+            "or",
+            "not",
+        },
+        "shelf": {
+            "code",
+            "topic",
+            "branch",
+            "branchName",
+            "branchCity",
+            "branchDesksName",
+            "branchDesksShelfCode",
+            "branchDesksShelfTopic",
+            "and",
+            "or",
+            "not",
+        },
+    }
+
+
+@pytest.mark.parametrize("paused", sorted(_DESK_RING_FILTERS))
+def test_a_get_filters_call_reentering_a_set_mid_build_gets_the_surface_the_build_publishes(
+    paused: str,
+):
+    """A second thread reading a cycle member while its first expansion runs gets the whole surface.
+
+    The reentry guard is class-level, so the second call sees the set mid-build;
+    it gets the surface built again, unpublished, never the unexpanded filters.
+    """
+    import threading
+
+    inside, release = threading.Event(), threading.Event()
+    builders: set[int] = set()
+    pausing: list[type[FilterSet]] = []
+
+    class PausingFilterSet(FilterSet):
+        @classmethod
+        @override
+        def get_fields(cls) -> OrderedDict[str, object]:
+            if cls in pausing and threading.get_ident() in builders:
+                inside.set()
+                assert release.wait(5)
+            return super().get_fields()
+
+    ring = _desk_ring(PausingFilterSet)
+    pausing.append(ring[paused])
+    built: list[set[str]] = []
+
+    def build() -> None:
+        builders.add(threading.get_ident())
+        built.append(set(ring[paused].get_filters()))
+
+    builder = threading.Thread(target=build)
+    builder.start()
+    assert inside.wait(5)
+    try:
+        reentered = set(ring[paused].get_filters())
+    finally:
+        release.set()
+        builder.join(5)
+
+    assert reentered == _DESK_RING_FILTERS[paused]
+    assert built == [reentered]
+
+
+@pytest.mark.parametrize("member", sorted(_DESK_RING_FILTERS))
+def test_a_get_filters_call_reentering_a_set_from_its_own_build_gets_the_surface_the_build_publishes(
+    member: str,
+):
+    """A cycle member's build reading the member again gets the surface the build then publishes.
+
+    ``get_fields`` runs inside the member's own expansion, so its ``get_filters`` call
+    meets the member mid-build in the same thread.
+    """
+    observed: list[set[str]] = []
+    reading: list[type[FilterSet]] = []
+
+    class ReadingFilterSet(FilterSet):
+        @classmethod
+        @override
+        def get_fields(cls) -> OrderedDict[str, object]:
+            if cls in reading and cls.__dict__.get(cls._lifecycle.guard):
+                reading.remove(cls)
+                observed.append(set(cls.get_filters()))
+            return super().get_fields()
+
+    ring = _desk_ring(ReadingFilterSet)
+    reading.append(ring[member])
+
+    published = set(ring[member].get_filters())
+
+    assert observed == [_DESK_RING_FILTERS[member]]
+    assert published == _DESK_RING_FILTERS[member]
+
+
+# A two-set cycle with a ``RelatedFilter(None)`` placeholder on one set: the
+# placeholder stays a head on its set and on every flat copy of that set.
+_PLACEHOLDER_CYCLE_FILTERS = {
+    "shelf": {
+        "branch": {
+            "name",
+            "shelves",
+            "shelves__code",
+            "shelves__books",
+            "shelves__branch",
+            "shelves__branch__name",
+            "shelves__branch__shelves",
+        },
+        "shelf": {
+            "code",
+            "books",
+            "branch",
+            "branch__name",
+            "branch__shelves",
+            "branch__shelves__code",
+            "branch__shelves__books",
+            "branch__shelves__branch",
+        },
+    },
+    "branch": {
+        "branch": {
+            "name",
+            "shelves",
+            "desks",
+            "shelves__code",
+            "shelves__branch",
+            "shelves__branch__name",
+            "shelves__branch__shelves",
+            "shelves__branch__desks",
+        },
+        "shelf": {
+            "code",
+            "branch",
+            "branch__name",
+            "branch__shelves",
+            "branch__desks",
+            "branch__shelves__code",
+            "branch__shelves__branch",
+        },
+    },
+}
+
+
+@pytest.mark.parametrize("first", ["branch", "shelf"])
+@pytest.mark.parametrize("owner", sorted(_PLACEHOLDER_CYCLE_FILTERS))
+def test_a_related_filter_cycle_through_a_set_with_a_placeholder_declaration_expands_each_set(
+    owner: str,
+    first: str,
+):
+    """A ``RelatedFilter(None)`` placeholder inside a cycle reaches no set and expands nothing.
+
+    The cycle still ends where a path reaches a set already on it, whichever set
+    of the cycle declares the placeholder and whichever set expands first.
+    """
+    branch_attrs: dict[str, object] = {
+        "shelves": RelatedFilter(lambda: sets["shelf"], field_name="shelves"),
+        "Meta": type("Meta", (), {"model": library_models.Branch, "fields": {"name": ["exact"]}}),
+    }
+    shelf_attrs: dict[str, object] = {
+        "branch": RelatedFilter(lambda: sets["branch"], field_name="branch"),
+        "Meta": type("Meta", (), {"model": library_models.Shelf, "fields": {"code": ["exact"]}}),
+    }
+    if owner == "branch":
+        branch_attrs["desks"] = RelatedFilter(None, field_name="circulation_desks")
+    else:
+        shelf_attrs["books"] = RelatedFilter(None, field_name="books")
+    sets: dict[str, type[FilterSet]] = {
+        "branch": type("PlaceholderBranchFilter", (FilterSet,), branch_attrs),
+        "shelf": type("PlaceholderShelfFilter", (FilterSet,), shelf_attrs),
+    }
+    sets[first].get_filters()
+
+    assert {name: set(fs.get_filters()) for name, fs in sets.items()} == (
+        _PLACEHOLDER_CYCLE_FILTERS[owner]
+    )
+
+
 # ---------------------------------------------------------------------------
 # _get_fields override
 # ---------------------------------------------------------------------------

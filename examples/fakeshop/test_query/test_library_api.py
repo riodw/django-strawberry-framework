@@ -2985,6 +2985,36 @@ _FLAT_TWIN_ROWS = {
 }
 
 
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "filter_input",
+    [
+        '{ loansBookTitle: { exact: "On secret shelf" } }',
+        '{ loans: { book: { title: { exact: "On secret shelf" } } } }',
+    ],
+    ids=["flat", "nested"],
+)
+def test_a_flat_filter_through_a_related_filter_cycle_reaches_past_its_first_lap(
+    filter_input: str,
+):
+    """``PatronFilter`` and ``LoanFilter`` expand each other; ``loansBookTitle`` crosses that cycle.
+
+    A flat path follows a cycle until it reaches a filter set already on it, so
+    ``PatronFilter`` publishes ``loans__book__title`` through ``LoanFilter`` whichever
+    of the two the finalizer expands first, as ``LoanFilter`` publishes
+    ``patron__loans__book__...`` through ``PatronFilter``.
+    """
+    _seed_flat_twin_visibility_graph()
+    assert {"loansBookTitle", "loansBookShelfTopic"} <= _input_field_names("PatronFilterInputType")
+    assert "shelvesBooksTitle" in _input_field_names("BranchFilterInputType")
+
+    response = _post_graphql(f"query {{ allLibraryPatrons(filter: {filter_input}) {{ name }} }}")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert [row["name"] for row in payload["data"]["allLibraryPatrons"]] == ["Ada"]
+
+
 def _flat_twin_names(row: _FlatTwinRow, filter_input: str, *, staff: bool) -> list[object]:
     query = f"query {{ {row.root}(filter: {filter_input}) {{ {row.selection} }} }}"
     response = _post_graphql_as_staff(query) if staff else _post_graphql(query)

@@ -519,9 +519,11 @@ def expanded_once(
       ``related_filters``) cannot serve a half-built result.
     - ``on_reentry`` (filter side only): when set AND ``cls`` is already mid-
       expansion (``guard_attr`` truthy in its own ``__dict__``), return
-      ``on_reentry()`` -- the unexpanded fallback that breaks a self-referential
-      ``RelatedFilter`` cycle without caching a half-built result. The order side
-      passes ``None`` (its expansion never re-enters ``get_fields``).
+      ``on_reentry()`` -- the result for a call reading ``cls`` again while its
+      build runs (a check inside the build, or a second thread), returned
+      without being published. The filter side builds the same surface again;
+      its expansion ends cycles by path, never through this guard. The order
+      side passes ``None`` (its expansion never re-enters ``get_fields``).
     - Otherwise set ``guard_attr`` ``True`` on ``cls``, run ``build()`` (which
       owns the family-specific expansion AND the cache-write decision, including
       any family side-effect such as ``FilterSet.base_filters``), and clear the
@@ -531,7 +533,8 @@ def expanded_once(
     thread-local one. Expansion runs during ``finalize_django_types()``
     (single-threaded) and once per class; parallel test runs that exercise the
     same set class from different threads can race the flag (the second thread
-    short-circuits via ``on_reentry`` to the unexpanded set). Do not introduce a
+    short-circuits via ``on_reentry``, so it repeats the build's work unpublished,
+    and the order side's second thread builds once more). Do not introduce a
     ``threading.local`` here without a real consumer call path requiring it.
     """
     cached = cls.__dict__.get(cache_attr)
@@ -561,6 +564,10 @@ def should_cache_expansion(cls: type[object], *, related_attr: str, target_slot:
        class AFTER ``super().__new__`` returns; and
     2. every related entry's ``target_slot`` (``_filterset`` / ``_orderset``)
        is a real class - no unresolved string forward references remain.
+
+    What either family caches is the class's own expansion, rooted at that
+    class (``FilterSet._expand_along`` / ``OrderSet.get_fields``), so a cached
+    value never depends on which class expanded first.
     """
     return related_attr in cls.__dict__ and all(
         not isinstance(getattr(entry, target_slot), str)

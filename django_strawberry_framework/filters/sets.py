@@ -1629,10 +1629,36 @@ def _filter_paths(filterset: type[object]) -> Iterator[str]:
             yield _bound_field_name(filter_instance)
 
 
-def _expand_related_filter(filter_name: str, f: RelatedFilter) -> OrderedDict[str, Filter]:
-    """Expand `f` against its target filterset's resolved filters.
+def _reachable_filtersets(filterset: type[FilterSet]) -> set[type[FilterSet]]:
+    """Return ``filterset`` and every filter set its ``RelatedFilter`` declarations reach, transitively.
 
-    Port of the cookbook's `expand_related_filter`: each child filter is
+    Follows each set's own ``related_filters``, as ``FilterSet._expand_along``
+    does, skipping the ``None`` placeholder. A set declaring no ``Meta.model`` is
+    refused as a target (``_require_correlated_target``) before it is expanded.
+    """
+    reached: set[type[FilterSet]] = {filterset}
+    pending = [filterset]
+    while pending:
+        current = pending.pop()
+        declarations: Mapping[str, RelatedFilter] = current.__dict__.get("related_filters", {})
+        for declaration in declarations.values():
+            target = declaration.filterset
+            if target is not None and target not in reached:
+                reached.add(target)
+                pending.append(target)
+    return reached
+
+
+def _expand_related_filter(
+    filter_name: str,
+    f: RelatedFilter,
+    path: tuple[type[FilterSet], ...],
+) -> OrderedDict[str, Filter]:
+    """Expand `f` against the filters its target filterset exposes along ``path``.
+
+    ``path`` is the chain of filter sets expanding above the target, the
+    declaring set last (``FilterSet._filters_along``). Port of the cookbook's
+    `expand_related_filter`: each child filter is
     deep-copied onto the parent under ``<filter_name>__<child name>`` with
     ``field_name`` rebound to the relation path, so the target filterset's own
     instances are never mutated. A child filter whose behavior the child filter
@@ -1647,7 +1673,7 @@ def _expand_related_filter(filter_name: str, f: RelatedFilter) -> OrderedDict[st
     target_filterset = f.filterset
     if not target_filterset:
         return expanded
-    target_filters = target_filterset.get_filters()
+    target_filters = target_filterset._filters_along(path)
     relation = _bound_field_name(f)
     for child_name, field in target_filters.items():
         new_name = f"{filter_name}__{child_name}"
@@ -1747,8 +1773,9 @@ class FilterSet(
     # ``get_filters()`` object it was built from and is rebuilt when that
     # object changes, so an inherited or pre-clear table is never read.
     _lookup_table: ClassVar[FilterLookupTable | None] = None
-    # Recursion guard around `get_filters` so a self-referential
-    # `RelatedFilter` does not blow the stack.
+    # Reentry guard around `get_filters`'s build: a call reading this class
+    # again mid-build (a captured-branch check, a second thread) gets the
+    # surface built again, unpublished (`expanded_once`'s `on_reentry`).
     _is_expanding_filters: ClassVar[bool] = False
 
     # Family binding-state descriptor: the single source for the lifecycle attr
@@ -1858,8 +1885,13 @@ class FilterSet(
     def get_filters(cls) -> OrderedDict[str, Filter]:
         """Return declared + Meta-derived + related-expanded filters.
 
-        Direct port of `AdvancedFilterSet.get_filters`. Two reasons the
-        guard reads `cls.__dict__` directly instead of `getattr`:
+        Port of `AdvancedFilterSet.get_filters` with a path-relative cycle
+        rule: the expansion (``_expand_along``) follows every ``RelatedFilter``
+        path from this set until the path reaches a set already on it, which
+        contributes its own filters there unexpanded (``_filters_along``). The
+        surface is therefore a function of this set and the declarations it
+        reaches alone, whichever set expanded first. Two reasons the cache
+        reads `cls.__dict__` directly instead of `getattr`:
 
         - A subclass must not inherit its parent's completed
           `_expanded_filters` cache via MRO.
@@ -1869,30 +1901,11 @@ class FilterSet(
           `__dict__`-based guard prevents the in-flight class from
           caching a half-built result.
 
-        Single-threaded contract:
-            ``_is_expanding_filters`` is a class-level reentrancy
-            flag, not a thread-local one. Expansion runs during
-            ``finalize_django_types()`` (single-threaded by design)
-            and once per class for the lifetime of the registry, so
-            the flag's read/write is never contended at runtime.
-            Parallel test runs that exercise the same FilterSet class
-            from different threads can race on the flag - the second
-            thread sees ``_is_expanding_filters=True`` and short-
-            circuits to ``super().get_filters()``, yielding the
-            unexpanded set. Tests that need to call ``get_filters()``
-            from multiple threads must serialize the call themselves;
-            do not introduce a ``threading.local`` here without first
-            confirming a real consumer call path requires it.
+        A call re-entering this method while the class is mid-build (a
+        captured-branch check whose target reaches back here, or a second
+        thread) returns the same surface, built again and not published
+        (``expanded_once``'s ``on_reentry``).
         """
-        # Capture ``super().get_filters`` HERE (in the classmethod body, where
-        # zero-arg ``super()`` resolves ``cls`` + the ``__class__`` cell) rather
-        # than inside ``_build`` / ``on_reentry``: the metaclass calls
-        # ``get_filters()`` DURING ``FilterSet``'s own creation, before the module
-        # global ``FilterSet`` is bound, so a ``super(FilterSet, cls)`` lookup in a
-        # nested function would ``NameError`` (and a zero-arg ``super()`` in a
-        # no-arg nested function / lambda has no positional to bind).
-        get_base = super().get_filters
-
         # An abstract model has no default manager, which django-filter reads to resolve
         # every generated lookup (and no primary key for ``get_fields`` to add).
         own_model = cls._meta.model
@@ -1902,26 +1915,20 @@ class FilterSet(
                 f"FilterSet needs a concrete model.",
             )
 
+        def _surface() -> OrderedDict[str, Filter]:
+            return cls._expand_along((cls,))
+
         def _build() -> OrderedDict[str, Filter]:
-            all_filters = get_base()
+            all_filters = _surface()
             model = cls._meta.model
             candidates: dict[str, CandidateFilterMetadata] = {}
             if model is not None:
-                # During ``FilterSetMetaclass.__new__``, the new class does not
-                # own ``related_filters`` yet. Expanding an inherited map here
-                # would leak removed relations into django-filter's class-level
-                # ``base_filters`` snapshot.
                 # The metaclass stores ``related_filters`` from
                 # ``sets_mixins.py::collect_related_declarations`` (``RelatedFilter`` only).
                 related_filters_val: Mapping[str, RelatedFilter] = cls.__dict__.get(
                     "related_filters",
                     OrderedDict(),
                 )
-                for filter_name, f in related_filters_val.items():
-                    _require_relation_path(cls, filter_name, f)
-                    _require_correlated_target(cls, filter_name, f)
-                    expanded = _expand_related_filter(filter_name, f)
-                    all_filters.update(expanded)
                 reject_captured_branches(
                     cls,
                     related_filters_val,
@@ -1929,6 +1936,15 @@ class FilterSet(
                     target_attr="filterset",
                     reached_paths=_filter_paths,
                 )
+                # Build every target's own expansion too, before publishing this
+                # one: a projected leaf runs in a child filter set instance, which
+                # reads the child's own ``base_filters``, and a target's
+                # declaration errors surface here. A target still mid-build is
+                # this expansion's caller and finishes on its own.
+                for declaration in related_filters_val.values():
+                    target = declaration.filterset
+                    if target is not None and not target.__dict__.get(target._lifecycle.guard):
+                        _ = target.get_filters()
                 # Build candidate metadata in THIS same expansion pass, over the
                 # fully-expanded surface. Origin is read from the frozen
                 # generation-provenance record stamped on each instance at its
@@ -1997,18 +2013,68 @@ class FilterSet(
             return all_filters
 
         # The class-level expansion cache + reentry-guard skeleton is shared with
-        # `OrderSet.get_fields` through `sets_mixins.expanded_once`.
-        # `on_reentry` returns the unexpanded `super().get_filters()`
-        # when this class is already mid-expansion, so a self-referential
-        # `RelatedFilter` neither blows the stack nor caches a half-built
-        # result.
+        # `OrderSet.get_fields` through `sets_mixins.expanded_once`. The
+        # expansion itself terminates by its path; `on_reentry` serves a call
+        # re-entering a class mid-build the same surface, unpublished.
         return expanded_once(
             cls,
             cache_attr=cls._lifecycle.cache,
             guard_attr=cls._lifecycle.guard,
             build=_build,
-            on_reentry=get_base,
+            on_reentry=_surface,
         )
+
+    @classmethod
+    def _unexpanded_filters(cls) -> OrderedDict[str, Filter]:
+        """Return this set's declared + Meta-derived filters, no ``RelatedFilter`` expanded.
+
+        django-filter's own ``get_filters``: a fresh ``OrderedDict`` per call,
+        its ``RelatedFilter`` declarations kept as branch heads.
+        """
+        return super().get_filters()
+
+    @classmethod
+    def _expand_along(cls, path: tuple[type[FilterSet], ...]) -> OrderedDict[str, Filter]:
+        """Return this set's filters with every ``RelatedFilter`` expanded along ``path``.
+
+        ``path`` is the chain of filter sets expanding from the root, this set
+        last. Each declaration is checked (``_require_relation_path`` /
+        ``_require_correlated_target``) and its target's filters along ``path``
+        copied on under the declaration's name (``_expand_related_filter``).
+        """
+        filters = cls._unexpanded_filters()
+        if cls._meta.model is None:
+            return filters
+        # During ``FilterSetMetaclass.__new__``, the new class does not own
+        # ``related_filters`` yet. Expanding an inherited map here would leak
+        # removed relations into django-filter's class-level ``base_filters``
+        # snapshot.
+        declarations: Mapping[str, RelatedFilter] = cls.__dict__.get(
+            "related_filters",
+            OrderedDict(),
+        )
+        for filter_name, f in declarations.items():
+            _require_relation_path(cls, filter_name, f)
+            _require_correlated_target(cls, filter_name, f)
+            filters.update(_expand_related_filter(filter_name, f, path))
+        return filters
+
+    @classmethod
+    def _filters_along(cls, path: tuple[type[FilterSet], ...]) -> OrderedDict[str, Filter]:
+        """Return the filters this set contributes as the target of the last set on ``path``.
+
+        The cycle rule of the flat surface. A set already on ``path`` contributes
+        its own filters unexpanded (``_unexpanded_filters``), its
+        ``RelatedFilter`` heads included, so every path ends one step after it
+        returns to a set it passed. A set that reaches no set on ``path``
+        expands exactly as it does alone, so its own surface (``get_filters``,
+        cached) is copied; any other set expands along ``path`` without caching.
+        """
+        if cls in path:
+            return cls._unexpanded_filters()
+        if _reachable_filtersets(cls).isdisjoint(path):
+            return cls.get_filters()
+        return cls._expand_along((*path, cls))
 
     @classmethod
     def _expansion_snapshot(cls) -> ExpansionSnapshot | None:

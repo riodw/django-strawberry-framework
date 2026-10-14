@@ -803,8 +803,8 @@ window arithmetic rather than only the field entry point. Its keyset twin
 `utils/connections.py::assert_relay_pagination_bound` is the single spelling of the
 negative and over-cap check, and it raises `PaginationArgumentError` with
 `SliceMetadata`'s own messages exactly. The offset fork reaches it through
-`utils/connections.py::validate_offset_pagination`, which
-`::derive_connection_window_bounds` and `connection.py::_consume_fallback` run against the
+`utils/connections.py::validate_offset_pagination`, which `::offset_engine_arguments` runs
+for `::derive_connection_window_bounds` and `connection.py::_consume_fallback` against the
 resolved cap before Strawberry's `SliceMetadata.from_arguments` or `ListConnection` sees
 the arguments, so the engine itself never rejects one. A keyset cursor is not an offset,
 so the keyset fork calls the helper directly, at `::derive_keyset_window_bounds` and
@@ -1327,6 +1327,12 @@ check runs rather than about how long anything takes.
   index `sys.maxsize - 1`, serves the page `first: <cap>` serves on the planned window and on the
   per-parent fallback alike, never the whole `start..before` interval
   ([Decision 7](#decision-7--the-policy-is-a-ceiling-over-relay_max_results-never-a-replacement)).
+- **An `after` cursor past the last row**, at any accepted index up to `sys.maxsize - 1` and
+  under `first: N`, `last: 0` or no page argument, including the index whose page
+  would end on `SliceMetadata`'s `sys.maxsize` sentinel, serves the empty past-the-end page
+  (`hasPreviousPage: true`, `hasNextPage: false`) on the planned window and on every
+  per-parent and root source alike: `utils/connections.py::offset_engine_arguments` ends the
+  page it hands the engine at `sys.maxsize - 1`.
 - **`last: 0`** serves the `first: 0` page on every connection, so it returns no edges and
   its zero-row admission charge is exact
   ([Decision 7](#decision-7--the-policy-is-a-ceiling-over-relay_max_results-never-a-replacement)).

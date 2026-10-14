@@ -76,7 +76,17 @@ three-row ``max_page_size`` (where a wrapped negative slice would serve 39 of
 shipped root ``allLibraryGenresConnection``. Index 0, a minted ``endCursor``,
 ``after: ""`` (absent) and the largest accepted index ``sys.maxsize - 1`` (an
 ordinary past-the-end page on the root ``QuerySet`` and a list resolver) are the
-positive controls. Each ``first`` / ``last`` bound message (negative, over the
+positive controls. Every accepted index past the last row is that page under
+``first: N``, ``last: 0`` or no page argument (``first: 0`` / ``2`` / the cap,
+``last: 0``, none; with or without ``before: ""``, which is no bound): the
+largest index, and the index whose page would end on ``SliceMetadata``'s
+``sys.maxsize`` last-only sentinel, each serve the page ``after: 5`` serves, on
+the root ``QuerySet``, the list, tuple and generator resolvers, the async list
+and ``QuerySet`` resolvers and a nested per-parent ``booksConnection``; an
+``after`` + ``before`` interval there pages like ``after: 5, before: 5``; and a
+page bounded only by a ``sys.maxsize`` cap (a module-owned
+``/graphql-cursor-unbounded/`` mount) serves every row with or without a
+cursor. Each ``first`` / ``last`` bound message (negative, over the
 three-row cap) is read exactly on both colours. The test-local resolvers
 are served over module-owned ``/graphql-cursor/`` and ``/graphql-cursor-async/``
 mounts with no error-policy pass-through.
@@ -130,6 +140,7 @@ from typing_extensions import override
 
 from django_strawberry_framework import DjangoConnectionField, DjangoSchema, strawberry_config
 from django_strawberry_framework.error_policy import DEFAULT_ERROR_POLICY
+from django_strawberry_framework.resource_policy import MAX_RESOURCE_BOUND
 from django_strawberry_framework.testing import AsyncTestClient
 from django_strawberry_framework.utils._queryset_private import (
     set_queryset_hints,
@@ -1906,6 +1917,286 @@ def test_offset_cursor_index_below_sys_maxsize_is_an_ordinary_cursor(source: str
     (before_end_page,) = before_end["data"].values()
     assert past_end_page["edges"] == []
     assert [edge["node"]["name"] for edge in before_end_page["edges"]] == ["Alpha", "Bravo"]
+
+
+#: ``(id, variables, rows the engine is handed)`` for a page under a ``cap``-row
+#: bound: ``last: 0`` is the ``first: 0`` page and no page argument is the
+#: ``first: <cap>`` page, so each row's page size is what decides which cursor
+#: ends its page on ``SliceMetadata``'s ``sys.maxsize`` sentinel.
+_PAST_END_PAGE_ROWS: list[tuple[str, Callable[[int], JSONObject], Callable[[int], int]]] = [
+    ("first-0", lambda _cap: {"first": 0}, lambda _cap: 0),
+    ("first-2", lambda _cap: {"first": 2}, lambda _cap: 2),
+    ("first-cap", lambda cap: {"first": cap}, lambda cap: cap),
+    ("last-0", lambda _cap: {"last": 0}, lambda _cap: 0),
+    ("no-page", lambda _cap: {}, lambda cap: cap),
+]
+
+#: ``(id, cursor index for a page of ``size`` rows)``: the largest accepted index,
+#: and the index whose page ends exactly on ``sys.maxsize``.
+_PAST_END_CURSORS: dict[str, Callable[[int], int]] = {
+    "largest-index": lambda _size: sys.maxsize - 1,
+    "page-ends-on-sentinel": lambda size: sys.maxsize - 1 - size,
+}
+
+_PAST_END_PAGE_INFO = {
+    "hasNextPage": False,
+    "hasPreviousPage": True,
+    "startCursor": None,
+    "endCursor": None,
+}
+
+_PAGE_INFO_QUERY = (
+    "query($after: String, $before: String, $first: Int, $last: Int) {"
+    " %s(after: $after, before: $before, first: $first, last: $last) {"
+    " edges { cursor } pageInfo { hasNextPage hasPreviousPage startCursor endCursor } } }"
+)
+
+#: The sources a past-the-end page is read on, each with the cap its page is bounded by:
+#: the shipped root ``QuerySet`` (the default ``max_page_size``) and the cursor mounts'
+#: list, tuple and generator resolvers (three rows).
+_PAST_END_SOURCES: dict[str, tuple[int, Callable[[JSONObject], JSONObject]]] = {
+    "root-queryset": (
+        100,
+        lambda v: graphql_payload(_PAGE_INFO_QUERY % "allLibraryGenresConnection", variables=v),
+    ),
+    "list-resolver": (3, lambda v: _post_local_sync(_PAGE_INFO_QUERY % "listGenres", v)),
+    "tuple-resolver": (3, lambda v: _post_local_sync(_PAGE_INFO_QUERY % "tupleGenres", v)),
+    "generator-resolver": (3, lambda v: _post_local_sync(_PAGE_INFO_QUERY % "generatorGenres", v)),
+}
+
+
+def _page_of(payload: JSONObject) -> JSONObject:
+    assert "errors" not in payload, payload
+    (page,) = payload["data"].values()
+    return page
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("before", [None, ""], ids=["no-before", "empty-before"])
+@pytest.mark.parametrize("cursor", list(_PAST_END_CURSORS))
+@pytest.mark.parametrize(
+    ("variables", "size"),
+    [row[1:] for row in _PAST_END_PAGE_ROWS],
+    ids=[row[0] for row in _PAST_END_PAGE_ROWS],
+)
+@pytest.mark.parametrize("source", list(_PAST_END_SOURCES))
+def test_offset_cursor_near_sys_maxsize_serves_the_past_the_end_page(
+    source: str,
+    variables: Callable[[int], JSONObject],
+    size: Callable[[int], int],
+    cursor: str,
+    before: str | None,
+):
+    """Each index past the last row is the empty page under ``first``, ``last: 0`` or none.
+
+    The cursor whose page would end on ``sys.maxsize`` (``SliceMetadata``'s
+    last-only sentinel) and the largest accepted index (whose overfetch passes
+    the bound ``itertools.islice`` accepts) are both the page an ordinary
+    past-the-end cursor serves, in the one ``library_genre`` statement every
+    source runs (the root ``QuerySet``'s slice, each resolver's list read). A
+    ``before: ""`` is no bound, as in the engine, so it pages the same.
+    """
+    for name in ("Alpha", "Bravo", "Charlie"):
+        library_models.Genre.objects.create(name=name)
+    cap, post = _PAST_END_SOURCES[source]
+    index = _PAST_END_CURSORS[cursor](size(cap))
+    page = {**variables(cap), **({} if before is None else {"before": before})}
+
+    with CaptureQueriesContext(connection) as ordinary_queries:
+        ordinary = _page_of(post({"after": _cursor("5"), **page}))
+    with CaptureQueriesContext(connection) as past_end_queries:
+        past_end = _page_of(post({"after": _cursor(str(index)), **page}))
+
+    assert past_end["edges"] == []
+    assert past_end["pageInfo"] == _PAST_END_PAGE_INFO
+    assert past_end == ordinary
+    assert len(past_end_queries.captured_queries) == 1, past_end_queries.captured_queries
+    assert len(ordinary_queries.captured_queries) == 1, ordinary_queries.captured_queries
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("source", list(_PAST_END_SOURCES))
+def test_offset_cursor_interval_near_sys_maxsize_pages_like_any_interval(source: str):
+    """An ``after`` + ``before`` interval near ``sys.maxsize`` slices from the client's own start.
+
+    ``after: sys.maxsize - 1, before: sys.maxsize - 1`` is the same empty
+    interval as ``after: 5, before: 5``, with the same ``pageInfo``.
+    """
+    for name in ("Alpha", "Bravo", "Charlie"):
+        library_models.Genre.objects.create(name=name)
+    _cap, post = _PAST_END_SOURCES[source]
+    largest = _cursor(str(sys.maxsize - 1))
+    ordinary = _cursor("5")
+
+    near_end = _page_of(post({"after": largest, "before": largest, "first": 2}))
+
+    assert near_end["edges"] == []
+    assert near_end == _page_of(post({"after": ordinary, "before": ordinary, "first": 2}))
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("cursor", list(_PAST_END_CURSORS))
+@pytest.mark.parametrize(
+    ("variables", "size"),
+    [row[1:] for row in _PAST_END_PAGE_ROWS],
+    ids=[row[0] for row in _PAST_END_PAGE_ROWS],
+)
+@pytest.mark.parametrize("field", ["asyncListGenres", "asyncQuerysetGenres"])
+async def test_async_offset_cursor_near_sys_maxsize_serves_the_past_the_end_page(
+    field: str,
+    variables: Callable[[int], JSONObject],
+    size: Callable[[int], int],
+    cursor: str,
+):
+    """The async colour of the past-the-end rows, over ``/graphql-cursor-async/``.
+
+    The page is read without a statement count: the async resolvers query on an
+    executor thread whose connection ``CaptureQueriesContext`` cannot see.
+    """
+    for name in ("Alpha", "Bravo", "Charlie"):
+        await library_models.Genre.objects.acreate(name=name)
+    index = _PAST_END_CURSORS[cursor](size(3))
+    query = _PAGE_INFO_QUERY % field
+
+    ordinary = _page_of(await _post_local_async(query, {"after": _cursor("5"), **variables(3)}))
+    past_end = _page_of(
+        await _post_local_async(query, {"after": _cursor(str(index)), **variables(3)}),
+    )
+
+    assert past_end["edges"] == []
+    assert past_end["pageInfo"] == _PAST_END_PAGE_INFO
+    assert past_end == ordinary
+
+
+_NESTED_PAST_END_QUERY = (
+    "query($after: String, $first: Int, $last: Int) { listGenres { edges { node { name"
+    " booksConnection(after: $after, first: $first, last: $last) {"
+    " edges { cursor } pageInfo { hasNextPage hasPreviousPage startCursor endCursor } } } } } }"
+)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("cursor", list(_PAST_END_CURSORS))
+@pytest.mark.parametrize(
+    ("variables", "size"),
+    [row[1:] for row in _PAST_END_PAGE_ROWS],
+    ids=[row[0] for row in _PAST_END_PAGE_ROWS],
+)
+def test_nested_per_parent_offset_cursor_near_sys_maxsize_serves_the_past_the_end_page(
+    variables: Callable[[int], JSONObject],
+    size: Callable[[int], int],
+    cursor: str,
+):
+    """A nested connection under a list resolver pages each parent per parent, past the end too.
+
+    The parents come from a consumer list, so no window is planned and each
+    ``booksConnection`` slices its own related manager (one ``library_book``
+    statement per parent).
+    """
+    branch = library_models.Branch.objects.create(name="Central", city="Boston")
+    shelf = library_models.Shelf.objects.create(code="A-1", topic="Fiction", branch=branch)
+    for name in ("Alpha", "Bravo"):
+        genre = library_models.Genre.objects.create(name=name)
+        for title in (f"{name} one", f"{name} two"):
+            library_models.Book.objects.create(title=title, shelf=shelf).genres.add(genre)
+    index = _PAST_END_CURSORS[cursor](size(3))
+
+    with CaptureQueriesContext(connection) as queries:
+        payload = _post_local_sync(
+            _NESTED_PAST_END_QUERY,
+            {"after": _cursor(str(index)), **variables(3)},
+        )
+
+    edges = _page_of(payload)["edges"]
+    assert [edge["node"] for edge in edges] == [
+        {"name": name, "booksConnection": {"edges": [], "pageInfo": _PAST_END_PAGE_INFO}}
+        for name in ("Alpha", "Bravo")
+    ]
+    book_reads = [q for q in queries.captured_queries if '"library_book"' in q["sql"]]
+    assert len(book_reads) == 2, book_reads
+    assert len(queries.captured_queries) == 3, queries.captured_queries
+
+
+#: The schema the unbounded-cap mount serves for the request in flight.
+_UNBOUNDED_CURRENT: dict[str, DjangoSchema | None] = {"schema": None}
+
+
+def _unbounded_cap_schema() -> DjangoSchema:
+    """A root ``QuerySet`` and a generator resolver whose page bound is the largest a policy takes.
+
+    ``relay_max_results`` and ``max_page_size`` both at ``MAX_RESOURCE_BOUND``
+    (``sys.maxsize``), so a page with no page argument is ``first: sys.maxsize``
+    and ends on ``SliceMetadata``'s sentinel with no cursor at all.
+    """
+    importlib.import_module("config.schema")
+    from apps.library.schema import GenreType
+
+    @strawberry.type
+    class Query:
+        genres = DjangoConnectionField(GenreType)
+        generator_genres = DjangoConnectionField(GenreType, resolver=_generator_genres)
+
+    return DjangoSchema(
+        query=Query,
+        config=strawberry_config(relay_max_results=MAX_RESOURCE_BOUND),
+        resource_policy={
+            "max_page_size": MAX_RESOURCE_BOUND,
+            "max_collection_cost": MAX_RESOURCE_BOUND,
+        },
+    )
+
+
+def _unbounded_graphql_view(request: HttpRequest):
+    schema = _UNBOUNDED_CURRENT["schema"]
+    assert schema is not None
+    return DjangoGraphQLView.as_view(schema=schema)(request)
+
+
+urlpatterns += [path("graphql-cursor-unbounded/", _unbounded_graphql_view)]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("after", [None, "0"], ids=["no-cursor", "after-first-row"])
+@pytest.mark.parametrize("field", ["genres", "generatorGenres"])
+def test_page_bound_of_sys_maxsize_serves_every_row(field: str, after: str | None):
+    """A page bounded only by ``sys.maxsize`` serves every remaining row and ends there.
+
+    With no page argument the page is ``first: sys.maxsize``: from the first
+    row its end is the engine's last-only sentinel, and from the second its
+    overfetch passes the bound ``itertools.islice`` and a 64-bit SQL ``LIMIT``
+    accept. Either source reads the rows in one ``library_genre`` statement.
+    """
+    for name in ("Alpha", "Bravo", "Charlie"):
+        library_models.Genre.objects.create(name=name)
+    _UNBOUNDED_CURRENT["schema"] = _unbounded_cap_schema()
+    try:
+        with override_settings(ROOT_URLCONF=__name__):
+            clear_url_caches()
+            with CaptureQueriesContext(connection) as queries:
+                payload = graphql_payload(
+                    _PAGE_INFO_QUERY.replace("cursor }", "cursor node { name } }") % field,
+                    variables={"after": None if after is None else _cursor(after)},
+                    url="/graphql-cursor-unbounded/",
+                )
+    finally:
+        _UNBOUNDED_CURRENT["schema"] = None
+        clear_url_caches()
+
+    start = 0 if after is None else 1
+    cursors = [_cursor(str(index)) for index in range(start, 3)]
+    assert _page_of(payload) == {
+        "edges": [
+            {"cursor": cursor, "node": {"name": name}}
+            for cursor, name in zip(cursors, ["Alpha", "Bravo", "Charlie"][start:], strict=True)
+        ],
+        "pageInfo": {
+            "hasNextPage": False,
+            "hasPreviousPage": after is not None,
+            "startCursor": cursors[0],
+            "endCursor": cursors[-1],
+        },
+    }
+    assert len(queries.captured_queries) == 1, queries.captured_queries
 
 
 def _root_genre_page(variables: JSONObject) -> JSONObject:

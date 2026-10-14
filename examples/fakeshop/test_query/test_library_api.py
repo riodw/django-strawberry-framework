@@ -8656,6 +8656,65 @@ def test_genre_books_connection_last_zero_serves_the_first_zero_window(after: bo
     assert window_sql == first_zero_captured[1]["sql"]
 
 
+#: ``(id, page arguments, rows the engine is handed)`` under the default cap:
+#: ``last: 0`` is the ``first: 0`` page and no page argument is ``first: <cap>``.
+_PAST_END_WINDOW_PAGES = [
+    pytest.param("first: 0", 0, id="first-0"),
+    pytest.param("first: 2", 2, id="first-2"),
+    pytest.param(f"first: {_DEFAULT_PAGE_CAP}", _DEFAULT_PAGE_CAP, id="first-cap"),
+    pytest.param("last: 0", 0, id="last-0"),
+    pytest.param("", _DEFAULT_PAGE_CAP, id="no-page"),
+]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "ends_on_sentinel",
+    [False, True],
+    ids=["largest-index", "page-ends-on-sentinel"],
+)
+@pytest.mark.parametrize(("page", "size"), _PAST_END_WINDOW_PAGES)
+def test_genre_books_connection_cursor_near_sys_maxsize_is_the_planned_past_end_window(
+    page: str,
+    size: int,
+    ends_on_sentinel: bool,
+):
+    """A nested ``after:`` near ``sys.maxsize`` is the past-the-end page, served by the window.
+
+    The relation-seeded colour of the root past-the-end rows in
+    ``test_connection_pagination_api.py``: the largest accepted index and the
+    index whose page would end on ``SliceMetadata``'s ``sys.maxsize`` sentinel
+    serve the page an ordinary past-the-end cursor serves, planned as a window
+    in the fixed two-query cost.
+    """
+    _seed_genre_books("Kindred", "Dawn", "Imago")
+    index = sys.maxsize - 1 - (size if ends_on_sentinel else 0)
+    selection = _CAP_BOUNDED_SELECTION % "title"
+    separator = ", " if page else ""
+
+    conn, captured = _genre_books_connection(
+        f'after: "{_array_cursor(index)}"{separator}{page}',
+        selection,
+    )
+    ordinary, _ = _genre_books_connection(
+        f'after: "{_array_cursor(5)}"{separator}{page}',
+        selection,
+    )
+
+    assert conn == {
+        "edges": [],
+        "pageInfo": {
+            "hasNextPage": False,
+            "hasPreviousPage": True,
+            "startCursor": None,
+            "endCursor": None,
+        },
+    }
+    assert conn == ordinary
+    assert len(captured) == 2
+    assert "_dst_row_number" in captured[1]["sql"]
+
+
 @pytest.mark.django_db
 @pytest.mark.parametrize("cursor", ["before", "after"])
 def test_genre_books_connection_last_with_empty_cursor_is_the_planned_tail(cursor: str):

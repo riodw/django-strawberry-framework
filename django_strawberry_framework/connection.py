@@ -129,10 +129,10 @@ from .utils.connections import (
     has_connection_sidecar_input,
     is_backward_shape,
     is_supplied,
+    offset_engine_arguments,
     page_arguments,
     resolve_relay_max_results,
     split_window_rows,
-    validate_offset_pagination,
     window_range_plan,
 )
 from .utils.directives import validated_field_directives
@@ -852,12 +852,14 @@ def _consume_fallback(
     ``utils/connections.py::page_arguments``, so every page is bounded by the
     already-clamped ``max_results`` and ``last: 0`` is the ``first: 0`` page.
     An offset page's arguments pass
-    ``utils/connections.py::validate_offset_pagination`` first, the validator the
-    window derivation runs, so whatever the source shape (``QuerySet``, list,
-    tuple, generator, sync or async) an invalid cursor or page size is the same
-    ``PaginationArgumentError`` and a negative or non-canonical cursor is never a
-    slice position. ``ListConnection`` is then called with no ``try`` around it:
-    once the arguments are valid, whatever it raises comes from the consumer's
+    ``utils/connections.py::offset_engine_arguments`` first, the validator and
+    page-end bound the window derivation runs, so whatever the source shape
+    (``QuerySet``, list, tuple, generator, sync or async) an invalid cursor or
+    page size is the same ``PaginationArgumentError``, a negative or
+    non-canonical cursor is never a slice position, and a page reaching past the
+    largest index is the same past-the-end page the window serves.
+    ``ListConnection`` is then called with no ``try`` around it: once the
+    arguments are valid, whatever it raises comes from the consumer's
     source or from row hydration, and travels as that exception for the error
     policy to classify, never re-raised as client-facing text.
     ``super(DjangoConnection, cls)`` reaches ``ListConnection`` even for a
@@ -887,7 +889,7 @@ def _consume_fallback(
     # ``ListConnection`` decodes the cursors with ``int()`` alone and an
     # async-iterable source (a ``QuerySet`` from an async resolver) slices
     # inside the coroutine it returns.
-    validate_offset_pagination(
+    after, first = offset_engine_arguments(
         before=before,
         after=after,
         first=first,

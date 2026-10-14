@@ -15,9 +15,10 @@ IDENTICALLY, or optimizer-on and optimizer-off behavior can split:
 * The offset pagination validator (``validate_offset_pagination``, over
   ``decode_offset_cursor`` and ``assert_relay_pagination_bound``) - the one
   validator of an offset page's ``after`` / ``before`` cursors and ``first`` /
-  ``last`` bounds, read by the window derivation above and by the resolver's
-  non-window slicing tail, so the planned window and every
-  ``ListConnection``-sliced source accept and reject the same arguments. Each
+  ``last`` bounds, run with the page-end bound by ``offset_engine_arguments``,
+  which the window derivation above and the resolver's non-window slicing tail
+  both call, so the planned window and every ``ListConnection``-sliced source
+  accept and reject the same arguments and slice the same page. Each
   rejection is a ``PaginationArgumentError`` raised where the argument is
   validated: the package's own validation constructs the client-facing error,
   so an exception from a consumer source or from row hydration is never caught
@@ -51,7 +52,7 @@ from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
 import strawberry
 from graphql import GraphQLError
-from strawberry.relay.utils import SliceMetadata, from_base64
+from strawberry.relay.utils import SliceMetadata, from_base64, to_base64
 
 from ..exceptions import DjangoStrawberryFrameworkError, OptimizerError
 from ..resource_policy import effective_bound, policy_from_info
@@ -705,25 +706,23 @@ def decode_offset_cursor(value: str | None, *, argument: str, prefix: str) -> in
     reach Python slicing (which wraps), ``islice`` or Django's ``QuerySet``
     slicing (each with its own error text) as a position.
 
-    Returns ``None`` when the cursor is absent by the engine's truthiness
-    (``None``, ``""``, or a falsy sentinel such as ``UNSET``): ``SliceMetadata``
-    reads ``if after:``, so an empty string sets no bound. Otherwise accepts only
-    the form the package and ``ListConnection`` mint: ``prefix`` (the
-    connection's edge-class ``CURSOR_PREFIX``, the one both mints write under
-    and ``ListConnection`` decodes under), a colon, and a canonical decimal
-    (ASCII digits, no sign, no padding, no leading zero) in
-    ``0 <= index < sys.maxsize``. Both mints are non-negative by construction
-    (``ListConnection`` mints ``start + i``; the window mints the row number
-    minus one), so a negative or non-canonical payload is never a cursor this
-    API issued. The upper bound is the largest index a row can have: no
-    Python sequence is longer than ``sys.maxsize``, ``SliceMetadata`` reserves
-    ``sys.maxsize`` as its unbounded-end sentinel, and ``after`` adds one, so
-    ``sys.maxsize - 1`` is the last index whose start still fits a 64-bit SQL
-    ``OFFSET`` (an ordinary past-the-end page). The length is compared before
-    ``int()`` runs, so an arbitrarily long digit string is never converted. Any
-    other value raises ``PaginationArgumentError`` with Strawberry's own
-    foreign-prefix wording, which the walker reads as malformed pagination and
-    both resolve-time callers let surface as the field's own error.
+    Returns ``None`` when the cursor is absent by the engine's truthiness (``None``, ``""``, or a
+    falsy sentinel such as ``UNSET``): ``SliceMetadata`` reads ``if after:``, so an empty string
+    sets no bound. Otherwise accepts only the form the package and ``ListConnection`` mint:
+    ``prefix`` (the connection's edge-class ``CURSOR_PREFIX``, the one both mints write under and
+    ``ListConnection`` decodes under), a colon, and a canonical decimal (ASCII digits, no sign, no
+    padding, no leading zero) in ``0 <= index < sys.maxsize``. Both mints are non-negative by
+    construction (``ListConnection`` mints ``start + i``; the window mints the row number minus
+    one), so a negative or non-canonical payload is never a cursor this API issued. The upper bound
+    is the largest index a row can have: no Python sequence is longer than ``sys.maxsize``,
+    ``SliceMetadata`` reserves ``sys.maxsize`` as its unbounded-end sentinel, and ``after`` adds
+    one, so ``sys.maxsize - 1`` is the last index whose start still fits a 64-bit SQL ``OFFSET``
+    (an ordinary past-the-end page under every page argument: ``offset_engine_arguments`` keeps a
+    forward page's end below that sentinel). The length is compared before ``int()`` runs, so an
+    arbitrarily long digit string is never converted. Any other value raises
+    ``PaginationArgumentError`` with Strawberry's own foreign-prefix wording, which the walker
+    reads as malformed pagination and both resolve-time callers let surface as the field's own
+    error.
     """
     if not value:
         return None
@@ -768,12 +767,14 @@ def derive_connection_window_bounds(
     it, the prefix the window mints its cursors under and ``ListConnection``
     decodes them under.
 
-    The arguments pass ``validate_offset_pagination`` before the engine sees
+    The arguments pass ``offset_engine_arguments`` before the engine sees
     them, so an invalid cursor or a negative / over-cap ``first`` / ``last``
     raises ``PaginationArgumentError`` with the engine's own wording and the
-    engine itself never rejects. The walker catches it to leave the selection
-    unplanned (Decision 4 step f); the resolver lets it surface as the field's
-    own pagination error.
+    engine itself never rejects, and a forward page's end stays below
+    ``sys.maxsize``, so the engine's ``end == sys.maxsize`` is the last-only
+    sentinel below and nothing else. The walker catches the error to leave the
+    selection unplanned (Decision 4 step f); the resolver lets it surface as
+    the field's own pagination error.
 
     Backward (``last``-only) pagination needs the reversed-row-number window:
     ``last`` set with no ``first`` and no ``before`` bound (``before`` + ``last``
@@ -805,7 +806,7 @@ def derive_connection_window_bounds(
     """
     effective_max_results = resolve_relay_max_results(info, max_results)
     first, last = page_arguments(first, last, cap=effective_max_results)
-    validate_offset_pagination(
+    engine_after, first = offset_engine_arguments(
         before=before,
         after=after,
         first=first,
@@ -818,7 +819,7 @@ def derive_connection_window_bounds(
         # ``None``, and ``effective_max_results`` is always an ``int``.
         cast("Info[object, object]", info),
         before=before,
-        after=after,
+        after=engine_after,
         first=first,
         last=last,
         max_results=effective_max_results,
@@ -882,7 +883,7 @@ def validate_offset_pagination(
     last: object,
     cap: int,
     prefix: str,
-) -> None:
+) -> int | None:
     """Reject every invalid offset pagination argument ``SliceMetadata.from_arguments`` rejects.
 
     The package's own validation of an offset page, run before anything slices,
@@ -898,17 +899,77 @@ def validate_offset_pagination(
     ``prefix`` is the connection's edge-class ``CURSOR_PREFIX``, the one the
     engine is handed (``ListConnection`` passes its edge class's).
 
-    Once this returns, the engine raises nothing for these arguments under that
-    same prefix, so the one window derivation
+    Returns the row index ``after`` names (``None`` when it is absent), the one
+    decode ``offset_engine_arguments`` bounds the page's end from. Once this
+    returns, the engine rejects none of these arguments under that same prefix;
+    with the page's end bounded as well, the one window derivation
     (``derive_connection_window_bounds``) and the one non-window slicing tail
-    (``connection.py::_consume_fallback``) can call the engine and
+    (``connection.py::_consume_fallback``) call the engine and
     ``ListConnection`` without a ``try``: anything they still raise comes from
     the source or the rows, not from the client's arguments.
     """
-    _ = decode_offset_cursor(after, argument="after", prefix=prefix)
+    position = decode_offset_cursor(after, argument="after", prefix=prefix)
     _ = decode_offset_cursor(before, argument="before", prefix=prefix)
     assert_relay_pagination_bound("first", first, cap=cap)
     assert_relay_pagination_bound("last", last, cap=cap)
+    return position
+
+
+#: The largest exclusive end an offset page hands the engine. ``SliceMetadata``
+#: reads an ``end`` of ``sys.maxsize`` as its last-only sentinel (with no ``last``,
+#: ``ListConnection`` then fails its ``assert last is not None``) and overfetches
+#: every other page to ``end + 1``, which ``itertools.islice`` refuses past
+#: ``sys.maxsize``; one below the sentinel keeps both, and a SQL ``LIMIT`` /
+#: ``OFFSET``, inside 64 bits.
+_OFFSET_PAGE_END_CEILING = sys.maxsize - 1
+
+
+def offset_engine_arguments(
+    *,
+    before: str | None,
+    after: str | None,
+    first: _FirstT,
+    last: object,
+    cap: int,
+    prefix: str,
+) -> tuple[str | None, _FirstT | int]:
+    """Validate an offset page and return the ``(after, first)`` the engine is handed.
+
+    The one owner of the arguments both offset slicers pass to Strawberry: the
+    window derivation (``derive_connection_window_bounds``, at plan and resolve
+    time) and the non-window slicing tail (``connection.py::_consume_fallback``).
+    ``first`` / ``last`` are the ``page_arguments`` values. The arguments pass
+    ``validate_offset_pagination`` first; then a forward page (an ``int``
+    ``first`` and no ``before`` bound) whose end ``start + first`` passes
+    ``_OFFSET_PAGE_END_CEILING`` is handed as the page that ends there:
+    ``first`` is the rows left below the ceiling, and a ``start`` past it (the
+    largest index's) is moved onto it with ``after`` re-minted to match. No
+    node source holds ``sys.maxsize - 1`` rows (a list of nodes is bounded by
+    the address space, a table by its 64-bit ``OFFSET``), so the rows, cursors
+    and page flags are the requested page's, ``hasPreviousPage`` included.
+    Every other page is returned unchanged, so its ``start`` and its engine
+    arithmetic are the client's own: with a ``before`` bound the engine ends the
+    page at the smaller of ``before`` and ``start + first``, and
+    ``decode_offset_cursor`` accepts no ``before`` past the ceiling; a
+    ``last``-only page reaches the sentinel by design, with its ``last`` set.
+    """
+    position = validate_offset_pagination(
+        before=before,
+        after=after,
+        first=first,
+        last=last,
+        cap=cap,
+        prefix=prefix,
+    )
+    if before or not isinstance(first, int):
+        return after, first
+    start = 0 if position is None else position + 1
+    if start + first <= _OFFSET_PAGE_END_CEILING:
+        return after, first
+    if start > _OFFSET_PAGE_END_CEILING:
+        start = _OFFSET_PAGE_END_CEILING
+        after = to_base64(prefix, start - 1)
+    return after, _OFFSET_PAGE_END_CEILING - start
 
 
 def relay_max_results_from_info(info: EitherInfo | None) -> int | None:

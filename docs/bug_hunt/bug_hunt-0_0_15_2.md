@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 63 done, 152 to do.
+Progress: 64 done, 151 to do.
 
 ## Done
 
@@ -56,6 +56,10 @@ Progress: 63 done, 152 to do.
   range filter cannot read (a list, a scalar, an object, a mapping with a key other than `start` / `end`, so also a misspelled
   lookup under a range head) dropped the constraint and `apply_sync` returned every row, against the GLOSSARY / spec-027
   promise that an unknown lookup raises; it now raises `ConfigurationError`, as the list and dict arms already did (`a54ad7c8`)
+- [x] 16. `forms/` robustness rows (not defects: application Python, no wire input). A `get_form_fields` hook value (or a
+  `base_fields` value) whose `__class__` raises escaped `_form_field_basis` raw at declaration and finalize, against the
+  `get_form_fields` / `_form_basis_content_identity` docstrings; it is now an invalid field in the typed error (`32b66897`).
+  The eight raw `__name__` reads in `forms/sets.py` need no code: no contract row, and the label question is item 26's
 - [x] 28. Deep dive 3 (authorization on deferred paths): findings 12 and 13 done; `VenueBadgeType` and `VenueSponsorType` now
   hide marked rows, and live rows prove none leaks through the no-`related_name` reverse accessors (`16a8c179`)
 - [x] 50. A SKIP hint (and a consumer-assigned relation, and the nested-connection SKIP arm) left the relation's key column out of
@@ -208,7 +212,6 @@ tracker number are recorded there; open remainders and new defects are filed as 
 40 low-priority rows, mostly guards against classes with broken `__name__` / `__eq__` / metaclasses. Expected outcome: most are
 not real bugs and just get deleted from t3. One checkbox per area:
 
-- [ ] 16. `forms/` (2 rows)
 - [ ] 17. `mutations/` and `auth/mutations.py` (4 rows)
 - [ ] 18. `optimizer/` (2 rows)
 - [ ] 19. `rest_framework/` (2 rows)
@@ -465,6 +468,10 @@ not real bugs and just get deleted from t3. One checkbox per area:
 ## Waiting on you
 
 - [ ] 26. A mutation whose `__name__` raises publishes a `<MetaclassName>Payload` type instead of failing. Fail, or keep?
+  The form flavors instead fail raw at declaration (`forms/sets.py::DjangoModelFormMutation._validate_meta`,
+  `forms/sets.py::DjangoFormMutation._validate_meta`), and a hostile form class name fails a valid declaration through
+  `forms/inputs.py::resolve_effective_form_fields`; generated input and payload names derive from `__name__`, so the answer
+  covers both flavors and the GraphQL names
 - [ ] 53. Docs (parked): README async section, a hand-written `@strawberry.field` returning a QuerySet runs synchronously
 - [ ] 54. Docs (parked): glossary, a sliced combinator branch on SQLite raises Django's own `DatabaseError`
 - [ ] 57. CHANGELOG entry for item 11: model, ModelForm, plain-form and register errors now use the input name (`categoryId`, not `category`)
@@ -557,8 +564,9 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 196. CHANGELOG entries for items 6 (combined querysets served as their pk set), 12 (the deadline message reads "before
   this field reached the database"; login, logout, me and `relay.node()` reject past the deadline), 50 and 83 (planned
   `.only()` writers no longer drop selected columns), 74 (a consumer `select_related` the selection never reads no
-  longer errors) and 15 (a hand-built range filter value that is not a `start` / `end` mapping or input object raises
-  `ConfigurationError` instead of filtering nothing)
+  longer errors), 15 (a hand-built range filter value that is not a `start` / `end` mapping or input object raises
+  `ConfigurationError` instead of filtering nothing) and 16 (a form field basis value whose `__class__` raises is reported
+  as an invalid field in `ConfigurationError`)
 - [ ] 197. The per-parent visibility paths (`types/resolvers.py::_visible_many_rows`, `_visible_related_object`, relation
   connections, `resolver=`) never narrow the hook's result to the source's rows, so a hook that ignores its input shows other
   parents' rows or the wrong to-one object. Decide the contract (narrow at the five seams, with a live row for an

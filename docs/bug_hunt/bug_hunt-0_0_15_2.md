@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 66 done, 154 to do.
+Progress: 70 done, 151 to do.
 
 ## Done
 
@@ -55,7 +55,8 @@ Progress: 66 done, 154 to do.
 - [x] 15. `filters/inputs.py` robustness row (not a defect: the wire cannot deliver the shape): a hand-built range value the
   range filter cannot read (a list, a scalar, an object, a mapping with a key other than `start` / `end`, so also a misspelled
   lookup under a range head) dropped the constraint and `apply_sync` returned every row, against the GLOSSARY / spec-027
-  promise that an unknown lookup raises; it now raises `ConfigurationError`, as the list and dict arms already did (`a54ad7c8`)
+  promise that an unknown lookup raises; it now raises `ConfigurationError`, as the list and dict arms already did
+  (`a54ad7c8`, in the body of the FBT ratchet commit)
 - [x] 16. `forms/` robustness rows (not defects: application Python, no wire input). A `get_form_fields` hook value (or a
   `base_fields` value) whose `__class__` raises escaped `_form_field_basis` raw at declaration and finalize, against the
   `get_form_fields` / `_form_basis_content_identity` docstrings; it is now an invalid field in the typed error (`32b66897`).
@@ -129,7 +130,7 @@ Progress: 66 done, 154 to do.
 - [x] 106. A `to_field` ForeignKey written through a declared `PrimaryKeyRelatedField` failed every non-null create and
   update (the attestation compared the stored `to_field` value with the pk) and, with an integer `to_field`, passed a
   wrong-row write; the snapshot captures the key the relation stores, the walk refuses it re-pointed in place and the
-  attestation compares the column with it (this commit)
+  attestation compares the column with it (`4ce779e1`)
 - [x] 88. A lone surrogate inside a list element or a JSON key or value skipped the decode text preflight (top-level `str`
   only) and reached the backend raw as a masked top-level `UnicodeEncodeError` (fakeshop `setCardFiles` paths; on Postgres an
   `ArrayField` of text or an `HStoreField` in every write flavor; a serializer `ListField(child=CharField())` element was
@@ -138,7 +139,7 @@ Progress: 66 done, 154 to do.
 - [x] 130. A model `DjangoMutation` (and register) wrote the related pk into a `to_field` relation's column: a wrong row
   linked silently (including one the visibility scope hides) or a payload FieldError, for a FK, a OneToOne and an M2M whose
   through model's target-side foreign key has a `to_field`; the one visibility query now also reads the key the relation
-  stores and that key is written (this commit)
+  stores and that key is written (`6a8713d6`)
 - [x] 89. The serializer refusal of a field taking a grouped-choices column's read enum offered "declare a flat
   ChoiceField" over an `ArrayField` whose `base_field` is grouped too, where a `ChoiceField` writes one value into the list
   column; over such an array it now names a declared `MultipleChoiceField` or `ListField(child=ChoiceField)`, each element
@@ -162,14 +163,14 @@ Progress: 66 done, 154 to do.
 - [x] 128. `testing/relay.py::global_id_for` annotated `schema` with a `TYPE_CHECKING`-only `Schema` in a module without
   `from __future__ import annotations`, so importing the public module raised `NameError` on Python 3.10-3.13 (the CI floor
   cell failed collection; nothing static caught it); the annotation is quoted (`7413c7b5`) and ruff `TC004` (quoting fix)
-  now fails an eager annotation naming a `TYPE_CHECKING`-only import (this commit); unreleased (no CHANGELOG
+  now fails an eager annotation naming a `TYPE_CHECKING`-only import (`1cee08c4`); unreleased (no CHANGELOG
   entry). Found fixing it: item 212
 - [x] 131. A ModelForm update that omitted a declared `ModelChoiceField` without `to_field_name` over a
   `ForeignKey(to_field=...)` / `OneToOneField(to_field=...)` refilled it with the stored `to_field` value where the field
   resolves by pk: "Select a valid choice" on every such partial update, or, when that value equals another row's pk, a
   silent re-link to that row (including one the related type hides); the refill now reads `model_to_dict` only when the
   form field's key names the column the FK stores, and otherwise rebinds the related row by the field's own key, as a
-  provided value decodes (this commit). Released in 0.0.13 and 0.0.14: item 214
+  provided value decodes (`b2f8d05c`). Released in 0.0.13 and 0.0.14: item 214
 - [x] 61. `RelatedFilter` cycles (two or more `FilterSet`s, and sets pointing into one) published flat filters decided by
   which type registered first: the first-expanded set's re-entry fallback was cached into every other member, so a flat
   filter validated in one registration order and was unknown in another (fakeshop's library inputs moved with it). A flat
@@ -181,6 +182,15 @@ Progress: 66 done, 154 to do.
   `sys.maxsize` page cap: a masked unexpected error on root, consumer-resolver and per-parent connections, sync and async.
   `offset_engine_arguments` now hands the engine every forward page ending at most at `sys.maxsize - 1`, so every accepted
   cursor serves the past-the-end page the optimized window serves (`60825338`); CHANGELOG item 218; filed 219
+- [x] 188. Re-checked at `8ca6a481`: a nested list whose `get_queryset` returns `union()` / `intersection()` /
+  `difference()` no longer raises `NotSupportedError`; the combined result is served as its pk set, optimizer on and off
+  (`5c5e32c5`, item 6; `test_combined_visibility_api.py` 199 passed)
+- [x] 189. Re-checked at `8ca6a481`: an overlapping declared and generated lookup runs the generated one, two lookups on
+  one key both apply, and `{"id": {"gt": 999}}` on a generated-only field filters (`754ed263`, `9f7ea5dd`, item 4)
+- [x] 192. Re-checked at `8ca6a481`: an `allow_blank` serializer `ChoiceField` publishes a `BLANK` member that writes `""`
+  (`a5dc6ea3`, item 5)
+- [x] 195. Re-checked at `8ca6a481`: `test_audit_marks_target_parse_failure_as_incomplete` and the three `async_executor`
+  rows in `tests/utils/test_querysets.py` pass; no fix commit identified (possibly stale when filed)
 
 ## Outside review of the fixes
 
@@ -221,8 +231,9 @@ tracker number are recorded there; open remainders and new defects are filed as 
 
 ## To do: t3 robustness rows
 
-40 low-priority rows, mostly guards against classes with broken `__name__` / `__eq__` / metaclasses. Expected outcome: most are
-not real bugs and just get deleted from t3. One checkbox per area:
+33 low-priority rows across items 18-25 plus item 27's unfiled leads (the rows behind items 15-17 are done and item
+26's moved to "Waiting on you"), mostly guards against classes with broken `__name__` / `__eq__` / metaclasses.
+Expected outcome: most are not real bugs and just get deleted from t3. One checkbox per area:
 
 - [ ] 18. `optimizer/` (2 rows)
 - [ ] 19. `rest_framework/` (2 rows)
@@ -230,8 +241,9 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 21. `routers.py`, `list_field.py` (2 rows)
 - [ ] 22. `types/` (7 rows)
 - [ ] 23. `utils/` (9 rows)
-- [ ] 24. Trailing-comma lint in two test files (2 rows)
-- [ ] 25. Stale test-fixture row in `tests/utils/test_querysets.py`: likely already covered by item 41
+- [ ] 24. Trailing-comma lint in two test files (2 rows; main passes `scripts/check_trailing_commas.py --check` at
+  `8ca6a481`, so these are t3-only)
+- [ ] 25. Stale test-fixture row in `tests/utils/test_querysets.py` (item 41's fix `cab934a0` did not touch this file)
 - [ ] 27. Unfiled leads from the same family (triage with the rows above)
 
 ## To do: found along the way
@@ -310,9 +322,12 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 133. A `PrimaryKeyRelatedField` to a model whose pk is a `OneToOneField` (`PatronProfile`) is refused at schema build
   ("Unsupported Django field type 'OneToOneField' on PatronProfile.patron"); a FK to such a model cannot be written by a
   serializer mutation (fails loud)
-- [ ] 135. A malformed GlobalID in an `[ID!]` list input (`genres: ["not-base64!!"]`) is a masked top-level error in the
-  model, ModelForm and serializer flavors: Strawberry's `convert_argument` raises `GlobalIDValueError` before any package
-  decode, where a single malformed id gets the field-keyed envelope
+- [ ] 135. A malformed GlobalID in a relation input, single (`categoryId: "not-base64!!"`) or an `[ID!]` element
+  (`genres: ["not-base64!!"]`), is a masked top-level error with `data: null` in the model, ModelForm and serializer
+  flavors: Strawberry raises `GlobalIDValueError` at the mutation resolver before any package decode, so the field-keyed
+  envelope (which a well-formed but missing, wrong-type or hidden id gets) never applies;
+  `test_products_api.py::test_create_item_malformed_category_id_is_top_level_coercion_error` pins the outcome but its
+  docstring says variable coercion
 - [ ] 137. ModelForm and serializer flavors: a relation id naming a visible row whose `to_field` key is `NULL` clears an
   optional relation silently (the form binds `None`; the serializer's descriptor assignment stores `NULL`), where the model
   flavor refuses it as the relation error since item 130; `forms/resolvers.py::_to_form_key_value` also falls back to
@@ -329,11 +344,11 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 146. `workspace.py::item_diff` emits the tracked and staged diff first, then the untracked files: staging an unchanged
   added file moves it into the first group, so the diff order and its seal change and `diff --check` fails after staging
   alone; the diff should be one baseline-versus-content diff independent of the index
-- [ ] 147. `scripts/build_kanban_md.py::GlossaryInliner._protected` protects only `[...]` link spans, pinpoints and code:
-  `Read <https://example.com/?q=DjangoListField>.` gets a glossary link inside the URI autolink, changing its destination;
-  URI and email autolinks need the same protection, and a later plain mention must still link (the test's mention must not
-  be followed by `.`, which `TERM_BOUNDARY_AFTER` reads as a path character); also unprotected: double-backtick code spans, a
-  `)` inside a quoted inline-link title, nested-parenthesis destinations and shortcut references (`[DjangoListField]`)
+- [ ] 147. `scripts/build_kanban_md.py::GlossaryInliner._protected` does not protect URI or email autolinks:
+  `Read <https://example.com/?q=DjangoListField>.` gets a glossary link inside the URI autolink, changing its destination
+  (`<DjangoListField@example.com>` likewise); a later plain mention must still link (the test's mention must not be
+  followed by `.`, which `TERM_BOUNDARY_AFTER` reads as a path character). `09d0caa0` already protects `[...]` groups with
+  quoted titles, nested-parenthesis destinations, shortcut references and double-backtick code spans
 - [ ] 148. `scripts/census_test_models.py::_import_map` folds every import in a file into one flat map, so an import's effect
   ignores scope and position: a function-local `import ... as Model` replaces the module-level one (a real module-level
   Django model drops out of the census), the converse makes a plain class count as a model, and a module-level import after
@@ -390,8 +405,8 @@ not real bugs and just get deleted from t3. One checkbox per area:
   `allLibraryCardsProjected`, `allLibraryCardsDeferred`) raise `SynchronousOnlyOperation` on `/graphql-async/` for any
   selection; item 53 covers only the README wording
 - [ ] 165. Item 12's deadline checks fail forward-FK and one-to-one hops inside a mutation payload (rolling back a write that
-  used to commit) and error subscription frames past the budget; no test pins either and spec-047 Decision 9 does not say
-  so; the async deadline rows also cannot tell a head check from a check inside the `sync_to_async` closure
+  used to commit) and error subscription frames past the budget; spec-047 Decision 9 states both (`8d4f66bd`) but no test
+  pins either; the async deadline rows also cannot tell a head check from a check inside the `sync_to_async` closure
 - [ ] 166. Fixture gaps: the async many-side tests miss a broken prefetch-cache lookup in `types/resolvers.py::many_resolver`;
   no fakeshop reverse many-to-many without `related_name` has an unhooked target (lost with item 28's fixture); no fakeshop
   to-many name repeats at two depths with different targets (the window resolver-key collision is pinned only by a
@@ -404,8 +419,8 @@ not real bugs and just get deleted from t3. One checkbox per area:
   flow path (`scripts/workspace.py::_lock_flow_dir` catches only `FileNotFoundError`; `main` catches only `WorkspaceError`)
 - [ ] 170. No test runs `workspace.py prove` (`scripts/workspace.py::_cmd_prove`); its flow lease and copy lock are pinned only
   through `execute`; add a `main(["prove", ...])` row and a two-run contention row
-- [ ] 171. `prove_failability.py` takes one anchor per manifest entry, so a mutation spanning two sites is scripted by hand;
-  and no tool measures coverage of a diff's changed lines without the full-tree gate
+- [ ] 171. No tool measures coverage of a diff's changed lines without the full-tree gate (a mutation spanning two sites
+  needs no hand script: `prove_failability.py` entries take `"sites": [...]`)
 - [ ] 172. START.md's resource-gate rule has no working probe: `pgrep -f` self-matches multi-line command lines and
   `memory_pressure` prints "System-wide memory free percentage", which the rule does not parse
 - [ ] 173. The KANBAN "Before a release" checklist (BoardDoc 11) runs `ruff format .` before `ruff check --fix .`, the reverse
@@ -438,28 +453,21 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 184. `tests/base/test_conf.py` crashes the coverage tracer on Python 3.14's default core (`COVERAGE_CORE=ctrace` needed)
 - [ ] 185. WebSocket residuals after `1b6a09b1`: a sync caller blocked in `async_to_sync` keeps the shared connection, and the
   Postgres steady-ping lost-write test has never run; the async mutation window has no owning spec or card
-- [ ] 186. The consumer-`Prefetch` contract row promised by item 83 is not in the docs, and docs/README.md has no inert-arm
-  sentence (only GLOSSARY was updated)
+- [ ] 186. docs/README.md has no consumer-`Prefetch` / `.only()` cooperation sentence and no inert-arm sentence (GLOSSARY has
+  both: "`only()` cooperation", from item 83's `548059b3`, and "Membership leaves")
 - [ ] 187. The C11 keyset fixes were never run on PostgreSQL's LATERAL path, and the workspace / prove_failability `flock` rows
   never on Linux or NFS locally (CI runs the rows on ubuntu)
-- [ ] 188. Seen at `87dc1df7` (267 commits before HEAD), re-check: under the optimizer a nested list whose `get_queryset`
-  returns `union()` / `intersection()` / `difference()` raises a raw `NotSupportedError`
-  (`optimizer/walker.py::_build_prefetch_child_queryset`)
-- [ ] 189. Seen at `87dc1df7`, re-check: an overlapping declared and generated lookup returns wrong rows
-  (`{name: {iContains}}` returns `[]`), two lookups on one form key drop one, and `{"id": {"gt": 999}}` is ignored on a
-  generated-only field
 - [ ] 190. Seen at `87dc1df7`, re-check: an out-of-range datetime, an invalid regex and a regex on a UUID field raise uncoded
   errors
-- [ ] 191. Seen at `87dc1df7`, re-check: a single malformed relation GlobalID in a mutation input answers `data: null` and hides
-  a committed sibling mutation (item 135 names only the `[ID!]` list form)
-- [ ] 192. Seen at `87dc1df7`, re-check: an `allow_blank` `ChoiceField` rejects `""` (no blank enum member)
+- [ ] 191. A malformed relation GlobalID (item 135) nulls the whole response, so a sibling mutation earlier in the same
+  document stays committed while `data` is `null` (`{ a: createItem(valid) b: createItem(malformed) }`, variable or
+  literal id; re-checked at `8ca6a481`)
 - [ ] 193. Seen at `87dc1df7`, re-check: directive argument values, variable-definition directives and defaults used only from
   untyped positions are uncharged by the resource budget, and a 200 KB literal reaches a custom scalar's `parse_literal`
   (item 7 was closed as already fixed)
-- [ ] 194. Seen early in the fixes, re-check: `last: 0` reports `hasNextPage: true` when rows exist; an enter-side cancel defect
-  was reported but never reproduced
-- [ ] 195. Seen early in the fixes, re-check: `test_audit_marks_target_parse_failure_as_incomplete` (DRY-review export) fails at
-  HEAD, and three `async_executor` tests are broken
+- [ ] 194. An enter-side cancel defect was reported early in the fixes but never reproduced, and the report names no site
+  (which hook, sync or async): name it or drop it. (`last: 0` answering `hasNextPage: true` while rows exist is the
+  deliberate `first: 0` page since `dbf0a870`)
 - [ ] 212. No static gate for a name defined inside a `TYPE_CHECKING` block (a `TypeVar`, `Protocol` or `TypeAlias`) used in
   an eager annotation of a module without `from __future__ import annotations`: it raises `NameError` at import on 3.10-3.13
   while ruff (`TC004` covers imports only, `F821` sees a binding) and basedpyright pass; six package modules define such names
@@ -477,7 +485,8 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## To do: holes found re-checking the fixes
 
-- [ ] 64. Two cursor-decoder guards no test pins (`isascii`, the nested-window decode)
+- [ ] 64. Cursor-decoder guards: the `isascii` term in `utils/connections.py::decode_offset_cursor` is redundant behind
+  `str(position) != raw` (drop it or keep it), and no live row pins a malformed nested-window cursor
 - [ ] 66. Index advisory on a multi-table-inheritance child names an order column that lives on the parent table
 - [ ] 67. Nested serializer: a Django error raised in `create()` for a child is keyed to a renamed root input
 - [ ] 70. Argument-less directives are re-walked on every fragment expansion (about 80 ms at the token bound; bounded, robustness)
@@ -500,9 +509,11 @@ not real bugs and just get deleted from t3. One checkbox per area:
   result is a bool (the request user's class name in `DjangoModelPermission.has_permission` likewise), and the conflict
   message in `auth/mutations.py` renders permission-class names raw. Read the label only on the failure branch, reject at
   declaration, or keep?
-- [ ] 53. Docs (parked): README async section, a hand-written `@strawberry.field` returning a QuerySet runs synchronously
+- [ ] 53. Docs (parked): docs/README.md, the async paragraph under `DjangoListField`:
+  a hand-written `@strawberry.field` returning a QuerySet runs synchronously
 - [ ] 54. Docs (parked): glossary, a sliced combinator branch on SQLite raises Django's own `DatabaseError`
-- [ ] 57. CHANGELOG entry for item 11: model, ModelForm, plain-form and register errors now use the input name (`categoryId`, not `category`)
+- [ ] 57. CHANGELOG entry for item 11: model, ModelForm, plain-form and register errors, and a `ValidationError` raised
+  during a serializer save, now use the input name (`categoryId`, not `category`)
 - [ ] 68. A model's default manager hides rows from declared filter hops but not from undeclared filter hops or ordering. Make them
   agree, or keep?
 - [ ] 69. CHANGELOG entry for item 1: `Meta.exclude=["parent"]` on a mutation over a `ForeignObject` model now raises
@@ -516,7 +527,8 @@ not real bugs and just get deleted from t3. One checkbox per area:
   `ArrayField` whose `base_field` is grouped, a `MultipleChoiceField` or `ListField(child=ChoiceField)`)
 - [ ] 77. The read enum refuses a grouped-choices column, though group labels are presentation like choice labels. Flatten it on
   the read side too (retires the `str`-override carve-out and the write-side grouped refusal), or keep?
-- [ ] 78. CHANGELOG entry for item 65: every lookup on a choice column treats each enum member as a value (`iExact: BLANK`
+- [ ] 78. CHANGELOG entry for item 65: every single-value lookup on a choice column (`exact`, `iExact`, `contains`, `gt`,
+  ...) treats each enum member as a value (`iExact: BLANK`
   matches blank rows only, a `"null"` member matches `"null"`); raw form data and declared `ChoiceFilter`s are unchanged
 - [ ] 79. CHANGELOG entry for item 52: connection fields no longer send consumer-source or row-hydration exception text to the
   client; pagination rejections keep their messages and are the new public `PaginationArgumentError`
@@ -539,15 +551,14 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 47. Postgres: `serializer_choice_field=MultipleChoiceField` over an `ArrayField` is unusable (parked: needs a Postgres run)
 - [ ] 93. CHANGELOG entry for item 44: a ModelForm mutation over a non-text choice column with `blank=True, null=False` answers
   `null` (or an omitted field with no default) with a field-keyed `null` FieldError instead of "An unexpected error occurred."
-- [ ] 94. The package's 228 `except BaseException` guards follow two postures: about 90 hostile-metadata guards turn a
+- [ ] 94. The package's 231 `except BaseException` guards follow two postures: about 90 hostile-metadata guards turn a
   `KeyboardInterrupt` / `SystemExit` into a typed error (pinned, e.g. `serializer_field_description`), while `utils/directives.py`
   and the await-side guards let control signals propagate (pinned the other way). No upstream library converts them at
   configuration time. One policy (re-raise control signals first, or narrow to `Exception`), or keep the split?
 - [ ] 96. CHANGELOG entry for item 95: a nested keyset connection over a type whose `get_queryset` or manager orders pages and
-  mints cursors under that order, so its cursors now replay on the root connection; `DeclaredCursorState` is renamed `CursorState`
+  mints cursors under that order, so its cursors now replay on the root connection
 - [ ] 98. CHANGELOG entry for item 51: an `OrderSet` over a forward `ForeignObject` orders it by every carrier column (a
-  multi-column link no longer errors), `Meta.fields = "__all__"` publishes the `ForeignObject` leaf, and naming a reverse
-  `GenericRel` in a `DjangoMutation`'s `fields` / `exclude` raises the unknown-field error instead of the `ForeignObject` one
+  multi-column link no longer errors) and `Meta.fields = "__all__"` publishes the `ForeignObject` leaf
 - [ ] 102. CHANGELOG entry for item 99: a connection over a type whose `get_queryset` or manager returns a `.reverse()`d
   queryset pages every row once and its cursors replay, root and nested; the order served is unchanged, an `orderBy:` beside
   such a hook stays inverted (Django `order_by()` semantics)
@@ -592,6 +603,17 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 218. CHANGELOG entry for item 63: an offset `after` cursor near `sys.maxsize` serves the empty past-the-end page under
   `first: N`, `last: 0` or no page argument on every source (one index per page size, and on a generator source every
   index past it, raised a masked unexpected error); a page cap of `sys.maxsize` serves its rows with no page argument
+- [ ] 223. CHANGELOG entries for items fixed before an entry was filed with each fix (each changes 0.0.14 behaviour;
+  confirm each against the tag when writing): 2 (a negative or malformed offset cursor is refused and no longer bypasses
+  the page cap), 4 (a filter lookup binds to its own filter when declared and generated names overlap), 5 (a serializer
+  list's elements follow the child's `allow_null`), 13 (a consumer `Prefetch` hint over a type whose `get_queryset` hides
+  rows is scoped by that hook), 30 and 31 (a flat `RelatedFilter` leaf, and a relation no `RelatedFilter` declares, no
+  longer return rows the target type hides), 32 (`orderBy` through a relation no longer sorts by rows the target type
+  hides), 34 (a `RelatedFilter` whose target model its relation does not reach raises at expansion), 35 (a serializer
+  choice field admitting a value the column's read enum cannot represent raises `ConfigurationError` at build), 36 (a
+  serializer `MultipleChoiceField` over a single-value choice column is refused at build), 38 (a `Choices.__empty__` enum
+  no longer carries a `_None` member), 58 (a fragment spread is charged against `max_selections`, and only the selected
+  operation's walk expands) and 60 (one `OrderSet` on two types is refused when either hides rows)
 - [ ] 196. CHANGELOG entries for items 6 (combined querysets served as their pk set), 12 (the deadline message reads "before
   this field reached the database"; login, logout, me and `relay.node()` reject past the deadline), 50 and 83 (planned
   `.only()` writers no longer drop selected columns), 74 (a consumer `select_related` the selection never reads no
@@ -619,14 +641,15 @@ not real bugs and just get deleted from t3. One checkbox per area:
   harness written against a prototype API fails as a `TypeError` that reads as a regression; a subprocess test that signals
   before its syscall flakes)
 - [ ] 204. Dive-3 HIGH (a consumer `Prefetch` hint over a hiding target bypassed its `get_queryset`, fixed as item 13): decide
-  disclosure, give SECURITY.md a path for a maintainer-found finding, and check 0.0.14 affectedness from the tagged walker
+  disclosure and give SECURITY.md a path for a maintainer-found finding; 0.0.14 is affected (its
+  `optimizer/walker.py::_apply_hint` installs the consumer `Prefetch` queryset and marks the relation planned)
 - [ ] 205. Upstream Strawberry: interface `resolve_type` looks Node-subclass instances up by raw name, so a converter that
   renames interfaces breaks their GlobalIDs; `ConnectionExtension` runs the resolver before `SliceMetadata` validates
   `first` / `last` (context #4510). File upstream or record as known gaps
 - [ ] 206. spec-045 was amended in place with no new card, while card 045 asks a numbered security decision for such changes
-- [ ] 207. Earlier open questions with no row: which name `FieldError.field` carries, whether a multi-column `ForeignObject` is
-  a supported shape (the reverse fallback was kept), nullable payloads (card 056), and the HUNT negative-offset cursor fix
-  on list sources being off by one
+- [ ] 207. Earlier open questions with no row: nullable payloads (card 056), and the HUNT negative-offset cursor fix on
+  list sources being off by one (the `FieldError.field` name was settled by item 11; items 1 and 51 support a multi-column
+  `ForeignObject`, the reverse fallback kept)
 - [ ] 216. A dense `RelatedFilter` graph publishes a flat surface factorial in its size (path-relative expansion over every
   simple path: six sets each related to every other give about 11k flat keys per set, seven about 94k); decide a stated
   bound or a per-declaration opt-out of flat copies
@@ -639,17 +662,17 @@ not real bugs and just get deleted from t3. One checkbox per area:
 ## Hunt not finished in t3
 
 - [ ] 29. The hunt's final test gate was never run (the Postgres and sharded runs included)
-- [ ] 208. t3 is about three commits behind main: a file-by-file sync (overlapping `8d4f66bd`) is due, its dive-3 BLOCKED
+- [ ] 208. t3 is behind main (0 ahead, 106 behind at `8ca6a481`): a file-by-file sync (overlapping `8d4f66bd`) is due, its dive-3 BLOCKED
   text purge and hunt-doc edit are uncommitted, it still carries the superseded refuse-combined patch, and two of its test
   pairs assert opposite outcomes (a hostile `__eq__` drift check; a hostile file replacement). Then decide removing the
   dry-0015 worktree, `~/t3code-1cc21548-pre-ff.tgz` and, after item 114 lands, `refs/scratch/admission-wip`
 - [ ] 209. The hunt's owned-changes ledger misses `field_name_map` and `check_deadline`, six files and the dive-5 pins;
   `filters/inputs.py` and the two-lookup raise are behaviour changes filed as robustness; eight items from the hunt's
   test-run notes were never folded back
-- [ ] 210. The truthful-reads migration and its fixes sit uncommitted in the hunt worktree; decide whether it and the 38
-  robustness rows (items 15-27) go to main
+- [ ] 210. The truthful-reads migration and its fixes sit uncommitted in the hunt worktree; decide whether it and the
+  remaining robustness rows (items 18-25, 27) go to main
 - [ ] 211. A repo-wide `ruff check --fix .` / `ruff format .` rewrote 30 untracked `.py` files of hunt evidence (11 in the
-  sealed deep-3 directory) with no copy kept; evidence trees need excluding from ruff, or AGENTS rule 16 needs explicit paths
+  sealed deep-3 directory) with no copy kept; evidence trees need excluding from ruff, or AGENTS rule 17 needs explicit paths
 
 <!-- LINK DEFINITIONS -->
 

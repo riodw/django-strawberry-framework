@@ -7,7 +7,8 @@ anywhere without circulars.
 
 from __future__ import annotations
 
-from typing import cast
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar, cast
 
 from typing_extensions import override
 
@@ -19,6 +20,65 @@ __all__ = (
     "PathResolutionError",
 )
 
+_P = ParamSpec("_P")
+_T = TypeVar("_T")
+_D = TypeVar("_D")
+
+_MISSING: object = object()
+
+
+def _safe_attr(obj: object, name: str, default: object = None) -> object:
+    """Return ``getattr(obj, name, default)``, or ``default`` when the read raises anything.
+
+    The one guarded attribute read. A missing attribute and a hostile
+    descriptor / ``__getattr__`` / metaclass lookup that raises (including a
+    ``BaseException`` such as ``SystemExit``) both degrade to ``default``, so a
+    caller that is assembling a diagnostic or classifying consumer-supplied
+    metadata never has its own contract replaced by the consumer's exception.
+    Pass a private sentinel as ``default`` to tell "absent or unreadable" apart
+    from a real ``None``.
+    """
+    try:
+        return getattr(obj, name, default)
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
+        return default
+
+
+def _safe_call(
+    fn: Callable[_P, _T],
+    fallback: _D,
+    /,
+    *args: _P.args,
+    **kwargs: _P.kwargs,
+) -> _T | _D:
+    """Return ``fn(*args, **kwargs)``, or ``fallback`` when the call raises anything.
+
+    The one guarded call. Only ``fn(*args, **kwargs)`` runs inside the guard:
+    ``fn`` itself is evaluated at the call site, so pass a callable that is
+    already safe to obtain (a builtin, an ``operator`` function, ``isinstance``)
+    rather than a bound method read off a hostile object, whose attribute
+    lookup would escape before this function runs.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
+        return fallback
+
+
+def _safe_predicate(fn: Callable[_P, bool], /, *args: _P.args, **kwargs: _P.kwargs) -> bool:
+    """Return ``fn(*args, **kwargs)``, or ``False`` when the call raises anything.
+
+    ``_safe_call`` for a boolean test (``isinstance``, ``operator.contains``,
+    ``bool``): the fallback is the single answer "not a match", and it is spelled
+    here once because a literal ``False`` fallback at every call site would be a
+    boolean positional argument. The same contract applies: ``fn`` is evaluated at
+    the call site, outside the guard.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
+        return False
+
 
 def _readable_type_name(source: type[object]) -> str | None:
     """Return ``source``'s own ``__name__`` as a plain base ``str``, or ``None`` when unreadable.
@@ -27,19 +87,9 @@ def _readable_type_name(source: type[object]) -> str | None:
     and a name whose base ``str`` slot cannot be read, so the caller moves on to
     the next candidate.
     """
+    name = _safe_attr(source, "__name__")
     try:
-        name = source.__name__
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        return None
-    try:
-        # basedpyright: trust boundary: a metaclass can answer ``__name__`` with any object
-        is_str_name = isinstance(name, str)  # pyright: ignore[reportUnnecessaryIsInstance]
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        is_str_name = False
-    if not is_str_name:
-        return None
-    try:
-        if not name:
+        if not isinstance(name, str) or not name:
             return None
         # A metaclass can return a ``str`` subclass for ``__name__``.  Returning
         # that object would let its ``__str__`` / ``__format__`` run while a
@@ -62,10 +112,7 @@ def _safe_type_name(value: object) -> str:
     metaclass name before the ``"object"`` last resort, so the caller still gets
     the most specific label that can be rendered safely.
     """
-    try:
-        is_type = isinstance(value, type)
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        is_type = False
+    is_type = _safe_predicate(isinstance, value, type)
     sources = (cast("type[object]", value), type(value)) if is_type else (type(value),)
     for source in sources:
         name = _readable_type_name(source)
@@ -75,7 +122,7 @@ def _safe_type_name(value: object) -> str:
 
 
 def _unprintable(value: object) -> str:
-    """The one standalone placeholder for a value that defeated rendering.
+    """Return the one standalone placeholder for a value that defeated rendering.
 
     Single home of the ``<unprintable {T}>`` grammar so its spelling cannot
     drift between the repr-based renderer (``_safe_arg_repr``), the str-based
@@ -131,9 +178,8 @@ def _safe_class_name(value: object, *, qualified: bool = False) -> str:
     ``_safe_type_name``; a non-string one renders through the guarded repr.
     """
     attribute = "__qualname__" if qualified else "__name__"
-    try:
-        name: object = getattr(value, attribute)
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
+    name = _safe_attr(value, attribute, _MISSING)
+    if name is _MISSING:
         return _safe_type_name(value)
     try:
         if isinstance(name, str) and name:
@@ -146,32 +192,21 @@ def _safe_class_name(value: object, *, qualified: bool = False) -> str:
 def _safe_model_label(model: object) -> str:
     """Return a model label without trusting consumer-supplied metadata."""
     try:
-        meta = getattr(model, "_meta", None)
-        label = getattr(meta, "label", None)
+        label = getattr(getattr(model, "_meta", None), "label", None)
+        rendered = str.__str__(str(label)) if isinstance(label, str) else ""
     except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        return _safe_type_name(model)
-    try:
-        if isinstance(label, str):
-            label_str = str(label)
-            return str.__str__(label_str) or _safe_type_name(model)
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        return _safe_type_name(model)
-    return _safe_type_name(model)
+        rendered = ""
+    return rendered or _safe_type_name(model)
 
 
 def _safe_terminal_label(terminal: object) -> str:
     """Return a terminal field name without trusting consumer-supplied metadata."""
     try:
         name = getattr(terminal, "name", None)
+        rendered = str.__str__(str(name)) if isinstance(name, str) else ""
     except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        return _safe_type_name(terminal)
-    try:
-        if isinstance(name, str):
-            name_str = str(name)
-            return str.__str__(name_str) or _safe_type_name(terminal)
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        return _safe_type_name(terminal)
-    return _safe_type_name(terminal)
+        rendered = ""
+    return rendered or _safe_type_name(terminal)
 
 
 def describe_value(value: object) -> str:

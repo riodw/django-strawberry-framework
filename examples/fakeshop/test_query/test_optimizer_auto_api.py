@@ -171,9 +171,8 @@ def install_hashable_scalar_cache_schema(
     @strawberry.type
     class Misc:
         @strawberry.field
-        # basedpyright: Strawberry derives the probe's GraphQL argument from this parameter
-        def logs(self, after: BombValue) -> list[str]:  # pyright: ignore[reportUnusedParameter]
-            return ["ok"]
+        def logs(self, after: BombValue) -> list[str]:
+            return [type(after).__name__]
 
     @strawberry.type
     class Query:
@@ -212,8 +211,8 @@ def test_repeated_live_query_survives_hashable_custom_scalar_equality(
 
     assert first.data is not None
     assert second.data is not None
-    assert first.data["misc"]["logs"] == ["ok"]
-    assert second.data["misc"]["logs"] == ["ok"]
+    assert first.data["misc"]["logs"] == ["EqualityBomb"]
+    assert second.data["misc"]["logs"] == ["EqualityBomb"]
     assert install_hashable_scalar_cache_schema.cache_info().misses == 2
     assert install_hashable_scalar_cache_schema.cache_info().hits == 0
 

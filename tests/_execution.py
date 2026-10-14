@@ -50,3 +50,10 @@ def make_execution_context(
         context=context,
         pre_execution_errors=pre_execution_errors,
     )
+
+
+def execution_result(context: ExecutionContext) -> object:
+    """Return ``context.result``, typed ``object`` so a test narrows it with ``isinstance``."""
+    # basedpyright: Strawberry's schema/_graphql_core.py rebinds GraphQLExecutionResult in an
+    # ImportError fallback, so ExecutionContext.result carries Unknown under the <3.3 pin
+    return context.result  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]

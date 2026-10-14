@@ -19,8 +19,7 @@ PLANNED_TEST_FILE = "tests/planned_only/test_planned_only.py"
 
 
 @pytest.fixture(autouse=True)
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def _service_lookups(db: None) -> None:  # pyright: ignore[reportUnusedParameter]
+def _service_lookups() -> None:
     kf.make_status("todo")
     kf.make_priority("medium")
     kf.make_section("scope")

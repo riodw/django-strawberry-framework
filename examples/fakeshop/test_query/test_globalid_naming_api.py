@@ -634,8 +634,7 @@ def test_globalid_filter_rejects_the_default_spelling_of_a_renamed_type() -> Non
 
 
 @pytest.fixture
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def collision_schema(db: None) -> Iterator[DjangoSchema]:  # pyright: ignore[reportUnusedParameter]
+def collision_schema() -> Iterator[DjangoSchema]:
     """``CategoryNode`` publishes as ``ApiCategoryNode``, the very name another real type declares.
 
     Every type uses ``Meta.globalid_strategy = "type"`` under the default setting. The
@@ -766,8 +765,7 @@ class _PropertyAsCategory(NameConverter):
 
 
 @pytest.fixture
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def filter_authority_schema(db: None) -> Iterator[DjangoSchema]:  # pyright: ignore[reportUnusedParameter]
+def filter_authority_schema() -> Iterator[DjangoSchema]:
     """An item filter on ``category`` in a schema that publishes ``PropertyNode`` as ``CategoryNode``.
 
     ``CategoryNode`` is registered (the filter's target) but reachable from no root,
@@ -855,8 +853,7 @@ def test_relation_filter_refuses_a_slot_this_schema_publishes_for_another_type()
 
 
 @pytest.fixture
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def shadowing_child_schema(db: None) -> Iterator[DjangoSchema]:  # pyright: ignore[reportUnusedParameter]
+def shadowing_child_schema() -> Iterator[DjangoSchema]:
     """A ``type`` child of a concrete ``model``-strategy Relay parent, under the prefix converter."""
     registry.clear()
 

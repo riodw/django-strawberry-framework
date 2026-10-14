@@ -112,6 +112,7 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils._queryset_private import (
     set_queryset_query,
 )
+from tests._django_private import has_values_method
 from tests._idioms import is_object_dict
 from tests.optimizer import _link_models
 
@@ -1346,9 +1347,9 @@ def test_hostile_values_override_end_to_end_is_neutralized_by_sealing():
             *fields: str,
             **expressions: object,
         ) -> object:  # re-projects the UNFILTERED set
-            # basedpyright: django-stubs omits QuerySet._values, reported as an unknown attribute
-            # whose call is therefore Unknown
-            return models.QuerySet._values(_CtTarget.objects.all(), *fields, **expressions)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
+            unfiltered = _CtTarget.objects.all()
+            assert has_values_method(unfiltered)
+            return unfiltered._values(*fields, **expressions)
 
     def _hostile_hook(
         _cls: type[DjangoType],

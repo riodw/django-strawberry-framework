@@ -76,7 +76,7 @@ import threading
 import warnings
 from collections.abc import Callable, Coroutine, Iterator, Mapping
 from contextlib import contextmanager
-from functools import cache
+from functools import cache, partial
 from typing import TYPE_CHECKING, NewType
 
 import pytest
@@ -663,9 +663,8 @@ class _AuthorityQuery:
         return list(bounded_rows(_UNCONFIGURED_SOURCE_ROWS, info, None))
 
     @strawberry.field
-    # basedpyright: Strawberry derives the probe's GraphQL argument from this parameter
-    def take(self, payload: OpaqueValue = _NO_OPAQUE_VALUE) -> str:  # pyright: ignore[reportUnusedParameter]
-        return "ok"
+    def take(self, payload: OpaqueValue = _NO_OPAQUE_VALUE) -> str:
+        return str(payload)
 
 
 @cache
@@ -1297,9 +1296,11 @@ class _SharedEntryExtension(SchemaExtension):
 
 
 @cache
-# basedpyright: the functools.cache key: one shared extension object per spelling
-def _entry_extension(spelling: str) -> _SharedEntryExtension:  # pyright: ignore[reportUnusedParameter]
-    """The ONE extension object a shared-entry mount hands every operation."""
+def _entry_extension(_spelling: str) -> _SharedEntryExtension:
+    """The ONE extension object a shared-entry mount hands every operation per spelling.
+
+    The spelling is the ``functools.cache`` key and is never read.
+    """
     return _SharedEntryExtension()
 
 
@@ -1308,7 +1309,7 @@ def _entry_entry(spelling: str):
     if spelling == "class":
         return _SharedEntryExtension
     if spelling == "fresh-factory":
-        return lambda: _SharedEntryExtension()  # noqa: PLW0108 - a factory entry, not the class
+        return partial(_SharedEntryExtension)
     if spelling == "instance":
         return _entry_extension(spelling)
     return lambda: _entry_extension(spelling)
@@ -3667,7 +3668,7 @@ def test_a_scalar_argument_within_the_bound_reaches_its_parser(source: str):
     query, variables, members = _opaque_request(source, MAX_CONTAINER_WIDTH)
     payload = _post("/rp-authority/", query, variables)
     _no_rejection(payload)
-    assert payload["data"] == {"take": "ok"}
+    assert payload["data"] == {"take": str(members)}
     assert _scalar_parses
     assert all(parsed == members for parsed in _scalar_parses)
 
@@ -3984,7 +3985,7 @@ def test_an_argument_within_the_bound_still_executes_beside_a_validation_extensi
     query, variables, members = _opaque_request(source, MAX_CONTAINER_WIDTH)
     payload = _post(CACHE_MOUNTS[order], query, variables)
     _no_rejection(payload)
-    assert payload["data"] == {"take": "ok"}
+    assert payload["data"] == {"take": str(members)}
     assert _scalar_parses
     assert all(parsed == members for parsed in _scalar_parses)
 

@@ -40,8 +40,8 @@ import copy
 import inspect
 import json
 import threading
-from collections.abc import Iterator
-from typing import Protocol
+from collections.abc import Callable, Iterator, Mapping
+from typing import Protocol, TypeVar
 
 import pytest
 
@@ -51,6 +51,8 @@ class _Closeable(Protocol):
 
     def close(self) -> None: ...
 
+
+_Wrapper = TypeVar("_Wrapper")
 
 #: Raw psycopg connections opened from an executor thread or under a running
 #: event loop - the handles main-thread ``close_all()`` can never reach.
@@ -66,7 +68,7 @@ _STRAY_REGISTRY_ATTR = "_dst_stray_connection_registry"
 
 
 def _opened_outside_main_thread_sync_context() -> bool:
-    """True when the caller cannot be closed by main-thread teardown."""
+    """Return whether the caller cannot be closed by main-thread teardown."""
     if threading.current_thread() is not threading.main_thread():
         return True
     try:
@@ -74,6 +76,18 @@ def _opened_outside_main_thread_sync_context() -> bool:
     except RuntimeError:
         return False
     return True
+
+
+def _open_tracked(
+    original: Callable[[_Wrapper, object], _Closeable],
+    wrapper: _Wrapper,
+    conn_params: object,
+) -> _Closeable:
+    """Open a connection through ``original``, recording it when it is a stray one."""
+    connection = original(wrapper, conn_params)
+    if _opened_outside_main_thread_sync_context():
+        _stray_postgres_connections.append(connection)
+    return connection
 
 
 def _install_postgres_connection_tracking() -> None:
@@ -97,10 +111,7 @@ def _install_postgres_connection_tracking() -> None:
         self: postgres_base.DatabaseWrapper,
         conn_params: object,
     ) -> _Closeable:
-        connection = original(self, conn_params)
-        if _opened_outside_main_thread_sync_context():
-            _stray_postgres_connections.append(connection)
-        return connection
+        return _open_tracked(original, self, conn_params)
 
     postgres_base.DatabaseWrapper.get_new_connection = _tracking_get_new_connection
     # The backend module declares no such attribute; it is the registry's shared
@@ -163,7 +174,9 @@ def _uses_db_and_is_transactional(item: pytest.Item) -> tuple[bool, bool]:
     if marker is None:
         uses_db = transactional = False
     else:
-        transaction, reset_sequences, *_ = _django_db_signature(*marker.args, **marker.kwargs)
+        marker_args: tuple[object, ...] = marker.args
+        marker_kwargs: Mapping[str, object] = marker.kwargs
+        transaction, reset_sequences, *_ = _django_db_signature(*marker_args, **marker_kwargs)
         uses_db = True
         transactional = bool(transaction or reset_sequences)
     fixtures = getattr(item, "fixturenames", ())
@@ -196,7 +209,7 @@ def _refuse_nontransactional_async_db_tests(items: list[pytest.Item]) -> None:
 
     offenders: list[str] = []
     for item in items:
-        function = getattr(item, "obj", None)
+        function: object = getattr(item, "obj", None)
         if function is None or not inspect.iscoroutinefunction(function):
             continue
         test_class = getattr(item, "cls", None)
@@ -267,12 +280,12 @@ _MAX_NESTING_PROBE_DEPTH = 262_144
 
 
 def _nested_array_text(depth: int) -> str:
-    """A syntactically valid JSON array nested ``depth`` levels deep."""
+    """Return a syntactically valid JSON array nested ``depth`` levels deep."""
     return "[" * depth + "]" * depth
 
 
 def _json_loads_overflow_depth() -> int:
-    """The shallowest probed depth whose parse overflows ``json.loads``."""
+    """Return the shallowest probed depth whose parse overflows ``json.loads``."""
     depth = 1024
     while depth <= _MAX_NESTING_PROBE_DEPTH:
         try:
@@ -291,7 +304,7 @@ def _json_loads_overflow_depth() -> int:
 
 
 def _deepcopy_overflow_depth() -> int:
-    """The shallowest probed depth whose copy overflows ``copy.deepcopy``."""
+    """Return the shallowest probed depth whose copy overflows ``copy.deepcopy``."""
     depth = 64
     while depth <= _MAX_NESTING_PROBE_DEPTH:
         nested: list[object] = []
@@ -312,7 +325,7 @@ def _deepcopy_overflow_depth() -> int:
 
 @pytest.fixture(scope="session")
 def pathological_json_text() -> str:
-    """A JSON array this interpreter's ``json.loads`` answers with ``RecursionError``.
+    """Return a JSON array this interpreter's ``json.loads`` answers with ``RecursionError``.
 
     The input for the ``parse_json`` / ``parse_query_params`` depth guards: the
     document is syntactically valid, so nothing short of the parser's own stack
@@ -329,7 +342,7 @@ def pathological_json_body(pathological_json_text: str) -> bytes:
 
 @pytest.fixture(scope="session")
 def deepcopy_overflow_operations_text() -> str:
-    """An ``operations`` document ``json.loads`` accepts but ``copy.deepcopy`` cannot walk.
+    """Return an ``operations`` document ``json.loads`` accepts but ``copy.deepcopy`` cannot walk.
 
     The multipart guard needs the WINDOW between the two bounds: the envelope
     check must pass the document as a well-typed object, and the upload

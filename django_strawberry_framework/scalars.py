@@ -27,7 +27,7 @@ from strawberry.file_uploads.scalars import UploadDefinition as _UploadDefinitio
 from strawberry.schema.config import StrawberryConfig
 from strawberry.types.scalar import ScalarDefinition
 
-from .exceptions import _safe_arg_repr, _safe_type_name
+from .exceptions import _safe_arg_repr, _safe_attr, _safe_type_name
 
 # Strawberry binds its ``UploadDefinition`` without an annotation; the re-export
 # declares the ``ScalarDefinition`` that ``strawberry.scalar(...)`` returns.
@@ -199,10 +199,7 @@ def strawberry_config(
 
 def _safe_scalar_map_key_label(key: object) -> str:
     """Describe a collision key without trusting consumer-defined metadata."""
-    try:
-        name = getattr(key, "__name__", None)
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        name = None
+    name = _safe_attr(key, "__name__")
     # A ``__name__`` that is a ``str`` subclass is read through the base
     # ``str`` slot (parity with ``exceptions.py::_safe_type_name``): handing
     # the subclass onward would let its ``__str__`` / ``__format__`` run -

@@ -129,6 +129,11 @@ from django_strawberry_framework.utils.querysets import (
     visible_related_objects,
 )
 from django_strawberry_framework.utils.write_transaction import write_pipeline
+from tests._django_private import (
+    has_constructor_args,
+    has_filtered_relations,
+    has_resolved_condition,
+)
 from tests._idioms import is_object_list, module_binding
 
 if TYPE_CHECKING:
@@ -193,10 +198,8 @@ def _as_async_hook_type(cls: type[object]) -> type[DjangoType]:
     return cls  # pyright: ignore[reportReturnType]
 
 
-@pytest.fixture(autouse=True)
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def _isolate_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
-    """Every type declared here registers; the shared fixture clears it after each test."""
+# Every type declared here registers; the shared fixture clears it after each test.
+pytestmark = pytest.mark.usefixtures("isolate_global_registry")
 
 
 def _declared_type(
@@ -3404,10 +3407,8 @@ def test_join_defect_shadowed_filtered_relation_fails_closed():
 def test_join_defect_unresolved_filtered_relation_is_clean():
     """A genuine join whose ``filtered_relation`` is not yet resolved carries no defect."""
     _frq, alias, join = _filtered_relation_join()
-    assert join.filtered_relation is not None
-    # basedpyright: django-stubs omits FilteredRelation.resolved_condition, reported as an unknown
-    # attribute
-    join.filtered_relation.resolved_condition = None  # pyright: ignore[reportAttributeAccessIssue]
+    assert has_resolved_condition(join.filtered_relation)
+    join.filtered_relation.resolved_condition = None
     assert _join_defect(join, alias, _GraphWalk()) is None
 
 
@@ -3963,8 +3964,8 @@ def test_hostile_filtered_relation_payload_fails_closed():
     """A ``_filtered_relations`` value must be a genuine, unshadowed Django object."""
     source = Category.objects.filter(is_private=False)
     str(source.query)
-    # basedpyright: django-stubs omits Query._filtered_relations, reported as an unknown attribute
-    source.query._filtered_relations = {"rel": object()}  # pyright: ignore[reportAttributeAccessIssue]
+    assert has_filtered_relations(source.query)
+    source.query._filtered_relations = {"rel": object()}
     assert _query_container_defect(source.query) == (
         "untrusted",
         "query _filtered_relations['rel'] is a object",
@@ -3973,8 +3974,7 @@ def test_hostile_filtered_relation_payload_fails_closed():
     # basedpyright: the instance-level as_sql shadow is the hostile input under test; the stubs
     # declare a method there
     relation.as_sql = _noop  # must never run  # pyright: ignore[reportAttributeAccessIssue]
-    # basedpyright: django-stubs omits Query._filtered_relations, reported as an unknown attribute
-    source.query._filtered_relations = {"rel": relation}  # pyright: ignore[reportAttributeAccessIssue]
+    source.query._filtered_relations = {"rel": relation}
     assert _query_container_defect(source.query) == (
         "untrusted",
         "query _filtered_relations['rel'] shadows the 'as_sql' method",
@@ -4096,23 +4096,21 @@ def test_sealed_query_shares_no_ast_node_with_the_candidate():
     assert isinstance(sealed.query.annotations["bonus"], RawSQL)
     assert isinstance(source.query.annotations["bonus"], RawSQL)
     assert sealed.query.annotations["bonus"].params is not source.query.annotations["bonus"].params
+    assert has_filtered_relations(sealed.query)
+    assert has_filtered_relations(source.query)
     assert (
-        # basedpyright: django-stubs omits Query._filtered_relations, reported as an unknown
-        # attribute
-        sealed.query._filtered_relations["visible"]  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
-        is not source.query._filtered_relations["visible"]  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+        sealed.query._filtered_relations["visible"]
+        is not (source.query._filtered_relations["visible"])
     )
     sealed_join = _join_with_filtered_relation(sealed.query)
     source_join = _join_with_filtered_relation(source.query)
     assert sealed_join is not source_join
     assert sealed_join.filtered_relation is not source_join.filtered_relation
-    assert sealed_join.filtered_relation is not None
-    assert source_join.filtered_relation is not None
+    assert has_resolved_condition(sealed_join.filtered_relation)
+    assert has_resolved_condition(source_join.filtered_relation)
     assert (
-        # basedpyright: django-stubs omits FilteredRelation.resolved_condition, reported as an
-        # unknown attribute
-        sealed_join.filtered_relation.resolved_condition  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
-        is not source_join.filtered_relation.resolved_condition  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+        sealed_join.filtered_relation.resolved_condition
+        is not source_join.filtered_relation.resolved_condition
     )
 
 
@@ -4179,9 +4177,8 @@ def test_reconstruction_hostile_mapping_key_fails_closed():
         """Hashable, but neither inert plain data nor trusted schema."""
 
     annotation = RawSQL("1", [], output_field=models.IntegerField())
-    # basedpyright: django-stubs omits the deconstructible _constructor_args slot; the planted key
-    # is the hostile input under test
-    annotation._constructor_args = ((), {_HostileKey(): 1})  # pyright: ignore[reportAttributeAccessIssue]
+    assert has_constructor_args(annotation)
+    annotation._constructor_args = ((), {_HostileKey(): 1})
     source = Category.objects.filter(is_private=False)
     source.query.annotations["boom"] = annotation
     sealed, defect = _seal_or_defect(source, Category, None)
@@ -6156,7 +6153,6 @@ def test_validate_post_orderset_result_serves_a_combined_result_and_refuses_a_lo
 
 
 @pytest.mark.django_db
-@pytest.mark.usefixtures("isolate_global_registry")
 def test_validate_post_orderset_result_refuses_a_combined_result_ordered_through_a_hiding_type():
     """A related order term on a combinator is a lost property, refused like any other.
 

@@ -70,6 +70,7 @@ branch to keep in parity.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, TypeVar
@@ -190,7 +191,7 @@ def _masked(error: object, policy: ErrorPolicy) -> GraphQLError:
 
 
 def _degraded(policy: ErrorPolicy) -> GraphQLError:
-    """The floor: the policy message alone, with no location and no correlation id.
+    """Build the floor: the policy message alone, with no location and no correlation id.
 
     Returned only when masking one error RAISED - a hostile ``original_error``
     property, an ``extensions`` map that misbehaves, an error object that is not
@@ -222,7 +223,7 @@ def _degraded(policy: ErrorPolicy) -> GraphQLError:
 
 
 def degraded_result(policy: ErrorPolicy) -> StrawberryExecutionResult:
-    """The WHOLE-RESPONSE floor: the policy message alone, and no data.
+    """Build the WHOLE-RESPONSE floor: the policy message alone, and no data.
 
     Every seam that discovers it cannot produce a safe response lands here, and
     there is one of these rather than one per seam so that a client meets the
@@ -289,7 +290,7 @@ def is_maskable_result(
 
 
 def schema_error_policy(schema: object) -> ErrorPolicy:
-    """The resolved policy carried by ``schema``, or the package default.
+    """Return the resolved policy carried by ``schema``, or the package default.
 
     A plain ``strawberry.Schema`` a consumer wired the extension into by hand has
     no ``error_policy`` attribute; that is a supported standalone use, so it falls
@@ -406,7 +407,7 @@ class DjangoErrorPolicyExtension(_OperationBoundExtension[OperationState]):
     """
 
     def _policy(self) -> ErrorPolicy:
-        """The schema's resolved policy, or the package default."""
+        """Return the schema's resolved policy, or the package default."""
         schema = getattr(getattr(self, "execution_context", None), "schema", None)
         return schema_error_policy(schema)
 
@@ -475,8 +476,7 @@ class DjangoErrorPolicyExtension(_OperationBoundExtension[OperationState]):
                 policy = self._policy()
             except Exception:  # noqa: BLE001 - boundary fails closed
                 policy = _PACKAGE_ERROR_POLICY
-            try:
+            # Last resort: a teardown must not raise.
+            with contextlib.suppress(Exception):
                 if hasattr(self, "execution_context") and self.execution_context is not None:
                     self.execution_context.result = degraded_result(policy)
-            except Exception:  # noqa: BLE001, S110 - last resort, a teardown must not raise
-                pass

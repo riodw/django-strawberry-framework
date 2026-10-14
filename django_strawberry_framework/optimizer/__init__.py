@@ -16,11 +16,10 @@ module paths (``optimizer.plans`` and ``optimizer.walker``) and are
 not re-exported here - they are internal implementation details
 consumed by ``extension.py`` and tests, not consumer-facing API.
 
-The canonical ``logger`` is declared at the top-level package
-(``django_strawberry_framework/__init__.py``); this module re-exports
-it so the ``"django_strawberry_framework"`` literal lives in exactly
-one source location and future subpackages (filters, orders,
-aggregates) can pick it up the same way.
+The canonical ``logger`` is declared in ``django_strawberry_framework/_logger.py``
+and re-exported by the top-level package; this module re-exports it in turn
+so the logger name lives in exactly one source location and future
+subpackages (filters, orders, aggregates) can pick it up the same way.
 """
 
 from .. import logger

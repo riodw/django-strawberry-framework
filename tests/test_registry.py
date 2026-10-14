@@ -27,9 +27,9 @@ DjangoType-wrapper collision and enum-caching through
 """
 
 import functools
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from enum import Enum
-from typing import Any
+from typing import ParamSpec, TypeVar
 
 import pytest
 import strawberry
@@ -604,6 +604,21 @@ def test_global_registry_is_a_type_registry_instance():
     assert issubclass(Category, models.Model)
 
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def _recording_first_argument(fn: Callable[_P, _R], calls: list[object]) -> Callable[_P, _R]:
+    """Wrap ``fn`` so each call appends its first positional argument to ``calls``."""
+
+    @functools.wraps(fn)
+    def spy(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        calls.append(args[0])
+        return fn(*args, **kwargs)
+
+    return spy
+
+
 def test_finalize_is_idempotent(monkeypatch: pytest.MonkeyPatch):
     """Calling finalize twice mutates type classes only once.
 
@@ -611,15 +626,8 @@ def test_finalize_is_idempotent(monkeypatch: pytest.MonkeyPatch):
     A live request never sees a half-finalized registry. Live sibling for a successful compose:
     ``examples/fakeshop/test_query/test_schema_composition_api.py``.
     """
-    calls: list[type[object]] = []
-    original_type = strawberry.type
-
-    # basedpyright: verbatim forward to strawberry.type; object fails its typed params
-    def counting_type(type_cls: type[object], **kwargs: Any):  # pyright: ignore[reportExplicitAny]
-        calls.append(type_cls)
-        return original_type(type_cls, **kwargs)
-
-    monkeypatch.setattr(strawberry, "type", counting_type)
+    calls: list[object] = []
+    monkeypatch.setattr(strawberry, "type", _recording_first_argument(strawberry.type, calls))
 
     class CategoryType(DjangoType):
         class Meta:

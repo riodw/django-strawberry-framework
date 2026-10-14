@@ -1014,13 +1014,13 @@ def test_plain_form_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.Mon
         _mutation_cls: object,
         _info: object,
         _data: object,
-        id: object,  # noqa: A002
+        id_: object,
         *,
         decode_step: object,
         write_step: object,
         tail_step: object = None,
     ):
-        seen["id"] = id
+        seen["id"] = id_
         seen["decode_step"] = decode_step
         seen["write_step"] = write_step
         seen["tail_step"] = tail_step
@@ -1039,7 +1039,7 @@ def test_plain_form_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.Mon
         Submit,
         info=unread_info(),
         data="data",
-        id="unset-id",
+        id_="unset-id",
     )
     assert result == "ridden"
     assert seen["id"] == "unset-id"

@@ -52,7 +52,7 @@ import hashlib
 import os
 import sys
 from collections import Counter, defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -496,8 +496,9 @@ def _doc_summary(
 
 def _decorators(node: ast.AST) -> tuple[str, ...]:
     """Return rendered decorators for a class or function definition."""
-    decorator_list = getattr(node, "decorator_list", ())
-    return tuple(ast.unparse(decorator) for decorator in decorator_list)
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return ()
+    return tuple(ast.unparse(decorator) for decorator in node.decorator_list)
 
 
 def _signature(node: ast.AST) -> str:
@@ -517,6 +518,10 @@ def _signature(node: ast.AST) -> str:
         )
         return f"({', '.join(bases)})" if bases else ""
     return ""
+
+
+# ``ast.iter_fields`` yields ``Any`` values; this alias hands callers ``object`` to narrow.
+_iter_fields: Callable[[ast.AST], Iterator[tuple[str, object]]] = ast.iter_fields
 
 
 def _is_list(value: object) -> TypeIs[list[object]]:
@@ -712,7 +717,7 @@ class _LiteralVisitor(ast.NodeVisitor):
 
     def _visit_definition(self, node: ast.AST) -> None:
         """Visit every AST field while omitting only the leading docstring."""
-        for field, value in ast.iter_fields(node):
+        for field, value in _iter_fields(node):
             if field == "body" and _is_list(value):
                 for index, statement in enumerate(value):
                     if not isinstance(statement, ast.AST) or (
@@ -1138,10 +1143,10 @@ def _render_evidence(
     """Render bounded location/text evidence with an omission notice."""
     lines: list[str] = []
     for record in records[:maximum]:
-        text = getattr(record, "text", None)
+        text = None if isinstance(record, LiteralRecord) else record.text
         location = f"{record.path.as_posix()}:{record.lineno}"
         suffix = f" -- {_code_span(text)}" if text else ""
-        kind = getattr(record, "kind", None)
+        kind = record.kind if isinstance(record, ReferenceRecord) else None
         kind_prefix = f"{kind}: " if kind else ""
         lines.append(f"- {kind_prefix}{_code_span(location)}{suffix}")
     if len(records) > maximum:
@@ -1512,13 +1517,50 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _effective_excludes(args: argparse.Namespace) -> tuple[str, ...]:
+class _Args(argparse.Namespace):
+    """The parsed command line, typed field by field after ``_build_parser``'s arguments.
+
+    Every subcommand reads ``command``; each other field is set only by the subcommands that
+    declare it (``plan``, ``audit`` and ``check``), so a handler reads only its own.
+    """
+
+    command: str
+    root: Path
+    # plan
+    package_root: Path
+    target_release: str | None
+    mode: str
+    output: Path | None
+    force: bool
+    generated_date: str | None
+    # audit and check (``_add_target_arguments``)
+    target: list[Path]
+    exclude: list[str]
+    no_default_excludes: bool
+    include_nested: bool
+    include_constants: bool
+    # audit
+    scan_root: list[Path]
+    context: list[Path]
+    search_term: list[str]
+    case_sensitive: bool
+    duplicate_min_nodes: int
+    literal_min_length: int
+    max_evidence: int
+    stdout: bool
+    # check
+    review: Path
+    require_topic: list[str]
+    case_sensitive_topics: bool
+
+
+def _effective_excludes(args: _Args) -> tuple[str, ...]:
     """Return default plus caller-supplied exclusion patterns."""
     defaults = () if args.no_default_excludes else DEFAULT_EXCLUDES
     return (*defaults, *args.exclude)
 
 
-def _run_plan(args: argparse.Namespace) -> int:
+def _run_plan(args: _Args) -> int:
     """Generate a fresh plan from current package source."""
     root = args.root.resolve()
     package_root = _resolve_path(args.package_root, root)
@@ -1547,7 +1589,7 @@ def _run_plan(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_audit(args: argparse.Namespace) -> int:
+def _run_audit(args: _Args) -> int:
     """Execute dossier generation."""
     if args.stdout == (args.output is not None):
         raise ValueError("pass exactly one of --output or --stdout")
@@ -1597,7 +1639,7 @@ def _run_audit(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_check(args: argparse.Namespace) -> int:
+def _run_check(args: _Args) -> int:
     """Execute completed-review coverage checks."""
     result = check_review(
         root=args.root,
@@ -1630,7 +1672,7 @@ def _run_check(args: argparse.Namespace) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the selected DRY toolkit mode and return a process exit code."""
     raw_argv = sys.argv[1:] if argv is None else argv
-    args = _build_parser().parse_args(raw_argv)
+    args = _build_parser().parse_args(raw_argv, namespace=_Args())
     try:
         if args.command == "plan":
             return _run_plan(args)

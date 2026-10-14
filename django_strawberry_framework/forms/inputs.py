@@ -55,7 +55,10 @@ from django.utils.choices import CallableChoiceIterator
 from ..exceptions import (
     ConfigurationError,
     _safe_arg_repr,
+    _safe_attr,
+    _safe_call,
     _safe_class_name,
+    _safe_predicate,
     _safe_text,
     _safe_type_name,
 )
@@ -282,12 +285,8 @@ def _form_field_basis(
             invalid_name = True
         if invalid_name:
             invalid_names.append(name)
-        try:
-            # basedpyright: trust boundary: the same hook can map a name to any value
-            invalid_field = not isinstance(field, forms.Field)  # pyright: ignore[reportUnnecessaryIsInstance]
-        except BaseException:  # noqa: BLE001 - hostile object, contained by design
-            invalid_field = True
-        if invalid_field:
+        # The same hook can map a name to any value.
+        if not _safe_predicate(isinstance, field, forms.Field):
             invalid_fields.append(name)
     if invalid_names or invalid_fields:
         # Each entry renders through ``_safe_arg_repr``: this message is assembled
@@ -332,13 +331,10 @@ def _related_model_of(field: forms.Field) -> object:
     and the build re-reads ``field.queryset`` unguarded where the field is
     actually emitted.
     """
-    try:
-        # A deliberate probe of an attribute only relation fields carry: a scalar
-        # field's ``AttributeError`` projects ``None`` below, exactly like a hostile
-        # attribute that raises.
-        return getattr(getattr(field, "queryset"), "model", None)  # noqa: B009
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        return None
+    # A deliberate probe of an attribute only relation fields carry: a scalar
+    # field's missing ``queryset`` projects ``None``, exactly like a hostile
+    # attribute that raises.
+    return _safe_attr(_safe_attr(field, "queryset"), "model")
 
 
 def _form_basis_content_identity(
@@ -745,10 +741,7 @@ def _choice_narrowing_identity(
     """
     if column is None:
         return None
-    try:
-        narrowing = _form_choice_narrowing(name, field, column, form_class)
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        return None
+    narrowing = _safe_call(_form_choice_narrowing, None, name, field, column, form_class)
     if narrowing is None:
         return None
     pairs, writes_list = narrowing

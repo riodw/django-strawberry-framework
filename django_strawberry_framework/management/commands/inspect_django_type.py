@@ -76,6 +76,13 @@ _RELAY_PK_CONVERTER = "relay.Node id"
 _DEFAULT_NAME_CONVERTER = NameConverter()
 _ScalarNamer = Callable[[object], str]
 
+# The origins ``typing.get_origin`` reports for a union annotation: ``types.UnionType`` for the
+# ``T | None`` spelling, ``typing.Union`` (read as a value) for ``Optional[T]`` / ``Union[...]``
+# below 3.14; no ``|`` spelling names the latter object
+# basedpyright: ``typing.Union`` is deprecated as a value from 3.14, but it is the one origin
+# the older spellings report
+_UNION_ORIGINS = (typing.Union, pytypes.UnionType)  # pyright: ignore[reportDeprecated]
+
 # Friendly converter-column labels for relation rows, mirroring the spec's
 # illustrative output (``M2M`` / ``forward FK`` / ``reverse FK``); a forward
 # ``ForeignObject`` that is not a ``ForeignKey`` reads ``forward ForeignObject``.
@@ -491,9 +498,7 @@ def _yes_no(*, value: bool) -> str:
 
 def _annotation_is_optional(annotation: object) -> bool:
     """Return whether ``annotation`` is a ``T | None`` union."""
-    # basedpyright: ``typing.Union`` read as a value, the origin ``get_origin`` reports for an
-    # ``Optional[T]`` / ``Union[...]`` spelling below 3.14; no ``|`` spelling names that object
-    if typing.get_origin(annotation) in (typing.Union, pytypes.UnionType):  # pyright: ignore[reportDeprecated]
+    if typing.get_origin(annotation) in _UNION_ORIGINS:
         return type(None) in typing.get_args(annotation)
     return False
 
@@ -679,9 +684,7 @@ def _render_annotation(annotation: object, scalar_namer: _ScalarNamer = _scalar_
     (the many-side list itself is non-null and its elements are non-null).
     """
     origin = typing.get_origin(annotation)
-    # basedpyright: ``typing.Union`` read as a value, the origin ``get_origin`` reports for an
-    # ``Optional[T]`` / ``Union[...]`` spelling below 3.14; no ``|`` spelling names that object
-    if origin in (typing.Union, pytypes.UnionType):  # pyright: ignore[reportDeprecated]
+    if origin in _UNION_ORIGINS:
         union_args: tuple[object, ...] = typing.get_args(annotation)
         args = [a for a in union_args if a is not type(None)]
         if len(args) == 1:

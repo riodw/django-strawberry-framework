@@ -808,8 +808,8 @@ failures logs two exceptions; a single per-operation id would make the client's 
 ambiguous about which of them they hit, which is the exact question the id exists to answer.
 
 **The log destination is pinned**: the package logger `django_strawberry_framework` (the
-`logger` in `django_strawberry_framework/__init__.py`), at `ERROR`, with `exc_info` set to
-the original exception, and **the correlation id in the message text** so a deployment with
+`logger` declared in `django_strawberry_framework/_logger.py` and re-exported by the package
+`__init__.py`), at `ERROR`, with `exc_info` set to the original exception, and **the correlation id in the message text** so a deployment with
 plain-text logging and no structured `extra` handling still resolves a client's report with
 one `grep`.
 

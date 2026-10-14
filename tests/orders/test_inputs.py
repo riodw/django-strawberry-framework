@@ -35,19 +35,12 @@ from tests._definition import make_definition
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
 from tests._soft_dependency import blocked_modules
 
-
-@pytest.fixture(autouse=True)
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def _isolate_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
-    """Clear the global registry and input ledgers around every test here.
-
-    The module declares function-scope ``OrderSet`` subclasses whose
-    class-derived input type names (``BookOrderInputType``,
-    ``ShelfOrderInputType``) are the same names the shipped fakeshop
-    ordersets claim. Without the clear, a test that runs after anything
-    that built the fakeshop schema on the same worker meets a registry
-    where those names are already owned, and the collision guard fires.
-    """
+# The module declares function-scope ``OrderSet`` subclasses whose class-derived
+# input type names (``BookOrderInputType``, ``ShelfOrderInputType``) are the same
+# names the shipped fakeshop ordersets claim. Without the registry clear, a test
+# that runs after anything that built the fakeshop schema on the same worker meets
+# a registry where those names are already owned, and the collision guard fires.
+pytestmark = pytest.mark.usefixtures("isolate_global_registry")
 
 
 # ---------------------------------------------------------------------------

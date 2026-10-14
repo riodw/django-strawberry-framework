@@ -77,7 +77,7 @@ from django_strawberry_framework.rest_framework.serializer_converter import (
 )
 from django_strawberry_framework.scalars import Upload
 from django_strawberry_framework.utils.inputs import normalize_field_name_sequence
-from tests._idioms import bind_unparented, definition_raises
+from tests._idioms import ModelSerializerBase, bind_unparented, definition_raises
 
 if TYPE_CHECKING:
     from typing import TypeAlias, TypeVar
@@ -228,9 +228,8 @@ def _make_relay_target():
 def _item_serializer():
     """A ``ModelSerializer`` over products ``Item`` (name + FK category + is_private)."""
 
-    class ItemSer(serializers.ModelSerializer[product_models.Item]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class ItemSer(ModelSerializerBase[product_models.Item]):
+        class Meta:
             model = product_models.Item
             fields = ("name", "category", "is_private")
 
@@ -330,13 +329,12 @@ def test_build_serializer_inputs_materializes_one_shot_narrowing(
     """The create and partial builds both receive one-shot field selectors."""
     _register_products_types()
 
-    names = ("name",) if selector == "fields" else ("category",)
+    narrowed = iter(("name",) if selector == "fields" else ("category",))
     create_cls, _, partial_cls, _ = _build_serializer_inputs(
         _item_serializer(),
         guard_required=False,
-        # basedpyright: a dict splat is checked against every keyword of _build_serializer_inputs;
-        # the parametrized key only ever names fields or exclude, which take object
-        **{selector: iter(names)},  # pyright: ignore[reportArgumentType]
+        fields=narrowed if selector == "fields" else None,
+        exclude=narrowed if selector == "exclude" else None,
     )
     assert set(_field_map(create_cls)) == expected
     assert set(_field_map(partial_cls)) == expected
@@ -462,9 +460,8 @@ def test_choices_modelserializer_field_resolves_to_read_side_enum():
 
     assert registry.get(Book) is BookType
 
-    class BookStatusSer(serializers.ModelSerializer[Book]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class BookStatusSer(ModelSerializerBase[Book]):
+        class Meta:
             model = Book
             fields = ("circulation_status",)
 
@@ -488,9 +485,8 @@ def test_get_fields_hook_allow_blank_over_strict_choice_column_refused():
     """
     from apps.library.models import Book
 
-    class HookBlankSer(serializers.ModelSerializer[Book]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class HookBlankSer(ModelSerializerBase[Book]):
+        class Meta:
             model = Book
             fields = ("circulation_status",)
 
@@ -1096,12 +1092,11 @@ def test_raise_writable_source_ownership_errors_star_and_collision():
 def _name_alias_serializer() -> type[serializers.ModelSerializer[product_models.Item]]:
     """``name`` beside ``alias`` (``source="name"``): one spelling, two writers."""
 
-    class DoubleWriteSer(serializers.ModelSerializer[product_models.Item]):
+    class DoubleWriteSer(ModelSerializerBase[product_models.Item]):
         name = serializers.CharField()
         alias = serializers.CharField(source="name")
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("name", "alias")
 
@@ -1111,14 +1106,13 @@ def _name_alias_serializer() -> type[serializers.ModelSerializer[product_models.
 def _category_attname_alias_serializer() -> type[serializers.ModelSerializer[product_models.Item]]:
     """``category`` beside ``cat`` (``source="category_id"``): two spellings of one FK."""
 
-    class AttnameWriteSer(serializers.ModelSerializer[product_models.Item]):
+    class AttnameWriteSer(ModelSerializerBase[product_models.Item]):
         cat: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
             source="category_id",
             queryset=product_models.Category.objects.all(),
         )
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("name", "category", "cat")
 
@@ -1128,12 +1122,11 @@ def _category_attname_alias_serializer() -> type[serializers.ModelSerializer[pro
 def _item_pk_alias_serializer() -> type[serializers.ModelSerializer[product_models.Item]]:
     """A writable ``id`` beside ``ident`` (``source="pk"``): two spellings of one primary key."""
 
-    class PkAliasWriteSer(serializers.ModelSerializer[product_models.Item]):
+    class PkAliasWriteSer(ModelSerializerBase[product_models.Item]):
         id = serializers.IntegerField()
         ident = serializers.IntegerField(source="pk")
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("id", "ident")
 
@@ -1174,12 +1167,11 @@ def test_read_only_field_sharing_source_with_writable_is_accepted():
     """A ``read_only`` field sharing a ``source`` with a writable one is accepted (read-only dropped)."""
     _register_products_types()
 
-    class MixedSer(serializers.ModelSerializer[product_models.Item]):
+    class MixedSer(ModelSerializerBase[product_models.Item]):
         name = serializers.CharField()
         name_echo = serializers.CharField(source="name", read_only=True)
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("name", "name_echo")
 
@@ -1192,7 +1184,7 @@ def test_read_only_relation_bound_to_its_attname_is_accepted():
     """A ``read_only`` relation over an FK ``attname`` builds: it is dropped before the converter."""
     _register_products_types()
 
-    class AttnameEchoSer(serializers.ModelSerializer[product_models.Item]):
+    class AttnameEchoSer(ModelSerializerBase[product_models.Item]):
         cat: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
             source="category_id",
             read_only=True,
@@ -1201,8 +1193,7 @@ def test_read_only_relation_bound_to_its_attname_is_accepted():
             read_only=True,
         )
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = (
                 "name",
@@ -1262,7 +1253,7 @@ def test_multiple_schema_time_problems_aggregate_into_one_error():
         def to_representation(self, value: object):  # never reached in conversion.
             return value
 
-    class MultiBadSer(serializers.ModelSerializer[product_models.Item]):
+    class MultiBadSer(ModelSerializerBase[product_models.Item]):
         # A non-PK relation (unsupported) ...
         slug_rel: _SlugRelation[product_models.Category] = serializers.SlugRelatedField(
             slug_field="name",
@@ -1271,8 +1262,7 @@ def test_multiple_schema_time_problems_aggregate_into_one_error():
         # ... and an unmapped custom field (unsupported) - two distinct problems.
         weird = CustomField()
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("slug_rel", "weird")
 
@@ -1289,14 +1279,13 @@ def test_single_schema_time_problem_raises_verbatim():
     """A SINGLE problem is raised verbatim (no aggregate header), preserving the precise message (#5)."""
     _register_products_types()
 
-    class OneBadSer(serializers.ModelSerializer[product_models.Item]):
+    class OneBadSer(ModelSerializerBase[product_models.Item]):
         slug_rel: _SlugRelation[product_models.Category] = serializers.SlugRelatedField(
             slug_field="name",
             queryset=product_models.Category.objects.all(),
         )
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("slug_rel",)
 

@@ -34,10 +34,10 @@ import sys
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, get_args
+from typing import TYPE_CHECKING, Literal, Protocol, get_args
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Mapping, Sequence
+    from collections.abc import Callable, Generator, Mapping, Sequence
 
     from django.test.utils import CaptureQueriesContext
     from typing_extensions import TypeIs
@@ -51,6 +51,23 @@ BENCH_COMMON = Path(__file__).resolve()
 
 BootstrapMode = Literal["sqlite-memory", "pg"]
 BOOTSTRAP_MODES: tuple[str, ...] = get_args(BootstrapMode)
+
+# ``json.loads`` and ``getattr`` return ``Any``; these aliases hand callers an ``object`` to narrow.
+_loads: Callable[[str], object] = json.loads
+_attr: Callable[[object, str], object] = getattr
+attr_or: Callable[[object, str, object], object] = getattr
+
+
+class _SettingsDictOwner(Protocol):
+    """A Django database wrapper, seen through its ``settings_dict`` as plain ``object`` values."""
+
+    @property
+    def settings_dict(self) -> Mapping[str, object]: ...
+
+
+def database_name(connection: _SettingsDictOwner) -> object:
+    """Return the ``NAME`` a database connection is configured with."""
+    return connection.settings_dict["NAME"]
 
 
 def memory_db_name(alias: str) -> str:
@@ -186,8 +203,8 @@ def package_digest(package_root: str | Path) -> str:
 
 def running_script() -> Path | None:
     """Return the resolved path of the ``__main__`` script, or ``None`` without one."""
-    main_file = getattr(sys.modules.get("__main__"), "__file__", None)
-    return Path(main_file).resolve() if main_file else None
+    main_file = attr_or(sys.modules.get("__main__"), "__file__", None)
+    return Path(main_file).resolve() if isinstance(main_file, str) and main_file else None
 
 
 def instrument_ids(script: Path | None, root: Path = REPO_ROOT) -> dict[str, str]:
@@ -303,8 +320,12 @@ def bootstrap_fakeshop_django(mode: BootstrapMode) -> BenchProvenance:
     if mode == "sqlite-memory":
         from django.conf import settings
 
-        for alias in list(settings.DATABASES):
-            settings.DATABASES[alias] = {
+        databases = _attr(settings, "DATABASES")
+        if not _is_json_object(databases):
+            msg = "settings.DATABASES must be a mapping of aliases to database settings"
+            raise TypeError(msg)
+        for alias in list(databases):
+            databases[alias] = {
                 "ENGINE": "django.db.backends.sqlite3",
                 "NAME": memory_db_name(alias),
             }
@@ -328,7 +349,7 @@ def bootstrap_fakeshop_django(mode: BootstrapMode) -> BenchProvenance:
         settings_module=os.environ["DJANGO_SETTINGS_MODULE"],
         db_alias=connection.alias,
         db_vendor=connection.vendor,
-        db_name=str(connection.settings_dict["NAME"]),
+        db_name=str(database_name(connection)),
         python=platform.python_version(),
         django=django.get_version(),
         strawberry=_distribution_version("strawberry-graphql"),
@@ -337,7 +358,7 @@ def bootstrap_fakeshop_django(mode: BootstrapMode) -> BenchProvenance:
     print("\n".join(provenance.lines()), flush=True)
     assert_package_in_tree(provenance.package_file)
     for alias in connections:
-        name = connections[alias].settings_dict["NAME"]
+        name = database_name(connections[alias])
         assert_not_tracked_db(name)
         if mode == "sqlite-memory" and not is_memory_db_name(name):
             msg = f"sqlite-memory mode resolved alias {alias!r} to NAME {name}, not in-memory"
@@ -504,7 +525,7 @@ def parse_variables(raw: str | None) -> dict[str, object] | None:
     """
     if raw is None:
         return None
-    value: object = json.loads(raw)
+    value = _loads(raw)
     if not _is_json_object(value):
         msg = f"--variables must be a JSON object, got {type(value).__name__}"
         raise TypeError(msg)

@@ -305,8 +305,7 @@ def _resolve_id_default(
     cls: type[relay.Node],
     root: models.Model,
     *,
-    # basedpyright: Strawberry's Relay machinery calls ``resolve_id(root, info=info)`` by keyword
-    info: Info[object, object],  # pyright: ignore[reportUnusedParameter]  # noqa: ARG001
+    info: Info[object, object],
 ) -> str:
     """Default ``Node.resolve_id`` with a ``__dict__`` cache check.
 
@@ -330,6 +329,7 @@ def _resolve_id_default(
     would mis-key the ``__dict__`` lookup for proxy-model rows whose actual
     class differs from the declared DjangoType model.
     """
+    del info  # Strawberry's Relay machinery passes it by keyword; the default id never reads it
     id_attr = cls.resolve_id_attr()
     if id_attr == "pk":
         id_attr = root.__class__._meta.pk.attname
@@ -344,7 +344,7 @@ def _coerce_node_id(node_id: object) -> object:
 
 
 def _node_value_or_none(cls: type[_RelayDjangoType], node_id: object) -> object:
-    """The id-slot value ``node_id`` names, coerced to its column's type; ``None`` for no row.
+    """Return the id-slot value ``node_id`` names, coerced to its column type; ``None`` if no row.
 
     Every caller of ``resolve_node`` / ``resolve_nodes`` passes the raw GlobalID
     ``node_id`` string - Strawberry's ``relay.node()`` field and the package's

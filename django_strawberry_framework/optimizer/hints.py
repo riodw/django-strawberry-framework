@@ -28,7 +28,8 @@ from typing import TYPE_CHECKING, ClassVar, cast
 
 from django.db.models import Prefetch
 
-from ..exceptions import ConfigurationError, _safe_type_name
+from ..exceptions import ConfigurationError, _safe_attr, _safe_type_name
+from ..utils.relations import safe_truthy
 
 # The shared public strategy-selection type (and the validator it feeds) are
 # owned by ``nested_fetch`` beside ``NestedConnectionStrategy``. They are
@@ -269,10 +270,7 @@ def hint_is_skip(hint: OptimizerHint | None) -> bool:
         return False
     if hint is OptimizerHint.SKIP:
         return True
-    try:
-        return bool(getattr(hint, "skip", False))
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        return False
+    return safe_truthy(_safe_attr(hint, "skip"))
 
 
 # Sentinel instance - must be created after the class body so the

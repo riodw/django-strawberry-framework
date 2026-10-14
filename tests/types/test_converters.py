@@ -96,6 +96,28 @@ def _concrete_field(model: type[models.Model], name: str) -> "ConcreteField":
     return field
 
 
+class _UnreadableAttributeField(models.Field[object, object]):
+    """A real Django field whose read of one attribute raises, armed once construction is done."""
+
+    _unreadable: str | None = None
+
+    def __init__(
+        self,
+        unreadable: str,
+        *,
+        name: str | None = None,
+        choices: list[tuple[str, str]] | None = None,
+    ) -> None:
+        super().__init__(name=name, choices=choices)
+        self._unreadable = unreadable
+
+    @override
+    def __getattribute__(self, name: str) -> object:
+        if name == object.__getattribute__(self, "_unreadable"):
+            raise RuntimeError(f"{name} exploded")
+        return super().__getattribute__(name)
+
+
 _app_label_counter = itertools.count(1)
 
 
@@ -116,17 +138,11 @@ def _unique_app_label(base: str) -> str:
     return f"{base}__{next(_app_label_counter)}"
 
 
-@pytest.fixture(autouse=True)
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def _isolate_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
-    """Every test here declares fresh ``DjangoType`` classes - opt the module
-    into the shared registry/connection-cache isolation (``tests/conftest.py``).
-
-    The clears cover the type + enum dicts and the connection-type cache but
-    not Django's app registry: the ``ChoiceFixture`` model is declared per
-    test under a synthetic ``app_label`` that
-    ``tests/conftest.py::_restore_app_registry`` retires afterwards.
-    """
+# The clears cover the type + enum dicts and the connection-type cache but not
+# Django's app registry: the ``ChoiceFixture`` model is declared per test under a
+# synthetic ``app_label`` that ``tests/conftest.py::_restore_app_registry`` retires
+# afterwards.
+pytestmark = pytest.mark.usefixtures("isolate_global_registry")
 
 
 @pytest.fixture
@@ -407,30 +423,10 @@ def test_field_diagnostics_survive_unreadable_metadata_descriptors():
 
 
 def test_converter_wraps_unreadable_choices_and_nullability_metadata():
-    class _UnreadableChoices:
-        model = object
-        name = "field"
-
-        @property
-        def choices(self):
-            raise RuntimeError("choices exploded")
-
-    class _UnreadableNull:
-        model = object
-        name = "field"
-
-        @property
-        def null(self):
-            raise RuntimeError("null exploded")
-
     with pytest.raises(ConfigurationError, match="Could not inspect choices"):
-        # basedpyright: the field whose choices read raises is the hostile input under test;
-        # _field_has_choices types the parameter as ConcreteField
-        _field_has_choices(_UnreadableChoices())  # pyright: ignore[reportArgumentType]
+        _field_has_choices(_UnreadableAttributeField("choices", name="field"))
     with pytest.raises(ConfigurationError, match="Could not inspect nullability"):
-        # basedpyright: the field whose null read raises is the hostile input under test;
-        # convert_scalar types the parameter as ConcreteField
-        convert_scalar(_UnreadableNull(), "OwnerType")  # pyright: ignore[reportArgumentType]
+        convert_scalar(_UnreadableAttributeField("null", name="field"), "OwnerType")
 
 
 def test_choice_conversion_wraps_unrenderable_values_and_unreadable_field_metadata():
@@ -446,18 +442,10 @@ def test_choice_conversion_wraps_unrenderable_values_and_unreadable_field_metada
             source_label="probe",
         )
 
-    class _UnreadableField:
-        @property
-        def model(self):
-            raise RuntimeError("field metadata exploded")
-
-        name = "field"
-        choices = (("a", "A"),)
+    unreadable_field = _UnreadableAttributeField("model", name="field", choices=[("a", "A")])
 
     with pytest.raises(ConfigurationError, match="Could not inspect choices"):
-        # basedpyright: the field whose model read raises is the hostile input under test;
-        # convert_choices_to_enum types the parameter as ConcreteField
-        convert_choices_to_enum(_UnreadableField(), "FixtureType")  # pyright: ignore[reportArgumentType]
+        convert_choices_to_enum(unreadable_field, "FixtureType")
 
 
 def test_choice_enum_name_derivation_wraps_a_hostile_type_name(

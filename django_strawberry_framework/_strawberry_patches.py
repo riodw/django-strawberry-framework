@@ -673,7 +673,7 @@ def _validate_upstream_shape() -> _UpstreamCaptures:
 
 
 def _translated_parse_json(self: "_AnyBaseView", data: "str | bytes") -> object:
-    """The captured original plus the raises its ``except`` lets escape as 500s.
+    """Parse through the captured original, translating the raises it lets escape as 500s.
 
     Upstream's ``parse_json`` translates ``json.JSONDecodeError`` into
     ``HTTPException(400, ...)`` and nothing else. Two further client-input
@@ -718,7 +718,7 @@ def _patched_parse_json(
     self: "_AnyBaseView",
     data: "str | bytes",
 ) -> "dict[object, object] | list[dict[object, object]]":
-    """Wrapper around ``BaseView.parse_json`` closing two upstream gaps.
+    """Parse as the patched ``BaseView.parse_json``, closing two upstream gaps.
 
     1. **The ``UnicodeDecodeError`` / ``RecursionError`` translation.**
        Upstream's ``parse_json`` catches only ``json.JSONDecodeError``, but

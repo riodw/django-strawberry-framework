@@ -514,7 +514,7 @@ def _fingerprint_field_map(
     seen: frozenset[type[DRFBaseSerializer]],
     nested_configs: Mapping[str, NestedSerializerConfig] | None = None,
 ) -> tuple[tuple[object, ...], ...]:
-    """The recursive fingerprint core (the nested recursion).
+    """Compute the recursive fingerprint core (the nested recursion).
 
     Captures every SDL-affecting axis per WRITABLE field (see ``serializer_schema_fingerprint``),
     plus the recursive nested fingerprint for OPTED-IN nested fields. ``seen`` carries
@@ -749,9 +749,9 @@ def raise_writable_source_ownership_errors(
             else f"writable field(s) {star_fields!r} declare"
         )
         raise ConfigurationError(
-            f"SerializerMutation {mutation_name}: {where} source='*'. DRF merges a "  # noqa: S608 - error prose, not SQL
+            f"SerializerMutation {mutation_name}: {where} source='*'. DRF merges a "
             "whole-object field's returned mapping into validated_data, so it can "
-            "silently replace client or injected values under any key (including "
+            "silently overwrite client or injected values under any key (including "
             "narrowed-out HiddenField / defaulted runtime fields that never reach "
             "the column converter). Remove the field, make it read_only, or give "
             "it a concrete single-column source.",
@@ -775,9 +775,9 @@ def raise_writable_source_ownership_errors(
         else "multiple writable fields bind one serializer source"
     )
     raise ConfigurationError(
-        f"SerializerMutation {mutation_name}: {where}: {detail}. DRF resolves a "  # noqa: S608 - error prose, not SQL
+        f"SerializerMutation {mutation_name}: {where}: {detail}. DRF resolves a "
         "source collision last-write-wins, so one field's validated value would "
-        "silently replace another's (including values from HiddenField or "
+        "silently overwrite another's (including values from HiddenField or "
         "narrowed-out field defaults). Give every runtime writable field a "
         "distinct source.",
     )

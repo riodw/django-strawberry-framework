@@ -137,7 +137,7 @@ class PrivateAuthority(Generic[StateT]):
         self._settled[key] = (ref(owner, forget), state)
 
     def recall(self, owner: object) -> StateT | None:
-        """The authority ``owner`` was settled with, or ``None`` if it has none.
+        """Return the authority ``owner`` was settled with, or ``None`` if it has none.
 
         ``None`` means never settled. It cannot mean lost: the entry is held
         here strongly and is removed only when the owner it belongs to dies, so
@@ -149,7 +149,7 @@ class PrivateAuthority(Generic[StateT]):
 
 
 def _boxed_member() -> None:
-    """The callable a box binds its member to, and never calls.
+    """Serve as the callable a box binds its member to; never called.
 
     ``types.MethodType`` needs a function to bind an object to, and this is that
     function: a box is a carrier, so nothing invokes it and it takes no
@@ -189,7 +189,7 @@ _Accepted = tuple[ReferenceType[object], tuple[_Evidence[MemberT], ...]]
 
 
 def _accepted_member(member: MemberT) -> tuple[_Evidence[MemberT], MemberT | MethodType]:
-    """What one accepted member is answered from, and what the owner holds for it.
+    """Return what one accepted member is answered from, and what the owner holds for it.
 
     A weak reference is preferred wherever the member's layout admits one,
     because it is evidence about that member alone and stops resolving exactly
@@ -257,7 +257,7 @@ class PrivateMembership(Generic[MemberT]):
         self._accepted[key] = (ref(owner, forget), tuple(evidence for evidence, _ in taken))
 
     def recall(self, owner: object) -> tuple[MemberT, ...] | None:
-        """The sequence ``owner`` was accepted with, or ``None`` for one that is gone.
+        """Return the sequence ``owner`` was accepted with, or ``None`` for one that is gone.
 
         ``None`` is the answer when no sequence was ever accepted, when the
         entry was filed under an identity that has since been reused, and when

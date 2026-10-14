@@ -167,11 +167,11 @@ class KeysetSeek:
     flip: bool = False
 
     def q(self) -> models.Q:
-        """The ORM seek predicate (``keyset_seek_q`` over this carrier)."""
+        """Return the ORM seek predicate (``keyset_seek_q`` over this carrier)."""
         return keyset_seek_q(self.columns, self.cursor, flip=self.flip)
 
     def plan(self, values: Sequence[object] | None = None) -> KeysetSeekPlan:
-        """The dialect-agnostic seek plan (optionally over already-adapted ``values``).
+        """Return the dialect-agnostic seek plan (optionally over already-adapted ``values``).
 
         Default values are the decoded cursor payload. SQL renderers that bind
         through ``Field.get_db_prep_value`` pass the prepared sequence so the
@@ -185,7 +185,7 @@ class KeysetSeek:
 
 
 def order_fingerprint(order_refs: tuple[str, ...]) -> str:
-    """The canonical fingerprint of an effective order, embedded in every cursor.
+    """Return the canonical fingerprint of an effective order, embedded in every cursor.
 
     A plain comma join of the Django ``order_by`` strings: cursors are
     authenticated-encrypted regardless, so the fingerprint stays human-readable
@@ -444,7 +444,7 @@ def keyset_contract_error(detail: str) -> GraphQLError:
 
 
 def _invalid_cursor_error(argument: str) -> GraphQLError:
-    """The one malformed / tampered / mismatched keyset-cursor error shape."""
+    """Build the one malformed / tampered / mismatched keyset-cursor error shape."""
     return GraphQLError(
         f"Argument '{argument}' contains an invalid cursor for this connection.",
     )
@@ -680,7 +680,7 @@ def keyset_seek_q(
     *,
     flip: bool = False,
 ) -> models.Q:
-    """The seek predicate: rows STRICTLY past the cursor position in the total order.
+    """Return the seek predicate: rows STRICTLY past the cursor position in the total order.
 
     ``flip=False`` selects rows after the cursor under the effective order
     (the ``after:`` seek); ``flip=True`` selects rows before it (the

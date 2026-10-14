@@ -1575,7 +1575,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
     max_rows: int | None = None,
     trusted_max_rows: bool = False,
 ) -> list[_TargetT]:
-    """Factory for a non-Relay ``list[T]`` root Query field bound to a ``DjangoType``.
+    """Build a non-Relay ``list[T]`` root Query field bound to a ``DjangoType``.
 
     The declared return type is the value the field resolves to, not the object
     returned: at run time this returns a ``StrawberryField``. The annotation states

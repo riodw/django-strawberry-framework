@@ -39,7 +39,7 @@ from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.db import models
 from django.utils.functional import Promise
 
-from ..exceptions import _safe_text, _unprintable
+from ..exceptions import _safe_predicate, _safe_text, _unprintable
 from ._narrowing import is_iterable, is_list_or_tuple, is_set_or_frozenset
 
 if TYPE_CHECKING:
@@ -216,11 +216,7 @@ def _str_list(value: object) -> list[str]:
     # "is this already text?" (the one-element-list path), while the exclusion
     # below asks "is this an atom rather than a container?". The byte-ish atoms
     # are excluded from iteration but are not stringified by this first branch.
-    try:
-        is_str = isinstance(value, (str, Promise))
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        is_str = False
-    if is_str:
+    if _safe_predicate(isinstance, value, (str, Promise)):
         return [_safe_text(value)]
     try:
         is_iter = is_iterable(value) and not _is_text_atom(value)
@@ -466,59 +462,54 @@ def validation_error_to_field_errors(
     name verbatim (a caller with no generated input, such as a service-layer
     error mapped into an envelope).
     """
+    # An unreadable ``error_dict`` or ``items()`` leaves the dict branch entirely
+    # and falls through to the ``error_list`` / ``messages`` fallback below.
     try:
-        error_dict = exc.error_dict
+        error_items = tuple(exc.error_dict.items())
     except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        error_dict = None
-    if error_dict is not None:
+        error_items = None
+    if error_items is not None:
         errors: list[FieldError] = []
-        try:
-            error_items = tuple(error_dict.items())
-        except BaseException:  # noqa: BLE001 - hostile object, contained by design
-            error_items = None
-        # An unreadable ``items()`` leaves the dict branch entirely and falls
-        # through to the ``error_list`` / ``messages`` fallback below.
-        if error_items is not None:
-            for item in error_items:
-                unpacked = _error_dict_entry(item)
-                if unpacked is None:
-                    errors.append(
-                        field_error(
-                            "",
-                            "Validation details could not be normalized.",
-                            codes=FIELD_ERROR_CODE_INVALID,
-                        ),
-                    )
-                    continue
-                field_name, field_errors = unpacked
-                normalized_name = _safe_text(field_name)
-                path = (
-                    ""
-                    if normalized_name == NON_FIELD_ERRORS
-                    else rekey_error_segment(normalized_name, key_map)[0]
-                )
-                if _is_text_atom(field_errors):
-                    field_error_items: tuple[object, ...] = (field_errors,)
-                else:
-                    try:
-                        field_error_items = tuple(field_errors)
-                    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-                        field_error_items = (field_errors,)
-                messages: list[object] = []
-
-                for error in field_error_items:
-                    messages.extend(_validation_messages(error))
-                # Preserve each leaf Django ``ValidationError.code`` alongside the
-                # message (``error.error_list`` is the flattened leaf list ``error.messages``
-                # reads; a ``None`` code is dropped).
-                codes = [code for error in field_error_items for code in _validation_codes(error)]
+        for item in error_items:
+            unpacked = _error_dict_entry(item)
+            if unpacked is None:
                 errors.append(
-                    field_error(path, messages, codes=codes)
-                    if messages
-                    else empty_validation_error(path),
+                    field_error(
+                        "",
+                        "Validation details could not be normalized.",
+                        codes=FIELD_ERROR_CODE_INVALID,
+                    ),
                 )
-            if errors:
-                return errors
+                continue
+            field_name, field_errors = unpacked
+            normalized_name = _safe_text(field_name)
+            path = (
+                ""
+                if normalized_name == NON_FIELD_ERRORS
+                else rekey_error_segment(normalized_name, key_map)[0]
+            )
+            if _is_text_atom(field_errors):
+                field_error_items: tuple[object, ...] = (field_errors,)
+            else:
+                try:
+                    field_error_items = tuple(field_errors)
+                except BaseException:  # noqa: BLE001 - hostile object, contained by design
+                    field_error_items = (field_errors,)
+            messages: list[object] = []
+
+            for error in field_error_items:
+                messages.extend(_validation_messages(error))
+            # Preserve each leaf Django ``ValidationError.code`` alongside the
+            # message (``error.error_list`` is the flattened leaf list ``error.messages``
+            # reads; a ``None`` code is dropped).
+            codes = [code for error in field_error_items for code in _validation_codes(error)]
+            errors.append(
+                field_error(path, messages, codes=codes)
+                if messages
+                else empty_validation_error(path),
+            )
+        if errors:
+            return errors
     leaves = _validation_leaves(exc)
     codes = [code for leaf in leaves if (code := _validation_code(leaf)) is not None]
     messages = _validation_messages(exc)

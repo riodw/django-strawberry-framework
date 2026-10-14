@@ -869,9 +869,8 @@ class SerializerMutation(DjangoMutation):
         reverse-map ``field_specs`` are stashed on the mutation
         (``cls._input_field_specs``) for the decode.
         """
-        del (
-            primary_type
-        )  # the serializer input derives from the serializer, not the model primary.
+        # The serializer input derives from the serializer, not the model primary.
+        del primary_type
         operation_kind = NON_DELETE_OPERATION_INPUT_KIND[meta.operation]
         # The serializer flavor's ``_validate_meta`` stored a validated serializer class.
         serializer_class = cast("type[DRFSerializer]", meta.serializer_class)
@@ -965,7 +964,7 @@ class SerializerMutation(DjangoMutation):
         data: Mapping[str, object],
         hook_context: SerializerHookContext,
     ) -> dict[str, object]:
-        """The default serializer-construction kwargs - CONSTRUCTOR-ONLY (the resolver consumes this).
+        """Return the default serializer-construction kwargs - CONSTRUCTOR-ONLY, resolver-consumed.
 
         The graphene ``get_serializer_kwargs`` parity seam (spec-039 Decision 7 step 4 /
         Decision 8), hardened to a CONSTRUCTOR-ONLY hook: a consumer overrides this to add

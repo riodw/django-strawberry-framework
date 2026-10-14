@@ -25,10 +25,11 @@ the same dig from plan-time graphql-core ``info`` and resolve-time Strawberry
 ``Info``, so the private attribute name lives in exactly one place.
 """
 
+import enum
 import functools
 import inspect
 from collections.abc import Callable, Coroutine
-from typing import TYPE_CHECKING, Any, TypeGuard, TypeVar, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Final, TypeGuard, TypeVar, cast, get_args, get_origin
 
 from asgiref.sync import iscoroutinefunction
 from graphql import GraphQLList, GraphQLNonNull
@@ -102,6 +103,7 @@ if TYPE_CHECKING:
 
 __all__ = (
     "MAX_TYPE_WRAPPER_DEPTH",
+    "MISSING_ATTRIBUTE",
     "graphql_type_of",
     "is_async_callable",
     "is_graphql_list",
@@ -117,6 +119,20 @@ __all__ = (
 )
 
 _T = TypeVar("_T")
+
+
+class _MissingAttribute(enum.Enum):
+    """The absent-attribute sentinel's type: one member, so an ``is`` test narrows it away."""
+
+    MISSING = enum.auto()
+
+
+MISSING_ATTRIBUTE: Final = _MissingAttribute.MISSING
+"""The default for a three-argument ``getattr`` that tells an absent attribute from a ``None`` value.
+
+``getattr(value, name, MISSING_ATTRIBUTE) is MISSING_ATTRIBUTE`` is the one-lookup form of
+``hasattr`` followed by ``getattr``: both swallow only ``AttributeError``.
+"""
 
 
 def strawberry_schema_from_schema(schema: object) -> object:
@@ -242,9 +258,7 @@ def is_async_callable(value: object) -> TypeGuard[Callable[..., Coroutine[object
         # class body's ``__call__`` -- that one belongs to instances. A plain
         # class resolves to the sync ``type.__call__`` slot wrapper, and a
         # metaclass carrying ``async def __call__`` is genuinely async to call.
-        return inspect.iscoroutinefunction(
-            getattr(type(target), "__call__", None),  # noqa: B004
-        )
+        return inspect.iscoroutinefunction(type(target).__call__)
     # Inspecting ``__call__``'s async-ness, not testing callability -- so
     # ``callable()`` (what B004 suggests) is the wrong tool here.
     return inspect.iscoroutinefunction(
@@ -289,10 +303,10 @@ def unwrap_graphql_type(gql_type: object) -> object:
         ``None`` -> ``None`` (no ``of_type`` attribute).
     """
     for _ in range(MAX_TYPE_WRAPPER_DEPTH + 1):
-        if not hasattr(gql_type, "of_type"):
+        inner = getattr(gql_type, "of_type", MISSING_ATTRIBUTE)
+        if inner is MISSING_ATTRIBUTE:
             return gql_type
-        # Read by name: the probe above admits any object that carries ``of_type``.
-        gql_type = getattr(gql_type, "of_type")  # noqa: B009
+        gql_type = inner
     raise RuntimeError(
         f"unwrap_graphql_type: `of_type` wrapper stack exceeded "
         f"{MAX_TYPE_WRAPPER_DEPTH} layers; the type chain is likely cyclic or corrupt.",
@@ -415,9 +429,8 @@ def unwrap_return_type(rt: object) -> object:
         ``StrawberryList(of_type=int)`` -> ``int``;
         ``int`` -> ``int`` (no wrapper to peel).
     """
-    missing = object()
-    inner = getattr(rt, "of_type", missing)
-    if inner is not missing:
+    inner = getattr(rt, "of_type", MISSING_ATTRIBUTE)
+    if inner is not MISSING_ATTRIBUTE:
         return inner
     if get_origin(rt) is list:
         args = get_args(rt)

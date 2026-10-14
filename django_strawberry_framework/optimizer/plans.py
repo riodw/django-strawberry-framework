@@ -824,7 +824,7 @@ def prune_unsupportable_select_related(
 
 
 def _consumer_projection(queryset: object) -> tuple[frozenset[str], bool] | None:
-    """The consumer's deferred-loading projection as ``(names, defer_mode)``.
+    """Return the consumer's deferred-loading projection as ``(names, defer_mode)``.
 
     ``None`` when the consumer restricted nothing (the default
     ``(frozenset(), True)`` state, or an unreadable deferred-loading state -
@@ -866,7 +866,7 @@ def _select_path_missing_connectors(
     defer_mode: bool,
     model: type[models.Model] | None,
 ) -> tuple[str, ...] | None:
-    """The projection entries ``select_related(path)`` still needs, or ``None``.
+    """Return the projection entries ``select_related(path)`` still needs, or ``None``.
 
     Walks the path one relation segment at a time, mirroring Django's
     deferred-loading rule at each level (pinned empirically; the error is
@@ -1421,7 +1421,7 @@ def effective_cursor_state(
 
 
 def local_cursor_attnames(state: CursorState) -> tuple[str, ...]:
-    """The attnames of ``state``'s LOCAL cursor columns (the ones a mint reads off the row).
+    """Return the attnames of ``state``'s LOCAL cursor columns (the ones a mint reads off the row).
 
     A related-path column reads its annotation instead, so it is excluded; the
     callers extend the page queryset's ``.only()`` projection with the result.

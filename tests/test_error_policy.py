@@ -74,7 +74,7 @@ from django_strawberry_framework.extensions.error_policy import (
     schema_error_policy,
 )
 from django_strawberry_framework.extensions.resource_policy import DjangoResourcePolicyExtension
-from tests._execution import make_execution_context
+from tests._execution import execution_result, make_execution_context
 
 _SENSITIVE = "standalone schema secret /srv/private/standalone.key"
 
@@ -639,8 +639,8 @@ def test_a_raising_schema_error_policy_property_falls_back_to_the_default():
 # ---------------------------------------------------------------------------
 
 
-class _HostileError:
-    """An error-shaped object whose ``original_error`` raises when read.
+class _HostileError(GraphQLError):
+    """A ``GraphQLError`` whose ``original_error`` raises when read.
 
     Not reachable through a request - graphql-core builds every error on a result
     - but reachable through a consumer extension that put its own object in
@@ -648,21 +648,27 @@ class _HostileError:
     depend on the object being well behaved.
     """
 
-    message = _SENSITIVE
+    def __init__(self) -> None:
+        super().__init__(_SENSITIVE)
 
-    @property
-    def original_error(self):
-        raise RuntimeError(_SENSITIVE)
+    @override
+    def __getattribute__(self, name: str) -> object:
+        if name == "original_error":
+            raise RuntimeError(_SENSITIVE)
+        return super().__getattribute__(name)
 
 
-class _HostileResult:
-    """A result-shaped object whose ``errors`` cannot be read at all."""
+class _HostileResult(GraphQLExecutionResult):
+    """A graphql-core result whose ``errors`` cannot be read at all."""
 
-    data = {"ping": 1}
+    def __init__(self) -> None:
+        super().__init__(data={"ping": 1})
 
-    @property
-    def errors(self):
-        raise RuntimeError(_SENSITIVE)
+    @override
+    def __getattribute__(self, name: str) -> object:
+        if name == "errors":
+            raise RuntimeError(_SENSITIVE)
+        return super().__getattribute__(name)
 
 
 class _HostileStrawberryResult(StrawberryExecutionResult):
@@ -948,9 +954,7 @@ def test_one_error_that_cannot_be_masked_degrades_to_the_policy_message(
     """
     caplog.set_level(logging.ERROR, logger="django_strawberry_framework")
     fine = GraphQLError("Deliberate.", original_error=GraphQLError("Deliberate."))
-    # basedpyright: the error whose original_error read raises is the hostile input under test;
-    # graphql-core types the parameter as list[GraphQLError] | None
-    result = GraphQLExecutionResult(data=None, errors=[_HostileError(), fine])  # pyright: ignore[reportArgumentType]
+    result = GraphQLExecutionResult(data=None, errors=[_HostileError(), fine])
 
     masked = mask_execution_result(result, DEFAULT_ERROR_POLICY)
 
@@ -975,9 +979,7 @@ def test_a_result_whose_errors_cannot_be_read_degrades_to_one_policy_message(
     """
     caplog.set_level(logging.ERROR, logger="django_strawberry_framework")
 
-    # basedpyright: the result whose errors read raises is the hostile input under test;
-    # mask_execution_result types the parameter as a graphql-core or Strawberry ExecutionResult
-    masked = mask_execution_result(_HostileResult(), DEFAULT_ERROR_POLICY)  # pyright: ignore[reportArgumentType]
+    masked = mask_execution_result(_HostileResult(), DEFAULT_ERROR_POLICY)
 
     assert masked.data is None
     assert masked.errors is not None
@@ -1030,9 +1032,7 @@ def test_the_extension_replaces_a_result_that_rejects_safe_field_adoption(
 
     extension._process_result(result, DEFAULT_ERROR_POLICY)
 
-    # basedpyright: Strawberry's schema/_graphql_core.py rebinds GraphQLExecutionResult in an
-    # ImportError fallback, so ExecutionContext.result carries Unknown under the <3.3 pin
-    degraded: object = context.result  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    degraded = execution_result(context)
     assert degraded is not result
     assert isinstance(degraded, StrawberryExecutionResult)
     assert degraded.data is None

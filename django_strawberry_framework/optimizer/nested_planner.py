@@ -302,7 +302,7 @@ def _window_partition_field(
     related_model: type[models.Model],
     partition_expr: str,
 ) -> ConcreteField | None:
-    """The concrete column a nested window's ``PARTITION BY`` resolves to, or ``None``.
+    """Return the concrete column a nested window's ``PARTITION BY`` resolves to, or ``None``.
 
     Resolved exactly as the window resolves it:
     ``plans.py::apply_window_pagination`` hands ``partition_expr`` to

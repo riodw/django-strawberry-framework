@@ -50,18 +50,34 @@ import argparse
 import statistics
 import sys
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from _bench_common import (
+    attr_or,
     bootstrap_fakeshop_django,
     build_report,
     capture_queries,
+    database_name,
     is_memory_db_name,
     write_report,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import strawberry
+    from typing_extensions import TypeIs
+
+
+class _RowReader(Protocol):
+    """A database cursor, seen through the one fetch call this script makes."""
+
+    def fetchone(self) -> Sequence[object] | None: ...
+
+
+def _is_row_reader(cursor: object) -> TypeIs[_RowReader]:
+    """Report whether a cursor delegates ``fetchone`` (Django's wrapper does so by ``__getattr__``)."""
+    return callable(attr_or(cursor, "fetchone", None))
 
 
 def _seed(parents: int, children: int) -> None:
@@ -196,7 +212,25 @@ def _postgres_server_version() -> str:
 
     with connection.cursor() as cursor:
         cursor.execute("SHOW server_version")
-        return str(cursor.fetchone()[0])
+        if not _is_row_reader(cursor):
+            msg = "the database cursor does not expose fetchone"
+            raise TypeError(msg)
+        row = cursor.fetchone()
+        if row is None:
+            msg = "SHOW server_version returned no row"
+            raise RuntimeError(msg)
+        return str(row[0])
+
+
+class _Args(argparse.Namespace):
+    """The parsed command line, typed field by field after ``main``'s ``add_argument`` calls."""
+
+    parents: int
+    children: int
+    page_size: int
+    iterations: int
+    sqlite_smoke: bool
+    json_path: str | None
 
 
 def main() -> int:
@@ -222,7 +256,7 @@ def main() -> int:
         help="windowed vs per-parent on in-memory SQLite; lateral reported unavailable",
     )
     _ = parser.add_argument("--json", dest="json_path", help="also write the report as JSON here")
-    args = parser.parse_args()
+    args = parser.parse_args(namespace=_Args())
 
     provenance = bootstrap_fakeshop_django("sqlite-memory" if args.sqlite_smoke else "pg")
 
@@ -236,7 +270,7 @@ def main() -> int:
     if args.sqlite_smoke:
         # ``_seed`` deletes every library row: refuse anything but the
         # process-private in-memory database before it runs.
-        name = connection.settings_dict["NAME"]
+        name = database_name(connection)
         if connection.vendor != "sqlite" or not is_memory_db_name(name):
             msg = f"--sqlite-smoke needs an in-memory sqlite database, got {connection.vendor} {name}"
             raise RuntimeError(msg)

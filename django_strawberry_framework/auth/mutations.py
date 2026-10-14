@@ -689,7 +689,7 @@ def _login_authenticate(
     username: str,
     password: str,
 ) -> tuple[object, sessions.Transport, SessionBase, type[object], str, _User | None]:
-    """The all-sync login prologue: classify, capability, gate, preflight, authenticate.
+    """Run the all-sync login prologue: classify, capability, gate, preflight, authenticate.
 
     Runs steps 1-5 of the login state machine with NO session mutation:
 
@@ -834,7 +834,7 @@ def _login_resolve_body(
     username: str,
     password: str,
 ) -> object:
-    """The native SYNC login body: prologue, then the transport critical section.
+    """Run the native SYNC login body: prologue, then the transport critical section.
 
     Handles Django HTTP under synchronous execution directly, and a directly-invoked
     Strawberry ``SyncGraphQLHTTPConsumer`` (a classified Channels HTTP scope) through
@@ -877,7 +877,7 @@ async def _login_resolve_body_async(
     username: str,
     password: str,
 ) -> object:
-    """The native ASYNC login body: bridge Django HTTP, await Channels HTTP natively.
+    """Run the native ASYNC login body: bridge Django HTTP, await Channels HTTP natively.
 
     A Django ``HttpRequest`` under async execution stays inside the existing
     thread-sensitive sync boundary (``run_in_one_sync_boundary`` around the sync body
@@ -917,7 +917,7 @@ def _logout_prologue(
     holder_cls: _SealedAuthHolderMeta,
     info: Info[object, object],
 ) -> tuple[object, sessions.Transport, type[_GeneratedPayload]]:
-    """The all-sync logout prologue: classify, capability, missing-session, gate, payload class.
+    """Run the all-sync logout prologue: classify, capability, missing-session, gate, payload class.
 
     Runs steps 1-3 of the logout state machine with NO session mutation:
 
@@ -998,7 +998,7 @@ async def _channels_logout(
     request: ChannelsRequestAdapter,
     payload_cls: type[_GeneratedPayload],
 ) -> object:
-    """The Channels twin of ``_django_http_logout``, awaited natively under the scope lock.
+    """Run the Channels twin of ``_django_http_logout``, awaited natively under the scope lock.
 
     ``channels.auth.logout`` (a ``database_sync_to_async`` callable) fires
     ``user_logged_out``, then ``session.flush()`` (the durable invalidation: on a
@@ -1066,7 +1066,7 @@ async def _channels_logout(
 
 
 def _logout_resolve_body(holder_cls: _SealedAuthHolderMeta, info: Info[object, object]) -> object:
-    """The native SYNC logout body: prologue, then the transport critical section.
+    """Run the native SYNC logout body: prologue, then the transport critical section.
 
     Handles Django HTTP under synchronous execution directly, and a directly-invoked
     Strawberry ``SyncGraphQLHTTPConsumer`` (a classified Channels HTTP scope) through
@@ -1096,7 +1096,7 @@ async def _logout_resolve_body_async(
     holder_cls: _SealedAuthHolderMeta,
     info: Info[object, object],
 ) -> object:
-    """The native ASYNC logout body: bridge Django HTTP, await Channels natively.
+    """Run the native ASYNC logout body: bridge Django HTTP, await Channels natively.
 
     A Django ``HttpRequest`` under async execution stays inside the existing
     thread-sensitive sync boundary (``run_in_one_sync_boundary`` around the sync body
@@ -1236,7 +1236,7 @@ def _register_decode_step(
     info: Info[object, object],
     instance: models.Model | None,
 ) -> _RegisterDecoded | StepFailure:
-    """The register ``decode_step``: the shared model decode + the password capture.
+    """Run the register ``decode_step``: the shared model decode + the password capture.
 
     Rides ``_model_decode_step``; bind stashes ``password`` as kind ``EXCLUDED``
     (spec-040 D6) so the ONE shared UNSET-strip walk captures it out of the
@@ -1277,7 +1277,7 @@ def _register_write_step(
     instance: models.Model | None,
     decoded: _RegisterDecoded,
 ) -> models.Model | StepFailure:
-    """The register ``write_step``: validate + hash the password, then the shared tail.
+    """Run the register ``write_step``: validate + hash the password, then the shared tail.
 
     ``validate_password(raw_password, user)`` runs with the constructed (unsaved)
     instance so ``UserAttributeSimilarityValidator`` compares against the
@@ -1451,7 +1451,7 @@ def _synthesize_register_rider(
             data: object,
             id: object,
         ) -> object:
-            """The sync register entry: the shared skeleton with the password step pair."""
+            """Run the sync register entry: the shared skeleton with the password step pair."""
             del id  # create-only: the field dispatcher always passes UNSET.
             return _run_register_pipeline_sync(cls, info, data)
 
@@ -1464,7 +1464,7 @@ def _synthesize_register_rider(
             data: object,
             id: object,
         ) -> object:
-            """The async twin: the SAME sync body in one ``sync_to_async`` boundary."""
+            """Run the async twin: the SAME sync body in one ``sync_to_async`` boundary."""
             del id  # create-only: the field dispatcher always passes UNSET.
             return await run_in_one_sync_boundary(_run_register_pipeline_sync, cls, info, data)
 

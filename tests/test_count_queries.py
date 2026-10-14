@@ -10,23 +10,18 @@ script in a workspace copy. There is no live sibling in
 reached by a query.
 """
 
-import importlib
-from pathlib import Path
+from collections.abc import Callable
 from types import ModuleType
 
 import pytest
 
 from scripts import _bench_common
 
-SCRIPTS = Path(_bench_common.__file__).resolve().parent
-
 
 @pytest.fixture
-def count_queries(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+def count_queries(scripts_module: Callable[[str], ModuleType]) -> ModuleType:
     """Import ``scripts/count_queries.py`` the way it runs: scripts dir on ``sys.path``."""
-    # basedpyright: pytest leaves MonkeyPatch.syspath_prepend's ``path`` parameter unannotated
-    monkeypatch.syspath_prepend(str(SCRIPTS))  # pyright: ignore[reportUnknownMemberType]
-    return importlib.import_module("count_queries")
+    return scripts_module("count_queries")
 
 
 @pytest.mark.parametrize(

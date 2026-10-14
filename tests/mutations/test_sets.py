@@ -65,7 +65,7 @@ from django_strawberry_framework.mutations.sets import (
     iter_mutations,
 )
 from django_strawberry_framework.registry import registry
-from tests._idioms import definition_raises
+from tests._idioms import definition_raises, pickle_roundtrip
 from tests.optimizer import _link_models
 
 
@@ -1760,7 +1760,6 @@ def test_public_metaclasses_pin_public_identity_and_pickle():
     which is exactly what ``pickle`` requires to round-trip a class by reference.
     """
     import importlib
-    import pickle
 
     from django_strawberry_framework.forms.sets import DjangoFormMutationMetaclass
     from django_strawberry_framework.mutations.sets import DjangoMutationMetaclass
@@ -1784,7 +1783,7 @@ def test_public_metaclasses_pin_public_identity_and_pickle():
         # Module addressability: the metaclass is reachable at module.name.
         assert getattr(importlib.import_module(module), name) is metaclass
         # Reference pickling round-trips to the very same class object.
-        assert pickle.loads(pickle.dumps(metaclass)) is metaclass  # noqa: S301 - round-trips the object this test just pickled
+        assert pickle_roundtrip(metaclass) is metaclass
 
     # The two consumers are distinct class objects over disjoint ledgers, not one
     # shared function-local metaclass reused under two names.
@@ -2248,8 +2247,8 @@ def test_django_mutation_validate_meta_hostile_hash_operation_safe_containment()
 
     A str subclass's __hash__ may raise; frozenset membership hashes its probe, so
     a raw RuntimeError would escape the validation check meant to reject the value.
-    The operation membership test is guarded by _safe_frozenset_membership, which
-    answers False on any hash failure and routes to the ordinary typed reject.
+    The operation membership test is guarded by _safe_predicate(operator.contains, ...),
+    which answers False on any hash failure and routes to the ordinary typed reject.
     """
     _declare_products_primaries()
 

@@ -364,7 +364,7 @@ class _FakeHStoreField(models.Field):
 
 **Schema test fixture pattern** (the recipe every schema-execution test here follows):
 
-`tests/types/test_converters.py::_isolate_registry` is the module's thin `autouse=True` wrapper around the shared `tests/conftest.py::isolate_global_registry`, which clears the registry and the connection-type cache on entry and exit. The suite-wide autouse `tests/conftest.py::_restore_app_registry` retires every model a test declares, so an in-function model can be re-declared under the same `app_label` without Django's "Model already registered" warning.
+`tests/types/test_converters.py` applies the shared `tests/conftest.py::isolate_global_registry` to every test through a module-level `pytestmark = pytest.mark.usefixtures("isolate_global_registry")`; the fixture clears the registry and the connection-type cache on entry and exit. The suite-wide autouse `tests/conftest.py::_restore_app_registry` retires every model a test declares, so an in-function model can be re-declared under the same `app_label` without Django's "Model already registered" warning.
 
 The models are declared inside the test function, so each `monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)` sits beside the `DjangoType` declaration it governs. Every schema-execution test follows this sequence:
 

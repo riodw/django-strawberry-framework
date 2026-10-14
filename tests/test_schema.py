@@ -15,8 +15,9 @@ import gc
 import inspect
 import weakref
 from collections.abc import Callable, Iterator
+from functools import partial
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, TypedDict
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -600,18 +601,22 @@ def test_get_extensions_sync_and_async():
     assert sum(isinstance(e, DjangoResourcePolicyExtension) for e in async_exts) == 1
 
 
+class _PolicyKeyword(TypedDict, total=False):
+    """The one policy keyword a row hands ``DjangoSchema``, keyed by the attribute it lands on."""
+
+    resource_policy: ResourcePolicy
+    error_policy: ErrorPolicy
+
+
 @pytest.mark.parametrize(
-    ("attribute", "policy"),
+    "row",
     [
-        ("resource_policy", ResourcePolicy(max_list_rows=7)),
-        ("error_policy", ErrorPolicy(message="masked")),
+        {"resource_policy": ResourcePolicy(max_list_rows=7)},
+        {"error_policy": ErrorPolicy(message="masked")},
     ],
     ids=["resource", "error"],
 )
-def test_a_schema_policy_attribute_answers_with_a_copy(
-    attribute: str,
-    policy: ResourcePolicy | ErrorPolicy,
-):
+def test_a_schema_policy_attribute_answers_with_a_copy(row: _PolicyKeyword):
     """``info.schema`` reaches this attribute from every resolver in every request.
 
     A frozen dataclass refuses ``setattr`` and accepts ``policy.__dict__[name] =
@@ -619,9 +624,8 @@ def test_a_schema_policy_attribute_answers_with_a_copy(
     one out would make an attribute documented as configuration into a write seam
     onto every later request's authority.
     """
-    # basedpyright: each row pairs the keyword with its own policy class; the splat is checked
-    # against both error_policy and resource_policy
-    schema = DjangoSchema(query=DummyQuery, **{attribute: policy})  # pyright: ignore[reportArgumentType]
+    [(attribute, policy)] = row.items()
+    schema = DjangoSchema(query=DummyQuery, **row)
 
     first = getattr(schema, attribute)
     second = getattr(schema, attribute)
@@ -716,7 +720,7 @@ def _assert_entry_survives_a_replacement_attempt(schema: DjangoSchema):
 
 @pytest.mark.parametrize(
     "entry",
-    [_MarkerExtension, lambda: _MarkerExtension()],  # noqa: PLW0108 - a factory entry, not the class
+    [_MarkerExtension, partial(_MarkerExtension)],
     ids=["class", "factory"],
 )
 def test_an_accepted_extension_entry_still_runs_after_a_replacement_attempt(entry: object):
@@ -1392,31 +1396,15 @@ def test_an_extension_entry_strawberry_could_not_resolve_is_refused(entry: objec
 
 
 @pytest.mark.parametrize(
-    (
-        "argument",
-        "policy",
-        "field",
-        "widened",
-    ),
+    ("row", "field", "widened"),
     [
-        (
-            "resource_policy",
-            ResourcePolicy(max_list_rows=1),
-            "max_list_rows",
-            999,
-        ),
-        (
-            "error_policy",
-            ErrorPolicy(),
-            "enabled",
-            False,
-        ),
+        ({"resource_policy": ResourcePolicy(max_list_rows=1)}, "max_list_rows", 999),
+        ({"error_policy": ErrorPolicy()}, "enabled", False),
     ],
     ids=["resource", "error"],
 )
 def test_a_retained_policy_argument_is_not_the_one_the_schema_enforces(
-    argument: str,
-    policy: ResourcePolicy | ErrorPolicy,
+    row: _PolicyKeyword,
     field: str,
     widened: object,
 ):
@@ -1428,9 +1416,8 @@ def test_a_retained_policy_argument_is_not_the_one_the_schema_enforces(
     ``policy.__dict__[bound] = wider`` by the same route the schema attribute
     does.
     """
-    # basedpyright: each row pairs the keyword with its own policy class; the splat is checked
-    # against both error_policy and resource_policy
-    schema = DjangoSchema(query=DummyQuery, **{argument: policy})  # pyright: ignore[reportArgumentType]
+    [(argument, policy)] = row.items()
+    schema = DjangoSchema(query=DummyQuery, **row)
 
     policy.__dict__[field] = widened
 

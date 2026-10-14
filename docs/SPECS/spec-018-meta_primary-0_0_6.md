@@ -399,7 +399,7 @@ Secondary types are still **discoverable** for any `(type → model)` reverse-lo
 
 **Fixtures.** No fake field classes are needed (unlike [`spec-017-deferred_scalars-0_0_6.md`][spec-017] Slice 3/4). The fakeshop `products` models (`Category`, `Item`) are sufficient; a multi-type test declares two `DjangoType` subclasses pointing at the same real model.
 
-**Registry-isolation fixture.** Every test module that touches the registry declares an autouse fixture that calls `registry.clear()` on entry and exit; `tests/test_registry.py::_isolate_global_registry` is that module's.
+**Registry-isolation fixture.** Every test module that touches the registry clears it on entry and exit, through `tests/conftest.py::isolate_global_registry` (applied by a module-level `usefixtures` mark) or an autouse fixture of its own; `tests/test_registry.py::_isolate_global_registry` is that module's.
 
 **Schema-execution coverage.** Per [`AGENTS.md`][agents], public-facing behavior has at least one `schema.execute_sync` test:
 

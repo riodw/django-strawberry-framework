@@ -16,6 +16,7 @@ is earned in
 from __future__ import annotations
 
 from collections.abc import Callable, Coroutine, Iterable, Iterator
+from typing import NoReturn
 from unittest import mock
 
 import pytest
@@ -379,14 +380,13 @@ async def test_async_hostile_truthiness_collapses_to_anonymous_null():
 def test_current_user_hostile_directives_raise_configuration_error():
     """A hostile ``directives`` iterable or a bare string must raise ``ConfigurationError``."""
 
-    class HostileIter:
-        def __iter__(self):
+    class HostileIter(tuple[object, ...]):
+        @override
+        def __iter__(self) -> NoReturn:
             raise ValueError("hostile directives")
 
     with pytest.raises(ConfigurationError):
-        # basedpyright: the raising directives iterable is the hostile input under test;
-        # current_user types the parameter as Sequence[object]
-        current_user(directives=HostileIter())  # pyright: ignore[reportArgumentType]
+        current_user(directives=HostileIter())
 
     with pytest.raises(ConfigurationError):
         current_user(directives="oops")

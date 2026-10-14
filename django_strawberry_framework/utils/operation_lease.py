@@ -67,7 +67,7 @@ class OperationLease(Generic[PayloadT_co]):
         self._payload: PayloadT_co | None = payload
 
     def held(self) -> PayloadT_co | None:
-        """The payload, or ``None`` once the scope that owned it has ended."""
+        """Return the payload, or ``None`` once the scope that owned it has ended."""
         return self._payload
 
     def close(self) -> None:

@@ -40,12 +40,7 @@ from django_strawberry_framework.types.definition import (
     origin_has_custom_id_resolver,
 )
 
-
-@pytest.fixture(autouse=True)
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def _isolate_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
-    """Every test here declares fresh ``DjangoType`` classes - opt the module
-    into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
+pytestmark = pytest.mark.usefixtures("isolate_global_registry")
 
 
 def test_related_target_for_resolves_fk_m2m_and_reverse():

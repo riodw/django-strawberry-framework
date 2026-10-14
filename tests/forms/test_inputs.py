@@ -1586,8 +1586,8 @@ def test_digit_boundary_form_fields_survive_distinct_in_sdl():
         ("field2", "field2"),
     }
 
-    # basedpyright: Strawberry derives the GraphQL argument whose SDL name the test reads
-    def _probe(inp: object) -> int:  # pyright: ignore[reportUnusedParameter]
+    def _probe(inp: object) -> int:
+        del inp  # Strawberry derives the argument whose SDL name the test reads; never runs
         return 1
 
     _probe.__annotations__ = {"inp": cre, "return": int}

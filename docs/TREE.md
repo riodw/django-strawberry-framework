@@ -197,6 +197,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── _cross_web_patches.py         # Defensive patches for upstream ``cross_web`` bugs, applied at app load.
 ├── _django_patches.py            # Defensive patches for upstream Django bugs, applied at app load.
 ├── _graphql_core_patches.py      # Defensive patch for graphql-core async-iterable list completion.
+├── _logger.py                    # The package logger, in a leaf module so the package ``__init__`` imports it like any name.
 ├── _request_body.py              # The one place the package touches Django's private request-body internals.
 ├── _strawberry_patches.py        # Defensive patches for upstream Strawberry bugs, applied at app load.
 ├── apps.py                       # Django ``AppConfig`` - registers the package and applies its upstream patches at app load.
@@ -330,6 +331,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── _cross_web_patches.py         # Defensive patches for upstream ``cross_web`` bugs, applied at app load.
 ├── _django_patches.py            # Defensive patches for upstream Django bugs, applied at app load.
 ├── _graphql_core_patches.py      # Defensive patch for graphql-core async-iterable list completion.
+├── _logger.py                    # The package logger, in a leaf module so the package ``__init__`` imports it like any name.
 ├── _request_body.py              # The one place the package touches Django's private request-body internals.
 ├── _strawberry_patches.py        # Defensive patches for upstream Strawberry bugs, applied at app load.
 ├── apps.py                       # Django ``AppConfig`` - registers the package and applies its upstream patches at app load.
@@ -470,6 +472,7 @@ Source: `tests/`
 ```text
 tests/    # Package, integration, and repository-tool tests for django_strawberry_framework.
 ├── _definition.py                # Real ``DjangoTypeDefinition`` records built directly, without declaring or registering a type.
+├── _django_private.py            # Typed views of Django's private attributes that django-stubs omits.
 ├── _execution.py                 # Real Strawberry ``ExecutionContext`` objects for tests that drive an extension hook directly.
 ├── _generated_inputs.py          # Shared keyword-constructor view of run-time-generated GraphQL input classes.
 ├── _idioms.py                    # Shared test idioms written so the type checker can follow them.
@@ -749,6 +752,7 @@ Source: `tests/ (+ planned card paths)`
 ```text
 tests/    # Package, integration, and repository-tool tests for django_strawberry_framework.
 ├── _definition.py                # Real ``DjangoTypeDefinition`` records built directly, without declaring or registering a type.
+├── _django_private.py            # Typed views of Django's private attributes that django-stubs omits.
 ├── _execution.py                 # Real Strawberry ``ExecutionContext`` objects for tests that drive an extension hook directly.
 ├── _generated_inputs.py          # Shared keyword-constructor view of run-time-generated GraphQL input classes.
 ├── _idioms.py                    # Shared test idioms written so the type checker can follow them.

@@ -60,12 +60,12 @@ import enum
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
+from ..exceptions import _safe_attr, _safe_call
 from ..utils.relations import (
     RelationKind,
     is_single_column_foreign_key,
     m2m_through_link_fields,
     m2m_through_model,
-    relation_attr,
     relation_bool,
     relation_kind,
     relation_link,
@@ -100,16 +100,10 @@ WINDOWABLE_RELATION_KINDS: frozenset[RelationKind] = frozenset(
 )
 
 
-# This module's never-raises contract is a stated MODE of the shared
-# relation readers rather than a parallel family beside them: one read body,
-# one truth test, two failure policies. The local names stay so the call
-# sites below read as taxonomy code, and so the lenient policy is declared once
-# here instead of at each of them.
-def _safe_getattr(value: object, name: str, default: object = None) -> object:
-    """Read a descriptor attribute without letting malformed doubles escape."""
-    return relation_attr(value, name, default, lenient=True)
-
-
+# This module's never-raises contract is the lenient MODE of the shared
+# relation readers rather than a parallel family beside them: plain reads go
+# through ``_safe_attr`` (the body ``relation_attr(lenient=True)`` delegates to),
+# truth tests through ``safe_truthy``, and flags through ``relation_bool``.
 _safe_truthy = safe_truthy
 
 
@@ -119,7 +113,7 @@ def _safe_flag(value: object, name: str) -> bool:
 
 
 def _first_truthy(*values: object) -> object:
-    """The first value that tests true, a raising truth test counting as false."""
+    """Return the first value that tests true, a raising truth test counting as false."""
     for value in values:
         if _safe_truthy(value):
             return value
@@ -192,7 +186,7 @@ class RelationJoinDescriptor:
 
 
 def _partition_expr(field: object) -> str | None:
-    """The parent-side partition expression Django's M2M prefetch attach uses.
+    """Return the parent-side partition expression Django's M2M prefetch attach uses.
 
     ``remote_field.attname or remote_field.name`` - exactly what upstream's
     ``_optimize_prefetch_queryset`` partitions by (spec-033 Decision 4): the
@@ -200,20 +194,20 @@ def _partition_expr(field: object) -> str | None:
     target's reverse query name for a forward M2M (``"books"`` - NOT the
     accessor when ``related_name`` is absent).
     """
-    remote_field = _safe_getattr(field, "remote_field")
+    remote_field = _safe_attr(field, "remote_field")
     # A relation's ``attname`` / ``name`` slots hold strings.
     return cast(
         "str | None",
         _first_truthy(
-            _safe_getattr(remote_field, "attname"),
-            _safe_getattr(remote_field, "name"),
+            _safe_attr(remote_field, "attname"),
+            _safe_attr(remote_field, "name"),
         ),
     )
 
 
 def _precomputed_attnames(field: object, slot: str) -> tuple[str, ...]:
-    """A ``FieldMeta`` link slot stamped from ``relation_link``; ``()`` if absent or malformed."""
-    precomputed = _safe_getattr(field, slot)
+    """Return the ``FieldMeta`` link slot stamped from ``relation_link``; ``()`` if absent or malformed."""
+    precomputed = _safe_attr(field, slot)
     if isinstance(precomputed, tuple) and all(
         isinstance(attname, str) for attname in cast("tuple[object, ...]", precomputed)
     ):
@@ -222,7 +216,7 @@ def _precomputed_attnames(field: object, slot: str) -> tuple[str, ...]:
 
 
 def _carrier_attnames(field: object) -> tuple[str, ...]:
-    """The child columns carrying the parent key of a reverse FK / reverse O2O link.
+    """Return the child columns carrying the parent key of a reverse FK / reverse O2O link.
 
     A raw rel descriptor answers through ``utils/relations.py::relation_link``
     (``("shelf_id",)`` for a reverse ``ForeignKey``, one entry per
@@ -237,7 +231,7 @@ def _carrier_attnames(field: object) -> tuple[str, ...]:
 
 
 def _forward_join_columns(field: object) -> tuple[str, ...]:
-    """The related-model columns a forward single-valued relation's link targets.
+    """Return the related-model columns a forward single-valued relation's link targets.
 
     Django's prefetch attach for a forward relation keys each related row by
     these columns (the target pk, a ``to_field``, every ``to_fields`` member of
@@ -253,7 +247,7 @@ def _forward_join_columns(field: object) -> tuple[str, ...]:
 
 
 def _m2m_join_columns(field: object) -> tuple[str, ...]:
-    """The related model's pk attname, the only child column an M2M prefetch needs.
+    """Return the related model's pk attname, the only child column an M2M prefetch needs.
 
     Django selects the attach key itself from the through table
     (``ManyRelatedManager.get_prefetch_querysets`` adds one
@@ -263,7 +257,7 @@ def _m2m_join_columns(field: object) -> tuple[str, ...]:
     """
     # basedpyright: EAFP; ``related_model._meta`` is read inside the try/except below, which
     # is the guard (synthetic doubles carry no model class)
-    related_model: Any = _safe_getattr(field, "related_model")  # pyright: ignore[reportExplicitAny]
+    related_model: Any = _safe_attr(field, "related_model")  # pyright: ignore[reportExplicitAny]
     if related_model is None:
         return ()
     try:
@@ -273,7 +267,7 @@ def _m2m_join_columns(field: object) -> tuple[str, ...]:
 
 
 def _generic_child_attname(field: object, name_attr: str) -> str | None:
-    """The child column attname a ``GenericRelation`` names via ``name_attr``.
+    """Return the child column attname a ``GenericRelation`` names via ``name_attr``.
 
     A ``GenericForeignKey`` stores the parent id in an ordinary column
     (``object_id`` by default) and pairs it with a content-type FK; the
@@ -291,8 +285,8 @@ def _generic_child_attname(field: object, name_attr: str) -> str | None:
     """
     # basedpyright: EAFP; ``related_model._meta`` is read inside the try/except below, which
     # is the guard (synthetic doubles carry no model class)
-    related_model: Any = _safe_getattr(field, "related_model")  # pyright: ignore[reportExplicitAny]
-    child_field_name = _safe_getattr(field, name_attr)
+    related_model: Any = _safe_attr(field, "related_model")  # pyright: ignore[reportExplicitAny]
+    child_field_name = _safe_attr(field, name_attr)
     if related_model is None or child_field_name is None:
         return None
     try:
@@ -312,10 +306,7 @@ def classify_relation_join(field: ModelField | FieldMeta) -> RelationJoinDescrip
     fallback posture (``nested_planner.py::plan_connection_relation`` leaves an
     unwindowable relation unplanned for per-parent resolution).
     """
-    try:
-        kind = relation_kind(field)
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        kind = "forward_single"
+    kind: RelationKind = _safe_call(relation_kind, "forward_single", field)
     is_m2m = _safe_flag(field, "many_to_many")
     windowable = kind in WINDOWABLE_RELATION_KINDS
     parent_link_field = None
@@ -357,7 +348,7 @@ def classify_relation_join(field: ModelField | FieldMeta) -> RelationJoinDescrip
         lateral_shape = LateralJoinShape.DIRECT_FK
         # The child-side link (a reverse rel descriptor's ``.field``), kept only
         # when it is one column the correlated strategies can join and cast on.
-        link = _safe_getattr(field, "field")
+        link = _safe_attr(field, "field")
         if is_single_column_foreign_key(link):
             parent_link_field = link
     else:

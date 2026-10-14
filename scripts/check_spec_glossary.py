@@ -336,7 +336,16 @@ def _print_section(title: str, entries: list[tuple[str, str]], hint: str) -> Non
     print()
 
 
-def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+class _Args(argparse.Namespace):
+    """The parsed command line, typed field by field after ``_parse_args``'s ``add_argument`` calls."""
+
+    spec: Path
+    terms: Path | None
+    glossary: Path
+    auto_link: bool
+
+
+def _parse_args(argv: list[str] | None) -> _Args:
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -372,7 +381,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
             "[glossary-anchor]: GLOSSARY.md#anchor definition. Idempotent."
         ),
     )
-    return parser.parse_args(argv)
+    return parser.parse_args(argv, namespace=_Args())
 
 
 def _default_terms_path(spec_path: Path) -> Path:

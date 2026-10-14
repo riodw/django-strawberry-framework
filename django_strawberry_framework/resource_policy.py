@@ -60,6 +60,7 @@ a safety one.
 
 from __future__ import annotations
 
+import contextlib
 import math
 import time
 from collections.abc import AsyncIterable, Iterable, Iterator, Mapping
@@ -650,7 +651,7 @@ class _BudgetScope:
 
 
 def _armed_budget() -> _RequestBudget | None:
-    """The budget armed and still open here, or ``None``.
+    """Return the budget armed and still open here, or ``None``.
 
     The one read every seam in this module goes through, so "no budget" and "a
     budget whose operation has ended" cannot be told apart by any of them - the
@@ -662,7 +663,7 @@ def _armed_budget() -> _RequestBudget | None:
 
 
 def _absolute_deadline(policy: ResourcePolicy) -> float | None:
-    """The monotonic instant ``policy``'s budget ends, or ``None`` for no deadline.
+    """Return the monotonic instant ``policy``'s budget ends, or ``None`` for no deadline.
 
     ``execution_deadline_seconds`` is an exact built-in by construction
     (:func:`_is_valid_deadline`), so this addition is plain ``float``
@@ -689,7 +690,7 @@ def _publish_budget_mirror(
 
 
 def _operation_policy(policy: ResourcePolicy) -> ResourcePolicy:
-    """The private, exact policy one operation is bounded by.
+    """Return the private, exact policy one operation is bounded by.
 
     Taken once per operation rather than per bound read, so the per-field seams
     pay nothing for it. ``utils/policies.py::canonical_policy`` establishes both
@@ -733,7 +734,7 @@ def budget_resume_binding(
     OperationLease[_RequestBudget],
     Token[OperationLease[_RequestBudget] | None],
 ]:
-    """What a streamed operation has to bind again on resume, and what armed it here.
+    """Return what a streamed operation has to bind again on resume, and what armed it here.
 
     An operation's budget is armed once, in the task that started it, and a
     streamed operation's later frames run in whatever task drives them. The
@@ -765,7 +766,7 @@ def adopt_budget_binding(scope: _BudgetScope) -> None:
 
 
 def armed_resource_policy() -> ResourcePolicy | None:
-    """The snapshot armed for this operation, or ``None`` when nothing armed one.
+    """Return the snapshot armed for this operation, or ``None`` when nothing armed one.
 
     The package's own way of asking "which policy is this operation being
     bounded by", for the seams that run inside an armed scope but hold no
@@ -802,7 +803,7 @@ def record_admission_rejection(rejection: ResourceLimitExceeded) -> None:
 
 
 def admission_rejection() -> ResourceLimitExceeded | None:
-    """This operation's admission rejection, or ``None`` if it was admitted.
+    """Return the operation's admission rejection, or ``None`` if it was admitted.
 
     The answer every stage after admission reads, in preference to the published
     error it can be told apart from: publishing is how a rejection reaches the
@@ -846,7 +847,7 @@ def end_resource_budget(scope: _BudgetScope) -> None:
 
 
 def _effective_deadline(armed: float | None, mirror: object) -> float | None:
-    """The tighter of the operation's own deadline and a consumer-written one.
+    """Return the tighter of the operation's own deadline and a consumer-written one.
 
     The narrowing rule the rest of the module already states for bounds
     (``effective_bound``, ``ResourcePolicy.narrowed``), applied to the one piece
@@ -1258,14 +1259,12 @@ def _attach_cleanup_note(primary_error: BaseException, note: str) -> None:
     surface on the primary error (an unreadable or unassignable ``__notes__``)
     must not mask the error the caller is already propagating.
     """
-    try:
+    with contextlib.suppress(Exception):
         notes = [*getattr(primary_error, "__notes__", ())]
         notes.append(note)
         # ``setattr``, not an attribute write: 3.10's typeshed declares no ``__notes__``
         # (the attribute is 3.11+ API), and the floor check reads 3.10's.
         setattr(primary_error, "__notes__", notes)  # noqa: B010
-    except Exception:  # noqa: BLE001, S110 - the note is an attachment, never a failure of its own
-        pass
 
 
 def _is_cleanup_diagnostic(error: BaseException) -> bool:

@@ -44,6 +44,7 @@ never resolved.
 
 from __future__ import annotations
 
+import operator
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast, get_origin
@@ -54,7 +55,13 @@ from strawberry import relay
 from strawberry.types.base import StrawberryList
 from typing_extensions import override
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_class_name
+from ..exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_attr,
+    _safe_class_name,
+    _safe_predicate,
+)
 from ..registry import register_subsystem_clear, registry
 from ..utils._narrowing import is_class
 from ..utils.imports import import_attr
@@ -133,28 +140,6 @@ _ALLOWED_MUTATION_META_KEYS: frozenset[str] = MODEL_BACKED_WRITE_META_KEYS | fro
 )
 
 
-def _safe_frozenset_membership(value: object, choices: frozenset[str]) -> bool:
-    """Return ``value in choices``, answering ``False`` when hashing ``value`` raises.
-
-    ``Meta.operation`` is consumer-supplied: a ``str`` subclass may define a
-    raising ``__hash__`` (or one that turns hostile after its first call), and
-    frozenset containment hashes its probe FIRST, so the raw ``RuntimeError``
-    would escape the very validation raise that exists to reject the value -
-    the hostile-Meta containment parity ``_validate_permission_classes``
-    already applies to its own consumer-supplied containers. A value that
-    cannot be hashed cannot be a validated operation anyway, so answering
-    ``False`` routes it to the ordinary typed reject, whose ``_safe_arg_repr``
-    render is itself hostile-proof.
-    """
-    try:
-        return value in choices
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        # Deliberately ``BaseException`` (the package's hostile-dunder convention):
-        # a display-adjacent probe must never propagate ``SystemExit`` /
-        # ``KeyboardInterrupt`` past the typed reject.
-        return False
-
-
 def require_non_delete_operation(base_label: str, name: str, meta: type[object]) -> str:
     """Return ``Meta.operation`` if it is create/update, else raise the shared reject.
 
@@ -165,9 +150,14 @@ def require_non_delete_operation(base_label: str, name: str, meta: type[object])
     model-less plain form does NOT call this (it rejects ANY ``operation`` key).
     """
     operation = getattr(meta, "operation", None)
-    if not isinstance(operation, str) or not _safe_frozenset_membership(
-        operation,
+    # ``Meta.operation`` is consumer-supplied: frozenset containment hashes its probe
+    # FIRST, so a ``str`` subclass with a raising ``__hash__`` would otherwise escape
+    # as the raw error instead of reaching the typed reject. An unhashable value cannot
+    # be a validated operation anyway, so it counts as a non-member.
+    if not isinstance(operation, str) or not _safe_predicate(
+        operator.contains,
         NON_DELETE_WRITE_OPERATIONS,
+        operation,
     ):
         raise non_delete_operation_error(base_label, name, operation)
     return operation
@@ -1065,10 +1055,7 @@ def _validate_permission_classes(
             f"permission classes (e.g. [DjangoModelPermission]); got {_safe_arg_repr(value)}.",
         ) from exc
     for entry in classes:
-        try:
-            has_perm = getattr(entry, "has_permission", None)
-        except BaseException:  # noqa: BLE001 - hostile object, contained by design
-            has_perm = None
+        has_perm = _safe_attr(entry, "has_permission")
         if not isinstance(entry, type) or not callable(has_perm):
             raise ConfigurationError(
                 f"{base_label} {mutation_name}.Meta.permission_classes entry "
@@ -1333,9 +1320,12 @@ class DjangoMutation(_ModelResolverSeamsBase, metaclass=DjangoMutationMetaclass)
         model = require_model_class(name, model, base_label="DjangoMutation")
 
         operation = getattr(meta, "operation", None)
-        if not isinstance(operation, str) or not _safe_frozenset_membership(
-            operation,
+        # A hostile ``__hash__`` on a ``str`` subclass counts as a non-member
+        # (see ``require_non_delete_operation``), reaching the typed reject below.
+        if not isinstance(operation, str) or not _safe_predicate(
+            operator.contains,
             _VALID_OPERATIONS,
+            operation,
         ):
             raise ConfigurationError(
                 f"DjangoMutation {name}.Meta.operation must be one of "

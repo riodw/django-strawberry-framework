@@ -85,7 +85,7 @@ from django_strawberry_framework.rest_framework.sets import (
     _validate_schema_field_map,
     _validate_serializer_nested_fields,
 )
-from tests._idioms import definition_raises
+from tests._idioms import ModelSerializerBase, definition_raises
 from tests._info import unread_info
 
 if TYPE_CHECKING:
@@ -124,9 +124,8 @@ def _isolate_registry() -> Iterator[None]:
 def _item_serializer():
     """A ``ModelSerializer`` over products ``Item`` (the serializer-flavor fixture)."""
 
-    class ItemSerializer(serializers.ModelSerializer[product_models.Item]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class ItemSerializer(ModelSerializerBase[product_models.Item]):
+        class Meta:
             model = product_models.Item
             fields = (
                 "name",
@@ -240,11 +239,10 @@ def test_plain_serializer_with_no_model_rejected():
 def test_modelserializer_with_no_meta_model_rejected():
     """A ``ModelSerializer`` whose ``Meta.model`` is unset raises a clean config error, not AttributeError."""
 
-    class NoModelSerializer(serializers.ModelSerializer[models.Model]):
+    class NoModelSerializer(ModelSerializerBase[models.Model]):
         name = serializers.CharField()
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             fields = ("name",)
 
     with pytest.raises(ConfigurationError, match="resolves no model"):
@@ -607,11 +605,10 @@ def _item_serializer_with_required_extra():
     trigger (the schema would compile but ``is_valid()`` could never succeed).
     """
 
-    class ItemSerializer(serializers.ModelSerializer[product_models.Item]):
+    class ItemSerializer(ModelSerializerBase[product_models.Item]):
         confirm = serializers.CharField()
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("name", "category", "confirm")
 
@@ -657,14 +654,13 @@ def test_declared_choice_allow_blank_over_strict_choice_column_fails_finalize():
 
     assert registry.get(Book) is BookT
 
-    class BlankStatusSer(serializers.ModelSerializer[Book]):
+    class BlankStatusSer(ModelSerializerBase[Book]):
         circulation_status = serializers.ChoiceField(
             choices=Book.CirculationStatus.choices,
             allow_blank=True,
         )
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = Book
             fields = ("title", "circulation_status")
 
@@ -699,13 +695,12 @@ def test_multiple_choice_over_single_value_choice_column_fails_finalize():
 
     assert registry.get(Book) is BookT
 
-    class MultiStatusSer(serializers.ModelSerializer[Book]):
+    class MultiStatusSer(ModelSerializerBase[Book]):
         circulation_status = serializers.MultipleChoiceField(
             choices=Book.CirculationStatus.choices,
         )
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = Book
             fields = ("title", "circulation_status")
 
@@ -980,11 +975,10 @@ def test_meta_injected_field_must_be_writable_at_class_creation(
 ):
     """Injected fields use the generated input's writable schema-time basis."""
 
-    class NonWritableInjectedSerializer(serializers.ModelSerializer[product_models.Item]):
+    class NonWritableInjectedSerializer(ModelSerializerBase[product_models.Item]):
         server_value = field
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("name", "category", "server_value")
 
@@ -1003,11 +997,10 @@ def test_meta_injected_field_must_be_writable_at_class_creation(
 def test_hidden_field_source_collision_with_client_input_raises_at_class_creation():
     """A HiddenField default cannot silently replace a client's value for the same source."""
 
-    class HiddenCollisionSerializer(serializers.ModelSerializer[product_models.Item]):
+    class HiddenCollisionSerializer(ModelSerializerBase[product_models.Item]):
         hidden_name = serializers.HiddenField(default="server", source="name")
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("name", "category", "hidden_name")
 
@@ -1024,11 +1017,10 @@ def test_hidden_field_source_collision_with_client_input_raises_at_class_creatio
 def test_narrowed_default_field_source_collision_raises_at_class_creation():
     """A narrowed-out defaulted field remains part of DRF's validated-data write surface."""
 
-    class DefaultCollisionSerializer(serializers.ModelSerializer[product_models.Item]):
+    class DefaultCollisionSerializer(ModelSerializerBase[product_models.Item]):
         server_name = serializers.CharField(default="server", source="name")
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("name", "category", "server_name")
 
@@ -1046,11 +1038,10 @@ def test_narrowed_default_field_source_collision_raises_at_class_creation():
 def _dup_source_serializer():
     """A serializer where `summary` (source=) and `description` feed ONE model attribute."""
 
-    class DupSourceSer(serializers.ModelSerializer[product_models.Item]):
+    class DupSourceSer(ModelSerializerBase[product_models.Item]):
         summary = serializers.CharField(source="description")
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = (
                 "name",
@@ -1092,11 +1083,10 @@ def test_writable_star_source_field_is_rejected_at_class_creation():
     rejects every writable star field at class creation instead of treating it as exempt.
     """
 
-    class StarSer(serializers.ModelSerializer[product_models.Item]):
+    class StarSer(ModelSerializerBase[product_models.Item]):
         alpha = serializers.CharField(source="*")
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("name", "category", "alpha")
 
@@ -1157,11 +1147,10 @@ def _category_with_items(
 ) -> type[serializers.ModelSerializer[product_models.Category]]:
     """A ``Category`` serializer nesting ``child`` as writable ``items`` (create overridden)."""
 
-    class CategoryWithItems(serializers.ModelSerializer[product_models.Category]):
+    class CategoryWithItems(ModelSerializerBase[product_models.Category]):
         items = child(many=True)
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Category
             fields = ("name", "items")
 
@@ -1410,9 +1399,8 @@ def test_serializer_meta_optional_fields_is_not_the_public_api():
     """
     _declare_products_primaries()
 
-    class S(serializers.ModelSerializer[product_models.Item]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class S(ModelSerializerBase[product_models.Item]):
+        class Meta:
             model = product_models.Item
             fields = ("name", "category")
             optional_fields = ("name",)  # the serializer's own Meta - NOT the input API
@@ -1459,9 +1447,8 @@ def test_get_serializer_for_schema_classmethod_override_drives_bind():
     """
     _declare_products_primaries()
 
-    class CtxItemSerializer(serializers.ModelSerializer[product_models.Item]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class CtxItemSerializer(ModelSerializerBase[product_models.Item]):
+        class Meta:
             model = product_models.Item
             fields = ("name", "category")
 
@@ -1685,15 +1672,13 @@ def test_subclass_redefining_serializer_validates_against_child_serializer():
     """
     _declare_products_primaries()
 
-    class CategorySer(serializers.ModelSerializer[product_models.Category]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class CategorySer(ModelSerializerBase[product_models.Category]):
+        class Meta:
             model = product_models.Category
             fields = ("name",)
 
-    class ItemSer(serializers.ModelSerializer[product_models.Item]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class ItemSer(ModelSerializerBase[product_models.Item]):
+        class Meta:
             model = product_models.Item
             fields = ("name", "category")
 
@@ -2016,18 +2001,16 @@ def _category_field_map(
 ) -> tuple[type[serializers.ModelSerializer[product_models.Category]], dict[str, DRFField]]:
     """Return a ``CategorySerializer``'s bound field map (nested ``items`` list) + the class."""
 
-    class ItemInline(serializers.ModelSerializer[product_models.Item]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class ItemInline(ModelSerializerBase[product_models.Item]):
+        class Meta:
             model = product_models.Item
             fields = ("name",)
 
-    class CategorySer(serializers.ModelSerializer[product_models.Category]):
+    class CategorySer(ModelSerializerBase[product_models.Category]):
         if with_items:
             items = ItemInline(many=True)
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Category
             fields = ("name", "items") if with_items else ("name",)
 
@@ -2267,9 +2250,8 @@ def test_validate_nested_fields_empty_mapping_requires_no_write_override():
     and every other consumer treats a falsy ``nested_fields`` as absent.
     """
 
-    class ItemInlineless(serializers.ModelSerializer[product_models.Item]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class ItemInlineless(ModelSerializerBase[product_models.Item]):
+        class Meta:
             model = product_models.Item
             fields = ("name",)
 
@@ -2286,17 +2268,15 @@ def test_validate_nested_fields_empty_mapping_requires_no_write_override():
 def test_nested_fields_stored_on_snapshot_and_builds():
     """A declared ``Meta.nested_fields`` is stored on the snapshot and the mutation finalizes."""
 
-    class ItemInline(serializers.ModelSerializer[product_models.Item]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class ItemInline(ModelSerializerBase[product_models.Item]):
+        class Meta:
             model = product_models.Item
             fields = ("name",)
 
-    class CategoryWithItems(serializers.ModelSerializer[product_models.Category]):
+    class CategoryWithItems(ModelSerializerBase[product_models.Category]):
         items = ItemInline(many=True)
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Category
             fields = ("name", "items")
 
@@ -2345,19 +2325,17 @@ def test_nested_fields_stored_on_snapshot_and_builds():
 def test_nested_hidden_field_source_collision_raises_at_class_creation():
     """An opted-in nested serializer cannot hide a last-write-wins source collision."""
 
-    class ItemInline(serializers.ModelSerializer[product_models.Item]):
+    class ItemInline(ModelSerializerBase[product_models.Item]):
         hidden_name = serializers.HiddenField(default="server", source="name")
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("name", "hidden_name")
 
-    class CategoryWithItems(serializers.ModelSerializer[product_models.Category]):
+    class CategoryWithItems(ModelSerializerBase[product_models.Category]):
         items = ItemInline(many=True)
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Category
             fields = ("name", "items")
 
@@ -2379,19 +2357,17 @@ def test_nested_hidden_field_source_collision_raises_at_class_creation():
 def test_nested_star_source_field_raises_at_class_creation():
     """An opted-in nested serializer cannot smuggle a whole-object ``source="*"`` field."""
 
-    class ItemInline(serializers.ModelSerializer[product_models.Item]):
+    class ItemInline(ModelSerializerBase[product_models.Item]):
         whole = serializers.DictField(source="*")
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("name", "whole")
 
-    class CategoryWithItems(serializers.ModelSerializer[product_models.Category]):
+    class CategoryWithItems(ModelSerializerBase[product_models.Category]):
         items = ItemInline(many=True)
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Category
             fields = ("name", "items")
 
@@ -2426,11 +2402,10 @@ def test_read_only_nested_serializer_narrowed_away_does_not_break_class_creation
         def get_fields(self):
             raise RuntimeError("child fields should not be read")
 
-    class ShelfWithReadOnlyChild(serializers.ModelSerializer[product_models.Item]):
+    class ShelfWithReadOnlyChild(ModelSerializerBase[product_models.Item]):
         child = RaisingChild(read_only=True)
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("name", "child")
 
@@ -2476,11 +2451,10 @@ def test_narrowed_away_writable_nested_not_fingerprinted():
         def get_fields(self):
             raise RuntimeError("cannot read no-arg")
 
-    class ItemWithWritableChild(serializers.ModelSerializer[product_models.Item]):
+    class ItemWithWritableChild(ModelSerializerBase[product_models.Item]):
         child = RaisingWritableChild()
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("name", "child")
 
@@ -2513,11 +2487,10 @@ def test_unopted_writable_nested_reports_opt_in_error_not_materialization():
         def get_fields(self):
             raise RuntimeError("unopted nested child fields must not be read")
 
-    class ItemWithUnoptedChild(serializers.ModelSerializer[product_models.Item]):
+    class ItemWithUnoptedChild(ModelSerializerBase[product_models.Item]):
         child = RaisingChild()
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("name", "child")
 
@@ -2545,17 +2518,15 @@ def test_unopted_writable_nested_reports_opt_in_error_not_materialization():
 def _nested_category_serializer():
     """A ``Category`` ``ModelSerializer`` with a nested writable ``items`` list + a ``create`` override."""
 
-    class ItemInline(serializers.ModelSerializer[product_models.Item]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class ItemInline(ModelSerializerBase[product_models.Item]):
+        class Meta:
             model = product_models.Item
             fields = ("name",)
 
-    class CategoryWithItems(serializers.ModelSerializer[product_models.Category]):
+    class CategoryWithItems(ModelSerializerBase[product_models.Category]):
         items = ItemInline(many=True)
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Category
             fields = ("name", "items")
 
@@ -2665,13 +2636,12 @@ def test_deeper_nested_fields_non_nested_field_raises_configuration_error():
 def test_nested_fields_cycle_raises_configuration_error_at_class_creation():
     """A self-referential nested serializer configuration fails loud with ConfigurationError."""
 
-    class RecursiveCategorySerializer(serializers.ModelSerializer[product_models.Category]):
+    class RecursiveCategorySerializer(ModelSerializerBase[product_models.Category]):
         # basedpyright: drf-stubs read this as an assignment to ``Field.parent``; DRF's
         # ``SerializerMetaclass`` pops every declared field out of the class body, so it never is
         parent = serializers.SerializerMethodField()  # pyright: ignore[reportAssignmentType]
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Category
             fields = ("name", "parent")
 
@@ -2698,9 +2668,8 @@ def test_nested_fields_cycle_raises_configuration_error_at_class_creation():
 def test_mutual_nested_fields_cycle_raises_configuration_error_at_class_creation():
     """A mutual cycle in nested serializers fails loud with ConfigurationError."""
 
-    class MutCategorySerializer(serializers.ModelSerializer[product_models.Category]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class MutCategorySerializer(ModelSerializerBase[product_models.Category]):
+        class Meta:
             model = product_models.Category
             fields = ("name", "item")
 
@@ -2708,11 +2677,10 @@ def test_mutual_nested_fields_cycle_raises_configuration_error_at_class_creation
         def create(self, validated_data: dict[str, object]):
             return product_models.Category.objects.create(**validated_data)
 
-    class MutItemSerializer(serializers.ModelSerializer[product_models.Item]):
+    class MutItemSerializer(ModelSerializerBase[product_models.Item]):
         category = MutCategorySerializer()
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("name", "category")
 
@@ -2755,11 +2723,10 @@ def test_validate_nested_fields_child_serializer_errors():
         def fields(self):  # pyright: ignore[reportIncompatibleVariableOverride]
             raise RuntimeError("Unexpected runtime error in child fields")
 
-    class Parent1(serializers.ModelSerializer[product_models.Category]):
+    class Parent1(ModelSerializerBase[product_models.Category]):
         child = BrokenConfigChild()
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Category
             fields = ("child",)
 
@@ -2767,11 +2734,10 @@ def test_validate_nested_fields_child_serializer_errors():
         def create(self, validated_data: dict[str, object]) -> NoReturn:
             raise AssertionError("the nested-write check reads this override; nothing calls it")
 
-    class Parent2(serializers.ModelSerializer[product_models.Category]):
+    class Parent2(ModelSerializerBase[product_models.Category]):
         child = BrokenExcChild()
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Category
             fields = ("child",)
 

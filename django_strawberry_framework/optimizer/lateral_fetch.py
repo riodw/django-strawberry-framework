@@ -712,7 +712,7 @@ def _recognize_lateral_fetch(
 
 
 def _is_window_qual(node: object) -> bool:
-    """True if ``node`` constrains ONLY the planned ``_dst_*`` window annotations.
+    """Return whether ``node`` constrains ONLY the planned ``_dst_*`` window annotations.
 
     A window-range lookup carries the cloned ``Window`` expression as its
     ``lhs``; the ambiguous-shape marker filter arrives as a nested ``WhereNode``
@@ -928,7 +928,7 @@ def _visibility_quals_match(
 
 
 def _parent_in_values(node: object, *, column: str, table: str) -> list[object] | None:
-    """The parent-id list if ``node`` is the prefetch ``__in`` filter, else ``None``.
+    """Return the parent-id list if ``node`` is the prefetch ``__in`` filter, else ``None``.
 
     Matches by the lookup's target ``column`` AND ``table`` (the child table for
     ``DIRECT_FK``, the through table for ``THROUGH_TABLE`` - Django's
@@ -1008,7 +1008,7 @@ LATERAL_STRATEGY = LateralPrefetchStrategy()
 
 
 def _plain_single_table_where(node: Node, base_table: str) -> bool:
-    """True iff every leaf qual under ``node`` is a plain ``base_table`` column qual.
+    """Return whether every leaf qual under ``node`` is a plain ``base_table`` column qual.
 
     The v1 visibility-WHERE admission test: each leaf lookup's ``lhs`` must be a
     bare ``Col`` on the base child table (``base_table`` is the ``Col.alias``
@@ -1223,7 +1223,7 @@ def _select_columns(
     queryset: QuerySet[models.Model],
     child_meta: Options[models.Model],
 ) -> tuple[tuple[str, str], ...] | None:
-    """The loaded ``(attname, column)`` projection in concrete-field order.
+    """Return the loaded ``(attname, column)`` projection in concrete-field order.
 
     Mirrors the ``.only()`` deferred-loading shape the walker plans (names
     plus the pk); the full projection when nothing is deferred. A ``defer()``

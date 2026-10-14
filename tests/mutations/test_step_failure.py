@@ -28,10 +28,8 @@ if TYPE_CHECKING:
     from django.db import models
 
 
-@pytest.fixture(autouse=True)
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def _isolate_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
-    """Declare this module's types and mutation over a cleared registry."""
+# This module's types and mutation are declared over a cleared registry.
+pytestmark = pytest.mark.usefixtures("isolate_global_registry")
 
 
 @pytest.fixture
@@ -72,7 +70,7 @@ def test_list_decode_product_reaches_the_write_step(create_item: type[DjangoMuta
             create_item,
             info=make_info(),
             data=None,
-            id=None,
+            id_=None,
             decode_step=lambda _instance: ["product"],
             write_step=write_step,
         )
@@ -96,7 +94,7 @@ def test_step_failure_short_circuits_to_the_error_envelope(create_item: type[Dja
             create_item,
             info=make_info(),
             data=None,
-            id=None,
+            id_=None,
             decode_step=lambda _instance: StepFailure([error]),
             write_step=write_step,
         )

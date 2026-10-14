@@ -224,7 +224,7 @@ def _resolved_max_request_body_bytes(value: object) -> int | None:
 
 
 def _declared_content_length(request: HttpRequest) -> int | None:
-    """The request's declared ``CONTENT_LENGTH`` as an ``int``, or ``None``.
+    """Return the request's declared ``CONTENT_LENGTH`` as an ``int``, or ``None``.
 
     ``None`` covers both unmeasurable shapes: the header is absent (read as
     ``""``) or is not a number; ``int`` raises ``ValueError`` on either, and
@@ -968,7 +968,7 @@ async def _async_run_after_csrf_check(
     args: tuple[object, ...],
     kwargs: dict[str, object],
 ) -> _ResponseT:
-    """The async twin of :func:`_run_after_csrf_check` - see it for the whole contract.
+    """Run the async twin of :func:`_run_after_csrf_check` - see it for the whole contract.
 
     Needed as a separate function because ``csrf_protect`` branches on
     ``iscoroutinefunction(view_func)`` to decide whether to ``await`` the view, so
@@ -1077,7 +1077,7 @@ class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView[Context, RootValu
 
     @classonlymethod
     @override
-    def as_view(cls, **initkwargs: object) -> Callable[..., HttpResponseBase]:  # noqa: N805 - Django's own signature
+    def as_view(cls, **initkwargs: object) -> Callable[..., HttpResponseBase]:
         """Return upstream's view callback, stamped with the ordering protocol (``_boundary_view``)."""
         return _boundary_view(super().as_view(**initkwargs))
 
@@ -1148,7 +1148,7 @@ class AsyncDjangoGraphQLView(_RequestBodyBoundaryMixin, AsyncGraphQLView[Context
     # basedpyright: Strawberry (after django-stubs) types ``as_view``'s callback sync only; the
     # callback it returns here is the coroutine function its own ``as_view`` marks it
     def as_view(  # pyright: ignore[reportIncompatibleMethodOverride]
-        cls,  # noqa: N805 - Django's own signature
+        cls,
         **initkwargs: object,
     ) -> Callable[..., Coroutine[object, object, HttpResponseBase]]:
         """Return upstream's coroutine view callback, stamped with the ordering protocol.

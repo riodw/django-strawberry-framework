@@ -242,13 +242,13 @@ def run_write_pipeline_sync(
     mutation_cls: WriteMutationClass,
     info: Info[object, object],
     data: object,
-    id: object,  # noqa: A002
+    id_: object,
     *,
     decode_step: Callable[[models.Model | None], _DecodedT | StepFailure],
     write_step: Callable[[models.Model | None, _DecodedT], _SavedT | StepFailure],
     tail_step: Callable[[_SavedT], object] | None = None,
 ) -> object:
-    """The shared write orchestration every mutation flavor rides.
+    """Run the shared write orchestration every mutation flavor rides.
 
     The single-sited skeleton the model (create / update / delete), the
     ``ModelForm``, the serializer, and the model-less plain form all ride, so the
@@ -324,7 +324,7 @@ def run_write_pipeline_sync(
         instance = None
         if needs_locate:
             node_id, id_error = coerce_lookup_id(
-                id,
+                id_,
                 cast("type[DjangoType]", primary_type),
                 using=using,
                 schema=strawberry_schema_from_info(info),
@@ -942,7 +942,7 @@ def _run_pipeline_sync(
     mutation_cls: type[DjangoMutation],
     info: Info[object, object],
     data: object,
-    id: object,  # noqa: A002
+    id_: object,
 ) -> object:
     """Run the synchronous decode -> ... -> payload pipeline inside one ``transaction.atomic()``.
 
@@ -957,14 +957,14 @@ def _run_pipeline_sync(
     primary_type = mutation_cls._primary_type
 
     if meta.operation == "delete":
-        return _run_delete(mutation_cls, info, id)
+        return _run_delete(mutation_cls, info, id_)
 
     model = model_for(primary_type)
     return run_write_pipeline_sync(
         mutation_cls,
         info,
         data,
-        id,
+        id_,
         decode_step=lambda instance: _model_decode_step(
             model,
             data,
@@ -993,7 +993,7 @@ def _model_decode_step(
     specs: Sequence[InputFieldSpec],
     model_fields: ModelFieldIndex,
 ) -> _ModelDecoded | _ModelDecodedWithExcluded | StepFailure:
-    """The model ``decode_step``: relation-decode + construct / ``setattr``.
+    """Run the model ``decode_step``: relation-decode + construct / ``setattr``.
 
     Decodes the input via ``_decode_relations`` (the ``036`` contract: type-check
     + visibility on every relation branch, riding ``decode_provided_fields``),
@@ -1053,7 +1053,7 @@ def _model_write_step(
     instance: models.Model | None,
     decoded: _ModelDecoded,
 ) -> models.Model | StepFailure:
-    """The model ``write_step``: ``full_clean`` -> ``save`` -> M2M.
+    """Run the model ``write_step``: ``full_clean`` -> ``save`` -> M2M.
 
     From validation onward create and update run an IDENTICAL tail (the prior
     ``_validate_save_assign_refetch_payload``): ``full_clean(exclude=...)`` mapped to
@@ -1137,7 +1137,7 @@ def forced_save_or_field_errors(target: models.Model) -> list[FieldError] | None
 def _run_delete(
     mutation_cls: type[DjangoMutation],
     info: Info[object, object],
-    id: object,  # noqa: A002
+    id_: object,
 ) -> object:
     """Delete rider of ``run_write_pipeline_sync``: snapshot-before-delete via ``tail_step``.
 
@@ -1154,7 +1154,7 @@ def _run_delete(
         mutation_cls,
         info,
         None,
-        id,
+        id_,
         decode_step=lambda _instance: None,
         # A delete always locates: a missing row returned the not-found envelope
         # before the write step, so the step receives the located row.
@@ -1370,7 +1370,7 @@ def save_or_field_errors(save_callable: Callable[[], object]) -> list[FieldError
 
 
 def coerce_lookup_id(
-    id: object,  # noqa: A002
+    id_: object,
     target_type: type[DjangoType],
     *,
     using: str | None = None,
@@ -1427,11 +1427,11 @@ def coerce_lookup_id(
     """
     target_model = model_for(target_type)
     if not implements_relay_node(target_type):
-        pk = coerce_relation_pk_or_none(target_model, id)
+        pk = coerce_relation_pk_or_none(target_model, id_)
         if pk is None:
             return None, not_found_error()
         return pk, None
-    result = decode_model_global_id(id, target_model, using=using, schema=schema)
+    result = decode_model_global_id(id_, target_model, using=using, schema=schema)
     if result.status in (GlobalIDDecode.DECODE_FAILED, GlobalIDDecode.WRONG_MODEL):
         return None, _invalid_lookup_id_error()
     if result.status is GlobalIDDecode.UNCOERCIBLE_PK:
@@ -1494,7 +1494,7 @@ async def run_pipeline_async(
     mutation_cls: _MutationClassT,
     info: Info[object, object],
     data: object,
-    id: object,  # noqa: A002
+    id_: object,
 ) -> object:
     """Run a sync mutation/form pipeline body in one ``sync_to_async(thread_sensitive=True)`` call.
 
@@ -1508,7 +1508,7 @@ async def run_pipeline_async(
     synchronously inside that thread, while an ``async def get_queryset`` raises
     ``SyncMisuseError`` there (no awaiting context - the standing discipline).
     """
-    return await run_in_one_sync_boundary(sync_body, mutation_cls, info, data, id)
+    return await run_in_one_sync_boundary(sync_body, mutation_cls, info, data, id_)
 
 
 # ``run_in_one_sync_boundary`` is imported from ``utils/querysets`` above and

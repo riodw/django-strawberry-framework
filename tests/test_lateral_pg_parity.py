@@ -42,9 +42,13 @@ from strategy_schemas import build_strategy_schema, make_django_type
 from strawberry.relay.utils import to_base64
 
 from django_strawberry_framework import DjangoListField, DjangoType, finalize_django_types
-from tests._idioms import is_object_dict, is_object_list
+from tests._idioms import is_object_dict, is_object_list, run_capturing
 
-pytestmark = [pytest.mark.pg, pytest.mark.django_db]
+pytestmark = [
+    pytest.mark.pg,
+    pytest.mark.django_db,
+    pytest.mark.usefixtures("isolate_global_registry"),
+]
 
 
 _RowT = TypeVar("_RowT", bound=Model)
@@ -67,13 +71,6 @@ class _Closeable(Protocol):
     """A raw database connection handle, as the stray-connection registry holds them."""
 
     def close(self) -> None: ...
-
-
-@pytest.fixture(autouse=True)
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def _isolate_global_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
-    """Every test here declares fresh ``DjangoType`` classes - opt the module
-    into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
 
 
 def _make_type(
@@ -485,16 +482,16 @@ def test_stray_executor_thread_connections_are_tracked_for_session_close():
     registry_list: object = vars(postgres_base)["_dst_stray_connection_registry"]
     assert is_object_list(registry_list)
     before = len(registry_list)
-    failures: list[Exception] = []
+    failures: list[BaseException] = []
 
     def _open_and_close_on_worker_thread():
-        try:
-            django_connections["default"].ensure_connection()
-            django_connections["default"].close()
-        except Exception as exc:  # noqa: BLE001 - worker thread reports to the main thread
-            failures.append(exc)
+        django_connections["default"].ensure_connection()
+        django_connections["default"].close()
 
-    worker = threading.Thread(target=_open_and_close_on_worker_thread)
+    worker = threading.Thread(
+        target=run_capturing,
+        args=(failures, _open_and_close_on_worker_thread),
+    )
     worker.start()
     worker.join()
     assert not failures, failures

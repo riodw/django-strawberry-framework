@@ -37,7 +37,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NoReturn, cast
 
-from ..exceptions import ConfigurationError, _safe_type_name
+from ..exceptions import ConfigurationError, _safe_attr, _safe_type_name
 from ._narrowing import dict_get, dict_items, is_dict, is_list, is_mapping, list_iter
 
 if TYPE_CHECKING:
@@ -251,10 +251,7 @@ def raise_set_traversal_depth_exceeded(
     only one of the two copies.
     """
     cap = set_traversal_depth_cap(set_cls)
-    try:
-        label = getattr(set_cls, "__qualname__", None)
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        label = None
+    label = _safe_attr(set_cls, "__qualname__")
     if not isinstance(label, str):
         label = _safe_type_name(set_cls)
     if subject:

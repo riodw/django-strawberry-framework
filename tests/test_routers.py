@@ -164,7 +164,7 @@ from django_strawberry_framework.error_policy import DEFAULT_ERROR_POLICY
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.utils import sessions as session_store_module
 from django_strawberry_framework.utils.permissions import ChannelsRequestAdapter, request_from_info
-from tests._idioms import is_object_dict, is_object_list, websocket_scope
+from tests._idioms import is_object_dict, is_object_list, run_capturing, websocket_scope
 from tests._soft_dependency import blocked_modules, evicted_modules, simulated_absence
 
 if TYPE_CHECKING:
@@ -1825,13 +1825,10 @@ def test_concurrent_first_class_access_returns_one_cached_class(monkeypatch: pyt
     monkeypatch.setattr(routers_module, "require_channels", synchronized_guard)
 
     def load_class():
-        try:
-            ready.wait(timeout=5)
-            results.append(_router_class())
-        except BaseException as exc:  # noqa: BLE001 - worker thread reports to the main thread
-            errors.append(exc)
+        ready.wait(timeout=5)
+        results.append(_router_class())
 
-    threads = [threading.Thread(target=load_class) for _ in range(2)]
+    threads = [threading.Thread(target=run_capturing, args=(errors, load_class)) for _ in range(2)]
     for thread in threads:
         thread.start()
     assert entered.wait(timeout=5)

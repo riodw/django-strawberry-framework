@@ -558,7 +558,7 @@ _FALLBACK_ENFORCEMENT = _SchemaEnforcement(
 
 
 def _enforcement(schema: object) -> _SchemaEnforcement:
-    """The record ``schema`` was settled with, or the record of one that settled none."""
+    """Return the record ``schema`` was settled with, or the record of one that settled none."""
     record = _SCHEMA_ENFORCEMENT.recall(schema)
     return _FALLBACK_ENFORCEMENT if record is None else record
 
@@ -707,7 +707,7 @@ class _RefusedConfiguration(SchemaExtension):
         raise self._refusal()
 
     def _refusal(self) -> GraphQLError:
-        """The error this schema answers every operation with."""
+        """Return the error this schema answers every operation with."""
         return GraphQLError(
             self._message,
             extensions={"code": SCHEMA_CONFIGURATION_ERROR_CODE},
@@ -715,7 +715,7 @@ class _RefusedConfiguration(SchemaExtension):
 
 
 def _refused_chain(message: str, reason: str, *, sync: bool) -> list[SchemaExtension]:
-    """The only chain a refused configuration runs: mask, refuse, and still bound.
+    """Build the only chain a refused configuration runs: mask, refuse, and still bound.
 
     Both package authorities are kept. The masking extension is kept because the
     refusal still travels as an ordinary response and an unexpected exception
@@ -758,7 +758,7 @@ def _refused_chain(message: str, reason: str, *, sync: bool) -> list[SchemaExten
 
 
 def _operation_mode(*, sync: bool) -> OperationMode:
-    """The executor this operation is being driven by, from the flag upstream passed.
+    """Return the executor this operation is being driven by, from the flag upstream passed.
 
     ``get_extensions(sync=True)`` is ``execute_sync`` and nothing else;
     ``execute``, ``stream`` and ``subscribe`` all leave it false. That flag is
@@ -1317,7 +1317,7 @@ def _claimed_authority(member: object) -> str | None:
 
 
 def _admitted_chain(resolved: list[SchemaExtension], *, sync: bool) -> list[SchemaExtension]:
-    """This schema's authorities around ``resolved``, and the guard behind them.
+    """Return the schema's authorities around ``resolved``, and the guard behind them.
 
     The error policy is FIRST and the resource policy LAST, and both positions
     are the contract (spec-048 Decision 10). Strawberry's ``on_operation``
@@ -1444,7 +1444,7 @@ def _consumer_extension_entries(
 
 
 def _declared_authority(entry: object) -> type[SchemaExtension] | None:
-    """The enforcement kind ``entry`` declares directly, or ``None`` for any other entry.
+    """Return the enforcement kind ``entry`` declares directly, or ``None`` for any other entry.
 
     A class or an instance names its type without anything being run, which is
     what makes this answerable at construction; a factory is opaque until it is
@@ -1472,7 +1472,7 @@ def _declared_authority(entry: object) -> type[SchemaExtension] | None:
 def _entry_resource_policy(
     entry: DjangoResourcePolicyExtension | type[DjangoResourcePolicyExtension],
 ) -> ResourcePolicy | None:
-    """The explicit policy a directly supplied resource-policy INSTANCE was built with.
+    """Return the explicit policy a directly supplied resource-policy INSTANCE was built with.
 
     ``None`` for a class entry, which was never constructed and therefore
     declares nothing, and for an instance built without an override, which
@@ -1487,7 +1487,7 @@ def _entry_resource_policy(
 
 
 def _entry_type(entry: object) -> type[object]:
-    """The class an entry names - itself, or the type of the instance it is.
+    """Return the class an entry names - itself, or the type of the instance it is.
 
     Read with ``type()``, never ``isinstance``: a consumer instance answers
     ``__class__`` with whatever it likes, so one claiming to be a class would be

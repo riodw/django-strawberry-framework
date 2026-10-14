@@ -48,7 +48,6 @@ import contextlib
 import contextvars
 import copy
 import math
-import pickle
 import time
 from collections.abc import AsyncGenerator, Callable, Generator, Iterable, Iterator, Mapping
 from types import MappingProxyType, SimpleNamespace
@@ -106,7 +105,9 @@ from django_strawberry_framework.resource_policy import (
 )
 from django_strawberry_framework.schema import _consumer_extension_entries
 from django_strawberry_framework.utils.querysets import materialized_rows, normalized_row_source
+from tests._django_private import has_apply_rel_filters
 from tests._execution import make_execution_context
+from tests._idioms import pickle_roundtrip
 
 _M = TypeVar("_M", bound=Model)
 _QuerySetT = TypeVar("_QuerySetT", bound="QuerySet[Model, object]")
@@ -1286,15 +1287,19 @@ async def test_bounded_rows_async_survives_a_hostile_notes_list_on_the_source_er
     error with the attachment's own ``TypeError``. The assertion inspects the
     caught error's own attributes rather than ``pytest.raises(match=...)``:
     pytest's matcher stringifies ``__notes__`` too, so handing it this hostile
-    surface would detonate the matcher, not the seam under test.
+    surface would detonate the matcher, not the seam under test. A dedicated
+    error class keeps ``pytest.raises`` narrow without a ``match``.
     """
+
+    class SourceError(ValueError):
+        pass
 
     class HostileNotesRows:
         def __aiter__(self):
             return self
 
         async def __anext__(self):
-            error = ValueError("source failed")
+            error = SourceError("source failed")
             # basedpyright: the non-list __notes__ is the hostile input under test; typeshed types
             # __notes__ as list[str]
             error.__notes__ = 42  # pyright: ignore[reportAttributeAccessIssue]
@@ -1303,7 +1308,7 @@ async def test_bounded_rows_async_survives_a_hostile_notes_list_on_the_source_er
         async def aclose(self):
             raise RuntimeError("cleanup failed")
 
-    with pytest.raises(ValueError, match="source failed") as caught:
+    with pytest.raises(SourceError) as caught:
         await bounded_rows_async(HostileNotesRows(), SimpleNamespace(context={}))
     assert str(caught.value) == "source failed"
     # The hostile surface itself survived untouched: the containment swallowed
@@ -2415,9 +2420,8 @@ def test_a_queryset_subclass_is_never_asked_what_it_has_already_fetched():
 
 def _relation_source(manager: Manager[Item], queryset: _QuerySetT) -> _QuerySetT:
     """Django's own ``_apply_rel_filters``: ``queryset`` carrying the relation's pending predicate."""
-    # basedpyright: django-stubs omits RelatedManager._apply_rel_filters, reported as an unknown
-    # attribute
-    source = manager._apply_rel_filters(queryset)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
+    assert has_apply_rel_filters(manager)
+    source = manager._apply_rel_filters(queryset)
     assert isinstance(source, type(queryset))
     return source
 
@@ -2784,13 +2788,13 @@ class _Probe:
     scalar_edges: _ScalarEdges
 
     @strawberry.field
-    # basedpyright: Strawberry derives the probe's GraphQL argument from this parameter
-    def page(self, first: int | None = None) -> _ProbeConnection:  # pyright: ignore[reportUnusedParameter]
+    def page(self, first: int | None = None) -> _ProbeConnection:
+        del first  # Strawberry derives the probe's argument from it; the body never runs
         return _ProbeConnection(edges=[])
 
     @strawberry.field
-    # basedpyright: Strawberry derives the probe's GraphQL argument from this parameter
-    def echo(self, text: str = "x", tags: list[str] | None = None) -> str:  # pyright: ignore[reportUnusedParameter]
+    def echo(self, text: str = "x", tags: list[str] | None = None) -> str:
+        del tags  # Strawberry derives the probe's argument from it; the body never runs
         return text
 
     @strawberry.field
@@ -2799,14 +2803,14 @@ class _Probe:
 
     @strawberry.field
     # basedpyright: Strawberry reads this annotation as the argument's GraphQL type; JSON | None
-    # would make the probe's argument nullable and change its schema; Strawberry derives the
-    # probe's GraphQL argument from this parameter
-    def blob(self, payload: strawberry.scalars.JSON = None) -> str:  # pyright: ignore[reportArgumentType, reportUnusedParameter]
+    # would make the probe's argument nullable and change its schema
+    def blob(self, payload: strawberry.scalars.JSON = None) -> str:  # pyright: ignore[reportArgumentType]
+        del payload  # Strawberry derives the probe's argument from it; the body never runs
         return "ok"
 
     @strawberry.field
-    # basedpyright: Strawberry derives the probe's GraphQL argument from this parameter
-    def stash(self, document: Upload) -> str:  # pyright: ignore[reportUnusedParameter]
+    def stash(self, document: Upload) -> str:
+        del document  # Strawberry derives the probe's argument from it; the body never runs
         return "ok"
 
 
@@ -2824,8 +2828,8 @@ class _WriteProbe:
     """
 
     @strawberry.mutation
-    # basedpyright: Strawberry derives the probe's GraphQL argument from this parameter
-    def tag(self, tags: list[strawberry.ID] | None = None) -> str:  # pyright: ignore[reportUnusedParameter]
+    def tag(self, tags: list[strawberry.ID] | None = None) -> str:
+        del tags  # Strawberry derives the probe's argument from it; the body never runs
         return "ok"
 
 
@@ -2950,9 +2954,8 @@ class _SpyQuery:
         return "hi"
 
     @strawberry.field
-    # basedpyright: Strawberry derives the probe's GraphQL argument from this parameter
-    def echo(self, text: SpyText) -> str:  # pyright: ignore[reportUnusedParameter]
-        return "ok"
+    def echo(self, text: SpyText) -> str:
+        return text
 
 
 def _spy_result(
@@ -4062,7 +4065,7 @@ def test_resource_limit_exceeded_pickle_and_copy_fidelity():
     exc.custom_tag = "tagged"  # pyright: ignore[reportAttributeAccessIssue]
 
     # Pickle serialization roundtrip
-    restored = pickle.loads(pickle.dumps(exc))  # noqa: S301 - round-trips the object this test just pickled
+    restored = pickle_roundtrip(exc)
     assert isinstance(restored, ResourceLimitExceeded)
     assert restored.bound == "max_depth"
     assert restored.limit == 10

@@ -498,7 +498,7 @@ def _render_change(
     new_rev: str | None,
     repo_root: Path,
     dirs: _SideDirs,
-    args: argparse.Namespace,
+    args: _Args,
 ) -> None:
     """Render both sides of ``change`` into ``dirs`` and write its diff(s)."""
     old_path = change.old_side_path
@@ -529,10 +529,12 @@ def _render_change(
 
 def _check_stem_collisions(changes: Sequence[_Change]) -> None:
     """Refuse a run where two changed paths would write the same artifact name on one side."""
-    for side in ("old_side_path", "path"):
+    for side in (
+        [change.old_side_path for change in changes],
+        [change.path for change in changes],
+    ):
         by_stem: dict[str, list[str]] = {}
-        for change in changes:
-            path = getattr(change, side)
+        for path in side:
             by_stem.setdefault(_stem_for(path), []).append(path)
         collisions = {stem: paths for stem, paths in by_stem.items() if len(paths) > 1}
         if collisions:
@@ -617,7 +619,24 @@ def _format_list(payload: _ListPayload) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
+class _Args(argparse.Namespace):
+    """The parsed command line, typed field by field after ``_parse_args``'s ``add_argument`` calls."""
+
+    commit_hash: str | None
+    paths: Sequence[str] | None
+    output_dir: Path | None
+    against: str
+    include_tests: bool
+    include_init: bool
+    keep_literals: bool
+    collapse_blank: bool
+    prose: bool
+    list: bool
+    json: bool
+    since: str | None
+
+
+def _parse_args(argv: Sequence[str]) -> _Args:
     parser = argparse.ArgumentParser(
         description=(
             "Generate per-file stripped diffs between a commit and HEAD for every "
@@ -686,10 +705,10 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         metavar="REV",
         help="Base commit; alternative spelling of the positional commit.",
     )
-    return parser.parse_args(argv)
+    return parser.parse_args(argv, namespace=_Args())
 
 
-def _resolve_base(args: argparse.Namespace) -> str | None:
+def _resolve_base(args: _Args) -> str | None:
     """Return the base rev from the positional, ``--since`` or the latest tag."""
     if args.commit_hash and args.since and args.commit_hash != args.since:
         print(
@@ -704,7 +723,7 @@ def _resolve_base(args: argparse.Namespace) -> str | None:
 
 
 def _run_list(
-    args: argparse.Namespace,
+    args: _Args,
     base: str,
     head: str,
     repo_root: Path,

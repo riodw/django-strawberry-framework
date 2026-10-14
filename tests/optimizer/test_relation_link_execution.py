@@ -51,11 +51,7 @@ from ._link_models import (
     link_fixture_tables,
 )
 
-
-@pytest.fixture(autouse=True)
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def _isolate_global_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
-    """Every row declares fresh ``DjangoType`` classes."""
+pytestmark = pytest.mark.usefixtures("isolate_global_registry")
 
 
 @pytest.fixture

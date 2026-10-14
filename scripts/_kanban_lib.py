@@ -19,13 +19,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import operator
 import os
 import re
 import subprocess
 import sys
 from collections.abc import Callable, Container, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeAlias, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, TypedDict, cast
 
 if TYPE_CHECKING:
     from _typeshed import SupportsRichComparison
@@ -98,7 +99,8 @@ def unresolvable_placeholders(
     the markdown build from rejecting prose the HTML build silently publishes.
     """
     unresolvable: list[str] = []
-    for token in PLACEHOLDER_RE.findall(text or ""):
+    for match in PLACEHOLDER_RE.finditer(text or ""):
+        token = match.group()
         card_ref = CARD_REF_RE.fullmatch(token)
         if card_ref is not None:
             if int(card_ref.group(1)) not in reference_orders:
@@ -363,6 +365,12 @@ def placeholder_defects(cards: Sequence[CardRow], board_docs: Sequence[BoardDocR
 _JSONRow: TypeAlias = dict[str, Any]  # pyright: ignore[reportExplicitAny]
 SortKey: TypeAlias = "Callable[[_JSONRow], SupportsRichComparison]"
 
+
+def _path_link_sort_key(row: Mapping[str, Mapping[str, str]]) -> str:
+    """Order a path link by the tracked path it points at."""
+    return row["path"]["path"]
+
+
 # Every per-card child list ``STATIC_KANBAN_QUERY`` selects, as
 # ``payload key -> (ORM accessor, deterministic sort key)``. One table drives both the
 # truncation census (:func:`board_row_counts`) and the deep sort
@@ -383,12 +391,12 @@ CARD_CHILD_LISTS: dict[str, tuple[str | None, SortKey]] = {
     "glossaryLinks": ("glossary_links", lambda row: (row["order"], row["id"])),
     "outgoingReferences": ("outgoing_references", lambda row: (row["order"], row["id"])),
     "incomingReferences": ("incoming_references", lambda row: (row["order"], row["id"])),
-    "pathLinks": ("path_links", lambda row: row["path"]["path"]),
+    "pathLinks": ("path_links", _path_link_sort_key),
     "parityClaims": ("parity_claims", lambda row: (row["upstream"]["order"], row["id"])),
-    "labels": ("labels", lambda row: row["key"]),
-    "changedFiles": ("changed_files", lambda row: row["path"]),
-    "dependencies": (None, lambda row: row["number"]),
-    "dependents": (None, lambda row: row["number"]),
+    "labels": ("labels", operator.itemgetter("key")),
+    "changedFiles": ("changed_files", operator.itemgetter("path")),
+    "dependencies": (None, operator.itemgetter("number")),
+    "dependents": (None, operator.itemgetter("number")),
 }
 
 # The truncation census: ``payload key -> ORM accessor`` for every bounded child list.
@@ -489,8 +497,32 @@ def assert_nothing_truncated(cards: Sequence[Mapping[str, object]]) -> None:
         )
 
 
+class _StderrOwner(Protocol):
+    """A failed subprocess, seen through its captured ``stderr`` as ``object``."""
+
+    @property
+    def stderr(self) -> object: ...
+
+
+def _stderr_text(error: _StderrOwner) -> str:
+    """Return the text a failed ``text=True`` subprocess captured on stderr."""
+    return str(error.stderr)
+
+
 class GitCommandError(RuntimeError):
     """A ``git`` invocation failed (caller-correctable)."""
+
+
+class _RawConnectionOwner(Protocol):
+    """A Django database wrapper, seen through its driver connection as ``object | None``."""
+
+    @property
+    def connection(self) -> object | None: ...
+
+
+def _is_open(wrapper: _RawConnectionOwner) -> bool:
+    """Return whether ``wrapper`` already holds an open driver connection."""
+    return wrapper.connection is not None
 
 
 def _install_sqlite_busy_timeout() -> None:
@@ -509,7 +541,7 @@ def _install_sqlite_busy_timeout() -> None:
 
     connection_created.connect(_on_connect, dispatch_uid="kanban_scripts_busy_timeout")
     for connection in connections.all():
-        if connection.connection is not None:
+        if _is_open(connection):
             _apply(connection)
 
 
@@ -570,15 +602,24 @@ def run_git(args: Sequence[str], *, error_cls: type[Exception] = GitCommandError
             text=True,
         )
     except subprocess.CalledProcessError as error:
-        message = error.stderr.strip() or f"git {' '.join(args)} failed."
+        message = _stderr_text(error).strip() or f"git {' '.join(args)} failed."
         raise error_cls(message) from error
     return result.stdout
 
 
-# basedpyright: the decoded ``response.json()`` is untyped; each caller states the shape
-# its own query selects (``DashboardData`` here, ``GlossaryData`` in build_glossary_md)
-def fetch_graphql_data(query: str, *, required_lists: tuple[str, ...]) -> dict[str, Any]:  # pyright: ignore[reportExplicitAny]
-    """Fetch a GraphQL payload and validate required top-level list fields."""
+class _JSONResponse(Protocol):
+    """A test-client response, seen through its decoded body as ``object``."""
+
+    def json(self) -> object: ...
+
+
+def _response_json(response: _JSONResponse) -> object:
+    """Decode a test-client response body."""
+    return response.json()
+
+
+def fetch_graphql_data(query: str, *, required_lists: tuple[str, ...]) -> dict[str, object]:
+    """Fetch a GraphQL payload as decoded JSON and validate required top-level list fields."""
     from django.test import Client
 
     response = Client(HTTP_HOST="localhost").post(
@@ -590,7 +631,7 @@ def fetch_graphql_data(query: str, *, required_lists: tuple[str, ...]) -> dict[s
         body = response.content.decode("utf-8", errors="replace")
         raise RuntimeError(f"GraphQL request failed with HTTP {response.status_code}:\n{body}")
 
-    payload: object = response.json()
+    payload = _response_json(response)
     if not _is_json_object(payload):
         raise TypeError("GraphQL response body is not a JSON object.")
     errors = payload.get("errors")
@@ -1349,15 +1390,24 @@ def fetch_dashboard_data() -> DashboardData:
         STATIC_KANBAN_QUERY,
         required_lists=("allCards", "allKanbanBoardDocs", *LOOKUP_FIELDS),
     )
-    assert_nothing_truncated(data["allCards"])
-    lookups = Lookups(
-        **{
-            payload_name: data[graphql_name]
-            for graphql_name, payload_name in LOOKUP_FIELDS.items()
-        },
+    # basedpyright: the decoded rows are not validated one by one; each list has the
+    # shape STATIC_KANBAN_QUERY selects for it
+    cards = cast("list[CardRow]", data["allCards"])
+    assert_nothing_truncated(cards)
+    # basedpyright: same boundary - every lookup list has the row shape its query selects
+    lookups = cast(
+        "Lookups",
+        cast(
+            "object",
+            {
+                payload_name: data[graphql_name]
+                for graphql_name, payload_name in LOOKUP_FIELDS.items()
+            },
+        ),
     )
 
-    board_docs: list[BoardDocRow] = data["allKanbanBoardDocs"]
+    # basedpyright: same boundary - the board doc rows are the shape STATIC_KANBAN_QUERY selects
+    board_docs = cast("list[BoardDocRow]", data["allKanbanBoardDocs"])
     anchor_index = next(
         (
             index
@@ -1374,13 +1424,13 @@ def fetch_dashboard_data() -> DashboardData:
         )
     progress = progress_board_doc(
         board_docs[anchor_index],
-        data["allCards"],
+        cards,
         lookups["milestones"],
     )
     board_docs.insert(anchor_index + 1, progress)
 
     return {
-        "cards": data["allCards"],
+        "cards": cards,
         "boardDocs": board_docs,
         "lookups": lookups,
         "blockingReferenceKindKeys": sorted(models.BLOCKING_REFERENCE_KIND_KEYS),
@@ -1411,7 +1461,7 @@ def build_dashboard_snapshot(dashboard_data: DashboardData) -> DashboardData:
     lookups = cast("dict[str, list[_JSONRow]]", cast("object", dashboard_data["lookups"]))
     for name, rows in lookups.items():
         if name == "trackedPaths":
-            rows.sort(key=lambda row: row["path"])
+            rows.sort(key=operator.itemgetter("path"))
         else:
             rows.sort(key=lambda row: (row.get("order", 0), row["id"]))
     return dashboard_data

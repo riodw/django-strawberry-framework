@@ -214,6 +214,15 @@ def _ms(us: int | None) -> str:
     return "?" if us is None else f"{us / 1000:.1f}"
 
 
+class _Args(argparse.Namespace):
+    """The parsed command line, typed field by field after ``main``'s ``add_argument`` calls."""
+
+    top: int
+    rounds: int
+    warmup: int
+    json_path: str | None
+
+
 def main() -> int:
     """Parse args, run the children, and print the import-time report."""
     parser = argparse.ArgumentParser(
@@ -224,7 +233,7 @@ def main() -> int:
     _ = parser.add_argument("--rounds", type=int, default=5, help="measured children (default 5)")
     _ = parser.add_argument("--warmup", type=int, default=1, help="discarded children (default 1)")
     _ = parser.add_argument("--json", dest="json_path", help="also write the report as JSON here")
-    args = parser.parse_args()
+    args = parser.parse_args(namespace=_Args())
     if args.rounds < 1 or args.top < 1 or args.warmup < 0:
         parser.error("--rounds and --top must be at least 1, --warmup at least 0")
 

@@ -74,6 +74,10 @@ from graphql import GraphQLError, OperationDefinitionNode, parse
 from typing_extensions import NotRequired
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from typing_extensions import TypeIs
+
     from django_strawberry_framework import DjangoSchema
 
 BATCHED = "batched"
@@ -212,6 +216,36 @@ class _Report(TypedDict):
     verdict: NotRequired[str | None]
 
 
+# ``json.loads`` returns ``Any``; this alias hands callers an ``object`` to narrow.
+_loads: Callable[[str], object] = json.loads
+
+
+def _is_object(value: object) -> TypeIs[dict[str, object]]:
+    """Return whether a decoded JSON value is an object (JSON object keys are always strings)."""
+    return isinstance(value, dict)
+
+
+def _is_array(value: object) -> TypeIs[list[object]]:
+    """Return whether a decoded JSON value is an array."""
+    return isinstance(value, list)
+
+
+def _is_report(value: object) -> TypeIs[_Report]:
+    """Return whether a decoded JSON value carries the keys ``compare_reports`` reads."""
+    if not _is_object(value):
+        return False
+    header = value.get("header")
+    rows = value.get("rows")
+    if not (_is_object(header) and _is_object(header.get("params")) and _is_array(rows)):
+        return False
+    return all(
+        _is_object(row)
+        and isinstance(row.get("cardinality"), int)
+        and isinstance(row.get("queries"), int)
+        for row in rows
+    )
+
+
 def compare_reports(baseline: _Report, current: _Report) -> list[str]:
     """Return the delta lines between two ``count_queries`` JSON reports.
 
@@ -285,8 +319,22 @@ def _schema(*, optimizer: bool) -> DjangoSchema:
     )
 
 
+class _Args(argparse.Namespace):
+    """The parsed command line, typed field by field after ``main``'s ``add_argument`` calls."""
+
+    query: str | None
+    operation_name: str | None
+    variables: str | None
+    seeder: str | None
+    cardinalities: str
+    no_optimizer: bool
+    show_sql: bool
+    json_path: str | None
+    compare: str | None
+
+
 def _resolve_operation(
-    args: argparse.Namespace,
+    args: _Args,
     parser: argparse.ArgumentParser,
 ) -> tuple[str, str, str | None]:
     """Return ``(document, seeder, graphql_operation_name)`` for the CLI flags."""
@@ -340,7 +388,7 @@ def main() -> int:
     )
     _ = parser.add_argument("--json", dest="json_path", help="also write the report as JSON here")
     _ = parser.add_argument("--compare", help="baseline JSON from an earlier run; prints deltas")
-    args = parser.parse_args()
+    args = parser.parse_args(namespace=_Args())
     if not args.query and not args.operation_name:
         parser.error("pass --query PATH or --operation-name NAME")
     try:
@@ -351,7 +399,9 @@ def main() -> int:
     document, seeder, graphql_operation_name = _resolve_operation(args, parser)
     baseline = None
     if args.compare:
-        baseline = json.loads(Path(args.compare).read_text(encoding="utf-8"))
+        baseline = _loads(Path(args.compare).read_text(encoding="utf-8"))
+        if not _is_report(baseline):
+            parser.error(f"--compare {args.compare} is not a count_queries JSON report")
 
     provenance = bootstrap_fakeshop_django("sqlite-memory")
     schema = _schema(optimizer=not args.no_optimizer)

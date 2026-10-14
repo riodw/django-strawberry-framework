@@ -215,7 +215,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import takewhile
@@ -226,6 +226,8 @@ if TYPE_CHECKING:
     from typing_extensions import TypeIs
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+# ``json.loads`` returns ``Any``; this alias hands callers an ``object`` to narrow.
+_loads: Callable[[str], object] = json.loads
 DEFAULT_SCRATCH_PREFIX = "failability-"
 TREE_NAMESPACE_PREFIX = "tree-"
 TREE_NAMESPACE_DIGEST_LENGTH = 16
@@ -1102,7 +1104,7 @@ def _resolve_scratch_root(raw_root: str | None) -> Path:
 def _read_json_marker(path: Path) -> dict[str, object]:
     """Return a marker's JSON object, or an empty one when it is unreadable."""
     try:
-        document: object = json.loads(path.read_text(encoding="utf-8"))
+        document = _loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return document if _is_json_object(document) else {}
@@ -1553,7 +1555,7 @@ def _one_line(text: str, limit: int = 120) -> str:
 def load_manifest(manifest_path: Path) -> tuple[tuple[ProofEntry, ...], str | None]:
     """Return the manifest's proof entries and its optional scratch-root override."""
     try:
-        document: object = json.loads(manifest_path.read_text(encoding="utf-8"))
+        document = _loads(manifest_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
         raise ManifestError(f"{manifest_path}: invalid JSON: {error}") from error
     if not _is_json_object(document):
@@ -1698,7 +1700,7 @@ def _read_probe(path: Path) -> tuple[tuple[tuple[str, str], ...], tuple[Provenan
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         if not raw_line.strip():
             continue
-        record: object = json.loads(raw_line)
+        record = _loads(raw_line)
         if not _is_json_object(record):
             raise RuntimeError(f"{path}: probe line is not a JSON object: {raw_line[:200]!r}")
         if record.get("kind") == "provenance":
@@ -2082,11 +2084,6 @@ def _unified_diff(planned: PlannedFile) -> str:
             tofile=f"b/{relative}",
         ),
     )
-
-
-def _pristine_name(entry: ProofEntry) -> str:
-    """Return a collision-free scratch filename for one entry's pristine copy."""
-    return _pristine_name_for(entry, entry.target)
 
 
 def _pristine_name_for(entry: ProofEntry, target: Path) -> str:
@@ -2574,6 +2571,20 @@ def _refuse_outside_workspace(raw_workspace: Path) -> str | None:
     return None
 
 
+class _Args(argparse.Namespace):
+    """The parsed command line, typed field by field after ``_build_parser``'s ``add_argument`` calls."""
+
+    manifest: Path
+    only: list[str]
+    scratch_root: str | None
+    force_baseline: bool
+    baseline: bool
+    check_anchors_only: bool
+    output: Path | None
+    json_output: Path | None
+    workspace: Path | None
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Return the command-line parser."""
     parser = argparse.ArgumentParser(
@@ -2662,7 +2673,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run every selected proof entry and emit the markdown (and optional JSON) report."""
-    arguments = _build_parser().parse_args(argv)
+    arguments = _build_parser().parse_args(argv, namespace=_Args())
     capture_baseline = arguments.baseline or arguments.force_baseline
     if not capture_baseline and arguments.output is not None and not arguments.check_anchors_only:
         print(
@@ -2710,7 +2721,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _run_selected(
-    arguments: argparse.Namespace,
+    arguments: _Args,
     selected: Sequence[ProofEntry],
     selection: ManifestSelection,
     context: ReportContext,

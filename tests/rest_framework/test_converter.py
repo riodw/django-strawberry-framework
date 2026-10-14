@@ -87,7 +87,7 @@ from django_strawberry_framework.rest_framework.serializer_converter import (
     serializer_only_relation_annotation,
 )
 from django_strawberry_framework.scalars import Upload
-from tests._idioms import bind_unparented
+from tests._idioms import ModelSerializerBase, bind_unparented
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -376,17 +376,15 @@ def test_resolve_serializer_field_rejects_nested_over_relation_column():
     relation-id input.
     """
 
-    class ItemInline(serializers.ModelSerializer[product_models.Item]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class ItemInline(ModelSerializerBase[product_models.Item]):
+        class Meta:
             model = product_models.Item
             fields = ("name",)
 
-    class CategorySer(serializers.ModelSerializer[product_models.Category]):
+    class CategorySer(ModelSerializerBase[product_models.Category]):
         items = ItemInline(many=True)
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Category
             fields = ("name", "items")
 
@@ -533,11 +531,10 @@ def test_renamed_scalar_resolves_backing_column_via_source():
     """``full_name = CharField(source="name")`` resolves the ``name`` column, keeps the declared name."""
     _register_products_types()
 
-    class RenamedSer(serializers.ModelSerializer[product_models.Item]):
+    class RenamedSer(ModelSerializerBase[product_models.Item]):
         full_name = serializers.CharField(source="name")
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("full_name",)
 
@@ -558,14 +555,13 @@ def test_renamed_relation_resolves_backing_column_and_id_like_name():
     """``category_pk = PrimaryKeyRelatedField(source="category")`` -> ``categoryPk``, column via source."""
     _register_products_types()
 
-    class RenamedSer(serializers.ModelSerializer[product_models.Item]):
+    class RenamedSer(ModelSerializerBase[product_models.Item]):
         category_pk: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
             queryset=product_models.Category.objects.all(),
             source="category",
         )
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("category_pk",)
 
@@ -585,15 +581,14 @@ def test_model_backed_relation_cardinality_mismatch_raises():
     """A DRF ``many=True`` relation cannot masquerade as a scalar FK input."""
     _register_products_types()
 
-    class MismatchedSer(serializers.ModelSerializer[product_models.Item]):
+    class MismatchedSer(ModelSerializerBase[product_models.Item]):
         category_ids: _PkRelation[product_models.Category] = serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=product_models.Category.objects.all(),
             source="category",
         )
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("category_ids",)
 
@@ -802,14 +797,13 @@ def test_many_pk_related_field_over_reverse_fk_column_emits_multi():
     """
     _register_relay_shelf_primary()
 
-    class BranchSer(serializers.ModelSerializer[library_models.Branch]):
+    class BranchSer(ModelSerializerBase[library_models.Branch]):
         shelves: _PkRelation[library_models.Shelf] = serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=library_models.Shelf.objects.all(),
         )
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = library_models.Branch
             fields = ("name", "shelves")
 
@@ -836,15 +830,14 @@ def test_many_pk_related_field_over_generic_relation_column_emits_multi():
     assert tags_rel.one_to_many is True
     assert tags_rel.many_to_many is False
 
-    class BranchTagSer(serializers.ModelSerializer[library_models.Branch]):
+    class BranchTagSer(ModelSerializerBase[library_models.Branch]):
         tagged: _PkRelation[library_models.TaggedItem] = serializers.PrimaryKeyRelatedField(
             many=True,
             source="tags",
             queryset=library_models.TaggedItem.objects.all(),
         )
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = library_models.Branch
             fields = ("name", "tagged")
 
@@ -872,13 +865,12 @@ def test_single_pk_related_field_over_reverse_o2o_column_emits_single():
     assert type(rel).__name__ == "OneToOneRel"
     assert serializer_converter._model_relation_cardinality(rel) is False
 
-    class PatronSer(serializers.ModelSerializer[library_models.Patron]):
+    class PatronSer(ModelSerializerBase[library_models.Patron]):
         card: _PkRelation[library_models.MembershipCard] = serializers.PrimaryKeyRelatedField(
             queryset=library_models.MembershipCard.objects.all(),
         )
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = library_models.Patron
             fields = ("name", "card")
 
@@ -897,14 +889,13 @@ def test_single_pk_related_field_over_reverse_o2o_column_emits_single():
 def test_many_over_reverse_o2o_column_is_rejected():
     """many=True over a reverse OneToOneRel is a cardinality mismatch (a collection lie)."""
 
-    class PatronSer(serializers.ModelSerializer[library_models.Patron]):
+    class PatronSer(ModelSerializerBase[library_models.Patron]):
         card: _PkRelation[library_models.MembershipCard] = serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=library_models.MembershipCard.objects.all(),
         )
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = library_models.Patron
             fields = ("name", "card")
 
@@ -927,14 +918,13 @@ def test_single_over_collection_column_is_rejected(
 ) -> None:
     """A single relation over a reverse FK or a many-to-many is a cardinality mismatch."""
 
-    class SingleSer(serializers.ModelSerializer[models.Model]):
+    class SingleSer(ModelSerializerBase[models.Model]):
         target: _PkRelation[models.Model] = serializers.PrimaryKeyRelatedField(
             queryset=related_cls._default_manager.all(),
             source=column_name,
         )
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = model_cls
             fields = ("target",)
 
@@ -953,14 +943,13 @@ def test_model_backed_slug_related_field_raises():
     """
     _register_products_types()
 
-    class SlugSer(serializers.ModelSerializer[product_models.Item]):
+    class SlugSer(ModelSerializerBase[product_models.Item]):
         category: _SlugRelation[product_models.Category] = serializers.SlugRelatedField(
             slug_field="name",
             queryset=product_models.Category.objects.all(),
         )
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("category",)
 
@@ -973,11 +962,10 @@ def test_dotted_source_on_model_column_field_raises():
     """A dotted ``source`` on a model-column-converting field raises ``ConfigurationError``."""
     _register_products_types()
 
-    class DottedSer(serializers.ModelSerializer[product_models.Item]):
+    class DottedSer(ModelSerializerBase[product_models.Item]):
         nm = serializers.CharField(source="category.name")
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("nm",)
 
@@ -1078,9 +1066,8 @@ def test_relation_target_with_no_registered_primary_raises():
     """A relation whose target model has no registered primary DjangoType raises."""
 
     # No DjangoType registered for Category in this test -> the raise fires.
-    class ItemSer(serializers.ModelSerializer[product_models.Item]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class ItemSer(ModelSerializerBase[product_models.Item]):
+        class Meta:
             model = product_models.Item
             fields = ("category",)
 
@@ -1378,11 +1365,10 @@ def test_listfield_filepath_child_stays_list_str(tmp_path: Path):
 def test_declared_choicefield_allow_blank_over_model_column_enum_has_blank_member():
     """A declared ``ChoiceField(allow_blank=True)`` over a plain column emits its enum with ``BLANK``."""
 
-    class DeclaredSer(serializers.ModelSerializer[library_models.Shelf]):
+    class DeclaredSer(ModelSerializerBase[library_models.Shelf]):
         topic = serializers.ChoiceField(choices=[("x", "X")], allow_blank=True)
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = library_models.Shelf
             fields = ("topic",)
 
@@ -1415,14 +1401,13 @@ _BLANK_COLUMN_REMEDY = (
 def test_declared_choice_allow_blank_over_strict_choice_column_refused():
     """``allow_blank=True`` over a ``blank=False`` choice column would write an unreadable ``""``."""
 
-    class BlankStatusSer(serializers.ModelSerializer[library_models.Book]):
+    class BlankStatusSer(ModelSerializerBase[library_models.Book]):
         circulation_status = serializers.ChoiceField(
             choices=[("available", "Available")],
             allow_blank=True,
         )
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = library_models.Book
             fields = ("circulation_status",)
 
@@ -1441,15 +1426,14 @@ def test_declared_choice_allow_blank_over_strict_choice_column_refused():
 def test_source_mapped_choice_allow_blank_over_strict_choice_column_refused():
     """The column is resolved through ``source``; the message names the declared field."""
 
-    class RenamedStatusSer(serializers.ModelSerializer[library_models.Book]):
+    class RenamedStatusSer(ModelSerializerBase[library_models.Book]):
         status = serializers.ChoiceField(
             choices=[("available", "Available")],
             allow_blank=True,
             source="circulation_status",
         )
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = library_models.Book
             fields = ("status",)
 
@@ -1468,9 +1452,8 @@ def test_source_mapped_choice_allow_blank_over_strict_choice_column_refused():
 def test_extra_kwargs_allow_blank_over_strict_choice_column_refused():
     """An auto-generated choice field given ``allow_blank`` by ``extra_kwargs`` is refused too."""
 
-    class ExtraBlankSer(serializers.ModelSerializer[library_models.Book]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class ExtraBlankSer(ModelSerializerBase[library_models.Book]):
+        class Meta:
             model = library_models.Book
             fields = ("circulation_status",)
             extra_kwargs = {"circulation_status": {"allow_blank": True}}
@@ -1541,11 +1524,10 @@ def test_declared_choice_value_missing_from_column_enum_refused(
 ):
     """Every value the serializer admits must be a member of the column's read enum."""
 
-    class ValueSer(serializers.ModelSerializer[library_models.Book]):
+    class ValueSer(ModelSerializerBase[library_models.Book]):
         circulation_status = serializers.ChoiceField(choices=declared, allow_blank=allow_blank)
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = library_models.Book
             fields = ("circulation_status",)
 
@@ -1625,14 +1607,13 @@ def test_declared_choice_allow_blank_over_blank_choice_column_accepted():
     """Over a ``blank=True`` choice column both the input enum and the read enum carry ``BLANK``."""
     from django_strawberry_framework.types.converters import convert_choices_to_enum
 
-    class ConditionSer(serializers.ModelSerializer[library_models.Shelf]):
+    class ConditionSer(ModelSerializerBase[library_models.Shelf]):
         condition = serializers.ChoiceField(
             choices=library_models.Shelf.Condition.choices,
             allow_blank=True,
         )
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = library_models.Shelf
             fields = ("condition",)
 
@@ -1655,11 +1636,10 @@ def test_declared_choice_allow_blank_over_strict_non_choice_column_accepted():
     declared field out of the refusal.
     """
 
-    class TitleChoiceSer(serializers.ModelSerializer[library_models.Book]):
+    class TitleChoiceSer(ModelSerializerBase[library_models.Book]):
         title = serializers.ChoiceField(choices=[("dune", "Dune")], allow_blank=True)
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = library_models.Book
             fields = ("title",)
 
@@ -1673,11 +1653,10 @@ def test_declared_choice_allow_blank_over_strict_non_choice_column_accepted():
 def test_serializer_only_choice_allow_blank_on_model_serializer_accepted():
     """A choice field with no backing column keeps the ``BLANK`` member ``allow_blank`` adds."""
 
-    class ExtraChoiceSer(serializers.ModelSerializer[library_models.Book]):
+    class ExtraChoiceSer(ModelSerializerBase[library_models.Book]):
         mood = serializers.ChoiceField(choices=[("calm", "Calm")], allow_blank=True)
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = library_models.Book
             fields = ("mood",)
 
@@ -1703,9 +1682,8 @@ def test_auto_model_serializer_over_empty_label_column_builds_the_read_enum():
     """
     from django_strawberry_framework.types.converters import convert_choices_to_enum
 
-    class AutoConditionSer(serializers.ModelSerializer[library_models.Shelf]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class AutoConditionSer(ModelSerializerBase[library_models.Shelf]):
+        class Meta:
             model = library_models.Shelf
             fields = ("condition",)
 
@@ -1780,13 +1758,12 @@ def _multiple_choice_refusal(
 
 
 def _declared_multiple_choice_ser():
-    class MultiStatusSer(serializers.ModelSerializer[library_models.Book]):
+    class MultiStatusSer(ModelSerializerBase[library_models.Book]):
         circulation_status = serializers.MultipleChoiceField(
             choices=library_models.Book.CirculationStatus.choices,
         )
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = library_models.Book
             fields = ("circulation_status",)
 
@@ -1794,14 +1771,13 @@ def _declared_multiple_choice_ser():
 
 
 def _source_mapped_multiple_choice_ser():
-    class MultiStatusSer(serializers.ModelSerializer[library_models.Book]):
+    class MultiStatusSer(ModelSerializerBase[library_models.Book]):
         statuses = serializers.MultipleChoiceField(
             choices=library_models.Book.CirculationStatus.choices,
             source="circulation_status",
         )
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = library_models.Book
             fields = ("statuses",)
 
@@ -1809,11 +1785,10 @@ def _source_mapped_multiple_choice_ser():
 
 
 def _generated_multiple_choice_ser():
-    class MultiStatusSer(serializers.ModelSerializer[library_models.Book]):
+    class MultiStatusSer(ModelSerializerBase[library_models.Book]):
         serializer_choice_field = serializers.MultipleChoiceField
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = library_models.Book
             fields = ("circulation_status",)
 
@@ -1821,13 +1796,12 @@ def _generated_multiple_choice_ser():
 
 
 def _listfield_choice_child_ser():
-    class MultiStatusSer(serializers.ModelSerializer[library_models.Book]):
+    class MultiStatusSer(ModelSerializerBase[library_models.Book]):
         circulation_status = serializers.ListField(
             child=serializers.ChoiceField(choices=library_models.Book.CirculationStatus.choices),
         )
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = library_models.Book
             fields = ("circulation_status",)
 
@@ -2358,11 +2332,10 @@ def test_consumer_declared_scalar_disagreeing_with_column_raises():
     """A consumer-declared field whose scalar disagrees with the model column fails loud."""
     _register_products_types()
 
-    class MismatchSer(serializers.ModelSerializer[product_models.Item]):
+    class MismatchSer(ModelSerializerBase[product_models.Item]):
         name = serializers.IntegerField()  # column is TextField -> str; declared int -> disagree.
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("name",)
 
@@ -2375,11 +2348,10 @@ def test_consumer_declared_scalar_agreeing_with_column_ok():
     """A benign rename (``CharField`` over a text column) AGREES and resolves to the model scalar."""
     _register_products_types()
 
-    class AgreeSer(serializers.ModelSerializer[product_models.Item]):
+    class AgreeSer(ModelSerializerBase[product_models.Item]):
         display_name = serializers.CharField(source="name")
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("display_name",)
 
@@ -2403,11 +2375,10 @@ def test_declared_model_backed_non_scalar_conversion_defers_to_model_annotation(
     """A declared model-backed field whose converter is not scalar falls back to the column type."""
     _register_products_types()
 
-    class FileOverrideSer(serializers.ModelSerializer[product_models.Item]):
+    class FileOverrideSer(ModelSerializerBase[product_models.Item]):
         attachment = serializers.FileField(source="name")
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("attachment",)
 
@@ -2421,9 +2392,8 @@ def test_auto_generated_model_field_is_not_conflict_checked():
     """An AUTO-generated ModelSerializer field routes through the model converter (no conflict check)."""
     _register_products_types()
 
-    class AutoSer(serializers.ModelSerializer[product_models.Item]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class AutoSer(ModelSerializerBase[product_models.Item]):
+        class Meta:
             model = product_models.Item
             fields = ("name",)
 
@@ -2544,11 +2514,10 @@ def test_declared_choicefield_over_model_column_emits_serializer_enum():
     """
     _register_products_types()
 
-    class ChoiceOverColumnSer(serializers.ModelSerializer[product_models.Item]):
+    class ChoiceOverColumnSer(ModelSerializerBase[product_models.Item]):
         status = serializers.ChoiceField(source="name", choices=[("a", "A"), ("b", "B")])
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("status",)
 
@@ -2564,11 +2533,10 @@ def test_non_relation_field_over_relation_column_fails_loud():
     """A non-relation field (e.g. CharField) explicitly mapped over a relation column raises ConfigurationError."""
     _register_products_types()
 
-    class BadRelSer(serializers.ModelSerializer[product_models.Item]):
+    class BadRelSer(ModelSerializerBase[product_models.Item]):
         category = serializers.CharField()
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("category",)
 
@@ -2583,11 +2551,10 @@ def test_consumer_declared_scalar_disagreeing_with_choices_column_fails_loud():
 
     from apps.library.models import Book
 
-    class BookStatusSer(serializers.ModelSerializer[Book]):
+    class BookStatusSer(ModelSerializerBase[Book]):
         circulation_status = serializers.IntegerField()
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = Book
             fields = ("circulation_status",)
 
@@ -2642,11 +2609,10 @@ def test_unsupported_serializer_field_with_hostile_field_name_repr():
 def test_backing_model_field_nonexistent_column_returns_none():
     """A serializer field referencing a non-existent model field returns None."""
 
-    class MissingFieldSer(serializers.ModelSerializer[product_models.Item]):
+    class MissingFieldSer(ModelSerializerBase[product_models.Item]):
         extra = serializers.CharField(source="nonexistent_column")
 
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        class Meta:
             model = product_models.Item
             fields = ("extra",)
 
@@ -2659,9 +2625,8 @@ def test_resolve_serializer_field_model_backed_file_field():
 
     from apps.scalars.models import MediaSpecimen
 
-    class MediaSpecimenSer(serializers.ModelSerializer[MediaSpecimen]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class MediaSpecimenSer(ModelSerializerBase[MediaSpecimen]):
+        class Meta:
             model = MediaSpecimen
             fields = ("attachment",)
 

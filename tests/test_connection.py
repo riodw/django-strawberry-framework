@@ -46,7 +46,7 @@ import gc
 import warnings
 from collections.abc import Awaitable, Callable, Iterable, Iterator
 from types import SimpleNamespace, new_class
-from typing import TypeAlias, TypedDict, TypeVar, cast, get_origin
+from typing import NoReturn, TypeAlias, TypedDict, TypeVar, cast, get_origin
 
 import pytest
 import strawberry
@@ -2740,29 +2740,27 @@ def test_connection_field_directives_bytes_rejected():
 def test_connection_field_directives_hostile_iter_rejected():
     """A ``directives=`` iterable that raises mid-iteration is ``ConfigurationError`` (not ``ValueError``)."""
 
-    class Hostile:
-        def __iter__(self):
+    class Hostile(tuple[object, ...]):
+        @override
+        def __iter__(self) -> NoReturn:
             raise ValueError("hostile iter")
 
     node = _make_node_type("DirHostileNode", total_count=None)
     with pytest.raises(ConfigurationError, match="directives could not be read"):
-        # basedpyright: the raising directives iterable is the hostile input under test;
-        # DjangoConnectionField types the parameter as Sequence[object]
-        DjangoConnectionField(node, directives=Hostile())  # pyright: ignore[reportArgumentType]
+        DjangoConnectionField(node, directives=Hostile())
 
 
 def test_connection_field_directives_hostile_attribute_rejected():
     """A ``directives=`` iterable raising ``AttributeError`` is ``ConfigurationError``."""
 
-    class Hostile:
-        def __iter__(self):
+    class Hostile(tuple[object, ...]):
+        @override
+        def __iter__(self) -> NoReturn:
             raise AttributeError("hostile attr")
 
     node = _make_node_type("DirHostileAttrNode", total_count=None)
     with pytest.raises(ConfigurationError, match="directives could not be read"):
-        # basedpyright: the raising directives iterable is the hostile input under test;
-        # DjangoConnectionField types the parameter as Sequence[object]
-        DjangoConnectionField(node, directives=Hostile())  # pyright: ignore[reportArgumentType]
+        DjangoConnectionField(node, directives=Hostile())
 
 
 def test_window_rows_are_annotated_hostile_iter_returns_false():

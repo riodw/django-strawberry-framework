@@ -255,6 +255,6 @@ class DenyAll:
         data: object,
         instance: object = None,
     ) -> bool:
-        """Always deny: a plain form with no explicit ``permission_classes`` is closed."""
+        """Deny every call: a plain form with no explicit ``permission_classes`` is closed."""
         del info, mutation, operation, data, instance  # a closed default reads none of them.
         return False

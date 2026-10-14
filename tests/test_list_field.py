@@ -51,7 +51,6 @@ import copy
 import datetime
 import gc
 import inspect
-import pickle
 import warnings
 from collections.abc import Callable, Generator, Iterator
 from types import SimpleNamespace
@@ -110,6 +109,7 @@ from django_strawberry_framework.utils._queryset_private import (
     set_queryset_hints,
 )
 from django_strawberry_framework.utils.querysets import require_orderset_class
+from tests._idioms import pickle_roundtrip
 from tests._info import make_info
 
 _M = TypeVar("_M", bound=models.Model)
@@ -125,6 +125,20 @@ def _as_strawberry_info(stand_in: object) -> Info[object, object]:
     # basedpyright: a deliberately partial or hostile info shape is the input under test; the
     # list-field helpers type info as a concrete Strawberry Info
     return stand_in  # pyright: ignore[reportReturnType]
+
+
+def _info_failing_on(attribute: str, error: Exception) -> Info[object, object]:
+    """Build a real ``Info`` whose read of ``attribute`` raises ``error``; every other read answers."""
+
+    class FailingInfo(Info[object, object]):
+        @override
+        def __getattribute__(self, name: str) -> object:
+            if name == attribute:
+                raise error
+            return super().__getattribute__(name)
+
+    built = make_info()
+    return FailingInfo(_raw_info=built._raw_info, _field=built._field)
 
 
 @pytest.fixture(autouse=True)
@@ -290,10 +304,11 @@ class _DefinitionTrapMeta(type):
         raise AttributeError(name)
 
 
-class _ExplodingDirectives:
-    """A hostile directives container that raises mid-iteration."""
+class _ExplodingDirectives(tuple[object, ...]):
+    """A hostile directives sequence that raises mid-iteration."""
 
-    def __iter__(self):
+    @override
+    def __iter__(self) -> Iterator[object]:
         yield _ProbeTag()
         raise ValueError("hostile iterator detonated midway")
 
@@ -398,9 +413,7 @@ def test_djangolistfield_rejects_hostile_iterator_directives() -> None:
         ConfigurationError,
         match=r"DjangoListField directives could not be read",
     ):
-        # basedpyright: the raising directives iterable is the hostile input under test;
-        # DjangoListField types the parameter as Sequence[object]
-        DjangoListField(_DirectiveHolderType(), directives=_ExplodingDirectives())  # pyright: ignore[reportArgumentType]
+        DjangoListField(_DirectiveHolderType(), directives=_ExplodingDirectives())
 
 
 def test_djangolistfield_passes_real_directive_instances_through() -> None:
@@ -1357,8 +1370,7 @@ def test_list_field_error_pickle_round_trip():
     # ListArgumentError declares no such attribute
     err.custom_tag = "tagged"  # pyright: ignore[reportAttributeAccessIssue]
 
-    dumped = pickle.dumps(err)
-    restored = pickle.loads(dumped)  # noqa: S301 - round-trips the object this test just pickled
+    restored = pickle_roundtrip(err)
 
     assert restored.field == "books"
     assert restored.argument == "offset"
@@ -1440,18 +1452,13 @@ def test_published_wire_name_rejects_malformed_schema_metadata():
     assert _published_wire_name(_as_strawberry_info(SimpleNamespace()), arg_def, "offset") is None
 
     # 2. A ``_raw_info`` read that fails for any other reason is a broken schema.
-    class ExplodingInfo:
-        @property
-        def _raw_info(self):
-            raise RuntimeError("simulated raw-info failure")
+    exploding_info = _info_failing_on("_raw_info", RuntimeError("simulated raw-info failure"))
 
     with pytest.raises(
         ConfigurationError,
         match="Failed to read the schema field for argument 'offset'",
     ):
-        # basedpyright: the info whose _raw_info read raises is the hostile input under test;
-        # _published_wire_name types info as a concrete Strawberry Info
-        _published_wire_name(ExplodingInfo(), arg_def, "offset")  # pyright: ignore[reportArgumentType]
+        _published_wire_name(exploding_info, arg_def, "offset")
 
     # 3. The field exists but no argument carries this definition back-reference.
     other_def = SimpleNamespace(python_name="offset")
@@ -1566,11 +1573,6 @@ def test_resolver_call_context_accepts_strawberry_shape_and_rejects_unknown_inpu
 
 
 def test_field_and_orderset_metadata_reads_fail_closed():
-    class HostileInfo:
-        @property
-        def field_name(self):
-            raise RuntimeError("unreadable field name")
-
     class HostileDefinition:
         @property
         def orderset_class(self):
@@ -1579,9 +1581,8 @@ def test_field_and_orderset_metadata_reads_fail_closed():
     class Target:
         __django_strawberry_definition__ = HostileDefinition()
 
-    # basedpyright: the info whose field_name read raises is the hostile input under test;
-    # _field_label types info as a concrete Strawberry Info
-    assert _field_label(HostileInfo()) == "DjangoListField"  # pyright: ignore[reportArgumentType]
+    hostile_info = _info_failing_on("field_name", RuntimeError("unreadable field name"))
+    assert _field_label(hostile_info) == "DjangoListField"
     assert _field_label(make_info(field_name="items")) == "items"
     # The sidecar read fails LOUDLY rather than answering None: publishing a
     # schema without ``orderBy`` for a target that declares one would be a
@@ -1593,15 +1594,13 @@ def test_field_and_orderset_metadata_reads_fail_closed():
 
 
 def test_argument_definition_metadata_reads_fail_closed():
-    class HostileInfo:
-        @property
-        def get_argument_definition(self):
-            raise RuntimeError("unreadable argument metadata")
+    hostile_info = _info_failing_on(
+        "get_argument_definition",
+        RuntimeError("unreadable argument metadata"),
+    )
 
     with pytest.raises(ConfigurationError, match="argument-definition resolver"):
-        # basedpyright: the info whose get_argument_definition read raises is the hostile input
-        # under test; _resolve_argument_wire_name types info as a concrete Strawberry Info
-        _resolve_argument_wire_name(HostileInfo(), "offset")  # pyright: ignore[reportArgumentType]
+        _resolve_argument_wire_name(hostile_info, "offset")
 
     def raise_from_lookup(_name: str):
         raise RuntimeError("unreadable argument definition")

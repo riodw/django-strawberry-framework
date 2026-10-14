@@ -108,9 +108,9 @@ def test_builder_pins_names_so_digit_boundary_fields_do_not_silently_collide():
     @strawberry.type
     class Query:
         @strawberry.field
-        # basedpyright: Strawberry reads this annotation at runtime; the input class is built by the helper under test;
-        # Strawberry reads the unused argument to put the input class in the SDL under test
-        def probe(self, inp: input_cls) -> int:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType, reportUnusedParameter]
+        # basedpyright: Strawberry reads this annotation at runtime; the input class is built by the helper under test
+        def probe(self, inp: input_cls) -> int:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
+            del inp  # Strawberry reads it to put the input class in the SDL under test; never runs
             return 1
 
     schema = strawberry.Schema(query=Query, config=strawberry_config())

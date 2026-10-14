@@ -211,6 +211,7 @@ class TestStrategyFactory:
         from django_strawberry_framework.exceptions import ConfigurationError
         from django_strawberry_framework.optimizer.nested_fetch import (
             WINDOWED_STRATEGY,
+            NestedConnectionStrategy,
             resolve_strategy,
         )
 
@@ -233,9 +234,18 @@ class TestStrategyFactory:
             def __hash__(self):
                 raise RuntimeError("hash should never run")
 
-        class HostileGetattr:
-            def __getattr__(self, name: str):
-                raise RuntimeError("getattr should never run")
+        class HostilePlan(NestedConnectionStrategy):
+            name = "hostile"
+
+            @override
+            def plan(self, *_args: object) -> bool:
+                return False
+
+            @override
+            def __getattribute__(self, name: str) -> object:
+                if name == "plan":
+                    raise RuntimeError("plan read should never run")
+                return super().__getattribute__(name)
 
         # Unknown names raise the unknown-name rejection rendered safely.
         for hostile in (HostileRepr("winowed"), HostileHash("winowed")):
@@ -243,11 +253,9 @@ class TestStrategyFactory:
                 OptimizerHint.strategy(hostile)
             with pytest.raises(ConfigurationError, match="Unknown nested_connection_strategy"):
                 OptimizerHint(nested_strategy=hostile)
-        # A raising ``__getattr__`` reads as "not a strategy", typed the same way.
+        # A raising ``plan`` read means "not a strategy", typed the same way.
         with pytest.raises(ConfigurationError, match="must be a strategy name"):
-            # basedpyright: the raising-getattr object is the hostile input under test;
-            # OptimizerHint.strategy types the parameter as StrategySelection
-            OptimizerHint.strategy(HostileGetattr())  # pyright: ignore[reportArgumentType]
+            OptimizerHint.strategy(HostilePlan())
         # Content decides through the base ``str`` slot: a hostile ``__eq__``
         # can neither force a false AUTO_STRATEGY match nor break a valid name.
         # (Even the assertion reads through the base slot - ``==`` on the
@@ -433,19 +441,25 @@ class TestSkipPredicate:
         """Unexpected hint objects cannot break a never-raise schema audit."""
         from django_strawberry_framework.optimizer.hints import hint_is_skip
 
-        class HostileAttribute:
-            @property
-            def skip(self):
-                raise RuntimeError("skip should never run")
+        # ``OptimizerHint.__post_init__`` reads ``skip``, so the hostile read arms only once
+        # construction is done.
+        armed = False
+
+        class HostileAttribute(OptimizerHint):
+            @override
+            def __getattribute__(self, name: str) -> object:
+                if armed and name == "skip":
+                    raise RuntimeError("skip should never run")
+                return super().__getattribute__(name)
 
         class HostileBoolean:
             def __bool__(self):
                 raise RuntimeError("bool should never run")
 
-        class HostileValue:
-            skip = HostileBoolean()
+        hostile_attribute = HostileAttribute()
+        armed = True
+        hostile_value = OptimizerHint()
+        object.__setattr__(hostile_value, "skip", HostileBoolean())
 
-        # basedpyright: each raising hint shape is the hostile input under test; hint_is_skip
-        # types the parameter as OptimizerHint | None
-        assert hint_is_skip(HostileAttribute()) is False  # pyright: ignore[reportArgumentType]
-        assert hint_is_skip(HostileValue()) is False  # pyright: ignore[reportArgumentType]
+        assert hint_is_skip(hostile_attribute) is False
+        assert hint_is_skip(hostile_value) is False

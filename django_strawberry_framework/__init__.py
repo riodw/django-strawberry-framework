@@ -1,62 +1,56 @@
 """Public API of django-strawberry-framework, a DRF-inspired Django integration for Strawberry GraphQL."""
 
-# `auto` is re-exported so consumers can write `from django_strawberry_framework import auto`
-# without importing strawberry directly; this is part of the DRF-shaped public surface.
-import logging
 from typing import TYPE_CHECKING, Any
 
-# Canonical package logger. Declared at the top-level package so the
-# string ``"django_strawberry_framework"`` lives in exactly one source
-# location; subpackages re-export this via ``from .. import logger``
-# (see ``optimizer/__init__.py``). Consumer-facing: the name is the key
-# clients use in Django's ``LOGGING`` config dict, so it is part of the
-# public surface even though it is not in ``__all__``.
-logger: logging.Logger = logging.getLogger("django_strawberry_framework")
+# `auto` is re-exported so consumers can write `from django_strawberry_framework import auto`
+# without importing strawberry directly; this is part of the DRF-shaped public surface.
+from strawberry import auto
 
-from strawberry import auto  # noqa: E402  # logger must exist before subpackage imports
-
-from .connection import DjangoConnection, DjangoConnectionField  # noqa: E402
-from .error_policy import (  # noqa: E402
+# The package logger comes first among the package's own imports (isort sorts ``._logger``
+# ahead of every subpackage), since subpackages read it as ``from .. import logger``.
+from ._logger import logger as logger
+from .connection import DjangoConnection, DjangoConnectionField
+from .error_policy import (
     DEFAULT_ERROR_POLICY,
     ErrorPolicy,
 )
-from .extensions.error_policy import DjangoErrorPolicyExtension  # noqa: E402
-from .extensions.resource_policy import DjangoResourcePolicyExtension  # noqa: E402
-from .forms import DjangoFormMutation, DjangoModelFormMutation  # noqa: E402
-from .list_field import DjangoListField, ListArgumentError  # noqa: E402
-from .mutations import (  # noqa: E402
+from .extensions.error_policy import DjangoErrorPolicyExtension
+from .extensions.resource_policy import DjangoResourcePolicyExtension
+from .forms import DjangoFormMutation, DjangoModelFormMutation
+from .list_field import DjangoListField, ListArgumentError
+from .mutations import (
     DjangoModelPermission,
     DjangoMutation,
     DjangoMutationField,
     FieldError,
 )
-from .optimizer import DjangoOptimizerExtension  # noqa: E402
-from .optimizer.hints import OptimizerHint  # noqa: E402
-from .permissions import (  # noqa: E402
+from .optimizer import DjangoOptimizerExtension
+from .optimizer.hints import OptimizerHint
+from .permissions import (
     aapply_cascade_permissions,
     apply_cascade_permissions,
 )
-from .relay import DjangoNodeField, DjangoNodesField  # noqa: E402
-from .resource_policy import (  # noqa: E402
+from .relay import DjangoNodeField, DjangoNodesField
+from .resource_policy import (
     DEFAULT_RESOURCE_POLICY,
     RESOURCE_LIMIT_ERROR_CODE,
     ResourceLimitExceeded,
     ResourcePolicy,
 )
-from .scalars import BigInt, Upload, strawberry_config  # noqa: E402
-from .schema import (  # noqa: E402
+from .scalars import BigInt, Upload, strawberry_config
+from .schema import (
     SCHEMA_CONFIGURATION_ERROR_CODE,
     DjangoMutationExecutionContext,
     DjangoSchema,
 )
-from .types import DjangoType, SyncMisuseError, finalize_django_types  # noqa: E402
-from .types.converters import (  # noqa: E402
+from .types import DjangoType, SyncMisuseError, finalize_django_types
+from .types.converters import (
     DjangoFilePathType,
     DjangoFileType,
     DjangoImagePathType,
     DjangoImageType,
 )
-from .utils.connections import PaginationArgumentError  # noqa: E402
+from .utils.connections import PaginationArgumentError
 
 # Do not import or root-export DjangoDebugExtension here: its public
 # opt-in remains django_strawberry_framework.extensions.

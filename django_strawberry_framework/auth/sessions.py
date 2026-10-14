@@ -331,7 +331,7 @@ async def scope_session_lock(
 
 
 def uses_signed_cookie_sessions() -> bool:
-    """True when the configured session engine is Django's signed-cookie engine.
+    """Return whether the configured session engine is Django's signed-cookie engine.
 
     A settings / session-store read (``settings.SESSION_ENGINE``), NOT adapter
     metadata: the transport module answers the capability question itself rather

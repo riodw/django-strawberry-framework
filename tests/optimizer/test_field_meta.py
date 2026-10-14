@@ -6,7 +6,6 @@ walker metadata have no wire shape. Relation SQL on shipped types is
 """
 
 import copy
-import pickle
 from collections.abc import Iterable, Iterator
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -35,6 +34,7 @@ from django_strawberry_framework.exceptions import ConfigurationError, Optimizer
 from django_strawberry_framework.optimizer.field_meta import FieldMeta, _target_pk_name
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils.relations import has_composite_pk
+from tests._idioms import pickle_roundtrip
 from tests._relation_fixtures import RpCompositeParent
 
 from ._link_models import (
@@ -521,7 +521,7 @@ def test_field_meta_slots_hashing_and_copy():
     # Copy and pickle
     copied = copy.copy(fm)
     deep_copied = copy.deepcopy(fm)
-    pickled = pickle.loads(pickle.dumps(fm))  # noqa: S301 - round-trips the object this test just pickled
+    pickled = pickle_roundtrip(fm)
     assert copied == fm
     assert deep_copied == fm
     assert pickled == fm

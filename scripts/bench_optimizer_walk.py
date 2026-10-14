@@ -252,6 +252,19 @@ def _us(ns: float) -> float:
     return ns / 1000.0
 
 
+class _Args(argparse.Namespace):
+    """The parsed command line, typed field by field after ``main``'s ``add_argument`` calls."""
+
+    iterations: int
+    warmup: int
+    seed: int
+    glossary_terms: int
+    rounds: int
+    query: str | None
+    variables: str | None
+    json_path: str | None
+
+
 def main() -> int:
     """Parse args, bootstrap the example project, and print the walk benchmark."""
     parser = argparse.ArgumentParser(
@@ -291,7 +304,7 @@ def main() -> int:
     _ = parser.add_argument("--query", help="GraphQL file to bench instead of the built-in set")
     _ = parser.add_argument("--variables", help="JSON object of variables for --query")
     _ = parser.add_argument("--json", dest="json_path", help="also write the report as JSON here")
-    args = parser.parse_args()
+    args = parser.parse_args(namespace=_Args())
     if args.rounds < 1 or args.iterations < 1:
         parser.error("--rounds and --iterations must be at least 1")
     try:

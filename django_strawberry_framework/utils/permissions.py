@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING, cast
 from django.db.models.constants import LOOKUP_SEP
 from django.http import HttpRequest
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_attr, _safe_type_name
 from ._narrowing import dict_items, is_dict, is_mapping, mapping_get
 from .input_values import (
     LEAF,
@@ -179,17 +179,10 @@ class ChannelsRequestAdapter:
 
 def _channels_scope(request: object) -> Mapping[object, object] | None:
     """Resolve Strawberry's HTTP or WebSocket Channels scope shape."""
-    try:
-        consumer: object = getattr(request, "consumer", None)
-        scope: object = getattr(consumer, "scope", None)
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        scope = None
+    scope = _safe_attr(_safe_attr(request, "consumer"), "scope")
     if is_mapping(scope):
         return scope
-    try:
-        scope = getattr(request, "scope", None)
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        scope = None
+    scope = _safe_attr(request, "scope")
     if is_mapping(scope):
         return scope
     return None
@@ -288,10 +281,7 @@ def request_from_info(info: object, *, family_label: str) -> object:
     ``check_permission`` seam, which has no ``.apply`` method, so hard-coding
     ``.apply`` would mis-describe the mutation caller.
     """
-    try:
-        context: object = getattr(info, "context", None)
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        context = None
+    context = _safe_attr(info, "context")
     if context is None:
         raise ConfigurationError(
             f"{family_label} requires `info.context`; received `info` without a context.",
@@ -325,7 +315,7 @@ def _safe_get_model(app_label: str, model_name: str) -> type[models.Model] | Non
 
 
 def resolve_auth_aliases() -> frozenset[str]:
-    """The database aliases the auth machinery reads from (for the authorization phase).
+    """Return the database aliases the auth machinery reads from (for the authorization phase).
 
     The write pipeline's dedicated authorization phase permits READ-ONLY SQL on
     exactly these aliases while it resolves the request user + permission set, so

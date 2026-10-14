@@ -92,7 +92,7 @@ import sys
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypedDict
+from typing import Protocol, TypedDict
 
 try:
     import _plan_common
@@ -152,9 +152,21 @@ def _git(root: Path, *args: str, stdin: str | None = None) -> str:
     except FileNotFoundError as exc:
         raise ValueError("git is not installed") from exc
     except subprocess.CalledProcessError as exc:
-        message = exc.stderr.strip() or f"exit {exc.returncode}"
+        message = _stderr_text(exc).strip() or f"exit {exc.returncode}"
         raise ValueError(f"git {' '.join(args)} failed: {message}") from exc
     return result.stdout
+
+
+class _StderrOwner(Protocol):
+    """A failed subprocess, seen through its captured ``stderr`` as ``object``."""
+
+    @property
+    def stderr(self) -> object: ...
+
+
+def _stderr_text(error: _StderrOwner) -> str:
+    """Return the text a failed ``text=True`` subprocess captured on stderr."""
+    return str(error.stderr)
 
 
 def _nul_fields(output: str) -> list[str]:
@@ -742,13 +754,42 @@ def _validated_release(value: str) -> str:
     return value
 
 
-def _check_since(args: argparse.Namespace) -> None:
+class _Args(argparse.Namespace):
+    """The parsed command line, typed field by field after ``_build_parser``'s ``add_argument`` calls.
+
+    Every subcommand reads ``root`` and ``command``; each other field is set only by the
+    subcommand named beside it (``plan`` and ``resume`` share the scope group), so a
+    handler reads only the fields its own subcommand declares.
+    """
+
+    root: Path
+    command: str
+    # plan and resume (``_add_scope_arguments``); ``since`` is also scope's
+    scope: list[str]
+    changed: bool
+    since: str | None
+    # plan, and resume
+    target_release: str | None
+    generated_date: str | None
+    # plan
+    mode: str
+    output: Path | None
+    force: bool
+    # resume
+    plan: Path | None
+    # scope
+    json: bool
+    # reconcile
+    reconcile_plan: Path
+
+
+def _check_since(args: _Args) -> None:
     """Refuse ``--since`` without ``--changed``, which alone reads it."""
     if args.since is not None and not args.changed:
         raise ValueError("--since applies only with --changed")
 
 
-def _run_plan(args: argparse.Namespace) -> int:
+def _run_plan(args: _Args) -> int:
     """Write a fresh plan; an existing one is resumed, and replaced only while unworked."""
     _check_since(args)
     root = args.root.resolve()
@@ -948,7 +989,7 @@ def _render_resume(
     return lead + "\n".join(lines) + "\n", counts
 
 
-def _run_resume(args: argparse.Namespace) -> int:
+def _run_resume(args: _Args) -> int:
     """Append one run to an existing plan without touching a byte already in it."""
     _check_since(args)
     root = args.root.resolve()
@@ -1204,7 +1245,7 @@ def _render_scope(report: ScopeReport) -> str:
     return "\n".join(lines)
 
 
-def _run_scope(args: argparse.Namespace) -> int:
+def _run_scope(args: _Args) -> int:
     """Print the changed package files since ``--since``."""
     report = build_scope(args.root.resolve(), args.since)
     if args.json:
@@ -1460,10 +1501,10 @@ def _render_reconcile(report: ReconcileReport, plan_path: Path) -> str:
     return "\n".join(lines)
 
 
-def _run_reconcile(args: argparse.Namespace) -> int:
+def _run_reconcile(args: _Args) -> int:
     """Print plan drift; exit 1 when anything is off."""
     root = args.root.resolve()
-    plan_path = _plan_common.resolve_path(args.plan, root)
+    plan_path = _plan_common.resolve_path(args.reconcile_plan, root)
     if not plan_path.is_file():
         raise ValueError(f"--plan is not a file: {plan_path.as_posix()}")
     report = build_reconcile(root, plan_path)
@@ -1543,13 +1584,23 @@ def _build_parser() -> argparse.ArgumentParser:
     _ = scope.add_argument("--json", action="store_true", help="emit JSON")
 
     reconcile = commands.add_parser("reconcile", help="compare a plan with the inventory")
-    _ = reconcile.add_argument("--plan", type=Path, required=True, help="plan to compare")
+    _ = reconcile.add_argument(
+        "--plan",
+        dest="reconcile_plan",
+        metavar="PLAN",
+        type=Path,
+        required=True,
+        help="plan to compare",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the selected subcommand and return a process exit code."""
-    args = _build_parser().parse_args(sys.argv[1:] if argv is None else argv)
+    args = _build_parser().parse_args(
+        sys.argv[1:] if argv is None else argv,
+        namespace=_Args(),
+    )
     runners = {
         "plan": _run_plan,
         "resume": _run_resume,

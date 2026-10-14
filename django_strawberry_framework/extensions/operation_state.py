@@ -362,7 +362,7 @@ class _OperationModeMarker(SchemaExtension):
 
 
 def _declared_operation_mode(extensions: Iterable[SchemaExtension]) -> OperationMode | None:
-    """The mode the chain declares, or ``None`` when no chain member declares one.
+    """Return the mode the chain declares, or ``None`` when no chain member declares one.
 
     Exact type, and the first one found: a consumer extension that grew a
     ``mode`` attribute declares nothing, and a chain the package built carries
@@ -375,7 +375,7 @@ def _declared_operation_mode(extensions: Iterable[SchemaExtension]) -> Operation
 
 
 def _live_scope() -> _RunnerScope | None:
-    """The scope bound and still open here, or ``None``.
+    """Return the scope bound and still open here, or ``None``.
 
     ``None`` covers both "no runner bound one" and "the runner that bound one
     has finished with it", which are the same answer to every caller: a context
@@ -398,7 +398,7 @@ def operation_is_nested() -> bool:
 
 
 def _carrier(extension: object) -> ContextVar[OperationLease[ref[OperationState]] | None]:
-    """The binding carrier settled for ``extension`` at construction.
+    """Return the binding carrier settled for ``extension`` at construction.
 
     Absent for one case only: a subclass whose ``__init__`` never reached
     :meth:`_OperationBoundExtension.__init__`. That extension has no place to
@@ -417,7 +417,7 @@ def _carrier(extension: object) -> ContextVar[OperationLease[ref[OperationState]
 
 
 def _bound_state(extension: _OperationBoundExtension[_StateT_co]) -> _StateT_co | None:
-    """The state bound to ``extension`` here, or ``None`` outside that binding.
+    """Return the state bound to ``extension`` here, or ``None`` outside that binding.
 
     Two conditions, one answer. The lease is closed when the scope that bound it
     ends, so a context that copied the binding earlier reads nothing even while
@@ -577,7 +577,7 @@ class _OperationBoundExtension(SchemaExtension, Generic[_StateT_co]):
         return cast("_StateT_co", OperationState(execution_context))
 
     def _operation_state(self) -> _StateT_co | None:
-        """The state this extension may write this operation's scratch on.
+        """Return the state this extension may write this operation's scratch on.
 
         ``None`` outside an operation, and ``None`` again in a task that copied
         a binding and outlived the scope that made it: the state a completed
@@ -951,7 +951,7 @@ class DjangoExtensionsRunner(SchemaExtensionsRunner):
         self._runner_scope: _RunnerScope | None = None
 
     def _scope(self) -> _RunnerScope:
-        """This runner's scope, settled the first time it binds anything.
+        """Return the runner's scope, settled the first time it binds anything.
 
         Not at construction. Upstream builds the runner before the operation
         begins and a streamed one is driven long afterwards, so construction is
@@ -970,13 +970,13 @@ class DjangoExtensionsRunner(SchemaExtensionsRunner):
     @override
     # basedpyright: returns _BoundScope, not the base's OperationContextManager
     def operation(self) -> Any:  # pyright: ignore[reportExplicitAny]
-        """The operation scope, with this operation's bindings around it."""
+        """Return the operation scope, with this operation's bindings around it."""
         return _BoundScope(self._scope(), self._operation_states, super().operation())
 
     @override
     # basedpyright: returns _BoundScope, not the base's StreamResultContextManager
     def on_stream_result(self, result: object) -> Any:  # pyright: ignore[reportExplicitAny]
-        """The streaming-result scope, bound so the runner's contract is complete."""
+        """Return the streaming-result scope, bound so the runner's contract is complete."""
         # basedpyright: Strawberry's schema/_graphql_core.py rebinds its graphql-core 3.3 result
         # aliases in an ImportError fallback, so StreamExecutionResult carries Unknown
         return _BoundScope(self._scope(), self._operation_states, super().on_stream_result(result))  # pyright: ignore[reportUnknownMemberType]

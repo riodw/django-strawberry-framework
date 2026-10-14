@@ -77,7 +77,8 @@ def render_anchor_violations(rendered_markdown: str) -> list[str]:
     """Return one message per anchor id that appears more than once in the render."""
     seen: set[str] = set()
     violations: list[str] = []
-    for anchor in RENDER_ANCHOR_RE.findall(rendered_markdown):
+    for match in RENDER_ANCHOR_RE.finditer(rendered_markdown):
+        anchor = match[1]
         if anchor in seen:
             violations.append(f'duplicate rendered anchor: <a id="{anchor}"> appears twice')
         seen.add(anchor)

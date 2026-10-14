@@ -341,7 +341,18 @@ class TreePosition:
     child_prefix: str
 
 
-def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+class Args(argparse.Namespace):
+    """The parsed command line, typed field by field after ``parse_args``'s ``add_argument`` calls."""
+
+    md: Path
+    check: bool
+    package_dir: Path
+    list_docstrings: list[Path] | None
+    json: bool
+    max_hunks: int
+
+
+def parse_args(argv: Sequence[str] | None = None) -> Args:
     """Parse CLI arguments."""
     parser = render_parser(
         "Render the dynamic django_strawberry_framework section of docs/TREE.md.",
@@ -380,7 +391,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             f"(default {DEFAULT_MAX_HUNKS}; 0 prints all)."
         ),
     )
-    args = parser.parse_args(argv)
+    args = parser.parse_args(argv, namespace=Args())
     if args.json and args.list_docstrings is None:
         parser.error("--json requires --list-docstrings")
     if args.list_docstrings is not None and args.check:
@@ -1613,7 +1624,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.check:
         return check_rendered(args.md, rendered, max_hunks=args.max_hunks)
 
-    args.md.write_text(rendered)
+    _ = args.md.write_text(rendered)
     print(f"Wrote {args.md}")
     return 0
 

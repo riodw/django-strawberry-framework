@@ -216,11 +216,24 @@ def _probe(
     return root_row_count(result.data), len(ctx)
 
 
+class _Args(argparse.Namespace):
+    """The parsed command line, typed field by field after ``main``'s ``add_argument`` calls."""
+
+    iterations: int
+    warmup: int
+    seed: int
+    glossary_terms: int
+    rounds: int
+    query: str | None
+    variables: str | None
+    json_path: str | None
+
+
 def _measure(
     schema: DjangoSchema,
     optimizer: DjangoOptimizerExtension,
     query: str,
-    args: argparse.Namespace,
+    args: _Args,
     variables: dict[str, object] | None,
 ) -> _Row:
     """Run every round of one query and return its report row.
@@ -326,7 +339,7 @@ def main() -> int:
     _ = parser.add_argument("--query", help="GraphQL file to bench instead of the built-in set")
     _ = parser.add_argument("--variables", help="JSON object of variables for --query")
     _ = parser.add_argument("--json", dest="json_path", help="also write the report as JSON here")
-    args = parser.parse_args()
+    args = parser.parse_args(namespace=_Args())
     if args.rounds < 1 or args.iterations < 1:
         parser.error("--rounds and --iterations must be at least 1")
     try:

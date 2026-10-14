@@ -34,9 +34,12 @@ relaxing ``-W error`` or filtering the warning.
 
 import asyncio
 import contextlib
+import importlib
 import sqlite3
 import sys
 from collections.abc import Callable, Iterator
+from pathlib import Path
+from types import ModuleType
 from typing import TYPE_CHECKING
 
 import pytest
@@ -86,9 +89,12 @@ def isolate_global_registry() -> Iterator[None]:
     function-scope ``DjangoType`` classes: connection classes are cached on
     ``target_type`` identity, so a discarded class must not leak into a later
     test's identity check (the ``tests/test_connection.py`` fixture shape).
-    Opt-in - modules wrap it in their own thin ``autouse=True`` fixture so the
-    invariant has ONE implementation without imposing the clears on suites
-    that use the shipped fakeshop types.
+    Opt-in - a module declares ``pytestmark =
+    pytest.mark.usefixtures("isolate_global_registry")`` so the invariant has
+    ONE implementation without imposing the clears on suites that use the
+    shipped fakeshop types. A function-level ``usefixtures`` mark is requested
+    before the module mark, so a fixture that must see the cleared registry takes
+    it as an explicit argument or is requested by an argument instead.
     """
     from django_strawberry_framework.connection import _connection_type_cache
     from django_strawberry_framework.registry import registry
@@ -98,6 +104,25 @@ def isolate_global_registry() -> Iterator[None]:
     yield
     registry.clear()
     _connection_type_cache.clear()
+
+
+@pytest.fixture
+def scripts_module(monkeypatch: pytest.MonkeyPatch) -> Callable[[str], ModuleType]:
+    """Return ``load(name)``, importing ``scripts/<name>.py`` the way the script runs.
+
+    The scripts directory leads ``sys.path`` for the test, so a script's bare
+    sibling imports resolve; ``monkeypatch`` restores ``sys.path`` afterwards. Import
+    caches are invalidated first, as ``MonkeyPatch.syspath_prepend`` does, so a
+    directory the finder already cached is re-listed.
+    """
+    scripts_dir = str(Path(__file__).resolve().parents[1] / "scripts")
+    monkeypatch.setattr(sys, "path", [scripts_dir, *sys.path])
+    importlib.invalidate_caches()
+
+    def load(name: str) -> ModuleType:
+        return importlib.import_module(name)
+
+    return load
 
 
 @pytest.fixture

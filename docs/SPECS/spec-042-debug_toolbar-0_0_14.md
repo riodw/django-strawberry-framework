@@ -993,10 +993,11 @@ lazy-symbol][glossary-pep-562-lazy-export] variant:
    the guard after eviction, the [`require_drf()`][rf-init] /
    `require_channels()` contract.
 2. **The guard runs at module import time, and the class is a plain module
-   global.** The module body is: `require_debug_toolbar()`, then the
-   `apps.is_installed("debug_toolbar")` wiring gate ([Error shapes](#error-shapes)),
-   then the `debug_toolbar.middleware` / `debug_toolbar.toolbar` (and
-   `strawberry.django.views`) imports, then `_HTML_TYPES`, `_get_payload`, and
+   global.** The module body is: the always-installed Django and Strawberry
+   imports (`strawberry.django.views` among them), then `require_debug_toolbar()`,
+   then the `apps.is_installed("debug_toolbar")` wiring gate
+   ([Error shapes](#error-shapes)), then the `debug_toolbar.middleware` /
+   `debug_toolbar.toolbar` imports, then `_HTML_TYPES`, `_get_payload`, and
    the `DebugToolbarMiddleware` class. This is the card's own DoD wording ("the
    middleware module raises `ImportError` with an install hint when actually
    imported") and the `rest_framework/` precedent. The rule the two shapes

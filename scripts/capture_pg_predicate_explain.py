@@ -48,13 +48,17 @@ import importlib
 import re
 import sys
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Generator, Sequence
+
     from apps.scalars.models import ScalarSpecimen
     from django.db import models
+    from typing_extensions import TypeIs
 
     from django_strawberry_framework.filters import FilterSet
 
@@ -130,6 +134,67 @@ class Capture:
     oracle_pks: list[int]
     explain_output: str
     top_actual_rows: int
+
+
+# ``getattr`` returns ``Any``; this alias hands callers an ``object`` to narrow.
+_attr: Callable[[object, str], object] = getattr
+
+
+# The bind values the statements this script compiles carry: text patterns and integer keys.
+_BindValue = str | int
+
+
+class _RowReader(Protocol):
+    """A database cursor, seen through the execute and fetch calls this script makes."""
+
+    def execute(self, sql: str, params: Sequence[_BindValue] | None = None) -> object: ...
+
+    def fetchone(self) -> Sequence[object] | None: ...
+
+    def fetchall(self) -> Sequence[Sequence[object]]: ...
+
+
+class _SqlCompiler(Protocol):
+    """A queryset compiler, seen through ``as_sql`` as a statement plus its bind parameters."""
+
+    def as_sql(self) -> tuple[str, Sequence[_BindValue]]: ...
+
+
+class _CompilableQuery(Protocol):
+    """A queryset's ``query``, seen through ``get_compiler`` as a typed compiler."""
+
+    def get_compiler(self, using: str) -> _SqlCompiler: ...
+
+
+def _compile(query: _CompilableQuery, using: str) -> tuple[str, Sequence[_BindValue]]:
+    """Return the exact statement and bind parameters ``query`` runs on database ``using``."""
+    return query.get_compiler(using=using).as_sql()
+
+
+def _is_row_reader(cursor: object) -> TypeIs[_RowReader]:
+    """Report whether a cursor delegates the fetch calls (Django's wrapper does so by ``__getattr__``)."""
+    return callable(_attr(cursor, "fetchone")) and callable(_attr(cursor, "fetchall"))
+
+
+@contextmanager
+def _cursor() -> Generator[_RowReader]:
+    """Open a cursor on the default database, typed by the calls this script makes on it."""
+    from django.db import connection
+
+    with connection.cursor() as cursor:
+        if not _is_row_reader(cursor):
+            msg = "the database cursor does not expose the execute and fetch calls"
+            raise TypeError(msg)
+        yield cursor
+
+
+def _int_pk(row: models.Model) -> int:
+    """Return ``row``'s primary key, which every table this script seeds keeps as an integer."""
+    pk = _attr(row, "pk")
+    if not isinstance(pk, int):
+        msg = f"expected an integer primary key, got {pk!r}"
+        raise TypeError(msg)
+    return pk
 
 
 def _seed_library() -> dict[str, int]:
@@ -208,7 +273,7 @@ def _seed_scalars() -> tuple[dict[str, int], list[int]]:
         for parent_index, parent in enumerate(parents)
         for offset in range(CHILDREN_PER_PARENT)
     )
-    needle = [child.pk for index, child in enumerate(children) if index % CARDIO_EVERY == 0]
+    needle = [_int_pk(child) for index, child in enumerate(children) if index % CARDIO_EVERY == 0]
     return {"parents": len(parents), "children": len(children), "needle": len(needle)}, needle
 
 
@@ -275,13 +340,11 @@ def _extract_exists_subquery(sql: str) -> str:
 
 def _capture(qs: models.QuerySet[models.Model], oracle_pks: list[int]) -> Capture:
     """Run ``EXPLAIN (ANALYZE, BUFFERS)`` on ``qs``'s exact statement and record its shape."""
-    from django.db import connection
-
     display_sql = str(qs.query)
-    compiled_sql, compiled_params = qs.query.get_compiler(using=qs.db).as_sql()
-    with connection.cursor() as cursor:
-        cursor.execute("EXPLAIN (ANALYZE, BUFFERS) " + compiled_sql, compiled_params)
-        explain_output = "\n".join(row[0] for row in cursor.fetchall())
+    compiled_sql, compiled_params = _compile(qs.query, qs.db)
+    with _cursor() as cursor:
+        _ = cursor.execute("EXPLAIN (ANALYZE, BUFFERS) " + compiled_sql, compiled_params)
+        explain_output = "\n".join(str(row[0]) for row in cursor.fetchall())
     top = re.search(r"actual time=[\d.]+\.\.[\d.]+ rows=(\d+)", explain_output)
     if top is None:
         raise AssertionError("EXPLAIN output carries no actual row count")
@@ -421,23 +484,27 @@ def main() -> None:
     from apps.scalars.filters import ScalarSpecimenFilter
     from apps.scalars.models import ScalarSpecimen
 
-    with connection.cursor() as cursor:
-        cursor.execute("SELECT version()")
-        pg_version = cursor.fetchone()[0]
+    with _cursor() as cursor:
+        _ = cursor.execute("SELECT version()")
+        version_row = cursor.fetchone()
+        if version_row is None:
+            msg = "SELECT version() returned no row"
+            raise RuntimeError(msg)
+        pg_version = str(version_row[0])
 
     # Everything below runs in ONE transaction that is rolled back, so the
     # throwaway database is left exactly as migrated.
     with transaction.atomic():
         library_counts = _seed_library()
         specimen_counts, needle = _seed_scalars()
-        with connection.cursor() as cursor:
+        with _cursor() as cursor:
             for table in (
                 "library_loan",
                 "library_book",
                 "library_patron",
                 "scalars_scalarspecimen",
             ):
-                cursor.execute(f"ANALYZE {table}")
+                _ = cursor.execute(f"ANALYZE {table}")
 
         # Routed leaf: the oracle is the leaf invoked directly on the outer
         # queryset, then deduplicated (the JOIN + DISTINCT idiom the routing replaces).

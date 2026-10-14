@@ -497,7 +497,7 @@ def upstream_patches_enabled(dependency: str) -> bool:
 
 
 def nested_connection_strategy_setting() -> object:
-    """The configured default nested-connection fetch strategy name.
+    """Return the configured default nested-connection fetch strategy name.
 
     Reads ``DJANGO_STRAWBERRY_FRAMEWORK["NESTED_CONNECTION_STRATEGY"]``,
     defaulting to ``"windowed"`` when the key (or the whole settings dict)
@@ -561,7 +561,7 @@ def hide_flat_filters_setting() -> object:
 
 
 def relay_globalid_strategy_setting() -> object:
-    """The configured schema-wide GlobalID type-name-slot strategy (or ``None``).
+    """Return the configured schema-wide GlobalID type-name-slot strategy (or ``None``).
 
     Reads ``DJANGO_STRAWBERRY_FRAMEWORK["RELAY_GLOBALID_STRATEGY"]``,
     defaulting to ``None`` ("no schema-wide override") when the key (or the
@@ -575,7 +575,7 @@ def relay_globalid_strategy_setting() -> object:
 
 
 def max_request_body_bytes_setting() -> object:
-    """The configured cumulative GraphQL request-body ceiling, in bytes.
+    """Return the configured cumulative GraphQL request-body ceiling, in bytes.
 
     Reads ``DJANGO_STRAWBERRY_FRAMEWORK["MAX_REQUEST_BODY_BYTES"]``, defaulting
     to ``1_048_576`` (1 MiB) when the key (or the whole settings dict) is
@@ -590,7 +590,7 @@ def max_request_body_bytes_setting() -> object:
 
 
 def resource_policy_setting() -> object:
-    """The configured resource-policy overrides, or ``None`` when unset.
+    """Return the configured resource-policy overrides, or ``None`` when unset.
 
     Reads ``DJANGO_STRAWBERRY_FRAMEWORK["RESOURCE_POLICY"]``. ``conf.py`` stays a
     thin reader: the value's shape and every bound's domain are validated by
@@ -602,7 +602,7 @@ def resource_policy_setting() -> object:
 
 
 def error_policy_setting() -> object:
-    """The configured production error-policy overrides, or ``None`` when unset.
+    """Return the configured production error-policy overrides, or ``None`` when unset.
 
     Reads ``DJANGO_STRAWBERRY_FRAMEWORK["ERROR_POLICY"]``. ``conf.py`` stays a
     thin reader: the value's shape and every option's domain are validated by

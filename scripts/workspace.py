@@ -214,6 +214,9 @@ if TYPE_CHECKING:
 
     from typing_extensions import TypeIs
 
+# ``json.loads`` returns ``Any``; this alias hands callers an ``object`` to narrow.
+_loads: Callable[[str], object] = json.loads
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_DIR = "django_strawberry_framework"
 COMPOSE_FILE = "docker-compose.postgres.yml"
@@ -646,7 +649,7 @@ def _read_json_object(path: Path, default: Mapping[str, object]) -> Mapping[str,
     """Return the JSON object this script wrote at ``path``, or ``default`` when it is absent."""
     if not path.exists():
         return default
-    document: object = json.loads(path.read_text(encoding="utf-8"))
+    document = _loads(path.read_text(encoding="utf-8"))
     if not _is_json_object(document):
         msg = f"{path} holds a JSON {type(document).__name__}, not the object this script writes"
         raise WorkspaceError(msg)
@@ -1063,6 +1066,27 @@ def _normalized(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
+def _project_declarations(
+    loads: Callable[[str], Mapping[str, object]],
+    text: str,
+) -> tuple[str, list[str]]:
+    """Return ``[project]``'s ``requires-python`` and ``dependencies`` from ``pyproject`` text.
+
+    Raises:
+        KeyError: a key is missing.
+        TypeError: ``[project]`` is not a table or ``dependencies`` is not an array.
+    """
+    project = loads(text)["project"]
+    if not _is_json_object(project):
+        msg = f"[project] is a {type(project).__name__}, not a table"
+        raise TypeError(msg)
+    dependencies = project["dependencies"]
+    if not _is_json_array(dependencies):
+        msg = f"[project].dependencies is a {type(dependencies).__name__}, not an array"
+        raise TypeError(msg)
+    return str(project["requires-python"]), [str(requirement) for requirement in dependencies]
+
+
 def floor_pins(pyproject: Path) -> dict[str, str]:
     """Return the floor ``python`` and each of ``FLOOR_PACKAGES`` read from ``pyproject``.
 
@@ -1074,9 +1098,10 @@ def floor_pins(pyproject: Path) -> dict[str, str]:
     import tomli
 
     try:
-        project = tomli.loads(pyproject.read_text(encoding="utf-8"))["project"]
-        requires_python = str(project["requires-python"])
-        dependencies = [str(requirement) for requirement in project["dependencies"]]
+        requires_python, dependencies = _project_declarations(
+            tomli.loads,
+            pyproject.read_text(encoding="utf-8"),
+        )
     except (
         OSError,
         KeyError,
@@ -1316,7 +1341,7 @@ class Postgres:
         if not ids:
             return None
         found: list[tuple[str, str, str]] = []
-        inspected: object = json.loads(self._docker("inspect", *ids))
+        inspected = _loads(self._docker("inspect", *ids))
         if not _is_json_array(inspected):
             msg = f"docker inspect printed no JSON array: {inspected!r:.200}"
             raise WorkspaceError(msg)
@@ -1760,7 +1785,7 @@ def probe(directory: Path, env: dict[str, str]) -> _ProbeResult:
         detail = completed.stderr.decode("utf-8", "replace").strip()
         msg = f"the provenance probe failed in {directory}: {detail}"
         raise WorkspaceError(msg)
-    return _probe_result(json.loads(completed.stdout.decode("utf-8").strip().splitlines()[-1]))
+    return _probe_result(_loads(completed.stdout.decode("utf-8").strip().splitlines()[-1]))
 
 
 def _probe_result(document: object) -> _ProbeResult:
@@ -2213,7 +2238,7 @@ def load_runs(layout: Layout) -> dict[str, _LoggedRun]:
     runs: dict[str, _LoggedRun] = {}
     for line in layout.run_log.read_text(encoding="utf-8").splitlines():
         if line.strip():
-            record = _logged_run(json.loads(line), layout.run_log)
+            record = _logged_run(_loads(line), layout.run_log)
             runs[record["run_id"]] = record
     return runs
 
@@ -2529,7 +2554,34 @@ def _append_gate_run(
 # --------------------------------------------------------------------------------------------
 
 
-def _cmd_run(args: argparse.Namespace) -> int:
+class _Args(argparse.Namespace):
+    """The parsed command line, typed field by field after ``build_parser``'s ``add_argument`` calls.
+
+    ``name`` and ``handler`` are set by every subcommand and ``tail`` by ``main``; each
+    other field is set only by the subcommands that declare it, and a handler reads only
+    its own.
+    """
+
+    name: str
+    handler: Callable[[_Args], int]
+    tail: list[str]
+    address: str
+    cell: str
+    fresh: bool
+    manifest: str
+    item: str
+    baseline: str
+    output: str | None
+    check: str | None
+    role: list[str] | None
+    keep: list[str] | None
+    records: list[str]
+    flow: str
+    suites: str
+    status_flow: str | None
+
+
+def _cmd_run(args: _Args) -> int:
     address = Address.parse(args.address)
     command = _worker_command(args.tail)
     layout = Layout.for_flow(address.flow)
@@ -2542,7 +2594,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     )
 
 
-def _cmd_prove(args: argparse.Namespace) -> int:
+def _cmd_prove(args: _Args) -> int:
     address = Address.parse(args.address)
     manifest = Path(args.manifest).expanduser().resolve()
     if not manifest.is_file():
@@ -2569,7 +2621,7 @@ def _cmd_prove(args: argparse.Namespace) -> int:
     return execute(layout, address, build, cell=args.cell, fresh=args.fresh)
 
 
-def _cmd_path(args: argparse.Namespace) -> int:
+def _cmd_path(args: _Args) -> int:
     address = Address.parse(args.address)
     layout = Layout.for_flow(address.flow)
     check_shared_checkout(layout.repo_root)
@@ -2579,7 +2631,7 @@ def _cmd_path(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_baseline(args: argparse.Namespace) -> int:
+def _cmd_baseline(args: _Args) -> int:
     ref = ItemRef.parse(args.item)
     layout = Layout.for_flow(ref.flow)
     check_shared_checkout(layout.repo_root)
@@ -2600,7 +2652,7 @@ def _cmd_baseline(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_diff(args: argparse.Namespace) -> int:
+def _cmd_diff(args: _Args) -> int:
     check_shared_checkout(REPO_ROOT)
     diff = item_diff(REPO_ROOT, args.baseline, args.tail)
     if args.check:
@@ -2620,26 +2672,26 @@ def _cmd_diff(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_release(args: argparse.Namespace) -> int:
+def _cmd_release(args: _Args) -> int:
     ref = ItemRef.parse(args.item)
     released = release(Layout.for_flow(ref.flow), ref.item, args.role or (), args.keep or ())
     print(f"released {len(released)} copy(ies)" + "".join(f"\n  {line}" for line in released))
     return 0
 
 
-def _cmd_gc(args: argparse.Namespace) -> int:
+def _cmd_gc(args: _Args) -> int:
     for line in gc(Layout.for_flow(args.flow)):
         print(line)
     return 0
 
 
-def _cmd_status(args: argparse.Namespace) -> int:
-    for line in status(REPO_ROOT, args.flow):
+def _cmd_status(args: _Args) -> int:
+    for line in status(REPO_ROOT, args.status_flow):
         print(line)
     return 0
 
 
-def _cmd_audit(args: argparse.Namespace) -> int:
+def _cmd_audit(args: _Args) -> int:
     all_ok = True
     for record in args.records:
         lines, ok = audit_record(REPO_ROOT, Path(record))
@@ -2648,7 +2700,7 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     return 0 if all_ok else 1
 
 
-def _cmd_gate(args: argparse.Namespace) -> int:
+def _cmd_gate(args: _Args) -> int:
     suites = [suite.strip() for suite in args.suites.split(",") if suite.strip()]
     unknown = sorted(set(suites) - set(GATE_SUITES))
     if unknown or not suites:
@@ -2740,7 +2792,7 @@ def build_parser() -> argparse.ArgumentParser:
     gate_parser.set_defaults(handler=_cmd_gate)
 
     status_parser = commands.add_parser("status", help="describe copies, runs and leases")
-    _ = status_parser.add_argument("flow", nargs="?")
+    _ = status_parser.add_argument("status_flow", metavar="flow", nargs="?")
     status_parser.set_defaults(handler=_cmd_status)
 
     gc_parser = commands.add_parser("gc", help="delete everything the flow holds")
@@ -2763,7 +2815,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         split = words.index("--")
         words, tail = words[:split], words[split + 1 :]
     parser = build_parser()
-    args = parser.parse_args(words)
+    args = parser.parse_args(words, namespace=_Args())
     args.tail = tail
     if tail and args.name not in {"run", "prove", "diff"}:
         parser.error(f"{args.name} takes nothing after --")

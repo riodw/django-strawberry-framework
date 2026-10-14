@@ -5,7 +5,7 @@ rules still switched off and the `# pyright: ignore[...]` comments still in the 
 Each item is fixed at the root, gated (both passes 0 errors, full suite in one pass at 100% coverage), then committed.
 A split suite run on a tree other sessions are editing can drop modules from every part, so it is not a coverage gate.
 
-Progress: 22 done, 7 to do. Ignore comments: 1137 lines (1897 at the start of 0.0.15's ignore sweep).
+Progress: 23 done, 7 to do. Ignore comments: 927 lines (1897 at the start of 0.0.15's ignore sweep).
 
 ## Pre-commit (`uvx pre-commit run --all-files`, 4ce779e1, clean clone)
 
@@ -62,6 +62,13 @@ Progress: 22 done, 7 to do. Ignore comments: 1137 lines (1897 at the start of 0.
 - [x] 13. `reportUnknownArgumentType` on everywhere: typed unbound slots (`dict_items`, `mapping_get`), per-view
   `as_view` returns, and checker-only shape classes for the bases the consumer factory reads at run time; 76
   suppression lines carry one of the three rules, each naming the third-party defect
+- [x] 31. Ignore sweep (1158 to 927 lines): the DRF `ModelSerializer.Meta` stub gap is held by one ignore on
+  `tests/_idioms.py::ModelSerializerBase`, which the DRF tests subclass (124 ignores); the registry-isolation wrappers
+  are a module `usefixtures` mark; `db` / `transactional_db` taken for their side effect are `django_db` marks;
+  hostile test doubles conform to the Protocol or subclass the real type (`-> NoReturn` properties, raising
+  `__getattribute__`); `tests/_django_private.py` narrows Django's private attributes with `TypeIs`; probe resolvers
+  `del` the argument Strawberry reads; unused package parameters are `del`eted; `_request_body.py` types its stream as a Protocol;
+  the runtime `T | None` widening keeps its reason-tagged `reportInvalidCast` at each site
 - [x] 10. `reportUnusedParameter` on everywhere: a parameter the caller passes by position is renamed `_name`, a
   fixture requested for its side effect moves to `@pytest.mark.usefixtures`, an optional Strawberry `root` / `info`
   or unread private parameter is removed, and `NestedConnectionStrategy.plan` takes its arguments positional-only;
@@ -73,10 +80,13 @@ Counts are the diagnostics each rule reports when switched on (main pass, all fo
 11-13 were on). "Root" is `conftest.py`, `line_count.py` and `docs/dry/export_dry_review.py`. Migrations account for 455
 of them.
 
-- [ ] 7. `reportAny`: 9636 (package 637, tests 2932, examples 5338, scripts 634, root 95). The kanban scripts' GraphQL
-  boundary stays here: `scripts/_kanban_lib.py::fetch_graphql_data` returns `dict[str, Any]`, and the `TypedDict`
-  payloads it feeds (`IdRow`, `LabelRef`, ...) are only as true as that `Any`; retyping it to `object` needs a runtime
-  validator that narrows the payload into those `TypedDict`s, keeping today's behavior on a malformed response
+- [ ] 7. `reportAny`: on for scripts/ and the root files (their execution environments in `pyproject.toml`): every
+  script parses into a typed `argparse.Namespace` subclass, JSON goes through a `Callable[[str], object]` alias and
+  is narrowed, and `scripts/_kanban_lib.py::fetch_graphql_data` returns `dict[str, object]`; the kanban and glossary
+  payloads enter their `TypedDict`s through a `cast` per decoded list (three in `fetch_dashboard_data`, one in
+  `fetch_glossary_data`), each tagged with the query that fixes the row shape. Still off for the package (645: `*args` / `**kwargs`
+  forwards, `getattr`, `strawberry.UNSET`, `Model.pk`), tests (2977) and examples (5542, about 2000 of them from
+  `testing/client.py`'s public `Response.response: Any`)
 - [ ] 8. `reportUnannotatedClassAttribute`: 8365 (package 0, tests 6684, examples 1681, scripts 0, root 0); on for
   scripts/, the package and the root files (their execution environments in `pyproject.toml`)
 - [ ] 9. `reportUnusedCallResult`: 4425 (package 0, tests 2897, examples 1527, scripts 0, root 0); on for scripts/, the
@@ -100,6 +110,10 @@ Survey verdicts recorded so nothing is re-tried blind:
   ModelForm / ModelSerializer forwards in examples; Django model `Meta` on proxy / MTI children; `connection.py`'s two
   ignores the Strawberry survey looked at
 - Rejected: making `DjangoType` generic over its model (rows and GraphQL types stay unrelated classes)
+- Item 31, not taken: dropping the test `__hash__ = None` lines (CPython already sets it beside `__eq__`, but ruff
+  `PLW1641` then fires, so their `reportAssignmentType` ignores stay); `unchecked()` / `plant()` escape helpers (a cast
+  by another name); collapsing keyword-called hook parameters into `**_kwargs` (the signature stops documenting the
+  hook); widening `DjangoType.get_queryset` for async overrides (item 28)
 - Item 21, not taken: aliasing asgiref's coroutine marker; `is_marked_coroutine_function` keeps its two suppressions
   with their real reasons (typeshed deprecates `asyncio.iscoroutinefunction` from 3.11; asgiref picks its check by
   `hasattr`)
@@ -107,7 +121,7 @@ Survey verdicts recorded so nothing is re-tried blind:
 ## Waiting on you
 
 - [ ] 23. Draft a djangorestframework-stubs issue for `ModelSerializer.Meta` (`Meta: ClassVar[type[object]]`)? It would
-  retire 142 ignores once released
+  retire the `ModelSerializerBase` ignore and the 23 example-serializer ignores once released
 - [ ] 24. Type `info` as `Info` on the public visibility helpers (`apply_cascade_permissions`, `FilterSet.apply_sync`,
   ...): 23 functions and about 65 test calls; a public API change
 - [ ] 28. Widen `DjangoType.get_queryset`'s return to a union? It breaks the direct sync calls in `docs/README.md` and
@@ -128,24 +142,31 @@ Survey verdicts recorded so nothing is re-tried blind:
   `auth/mutations.py`), pytest (`MonkeyPatch.syspath_prepend`'s `path`) and asgiref (the communicator's unannotated
   parameters and returns)
 
+- [ ] 32. Type `testing/client.py`'s `Response.response` (`Any` today) as `HttpResponse`? It needs a no-default or
+  keyword-only field, a public API change, and is the source of about 2000 of the examples' `reportAny` sites
+- [ ] 33. `reportUninitializedInstanceVariable` in the package environment: `ClassVar` on the metaclass-filled
+  attributes clears 16 of 22; the `__weakref__` slots, the unbound `bound_*` markers, `_projection` and `Register`
+  keep about 6 ignores. On with 6 ignores, or off?
+
 Open question from item 6: on the prefetch path the hook's `info.field_name` and `selected_fields` describe the field
 whose plan reached the relation, not the nested relation. Keep (as documented), or build a per-field raw info as
 strawberry_django does?
 
 ## Ignore breakdown
 
-Lines carrying `# pyright: ignore[...]`: 1137 (1233 rule hits) in 193 files: tests 846, package 203, examples 85,
-scripts 2, root 1.
+Lines carrying `# pyright: ignore[...]`: 927 (1008 rule hits) in 177 files: tests 668, package 189, examples
+68, scripts 1, root 1.
 
 ### By cause
 
-Classified by each line's reason comment. "Unknown too" counts the lines whose bracket also names one of the three
-Unknown rules because the expression already suppressed for another rule evaluates to Unknown.
+Classified by each line's reason comment; rows other than the DRF one were measured before item 31. "Unknown too"
+counts the lines whose bracket also names one of the three Unknown rules because the expression already suppressed for
+another rule evaluates to Unknown.
 
 | Cause | Lines | Unknown too | Plan |
 | --- | --- | --- | --- |
 | Deliberately ill-typed test input (hostile values, forged classes, stand-ins, rejected writes) | 426 | 4 | keep |
-| DRF stubs declare `ModelSerializer.Meta` | 148 | 0 | item 23 |
+| DRF stubs declare `ModelSerializer.Meta` (the test base plus the example serializers) | 24 | 0 | item 23 |
 | Django private QuerySet attributes (seam, `super()._clone()`, hostile writes, planted shapes) | 17 | 8 | keep |
 | Verbatim forwards (schema, consumers, ModelForm, ModelSerializer, field and `strawberry.type` forwards) | 42 | 0 | keep |
 | Django model `Meta` on proxy / MTI children | 10 | 0 | keep |
@@ -157,55 +178,55 @@ Unknown rules because the expression already suppressed for another rule evaluat
 
 | Rule | Hits | Package | Tests | Examples | Scripts | Root |
 | --- | --- | --- | --- | --- | --- | --- |
-| `reportArgumentType` | 316 | 24 | 287 | 5 | 0 | 0 |
-| `reportIncompatibleVariableOverride` | 210 | 5 | 178 | 27 | 0 | 0 |
-| `reportAttributeAccessIssue` | 153 | 26 | 126 | 1 | 0 | 0 |
-| `reportExplicitAny` | 100 | 62 | 22 | 14 | 2 | 0 |
-| `reportUnusedParameter` | 98 | 7 | 72 | 18 | 0 | 1 |
-| `reportIncompatibleMethodOverride` | 74 | 7 | 62 | 5 | 0 | 0 |
-| `reportUnknownMemberType` | 60 | 29 | 29 | 2 | 0 | 0 |
-| `reportUnknownVariableType` | 38 | 23 | 15 | 0 | 0 | 0 |
-| `reportReturnType` | 27 | 1 | 25 | 1 | 0 | 0 |
-| `reportUnnecessaryIsInstance` | 19 | 19 | 0 | 0 | 0 | 0 |
+| `reportArgumentType` | 285 | 23 | 257 | 5 | 0 | 0 |
+| `reportAttributeAccessIssue` | 142 | 26 | 115 | 1 | 0 | 0 |
+| `reportExplicitAny` | 95 | 59 | 21 | 14 | 1 | 0 |
+| `reportIncompatibleVariableOverride` | 87 | 5 | 55 | 27 | 0 | 0 |
+| `reportIncompatibleMethodOverride` | 76 | 7 | 64 | 5 | 0 | 0 |
+| `reportUnusedParameter` | 46 | 0 | 44 | 1 | 0 | 1 |
+| `reportUnknownMemberType` | 47 | 29 | 16 | 2 | 0 | 0 |
+| `reportUnknownVariableType` | 33 | 22 | 11 | 0 | 0 | 0 |
+| `reportAssignmentType` | 31 | 0 | 30 | 1 | 0 | 0 |
+| `reportReturnType` | 26 | 1 | 24 | 1 | 0 | 0 |
+| `reportUnnecessaryIsInstance` | 17 | 17 | 0 | 0 | 0 | 0 |
 | `reportCallIssue` | 15 | 1 | 13 | 1 | 0 | 0 |
-| `reportAssignmentType` | 14 | 0 | 13 | 1 | 0 | 0 |
 | `reportUnknownArgumentType` | 14 | 4 | 3 | 7 | 0 | 0 |
 | `reportUnsafeMultipleInheritance` | 13 | 8 | 3 | 2 | 0 | 0 |
 | `reportIndexIssue` | 10 | 0 | 10 | 0 | 0 | 0 |
 | `reportMissingSuperCall` | 7 | 2 | 5 | 0 | 0 | 0 |
-| `reportUndefinedVariable` | 7 | 0 | 7 | 0 | 0 | 0 |
 | `reportUnreachable` | 7 | 5 | 2 | 0 | 0 | 0 |
+| `reportUndefinedVariable` | 7 | 0 | 7 | 0 | 0 | 0 |
 | `reportFunctionMemberAccess` | 6 | 4 | 1 | 1 | 0 | 0 |
 | `reportUnnecessaryComparison` | 6 | 5 | 1 | 0 | 0 | 0 |
-| `reportGeneralTypeIssues` | 5 | 0 | 5 | 0 | 0 | 0 |
 | `reportPropertyTypeMismatch` | 5 | 5 | 0 | 0 | 0 | 0 |
-| `reportDeprecated` | 4 | 3 | 1 | 0 | 0 | 0 |
+| `reportGeneralTypeIssues` | 5 | 0 | 5 | 0 | 0 | 0 |
 | `reportUnknownParameterType` | 4 | 1 | 3 | 0 | 0 | 0 |
-| `reportIncompatibleUnannotatedOverride` | 3 | 1 | 2 | 0 | 0 | 0 |
-| `reportInvalidCast` | 3 | 3 | 0 | 0 | 0 | 0 |
 | `reportInvalidTypeArguments` | 3 | 1 | 2 | 0 | 0 | 0 |
-| `reportInvalidTypeForm` | 3 | 0 | 3 | 0 | 0 | 0 |
 | `reportOptionalMemberAccess` | 3 | 3 | 0 | 0 | 0 | 0 |
+| `reportDeprecated` | 3 | 2 | 1 | 0 | 0 | 0 |
+| `reportIncompatibleUnannotatedOverride` | 3 | 1 | 2 | 0 | 0 | 0 |
+| `reportInvalidTypeForm` | 3 | 0 | 3 | 0 | 0 | 0 |
+| `reportInvalidCast` | 3 | 3 | 0 | 0 | 0 | 0 |
 | `reportUntypedFunctionDecorator` | 2 | 2 | 0 | 0 | 0 | 0 |
 | `reportImplicitOverride` | 1 | 0 | 1 | 0 | 0 | 0 |
-| `reportMissingTypeArgument` | 1 | 0 | 1 | 0 | 0 | 0 |
 | `reportUntypedBaseClass` | 1 | 0 | 1 | 0 | 0 | 0 |
 | `reportUnusedImport` | 1 | 0 | 1 | 0 | 0 | 0 |
+| `reportMissingTypeArgument` | 1 | 0 | 1 | 0 | 0 | 0 |
 
 ### Most ignores per file
 
 | File | Lines |
 | --- | --- |
-| `tests/rest_framework/test_resolvers.py` | 72 |
-| `tests/utils/test_querysets.py` | 66 |
-| `tests/rest_framework/test_sets.py` | 50 |
-| `tests/rest_framework/test_converter.py` | 45 |
-| `tests/test_resource_policy.py` | 32 |
+| `tests/utils/test_querysets.py` | 58 |
 | `examples/fakeshop/apps/library/serializers.py` | 30 |
-| `tests/types/test_relay_interfaces.py` | 24 |
-| `tests/test_list_field.py` | 22 |
-| `tests/rest_framework/test_inputs.py` | 20 |
-| `tests/test_error_policy.py` | 18 |
+| `tests/rest_framework/test_resolvers.py` | 28 |
+| `tests/test_resource_policy.py` | 26 |
+| `tests/types/test_relay_interfaces.py` | 23 |
+| `tests/test_list_field.py` | 19 |
+| `tests/utils/test_relations.py` | 18 |
+| `tests/optimizer/test_extension.py` | 17 |
+| `tests/rest_framework/test_sets.py` | 16 |
+| `tests/test_schema.py` | 16 |
 
 
 <!-- LINK DEFINITIONS -->

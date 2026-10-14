@@ -983,7 +983,7 @@ def _resolve_keyset_connection(
     max_results: int | None = None,
     **kwargs: object,
 ) -> AwaitableOrValue[_ConnectionT]:
-    """The framework-owned slicer for KEYSET (``Meta.cursor_field``) connections.
+    """Slice a KEYSET (``Meta.cursor_field``) connection as the framework-owned slicer.
 
     Serves every non-window keyset path - root connections AND the
     per-parent fallback pipeline - through the one canonical codec, so a
@@ -2343,7 +2343,7 @@ def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parit
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
 ) -> DjangoConnection[NodeType]:
-    """Factory for a Relay connection field over a Relay-Node-shaped ``DjangoType``.
+    """Build a Relay connection field over a Relay-Node-shaped ``DjangoType``.
 
     The declared return type is the value the field resolves to, not the object
     returned: at run time this returns a ``StrawberryField``. The annotation states

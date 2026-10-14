@@ -7,11 +7,11 @@ A rule family is selected whole. Every stable code is on except the off-by-desig
 block is empty. A site the rule is wrong about carries a `# noqa: CODE - reason`; a whole folder the rule is wrong
 about gets a per-file ignore with its reason in `pyproject.toml`.
 
-Progress: 34 done, 1 to do (item 31). Stable rules: 815, every one named in the config: 790 on, 25 in `ignore` (off
-by design). The 139 preview-only rules stay off with `preview`. `# noqa` comments: 410 lines in 114 files.
+Progress: 36 done, 1 to do (item 31). Stable rules: 815, every one named in the config: 799 on, 16 in `ignore` (off
+by design). The 139 preview-only rules stay off with `preview`. `# noqa` comments: 302 lines in 91 files.
 
-Counts below were measured on ruff 0.17.0 at ee9c8161 (items 1-27) and 8ca6a481 (items 28-35). "Root" is `conftest.py`, `line_count.py` and
-`docs/dry/export_dry_review.py`.
+Counts below were measured on ruff 0.17.0 at ee9c8161 (items 1-27), 8ca6a481 (items 28-35) and the tree after
+e42952a5 (items 36-37). "Root" is `conftest.py`, `line_count.py` and `docs/dry/export_dry_review.py`.
 
 ## Done: rules on
 
@@ -93,6 +93,19 @@ Counts below were measured on ruff 0.17.0 at ee9c8161 (items 1-27) and 8ca6a481 
 - [x] `PLC0414`: `permissions.py` gets an `__all__`; the eleven `x as x` re-exports basedpyright needs for consumers
   that import through the converter modules, `utils.inputs`, `types.relay` and `filters.base` keep the alias with a
   `noqa`
+- [x] 36. `D400`, `D404` (7 summaries reworded) and `D401` (every function summary in the imperative mood) on;
+  `C901` and `PLR0911` / `PLR0912` / `PLR0913` / `PLR0915` / `PLR0917` on as ratchets at today's maxima
+  (`mccabe.max-complexity` 45, `pylint.max-branches` 39, `max-returns` 20, `max-args` 18, `max-statements` 133,
+  `max-positional-args` 10): no new function may exceed the worst one, and lowering a threshold lists the functions
+  above it
+- [x] 37. `# noqa` refactored away (410 to 302 lines): the package logger lives in the leaf module `_logger.py`, so
+  `__init__` needs no `E402`, and `debug_toolbar.py` keeps it only on its three toolbar imports; containment goes
+  through `exceptions.py::_safe_attr` / `_safe_call` / `_safe_predicate`, merged guards and `contextlib.suppress` on
+  the two last-resort passes (`BLE001` 148 to 112); positional `id` parameters are `id_` and `DjangoNodeField` binds
+  `id_` to the wire `id` through `strawberry.argument(name="id")` (`A002`); `pep8-naming.classmethod-decorators` names
+  Django's `classonlymethod` (`N805`); one 3-arg `getattr` against `utils/typing.py::MISSING_ATTRIBUTE` replaces
+  `hasattr` + `getattr` (`B009`); `tests/_idioms.py` `pickle_roundtrip` and `run_capturing` hold the single `S301` and
+  the single test `BLE001`; extension factories are `functools.partial` (`PLW0108`); unused parameters are `del`eted (`ARG`)
 
 ## To do: rules still off
 
@@ -129,14 +142,14 @@ Off by design (not planned):
   (`reportPrivateUsage` is off for the same reason)
 - `TID252` (917, relative imports): the package imports its siblings relatively
 - `EM101`, `EM102`, `TRY003` (3097): exception-message style only
-- `PLR` complexity and magic values (`PLR2004` 1269, `PLR0913` 123, `PLR0912` 49, `PLR0911` 40, `PLR0917` 26,
-  `PLR0915` 24) and `C901` (97)
+- `PLR2004` (1276, magic value in comparison): 1235 of them are test and example assertions
 - `FIX002` (10), `TD003` (10): a TODO is the `TODO(spec-NNN slice N): ...` anchor convention, which names a spec or
   a backlog entry, not an issue link; the rest of `TD` and `FIX` is on
 - `CPY001` (511, copyright headers)
 - `D203`, `D213`: the opposites of `D211` and `D212`, which the Google convention selects (ruff drops one of each
   pair)
-- `D400` (1), `D401` (170, imperative mood), `D404` (6), `D413` (71): outside the Google convention
+- `D413` (71, blank line after the last section): the Google convention ends a docstring right after its last
+  section, and ruff's `google` preset turns `D413` off
 
 ## Files ruff skips
 
@@ -147,11 +160,11 @@ content, so the formatter owns `.py` only. No file carries a file-level `# ruff:
 
 ## Config ignores
 
-Global `ignore`: the off-by-design block only (25): `C901`, `CPY001`, `D203`, `D213`, `D400`, `D401`, `D404`, `D413`,
-`EM101`, `EM102`, `FIX002`, `PLC0415`, `PLR0911`, `PLR0912`, `PLR0913`, `PLR0915`, `PLR0917`, `PLR2004`, `SLF001`,
-`TC001`-`TC003`, `TD003`, `TID252`, `TRY003`. Rule settings: `logger-objects` (the package logger, for `BLE001` /
-`LOG`), `flake8-annotations.allow-star-arg-any`, `flake8-import-conventions.aliases` (ruff's map minus
-`datetime = dt`).
+Global `ignore`: the off-by-design block only (16): `CPY001`, `D203`, `D213`, `D413`, `EM101`, `EM102`, `FIX002`,
+`PLC0415`, `PLR2004`, `SLF001`, `TC001`-`TC003`, `TD003`, `TID252`, `TRY003`. Rule settings: `logger-objects` (the
+package logger, for `BLE001` / `LOG`), `flake8-annotations.allow-star-arg-any`, `flake8-import-conventions.aliases`
+(ruff's map minus `datetime = dt`), `pep8-naming.classmethod-decorators` (Django's `classonlymethod`), and the
+`mccabe` / `pylint` complexity ratchets of item 36.
 
 Per-file ignores:
 
@@ -166,62 +179,72 @@ Per-file ignores:
 
 ## `# noqa` breakdown
 
-Lines carrying `# noqa`: 410 (none bare) in 114 files: package 278, tests 64, examples 60, scripts 4, root 4.
+Lines carrying `# noqa`: 302 (none bare) in 91 files: package 197, tests 43, examples 54, scripts 4, root 4.
 
 | Code | Hits | Package | Tests | Examples | Scripts / root | Why |
 | --- | --- | --- | --- | --- | --- | --- |
-| `BLE001` | 148 | 141 | 5 | 1 | 1 | deliberate containment, one of the five reasons of item 30 |
-| `A002` | 65 | 17 | 2 | 46 | 0 | an `id` parameter, the GraphQL argument name |
-| `E402` | 27 | 27 | 0 | 0 | 0 | the package `__init__` creates its logger before the subpackage imports |
-| `ANN401` | 24 | 24 | 0 | 0 | 0 | an `Any` the package does not own, each with a basedpyright reason |
-| `PLW0108` | 15 | 1 | 8 | 6 | 0 | a lambda whose late binding or factory-vs-class shape is the point |
+| `BLE001` | 112 | 109 | 1 | 1 | 1 | deliberate containment whose fallback or flavor a shared helper cannot carry |
+| `A002` | 55 | 9 | 0 | 46 | 0 | a `filter` / `id` parameter that is the GraphQL argument name or a public keyword |
+| `ANN401` | 21 | 21 | 0 | 0 | 0 | an `Any` the package does not own, each with a basedpyright reason |
 | `PLC0414` | 11 | 11 | 0 | 0 | 0 | explicit re-exports basedpyright needs |
-| `N802` | 10 | 10 | 0 | 0 | 0 | PascalCase field factories (`DjangoConnectionField`, ...), for graphene-django parity |
+| `N802` | 10 | 10 | 0 | 0 | 0 | PascalCase field factories (`DjangoConnectionField`, ...), for graphene-django parity, and unittest vocabulary |
 | `S102` | 10 | 0 | 10 | 0 | 0 | `exec` of a literal program the test runs |
 | `N815` | 9 | 0 | 6 | 3 | 0 | camelCase model fields the naming tests need |
-| `B009`, `B004`, `B010`, `B904`, `TRY004` | 16 | 16 | 0 | 0 | 0 | `getattr` / `setattr` past the stubs, `__call__` probes, `raise` chaining, `ValueError` for bad input |
-| `DJ001`, `S301`, `S610` | 18 | 0 | 17 | 1 | 0 | NULL as fixture input, `pickle` round trips, hostile `.extra()` input |
+| `DJ001`, `S301`, `S610` | 11 | 0 | 10 | 1 | 0 | NULL as fixture input, the one `pickle` round trip, hostile `.extra()` input |
 | `F821` | 7 | 0 | 7 | 0 | 0 | forward references the definition-order tests leave unresolved |
-| `ARG001`, `ARG003` | 6 | 5 | 0 | 0 | 1 | framework-fixed parameters (each also carries a basedpyright suppression) |
-| `N805`, `N818` | 9 | 6 | 3 | 0 | 0 | metaclass methods and `as_view` take `cls`; control-flow exceptions |
-| `S101`, `S608`, `S110`, `PT009`, `PLW0603`, `PYI034`, `FBT001` | 18 | 18 | 0 | 0 | 0 | django-filter's asserts, quoted SQL, teardown passes, the unittest mixin, patched module caches, a metaclass `__new__`, Django's positional `many` |
-| `FBT002`, `PERF203`, `RUF063`, `TRY301`, `PTH115`, others | 20 | 5 | 6 | 3 | 6 | one to three each |
+| `N805`, `N818` | 6 | 4 | 2 | 0 | 0 | metaclass methods take `cls`; control-flow exceptions |
+| `B009`, `B004`, `B010`, `B904`, `TRY004` | 10 | 10 | 0 | 0 | 0 | `getattr` / `setattr` past the stubs, a `__call__` probe, `raise` chaining, `ValueError` for bad input |
+| `S101`, `S608`, `PT009`, `PLW0603`, `PYI034`, `FBT001`, `RUF012` | 15 | 15 | 0 | 0 | 0 | django-filter's asserts, the lateral SQL, the unittest mixin, patched module caches, a metaclass `__new__`, Django's positional `many`, a stub-typed list |
+| `E402`, `PERF203`, `RUF063`, `FBT002`, `TRY301`, `PTH115`, others | 25 | 8 | 7 | 3 | 7 | one to three each |
 
 ### Most `# noqa` per file
 
 | File | Lines |
 | --- | --- |
 | `examples/fakeshop/apps/kanban/schema.py` | 23 |
-| `django_strawberry_framework/__init__.py` | 19 |
-| `django_strawberry_framework/exceptions.py` | 15 |
-| `django_strawberry_framework/utils/relations.py` | 15 |
-| `django_strawberry_framework/utils/errors.py` | 13 |
-| `django_strawberry_framework/middleware/debug_toolbar.py` | 11 |
-| `django_strawberry_framework/types/definition.py` | 11 |
-| `django_strawberry_framework/mutations/sets.py` | 10 |
+| `django_strawberry_framework/utils/relations.py` | 14 |
+| `django_strawberry_framework/exceptions.py` | 12 |
+| `django_strawberry_framework/utils/errors.py` | 11 |
 | `examples/fakeshop/apps/glossary/schema.py` | 10 |
-| `django_strawberry_framework/_request_body.py` | 9 |
+| `django_strawberry_framework/utils/querysets.py` | 9 |
+| `django_strawberry_framework/mutations/sets.py` | 8 |
+| `django_strawberry_framework/testing/client.py` | 8 |
+| `tests/types/test_definition_order.py` | 8 |
+| `django_strawberry_framework/auth/mutations.py` | 7 |
 
 ## Waiting on You
 
-- Run the suite. The ratchet landed gated on ruff, `ruff format`, `check_trailing_commas.py`, basedpyright (main and
-  floor), `check_public_types.py` and `check_citations.py`; pytest was not run. Riskiest edits: the PT012 / PT019
-  test rewrites (four `raises` blocks now await only the coroutine, slightly stricter), the exec-free
-  "sourceless function" tests in `test_django_patches.py` / `test_strawberry_patches.py`, the workspace
-  `databases()` rewrite and its new test, the `conf.py` / `filters/base.py` / `utils/relations.py` / `exceptions.py`
-  helper extractions, `_BoundScope.__exit__` / `__aexit__`, and the keyword-only signatures of item 34.
+- Run the `FAKESHOP_PG_DSN` tier. Both suppression sweeps pass ruff, `ruff format`, `check_trailing_commas.py`,
+  basedpyright (main and floor), `check_public_types.py`, `check_citations.py`, the render checks and the default
+  (SQLite) pytest run at 100% coverage; the Postgres tier was not run. Riskiest: the `exceptions.py` containment helpers and merged guards (`types/definition.py`, `utils/relations.py`,
+  `utils/errors.py`, `exceptions.py`), `FilterSet._build_stashed_instance`, the `usefixtures` / `django_db` mark moves
+  (13 registry-isolation modules, the fakeshop `db` / `transactional_db` fixtures), the typed hostile doubles
+  (`test_consumers.py`, `test_list_field.py`, `test_error_policy.py`, `optimizer/test_hints.py`), and the typed
+  `argparse` namespaces in every script and `docs/dry/export_dry_review.py`, and the root `conftest.py`, whose
+  Postgres connection-tracking wrapper changed shape.
 - `consumers.py`: 38 handlers re-raise `(CancelledError, KeyboardInterrupt, SystemExit)` and then catch
   `BaseException`, which swallows `GeneratorExit` from a coroutine closed mid-await (then `RuntimeError: coroutine
   ignored GeneratorExit`). Narrowing them to `except Exception` is a behavior change that wants its own card and a
   `GeneratorExit` regression test.
-- `extensions/error_policy.py` `on_operation`'s last-resort `except Exception: pass` takes a `noqa`; logging it would
-  surface a failed store that today serves the unmasked result silently. Log it?
+- `extensions/error_policy.py` `on_operation`'s last resort is now `contextlib.suppress(Exception)`; logging it
+  instead would surface a failed store that today serves the unmasked result silently. Log it?
 - `types.relay.SyncMisuseError` and `filters.base.LazyRelatedClassMixin` are back-compat re-export paths nothing in the
   repo imports (both names live on the package root and their owner modules). Drop them?
-- The per-file ignores added here are policy calls: `DJ008`, `SLOT000` / `SLOT001`, `S105`-`S107` for tests/ and
+- The 46 example `filter:` resolver parameters (`A002`): a fakeshop-level Strawberry `NameConverter` that strips a
+  trailing `_` would let them read `filter_` with the wire name unchanged, but `FilterInput`'s docstring prescribes
+  `filter:` for consumers. Adopt the converter in the example project?
+- `TC001` / `TC002` / `TC003`: `exempt-modules = ["typing", "typing_extensions", "strawberry.types"]` plus the autofix
+  moves 519 imports under `TYPE_CHECKING` with the schema still building; the dynamic `strawberry.type(cls)` paths
+  only a full suite run can clear. Do it once you are ready to run the suite after it?
+- `TID252` autofixes cleanly (65 files, +172 lines) but leaves sibling imports relative and parent imports absolute;
+  judged a wash, so not done.
+- AGENTS.md says TODO-anchored pseudo blocks are exempt from `ERA001`; in ruff 0.17 a `# TODO(...)` line does not
+  exempt the commented code after it, so the claim is nominal.
+- The per-file ignores are policy calls: `DJ008`, `SLOT000` / `SLOT001`, `S105`-`S107` for tests/ and
   examples/, `S603` / `S607` for tests/ and scripts/. The alternatives were 127 `__str__`s, 62 `__slots__ = ()`, and
   about 115 `noqa` lines.
-
+- Two new tracked files: `django_strawberry_framework/_logger.py` and `tests/_django_private.py`; at commit run
+  `build_kanban_tracked_path_constants.py` and `build_tree_md.py` (the hook does the first).
 
 <!-- LINK DEFINITIONS -->
 

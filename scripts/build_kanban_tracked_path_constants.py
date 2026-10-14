@@ -105,7 +105,14 @@ def render_constants(file_paths: Sequence[str]) -> str:
     return "\n".join(lines)
 
 
-def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+class _Args(argparse.Namespace):
+    """The parsed command line: one field per ``parse_args`` argument."""
+
+    output: Path
+    check: bool
+
+
+def parse_args(argv: Sequence[str]) -> _Args:
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(
         description="Render apps.kanban.constants from tracked package and test paths.",
@@ -121,7 +128,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         action="store_true",
         help="Exit with status 1 if the constants file is stale.",
     )
-    return parser.parse_args(argv)
+    return parser.parse_args(argv, namespace=_Args())
 
 
 def current_text(output: Path) -> str | None:
@@ -152,7 +159,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(rendered, encoding="utf-8", newline="\n")
+    _ = args.output.write_text(rendered, encoding="utf-8", newline="\n")
     print(f"Wrote {args.output}")
     return 0
 

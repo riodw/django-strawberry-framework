@@ -74,7 +74,13 @@ import strawberry
 from django.db import models
 from django.db.models.fields.files import FieldFile, ImageFieldFile
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_text, _safe_type_name
+from ..exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_attr,
+    _safe_text,
+    _safe_type_name,
+)
 from ..optimizer.field_meta import FieldMeta
 from ..registry import registry
 from ..scalars import BigInt
@@ -151,7 +157,7 @@ class DjangoFileType:
     @strawberry.field
     @staticmethod
     def name(root: strawberry.Parent[FieldFile]) -> str:
-        """The stored file name. Non-null and read directly (no storage guard)."""
+        """Return the stored file name. Non-null and read directly (no storage guard)."""
         # ``FieldFile.__str__`` is ``self.name or ""``, and the parent resolver returns
         # only a truthy file (one with a non-empty name), so this is the stored name.
         return str(root)
@@ -159,13 +165,13 @@ class DjangoFileType:
     @strawberry.field
     @staticmethod
     def size(root: strawberry.Parent[FieldFile]) -> int | None:
-        """The file size in bytes, or ``None`` if storage cannot read it."""
+        """Return the file size in bytes, or ``None`` if storage cannot read it."""
         return _safe_file_attr(lambda: root.size)
 
     @strawberry.field
     @staticmethod
     def url(root: strawberry.Parent[FieldFile]) -> str | None:
-        """The file URL, or ``None`` if storage cannot produce one."""
+        """Return the file URL, or ``None`` if storage cannot produce one."""
         return _safe_file_attr(lambda: root.url)
 
 
@@ -184,13 +190,13 @@ class DjangoImageType(DjangoFileType):
     @strawberry.field
     @staticmethod
     def width(root: strawberry.Parent[ImageFieldFile]) -> int | None:
-        """The image width in pixels, or ``None`` if storage cannot read it."""
+        """Return the image width in pixels, or ``None`` if storage cannot read it."""
         return _safe_file_attr(lambda: root.width)
 
     @strawberry.field
     @staticmethod
     def height(root: strawberry.Parent[ImageFieldFile]) -> int | None:
-        """The image height in pixels, or ``None`` if storage cannot read it."""
+        """Return the image height in pixels, or ``None`` if storage cannot read it."""
         return _safe_file_attr(lambda: root.height)
 
 
@@ -219,7 +225,7 @@ class _FileSystemPathFields:
     )
     @staticmethod
     def path(root: strawberry.Parent[FieldFile]) -> str | None:
-        """The absolute filesystem path, or ``None`` if storage cannot produce one."""
+        """Return the absolute filesystem path, or ``None`` if storage cannot produce one."""
         return _safe_file_attr(lambda: root.path)
 
 
@@ -327,18 +333,9 @@ _HSTORE_FIELD_CLS = cast(
 
 def _field_label(field: object) -> str:
     """Return ``Model.field`` for diagnostics, tolerating malformed field metadata."""
-    try:
-        model = getattr(field, "model", None)
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        model = None
-    try:
-        model_name = getattr(model, "__name__", "<unbound>")
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        model_name = "<unbound>"
-    try:
-        field_name = getattr(field, "name", "<unknown>")
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        field_name = "<unknown>"
+    model = _safe_attr(field, "model")
+    model_name = _safe_attr(model, "__name__", "<unbound>")
+    field_name = _safe_attr(field, "name", "<unknown>")
     return f"{_safe_text(model_name, '<unbound>')}.{_safe_text(field_name, '<unknown>')}"
 
 

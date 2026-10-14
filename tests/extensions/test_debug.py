@@ -59,6 +59,7 @@ import warnings
 from collections import deque
 from collections.abc import AsyncGenerator, Generator, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
@@ -91,7 +92,7 @@ from django_strawberry_framework.extensions.debug import (
     _serialize_sql_row,
     _terminal_original_error,
 )
-from tests._execution import make_execution_context
+from tests._execution import execution_result, make_execution_context
 
 # The payload caps re-spelled as INDEPENDENT literals (the module's spec-044
 # D4 rule extended to spec-048 Decision 6's constants): a cap that silently
@@ -645,9 +646,9 @@ def test_execute_sync_restores_the_prior_flag_value(
 )
 def test_mask_errors_ordering_controls_exception_visibility(debug_after_masking: bool):
     if debug_after_masking:
-        extension_list = [lambda: MaskErrors(), DjangoDebugExtension]  # noqa: PLW0108 - a factory entry, not the class
+        extension_list = [partial(MaskErrors), DjangoDebugExtension]
     else:
-        extension_list = [DjangoDebugExtension, lambda: MaskErrors()]  # noqa: PLW0108 - a factory entry, not the class
+        extension_list = [DjangoDebugExtension, partial(MaskErrors)]
     schema = strawberry.Schema(query=_BoomQuery, extensions=extension_list)
 
     result = schema.execute_sync("{ boom }")
@@ -695,9 +696,7 @@ class _ResultMapPrepopulator(SchemaExtension):
     @override
     def on_operation(self):
         yield
-        # basedpyright: Strawberry's schema/_graphql_core.py rebinds GraphQLExecutionResult in an
-        # ImportError fallback, so ExecutionContext.result carries Unknown under the <3.3 pin
-        result: object = self.execution_context.result  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        result = execution_result(self.execution_context)
         assert isinstance(result, GraphQLExecutionResult)
         result.extensions = {"sentinel": True}
 

@@ -178,7 +178,7 @@ class GraphQLRequestBodyBoundaryMiddleware:
             _boundary_middleware_request.reset(token)
 
     async def __acall__(self, request: HttpRequest) -> HttpResponseBase:
-        """The async twin of :meth:`__call__` - the ``await`` is the whole difference.
+        """Run the async twin of :meth:`__call__` - the ``await`` is the whole difference.
 
         Separate rather than shared because the reset has to happen after the
         downstream response exists: returning the coroutine from a synchronous
@@ -259,7 +259,7 @@ class GraphQLRequestBodyBoundaryMiddleware:
 
 
 def _package_view_instance(view_func: object) -> object:
-    """The package view instance whose boundary this callback's mount would run.
+    """Return the package view instance whose boundary this callback's mount would run.
 
     ``None`` means "not a callback this middleware can run a boundary for", and
     that is the whole answer :meth:`GraphQLRequestBodyBoundaryMiddleware

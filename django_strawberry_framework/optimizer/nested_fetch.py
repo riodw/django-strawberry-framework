@@ -82,7 +82,7 @@ from django.db.models import Prefetch, QuerySet
 from django.db.models.query import ModelIterable
 from typing_extensions import override
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_attr, _safe_type_name
 from ..utils._queryset_private import chain_queryset, super_clone_queryset
 from ..utils.connections import assert_window_fetch_mode_for
 from ._context import active_nested_strategy
@@ -485,13 +485,9 @@ def resolve_strategy(value: object) -> NestedConnectionStrategy:
                 f"instance.",
             )
         return strategy
-    try:
-        plan_callable = getattr(value, "plan", None)
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        # ``getattr``'s default only absorbs ``AttributeError``; a raising
-        # property (or descriptor) is not a strategy, so the typed rejection
-        # below applies.
-        plan_callable = None
+    # A raising property (or descriptor) is not a strategy, so the typed rejection
+    # below applies.
+    plan_callable = _safe_attr(value, "plan")
     if not isinstance(value, type) and callable(plan_callable):
         # A non-class value with a callable ``plan`` is a consumer strategy.
         return cast("NestedConnectionStrategy", value)
@@ -502,7 +498,7 @@ def resolve_strategy(value: object) -> NestedConnectionStrategy:
 
 
 def active_strategy() -> NestedConnectionStrategy:
-    """The strategy the current execution planned with; windowed by default.
+    """Return the strategy the current execution planned with; windowed by default.
 
     Published on the execution frame by ``DjangoOptimizerExtension.on_execute``
     for the walker, which cannot import the extension module (the dependency

@@ -398,7 +398,7 @@ def _truncate(text: str, limit: int) -> str:
 
 
 def _row_cost(row: "Mapping[str, object]") -> int:
-    """The serialized character cost of one row, counting its string values only.
+    """Return the serialized character cost of one row, counting its string values only.
 
     The numeric and boolean values are bounded by their own types, so the
     variable cost of a row is exactly its strings. Counting anything else would
@@ -731,7 +731,7 @@ class DjangoDebugExtension(_OperationBoundExtension[_DebugOperationState]):
         return self._acknowledged()
 
     def _acknowledged(self) -> bool:
-        """The settled acknowledgement, ``False`` for an extension that settled none."""
+        """Return the settled acknowledgement, ``False`` for an extension that settled none."""
         accepted = _ACKNOWLEDGEMENT.recall(self)
         return accepted is not None and accepted.allow_unsafe_production
 

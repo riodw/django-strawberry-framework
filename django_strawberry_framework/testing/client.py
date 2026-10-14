@@ -550,7 +550,7 @@ class AsyncTestClient(_GraphQLTestClientBase[AsyncClient]):
 
     @contextlib.asynccontextmanager
     async def login(self, user: _User) -> AsyncGenerator[None, None]:
-        """The async ``login()`` bracket - ``force_login`` / ``logout`` via ``sync_to_async``.
+        """Log ``user`` in for the block: ``force_login`` / ``logout`` via ``sync_to_async``.
 
         Session writes are ORM work, hence the ``sync_to_async`` wrapping;
         the logout runs even when the block raises.

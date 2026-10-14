@@ -102,7 +102,7 @@ FormFieldConverter = Callable[[forms.Field], FormFieldConversion]
 
 
 def form_field_required(field: forms.Field, *, column: object = None) -> bool:
-    """The effective GraphQL-input requiredness of any form field (the one rule).
+    """Return the effective GraphQL-input requiredness of any form field (the one rule).
 
     An exact ``NullBooleanField`` has a no-op ``validate``, so its
     ``field.required`` is normally meaningless (omit / ``None`` both pass).

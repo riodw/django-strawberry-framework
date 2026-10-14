@@ -56,7 +56,7 @@ import copy
 import inspect
 from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from enum import Enum
-from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Annotated, Any, NamedTuple, Protocol, TypeVar, cast, overload
 
 import strawberry
 from django.core.exceptions import FieldDoesNotExist
@@ -528,7 +528,7 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
 ) -> object:
-    """Factory for the root ``node(id: ID!)`` Relay refetch field.
+    """Build the root ``node(id: ID!)`` Relay refetch field.
 
     Bare form (``target_type=None``) resolves any registered Relay-Node-shaped
     ``DjangoType``; the typed form pins one target and rejects mismatched ids
@@ -554,12 +554,12 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
 
     def _resolve(
         info: Info[object, object],
-        # ``id`` is the Relay-spec signature (``node(id: ID!)``) - the builtin
-        # shadow is deliberate. ``strawberry.ID`` (the raw string), never
-        # ``relay.GlobalID``: a GlobalID-annotated argument is parsed by
-        # Strawberry's ``convert_argument`` BEFORE the resolver runs, so
-        # malformed ids would never reach the package.
-        id: strawberry.ID,  # noqa: A002
+        # The argument is ``node(id: ID!)``, the Relay-spec signature; ``name="id"`` keeps
+        # the wire name while the Python parameter avoids shadowing the builtin.
+        # ``strawberry.ID`` (the raw string), never ``relay.GlobalID``: a
+        # GlobalID-annotated argument is parsed by Strawberry's ``convert_argument``
+        # BEFORE the resolver runs, so malformed ids would never reach the package.
+        id_: Annotated[strawberry.ID, strawberry.argument(name="id")],
         # basedpyright: Strawberry reads this annotation for an unannotated assignment; Any keeps
         # the module docstring's "Unexpected type 'typing.Any'" build error (object changes it)
     ) -> Any:  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - Strawberry reads this annotation
@@ -568,7 +568,7 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
         # inevitable.
         check_deadline(info)
         schema = strawberry_schema_from_info(info)
-        resolved, node_id = _decode_or_graphql_error(id, schema)
+        resolved, node_id = _decode_or_graphql_error(id_, schema)
         # Everything below runs OUTSIDE the decode try/except so a dispatch-time
         # ``SyncMisuseError`` surfaces as itself (see ``_decode_or_graphql_error``).
         _check_typed_match(target_type, resolved, schema)
@@ -628,7 +628,7 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
 ) -> object:
-    """Factory for the root ``nodes(ids: [ID!]!)`` batch Relay refetch field.
+    """Build the root ``nodes(ids: [ID!]!)`` batch Relay refetch field.
 
     The declared return type is the value the field resolves to, not the object
     returned: at run time this returns a ``StrawberryField``. The overloads state

@@ -85,20 +85,12 @@ _iter_filterset_subclasses = iter_set_subclasses
 _input_type_name_for = set_input_type_name
 
 if TYPE_CHECKING:
-    from typing import Protocol
-
     from django_filters.filterset import FilterSetOptions
 
     from ..types.definition import DjangoTypeDefinition
     from ..utils.inputs import SetInputNamespace
-    from ..utils.typing import ConcreteField, ModelField
+    from ..utils.typing import ConcreteField, ModelField, OptionalWidenable
     from .sets import FilterSet
-
-    class _TypeForm(Protocol):
-        """A runtime annotation value (a class, ``NewType``, or scalar) that ``| None`` widens."""
-
-        def __or__(self, other: None, /) -> object: ...
-
 
 # Module path the ``strawberry.lazy(...)`` marker references; pinned as a
 # single constant so the factory, ``_build_logic_fields``, and
@@ -289,7 +281,7 @@ def _pascal_case(name: str) -> str:
     )
 
 
-def _scalar_from_form_field(form_field: object) -> _TypeForm:
+def _scalar_from_form_field(form_field: object) -> OptionalWidenable:
     """Pick a Strawberry-compatible scalar for a Django form field.
 
     Used by ``convert_filter_to_input_annotation`` for the
@@ -335,7 +327,7 @@ def _scalar_from_form_field(form_field: object) -> _TypeForm:
     return str
 
 
-def _scalar_from_model_field(model_field: ModelField | None) -> _TypeForm:
+def _scalar_from_model_field(model_field: ModelField | None) -> OptionalWidenable:
     """Map a Django model field to its scalar via the shared ``SCALAR_MAP`` lookup.
 
     Delegates to ``types.converters.scalar_for_field`` -- a LOCAL import, to
@@ -354,13 +346,13 @@ def _scalar_from_model_field(model_field: ModelField | None) -> _TypeForm:
     # A ``SCALAR_MAP`` value is a registered runtime annotation (a class or ``NewType``).
     # basedpyright: ``TypeForm`` also admits forms with no runtime ``__or__`` (a string forward
     # reference), which no ``SCALAR_MAP`` entry is
-    return cast("_TypeForm", scalar_for_field(model_field))  # pyright: ignore[reportInvalidCast]
+    return cast("OptionalWidenable", scalar_for_field(model_field))  # pyright: ignore[reportInvalidCast]
 
 
 def _relation_identity_annotation(
     filter_instance: Filter,
     model_field: ModelField | None,
-) -> _TypeForm:
+) -> OptionalWidenable:
     """Type a raw-pk relation leaf from the target's primary-key column.
 
     The scalar comes from ``filters/base.py::relation_identity_column`` through the
@@ -394,7 +386,7 @@ def _model_choice_identity_annotation(
     filter_instance: Filter,
     model_field: ModelField | None,
     filterset_cls: type[FilterSet] | None,
-) -> _TypeForm:
+) -> OptionalWidenable:
     """Type one value of a consumer model-choice filter from the column its form cleans.
 
     The column is ``filters/base.py::model_choice_identity_column``'s (the ``queryset``
@@ -453,7 +445,7 @@ def _element_annotation(
     filter_instance: Filter,
     model_field: ModelField | None,
     owner_definition: DjangoTypeDefinition | None,
-) -> _TypeForm:
+) -> OptionalWidenable:
     """Single-element Strawberry type with the MODEL FIELD as source of truth.
 
     A backing model field's choices become the shared GraphQL enum and its
@@ -646,7 +638,7 @@ def convert_filter_to_input_annotation(
     if not required:
         # Every precheck handler above returns a runtime annotation (a class, ``NewType``,
         # or scalar), and the registry is empty.
-        annotation = cast("_TypeForm", annotation) | None
+        annotation = cast("OptionalWidenable", annotation) | None
     return annotation
 
 
@@ -843,7 +835,7 @@ def _unwrap_enum_member(value: object) -> object:
 
 def _build_range_input_class(
     filter_instance: Filter,
-    inner: _TypeForm,
+    inner: OptionalWidenable,
     filterset_cls: type[FilterSet] | None = None,
 ) -> type[object]:
     """Return a Strawberry input dataclass with ``start: T | None`` and ``end: T | None``.
@@ -984,7 +976,7 @@ def _build_logic_fields(type_name: str) -> list[tuple[str, object, dict[str, obj
     """
     # basedpyright: it models an ``Annotated[...]`` value as the bare special form, which has
     # no ``__or__``; the runtime ``Annotated`` alias widens with ``| None`` below.
-    self_ref = cast("_TypeForm", Annotated[type_name, strawberry.lazy(INPUTS_MODULE_PATH)])  # pyright: ignore[reportInvalidCast]
+    self_ref = cast("OptionalWidenable", Annotated[type_name, strawberry.lazy(INPUTS_MODULE_PATH)])  # pyright: ignore[reportInvalidCast]
     list_ref = GenericAlias(list, (self_ref,))
     return [
         (

@@ -116,6 +116,7 @@ from django_strawberry_framework.views import (
     _RawBodyRequestAdapter,
     _resolved_max_request_body_bytes,
 )
+from tests._django_private import has_read_started
 from tests._idioms import is_object_dict
 from tests._soft_dependency import evicted_modules, simulated_absence
 
@@ -1419,9 +1420,8 @@ def test_a_non_seekable_under_limit_body_is_handed_back_as_a_rewound_stream(
     view._enforce_request_body_limit(request)
 
     assert hasattr(request, "_body") is False
-    # basedpyright: django-stubs omits HttpRequest._read_started, which HttpRequest.read reads; the
-    # omission reads as an unknown attribute
-    assert request._read_started is False  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+    assert has_read_started(request)
+    assert request._read_started is False
     assert isinstance(request._stream, BytesIO)
     assert stream.closed is True
     assert stream.delivered == len(_UNDER_LIMIT_BODY)
@@ -3326,11 +3326,10 @@ def _counting_multipart_parses() -> Generator[list[bool], None, None]:
         yield parses
 
 
-@pytest.mark.parametrize(("under", "over", "is_async"), _MOUNTED_PATHS)
+@pytest.mark.parametrize(("under", "_over", "is_async"), _MOUNTED_PATHS)
 async def test_the_projects_own_csrf_middleware_runs_when_the_chain_supplies_the_ordering(
     under: str,
-    # basedpyright: pytest binds every parametrize column by name, read or not
-    over: str,  # pyright: ignore[reportUnusedParameter]
+    _over: str,
     is_async: bool,
 ):
     """The defect this closes: a project's CSRF class must not be replaced here.
@@ -3693,10 +3692,9 @@ async def test_the_same_two_mounts_parse_nothing_without_the_middleware_either(
     assert parses == []
 
 
-@pytest.mark.parametrize(("marked", "wrapped", "is_async"), _WRAPPED_PATHS)
+@pytest.mark.parametrize(("_marked", "wrapped", "is_async"), _WRAPPED_PATHS)
 async def test_a_declined_callbacks_over_limit_body_never_reaches_the_csrf_class(
-    # basedpyright: pytest binds every parametrize column by name, read or not
-    marked: str,  # pyright: ignore[reportUnusedParameter]
+    _marked: str,
     wrapped: str,
     is_async: bool,
 ):
@@ -3709,7 +3707,7 @@ async def test_a_declined_callbacks_over_limit_body_never_reaches_the_csrf_class
     ``::test_the_chain_refuses_an_over_limit_multipart_before_any_csrf_read`` makes
     for the stamped mount, now made for the one the middleware does not recognize.
 
-    ``marked`` is unused here and present only because both mounts come from one
+    ``_marked`` is unused here and present only because both mounts come from one
     parametrization.
 
     The live sync mount is marked, so the declined sync colour is package-only.
@@ -3723,10 +3721,9 @@ async def test_a_declined_callbacks_over_limit_body_never_reaches_the_csrf_class
     assert _RejectingCsrfMiddleware.calls == []
 
 
-@pytest.mark.parametrize(("marked", "wrapped", "is_async"), _WRAPPED_PATHS)
+@pytest.mark.parametrize(("_marked", "wrapped", "is_async"), _WRAPPED_PATHS)
 async def test_a_declined_callback_still_gets_a_complete_csrf_check(
-    # basedpyright: pytest binds every parametrize column by name, read or not
-    marked: str,  # pyright: ignore[reportUnusedParameter]
+    _marked: str,
     wrapped: str,
     is_async: bool,
 ):
@@ -3738,7 +3735,7 @@ async def test_a_declined_callback_still_gets_a_complete_csrf_check(
     client cannot show a check ran, and a rejected one cannot show the request
     would otherwise reach the schema.
 
-    ``marked`` is unused here and present only because both mounts come from one
+    ``_marked`` is unused here and present only because both mounts come from one
     parametrization.
     """
     body = json.dumps({"query": "{ ping }"})
@@ -3764,11 +3761,10 @@ async def test_a_declined_callback_still_gets_a_complete_csrf_check(
     assert refused.status_code == 403
 
 
-@pytest.mark.parametrize(("under", "over", "is_async"), _MOUNTED_PATHS)
+@pytest.mark.parametrize(("under", "_over", "is_async"), _MOUNTED_PATHS)
 async def test_a_chain_with_the_boundary_and_no_csrf_middleware_still_checks_csrf(
     under: str,
-    # basedpyright: pytest binds every parametrize column by name, read or not
-    over: str,  # pyright: ignore[reportUnusedParameter]
+    _over: str,
     is_async: bool,
 ):
     """The disjunct the ordering audit deliberately admits, driven by a request.
@@ -3781,7 +3777,7 @@ async def test_a_chain_with_the_boundary_and_no_csrf_middleware_still_checks_csr
     default; with a default client both arrangements answer ``200`` and the
     assertion would say nothing.
 
-    ``over`` is unused here and present only because both mounts come from one
+    ``_over`` is unused here and present only because both mounts come from one
     parametrization.
     """
     body = json.dumps({"query": "{ ping }"})

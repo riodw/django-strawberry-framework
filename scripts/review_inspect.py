@@ -238,6 +238,8 @@ _COMPREHENSIONS = (
     ast.DictComp,
 )
 _TRY_STAR = getattr(ast, "TryStar", ast.Try)
+# ``ast.iter_fields`` yields ``Any`` values; this alias hands callers an ``object`` to narrow.
+_iter_fields: Callable[[ast.AST], Iterator[tuple[str, object]]] = ast.iter_fields
 _BLOCK_STATEMENTS = (
     ast.If,
     ast.For,
@@ -650,7 +652,26 @@ def _branch_count_excluding_nested(node: ast.FunctionDef | ast.AsyncFunctionDef)
     return branch_count
 
 
-def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
+class _Args(argparse.Namespace):
+    """The parsed command line, typed field by field after ``_parse_args``'s ``add_argument`` calls."""
+
+    target: Path | None
+    all: bool
+    code_digest: list[str] | None
+    output_dir: Path
+    root: Path
+    outline_only: bool
+    stdout: bool
+    no_cap: bool
+    json: Path | None
+    long_function_lines: int
+    long_function_branches: int
+    marker: list[str]
+    first_party_prefix: list[str]
+    literal_min_length: int
+
+
+def _parse_args(argv: Sequence[str]) -> _Args:
     parser = argparse.ArgumentParser(
         description="Generate static review aids for Python files without importing them.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -731,7 +752,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         default=8,
         help="Minimum string-literal length before duplicate-literal reporting.",
     )
-    return parser.parse_args(argv)
+    return parser.parse_args(argv, namespace=_Args())
 
 
 def _stable_stem(path: Path, root: Path) -> str:
@@ -1089,7 +1110,7 @@ def _walk_scope(
             if isinstance(value, ast.AST):
                 yield from _walk_child(value, inner, depth)
         return
-    for name, value in ast.iter_fields(node):
+    for name, value in _iter_fields(node):
         children: list[object] = value if _is_list(value) else [value]
         for child in children:
             if not isinstance(child, ast.AST):
@@ -1623,7 +1644,7 @@ def _analyze(
     source: str,
     tree: ast.Module,
     stripped: str,
-    args: argparse.Namespace,
+    args: _Args,
     markers: Sequence[str],
     shadow_path: Path,
     references: _ReferenceIndex | None,
@@ -2237,7 +2258,7 @@ def _target_files_for_all(package_root: Path) -> list[Path]:
 
 def _inspect_target(
     target: Path,
-    args: argparse.Namespace,
+    args: _Args,
     markers: Sequence[str],
     output_dir: Path,
     references: _ReferenceIndex | None = None,

@@ -119,7 +119,7 @@ class RelatedOrder(RelatedSetTargetMixin):
 
     @override
     def _validate_target(self, resolved: object) -> None:
-        """The ``RelatedSetTargetMixin`` family gate: target must be an ``OrderSet``.
+        """Enforce the ``RelatedSetTargetMixin`` family gate: target must be an ``OrderSet``.
 
         Fired by ``sets_mixins.py::RelatedSetTargetMixin._resolved_target`` on
         every non-``None`` resolved read -- the one seam every consumer routes

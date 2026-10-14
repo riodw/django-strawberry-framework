@@ -31,6 +31,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
+from functools import partial
 from types import MethodType, SimpleNamespace
 
 import pytest
@@ -152,12 +153,12 @@ def _raise_sentinel():
 #: the package logs for refusing it.
 _LADDER_FACTORIES = {
     "raises": (_raise_sentinel, "raised"),
-    "not-an-extension": (lambda: object(), "not a SchemaExtension instance"),  # noqa: PLW0108 - a factory entry, not the class
+    "not-an-extension": (partial(object), "not a SchemaExtension instance"),
     "returns-the-class": (lambda: _ConsumerExtension, "not a SchemaExtension instance"),
-    "claims-to-be-an-extension": (lambda: _ClaimsAnExtension(), "not a SchemaExtension instance"),  # noqa: PLW0108 - a factory entry, not the class
-    "claims-to-be-an-authority": (lambda: _ClaimsAnAuthority(), "not a SchemaExtension instance"),  # noqa: PLW0108 - a factory entry, not the class
-    "authority-subclass": (lambda: _AuthoritySubclass(), "claims the resource-policy authority"),  # noqa: PLW0108 - a factory entry, not the class
-    "hybrid": (lambda: _HybridAuthority(), "claims the resource-policy authority"),  # noqa: PLW0108 - a factory entry, not the class
+    "claims-to-be-an-extension": (partial(_ClaimsAnExtension), "not a SchemaExtension instance"),
+    "claims-to-be-an-authority": (partial(_ClaimsAnAuthority), "not a SchemaExtension instance"),
+    "authority-subclass": (partial(_AuthoritySubclass), "claims the resource-policy authority"),
+    "hybrid": (partial(_HybridAuthority), "claims the resource-policy authority"),
 }
 
 _LADDER_IDS = sorted(_LADDER_FACTORIES)

@@ -385,7 +385,7 @@ _EXACT_SEQUENCE_TYPES = (list, tuple)
 
 
 def _closes_a_cycle(container: object, path: tuple[object, ...]) -> bool:
-    """``True`` when ``container`` is one of the containers it hangs under.
+    """Return whether ``container`` is one of the containers it hangs under.
 
     Identity by ``is``, never by ``==`` or by ``id()``: an input value's
     ``__eq__`` is arbitrary consumer / library code (two distinct equal lists are
@@ -1098,7 +1098,7 @@ def _collection_rows(
 
 
 def _is_connection_type(candidate: object) -> bool:
-    """``True`` for a Relay connection object type, detected by its whole edge shape.
+    """Return whether ``candidate`` is a Relay connection object type, by its whole edge shape.
 
     The full structural test, not merely "has a field called ``edges``": the
     ``edges`` field must be a LIST whose item type is an object carrying both
@@ -1160,7 +1160,7 @@ def _type_system_directives(definition: Node) -> Iterator[DirectiveNode]:
 
 
 def _declared_input_type(graphql_schema: GraphQLSchema, type_node: TypeNode) -> GraphQLType | None:
-    """The input type a variable definition declares, or ``None`` when it names none."""
+    """Return the input type a variable definition declares, or ``None`` when it names none."""
     # basedpyright: graphql-core 3.2 overloads ``type_from_ast`` on the bare generic
     # ``GraphQLList``, so the function reads as partially Unknown
     declared = graphql.type_from_ast(graphql_schema, type_node)  # pyright: ignore[reportUnknownMemberType]
@@ -1626,7 +1626,7 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension[OperationState]):
         return copy_policy(accepted.policy)
 
     def _resolved_policy(self) -> ResourcePolicy:
-        """The explicit policy, else the schema's, else the package defaults.
+        """Return the explicit policy, else the schema's, else the package defaults.
 
         Consulted once per operation, by :meth:`on_operation`, which arms what
         it returns; every later charge in that operation reads the armed

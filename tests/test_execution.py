@@ -10,7 +10,7 @@ from graphql import GraphQLError
 from strawberry.types.execution import ExecutionContext
 
 from django_strawberry_framework import DjangoSchema
-from tests._execution import make_execution_context
+from tests._execution import execution_result, make_execution_context
 
 
 @strawberry.type
@@ -50,10 +50,7 @@ def test_make_execution_context_defaults_to_an_unparsed_plain_schema_request():
     assert context.graphql_document is None
     assert context.operation_name is None
     assert context.pre_execution_errors is None
-    # basedpyright: Strawberry's schema/_graphql_core.py rebinds GraphQLExecutionResult in an
-    # ImportError fallback, so ExecutionContext.result carries Unknown under the <3.3 pin
-    result: object = context.result  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-    assert result is None
+    assert execution_result(context) is None
     assert {operation.value for operation in context.allowed_operations} == {
         "query",
         "mutation",

@@ -307,8 +307,9 @@ def _bind(
     _add(names, prefix, name)
     if spans is None:
         return
-    decorators = getattr(node, "decorator_list", ())
-    start = min([node.lineno, *(decorator.lineno for decorator in decorators)])
+    start = node.lineno
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        start = min([start, *(decorator.lineno for decorator in node.decorator_list)])
     span = (start, node.end_lineno or node.lineno, prefix + name)
     for key in {name, prefix + name}:
         spans.setdefault(key, []).append(span)
@@ -830,7 +831,17 @@ def check_source(
     return violations, len(outcomes)
 
 
-def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+class _Args(argparse.Namespace):
+    """The parsed command line: one field per ``parse_args`` argument."""
+
+    check: bool
+    paths: list[str] | None
+    cited_by: str | None
+    json: bool
+    substrings: bool
+
+
+def parse_args(argv: Sequence[str]) -> _Args:
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(
         description="Resolve every path::Symbol source reference against the tree.",
@@ -862,7 +873,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         action="store_true",
         help='Also check `path::Symbol #"text"` and `path #"text"` pinpoints.',
     )
-    return parser.parse_args(argv)
+    return parser.parse_args(argv, namespace=_Args())
 
 
 def _named_sources(paths: Sequence[str]) -> list[tuple[Path, bool]]:
@@ -1064,8 +1075,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise CitationCheckError(f"No .py sources found under {REPO_ROOT}.")
     index = suffix_index(corpus)
 
-    named = args.paths is not None
-    sources = _named_sources(args.paths) if named else _gate_sources(corpus)
+    paths = args.paths
+    named = paths is not None
+    sources = _named_sources(paths) if paths is not None else _gate_sources(corpus)
     outcomes: list[Outcome] = []
     checked = {"py": 0, "board": 0, "spec": 0}
     for source, require_file in sources:

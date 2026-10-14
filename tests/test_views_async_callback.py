@@ -32,7 +32,7 @@ class _UnmarkedAsView(AsyncGraphQLView[object, object]):
     # basedpyright: the stand-in returns Django's own ``View.as_view`` callback, typed as
     # django-stubs types it rather than as Strawberry's narrower override
     def as_view(  # pyright: ignore[reportIncompatibleMethodOverride]
-        cls,  # noqa: N805 - Django's own signature
+        cls,
         **initkwargs: object,
     ) -> Callable[..., HttpResponseBase]:
         # The next ``as_view`` past Strawberry's is Django's ``View.as_view``, which marks nothing.

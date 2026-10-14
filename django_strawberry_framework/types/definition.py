@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Literal
 
 from django.db import models
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_attr, _safe_type_name
 from ..optimizer.field_meta import FieldMeta
 from ..optimizer.hints import OptimizerHint
 
@@ -333,11 +333,7 @@ class DjangoTypeDefinition:
         except BaseException:  # noqa: BLE001 - hostile object, contained by design
             result = None
         else:
-            try:
-                is_relation = getattr(model_field, "is_relation", False)
-            except BaseException:  # noqa: BLE001 - hostile object, contained by design
-                is_relation = False
-            if not is_relation:
+            if not _safe_attr(model_field, "is_relation"):
                 result = None
             else:
                 try:
@@ -346,27 +342,15 @@ class DjangoTypeDefinition:
                         "related_model",
                         None,
                     )
+                    target_type = None if target_model is None else registry.get(target_model)
+                    target_definition = (
+                        None if target_type is None else registry.get_definition(target_type)
+                    )
                 except BaseException:  # noqa: BLE001 - hostile object, contained by design
-                    target_model = None
-                if target_model is None:
-                    result = None
-                else:
-                    try:
-                        target_type = registry.get(target_model)
-                    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-                        target_type = None
-                    if target_type is None:
-                        result = None
-                    else:
-                        try:
-                            target_definition = registry.get_definition(target_type)
-                        except BaseException:  # noqa: BLE001 - hostile object, contained by design
-                            target_definition = None
-                        result = (
-                            (target_definition, model_field)
-                            if target_definition is not None
-                            else None
-                        )
+                    target_definition = None
+                result = (
+                    (target_definition, model_field) if target_definition is not None else None
+                )
 
         if cache_ok:
             self._related_target_cache[field_name] = result
@@ -406,12 +390,9 @@ def origin_has_custom_id_resolver(origin: type[object], pk_name: str) -> bool:
     normalized_pk_name = _normalize_pk_name(pk_name)
     if normalized_pk_name is None:
         return False
-    try:
-        mro: tuple[type[object], ...] = getattr(origin, "__mro__", ())
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        return True
     resolver_names = (normalized_pk_name, f"resolve_{normalized_pk_name}")
     try:
+        mro: tuple[type[object], ...] = getattr(origin, "__mro__", ())
         if any(_class_has_custom_id_resolver(cls, name) for cls in mro for name in resolver_names):
             return True
     except BaseException:  # noqa: BLE001 - hostile object, contained by design
@@ -444,12 +425,8 @@ def _resolves_id_off_pk(origin: type[object], pk_name: str) -> bool:
     from strawberry.relay.exceptions import NodeIDAnnotationError
 
     try:
-        is_node = issubclass(origin, relay.Node)
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        return True
-    if not is_node:
-        return False
-    try:
+        if not issubclass(origin, relay.Node):
+            return False
         # A consumer ``Node`` may override ``resolve_id_attr`` to return anything.
         id_attr: object = origin.resolve_id_attr()
     except NodeIDAnnotationError:

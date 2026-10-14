@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Iterator
+from typing import NoReturn
 
 import pytest
 import strawberry
@@ -443,15 +444,13 @@ def test_django_mutation_field_generalizes_to_serializer_mutation():
     `SerializerMutation` is imported BY NAME from the package root (NOT via the root
     `__all__` / star import, which stays DRF-free while DRF is soft).
     """
-    from rest_framework import serializers
-
     from django_strawberry_framework import SerializerMutation
+    from tests._idioms import ModelSerializerBase
 
     _declare_item_primaries()
 
-    class ItemSerializer(serializers.ModelSerializer[product_models.Item]):
-        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
-        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+    class ItemSerializer(ModelSerializerBase[product_models.Item]):
+        class Meta:
             model = product_models.Item
             fields = ("name", "category")
 
@@ -543,17 +542,16 @@ def test_hostile_directives_iterator_raises_at_construction():
     _declare_item_primaries()
     CreateItem, _, _ = _operation_mutations()
 
-    class HostileDirectives:
-        def __iter__(self):
+    class HostileDirectives(tuple[object, ...]):
+        @override
+        def __iter__(self) -> Iterator[object]:
             return self
 
-        def __next__(self):
+        def __next__(self) -> NoReturn:
             raise ValueError("boom")
 
     with pytest.raises(ConfigurationError, match="directives could not be read") as exc:
-        # basedpyright: the raising directives iterator is the hostile input under test;
-        # DjangoMutationField types the parameter as Sequence[object]
-        DjangoMutationField(CreateItem, directives=HostileDirectives())  # pyright: ignore[reportArgumentType]
+        DjangoMutationField(CreateItem, directives=HostileDirectives())
     assert isinstance(exc.value.__cause__, ValueError)
 
 

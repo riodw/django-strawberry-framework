@@ -1917,7 +1917,7 @@ def _assert_intent_specs(
     path: str,
     manifest: dict[str, object],
 ) -> None:
-    """The per-level body of the intent walk (one serializer level, recursing into nested).
+    """Run the per-level body of the intent walk (one serializer level, recursing into nested).
 
     Populates ``manifest`` at the TOP level only (``path == ""``): the captured link key
     (single) or pk set (multi) per supplied relation source, for the post-save attestation.
@@ -2073,7 +2073,7 @@ def _attested_foreign_key(
     field: DRFField | None,
     spec: InputFieldSpec,
 ) -> ForeignKeyField | None:
-    """The single-column FK / OneToOne a single relation writes on ``model``.
+    """Return the single-column FK / OneToOne a single relation writes on ``model``.
 
     The source is the runtime field's (a renamed field binds the relation it names),
     else the spec's. ``None`` for a serializer-only source (no model field) and for any
@@ -2098,7 +2098,7 @@ def _link_key_attname(
     field: DRFField | None,
     spec: InputFieldSpec,
 ) -> str | None:
-    """The related column a single relation's key stores (``ForeignKey.target_field``).
+    """Return the related column a single relation's key stores (``ForeignKey.target_field``).
 
     Resolved against the serializer level's own ``Meta.model``: the related pk's
     attname for a plain key, the ``to_field`` column's for a ``to_field`` key. ``None``
@@ -2396,7 +2396,7 @@ def _serializer_write_step(
     instance: models.Model | None,
     provided_data: dict[str, object],
 ) -> models.Model | StepFailure:
-    """The serializer ``write_step``: construct -> validate -> save (spec-039 pipeline callback).
+    """Run the serializer ``write_step``: construct -> validate -> save (spec-039 callback).
 
     Constructs the serializer through the ``get_serializer_kwargs`` hook + the
     framework merge (``_merged_serializer_kwargs``), runs ``is_valid()`` (a failure
@@ -2473,7 +2473,7 @@ def _guarded_serializer_write(
     hook_context: SerializerHookContext,
     written: list[_WrittenRow],
 ) -> models.Model | StepFailure:
-    """The write-step body, run inside the ``_write_witness`` guards."""
+    """Run the write-step body inside the ``_write_witness`` guards."""
     # The pre-save M2M membership snapshot (update only), taken at write-step
     # entry - strictly AFTER authorization (relation membership is data an
     # unauthorized caller must never make the pipeline query) and strictly
@@ -2668,7 +2668,7 @@ def _serializer_decode_step(
     data: object,
     info: Info[object, object],
 ) -> dict[str, object] | StepFailure:
-    """The serializer ``decode_step``: serializer-field-keyed decode (spec-039 pipeline callback).
+    """Run the serializer ``decode_step``: serializer-field-keyed decode (spec-039 callback).
 
     Decodes the bound input into a serializer-field-keyed ``provided_data`` (the
     ``_decode_serializer_data`` contract: type-check + visibility on every relation
@@ -2688,7 +2688,7 @@ def _run_serializer_pipeline_sync(
     mutation_cls: type[SerializerMutation],
     info: Info[object, object],
     data: object,
-    id: object,  # noqa: A002
+    id_: object,
 ) -> object:
     """Run the serializer decode/write callbacks through the shared write skeleton.
 
@@ -2701,7 +2701,7 @@ def _run_serializer_pipeline_sync(
         mutation_cls,
         info,
         data,
-        id,
+        id_,
         decode_step=lambda _instance: _serializer_decode_step(mutation_cls, data, info),
         write_step=lambda instance, decoded: _serializer_write_step(
             mutation_cls,

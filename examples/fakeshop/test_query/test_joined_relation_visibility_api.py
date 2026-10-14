@@ -493,12 +493,11 @@ def _unread_hook_join_rows() -> tuple[strawberry.Schema, Item, Entry]:
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize(("query", "expected", "statement"), _UNREAD_HOOK_JOINS)
+@pytest.mark.parametrize(("query", "expected", "_statement"), _UNREAD_HOOK_JOINS)
 async def test_async_hook_join_the_selection_never_reads_survives_the_projection(
     query: str,
     expected: Callable[[Item, Entry], JSONObject],
-    # basedpyright: pytest binds the shared parametrize row's argnames by name
-    statement: int,  # pyright: ignore[reportUnusedParameter]
+    _statement: int,
 ) -> None:
     """The same unread hook JOIN, at the root and in the planned child, on an async request."""
     schema, item, entry = await sync_to_async(_unread_hook_join_rows)()

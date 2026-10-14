@@ -135,13 +135,39 @@ import sys
 import tokenize
 from bisect import bisect_left, bisect_right
 from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from fnmatch import fnmatch, fnmatchcase
 from pathlib import Path
 from types import MappingProxyType
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from typing_extensions import TypeIs
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _is_toml_table(value: object) -> TypeIs[dict[str, object]]:
+    """Return whether a decoded TOML value is a table (TOML table keys are always strings)."""
+    return isinstance(value, dict)
+
+
+def _ruff_line_length(document: object) -> int:
+    """Return ``document["tool"]["ruff"]["line-length"]`` as an int.
+
+    Raises:
+        KeyError: A table on the path lacks its key.
+        TypeError: A value on the path is not a table, or the length is not a number or string.
+    """
+    value = document
+    for key in ("tool", "ruff", "line-length"):
+        if not _is_toml_table(value):
+            raise TypeError(key)
+        value = value[key]
+    if not isinstance(value, (int, float, str)):
+        raise TypeError("line-length")
+    return int(value)
 
 
 @functools.cache
@@ -163,8 +189,10 @@ def line_length() -> int:
         raise RuntimeError(f"cannot read {pyproject}: {error}") from error
     import tomli
 
+    # ``tomli.loads`` returns ``dict[str, Any]``; this alias hands the walk an ``object``.
+    toml_loads: Callable[[str], dict[str, object]] = tomli.loads
     try:
-        return int(tomli.loads(text)["tool"]["ruff"]["line-length"])
+        return _ruff_line_length(toml_loads(text))
     except (KeyError, TypeError, ValueError) as error:
         raise RuntimeError(f"[tool.ruff] line-length missing from {pyproject}") from error
 
@@ -238,7 +266,7 @@ Construct = tuple[int, int, int, int, int, bool]
 
 
 def threshold_for(path: Path) -> int:
-    """The explode threshold for ``path`` (2 for ``models.py``, else 4)."""
+    """Return the explode threshold for ``path`` (2 for ``models.py``, else 4)."""
     return MODELS_THRESHOLD if path.name == "models.py" else DEFAULT_THRESHOLD
 
 
@@ -459,13 +487,13 @@ def _rendered_len(body: str) -> int:
 
 
 def _next_string(toks: list[tokenize.TokenInfo], position: int) -> str:
-    """The string of the next significant token after ``position`` (``""`` at end)."""
+    """Return the string of the next significant token after ``position`` (``""`` at end)."""
     nxt = position + 1
     return toks[nxt].string if nxt < len(toks) else ""
 
 
 def _has_nested_trailing_comma(body: str) -> bool:
-    """True when a child construct carries its own magic trailing comma.
+    """Return whether a child construct carries its own magic trailing comma.
 
     A nested trailing comma pins that child multi-line, so the parent cannot
     collapse. Detected on the token stream rather than by matching ``,)`` in raw
@@ -573,7 +601,7 @@ def _run_ruff_format(files: list[Path], *, quiet: bool = False) -> None:
     ruff = shutil.which("ruff")
     cmd = ([ruff] if ruff else ["uv", "run", "ruff"]) + ["format", *(str(f) for f in files)]
     try:
-        result = subprocess.run(cmd, check=False, capture_output=quiet, text=quiet)
+        result = subprocess.run(cmd, check=False, capture_output=quiet, text=True)
     except FileNotFoundError:
         print("note: ruff not found on PATH; run `uv run ruff format` to reflow", file=sys.stderr)
         return
@@ -659,7 +687,7 @@ def _footer_line_index(lines: list[str]) -> int:
 
 
 def _scaffold_in_canonical_order(text: str) -> str | None:
-    """The first missing/out-of-order scaffold marker, or ``None`` when canonical."""
+    """Return the first missing/out-of-order scaffold marker, or ``None`` when canonical."""
     lines = text.split("\n")
     start = _footer_line_index(lines)
     if start < 0:
@@ -720,7 +748,7 @@ def _render_footer(cats: dict[str, list[str]], orphan: list[str]) -> str:
 
 
 def _preserves_content(before: str, after: str) -> bool:
-    """True when every non-blank line of ``before`` survives in ``after``.
+    """Return whether every non-blank line of ``before`` survives in ``after``.
 
     The scaffold fixer only ever adds category markers and re-sorts def lines under
     them, so a rewrite that DROPS a line has misread where the footer starts. This
@@ -733,7 +761,7 @@ def _preserves_content(before: str, after: str) -> bool:
 
 
 def fix_markdown_scaffold(text: str) -> str | None:
-    """The canonical-footer form of ``text``, or ``None`` if that would lose content."""
+    """Return the canonical-footer form of ``text``, or ``None`` if that would lose content."""
     body, cats, orphan = _parse_footer(text)
     fixed = body.rstrip("\n") + "\n\n" + _render_footer(cats, orphan)
     return fixed if _preserves_content(text, fixed) else None
@@ -776,9 +804,13 @@ def _reject_constant(name: str) -> object:
     raise ValueError(f"{name} is not valid JSON")
 
 
+# ``json.loads`` returns ``Any``; this alias hands callers an ``object`` to narrow.
+_loads: Callable[..., object] = json.loads
+
+
 def _load_json(content: str, *, exact: bool = False) -> object:
     """Parse JSON, refusing the non-standard constructs this fixer must not rewrite."""
-    return json.loads(
+    return _loads(
         content,
         object_pairs_hook=_reject_duplicate_keys,
         parse_constant=_reject_constant,
@@ -1059,7 +1091,7 @@ def _match_segments(pattern: tuple[str, ...], parts: tuple[str, ...]) -> bool:
 
 
 def matches_exclude_pattern(relative: str) -> bool:
-    """True when the repo-relative posix path ``relative`` matches ``EXCLUDE_PATTERNS``.
+    """Return whether the repo-relative posix path ``relative`` matches ``EXCLUDE_PATTERNS``.
 
     Matching is per segment, never over the joined string: ``fnmatch`` lets ``*``
     cross ``/``, which would make ``docs/review/rev-*.md`` swallow any file under a
@@ -1070,7 +1102,7 @@ def matches_exclude_pattern(relative: str) -> bool:
 
 
 def is_excluded(path: Path) -> bool:
-    """True when ``path`` is outside the enforced set.
+    """Return whether ``path`` is outside the enforced set.
 
     ``EXCLUDE_DIRS`` always drops external/generated trees (``.venv``, caches,
     ``node_modules``, ``build``/``dist``, ``migrations``) at any depth. Inside the
@@ -1365,7 +1397,7 @@ def _ruff_format_text(text: str, path: Path) -> str | None:
 
 
 def _unified_diff(path: Path, before: str, after: str) -> str:
-    """The unified diff turning ``before`` into ``after``, labelled with ``path``."""
+    """Return the unified diff turning ``before`` into ``after``, labelled with ``path``."""
     return "".join(
         difflib.unified_diff(
             before.splitlines(keepends=True),
@@ -1374,6 +1406,16 @@ def _unified_diff(path: Path, before: str, after: str) -> str:
             tofile=f"b/{path}",
         ),
     )
+
+
+class _Args(argparse.Namespace):
+    """The parsed command line: one field per ``main`` argument."""
+
+    check: bool
+    fix: bool
+    diff: bool
+    json: bool
+    paths: list[str]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1400,7 +1442,7 @@ def main(argv: list[str] | None = None) -> int:
         help="print one JSON result document on stdout instead of human output",
     )
     _ = parser.add_argument("paths", nargs="*", help="files/dirs to process (default: whole repo)")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(argv, namespace=_Args())
     if args.diff and args.fix:
         parser.error("--diff writes nothing; it cannot be combined with --fix")
     check = args.check or args.diff

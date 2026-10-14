@@ -198,7 +198,7 @@ def _single_parent_where_ids(
     where: WhereNode,
     spec: SingleParentWindowSpec,
 ) -> list[object] | None:
-    """The parent-id list if ``where`` is "window range + ONE parent IN", else ``None``.
+    """Return the parent-id list if ``where`` is "window range + ONE parent IN", else ``None``.
 
     The structural twin of ``lateral_fetch._recognize_lateral_fetch``'s WHERE
     walk minus the keyset/visibility arms: the root must be a non-negated ``AND``,

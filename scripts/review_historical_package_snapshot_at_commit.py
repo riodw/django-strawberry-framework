@@ -306,7 +306,14 @@ def _materialize_and_inspect(commit: str, path: str, out_dir: Path) -> None:
         _inspect_quiet(tmp_target, out_dir, tmp_root)
 
 
-def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
+class _Args(argparse.Namespace):
+    """The parsed command line, typed field by field after ``_parse_args``'s ``add_argument`` calls."""
+
+    commit_hash: str
+    package_dir: str
+
+
+def _parse_args(argv: Sequence[str]) -> _Args:
     parser = argparse.ArgumentParser(
         description=(
             "Generate stripped/overview shadow files for every .py file under "
@@ -321,7 +328,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
             f"Repo-relative directory to scan recursively. Defaults to {DEFAULT_PACKAGE_DIR!r}."
         ),
     )
-    return parser.parse_args(argv)
+    return parser.parse_args(argv, namespace=_Args())
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -22,6 +22,7 @@ import gc
 import threading
 from collections import OrderedDict
 from collections.abc import Iterator
+from functools import partial
 from types import SimpleNamespace
 from typing import SupportsIndex, TypeVar, overload
 
@@ -52,7 +53,7 @@ from django_strawberry_framework.orders.sets import (
 from django_strawberry_framework.types.base import DjangoType
 from django_strawberry_framework.utils.querysets import model_for
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
-from tests._idioms import is_object_list
+from tests._idioms import is_object_list, run_capturing
 
 _M = TypeVar("_M", bound=Model)
 
@@ -2379,14 +2380,14 @@ def test_concurrent_threads_publishing_into_one_ledger_lose_nothing(
     errors: list[BaseException] = []
 
     def apply_one(copied: contextvars.Context, order_input: object):
-        try:
-            copied.run(ConcurrentOrder.apply_sync, order_input, Book.objects.all(), info)
-        except BaseException as error:  # noqa: BLE001 - worker thread reports to the main thread
-            errors.append(error)
+        copied.run(ConcurrentOrder.apply_sync, order_input, Book.objects.all(), info)
 
     with capture_applied_order_normalization():
         workers = [
-            threading.Thread(target=apply_one, args=(contextvars.copy_context(), value))
+            threading.Thread(
+                target=run_capturing,
+                args=(errors, partial(apply_one, contextvars.copy_context(), value)),
+            )
             for value in inputs
         ]
         for worker in workers:

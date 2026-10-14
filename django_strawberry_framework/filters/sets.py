@@ -152,6 +152,7 @@ if TYPE_CHECKING:
 
     from django.forms import Field as FormField
     from django_filters.filterset import FilterSetOptions
+    from typing_extensions import Self
 
     from ..types.base import DjangoType
     from ..types.definition import DjangoTypeDefinition
@@ -1245,6 +1246,11 @@ class ProjectedChildFilter(Filter):
     """
 
     _projection: ChildProjection
+    # django-filter's ``BaseFilterSet.__init__`` stamps ``filter_.parent = self`` on every
+    # per-request copy (never on the class-level template), so the attribute is absent until
+    # bound; only a package ``FilterSet`` expands a ``RelatedFilter``, so the parent is one.
+    # A bare annotation: the stubs do not declare it and no class attribute is created.
+    parent: FilterSet
     # The child filter's own class this projected class was built from
     # (``_projected_class_for``); set on each built class, never on this base.
     _projected_from: ClassVar[type[Filter]]
@@ -1262,11 +1268,7 @@ class ProjectedChildFilter(Filter):
 
     def _child(self) -> FilterSet:
         """Return the child filter set instance this leaf runs in, shared per parent instance."""
-        # django-filter's ``BaseFilterSet.__init__`` stamps ``filter_.parent = self``
-        # on every per-request copy (never on the class-level template); only a
-        # package ``FilterSet`` expands a ``RelatedFilter``, so the parent is one.
-        parent = cast("FilterSet", getattr(self, "parent"))  # noqa: B009
-        return parent._projection_child(self._projection.filterset)
+        return self.parent._projection_child(self._projection.filterset)
 
     @property
     @override
@@ -1285,9 +1287,7 @@ class ProjectedChildFilter(Filter):
         leaves the parent unchanged and runs no ``get_queryset``
         (``FilterSet._apply_relation_leaf``).
         """
-        # See ``_child`` for the ``parent`` stamp.
-        parent = cast("FilterSet", getattr(self, "parent"))  # noqa: B009
-        return parent._apply_relation_leaf(qs, self, value)
+        return self.parent._apply_relation_leaf(qs, self, value)
 
 
 @cache
@@ -1485,7 +1485,7 @@ class _LeafChain:
     key_attname: str | None = None
 
     def terminal_value(self, value: object) -> object:
-        """The value ``terminal`` receives: ``value``, read as the target key for a to-many key leaf."""
+        """Return the ``terminal`` value: ``value``, or the target key for a to-many key leaf."""
         if self.key_attname is None:
             return value
         return _relation_key_value(value, self.key_attname)
@@ -4206,7 +4206,7 @@ class FilterSet(
         chain: _LeafChain,
         queryset: models.QuerySet[_M],
     ) -> models.QuerySet[models.Model]:
-        """The unscoped rows ``chain``'s terminal is written for: its last hop target's, else ``queryset``."""
+        """Return the unscoped rows for ``chain``'s terminal: the last hop target's, else ``queryset``."""
         if not chain.hops:
             return cast("models.QuerySet[models.Model]", queryset)
         return base_queryset(_hop_model(chain.hops[-1]), using=queryset.db)
@@ -4804,18 +4804,15 @@ class FilterSet(
             _flat_hop_visibility,
         )
         child_data = cls._normalize_input(child_input)
-        # basedpyright: typeshed narrows ``request`` to ``HttpRequest``; upstream only stores it,
-        # and the context request need not be a Django one. It rejects ``object`` for
-        # ``HttpRequest | None``
-        child_set = cls(
-            data=child_data,
-            queryset=constrained,
-            request=request,  # pyright: ignore[reportArgumentType]
+        child_set = cls._build_stashed_instance(
+            child_data,
+            constrained,
+            request,
+            info,
+            _nested_qs_by_branch_id,
+            _flat_hop_visibility,
         )
         child_set._logic_depth = _depth
-        child_set._apply_info = info
-        child_set._nested_qs_by_branch_id = _nested_qs_by_branch_id
-        child_set._flat_hop_visibility = _flat_hop_visibility
         cls._validate_form_or_raise(child_set)
         if type(child_set).qs is not filterset.BaseFilterSet.qs:
             # A consumer ``qs`` override (django-filter's seam) runs inside the arm as it
@@ -4901,6 +4898,37 @@ class FilterSet(
         return data, request, constrained
 
     @classmethod
+    def _build_stashed_instance(
+        cls,
+        data: dict[str, object],
+        constrained: models.QuerySet[_M],
+        request: object,
+        info: object,
+        nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet[models.Model]]] | None,
+        flat_hop_visibility: dict[tuple[object, str | None], models.QuerySet[models.Model]] | None,
+    ) -> Self:
+        """Build a filterset over ``constrained`` and stash the per-request state it reads.
+
+        ``info`` lands as ``_apply_info``, and the async-only pre-derived
+        ``nested_qs_by_branch_id`` and ``flat_hop_visibility`` maps (``None`` on the
+        sync path) as ``_nested_qs_by_branch_id`` and ``_flat_hop_visibility``, so
+        ``filter_queryset`` (upstream's one-argument signature) reaches them. The one
+        construction shared by the top-level apply and every nested-branch sibling.
+        """
+        # basedpyright: typeshed narrows ``request`` to ``HttpRequest``; upstream only stores it,
+        # and the context request need not be a Django one. It rejects ``object`` for
+        # ``HttpRequest | None``
+        instance = cls(
+            data=data,
+            queryset=constrained,
+            request=request,  # pyright: ignore[reportArgumentType]
+        )
+        instance._apply_info = info
+        instance._nested_qs_by_branch_id = nested_qs_by_branch_id
+        instance._flat_hop_visibility = flat_hop_visibility
+        return instance
+
+    @classmethod
     def _apply_common_finalize(
         cls,
         input_value: object,
@@ -4941,16 +4969,14 @@ class FilterSet(
         Form validation still runs so a malformed nested clause still raises
         ``FILTER_INVALID``.
         """
-        # basedpyright: typeshed narrows ``request`` to ``HttpRequest`` (see ``_q_for_branch``); it
-        # rejects ``object`` for ``HttpRequest | None``
-        filterset_instance = cls(
-            data=data,
-            queryset=constrained,
-            request=request,  # pyright: ignore[reportArgumentType]
+        filterset_instance = cls._build_stashed_instance(
+            data,
+            constrained,
+            request,
+            info,
+            nested_qs_by_branch_id,
+            flat_hop_visibility,
         )
-        filterset_instance._apply_info = info
-        filterset_instance._nested_qs_by_branch_id = nested_qs_by_branch_id
-        filterset_instance._flat_hop_visibility = flat_hop_visibility
         if run_permissions:
             cls._run_permission_checks(input_value, request)
         cls._validate_form_or_raise(filterset_instance)

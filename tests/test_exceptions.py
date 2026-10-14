@@ -24,7 +24,6 @@ cap raising ``ConfigurationError`` out of ``Client.get``, not as JSON).
 from __future__ import annotations
 
 import copy
-import pickle
 from collections.abc import Callable
 
 import pytest
@@ -48,7 +47,7 @@ from django_strawberry_framework.exceptions import (
 from django_strawberry_framework.types import converters as _converters_module
 from django_strawberry_framework.utils import errors as _errors_module
 from django_strawberry_framework.utils.querysets import SyncMisuseError
-from tests._idioms import module_binding
+from tests._idioms import module_binding, pickle_roundtrip
 
 
 class _Unprintable:
@@ -264,7 +263,7 @@ def test_args_reassignment_and_pickle_never_leave_stale_render_caches():
     assert repr(err) == "ConfigurationError('first')"
 
     err.args = ("second",)
-    restored = pickle.loads(pickle.dumps(err))  # noqa: S301 - round-trips the object this test just pickled
+    restored = pickle_roundtrip(err)
 
     assert str(err) == "second"
     assert repr(err) == "ConfigurationError('second')"
@@ -357,13 +356,9 @@ def test_lookup_validation_error_constructor_survives_hostile_metadata_and_value
     assert "terminal _HostileMetadata" in str(err)
 
 
-def _pickle_roundtrip(err: object) -> object:
-    return pickle.loads(pickle.dumps(err))  # noqa: S301 - round-trips the object this test just pickled
-
-
 @pytest.mark.parametrize(
     "roundtrip",
-    [_pickle_roundtrip, copy.copy, copy.deepcopy],
+    [pickle_roundtrip, copy.copy, copy.deepcopy],
     ids=["pickle", "copy", "deepcopy"],
 )
 def test_path_resolution_error_roundtrip_preserves_attributes(
@@ -388,7 +383,7 @@ def test_path_resolution_error_roundtrip_preserves_attributes(
 
 @pytest.mark.parametrize(
     "roundtrip",
-    [_pickle_roundtrip, copy.copy, copy.deepcopy],
+    [pickle_roundtrip, copy.copy, copy.deepcopy],
     ids=["pickle", "copy", "deepcopy"],
 )
 def test_lookup_validation_error_roundtrip_preserves_attributes(

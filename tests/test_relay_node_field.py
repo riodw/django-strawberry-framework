@@ -258,9 +258,8 @@ def test_node_type_hint_does_not_poison_reused_model_instance():
 
     class Query:
         node: relay.Node | None = DjangoNodeField()
-        # basedpyright: a DjangoType field resolves to its model row; the checker cannot see
-        # that ``PrimaryNode`` wraps ``Category``
-        primary: PrimaryNode = strawberry.field(resolver=lambda: row)  # pyright: ignore[reportAssignmentType]
+        # The resolver returns the model row; ``graphql_type`` names the type that wraps it.
+        primary: Category | None = strawberry.field(graphql_type=PrimaryNode, resolver=lambda: row)
 
     Query = strawberry.type(Query)
     finalize_django_types()

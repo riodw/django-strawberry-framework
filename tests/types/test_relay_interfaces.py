@@ -50,12 +50,7 @@ from django_strawberry_framework.utils.querysets import model_for
 from tests._idioms import async_relay_hooks, relay_hooks
 from tests._info import make_info, unread_info
 
-
-@pytest.fixture(autouse=True)
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def _isolate_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
-    """Every test here declares fresh ``DjangoType`` classes - opt the module
-    into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
+pytestmark = pytest.mark.usefixtures("isolate_global_registry")
 
 
 def _meta(**attrs: object) -> type:
@@ -3089,7 +3084,7 @@ def test_decode_unresolvable_label_raises():
 
 def test_decode_model_label_unregistered_model_raises():
     """A real model with no registered Relay-Node DjangoType raises (no decode target)."""
-    # Registry is empty (autouse clear) - ``products.item`` is a real model but
+    # Registry is empty (module-level clear) - ``products.item`` is a real model but
     # has no registered type to decode to.
     with pytest.raises(ConfigurationError, match="no registered"):
         decode_global_id(relay.GlobalID("products.item", "1"))

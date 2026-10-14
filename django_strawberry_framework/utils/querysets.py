@@ -122,6 +122,7 @@ from ._queryset_private import (
     set_queryset_prefetch_lookups,
     set_queryset_sticky_filter,
 )
+from .typing import MISSING_ATTRIBUTE
 from .write_transaction import (
     current_write_pipeline,
     pin_write_queryset,
@@ -1234,8 +1235,6 @@ _DIRECT_RHS_DATA_BASES: tuple[type[object], ...] = (*_INERT_VALUE_TYPES, enum.En
 # ``object`` (whose ``__getattribute__`` every type inherits).
 _DIRECT_RHS_TRUSTED_MRO: frozenset[type[object]] = frozenset(_DIRECT_RHS_DATA_BASES) | {object}
 
-_ATTR_MISSING = object()
-
 
 def _static_attr_present(value: object, name: str) -> bool:
     """Return whether ``name`` resolves on ``value`` WITHOUT running an attribute hook.
@@ -1248,7 +1247,7 @@ def _static_attr_present(value: object, name: str) -> bool:
     would run a consumer RHS object's attribute hook DURING the proof, before the query
     is cloned, which is exactly the dispatch the seal exists to prevent.
     """
-    return inspect.getattr_static(value, name, _ATTR_MISSING) is not _ATTR_MISSING
+    return inspect.getattr_static(value, name, MISSING_ATTRIBUTE) is not MISSING_ATTRIBUTE
 
 
 def _rhs_hook_defect(value_type: type[object], label: str) -> tuple[str, str] | None:
@@ -2482,9 +2481,10 @@ def _rebuilt_prefetch_or_defect(
         return None, ("untrusted", f"{cls_name} prefetch path is not an exact str")
     if to_attr is not None and type(to_attr) is not str:
         return None, ("untrusted", f"{cls_name} prefetch to_attr is not an exact str or None")
-    # basedpyright: ``Prefetch`` is generic only in django-stubs, so the bare class allocated
-    # here (it is not subscriptable at runtime) has no bound lookup parameter
-    rebuilt: _SealedPrefetch = Prefetch.__new__(Prefetch)  # pyright: ignore[reportUnknownVariableType]
+    # ``Prefetch`` is generic only in django-stubs and not subscriptable at runtime, so the
+    # parametrized class is named by annotation on a plain alias of it
+    prefetch_cls: type[_SealedPrefetch] = Prefetch
+    rebuilt = prefetch_cls.__new__(prefetch_cls)
     rebuilt_state: dict[str, object] = object.__getattribute__(rebuilt, "__dict__")
     rebuilt_state["prefetch_through"] = through
     rebuilt_state["prefetch_to"] = prefetch_to
@@ -4029,7 +4029,7 @@ def _seal_or_defect(
 
 
 def _row_source_model(state: Mapping[str, object], origin: str) -> type[models.Model]:
-    """The model a candidate row source declares, proven to be a model class.
+    """Return the model a candidate row source declares, proven to be a model class.
 
     ``_seal_or_defect`` reaches ``model._meta.concrete_model`` on its first line,
     so the model it is given has to be a real model class before the call, not
@@ -4111,7 +4111,7 @@ def normalized_row_source(
 
 
 def materialized_rows(value: object) -> list[object] | None:
-    """The rows a row source has already fetched, or ``None`` when it has none.
+    """Return the rows a row source has already fetched, or ``None`` when it has none.
 
     Django's prefetch cache holds a queryset whose ``_result_cache`` is the list
     of rows it fetched, and returning that list directly is what lets a
@@ -4142,7 +4142,7 @@ def _readable_queryset_state(
     value: object,
     origin: str = "a collection resolver returned",
 ) -> dict[str, object]:
-    """The instance dictionary of ``value``, read without dispatching consumer code.
+    """Return the instance dictionary of ``value``, read without dispatching consumer code.
 
     ``object.__getattribute__`` is the only read here for the reason the seal
     gives: a custom ``__getattribute__`` or a redefined descriptor cannot run
@@ -4194,7 +4194,7 @@ _COMBINED_WHAT = (
 
 
 def _raw_list_source_message(defect: tuple[str, str], name: str, origin: str) -> str:
-    """The wording for a row source the raw-list bound could not take ownership of.
+    """Return the wording for a row source the raw-list bound could not take ownership of.
 
     Only the defects ``_RAW_LIST_SOURCE_POLICY`` can actually reach have arms:
     ``evaluated``, ``sliced``, ``combined`` and ``projection`` are switched off
@@ -4749,7 +4749,7 @@ def related_visibility_queryset_or_default(
     info: object,
     async_recourse: str = _RELAY_ASYNC_RECOURSE,
 ) -> models.QuerySet[models.Model]:
-    """The visibility-scoped queryset, falling back to the default manager.
+    """Return the visibility-scoped queryset, falling back to the default manager.
 
     The "no primary ``DjangoType`` => default-manager, no visibility contract"
     fallback ``visible_related_object`` and ``visible_related_objects`` both

@@ -69,6 +69,7 @@ from ..utils.querysets import (
     wrap_async_queryset_adapter,
 )
 from ..utils.typing import (
+    MISSING_ATTRIBUTE,
     return_type_of,
     unwrap_graphql_type,
 )
@@ -266,7 +267,7 @@ def _walk_cache_relevant_vars(
     directive_names: set[str],
     pagination_names: set[str],
 ) -> None:
-    """The single AST traversal collecting BOTH cache-relevant variable families.
+    """Collect BOTH cache-relevant variable families in a single AST traversal.
 
     One descent collects two families on different axes:
 
@@ -773,13 +774,10 @@ def _collect_schema_reachable_types(schema: object) -> "set[type[DjangoType]]":
         if type_name is None or type_name in visited_type_names:
             return
         visited_type_names.add(type_name)
-        # Check if this type is a DjangoType. The lookup is read by name: the probe
-        # admits any schema object that carries ``get_type_by_name``.
-        definition = (
-            getattr(strawberry_schema, "get_type_by_name")(type_name)  # noqa: B009
-            if hasattr(strawberry_schema, "get_type_by_name")
-            else None
-        )
+        # Check if this type is a DjangoType. The lookup is read by name: any schema
+        # object that carries ``get_type_by_name`` answers it.
+        lookup = getattr(strawberry_schema, "get_type_by_name", MISSING_ATTRIBUTE)
+        definition = None if lookup is MISSING_ATTRIBUTE else lookup(type_name)
         if definition is not None:
             origin = getattr(definition, "origin", None)
             if origin is not None and registry.get_definition(origin) is not None:
@@ -1020,7 +1018,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         return _OptimizerOperationState(execution_context)
 
     def _configuration(self) -> _AcceptedOptimizerConfiguration:
-        """The configuration this extension settled, or the safe default for none.
+        """Return the configuration this extension settled, or the safe default for none.
 
         ``None`` means the constructor never ran - a subclass that skipped it -
         and the answer for that is the shape a zero-argument construction

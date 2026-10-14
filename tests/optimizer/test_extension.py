@@ -3025,9 +3025,9 @@ def test_check_schema_descends_into_interface_implementations():
     class Query:
         @strawberry.field
         def some_node(self) -> relay.Node:
-            # basedpyright: never executed: the annotation only builds the schema whose interface implementers
-            # the reachability audit walks
-            return None  # pyright: ignore[reportReturnType]
+            # Never executed: the annotation only builds the schema whose interface implementers
+            # the reachability audit walks.
+            raise NotImplementedError
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, types=[CategoryNode, ItemNode])

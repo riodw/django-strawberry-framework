@@ -118,7 +118,13 @@ def clean_up() -> list[Path]:
     return deleted
 
 
-def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+class _Args(argparse.Namespace):
+    """The parsed command line: one field per ``_parse_args`` argument."""
+
+    quiet: bool
+
+
+def _parse_args(argv: Sequence[str] | None = None) -> _Args:
     parser = argparse.ArgumentParser(
         description="Delete generated review, builder, and bug-hunt artifacts.",
     )
@@ -127,7 +133,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Do not print deleted paths.",
     )
-    return parser.parse_args(argv)
+    return parser.parse_args(argv, namespace=_Args())
 
 
 def main(argv: Sequence[str] | None = None) -> int:

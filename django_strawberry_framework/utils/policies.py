@@ -104,7 +104,7 @@ def canonical_policy(policy: object, *, policy_cls: type[PolicyT], display_name:
 
 
 def _article(name: str) -> str:
-    """The indefinite article for a class name: "an ErrorPolicy", "a ResourcePolicy"."""
+    """Return the indefinite article for a class name: "an ErrorPolicy", "a ResourcePolicy"."""
     return "an" if name[0] in "AEIOU" else "a"
 
 

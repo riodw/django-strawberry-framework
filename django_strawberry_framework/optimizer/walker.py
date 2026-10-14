@@ -213,8 +213,7 @@ def plan_optimizations(
 def plan_relation(
     field: FieldMeta,
     target_type: type[DjangoType] | None,
-    # basedpyright: mirrors the ``DjangoOptimizerExtension.plan_relation`` seam, whose overrides plan on it
-    info: object,  # pyright: ignore[reportUnusedParameter]  # noqa: ARG001
+    info: object,
     *,
     target_definition: DjangoTypeDefinition | None = None,
 ) -> tuple[str, str]:
@@ -222,13 +221,14 @@ def plan_relation(
 
     ``info`` is unused by this default planner but kept to mirror the
     ``DjangoOptimizerExtension.plan_relation`` override seam, whose subclasses
-    may plan on ``info`` - hence the suppressions rather than dropping the param.
+    may plan on ``info`` - hence the parameter stays and is deleted unread.
 
     ``target_definition`` is the walker's captured child definition
     (``_resolve_relation_target``'s second answer). The walk always supplies
     it; the public two-value seam may omit it and the predicate falls back to
     the target's own report.
     """
+    del info
     if _target_has_custom_get_queryset(target_type, target_definition):
         logger.debug(
             "Optimizer: will downgrade %s to Prefetch because %s overrides get_queryset.",

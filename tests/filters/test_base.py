@@ -15,6 +15,7 @@ delivers a non-list container to ``GlobalIDMultipleChoiceFilter``.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator
+from functools import partial
 from typing import TypeVar
 
 import pytest
@@ -738,7 +739,7 @@ def test_lazy_related_class_mixin_returns_class_as_is():
 def test_lazy_related_class_mixin_invokes_callable_factory():
     mixin = LazyRelatedClassMixin()
     instance = mixin.resolve_lazy_class(
-        lambda: _SampleClass(),  # noqa: PLW0108 - a factory returning the instance, not the class
+        partial(_SampleClass),
         None,
     )
     assert isinstance(instance, _SampleClass)

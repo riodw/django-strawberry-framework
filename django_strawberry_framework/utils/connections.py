@@ -1016,8 +1016,7 @@ def derive_keyset_window_bounds(
     info: EitherInfo | None,
     *,
     before: object,
-    # basedpyright: keyword parity with the offset twin; the seek, not the bounds, consumes it
-    after: object,  # pyright: ignore[reportUnusedParameter]  # noqa: ARG001
+    after: object,
     first: int | None,
     last: object,
     max_results: int | None,
@@ -1050,6 +1049,7 @@ def derive_keyset_window_bounds(
       the bound), matching the offset path's flow where the guard raises
       before any window is consumed.
     """
+    del after  # keyword parity with the offset twin; the seek, not the bounds, consumes it
     cap = resolve_relay_max_results(info, max_results)
     first, last = page_arguments(first, last, cap=cap)
     if is_supplied(before) or is_backward_shape(first, last):

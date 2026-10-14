@@ -15,6 +15,14 @@ read as use of a private local import (``reportPrivateLocalImportUsage``). ``var
 the ``__dict__`` entry, which a package ``__getattr__`` cannot satisfy, so the check is at
 least as strict as the attribute read it replaces.
 
+``ModelSerializerBase`` is ``serializers.ModelSerializer`` with the nested ``Meta`` the
+stubs declare but the runtime class lacks (``djangorestframework-stubs`` types
+``ModelSerializer.Meta``; DRF's class has no such attribute to subclass). Every test
+serializer that declares ``class Meta:`` derives from it, so the one override of the stub's
+attribute is declared here rather than suppressed at each ``class Meta:``. The annotation
+creates no class attribute, so DRF's metaclass and ``__class_getitem__`` see the same class
+body and the same ``ModelSerializer`` they see without it.
+
 ``websocket_scope`` builds a complete ASGI WebSocket handshake scope, so a row that cares
 about only the headers and the ``server`` pair still hands a typed scope to code that
 declares asgiref's ``WebSocketScope``.
@@ -39,6 +47,14 @@ definition, its hooks) resolves.
 object is a plain function; Strawberry annotates ``base_resolver`` as the bare generic
 ``StrawberryResolver``, so the one read that inherits its Unknown lives here.
 
+``pickle_roundtrip`` dumps a value and loads the bytes straight back, typed as the value it
+was given, so every pickle test shares the one unpickle (and its one lint suppression) and
+reads its result as the original type rather than ``Any``.
+
+``run_capturing`` is the target a test hands a ``threading.Thread`` (``args=(errors, fn)``):
+it runs ``fn`` and appends whatever it raises to ``errors``, so the main thread asserts the
+list is empty after ``join`` instead of every worker body carrying its own catch-all.
+
 ``is_object_dict`` / ``is_object_list`` narrow an ``object`` (a JSON payload, a GraphQL
 result, a hook's input) the way ``isinstance`` does at run time, but to ``dict[object,
 object]`` / ``list[object]``: a bare ``isinstance`` on an ``object`` narrows to the class
@@ -46,12 +62,14 @@ over Unknown element types, which every later read inherits.
 """
 
 import inspect
-from collections.abc import Iterable, Mapping
+import pickle
+from collections.abc import Callable, Iterable, Mapping
 from types import FunctionType, ModuleType
-from typing import TYPE_CHECKING, Literal, Protocol, TypeGuard, TypeVar, overload
+from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, TypeGuard, TypeVar, overload
 
 from django.db.models import Model, QuerySet
 from django.test.testcases import SimpleTestCase
+from rest_framework import serializers
 from strawberry import relay
 
 from django_strawberry_framework import DjangoType
@@ -65,8 +83,16 @@ if TYPE_CHECKING:
     from django_strawberry_framework.rest_framework.serializer_converter import DRFField
 
 _ClassT = TypeVar("_ClassT", bound=type)
+_T = TypeVar("_T")
 _ModelT = TypeVar("_ModelT", bound=Model)
 _DRFFieldT = TypeVar("_DRFFieldT", bound="DRFField")
+
+
+class ModelSerializerBase(serializers.ModelSerializer[_ModelT]):
+    """``ModelSerializer`` carrying the ``Meta`` the stubs declare and the runtime class lacks."""
+
+    # basedpyright: the DRF stubs declare ModelSerializer.Meta; the runtime class has none
+    Meta: ClassVar[type[object]]  # pyright: ignore[reportIncompatibleVariableOverride]
 
 
 def declare_django_type(name: str, namespace: Mapping[str, object]) -> type[DjangoType]:
@@ -95,6 +121,25 @@ def is_object_dict(value: object) -> "TypeIs[dict[object, object]]":
 def is_object_list(value: object) -> "TypeIs[list[object]]":
     """Whether ``value`` is a ``list`` (subclasses included), its items typed ``object``."""
     return isinstance(value, list)
+
+
+def pickle_roundtrip(value: _T) -> _T:
+    """``value`` after a pickle dump and load: the one place a test unpickles."""
+    # The bytes were produced one line up from ``value``, so loading them reads no untrusted input.
+    return pickle.loads(pickle.dumps(value))  # noqa: S301 - round-trips the object this test just pickled
+
+
+def run_capturing(errors: list[BaseException], fn: Callable[[], object]) -> None:
+    """Run ``fn`` on a worker thread, recording what it raises in ``errors`` for the main thread.
+
+    An exception escaping a ``threading.Thread`` target prints through ``threading.excepthook``
+    and ends only that thread, so the test that started it would pass on a failed worker; the
+    thread target is this function and the test asserts ``errors`` is empty after ``join``.
+    """
+    try:
+        fn()
+    except BaseException as exc:  # noqa: BLE001 - worker thread reports to the main thread
+        errors.append(exc)
 
 
 def definition_raises(cls: _ClassT) -> _ClassT:

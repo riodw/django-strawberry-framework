@@ -56,7 +56,7 @@ from django_strawberry_framework.auth import register_mutation
 from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing.relay import global_id_for
-from tests._idioms import is_object_list
+from tests._idioms import ModelSerializerBase, is_object_list
 
 if TYPE_CHECKING:
     from django_strawberry_framework.rest_framework.serializer_converter import DRFSerializer
@@ -282,12 +282,10 @@ def _run_serializer(*, save_time: bool):
         category_type, _item_type = _category_types()
         name, message = raised
 
-        class KeyedItemSerializer(serializers.ModelSerializer[product_models.Item]):
+        class KeyedItemSerializer(ModelSerializerBase[product_models.Item]):
             full_name = serializers.CharField(source="name")
 
-            # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none
-            # to subclass
-            class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+            class Meta:
                 model = product_models.Item
                 fields = ("full_name", "category", "is_private")
 

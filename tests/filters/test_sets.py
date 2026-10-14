@@ -19,7 +19,6 @@ import contextlib
 import copy
 import datetime
 import enum
-import pickle
 import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -109,7 +108,7 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.sets_mixins import collect_related_declarations
 from django_strawberry_framework.types.relay import SyncMisuseError, apply_interfaces
 from django_strawberry_framework.utils.relations import classify_path
-from tests._idioms import definition_raises, is_object_dict
+from tests._idioms import definition_raises, is_object_dict, pickle_roundtrip
 from tests.optimizer import _link_models
 
 if TYPE_CHECKING:
@@ -10829,7 +10828,7 @@ def test_projected_leaf_copies_keep_their_projected_class_and_projection(how: st
     """
     template = LoanFilter.get_filters()["patron__email_must_have_at_sign"]
     assert isinstance(template, ProjectedChildFilter)
-    restored = pickle.loads(pickle.dumps(template)) if how == "pickle" else copy.deepcopy(template)  # noqa: S301 - round-trips the object this test just pickled
+    restored = pickle_roundtrip(template) if how == "pickle" else copy.deepcopy(template)
     assert type(restored) is type(template)
     assert restored._projection == template._projection
     assert restored.method == "filter_email_must_have_at_sign"
@@ -13894,12 +13893,11 @@ class _ConditionMember(enum.Enum):
 
 
 @pytest.fixture
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def nullable_condition_rows(transactional_db: None) -> Iterator[None]:  # pyright: ignore[reportUnusedParameter]
+def nullable_condition_rows() -> Iterator[None]:
     """Create the specimen table with rows ``blank``, ``good``, ``worn`` and ``null``; drop it after.
 
     The table is unmanaged, so it exists only for the requesting test; SQLite's schema editor
-    needs the transactional database.
+    needs the transactional database, so each consumer is ``django_db(transaction=True)``.
     """
     from django.db import connection
 
@@ -13945,6 +13943,7 @@ def _nullable_condition_codes(data: dict[str, object]) -> list[str]:
         ("iregex", ["blank", "good", "worn"]),
     ],
 )
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("nullable_condition_rows")
 def test_blank_member_is_applied_as_empty_string_on_every_text_choice_lookup(
     lookup: str,
@@ -13963,6 +13962,7 @@ def test_blank_member_is_applied_as_empty_string_on_every_text_choice_lookup(
 
 
 @pytest.mark.parametrize("lookup", ["exact", *_TEXT_CHOICE_SINGLE_VALUE_LOOKUPS])
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("nullable_condition_rows")
 def test_raw_empty_form_value_on_every_text_choice_lookup_applies_no_filter(lookup: str):
     """A raw ``""`` in form data keeps django-filter's empty-value skip on every lookup.
@@ -14104,12 +14104,7 @@ def test_whitespace_bearing_enum_member_value_is_not_stripped(name: str, lookup:
     assert where.rhs == " padded "
 
 
-def _pickle_round_trip(value: object) -> object:
-    """Return ``value`` after a pickle dump and load."""
-    return pickle.loads(pickle.dumps(value))  # noqa: S301 - round-trips the object this test just pickled
-
-
-@pytest.mark.parametrize("clone", [copy.deepcopy, _pickle_round_trip])
+@pytest.mark.parametrize("clone", [copy.deepcopy, pickle_roundtrip])
 def test_enum_member_value_survives_copy_and_pickle(clone: Callable[[object], object]):
     """The marker is matched by type and compared by value, so a copied one still applies.
 

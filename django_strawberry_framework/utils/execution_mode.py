@@ -104,7 +104,7 @@ def bind_operation_mode(
 
 
 def current_operation_mode() -> OperationMode | None:
-    """The executor driving the operation here, or ``None`` when nothing bound one.
+    """Return the executor driving the operation here, or ``None`` when nothing bound one.
 
     ``None`` covers both "no package runner is involved" and "the runner that
     bound this context's mode has finished with it" - the same answer to every

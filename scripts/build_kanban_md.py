@@ -21,6 +21,7 @@ every renderer, the dropped-card guard and the write summary read that :class:`B
 
 from __future__ import annotations
 
+import argparse
 import re
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
@@ -142,7 +143,7 @@ DESCENDING_COLUMN_KEYS = frozenset({"done"})
 
 
 def card_key(card: CardLink) -> str:
-    """The card id, read from ``cardId`` (``Card.card_id``) rather than recomputed here."""
+    """Return the card id, read from ``cardId`` (``Card.card_id``) rather than recomputed here."""
     return card["cardId"]
 
 
@@ -342,7 +343,7 @@ def bullet_lines(prefix: str, text: str) -> list[str]:
 
 
 def block(heading: str, body: list[str]) -> list[str]:
-    """A heading over ``body`` with the blank lines markdown wants; nothing when empty."""
+    """Return a heading over ``body`` with the blank lines markdown wants; nothing when empty."""
     return (
         [
             heading,
@@ -367,8 +368,8 @@ def fetch_glossary_terms() -> list[GlossaryTermRef]:
     from apps.glossary.models import GlossaryTerm
 
     return [
-        {"title": title, "anchor": anchor}
-        for title, anchor in GlossaryTerm.objects.values_list("title", "anchor")
+        {"title": term.title, "anchor": term.anchor}
+        for term in GlossaryTerm.objects.only("title", "anchor")
     ]
 
 
@@ -385,7 +386,7 @@ Spans = list[tuple[int, int]]
 
 
 def _skip_space(raw: str, j: int) -> int:
-    """The first index at or after ``j`` that is not whitespace."""
+    """Return the first index at or after ``j`` that is not whitespace."""
     while j < len(raw) and raw[j].isspace():
         j += 1
     return j
@@ -461,7 +462,7 @@ class GlossaryInliner:
 
     @staticmethod
     def _protected(text: str) -> tuple[Spans, Spans]:
-        """The (link-or-pinpoint, code-span) regions of ``text``."""
+        """Return the (link-or-pinpoint, code-span) regions of ``text``."""
         links = [m.span() for m in PINPOINT_RE.finditer(text)]
         masked = ESCAPE_OR_CODE_RE.sub(lambda m: "." * len(m.group()), text)
         raw = ESCAPE_RE.sub(lambda m: "." * len(m.group()), text)
@@ -501,7 +502,7 @@ class GlossaryInliner:
 
 
 def doc_body(doc: BoardDocRow, computed: dict[str, str]) -> str:
-    """A board doc's body with card refs and computed tokens resolved, stripped."""
+    """Return a board doc's body with card refs and computed tokens resolved, stripped."""
     text = resolve_card_refs(
         doc.get("body", ""),
         doc.get("cardReferences", []),
@@ -583,13 +584,13 @@ def parity_text(card: CardRow) -> str:
 
 
 def spec_link(card: CardRow) -> str:
-    """A Markdown link to the card's DB-backed spec path (``SpecDoc.path``), or ``""``."""
+    """Return a Markdown link to the card's DB-backed spec path (``SpecDoc.path``), or ``""``."""
     path = (card.get("spec") or {}).get("path", "")
     return f"[{Path(path).name}]({path})" if path else ""
 
 
 def card_meta_lines(card: CardRow) -> list[str]:
-    """The ``- Label: value`` bullets under a card heading, empty values skipped."""
+    """Return the ``- Label: value`` bullets under a card heading, empty values skipped."""
     meta = (
         ("Priority", (card.get("priority") or {}).get("label", "")),
         ("Parity", parity_text(card)),
@@ -625,7 +626,7 @@ def card_item_lines(card: CardRow, card_text: Callable[[str], str]) -> list[str]
 
 
 def card_reference_lines(card: CardRow, card_text: Callable[[str], str]) -> list[str]:
-    """The ``#### Card references`` block: one bullet per outgoing reference."""
+    """Return the ``#### Card references`` block: one bullet per outgoing reference."""
     body: list[str] = []
     for reference in card.get("outgoingReferences", []):
         target_card = reference["targetCard"]
@@ -726,13 +727,20 @@ def render_markdown(board: Board, glossary_terms: list[GlossaryTermRef]) -> str:
     return text
 
 
+class _Args(argparse.Namespace):
+    """The parsed command line: one field per ``render_parser`` argument."""
+
+    md: Path
+    check: bool
+
+
 def main() -> int:
     """Build the markdown board."""
     args = render_parser(
         "Render KANBAN.md from the same GraphQL payload used by KANBAN.html.",
         flag="--md",
         default=DEFAULT_MD_PATH,
-    ).parse_args()
+    ).parse_args(namespace=_Args())
     configure_django()
     board = plan_board(build_dashboard_snapshot(fetch_dashboard_data()))
     markdown = render_markdown(board, fetch_glossary_terms())
@@ -740,7 +748,7 @@ def main() -> int:
     if args.check:
         return check_freshness(args.md, markdown, script="scripts/build_kanban_md.py")
 
-    args.md.write_text(markdown, encoding="utf-8")
+    _ = args.md.write_text(markdown, encoding="utf-8")
     exported = len(board.exported_cards)
     print(
         f"Wrote {exported} cards (excluded {len(board.cards) - exported} backlog cards) "

@@ -140,11 +140,7 @@ def _fk_attname_is_deferred(root: object, attname: str) -> bool:
     if get_deferred_fields is None:
         return False
     try:
-        deferred = get_deferred_fields()
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        return False
-    try:
-        return attname in deferred
+        return attname in get_deferred_fields()
     except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return False
 

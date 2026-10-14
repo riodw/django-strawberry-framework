@@ -24,8 +24,7 @@ from django_strawberry_framework.testing import AsyncTestClient
 
 
 @pytest.fixture(autouse=True)
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def _lookups(db: None) -> None:  # pyright: ignore[reportUnusedParameter]
+def _lookups() -> None:
     for key in (
         "backlog",
         "todo",
@@ -619,14 +618,13 @@ def test_create_card_from_spec_number_branch_places_and_shifts():
 
 
 @pytest.fixture
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def async_kanban_card(transactional_db: None) -> tuple[models.Card, User]:  # pyright: ignore[reportUnusedParameter]
+def async_kanban_card() -> tuple[models.Card, User]:
     """Seed lookups, a TODO card, and a staff user, committed so the async view thread sees them.
 
     ``AsyncTestClient`` posts through Django's in-process async handler, running
     the sync GraphQL view (and thus ``resolve_async``) on asgiref's executor
     thread; that thread's connection only sees committed rows, so the seed runs
-    in a sync ``transactional_db`` fixture rather than the async test body.
+    in a sync fixture of a ``django_db(transaction=True)`` test rather than the async test body.
     """
     for key in (
         "backlog",
@@ -647,6 +645,7 @@ def async_kanban_card(transactional_db: None) -> tuple[models.Card, User]:  # py
     return card, user
 
 
+@pytest.mark.django_db(transaction=True)
 async def test_set_card_status_illegal_transition_async_envelope(
     async_kanban_card: tuple[models.Card, User],
 ) -> None:

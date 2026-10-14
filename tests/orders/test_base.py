@@ -16,6 +16,8 @@ document. Consumer ``orderBy`` walks live in
 
 from __future__ import annotations
 
+from functools import partial
+
 import pytest
 from apps.products.models import Category
 
@@ -299,7 +301,7 @@ def test_related_order_rejects_factory_returning_non_class():
         # basedpyright: the factory returning a non-class is the hostile input under test;
         # RelatedOrder types the parameter as _OrderSetTarget
         shelf = RelatedOrder(
-            lambda: object(),  # noqa: PLW0108 - a factory returning an instance, not the class  # pyright: ignore[reportArgumentType]
+            partial(object),  # pyright: ignore[reportArgumentType]
             field_name="shelf",
         )
 

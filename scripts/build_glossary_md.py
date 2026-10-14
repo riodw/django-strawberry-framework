@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
+import argparse
+from pathlib import Path
+from typing import TypedDict, cast
 
 try:
     from _kanban_lib import (
@@ -26,6 +28,14 @@ except ModuleNotFoundError:  # imported as ``scripts.build_glossary_md`` (repo r
     )
 
 DEFAULT_MD_PATH = REPO_ROOT / "docs" / "GLOSSARY.md"
+
+
+class _Args(argparse.Namespace):
+    """The parsed command line: one field per ``render_parser`` argument."""
+
+    md: Path
+    check: bool
+
 
 STATIC_GLOSSARY_QUERY = """
 query StaticGlossary {
@@ -184,12 +194,20 @@ def fetch_glossary_data() -> GlossaryData:
             "allGlossarySpecMentions",
         ),
     )
-    return {
-        "documents": data["allGlossaryDocuments"],
-        "terms": data["allGlossaryTerms"],
-        "categoryMemberships": data["allGlossaryCategoryMemberships"],
-        "specMentions": data["allGlossarySpecMentions"],
-    }
+    # basedpyright: the decoded rows are not validated one by one; each list has the shape
+    # STATIC_GLOSSARY_QUERY selects for it
+    return cast(
+        "GlossaryData",
+        cast(
+            "object",
+            {
+                "documents": data["allGlossaryDocuments"],
+                "terms": data["allGlossaryTerms"],
+                "categoryMemberships": data["allGlossaryCategoryMemberships"],
+                "specMentions": data["allGlossarySpecMentions"],
+            },
+        ),
+    )
 
 
 def term_link(term: GlossaryTermRef, *, label: str | None = None) -> str:
@@ -323,7 +341,7 @@ def main() -> int:
         "Render docs/GLOSSARY.md from the glossary GraphQL payload.",
         flag="--md",
         default=DEFAULT_MD_PATH,
-    ).parse_args()
+    ).parse_args(namespace=_Args())
     configure_django()
     glossary_data = fetch_glossary_data()
     markdown = render_markdown(glossary_data)
@@ -331,7 +349,7 @@ def main() -> int:
     if args.check:
         return check_freshness(args.md, markdown, script="scripts/build_glossary_md.py")
 
-    args.md.write_text(markdown, encoding="utf-8")
+    _ = args.md.write_text(markdown, encoding="utf-8")
 
     mentioned_specs = {mention["specPath"] for mention in glossary_data["specMentions"]}
     print(

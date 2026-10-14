@@ -1508,7 +1508,7 @@ def test_write_pipeline_opens_atomic_on_managed_write_alias(monkeypatch: pytest.
             CreateItem,
             info=make_info(),
             data=None,
-            id=None,
+            id_=None,
             decode_step=lambda _instance: ("decoded",),
             write_step=lambda _instance, _decoded: MagicMock(pk=7),
         )
@@ -1590,7 +1590,7 @@ def test_pipeline_snapshots_authorized_pk_before_permission_hook(monkeypatch: py
             mutation_cls,
             info=None,
             data=None,
-            id="ignored",
+            id_="ignored",
             decode_step=_decode_marker,
             write_step=_write_located,
         )
@@ -1629,7 +1629,7 @@ def test_pipeline_pk_drift_diagnostic_survives_hostile_repr(monkeypatch: pytest.
             mutation_cls,
             info=None,
             data=None,
-            id="ignored",
+            id_="ignored",
             decode_step=_decode_marker,
             write_step=_write_located,
         )
@@ -1666,7 +1666,7 @@ def test_pipeline_publishes_authorized_pk_on_write_context(monkeypatch: pytest.M
             mutation_cls,
             info=None,
             data=None,
-            id="ignored",
+            id_="ignored",
             decode_step=_decode_marker,
             write_step=_write_located,
         )
@@ -1704,7 +1704,7 @@ def test_delete_pipeline_rejects_pk_drift_during_authorization(monkeypatch: pyte
         managed_write_transaction("default"),
         pytest.raises(ConfigurationError, match="pk changed"),
     ):
-        mutation_resolvers._run_delete(mutation_cls, info=None, id="ignored")
+        mutation_resolvers._run_delete(mutation_cls, info=None, id_="ignored")
 
 
 def test_delete_pipeline_pk_drift_diagnostic_survives_hostile_repr(
@@ -1744,7 +1744,7 @@ def test_delete_pipeline_pk_drift_diagnostic_survives_hostile_repr(
         managed_write_transaction("default"),
         pytest.raises(ConfigurationError, match="pk changed"),
     ):
-        mutation_resolvers._run_delete(mutation_cls, info=None, id="ignored")
+        mutation_resolvers._run_delete(mutation_cls, info=None, id_="ignored")
 
 
 def test_delete_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.MonkeyPatch):
@@ -1758,7 +1758,7 @@ def test_delete_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.MonkeyP
         _mutation_cls: object,
         _info: object,
         data: object,
-        id: object,  # noqa: A002
+        id_: object,
         *,
         # basedpyright: the delete resolver passes the pipeline steps by keyword
         decode_step: object,  # pyright: ignore[reportUnusedParameter]
@@ -1767,7 +1767,7 @@ def test_delete_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.MonkeyP
         tail_step: object = None,
     ):
         seen["data"] = data
-        seen["id"] = id
+        seen["id"] = id_
         seen["tail_step"] = tail_step
         return "ridden"
 
@@ -1788,7 +1788,7 @@ def test_delete_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.MonkeyP
 
     finalize_django_types()
     assert DeleteItem._primary_type is ItemType
-    result = mutation_resolvers._run_delete(DeleteItem, info=unread_info(), id="gid")
+    result = mutation_resolvers._run_delete(DeleteItem, info=unread_info(), id_="gid")
     assert result == "ridden"
     assert seen["data"] is None
     assert seen["id"] == "gid"

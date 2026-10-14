@@ -24,7 +24,7 @@ clients" is earned live on both); the sync ``login()`` exception-logout twin
 and ``GRAPHQL_URL`` endpoint rungs against a real view, and the
 ``TransactionTestCase`` combination).
 
-The async tests that reach the GraphQL view depend on ``transactional_db``:
+The async tests that reach the GraphQL view carry ``django_db(transaction=True)``:
 ``django.test.AsyncClient`` runs the sync view on asgiref's executor thread,
 whose separate SQLite connection cannot see rows seeded inside a
 non-transactional test's uncommitted transaction; seeding happens in a sync
@@ -195,22 +195,20 @@ def test_query_sends_a_non_dict_variables_mapping(
 
 
 @pytest.fixture
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def seeded_catalog(transactional_db: None) -> None:  # pyright: ignore[reportUnusedParameter]
-    """``seed_data(1)`` in a sync fixture; transactional so the async view's thread sees the rows."""
+def seeded_catalog() -> None:
+    """``seed_data(1)`` in a sync fixture; the async consumer is transactional so the view sees it."""
     seed_data(1)
 
 
 @pytest.fixture
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def permitted_writer(transactional_db: None) -> tuple[User, str]:  # pyright: ignore[reportUnusedParameter]
+def permitted_writer() -> tuple[User, str]:
     """A ``create_users`` user granted ``add_item`` + a category GlobalID, for the async bracket.
 
     Seeds first (AGENTS.md seed-helper rule), then grants the explicit
     ``add_item`` codename: ``view_item_1`` is NOT a superuser, so the
     ``DjangoModelPermission`` codename check runs rather than the superuser
     short-circuit; the user is re-fetched after the grant to drop the stale
-    per-request permission cache. Transactional so the async view's
+    per-request permission cache. The async consumer is transactional so the view's
     executor-thread connection sees the seeded rows.
     """
     create_users(1)
@@ -227,6 +225,7 @@ def permitted_writer(transactional_db: None) -> tuple[User, str]:  # pyright: ig
     return user, category_gid
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("seeded_catalog")
 async def test_async_query_happy_path_and_raise_direction() -> None:
     """The awaited transport, the async decode, and the package ``Response``.
@@ -255,6 +254,7 @@ async def test_async_wrong_endpoint_surfaces_the_same_non_json_decode_error():
         await AsyncTestClient("/missing-graphql-endpoint/").query("{ __typename }")
 
 
+@pytest.mark.django_db(transaction=True)
 async def test_async_login_brackets_the_write_authorized_mutation(
     permitted_writer: tuple[User, str],
 ) -> None:
@@ -334,6 +334,7 @@ def test_sync_login_bracket_logs_out_when_the_block_raises():
     assert "Not authorized" in denied.errors[0]["message"]
 
 
+@pytest.mark.django_db(transaction=True)
 async def test_async_login_bracket_logs_out_when_the_block_raises(
     permitted_writer: tuple[User, str],
 ) -> None:
@@ -365,16 +366,15 @@ async def test_async_login_bracket_logs_out_when_the_block_raises(
 
 
 @pytest.fixture
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def upload_superuser(transactional_db: None) -> User:  # pyright: ignore[reportUnusedParameter]
+def upload_superuser() -> User:
     """A superuser for the async multipart upload, created in a sync fixture.
 
     ``createMediaSpecimen`` is gated by the default ``add_mediaspecimen``
     ``DjangoModelPermission``; a superuser short-circuits it (write-auth itself
     is exercised on its own in the async ``login()`` bracket above). Created here
     rather than in the async body so the ORM work never runs in the event loop,
-    and ``transactional_db`` so the async view's executor-thread SQLite
-    connection sees the committed row. The sync twin is a plain
+    and the consuming test is ``django_db(transaction=True)`` so the async view's
+    executor-thread SQLite connection sees the committed row. The sync twin is a plain
     ``client.login(superuser)`` in
     ``test_uploads_api.py::test_multipart_create_uploads_real_files_over_http``.
     """
@@ -385,6 +385,7 @@ def upload_superuser(transactional_db: None) -> User:  # pyright: ignore[reportU
     )
 
 
+@pytest.mark.django_db(transaction=True)
 async def test_async_multipart_upload_creates_media_specimen(
     upload_superuser: User,
     tmp_path: Path,

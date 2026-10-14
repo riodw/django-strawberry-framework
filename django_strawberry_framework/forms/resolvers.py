@@ -539,7 +539,7 @@ def _modelform_decode_step(
     *,
     instance: models.Model | None,
 ) -> _DecodedForm | StepFailure:
-    """The form ``decode_step``: form-decode + (ModelForm update) partial reconstruction.
+    """Run the form ``decode_step``: form-decode + (ModelForm update) partial reconstruction.
 
     Decodes the bound input into a FORM-field-keyed ``(provided_data,
     provided_files)`` (the ``038`` ``_decode_form_data`` contract: visibility on
@@ -655,7 +655,7 @@ def _modelform_write_step(
     instance: models.Model | None,
     decoded: _DecodedForm,
 ) -> models.Model | StepFailure:
-    """The ``ModelForm`` ``write_step``: ``get_form`` -> ``is_valid`` -> ``form.save``.
+    """Run the ``ModelForm`` ``write_step``: ``get_form`` -> ``is_valid`` -> ``form.save``.
 
     Constructs the form via the overridable ``get_form`` hook over the decoded bound
     data, runs ``is_valid()`` once (a failure maps ``form.errors`` onto the envelope
@@ -694,7 +694,7 @@ def _plain_form_write_step(
     info: Info[object, object],
     decoded: _DecodedForm,
 ) -> Literal[True] | StepFailure:
-    """The plain-form ``write_step``: ``get_form`` -> ``is_valid`` -> ``perform_mutate``.
+    """Run the plain-form ``write_step``: ``get_form`` -> ``is_valid`` -> ``perform_mutate``.
 
     Same construct/validate helper as ModelForm; the persist hook is
     ``perform_mutate`` (default ``form.save()`` if present, else no-op). Returns
@@ -727,9 +727,9 @@ def _run_form_pipeline_sync(
     mutation_cls: _FormMutationClass,
     info: Info[object, object],
     data: object,
-    id: object,  # noqa: A002
+    id_: object,
 ) -> object:
-    """The form-flavor rider of ``run_write_pipeline_sync`` (both form bases).
+    """Run the form-flavor rider of ``run_write_pipeline_sync`` (both form bases).
 
     ONE skeleton call serves both bases - the ``transaction.atomic()`` boundary
     + the locate preamble + the authorize-before-decode security ordering + the
@@ -774,7 +774,7 @@ def _run_form_pipeline_sync(
         mutation_cls,
         info,
         data,
-        id,
+        id_,
         decode_step=lambda instance: _modelform_decode_step(
             mutation_cls,
             data,

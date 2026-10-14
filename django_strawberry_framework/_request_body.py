@@ -124,12 +124,28 @@ from __future__ import annotations
 import os
 from enum import Enum
 from io import BytesIO
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from . import logger
 
 if TYPE_CHECKING:
+    from typing import Protocol
+
     from django.http import HttpRequest
+
+    class _ProbeStream(Protocol):
+        """The three calls the size probe makes on a request's byte source.
+
+        A foreign stream may lack any of them; the probe's callers guard each call
+        (EAFP) rather than checking, so the shape is declared for the type checker only.
+        """
+
+        def tell(self) -> object: ...
+
+        def seek(self, offset: int, whence: int = 0, /) -> object: ...
+
+        def close(self) -> None: ...
+
 
 __all__ = ("body_exceeds_limit",)
 
@@ -275,9 +291,8 @@ def body_exceeds_limit(request: HttpRequest, limit: int) -> bool:
     return remaining > limit
 
 
-# basedpyright: EAFP over a foreign stream whose methods may be absent; the except is the guard
-def _measured_remaining(stream: Any) -> int | _Probe:  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - foreign stream; EAFP probe
-    """The unread byte count of ``stream``, or which way the probe failed.
+def _measured_remaining(stream: _ProbeStream) -> int | _Probe:
+    """Return the unread byte count of ``stream``, or which way the probe failed.
 
     Three outcomes, never two: a positive ``int``,
     :attr:`_Probe.UNMEASURABLE` ("ask the bounded read instead", with the stream
@@ -439,15 +454,12 @@ def _declares_seekable(stream: object) -> bool:
     """
     try:
         seekable: object = getattr(stream, "seekable", None)
-    except Exception:  # noqa: BLE001 - a capability attribute that fails answers no, not maybe
-        return False
-    if seekable is None:
-        return True
-    if not callable(seekable):
-        return False
-    try:
+        if seekable is None:
+            return True
+        if not callable(seekable):
+            return False
         return bool(seekable())
-    except Exception:  # noqa: BLE001 - a capability query that fails answers no, not maybe
+    except Exception:  # noqa: BLE001 - a capability that fails to answer answers no, not maybe
         return False
 
 
@@ -476,8 +488,7 @@ def _lacks_seek(stream: object) -> bool:
         return False
 
 
-# basedpyright: EAFP over a foreign stream whose methods may be absent; the except is the guard
-def _position_restored(stream: Any, position: object) -> bool:  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - foreign stream; EAFP probe
+def _position_restored(stream: _ProbeStream, position: object) -> bool:
     """Whether ``stream`` is provably back at ``position``.
 
     Verified with ``tell()`` rather than inferred from a ``seek`` that did not
@@ -488,14 +499,14 @@ def _position_restored(stream: Any, position: object) -> bool:  # pyright: ignor
     if type(position) is not int:
         return False
     try:
-        stream.seek(position)
+        _ = stream.seek(position)
         restored = stream.tell()
         return type(restored) is int and restored == position
     except Exception:  # noqa: BLE001 - an unverifiable restore is a failed restore
         return False
 
 
-def _bounded_read_exceeds_limit(request: HttpRequest, stream: object, limit: int) -> bool:
+def _bounded_read_exceeds_limit(request: HttpRequest, stream: _ProbeStream, limit: int) -> bool:
     """Measure by reading, and answer fail-closed if the stream will not be read.
 
     The bounded read's error boundary, kept separate from the read itself so that
@@ -535,8 +546,7 @@ def _bounded_read_exceeds_limit(request: HttpRequest, stream: object, limit: int
         return True
 
 
-# basedpyright: EAFP over a foreign stream whose close may be absent; the caller's except guards
-def _measured_by_bounded_read(request: HttpRequest, stream: Any, limit: int) -> bool:  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - foreign stream; EAFP probe
+def _measured_by_bounded_read(request: HttpRequest, stream: _ProbeStream, limit: int) -> bool:
     """Read at most ``limit + 1`` bytes of ``stream``; report whether that exceeds ``limit``.
 
     Reads through ``request.read`` rather than ``stream.read`` so Django keeps

@@ -1759,7 +1759,7 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
 
     @override
     def _validate_target(self, resolved: object) -> None:
-        """The ``RelatedSetTargetMixin`` family gate: target must be a ``FilterSet``.
+        """Enforce the ``RelatedSetTargetMixin`` family gate: target must be a ``FilterSet``.
 
         Fired by ``sets_mixins.py::RelatedSetTargetMixin._resolved_target`` on
         every non-``None`` resolved read -- the one seam every consumer routes

@@ -41,6 +41,7 @@ from django_strawberry_framework.optimizer.single_parent_fetch import (
 from django_strawberry_framework.utils._queryset_private import (
     chain_queryset,
 )
+from tests._django_private import has_prefetched_objects_cache
 from tests.optimizer._builders import filter_prefetch_queryset
 from tests.optimizer._builders import nested_connection_request as _request
 
@@ -295,9 +296,8 @@ def test_fast_path_populates_a_nested_prefetch():
     queryset = _prefetch_filtered(request, "shelf", [shelf])
     rows = list(queryset)  # drive _fetch_all so the nested prefetch pass runs.
     assert isinstance(rows[0], Book)
-    # basedpyright: django-stubs omits Model._prefetched_objects_cache, reported as an unknown
-    # attribute
-    assert "genres" in rows[0]._prefetched_objects_cache  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+    assert has_prefetched_objects_cache(rows[0])
+    assert "genres" in rows[0]._prefetched_objects_cache
     assert list(rows[0].genres.all()) == [genre]
 
 

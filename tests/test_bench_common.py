@@ -10,7 +10,6 @@ that measures the package, so there is no live sibling in
 ``bootstrap_fakeshop_django`` past its mode check.
 """
 
-import importlib
 import json
 import subprocess
 from collections.abc import Callable
@@ -50,11 +49,9 @@ def package_tree(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def importtime_report(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+def importtime_report(scripts_module: Callable[[str], ModuleType]) -> ModuleType:
     """Import ``scripts/importtime_report.py`` the way it runs: scripts dir on ``sys.path``."""
-    # basedpyright: pytest leaves MonkeyPatch.syspath_prepend's ``path`` parameter unannotated
-    monkeypatch.syspath_prepend(str(SCRIPTS))  # pyright: ignore[reportUnknownMemberType]
-    return importlib.import_module("importtime_report")
+    return scripts_module("importtime_report")
 
 
 def test_summarize_rounds_reports_fastest_sample_median_of_medians_and_spread():

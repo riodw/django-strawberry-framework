@@ -15,9 +15,11 @@ from django_strawberry_framework.exceptions import (
     ConfigurationError,
     LookupValidationError,
     PathResolutionError,
+    _safe_attr,
     _safe_type_name,
 )
 from django_strawberry_framework.utils._narrowing import is_list_or_tuple
+from django_strawberry_framework.utils.typing import MISSING_ATTRIBUTE
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence, Sized
@@ -68,8 +70,6 @@ MANY_SIDE_RELATION_KINDS: frozenset[RelationKind] = frozenset(
     {"many", "reverse_many_to_one", "generic"},
 )
 
-_MISSING = object()
-
 
 def safe_truthy(value: object) -> bool:
     """Ask a value for its truth, treating a raising truth test as false.
@@ -89,7 +89,7 @@ def safe_truthy(value: object) -> bool:
 def relation_attr(
     field: object,
     name: str,
-    default: object = _MISSING,
+    default: object = MISSING_ATTRIBUTE,
     *,
     lenient: bool = False,
 ) -> object:
@@ -105,15 +105,16 @@ def relation_attr(
     unplanned path rather than fail the request.
 
     The two policies stay genuinely different - they can and do answer
-    differently for the same malformed field - but they now share one read body,
-    so a change to HOW relation metadata is read is one edit rather than two
-    parallel families that drifted.
+    differently for the same malformed field. The lenient one IS the package's
+    single contained read (``_safe_attr``), which the join taxonomy also calls
+    directly, so lenient relation reads have one body rather than two parallel
+    families that drift.
     """
+    if lenient:
+        return _safe_attr(field, name, default)
     try:
         return getattr(field, name, default)
     except BaseException as exc:
-        if lenient:
-            return default
         raise ConfigurationError(
             f"Could not read relation metadata {name!r} from {_safe_type_name(field)}.",
         ) from exc
@@ -347,7 +348,7 @@ def _is_traversable_relation(field: object) -> TypeGuard[_TraversableRelationLik
     try:
         if not relation_bool(field, "is_relation"):
             return False
-        return getattr(field, "path_infos", _MISSING) is not _MISSING
+        return getattr(field, "path_infos", MISSING_ATTRIBUTE) is not MISSING_ATTRIBUTE
     except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return False
 
@@ -408,9 +409,6 @@ def classify_path(model: type[models.Model], field_path: str) -> ClassifiedPath:
                     if relation_bool(path_info, "m2m"):
                         many_side = True
                         break
-            except BaseException:  # noqa: BLE001 - rewrapped as the typed rejection
-                raise PathResolutionError(current, field_path, segment) from None
-            try:
                 kind = relation_kind(field)
             except BaseException:  # noqa: BLE001 - rewrapped as the typed rejection
                 raise PathResolutionError(current, field_path, segment) from None
@@ -625,7 +623,7 @@ def _traverses_to_many(
 
 @lru_cache(maxsize=2048)
 def _path_traverses_to_many_cached(model: type[models.Model], field_path: str) -> bool:
-    """Cached implementation for hashable definition-time model/path pairs."""
+    """Compute ``_traverses_to_many`` for hashable definition-time model/path pairs (cached)."""
     return _traverses_to_many(_classify_path_cached, model, field_path)
 
 
@@ -865,7 +863,7 @@ def relation_link(field: object, *, lenient: bool = False) -> RelationLink:
 
 
 def m2m_through_model(field: object, *, lenient: bool = False) -> type[models.Model] | None:
-    """The M2M join table: ``field.through`` (rel side) or ``remote_field.through``."""
+    """Return the M2M join table: ``field.through`` (rel side) or ``remote_field.through``."""
     through = relation_attr(field, "through", None, lenient=lenient)
     if through is None:
         through = relation_attr(
@@ -883,7 +881,7 @@ def m2m_through_link_fields(
     *,
     lenient: bool = False,
 ) -> tuple[ForeignKeyField | None, ForeignKeyField | None]:
-    """The M2M through table's (source-side FK, target-side FK) for one M2M hop.
+    """Return the M2M through table's (source-side FK, target-side FK) for one M2M hop.
 
     Resolved from the forward ``ManyToManyField``'s own naming
     (``m2m_field_name`` / ``m2m_reverse_field_name``, which honor

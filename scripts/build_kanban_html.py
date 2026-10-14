@@ -8,6 +8,7 @@ rendering of the same kanban DB.
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 from pathlib import Path
@@ -96,13 +97,20 @@ def assert_placeholders_resolve(snapshot: DashboardData) -> None:
         )
 
 
+class _Args(argparse.Namespace):
+    """The parsed command line: one field per ``render_parser`` argument."""
+
+    html: Path
+    check: bool
+
+
 def main() -> int:
     """Build the HTML dashboard (or check its freshness)."""
     args = render_parser(
         "Embed kanban GraphQL JSON into the single-file dashboard.",
         flag="--html",
         default=DEFAULT_HTML_PATH,
-    ).parse_args()
+    ).parse_args(namespace=_Args())
     configure_django()
     snapshot = build_dashboard_snapshot(fetch_dashboard_data())
     assert_placeholders_resolve(snapshot)

@@ -946,7 +946,7 @@ class _ConnectionRevocation:
 
 
 async def revalidate_operation_actor(handler: _AdmissionHandler) -> bool:
-    """Admission checkpoint: may a NEW operation start on this connection?
+    """Admission checkpoint: return whether a NEW operation may start on this connection.
 
     Returns ``True`` to let upstream run the operation. Returns ``False`` after
     revoking the connection - which closes the socket - so the caller's only job
@@ -1948,7 +1948,7 @@ def build_revalidating_consumer_class(
 
         @override
         async def handle(self) -> None:
-            """The legacy handler's identical loop containment.
+            """Run the legacy handler's identical loop containment.
 
             Upstream's legacy loop is THINNER than transport-ws's, not sturdier:
             its dispatcher catches nothing. The legacy protocol therefore needs

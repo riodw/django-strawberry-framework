@@ -59,7 +59,13 @@ from strawberry import relay
 from strawberry.types.field import StrawberryField
 from strawberry.utils.str_converters import to_camel_case
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_class_name, _safe_type_name
+from ..exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_attr,
+    _safe_class_name,
+    _safe_type_name,
+)
 from ..optimizer import logger
 from ..optimizer.field_meta import FieldMeta
 from ..registry import GLOBALID_SETTING_UNSET, registry
@@ -98,10 +104,7 @@ _SetT = TypeVar("_SetT", bound="type[FilterSet | OrderSet]")
 
 def _safe_qualified_class_name(value: object) -> str:
     """Return ``module.qualname`` without trusting consumer class metadata."""
-    try:
-        module = value.__module__
-    except BaseException:  # noqa: BLE001 - hostile object, contained by design
-        module = None
+    module = _safe_attr(value, "__module__")
     if isinstance(module, str):
         try:
             module_label = str(module)

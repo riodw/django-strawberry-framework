@@ -59,6 +59,12 @@ from typing import TYPE_CHECKING
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
+from django.core.serializers.json import DjangoJSONEncoder
+from django.http.request import HttpRequest
+from django.http.response import HttpResponse
+from django.template.loader import render_to_string
+from django.utils.encoding import force_str
+from strawberry.django.views import BaseView
 from typing_extensions import override
 
 from django_strawberry_framework.utils._narrowing import is_dict
@@ -133,20 +139,14 @@ del _debug_toolbar  # only the raise is wanted; the module stays out of this nam
 if not apps.is_installed("debug_toolbar"):
     raise ImproperlyConfigured(_DEBUG_TOOLBAR_APP_HINT)
 
-# Everything below needs the optional dependency, so the guard above must run
-# first and these imports stay beneath it (spec-042 Decision 5); ``E402`` is
-# the deliberate price of the import-time-guard shape.
+# The toolbar imports need the optional dependency, so the guard above must run
+# first and they stay beneath it (spec-042 Decision 5); ``E402`` is the
+# deliberate price of the import-time-guard shape.
 from debug_toolbar.middleware import (  # noqa: E402
     DebugToolbarMiddleware as _DebugToolbarMiddleware,
 )
 from debug_toolbar.panels import Panel  # noqa: E402
 from debug_toolbar.toolbar import DebugToolbar  # noqa: E402
-from django.core.serializers.json import DjangoJSONEncoder  # noqa: E402
-from django.http.request import HttpRequest  # noqa: E402
-from django.http.response import HttpResponse  # noqa: E402
-from django.template.loader import render_to_string  # noqa: E402
-from django.utils.encoding import force_str  # noqa: E402
-from strawberry.django.views import BaseView  # noqa: E402
 
 # The content-type sniff set for the HTML injection path (upstream verbatim).
 _HTML_TYPES = {"text/html", "application/xhtml+xml"}
@@ -170,8 +170,7 @@ def _panel_title(panel: Panel) -> object:
 
 
 def _get_payload(
-    # basedpyright: upstream-verbatim signature (spec-042 Decision 6)
-    request: HttpRequest,  # pyright: ignore[reportUnusedParameter]  # noqa: ARG001
+    request: HttpRequest,
     response: HttpResponse,
     toolbar: DebugToolbar,
 ) -> dict[object, object] | None:
@@ -189,6 +188,7 @@ def _get_payload(
     ``TemplatesPanel`` is skipped (upstream's deliberate exclusion: its nav
     content churns per request and floods the payload).
     """
+    del request  # upstream-verbatim signature (spec-042 Decision 6)
     if not toolbar.request_id:
         return None
 
@@ -242,11 +242,10 @@ class DebugToolbarMiddleware(_DebugToolbarMiddleware):
         self,
         request: HttpRequest,
         view_func: object,
-        # basedpyright: upstream-verbatim signature (spec-042 Decision 6); Django passes the view's
-        # args and kwargs positionally, so both land in ``*args``
-        *args: object,  # pyright: ignore[reportUnusedParameter]
-        # basedpyright: upstream-verbatim signature (spec-042 Decision 6)
-        **kwargs: object,  # pyright: ignore[reportUnusedParameter]
+        # upstream's signature (spec-042 Decision 6) with the unread rest underscored; Django
+        # passes the view's args and kwargs positionally, so both land in ``*_args``
+        *_args: object,
+        **_kwargs: object,
     ) -> None:
         """Tag the request when its resolved view is a Strawberry Django view.
 

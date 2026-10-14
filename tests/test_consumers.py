@@ -28,7 +28,7 @@ in ``examples/fakeshop/test_query/test_transport_api.py``.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -207,8 +207,10 @@ async def test_actor_is_current_hostile_window_attribute_fails_closed():
 
     # Actually Mock property trick is messy; use a real object with hostile property
     class HostileConsumer:
+        _revocation = cmod._ConnectionRevocation()
+
         @property
-        def revalidation_window(self):
+        def revalidation_window(self) -> NoReturn:
             raise AttributeError("hostile window")
 
         @property
@@ -216,9 +218,7 @@ async def test_actor_is_current_hostile_window_attribute_fails_closed():
             return scope
 
     hc = HostileConsumer()
-    # basedpyright: the consumer whose revalidation_window read raises is the hostile input under
-    # test; _actor_is_current types the parameter as _RevalidatedConsumer
-    result = await cmod._actor_is_current(hc)  # pyright: ignore[reportArgumentType]
+    result = await cmod._actor_is_current(hc)
     assert result is False
 
 
@@ -364,15 +364,14 @@ async def test_actor_is_current_hostile_timestamp_write_still_succeeds():
 @pytest.mark.asyncio
 async def test_actor_is_current_hostile_consumer_scope_property_fails_closed():
     class HostileConsumer:
-        @property
-        def scope(self):
-            raise AttributeError("hostile scope")
-
+        _revocation = cmod._ConnectionRevocation()
         revalidation_window = 0.0
 
-    # basedpyright: the consumer whose scope read raises is the hostile input under test;
-    # _actor_is_current types the parameter as _RevalidatedConsumer
-    result = await cmod._actor_is_current(HostileConsumer())  # pyright: ignore[reportArgumentType]
+        @property
+        def scope(self) -> NoReturn:
+            raise AttributeError("hostile scope")
+
+    result = await cmod._actor_is_current(HostileConsumer())
     assert result is False
 
 
@@ -460,13 +459,13 @@ async def test_revalidate_revoked_short_circuits_without_db():
 async def test_send_revalidated_hostile_ws_consumer_fails_closed():
     class HostileWS:
         @property
-        def ws_consumer(self):
+        def ws_consumer(self) -> NoReturn:
             raise KeyError("hostile ws_consumer")
 
+        close = AsyncMock()
+
     with patch.object(cmod, "_revoke_connection", new_callable=AsyncMock) as mock_revoke:
-        # basedpyright: the socket whose ws_consumer read raises is the hostile input under test;
-        # send_revalidated_operation_frame types the parameter as _GatedSocket
-        await cmod.send_revalidated_operation_frame(HostileWS(), {"type": "next"}, AsyncMock())  # pyright: ignore[reportArgumentType]
+        await cmod.send_revalidated_operation_frame(HostileWS(), {"type": "next"}, AsyncMock())
         mock_revoke.assert_awaited_once()
 
 
@@ -638,8 +637,10 @@ async def test_send_revalidated_hostile_ws_consumer_with_failing_revoke_is_conta
 
     class HostileWS:
         @property
-        def ws_consumer(self):
+        def ws_consumer(self) -> NoReturn:
             raise KeyError("hostile ws_consumer")
+
+        close = AsyncMock()
 
     with patch.object(
         cmod,
@@ -647,9 +648,7 @@ async def test_send_revalidated_hostile_ws_consumer_with_failing_revoke_is_conta
         new_callable=AsyncMock,
         side_effect=ValueError("hostile close"),
     ) as mock_revoke:
-        # basedpyright: the socket whose ws_consumer read raises is the hostile input under test;
-        # send_revalidated_operation_frame types the parameter as _GatedSocket
-        await cmod.send_revalidated_operation_frame(HostileWS(), {"type": "next"}, AsyncMock())  # pyright: ignore[reportArgumentType]
+        await cmod.send_revalidated_operation_frame(HostileWS(), {"type": "next"}, AsyncMock())
         mock_revoke.assert_awaited_once()
 
 
@@ -750,8 +749,10 @@ async def test_send_revalidated_cancellation_in_hostile_ws_consumer_revoke_is_re
 
     class HostileWS:
         @property
-        def ws_consumer(self):
+        def ws_consumer(self) -> NoReturn:
             raise KeyError("hostile ws_consumer")
+
+        close = AsyncMock()
 
     with patch.object(
         cmod,
@@ -760,9 +761,7 @@ async def test_send_revalidated_cancellation_in_hostile_ws_consumer_revoke_is_re
         side_effect=asyncio.CancelledError,
     ):
         with pytest.raises(asyncio.CancelledError):
-            # basedpyright: the socket whose ws_consumer read raises is the hostile input under
-            # test; send_revalidated_operation_frame types the parameter as _GatedSocket
-            await cmod.send_revalidated_operation_frame(HostileWS(), {"type": "next"}, AsyncMock())  # pyright: ignore[reportArgumentType]
+            await cmod.send_revalidated_operation_frame(HostileWS(), {"type": "next"}, AsyncMock())
 
 
 @pytest.mark.asyncio
@@ -982,13 +981,13 @@ async def test_send_json_information_frame_cancellation_is_re_raised():
 async def test_revoke_connection_hostile_ws_consumer_does_not_raise():
     class HostileWS:
         @property
-        def ws_consumer(self):
+        def ws_consumer(self) -> NoReturn:
             raise AttributeError("hostile ws_consumer")
 
+        close = AsyncMock()
+
     # Should not raise
-    # basedpyright: the socket whose ws_consumer read raises is the hostile input under test;
-    # _revoke_connection types the parameter as _GatedSocket
-    await cmod._revoke_connection(HostileWS())  # pyright: ignore[reportArgumentType]
+    await cmod._revoke_connection(HostileWS())
 
 
 @pytest.mark.asyncio
@@ -1215,16 +1214,15 @@ async def test_revalidate_hostile_is_current_cancelled_propagates():
 @pytest.mark.asyncio
 async def test_actor_is_current_cancelled_at_scope_get_propagates():
     class HostileConsumer:
-        @property
-        def scope(self):
-            raise asyncio.CancelledError("cancelled scope")
-
+        _revocation = cmod._ConnectionRevocation()
         revalidation_window = 0.0
 
+        @property
+        def scope(self) -> NoReturn:
+            raise asyncio.CancelledError("cancelled scope")
+
     with pytest.raises(asyncio.CancelledError):
-        # basedpyright: the consumer whose scope read raises is the hostile input under test;
-        # _actor_is_current types the parameter as _RevalidatedConsumer
-        await cmod._actor_is_current(HostileConsumer())  # pyright: ignore[reportArgumentType]
+        await cmod._actor_is_current(HostileConsumer())
 
 
 @pytest.mark.asyncio
@@ -1284,8 +1282,10 @@ async def test_actor_is_current_cancelled_at_window_propagates():
     consumer.scope = scope
 
     class HostileConsumer:
+        _revocation = cmod._ConnectionRevocation()
+
         @property
-        def revalidation_window(self):
+        def revalidation_window(self) -> NoReturn:
             raise asyncio.CancelledError("cancelled window")
 
         @property
@@ -1293,9 +1293,7 @@ async def test_actor_is_current_cancelled_at_window_propagates():
             return scope
 
     with pytest.raises(asyncio.CancelledError):
-        # basedpyright: the consumer whose revalidation_window read raises is the hostile input
-        # under test; _actor_is_current types the parameter as _RevalidatedConsumer
-        await cmod._actor_is_current(HostileConsumer())  # pyright: ignore[reportArgumentType]
+        await cmod._actor_is_current(HostileConsumer())
 
 
 @pytest.mark.asyncio
@@ -1404,13 +1402,13 @@ async def test_actor_is_current_cancelled_at_timestamp_set_propagates():
 async def test_send_revalidated_hostile_ws_consumer_cancelled_propagates():
     class HostileWS:
         @property
-        def ws_consumer(self):
+        def ws_consumer(self) -> NoReturn:
             raise asyncio.CancelledError("cancelled ws_consumer")
 
+        close = AsyncMock()
+
     with pytest.raises(asyncio.CancelledError):
-        # basedpyright: the socket whose ws_consumer read raises is the hostile input under test;
-        # send_revalidated_operation_frame types the parameter as _GatedSocket
-        await cmod.send_revalidated_operation_frame(HostileWS(), {"type": "next"}, AsyncMock())  # pyright: ignore[reportArgumentType]
+        await cmod.send_revalidated_operation_frame(HostileWS(), {"type": "next"}, AsyncMock())
 
 
 @pytest.mark.asyncio
@@ -1462,13 +1460,13 @@ async def test_send_json_control_cancelled_propagates():
 async def test_revoke_connection_hostile_ws_consumer_cancelled_propagates():
     class HostileWS:
         @property
-        def ws_consumer(self):
+        def ws_consumer(self) -> NoReturn:
             raise asyncio.CancelledError("cancelled")
 
+        close = AsyncMock()
+
     with pytest.raises(asyncio.CancelledError):
-        # basedpyright: the socket whose ws_consumer read raises is the hostile input under test;
-        # _revoke_connection types the parameter as _GatedSocket
-        await cmod._revoke_connection(HostileWS())  # pyright: ignore[reportArgumentType]
+        await cmod._revoke_connection(HostileWS())
 
 
 @pytest.mark.asyncio

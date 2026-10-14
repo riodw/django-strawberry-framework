@@ -95,10 +95,7 @@ from tests.optimizer._link_models import LnkPairChild, link_fixture_tables
 ISSUE_ORDER = ("-number", "id")
 
 
-@pytest.fixture(autouse=True)
-def _registry(isolate_global_registry: None) -> None:
-    """Registry + connection-type-cache isolation around every test here."""
-    return isolate_global_registry
+pytestmark = pytest.mark.usefixtures("isolate_global_registry")
 
 
 def _make_issue_type(name: str = "KeysetIssueNode", **meta_extra: object) -> type[DjangoType]:

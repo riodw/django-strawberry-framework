@@ -250,7 +250,7 @@ _execution_frames: ContextVar[OperationLease[_ExecutionFrame] | None] = ContextV
 
 
 def _active_frame() -> _ExecutionFrame | None:
-    """The frame of the execution running here, or ``None``.
+    """Return the frame of the execution running here, or ``None``.
 
     ``None`` for a caller outside every managed execution - a direct call into a
     generated resolver, a test invoking a helper on its own - and ``None`` again
@@ -305,13 +305,13 @@ def end_execution_frame(scope: _FrameScope) -> None:
 
 
 def active_optimizer() -> DjangoOptimizerExtension | None:
-    """The extension instance running this execution, or ``None`` outside one."""
+    """Return the extension instance running this execution, or ``None`` outside one."""
     frame = _active_frame()
     return None if frame is None else frame.optimizer
 
 
 def active_nested_strategy() -> NestedConnectionStrategy | None:
-    """The nested-connection strategy this execution planned with, or ``None``."""
+    """Return the nested-connection strategy this execution planned with, or ``None``."""
     frame = _active_frame()
     return None if frame is None else frame.strategy
 
@@ -323,19 +323,19 @@ def active_strictness() -> str | None:
 
 
 def execution_plan_memo() -> dict[PlanCacheKey, OptimizationPlan] | None:
-    """This execution's built-plan memo, or ``None`` outside a managed execution."""
+    """Return the execution's built-plan memo, or ``None`` outside a managed execution."""
     frame = _active_frame()
     return None if frame is None else frame.plans
 
 
 def cache_key_parts_memo() -> dict[int, CacheKeyParts] | None:
-    """This execution's cache-key-parts memo, or ``None`` outside a managed execution."""
+    """Return the execution's cache-key-parts memo, or ``None`` outside a managed execution."""
     frame = _active_frame()
     return None if frame is None else frame.key_parts
 
 
 def converted_selections_memo() -> dict[ConvertedMemoKey, list[Selection]] | None:
-    """This execution's converted-selection memo, or ``None`` outside a managed execution."""
+    """Return the execution's converted-selection memo, or ``None`` outside a managed execution."""
     frame = _active_frame()
     return None if frame is None else frame.converted
 
@@ -355,7 +355,7 @@ def publish_window_cursor_states(states: Mapping[str, CursorState]) -> None:
 
 
 def window_cursor_state(key: str) -> CursorState | None:
-    """The cursor vocabulary the keyset window under resolver ``key`` was planned with.
+    """Return the cursor vocabulary the keyset window under resolver ``key`` was planned with.
 
     ``None`` outside an execution and for a key no published plan windowed.
     """

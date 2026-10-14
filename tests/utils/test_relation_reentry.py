@@ -37,11 +37,8 @@ from django_strawberry_framework.filters import FilterSet, RelatedFilter
 from django_strawberry_framework.orders import OrderSet
 from django_strawberry_framework.schema import DjangoSchema
 
-
-@pytest.fixture(autouse=True)
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def _isolate_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
-    """Every test here declares fresh ``DjangoType`` classes over the library models."""
+# Every test declares fresh ``DjangoType`` classes over the library models.
+pytestmark = pytest.mark.usefixtures("isolate_global_registry")
 
 
 def _hiding(field: str, value: str) -> classmethod[DjangoType, ..., QuerySet[Model]]:

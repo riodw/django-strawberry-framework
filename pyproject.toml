@@ -226,23 +226,14 @@ select = [
 ]
 ignore = [
     # Off by design (docs/ruffing.md "Off by design").
-    "C901",   # function complexity
     "CPY001", # copyright headers
     "D203",   # blank line before a class docstring: D211 (Google) is the opposite
     "D213",   # summary on the second line: D212 (Google) is the opposite
-    "D400",   # summary ends with a period: Google's D415 accepts any punctuation
-    "D401",   # imperative-mood summary: not part of the Google convention
-    "D404",   # summary starting "This": ditto
     "D413",   # blank line after the last section: ditto
     "EM101",  # string literal in the exception constructor: exception-message style only
     "EM102",  # f-string in the exception constructor: ditto
     "FIX002", # TODO markers are the `TODO(spec-NNN slice N)` anchor convention
     "PLC0415", # local imports break import cycles
-    "PLR0911", # too many return statements
-    "PLR0912", # too many branches
-    "PLR0913", # too many arguments
-    "PLR0915", # too many statements
-    "PLR0917", # too many positional arguments
     "PLR2004", # magic value in comparison
     "SLF001", # private member access: the package shares underscore names across modules
     "TC001",  # first-party import used only in annotations: annotations are read at runtime
@@ -255,6 +246,10 @@ ignore = [
 # The package logger is re-exported from `django_strawberry_framework`; naming it lets BLE001 see a
 # handler that logs the exception.
 logger-objects = ["django_strawberry_framework.logger"]
+
+[tool.ruff.lint.mccabe]
+# Ratchet at the current maximum: no new function may exceed the most complex one today.
+max-complexity = 45
 
 [tool.ruff.lint.flake8-annotations]
 # `*args: Any, **kwargs: Any` forwards verbatim to a third-party signature that varies across the
@@ -297,6 +292,10 @@ ignore-variadic-names = true
 
 [tool.ruff.lint.isort]
 known-first-party = ["django_strawberry_framework"]
+
+[tool.ruff.lint.pep8-naming]
+# Django's `classonlymethod` (`View.as_view`) is a classmethod: its first argument is `cls`.
+classmethod-decorators = ["django.utils.decorators.classonlymethod"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = [
@@ -356,6 +355,14 @@ known-first-party = ["django_strawberry_framework"]
 # -- the grace covers long strings/comments the formatter cannot break.
 max-line-length = 110
 
+[tool.ruff.lint.pylint]
+# Ratchets at the current maxima (PLR0911-PLR0917): lower one to list the functions above it.
+max-args = 18
+max-branches = 39
+max-positional-args = 10
+max-returns = 20
+max-statements = 133
+
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
@@ -398,8 +405,9 @@ reportPrivateUsage = "none"
 reportUnusedFunction = "none"
 reportImportCycles = "none"
 reportUninitializedInstanceVariable = "none"
-# The ratchet, off until their sites are fixed (turn one on to list them); the last two
-# are on in the scripts/, package and root-file environments below.
+# The ratchet, off until their sites are fixed (turn one on to list them): `reportAny` is
+# on in the scripts/ and root-file environments below, the last two in those and the
+# package's.
 reportAny = "none"
 reportUnannotatedClassAttribute = "none"
 reportUnusedCallResult = "none"
@@ -410,6 +418,7 @@ reportUnusedCallResult = "none"
 [[tool.basedpyright.executionEnvironments]]
 root = "scripts"
 extraPaths = ["examples/fakeshop", "."]
+reportAny = "error"
 reportUnannotatedClassAttribute = "error"
 reportUnusedCallResult = "error"
 
@@ -434,18 +443,21 @@ reportUnusedCallResult = "error"
 [[tool.basedpyright.executionEnvironments]]
 root = "conftest.py"
 extraPaths = [".", "examples/fakeshop"]
+reportAny = "error"
 reportUnannotatedClassAttribute = "error"
 reportUnusedCallResult = "error"
 
 [[tool.basedpyright.executionEnvironments]]
 root = "line_count.py"
 extraPaths = [".", "examples/fakeshop"]
+reportAny = "error"
 reportUnannotatedClassAttribute = "error"
 reportUnusedCallResult = "error"
 
 [[tool.basedpyright.executionEnvironments]]
 root = "docs/dry/export_dry_review.py"
 extraPaths = [".", "examples/fakeshop"]
+reportAny = "error"
 reportUnannotatedClassAttribute = "error"
 reportUnusedCallResult = "error"
 

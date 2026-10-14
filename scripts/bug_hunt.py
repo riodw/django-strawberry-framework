@@ -383,7 +383,17 @@ def _read_dicta(dicta_path: Path) -> str:
     return _FALLBACK_DICTA
 
 
-def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
+class _Args(argparse.Namespace):
+    """The parsed command line, typed field by field after ``_parse_args``'s ``add_argument`` calls."""
+
+    dicta: Path
+    output: Path | None
+    target_release: str | None
+    package_dir: str
+    force: bool
+
+
+def _parse_args(argv: Sequence[str]) -> _Args:
     parser = argparse.ArgumentParser(
         description=(
             "Resolve HEAD, refresh docs/shadow/current/ from that commit, "
@@ -431,7 +441,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         action="store_true",
         help="Replace an existing progress file for an explicit maintainer-requested restart.",
     )
-    return parser.parse_args(argv)
+    return parser.parse_args(argv, namespace=_Args())
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -74,12 +74,15 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from typing_extensions import TypeIs
+
+# ``json.loads`` returns ``Any``; this alias hands callers an ``object`` to narrow.
+_loads: Callable[[str], object] = json.loads
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "django_strawberry_framework"
@@ -193,13 +196,13 @@ def report_diagnostics(report: Mapping[str, object]) -> list[Diagnostic]:
 
 
 def _symbol_entries(report: Mapping[str, object]) -> list[Mapping[str, object]]:
-    """The report's ``typeCompleteness.symbols`` entries, or none when it lists none."""
+    """Return the report's ``typeCompleteness.symbols`` entries, or none when it lists none."""
     completeness = report.get("typeCompleteness")
     return _entries(completeness.get("symbols") if _is_json_object(completeness) else None)
 
 
 def _entries(value: object) -> list[Mapping[str, object]]:
-    """The mapping entries of a report list, or none when the key is absent."""
+    """Return the mapping entries of a report list, or none when the key is absent."""
     if value is None:
         return []
     if not _is_json_array(value):
@@ -223,7 +226,7 @@ def _is_json_array(value: object) -> TypeIs[list[object]]:
 
 
 def _text(entry: Mapping[str, object], key: str) -> str:
-    """The string ``entry[key]``, or raise when the report entry carries none."""
+    """Return the string ``entry[key]``, or raise when the report entry carries none."""
     value = entry.get(key)
     if not isinstance(value, str):
         raise MeasurementError(
@@ -308,7 +311,7 @@ def format_report(verdict: Verdict) -> list[str]:
 def parse_report(stdout: str) -> dict[str, object]:
     """Parse basedpyright's ``--outputjson`` stdout, or raise when it is not a report."""
     try:
-        report: object = json.loads(stdout)
+        report = _loads(stdout)
     except json.JSONDecodeError as error:
         raise MeasurementError(f"basedpyright printed no JSON report: {stdout[:500]!r}") from error
     if not _is_json_object(report):
@@ -324,7 +327,7 @@ def child_environment(base: Mapping[str, str], **extra: str) -> dict[str, str]:
 
 
 def _uv_executable() -> str:
-    """The ``uv`` running this script (``uv run`` exports it as ``UV``), else the one on PATH."""
+    """Return the ``uv`` running this script (``UV`` under ``uv run``), else the one on PATH."""
     found = os.environ.get("UV") or shutil.which("uv")
     if not found:
         raise MeasurementError("uv is not on PATH; the non-editable environment cannot be built.")
@@ -383,14 +386,29 @@ def build_environment(environment: Path) -> None:
         )
 
 
+def _basedpyright_python_version(document: object) -> str:
+    """Return ``document["tool"]["basedpyright"]["pythonVersion"]`` as a string.
+
+    Raises:
+        KeyError: A table on the path lacks its key, or a value on it is not a table.
+    """
+    value = document
+    for key in ("tool", "basedpyright", "pythonVersion"):
+        if not _is_json_object(value):
+            raise KeyError(key)
+        value = value[key]
+    return str(value)
+
+
 def checked_python_version() -> str:
     """Return ``[tool.basedpyright] pythonVersion``, the Python the package checkers read."""
     import tomli
 
+    # ``tomli.loads`` returns ``dict[str, Any]``; this alias hands the walk an ``object``.
+    toml_loads: Callable[[str], dict[str, object]] = tomli.loads
     pyproject = REPO_ROOT / "pyproject.toml"
     try:
-        config = tomli.loads(pyproject.read_text(encoding="utf-8"))
-        return str(config["tool"]["basedpyright"]["pythonVersion"])
+        return _basedpyright_python_version(toml_loads(pyproject.read_text(encoding="utf-8")))
     except (OSError, KeyError, tomli.TOMLDecodeError) as error:
         raise MeasurementError(
             f"[tool.basedpyright] pythonVersion is unreadable from {pyproject}: {error!r}",

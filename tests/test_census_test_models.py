@@ -9,23 +9,16 @@ script measures the test tree, it is not reached by a query.
 """
 
 import ast
-import importlib
-from pathlib import Path
+from collections.abc import Callable
 from types import ModuleType
 
 import pytest
 
-from scripts import _bench_common
-
-SCRIPTS = Path(_bench_common.__file__).resolve().parent
-
 
 @pytest.fixture
-def census(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+def census(scripts_module: Callable[[str], ModuleType]) -> ModuleType:
     """Import ``scripts/census_test_models.py`` the way it runs: scripts dir on ``sys.path``."""
-    # basedpyright: pytest leaves MonkeyPatch.syspath_prepend's ``path`` parameter unannotated
-    monkeypatch.syspath_prepend(str(SCRIPTS))  # pyright: ignore[reportUnknownMemberType]
-    return importlib.import_module("census_test_models")
+    return scripts_module("census_test_models")
 
 
 SIBLING_SAME_NAME = """

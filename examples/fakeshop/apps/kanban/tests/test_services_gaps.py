@@ -14,10 +14,11 @@ from apps.kanban import factories as kf
 from apps.kanban import models, services
 from apps.kanban.constants import TRACKED_FILE_PATHS
 
+pytestmark = pytest.mark.django_db
+
 
 @pytest.fixture(autouse=True)
-# basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def _service_lookups(db: None) -> None:  # pyright: ignore[reportUnusedParameter]
+def _service_lookups() -> None:
     kf.make_status("todo")
     kf.make_status("done")
     kf.make_priority("medium")

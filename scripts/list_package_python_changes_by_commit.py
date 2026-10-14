@@ -26,6 +26,7 @@ import sys
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Protocol
 
 DEFAULT_PACKAGE_DIR = "django_strawberry_framework"
 DEFAULT_REVISION = "HEAD"
@@ -66,6 +67,18 @@ class CommitChange:
     files: list[ChangedFile]
 
 
+class _StderrOwner(Protocol):
+    """A failed subprocess, seen through its captured ``stderr`` as ``object``."""
+
+    @property
+    def stderr(self) -> object: ...
+
+
+def _stderr_text(error: _StderrOwner) -> str:
+    """Return the text a failed ``text=True`` subprocess captured on stderr."""
+    return str(error.stderr)
+
+
 def run_git(args: Sequence[str], *, cwd: Path | None = None) -> str:
     """Run ``git --no-pager <args>`` and return stdout."""
     try:
@@ -77,7 +90,7 @@ def run_git(args: Sequence[str], *, cwd: Path | None = None) -> str:
             text=True,
         )
     except subprocess.CalledProcessError as error:
-        stderr = error.stderr.strip()
+        stderr = _stderr_text(error).strip()
         message = stderr or f"git {' '.join(args)} failed with exit code {error.returncode}"
         raise GitHistoryError(message) from error
     return result.stdout
@@ -340,7 +353,19 @@ def render_json(
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
-def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+class Args(argparse.Namespace):
+    """The parsed command line, typed field by field after ``parse_args``'s ``add_argument`` calls."""
+
+    revision: str
+    package_dir: str
+    format: str
+    output: Path | None
+    include_empty: bool
+    allow_shallow: bool
+    merge_diff: str
+
+
+def parse_args(argv: Sequence[str]) -> Args:
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(
         description=(
@@ -390,7 +415,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "what landed on the current branch."
         ),
     )
-    return parser.parse_args(argv)
+    return parser.parse_args(argv, namespace=Args())
 
 
 def write_report(report: str, output: Path | None) -> None:

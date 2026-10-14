@@ -455,9 +455,11 @@ def test_items(db):
         "query Items($first: Int) { allItems(first: $first) { edges { node { name } } } }",
         variables={"first": 2},
     )
-    assert res.errors is None          # already asserted by default (assert_no_errors=True)
+    # already asserted by default (assert_no_errors=True)
+    assert res.errors is None
     assert res.data["allItems"]["edges"]
-    assert res.response.status_code == 200   # the raw django.http.HttpResponse rides along
+    # the raw django.http.HttpResponse rides along
+    assert res.response.status_code == 200
 ```
 
 Expecting errors, authenticated flows, and multipart uploads:
@@ -466,7 +468,8 @@ Expecting errors, authenticated flows, and multipart uploads:
 res = client.query("{ nope }", assert_no_errors=False)
 assert res.errors and res.errors[0]["message"]
 
-with client.login(user):               # force_login / logout around the block
+# force_login / logout around the block
+with client.login(user):
     res = client.query(CREATE_ITEM, variables={"data": {...}})
 
 # Upload-scalar mutation — a nested input object with two file fields.
@@ -508,12 +511,14 @@ The unittest family (graphene-django's shape):
 from django_strawberry_framework.testing import GraphQLTestCase
 
 class ProductsTests(GraphQLTestCase):
-    # GRAPHQL_URL = "/graphql/"        # optional per-class override of the settings key
+    # optional per-class override of the settings key:
+    # GRAPHQL_URL = "/graphql/"
 
     def test_items(self):
         res = self.query("query Items { allItems(first: 1) { edges { node { name } } } }",
                          operation_name="Items")
-        self.assertResponseNoErrors(res)   # HTTP 200 AND res.errors is None
+        # HTTP 200 AND res.errors is None
+        self.assertResponseNoErrors(res)
 
     def test_bad_selection(self):
         res = self.query("{ nope }")
@@ -531,10 +536,13 @@ DJANGO_STRAWBERRY_FRAMEWORK = {
 
 ```python
 # Overrides, highest precedence first: per-call > constructor > class attr > settings > default
-res = client.query("{ __typename }", url="/other/graphql/")   # this one request only
-client = TestClient("/api/graphql/")                          # this client instance
+# this one request only
+res = client.query("{ __typename }", url="/other/graphql/")
+# this client instance
+client = TestClient("/api/graphql/")
 class MyTests(GraphQLTestCase):
-    GRAPHQL_URL = "/api/graphql/"                             # this test-case class
+    # this test-case class
+    GRAPHQL_URL = "/api/graphql/"
 ```
 
 ```diff
@@ -797,8 +805,10 @@ the pick total:
 
 ```python
 @dataclass
-class Response(strawberry.test.client.Response):   # errors / data / extensions
-    response: Any = None   # the raw django.http.HttpResponse the operation rode
+# errors / data / extensions
+class Response(strawberry.test.client.Response):
+    # the raw django.http.HttpResponse the operation rode
+    response: Any = None
 ```
 
 The `response` field is what lets every consumer of the raw flavor use the

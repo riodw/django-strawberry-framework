@@ -169,9 +169,9 @@ TEMPLATES: list[dict[str, object]] = [
 # whatever alias the caller queryset carries via ``queryset.db``.
 #
 # Usage:
-#     uv run pytest                                                 # single-DB
-#     FAKESHOP_SHARDED=1 uv run pytest                              # sharded
-#     FAKESHOP_SHARDED=1 uv run python manage.py seed_shards        # populate shard_b
+#   - single-DB: ``uv run pytest``
+#   - sharded: ``FAKESHOP_SHARDED=1 uv run pytest``
+#   - populate shard_b: ``FAKESHOP_SHARDED=1 uv run python manage.py seed_shards``
 # ``DJANGO_STRAWBERRY_KANBAN_DB`` points the default SQLite alias at an alternate
 # file. Used by the ``scripts/build_kanban_*`` / ``build_glossary_md`` / ``build_tree_md``
 # render tooling to run against a migrated COPY of ``db.sqlite3`` without touching the

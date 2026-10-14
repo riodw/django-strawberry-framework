@@ -953,7 +953,8 @@ class ItemSerializer(serializers.ModelSerializer):
 
 class CreateItemViaSerializer(SerializerMutation):
     class Meta:
-        serializer_class = ItemSerializer        # model resolves via serializer_class.Meta.model
+        # model resolves via serializer_class.Meta.model
+        serializer_class = ItemSerializer
         operation = "create"
 
 
@@ -1980,7 +1981,8 @@ The pipeline steps:
    saved = None
    def _do_save():
        nonlocal saved
-       saved = serializer.save(**save_kwargs)   # called exactly once
+       # called exactly once
+       saved = serializer.save(**save_kwargs)
    ```
    The re-fetch (step 7) then keys off `saved.pk`. (`serializer.instance` *is* `saved`
    after a successful DRF `save()`, but pinning the captured return value keeps the

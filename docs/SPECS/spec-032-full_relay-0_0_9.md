@@ -198,7 +198,8 @@ class GenreType(DjangoType):
         connection = {"total_count": True}
         # "connection" is the default for every eligible relation; "both" is the
         # explicit opt-in that keeps the raw list beside it:
-        relation_shapes = {"books": "both"}   # or "connection" (the default) or "list" (drop the connection)
+        # or "connection" (the default) or "list" (drop the connection)
+        relation_shapes = {"books": "both"}
 ```
 
 Because `GenreType` declares `"both"` for `books`, it exposes `books: [BookType!]!` **and** `booksConnection: BookTypeConnection!`; drop that entry and the default `"connection"` shape removes `books` from the SDL entirely, leaving `booksConnection` as the only way to reach a genre's books. The connection carries `first` / `after` / `last` / `before`, the target's sidecar-derived `filter:` / `orderBy:` arguments, and `totalCount` when the **target** declares [`Meta.connection`][glossary-metaconnection]` = {"total_count": True}`. Eligibility: the declaring type is Relay-Node-shaped, the relation is many-side (reverse FK, forward / reverse M2M), and the relation **target**'s type is Relay-Node-shaped. An eligible relation defaults to `"connection"`; a non-Node-target relation silently stays list-only under the default but raises [`ConfigurationError`][glossary-configurationerror] when `relation_shapes` explicitly requests `"connection"` / `"both"` for it.
@@ -208,8 +209,10 @@ Because `GenreType` declares `"both"` for `books`, it exposes `books: [BookType!
 ```python
 from django_strawberry_framework.testing.relay import decode_global_id, global_id_for
 
-gid = global_id_for(GenreType, 42)            # strategy-aware: base64("library.genre:42") under the model default
-target_type, node_id = decode_global_id(gid)  # (GenreType, "42"); pass schema= for a type-strategy id under a renaming NameConverter
+# strategy-aware: base64("library.genre:42") under the model default
+gid = global_id_for(GenreType, 42)
+# (GenreType, "42"); pass schema= for a type-strategy id under a renaming NameConverter
+target_type, node_id = decode_global_id(gid)
 ```
 
 ### Error shapes

@@ -161,10 +161,13 @@ schema = DjangoSchema(
 )
 
 # Correct caching but DEPRECATED (Schema.__init__ warns "...will be removed..."):
-#   extensions=[DjangoOptimizerExtension()]          # instance — cache preserved, but warns
+#   instance — cache preserved, but warns:
+#   extensions=[DjangoOptimizerExtension()]
 # WRONG (fresh instance per operation → cold plan cache, both modes):
-#   extensions=[DjangoOptimizerExtension]            # bare class
-#   extensions=[lambda: DjangoOptimizerExtension()]  # constructing factory
+#   bare class:
+#   extensions=[DjangoOptimizerExtension]
+#   constructing factory:
+#   extensions=[lambda: DjangoOptimizerExtension()]
 ```
 
 ### Slice 2 — `manage.py inspect_django_type <Type>`

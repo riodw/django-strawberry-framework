@@ -695,7 +695,8 @@ middleware" means the `INSTALLED_APPS` step was skipped.
 # settings.py — dev only, the standard django-debug-toolbar setup
 INSTALLED_APPS = [
     # ...
-    "django_strawberry_framework",   # already present: the package's AppConfig
+    # already present: the package's AppConfig
+    "django_strawberry_framework",
     "debug_toolbar",
 ]
 
@@ -718,7 +719,8 @@ from debug_toolbar.toolbar import debug_toolbar_urls
 
 urlpatterns = [
     # ... your GraphQL / admin / app routes ...
-] + debug_toolbar_urls()   # DEBUG-gated: returns [] when DEBUG is False
+# DEBUG-gated: returns [] when DEBUG is False
+] + debug_toolbar_urls()
 ```
 
 Consumer-visible behavior:

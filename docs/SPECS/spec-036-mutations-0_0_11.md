@@ -229,7 +229,8 @@ class CreateItem(DjangoMutation):
     class Meta:
         model = models.Item
         operation = "create"
-        input_class = MyHandWrittenItemInput   # overrides specific generated fields; the generator fills the rest
+        # overrides specific generated fields; the generator fills the rest
+        input_class = MyHandWrittenItemInput
 ```
 
 ### Error shapes

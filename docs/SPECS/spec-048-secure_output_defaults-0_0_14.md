@@ -523,7 +523,8 @@ class DocumentType(DjangoType):
     class Meta:
         model = Document
         fields = ("id", "title", "attachment")
-        filesystem_path_fields = ("attachment",)   # NEW: restores `path`
+        # NEW: restores `path`
+        filesystem_path_fields = ("attachment",)
 ```
 
 with the consequence that `attachment`'s type name in the SDL becomes

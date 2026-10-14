@@ -164,8 +164,10 @@ class ItemType(DjangoType):
     class Meta:
         model = models.Item
         fields = ("id", "name", "category")
-        interfaces = (relay.Node,)            # required — a strategy is only meaningful on a Node type
-        primary = True                        # two DjangoTypes share this model, so one must declare it
+        # required — a strategy is only meaningful on a Node type
+        interfaces = (relay.Node,)
+        # two DjangoTypes share this model, so one must declare it
+        primary = True
         # globalid_strategy omitted -> resolves to RELAY_GLOBALID_STRATEGY, then the "model" default
 
 
@@ -174,8 +176,10 @@ class LegacyItemType(DjangoType):
         model = models.Item
         fields = ("id", "name")
         interfaces = (relay.Node,)
-        primary = False                       # a secondary type ...
-        globalid_strategy = "type"            # ... that keeps type-scoped identity for disjoint cache scopes
+        # a secondary type ...
+        primary = False
+        # ... that keeps type-scoped identity for disjoint cache scopes
+        globalid_strategy = "type"
 
 
 finalize_django_types()
@@ -188,7 +192,8 @@ finalize_django_types()
 ```python
 # settings.py
 DJANGO_STRAWBERRY_FRAMEWORK = {
-    "RELAY_GLOBALID_STRATEGY": "type+model",   # transitional: emit model-anchored, accept both on decode
+    # transitional: emit model-anchored, accept both on decode
+    "RELAY_GLOBALID_STRATEGY": "type+model",
 }
 ```
 

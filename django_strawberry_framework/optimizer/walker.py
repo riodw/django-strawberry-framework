@@ -795,14 +795,12 @@ def _walk_selections(
     """
     type_cls, definition, field_map = _resolve_field_map(model, source_type=source_type)
     hints_map = _resolve_optimizer_hints(definition)
-    # TODO(BACKLOG polymorphic_interface_connections - the abstract-return
-    # optimizer entry card): supply a registry-only type-condition classifier
-    # to ``included_field_selections`` at this planning seam. Design contract:
-    # spec-035 Decision 6 (the tri-state classifier and its accept set) and
-    # Decision 7 (narrow, do not multi-plan). That card must first build the
-    # abstract-return production-entry contract (R1); until it exists no
-    # abstract root field reaches this walker, so the classifier has nothing
-    # to narrow.
+    # TODO(BACKLOG polymorphic_interface_connections - the abstract-return optimizer entry card): supply
+    # a registry-only type-condition classifier to ``included_field_selections`` at this planning
+    # seam. Design contract: spec-035 Decision 6 (the tri-state classifier and its accept set) and
+    # Decision 7 (narrow, do not multi-plan). That card must first build the abstract-return
+    # production-entry contract (R1); until it exists no abstract root field reaches this walker,
+    # so the classifier has nothing to narrow.
     # Pseudocode: accept the planning type's GraphQL name plus declared and
     # MRO-inherited interface names; skip known sibling concrete types; recurse
     # fragments-only for unknown composite/union names; never accept the model
@@ -1660,11 +1658,10 @@ def _selected_scalar_names(
     # exercised through the root _walk_selections path, not through this
     # helper. (An audit invariant.)
     type_cls, definition, field_map = _resolve_field_map(model)
-    # TODO(BACKLOG polymorphic_interface_connections - the abstract-return
-    # optimizer entry card): audit this FK-id-elision helper as the walker's
-    # second ``included_field_selections`` consumer. This is that card's
-    # requirement R2 in spec-035 Decision 6, and it is unreachable until the
-    # same card builds the abstract-return production-entry contract (R1).
+    # TODO(BACKLOG polymorphic_interface_connections - the abstract-return optimizer entry card): audit
+    # this FK-id-elision helper as the walker's second ``included_field_selections`` consumer. This
+    # is that card's requirement R2 in spec-035 Decision 6, and it is unreachable until the same
+    # card builds the abstract-return production-entry contract (R1).
     # Pseudocode: either share the same type-condition classifier used by
     # ``_walk_selections`` or prove the helper only receives concretely typed
     # relation child selections where sibling fragments are GraphQL-invalid.

@@ -502,7 +502,8 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "myproject.settings")
 
 from django.core.asgi import get_asgi_application
 
-django_asgi = get_asgi_application()          # Django is fully initialized here
+# Django is fully initialized here
+django_asgi = get_asgi_application()
 
 from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter
 
@@ -510,7 +511,8 @@ from myproject.schema import schema
 
 application = DjangoGraphQLProtocolRouter(
     schema,
-    django_application=django_asgi,           # REQUIRED
+    # REQUIRED
+    django_application=django_asgi,
 )
 ```
 
@@ -534,12 +536,17 @@ urlpatterns = [
 
 ```python
 DjangoGraphQLProtocolRouter(
-    schema,                                   # the strawberry.Schema (extensions ride along)
-    django_application,                       # REQUIRED: get_asgi_application()
+    # the strawberry.Schema (extensions ride along)
+    schema,
+    # REQUIRED: get_asgi_application()
+    django_application,
     *,
-    websocket_url_pattern=r"^graphql/?$",     # WebSocket-only, exact by default
-    websocket_consumer_class=None,            # class or factory; None -> the package default
-    websocket_revalidation_window=0.0,        # seconds of accepted revocation delay
+    # WebSocket-only, exact by default
+    websocket_url_pattern=r"^graphql/?$",
+    # class or factory; None -> the package default
+    websocket_consumer_class=None,
+    # seconds of accepted revocation delay
+    websocket_revalidation_window=0.0,
 )
 ```
 
@@ -548,7 +555,8 @@ DjangoGraphQLProtocolRouter(
 ```python
 DjangoGraphQLView.as_view(
     schema=schema,
-    max_request_body_bytes=None,              # None -> the MAX_REQUEST_BODY_BYTES setting
+    # None -> the MAX_REQUEST_BODY_BYTES setting
+    max_request_body_bytes=None,
     # every upstream strawberry.django.views.GraphQLView kwarg still applies:
     graphql_ide="graphiql",
     allow_queries_via_get=True,
@@ -726,7 +734,8 @@ only what is currently true.
 ```python
 {
     "http": django_application,
-    "websocket": DjangoWebSocketHostValidator(          # Decision 19
+    # Decision 19
+    "websocket": DjangoWebSocketHostValidator(
         AllowedHostsOriginValidator(
             AuthMiddlewareStack(URLRouter([re_path(websocket_url_pattern, consumer)])),
         ),

@@ -188,8 +188,10 @@ Rationale: [Decision 2][rationale-d2].
 Shape of [`django_strawberry_framework/scalars.py`][scalars] (comments and docstrings elided):
 
 ```python path=null start=null
-def _parse_bigint(value: object) -> int: ...      # int.__int__ / str.__str__ normalization
-def _serialize_bigint(value: object) -> str: ...  # int.__repr__ normalization
+# int.__int__ / str.__str__ normalization
+def _parse_bigint(value: object) -> int: ...
+# int.__repr__ normalization
+def _serialize_bigint(value: object) -> str: ...
 
 BigInt = NewType("BigInt", int)
 

@@ -5607,10 +5607,9 @@ def test_mutation_id_only_relation_still_records_elision():
     assert plan.only_fields == ()
 
 
-# TODO(BACKLOG polymorphic_interface_connections - the abstract-return
-# optimizer entry card): add G3 walker narrowing pins here. The named test
-# roster is spec-035's G3 deferred test plan; the classifier they pin is
-# spec-035 Decision 6, and they are unreachable until that card builds the
+# TODO(BACKLOG polymorphic_interface_connections - the abstract-return optimizer entry card): add
+# G3 walker narrowing pins here. The named test roster is spec-035's G3 deferred test plan; the
+# classifier they pin is spec-035 Decision 6, and they are unreachable until that card builds the
 # abstract-return production-entry contract (R1).
 # Pseudocode: synthesize interface/union-like selection trees and registered
 # DjangoType definitions; assert sibling concrete fragments are skipped whole,

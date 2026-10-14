@@ -572,7 +572,8 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "myproject.settings")
 
 from django.core.asgi import get_asgi_application
 
-django_asgi = get_asgi_application()   # Django is fully initialized here
+# Django is fully initialized here
+django_asgi = get_asgi_application()
 
 from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter
 
@@ -580,7 +581,8 @@ from myproject.schema import schema
 
 application = DjangoGraphQLProtocolRouter(
     schema,
-    django_application=django_asgi,    # REQUIRED
+    # REQUIRED
+    django_application=django_asgi,
 )
 ```
 
@@ -610,11 +612,15 @@ path, so a project that moves its GraphQL URL changes both. The constructor:
 
 ```python
 DjangoGraphQLProtocolRouter(
-    schema,                                  # the strawberry.Schema (extensions ride along)
-    django_application,                      # REQUIRED; becomes the "http" value verbatim
+    # the strawberry.Schema (extensions ride along)
+    schema,
+    # REQUIRED; becomes the "http" value verbatim
+    django_application,
     *,
-    websocket_url_pattern=r"^graphql/?$",    # re_path regex, WebSocket branch only
-    websocket_consumer_class=None,           # consumer-injection seam (spec-046 Decision 11)
+    # re_path regex, WebSocket branch only
+    websocket_url_pattern=r"^graphql/?$",
+    # consumer-injection seam (spec-046 Decision 11)
+    websocket_consumer_class=None,
     websocket_revalidation_window=_DEFAULT_REVALIDATION_WINDOW,  # consumers.py's value, seconds
 )
 ```

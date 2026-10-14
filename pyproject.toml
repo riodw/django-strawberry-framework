@@ -251,10 +251,7 @@ ignore = [
     "TC001",  # first-party import used only in annotations: annotations are read at runtime
     "TC002",  # third-party import used only in annotations: ditto
     "TC003",  # stdlib import used only in annotations: ditto
-    "TD002",  # TODO author: the anchor names a spec, not a person
     "TD003",  # TODO issue link: the anchor names a spec, not an issue
-    "TD004",  # TODO colon: a wrapped anchor carries its text on the next line
-    "TD005",  # TODO description: ditto
     "TID252", # relative imports inside the package
     "TRY003", # long message passed to the exception constructor
     # Ratchet: real sites still to fix (docs/ruffing.md); delete a line once its sites are fixed.

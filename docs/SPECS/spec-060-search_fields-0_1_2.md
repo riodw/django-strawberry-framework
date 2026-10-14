@@ -433,7 +433,8 @@ Generated SDL delta on every connection field serving the type:
 celestialBodies(
   filter: CelestialBodyFilterInput
   orderBy: [CelestialBodyOrderInput!]
-  search: String          # new — present only when Meta.search_fields is declared
+  # new — present only when Meta.search_fields is declared
+  search: String
   first: Int
   after: String
   ...

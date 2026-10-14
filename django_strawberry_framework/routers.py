@@ -434,14 +434,16 @@ def _build_router_class_uncached() -> type[ProtocolTypeRouter]:
 
             from django.core.asgi import get_asgi_application
 
-            django_asgi = get_asgi_application()   # Django is fully initialized here
+            # Django is fully initialized here
+            django_asgi = get_asgi_application()
 
             from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter
             from myproject.schema import schema
 
             application = DjangoGraphQLProtocolRouter(
                 schema,
-                django_application=django_asgi,    # REQUIRED
+                # REQUIRED
+                django_application=django_asgi,
             )
 
             # myproject/urls.py

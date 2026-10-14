@@ -64,7 +64,8 @@ Lives at `django_strawberry_framework/types/definition.py`. The single canonical
 @dataclass
 class DjangoTypeDefinition:
     # Identity
-    origin: type                              # the DjangoType subclass
+    # the DjangoType subclass
+    origin: type
     model: type[models.Model]
     name: str | None
     description: str | None
@@ -76,10 +77,12 @@ class DjangoTypeDefinition:
     # need real Django field objects (attname, related_model.DoesNotExist,
     # cardinality flags), not just FieldMeta. FieldMeta is a precomputed
     # projection; selected_fields is the source of truth.
-    selected_fields: tuple[Any, ...]          # tuple[models.Field | ForeignObjectRel, ...]
+    # tuple[models.Field | ForeignObjectRel, ...]
+    selected_fields: tuple[Any, ...]
     # Field metadata. This object is the only store for both; nothing
     # mirrors them onto the class.
-    field_map: dict[str, FieldMeta]           # the optimizer's canonical source
+    # the optimizer's canonical source
+    field_map: dict[str, FieldMeta]
     optimizer_hints: dict[str, OptimizerHint]
     # Get-queryset signal, populated by the MRO-walking helper (see the
     # collection pseudocode), not by `"get_queryset" in cls.__dict__`, so
@@ -128,10 +131,13 @@ Lives at `django_strawberry_framework/types/relations.py`. Frozen so the registr
 ```python path=null start=null
 @dataclass(frozen=True, eq=False)
 class PendingRelation:
-    source_type: type                # the DjangoType subclass that owns the field
+    # the DjangoType subclass that owns the field
+    source_type: type
     source_model: type[models.Model]
-    field_name: str                  # the raw Django field.name; keys DjangoTypeDefinition.field_map
-    django_field: Any                # models.Field | ForeignObjectRel
+    # the raw Django field.name; keys DjangoTypeDefinition.field_map
+    field_name: str
+    # models.Field | ForeignObjectRel
+    django_field: Any
     related_model: type[models.Model]
 ```
 The record carries no cardinality or nullability: finalization reads both from the owning definition's `field_map[field_name]`. The same module holds `PendingRelationAnnotation`, the sentinel annotation collection writes in place of every deferred relation; its metaclass repr names the missing `finalize_django_types()` call if Strawberry meets it.
@@ -169,7 +175,8 @@ class TypeRegistry:
         type_cls: type,
         definition: DjangoTypeDefinition,
         *,
-        primary: bool = False,   # forwarded to register; spec-018's keyword
+        # forwarded to register; spec-018's keyword
+        primary: bool = False,
     ) -> None: ...
     def get_definition(self, type_cls: type) -> DjangoTypeDefinition | None: ...
     def iter_definitions(self) -> Iterator[tuple[type, DjangoTypeDefinition]]: ...
@@ -229,8 +236,10 @@ def __init_subclass__(cls, **kwargs):
     #    assigned (a StrawberryField in cls.__dict__), split relation /
     #    scalar, plus their union.
     consumer_annotations = dict(cls.__annotations__)
-    consumer_annotated_relation_fields = ...   # relation names in consumer_annotations
-    consumer_annotated_scalar_fields = ...     # scalar names in consumer_annotations
+    # relation names in consumer_annotations
+    consumer_annotated_relation_fields = ...
+    # scalar names in consumer_annotations
+    consumer_annotated_scalar_fields = ...
     consumer_assigned_relation_fields, consumer_assigned_scalar_fields = (
         _consumer_assigned_fields(cls, fields)
     )

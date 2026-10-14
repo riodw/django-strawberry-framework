@@ -618,7 +618,8 @@ class ItemModelForm(forms.ModelForm):
 
 class CreateItemViaForm(DjangoModelFormMutation):
     class Meta:
-        form_class = ItemModelForm        # model resolves via form_class._meta.model
+        # model resolves via form_class._meta.model
+        form_class = ItemModelForm
         operation = "create"
 
 

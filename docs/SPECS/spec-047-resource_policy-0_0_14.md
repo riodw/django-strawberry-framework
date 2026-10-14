@@ -293,7 +293,8 @@ class CategoryType(DjangoType):
         model = Category
         fields = ("id", "name", "items")
         interfaces = (relay.Node,)
-        relation_shapes = {"items": "both"}   # NEW: required to keep the raw list sibling
+        # NEW: required to keep the raw list sibling
+        relation_shapes = {"items": "both"}
 ```
 
 ## Architectural decisions

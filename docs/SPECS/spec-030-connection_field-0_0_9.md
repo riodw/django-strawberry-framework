@@ -185,10 +185,14 @@ class GenreType(DjangoType):
     class Meta:
         model = models.Genre
         fields = ("id", "name", "books")
-        interfaces = (relay.Node,)                 # required — a connection is over a Node type
-        filterset_class = filters.GenreFilter      # drives the `filter:` argument
-        orderset_class = orders.GenreOrder         # drives the `orderBy:` argument
-        connection = {"total_count": True}         # opt-in `totalCount`
+        # required — a connection is over a Node type
+        interfaces = (relay.Node,)
+        # drives the `filter:` argument
+        filterset_class = filters.GenreFilter
+        # drives the `orderBy:` argument
+        orderset_class = orders.GenreOrder
+        # opt-in `totalCount`
+        connection = {"total_count": True}
 
 
 @strawberry.type
@@ -233,7 +237,8 @@ class GenreType(DjangoType):
     class Meta:
         model = models.Genre
         interfaces = (relay.Node,)
-        connection = {"total_count": True}   # adds `totalCount: Int!` to GenreTypeConnection
+        # adds `totalCount: Int!` to GenreTypeConnection
+        connection = {"total_count": True}
 ```
 
 `totalCount` is opt-in **per type** (not per field) so a node type has exactly one connection shape. When selected by a query, the value is the cardinality of the **unpaginated post-filter** queryset, attached to the connection instance: an ordinary offset queryset is counted with `qs.count()` (sync) / `qs.acount()` (async), and a prepared source that already carries its own count is read from there rather than re-counted. When the query omits `totalCount`, no count query runs ([Decision 4](#decision-4--djangoconnectiont-base-plus-per-target-concrete-connection-classes)).
@@ -243,11 +248,16 @@ class GenreType(DjangoType):
 The field's resolver runs the pipeline so a consumer needs no manual chaining (contrast the hand-written `@strawberry.field` form documented for the filter / order subsystems):
 
 ```text
-qs = GenreType.get_queryset(Genre.objects.all(), info)   # 1. visibility (first, always)
-qs = GenreFilter.apply_sync(filter, qs, info)            # 2. filter (active-input gates)   — if filter given
-qs = GenreOrder.apply_sync(order_by, qs, info)           # 3. orderBy (per-field gates)     — if orderBy given
-qs = qs.order_by(*effective_ordering, pk)                # 4. deterministic TOTAL order (append pk tiebreaker unless terminal already unique)
-qs = apply_connection_optimization(GenreType, qs, info)  # 5. optimizer plan (the field's own cooperation point)
+# 1. visibility (first, always)
+qs = GenreType.get_queryset(Genre.objects.all(), info)
+# 2. filter (active-input gates) — if filter given
+qs = GenreFilter.apply_sync(filter, qs, info)
+# 3. orderBy (per-field gates) — if orderBy given
+qs = GenreOrder.apply_sync(order_by, qs, info)
+# 4. deterministic TOTAL order (append pk tiebreaker unless terminal already unique)
+qs = qs.order_by(*effective_ordering, pk)
+# 5. optimizer plan (the field's own cooperation point)
+qs = apply_connection_optimization(GenreType, qs, info)
 # 6. ConnectionExtension slices `qs` by the cursor args; totalCount (if selected) = qs.count() pre-slice.
 ```
 

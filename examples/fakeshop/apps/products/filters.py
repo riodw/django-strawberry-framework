@@ -72,12 +72,12 @@ class ItemFilter(FilterSet):
             "category__name": "__all__",
         }
 
-    # TODO(unscheduled - queryset-scoping filter permission; see KANBAN.md):
-    #   The queryset-scoping permission variant below is NOT part of the shipped
-    #   permissions subsystem - ``DONE-034-0.0.10`` ships cascade row-visibility and
-    #   keeps the filter gates unchanged (its Decision 11), so this variant has no
-    #   owning card yet. Uncomment in the change that lands the hook contract and
-    #   exempt this pseudo-code block from ERA001 per AGENTS.md's TODO-pseudo-code rule.
+    # TODO(unscheduled - queryset-scoping filter permission; see KANBAN.md): The queryset-scoping
+    #   permission variant below is NOT part of the shipped permissions subsystem -
+    #   ``DONE-034-0.0.10`` ships cascade row-visibility and keeps the filter gates unchanged (its
+    #   Decision 11), so this variant has no owning card yet. Uncomment in the change that lands
+    #   the hook contract and exempt this pseudo-code block from ERA001 per
+    #   AGENTS.md's TODO-pseudo-code rule.
     # def check_entries_permission(self, queryset, request):
     #     """Only staff users may filter by Item.entries."""
     #     user = getattr(request, "user", None)

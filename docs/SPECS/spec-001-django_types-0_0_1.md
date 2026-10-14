@@ -130,9 +130,12 @@ class CategoryType(DjangoType):
     class Meta:
         model = Category
         fields = "__all__"
-        aggregate_class = CategoryAggregate  # ConfigurationError: Meta keys not supported yet
-        fields_class = CategoryFieldSet      # ConfigurationError
-        search_fields = ("name",)            # ConfigurationError
+        # ConfigurationError: Meta keys not supported yet
+        aggregate_class = CategoryAggregate
+        # ConfigurationError
+        fields_class = CategoryFieldSet
+        # ConfigurationError
+        search_fields = ("name",)
 ```
 
 Field-selection defaults: when neither `fields` nor `exclude` is declared on `Meta`, the type behaves as if `fields = "__all__"` were set. This matches DRF's permissive default and avoids forcing every consumer to spell out `fields = "__all__"` for the common case. The deprecation warning graphene-django emits in this scenario is intentionally not reproduced here.

@@ -223,8 +223,10 @@ Optimizer cooperation still applies because the optimizer extension is root-gate
 The outer-list nullability is controlled by the **consumer's class-attribute annotation** (`DjangoListField` does NOT take a `nullable_list=` constructor argument). Strawberry reads the annotation directly to render the GraphQL type:
 
 ```python path=null start=null
-all_branches: list[BranchType] = DjangoListField(BranchType)                  # [BranchType!]!  (non-null outer)
-all_branches_or_none: list[BranchType] | None = DjangoListField(BranchType)   # [BranchType!]   (nullable outer)
+# [BranchType!]! (non-null outer)
+all_branches: list[BranchType] = DjangoListField(BranchType)
+# [BranchType!] (nullable outer)
+all_branches_or_none: list[BranchType] | None = DjangoListField(BranchType)
 ```
 
 Item-level non-null is the same in both shapes — Django ORM never returns `None` rows from a queryset.
@@ -236,7 +238,8 @@ Every `DjangoListField` is row-bounded, and the field's surface for that bound i
 ```python path=null start=null
 all_library_branches: list[BranchType] = DjangoListField(
     BranchType,
-    max_rows=50,            # narrows to the tighter of 50 and the request policy
+    # narrows to the tighter of 50 and the request policy
+    max_rows=50,
     trusted_max_rows=False, # the default; True is the explicit widening opt-in
 )
 ```

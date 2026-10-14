@@ -261,8 +261,10 @@ The "active" spec is the one you just authored in Step 6. Every other `spec-*.md
 >
 >   ```
 >   uv run python examples/fakeshop/manage.py shell -c "<ORM edit>"
->   uv run python scripts/build_kanban_md.py     # re-export KANBAN.md from the DB
->   uv run python scripts/build_kanban_html.py   # re-export KANBAN.html from the DB
+>   # re-export KANBAN.md from the DB
+>   uv run python scripts/build_kanban_md.py
+>   # re-export KANBAN.html from the DB
+>   uv run python scripts/build_kanban_html.py
 >   ```
 >
 >   The render scripts rewrite the generated files from the DB, so confirm the resulting `git diff KANBAN.md KANBAN.html` shows ONLY your intended card-state and spec-reference changes (a clean diff also proves the committed exports were already in sync with the DB).
@@ -290,9 +292,12 @@ for number, name in [(<OLD_NNN>, 'spec-<OLD_NNN>-<old_topic>-<old_version>')]:
     sd.path = f'docs/SPECS/{name}.md'
     sd.full_clean(); sd.save()
 "
-uv run python scripts/build_kanban_md.py            # re-export KANBAN.md from the DB
-uv run python scripts/build_kanban_html.py          # re-export KANBAN.html from the DB
-git --no-pager diff KANBAN.md KANBAN.html           # expect ONLY intended card/spec changes
+# re-export KANBAN.md from the DB
+uv run python scripts/build_kanban_md.py
+# re-export KANBAN.html from the DB
+uv run python scripts/build_kanban_html.py
+# expect ONLY intended card/spec changes
+git --no-pager diff KANBAN.md KANBAN.html
 ```
 
 The modified `examples/fakeshop/db.sqlite3` is the durable artifact — `KANBAN.md` / `KANBAN.html` are just its exports, so the committed DB is what carries the change forward. Leave all three edited together for the maintainer to commit.

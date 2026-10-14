@@ -56,11 +56,16 @@ ruff alone.
 
 Usage::
 
-    python scripts/check_trailing_commas.py [paths...]            # auto-fix (default)
-    python scripts/check_trailing_commas.py --fix [paths...]      # auto-fix (explicit)
-    python scripts/check_trailing_commas.py --check [paths...]    # gate (CI); exit 1
-    python scripts/check_trailing_commas.py --diff [paths...]     # --check + the fix as a diff
-    python scripts/check_trailing_commas.py --check --json [...]  # machine-readable result
+    # auto-fix (default)
+    python scripts/check_trailing_commas.py [paths...]
+    # auto-fix (explicit)
+    python scripts/check_trailing_commas.py --fix [paths...]
+    # gate (CI); exit 1
+    python scripts/check_trailing_commas.py --check [paths...]
+    # --check + the fix as a diff
+    python scripts/check_trailing_commas.py --diff [paths...]
+    # machine-readable result
+    python scripts/check_trailing_commas.py --check --json [...]
 
 ``paths`` may be files or directories; with none, the whole repo is scanned.
 A directory walk covers only what git would accept as content (tracked, plus

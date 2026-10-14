@@ -394,7 +394,8 @@ Why `print_schema`, and three rejected alternatives (`--json`, `--indent`, `prin
 ```python path=null start=null
 def error(self, message):
     if self.called_from_command_line:
-        super().error(message)        # -> argparse.ArgumentParser.error -> SystemExit(2)
+        # -> argparse.ArgumentParser.error -> SystemExit(2)
+        super().error(message)
     else:
         raise CommandError("Error: %s" % message)  # <- the call_command path
 ```

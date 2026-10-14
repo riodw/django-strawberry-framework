@@ -722,8 +722,10 @@ schema = strawberry.Schema(
     query=Query,
     config=strawberry_config(),
     extensions=[
-        lambda: _optimizer,     # singleton-in-a-factory: preserves the plan cache
-        DjangoDebugExtension,   # the CLASS: one fresh instance per operation
+        # singleton-in-a-factory: preserves the plan cache
+        lambda: _optimizer,
+        # the CLASS: one fresh instance per operation
+        DjangoDebugExtension,
     ],
 )
 ```

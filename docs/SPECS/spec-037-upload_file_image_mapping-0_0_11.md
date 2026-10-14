@@ -432,7 +432,8 @@ from django_strawberry_framework import DjangoFileType, DjangoImageType, DjangoT
 
 
 class Asset(models.Model):
-    attachment = models.FileField(upload_to="files/")          # required column, but output is nullable by default
+    # required column, but output is nullable by default
+    attachment = models.FileField(upload_to="files/")
     preview = models.ImageField(upload_to="previews/", blank=True)  # optional: blank=True
 
 

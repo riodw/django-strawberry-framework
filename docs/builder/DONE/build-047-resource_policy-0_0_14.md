@@ -304,13 +304,20 @@ and the ownership partition above stands as declared.
 Read-only; none mutates the tree. The `HEAD` copy is `<scratchpad>/head`.
 
 ```shell
-git show 567cc6d0:django_strawberry_framework/mutations/resolvers.py | grep -c '^\s*check_deadline(info)'   # 2
-grep -c '^\s*check_deadline(info)' <head>/django_strawberry_framework/mutations/resolvers.py                # 1
-git log --oneline -S'_resolve_connection_fast_path' -- django_strawberry_framework/connection.py            # de2601e9
-git log --oneline -S'check_deadline' -- django_strawberry_framework/mutations/resolvers.py                  # 6013cda6
-git merge-base --is-ancestor 567cc6d0 6013cda6                                                              # exit 0
-grep -n '__version__' <head>/django_strawberry_framework/__init__.py                                        # "0.0.15"
-git show 567cc6d0:django_strawberry_framework/resource_policy.py | grep -c 'bounded_rows_async'             # 0
+# expect: 2
+git show 567cc6d0:django_strawberry_framework/mutations/resolvers.py | grep -c '^\s*check_deadline(info)'
+# expect: 1
+grep -c '^\s*check_deadline(info)' <head>/django_strawberry_framework/mutations/resolvers.py
+# expect: de2601e9
+git log --oneline -S'_resolve_connection_fast_path' -- django_strawberry_framework/connection.py
+# expect: 6013cda6
+git log --oneline -S'check_deadline' -- django_strawberry_framework/mutations/resolvers.py
+# expect: exit 0
+git merge-base --is-ancestor 567cc6d0 6013cda6
+# expect: "0.0.15"
+grep -n '__version__' <head>/django_strawberry_framework/__init__.py
+# expect: 0
+git show 567cc6d0:django_strawberry_framework/resource_policy.py | grep -c 'bounded_rows_async'
 shasum <(git show 567cc6d0:docs/builder/bld-047-remediation.md) <(git show 99696bac^:docs/builder/bld-047-remediation.md)  # identical
 ```
 

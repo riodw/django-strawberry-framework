@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 61 done, 150 to do.
+Progress: 62 done, 150 to do.
 
 ## Done
 
@@ -154,6 +154,12 @@ Progress: 61 done, 150 to do.
   cell failed collection; nothing static caught it); the annotation is quoted (`7413c7b5`) and ruff `TC004` (quoting fix)
   now fails an eager annotation naming a `TYPE_CHECKING`-only import (this commit); unreleased (no CHANGELOG
   entry). Found fixing it: item 212
+- [x] 131. A ModelForm update that omitted a declared `ModelChoiceField` without `to_field_name` over a
+  `ForeignKey(to_field=...)` / `OneToOneField(to_field=...)` refilled it with the stored `to_field` value where the field
+  resolves by pk: "Select a valid choice" on every such partial update, or, when that value equals another row's pk, a
+  silent re-link to that row (including one the related type hides); the refill now reads `model_to_dict` only when the
+  form field's key names the column the FK stores, and otherwise rebinds the related row by the field's own key, as a
+  provided value decodes (this commit). Released in 0.0.13 and 0.0.14: item 214
 
 ## Outside review of the fixes
 
@@ -279,9 +285,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 126. A plain `Form` `ChoiceField` publishes `String`, while a serializer-only `ChoiceField` publishes a generated enum
 - [ ] 127. Lead: a serializer single `ChoiceField` over an `ArrayField` may skip
   `_reject_choice_values_the_column_does_not_list` (`column.choices` is `None`) and publish a scalar enum
-- [ ] 131. ModelForm: a declared `ModelChoiceField` without `to_field_name` over a `to_field` ForeignKey fails every partial
-  update that omits it ("Select a valid choice"): `forms/resolvers.py::_reconstruct_partial_data` refills it with the stored
-  `to_field` value while the bound field resolves by pk (its docstring claims the attname is the key the field resolves)
 - [ ] 132. A `SerializerMutation` whose `Meta.fields` narrowing keeps a relation to a Relay-Node type fails schema build
   (`TypeError: Mutation fields cannot be resolved. '<...>PartialInput'`), create and update, e.g. `Shelf.branch`; a non-Relay
   target builds
@@ -540,6 +543,10 @@ not real bugs and just get deleted from t3. One checkbox per area:
   / `OneToOneField(to_field=...)`, or an M2M whose through model keys the target by a `to_field`, stores the key of the row
   its id names (it stored the pk: a wrong row, or a payload error); a visible row whose `to_field` key is `NULL` is the
   relation error
+- [ ] 214. CHANGELOG entry for item 131: a `ModelForm` update omitting a declared `ModelChoiceField` without
+  `to_field_name` over a `ForeignKey(to_field=...)` / `OneToOneField(to_field=...)` keeps the stored relation (it failed
+  "Select a valid choice", or re-linked the row whose pk equals the stored key); an omitted generated relation field no
+  longer reads the related row
 - [ ] 196. CHANGELOG entries for items 6 (combined querysets served as their pk set), 12 (the deadline message reads "before
   this field reached the database"; login, logout, me and `relay.node()` reject past the deadline), 50 and 83 (planned
   `.only()` writers no longer drop selected columns), 74 (a consumer `select_related` the selection never reads no

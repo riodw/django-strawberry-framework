@@ -13369,6 +13369,67 @@ def test_model_to_field_relation_update_stores_the_target_key_over_http(
     assert _profile_genre_column(patron) == [expected]
 
 
+_FORM_PROFILE_UPDATE = (
+    "mutation($id: ID!, $d: PatronProfileGenreFormPartialInput!) { "
+    f"updatePatronProfileViaForm(id: $id, data: $d) {{ {_PROFILE_SELECTION} }} }}"
+)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "value",
+    [
+        "omitted",
+        "omitted_named_like_another_genres_id",
+        "omitted_unset",
+        "genre",
+        "null",
+    ],
+)
+def test_form_to_field_relation_update_keeps_an_omitted_genre_over_http(value: str):
+    """A form update omitting a genre-id-keyed ``favoriteGenreId`` keeps the stored genre name.
+
+    ``PatronProfileGenreForm.favorite_genre`` resolves a genre by id while the column
+    stores the genre name (``ForeignKey(Genre, to_field="name")``). An update that omits
+    it binds the stored genre by its id, the shape a supplied genre decodes to, so the
+    name is kept: binding the stored name would fail the form ("Select a valid choice")
+    or, when the stored name is another genre's id, link that genre. An unset genre stays
+    unset, a supplied genre replaces the name and an explicit null clears it.
+    """
+    from apps.library.schema import GenreType, PatronProfileType
+
+    other = models.Genre.objects.create(name="ToFieldOther")
+    old_name = str(other.pk) if value == "omitted_named_like_another_genres_id" else "ToFieldOld"
+    old = models.Genre.objects.create(name=old_name)
+    new = models.Genre.objects.create(name="ToFieldNew")
+    patron = models.Patron.objects.create(name="ToFieldFormUpdatePatron")
+    models.PatronProfile.objects.create(
+        patron=patron,
+        favorite_genre=None if value == "omitted_unset" else old,
+    )
+    data: dict[str, object] = {"address_2": "Suite 4"}
+    if value == "genre":
+        data["favoriteGenreId"] = global_id_for(GenreType, new.pk)
+    elif value == "null":
+        data["favoriteGenreId"] = None
+    expected = {"omitted_unset": None, "genre": new.name, "null": None}.get(value, old.name)
+
+    response = _post_graphql(
+        _FORM_PROFILE_UPDATE,
+        variables={"id": global_id_for(PatronProfileType, patron.pk), "d": data},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updatePatronProfileViaForm"]
+    assert result["errors"] == []
+    assert result["node"] == {
+        "secondaryAddress": "Suite 4",
+        "favoriteGenre": None if expected is None else {"name": expected},
+    }
+    assert _profile_genre_column(patron) == [expected]
+
+
 @pytest.mark.django_db
 def test_model_to_field_relation_update_rejects_a_missing_genre_over_http():
     """A genre id no row answers is the uniform relation error; the stored name is kept."""

@@ -14,6 +14,9 @@ partial-update M2M-preservation case over the Relay-Node ``BookType``: an omitte
 required ``genres`` M2M is reconstructed from the located row rather than cleared.
 ``BookRepairDeskForm`` declares a ``circulation_status`` ``ChoiceField`` narrower than
 the column, so its generated input publishes only the values the form admits.
+``PatronProfileGenreForm`` declares a genre-id-keyed ``favorite_genre`` over the ``to_field``
+key ``PatronProfile.favorite_genre``, so a partial update omitting it rebinds the stored
+genre by its id.
 ``BranchWithShelfForm`` and ``BranchPairForm`` add model-less plain-form
 ``perform_mutate`` write-hook and transaction-rollback cases.
 """
@@ -111,6 +114,26 @@ class BookRepairDeskForm(forms.ModelForm[models.Book]):
     class Meta:
         model = models.Book
         fields = ("circulation_status",)
+
+
+class PatronProfileGenreForm(forms.ModelForm[models.PatronProfile]):
+    """A ``PatronProfile`` ``ModelForm`` whose ``favorite_genre`` choices are keyed by genre id.
+
+    ``favorite_genre`` is a ``ForeignKey(Genre, to_field="name")``: the column stores the
+    genre name. The form declares the field itself to list the genres alphabetically and
+    sets no ``to_field_name``, so it resolves a choice by genre id, not by the name the
+    column stores (the generated field passes ``to_field_name="name"``). A partial update
+    that omits ``favoriteGenreId`` therefore has to rebind the stored genre by its id.
+    """
+
+    favorite_genre: forms.ModelChoiceField[models.Genre] = forms.ModelChoiceField(
+        queryset=models.Genre.objects.order_by("name"),
+        required=False,
+    )
+
+    class Meta:
+        model = models.PatronProfile
+        fields = ("address_2", "favorite_genre")
 
 
 class BranchWithShelfForm(forms.Form):

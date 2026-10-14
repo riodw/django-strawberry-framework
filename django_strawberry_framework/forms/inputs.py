@@ -1044,13 +1044,12 @@ def guard_partial_required_column_less_fields(
     The partial counterpart to ``guard_create_required_fields``, but scoped to
     column-less fields ONLY. On update the input maps to ``PARTIAL``: a model-backed
     required field is widened optional and reconstructed from the located row by
-    ``_reconstruct_partial_data`` (``model_to_dict`` of the row), so dropping it from
-    the input via ``Meta.fields`` / ``Meta.exclude`` is harmless. But a required
-    field with NO backing model column - a declarative extra like ``confirm =
-    forms.CharField(required=True)`` - cannot be reconstructed from model state
-    (``model_to_dict`` only returns columns), so if it is dropped the bound form
-    fails its required validation on EVERY request while the schema still finalizes
-    cleanly. Reject that at bind, naming the field(s).
+    ``_reconstruct_partial_data``, so dropping it from the input via ``Meta.fields`` /
+    ``Meta.exclude`` is harmless. But a required field with NO backing model column -
+    a declarative extra like ``confirm = forms.CharField(required=True)`` - cannot be
+    reconstructed from model state (``model_to_dict`` only returns columns), so if it
+    is dropped the bound form fails its required validation on EVERY request while the
+    schema still finalizes cleanly. Reject that at bind, naming the field(s).
 
     Scoping the required set to ``_model_column_for(...) is None`` is load-bearing:
     a blanket reuse of ``guard_create_required_fields`` here would wrongly reject

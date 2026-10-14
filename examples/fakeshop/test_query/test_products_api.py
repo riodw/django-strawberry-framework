@@ -3980,8 +3980,13 @@ def test_update_item_via_form_non_colliding_partial_update():
 
     The non-colliding partial-update success: `ItemModelFormPartialInput` provides only
     `name`; the unprovided `description` / `category` are reconstructed from the located
-    row via `model_to_dict` and left unchanged. `staff_1` (full visibility) granted the
-    explicit `change_item` codename.
+    row via `model_to_dict` and left unchanged. The generated `category` field resolves its
+    choice by the category pk the column stores, so the reconstruction reads no category:
+    the only real `products_category` SELECT is the bound form's choice lookup, beside
+    the `SELECT 1` existence query of
+    `django/db/models/fields/related.py::ForeignKey.validate` (`qs.exists()` during
+    `clean_fields`). `staff_1` (full visibility) granted the explicit `change_item`
+    codename.
     """
     create_users(1)
     seed_data(1)
@@ -3993,11 +3998,19 @@ def test_update_item_via_form_non_colliding_partial_update():
     )
     client = _login_with_perm("staff_1", "change_item")
 
-    response = _post_graphql(
-        _UPDATE_ITEM_VIA_FORM,
-        client=client,
-        variables={"id": _global_id("products.item", item.pk), "d": {"name": "AfterForm"}},
-    )
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            _UPDATE_ITEM_VIA_FORM,
+            client=client,
+            variables={"id": _global_id("products.item", item.pk), "d": {"name": "AfterForm"}},
+        )
+    sql = [query["sql"] for query in captured]
+    category_selects = [
+        s
+        for s in sql
+        if "products_category" in s.lower() and s.strip().upper().startswith("SELECT")
+    ]
+    assert len([s for s in category_selects if "select 1" not in s.lower()]) == 1, sql
     assert response.status_code == 200
     payload = response.json()
     assert "errors" not in payload, payload

@@ -42,12 +42,13 @@ and the form-specific invariants this module owns:
 - **``update`` reconstructs the full bound payload** (Decision 8 step 4): for
   every non-file declared form field the input did not provide, supply the located
   row's value under the form field name, then overlay ``provided_data``; ``files =
-  provided_files``. Scalars + a ``to_field_name``-less FK come
-  from ``model_to_dict`` (the FK's stored ``attname`` IS the ``to_field`` / pk key the
-  bound form resolves), while M2M and a ``ModelChoiceField`` with ``to_field_name`` set
-  are reconstructed from the related object(s) as ``to_field_name`` values
-  (``_to_form_key_value``) so an omitted relation binds in the SAME shape a provided one
-  decodes to (Decision 8). An
+  provided_files``. Scalars, and a FK whose ``ModelChoiceField`` resolves its choice by
+  the column the FK stores (``to_field_name or "pk"`` names ``ForeignKey.target_field``,
+  as every generated field does), come from ``model_to_dict``: the stored value already
+  is the form key. M2M and every other ``ModelChoiceField`` FK, including a
+  ``to_field_name``-less field over a ``ForeignKey(to_field=...)``, are reconstructed
+  from the related object(s) through ``_to_form_key_value`` so an omitted relation binds
+  in the SAME shape a provided one decodes to (Decision 8). An
   omitted file is preserved via the bound ``form_class(instance=...)``'s ``initial``
   (never re-supplied, never cleared). A required non-model extra field stays
   required in the partial input, so it is always present in
@@ -118,6 +119,7 @@ from ..mutations.resolvers import (
 )
 from ..mutations.sets import backing_model_of
 from ..utils.querysets import sync_pipeline_recourse
+from ..utils.relations import is_single_column_foreign_key
 from ..utils.write_transaction import pipeline_write_phase
 from ..utils.write_values import (
     decode_field_handlers,
@@ -136,6 +138,7 @@ if TYPE_CHECKING:
 
     from ..mutations.inputs import FieldError
     from ..mutations.resolvers import _AsyncResolverEntry, _SyncResolverEntry
+    from ..utils.typing import ForeignKeyField
     from .sets import DjangoFormMutation, DjangoModelFormMutation
 
     # A form-flavor mutation class: the ``ModelForm`` or the model-less plain base.
@@ -220,6 +223,22 @@ def _is_model_multiple_choice_field(
 ) -> TypeIs[_ModelMultipleChoiceFieldAny]:
     """``isinstance(field, forms.ModelMultipleChoiceField)``, its choices read as rows of ``Model``."""
     return isinstance(field, forms.ModelMultipleChoiceField)
+
+
+def _stored_key_is_form_key(link: ForeignKeyField, form_field: _ModelChoiceFieldAny) -> bool:
+    """Return whether a FK column already stores the key ``form_field`` resolves its choice by.
+
+    The column holds the value of ``ForeignKey.target_field``: the related pk, or the
+    ``to_field``. The bound ``ModelChoiceField`` looks its choice up by
+    ``to_field_name or "pk"`` (``ModelChoiceField.to_python``). The stored value is the
+    form key exactly when both name the same related column. A generated field always
+    does (``ForeignKey.formfield`` passes the target's name as ``to_field_name``); a
+    declared field keyed by another column does not, a ``to_field_name``-less field over
+    a ``to_field`` FK included.
+    """
+    key = form_field.to_field_name or "pk"
+    target = link.target_field
+    return key == target.name or (key == "pk" and target.primary_key)
 
 
 def _is_empty_form_value(candidate: object, form_field: forms.Field | None) -> bool:
@@ -398,26 +417,28 @@ def _reconstruct_partial_data(
     partial input (or the consumer must repair the row out of band if narrowing
     excluded that field); untouched fields are not silently exempted.
 
-    Two reconstruction shapes, each matching what the DECODE produces for a PROVIDED
+    Three reconstruction shapes, each matching what the DECODE produces for a PROVIDED
     field so an omitted field binds byte-compatibly with a provided one:
 
-    - **Scalars + plain FK / OneToOne** come from ``model_to_dict``: a FK's value is
-      its ``attname`` (the stored ``to_field`` value - the pk by default, or the
-      ``ForeignKey(to_field=...)`` value), which is exactly the key the bound
-      ``ModelChoiceField`` resolves and what ``_to_form_key_value`` produces for a
-      provided FK. So a ``to_field_name``-LESS FK / scalar needs no special handling.
-    - **A ``ModelChoiceField`` with ``to_field_name`` set** is reconstructed from the
-      related object via ``_to_form_key_value`` (the ``to_field_name`` value), NOT
-      ``model_to_dict`` (which yields the pk / model ``to_field`` value). The bound
-      form validates that single FK against ``to_field_name`` (``queryset.get(
-      <to_field_name>=value)``), so a ``model_to_dict`` pk would fail ``to_python``
-      for an OMITTED unchanged FK while a PROVIDED unchanged FK (decoded to the
-      ``to_field_name`` value) passes - the same omitted-vs-provided inconsistency
-      the M2M branch already fixes. Gated on ``to_field_name`` so the
-      common ``to_field_name``-less FK keeps its cheap ``model_to_dict`` path (no
-      per-FK related-object fetch); a nullable FK whose row value is ``None`` falls
-      through to ``model_to_dict`` (the form's empty value), never
-      ``_to_form_key_value(None, ...)``.
+    - **Scalars + a FK / OneToOne stored by its form key** come from ``model_to_dict``.
+      A FK's value there is its ``attname``: the value of ``ForeignKey.target_field``
+      (the related pk, or the ``ForeignKey(to_field=...)`` column). When the bound
+      ``ModelChoiceField`` resolves its choice by that same column
+      (``_stored_key_is_form_key``; every generated field does, since
+      ``ForeignKey.formfield`` passes the target's name as ``to_field_name``), the
+      stored value is exactly what ``_to_form_key_value`` produces for a provided FK,
+      with no related-object fetch.
+    - **Every other single ``ModelChoiceField`` FK / OneToOne** is reconstructed from
+      the related object via ``_to_form_key_value``, NOT ``model_to_dict``. The bound
+      form validates it with ``queryset.get(<to_field_name or "pk">=value)``, so the
+      stored value of another column fails ``to_python`` for an OMITTED unchanged FK
+      ("Select a valid choice"), or matches a different row whose key equals it, while
+      a PROVIDED unchanged FK passes: a ``to_field_name`` naming another column, or a
+      ``to_field_name``-less field (keyed by pk) over a ``ForeignKey(to_field=...)``.
+      The fetch reads the related row through the FK descriptor, unscoped by
+      visibility like ``model_to_dict``; a FK whose row value is ``None``, or whose
+      target row is gone, falls through to ``model_to_dict`` (the form's empty value
+      / the stored key), never ``_to_form_key_value(None, ...)``.
     - **M2M** is reconstructed as a list of ``_to_form_key_value(obj, form_field)``
       (the ``to_field_name`` value, default ``obj.pk``) - NOT ``model_to_dict``'s
       list of related INSTANCES. For a ``ModelMultipleChoiceField`` with
@@ -443,8 +464,10 @@ def _reconstruct_partial_data(
     model = backing_model_of(mutation_cls._mutation_meta)
     form_fields = dict(mutation_cls.get_form_fields())
     m2m_field_names = {field.name for field in model._meta.many_to_many}
-    fk_field_names = {
-        field.name for field in model._meta.concrete_fields if getattr(field, "is_relation", False)
+    links = {
+        field.name: field
+        for field in model._meta.concrete_fields
+        if is_single_column_foreign_key(field)
     }
 
     m2m_data: dict[str, object] = {}
@@ -460,10 +483,10 @@ def _reconstruct_partial_data(
             except (AttributeError, ObjectDoesNotExist):
                 pass
         elif (
-            _is_model_choice_field(form_field)
+            name in links
+            and _is_model_choice_field(form_field)
             and not _is_model_multiple_choice_field(form_field)
-            and form_field.to_field_name
-            and name in fk_field_names
+            and not _stored_key_is_form_key(links[name], form_field)
         ):
             try:
                 related = getattr(instance, name, None)

@@ -1434,6 +1434,22 @@ class UpdateBookViaForm(DjangoModelFormMutation):
         permission_classes = []
 
 
+class UpdatePatronProfileViaForm(DjangoModelFormMutation):
+    """Update a ``PatronProfile`` via ``PatronProfileGenreForm`` - a form over a ``to_field`` key.
+
+    The form's ``favorite_genre`` resolves a genre by id while the column stores the genre
+    name. ``favoriteGenreId`` takes the genre's ``GlobalID``; an update that omits it binds
+    the stored genre by its id, so the stored name is kept, including when that name is
+    another genre's id. ``PatronProfileType`` is Relay-Node, so the update ``id`` is a
+    ``GlobalID``.
+    """
+
+    class Meta:
+        form_class = forms.PatronProfileGenreForm
+        operation = "update"
+        permission_classes = []
+
+
 class UpdateBookAtRepairDeskViaForm(DjangoModelFormMutation):
     """Update a ``Book``'s circulation via ``BookRepairDeskForm`` - a narrowed form choice field.
 
@@ -2307,6 +2323,8 @@ class Mutation:
     (a field validator renaming the validated genre in place) are refused.
     ``updatePatronProfile`` is the model-flavor write of the same key: the genre id it is
     sent is resolved to the genre name the column stores.
+    ``updatePatronProfileViaForm`` is the ``ModelForm`` write of the same key through a
+    genre-id-keyed form field: an omitted genre is rebound by its id, never by the stored name.
     """
 
     create_shelf_via_form = DjangoMutationField(CreateShelfViaForm)
@@ -2315,6 +2333,7 @@ class Mutation:
     update_patron_profile = DjangoMutationField(UpdatePatronProfile)
     update_book_via_form = DjangoMutationField(UpdateBookViaForm)
     update_book_at_repair_desk_via_form = DjangoMutationField(UpdateBookAtRepairDeskViaForm)
+    update_patron_profile_via_form = DjangoMutationField(UpdatePatronProfileViaForm)
     create_book_via_custom_input = DjangoMutationField(CreateBookViaCustomInput)
     update_book_via_custom_input = DjangoMutationField(UpdateBookViaCustomInput)
     create_publisher = DjangoMutationField(CreatePublisher)

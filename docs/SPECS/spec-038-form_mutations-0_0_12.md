@@ -1341,14 +1341,18 @@ write flavor rides.
      - **Every omitted field binds in the shape a provided one decodes to**, which
        takes **three** forms, single-sited in
        [`forms/resolvers.py`][forms-resolvers]`::_reconstruct_partial_data`:
-       `model_to_dict` for scalars and a `to_field_name`-**less** FK / one-to-one
-       (whose `model_to_dict` value is already the key the bound `ModelChoiceField`
-       resolves); `_to_form_key_value` per member for a real forward M2M (the
-       `to_field_name` value, default `obj.pk` — not `model_to_dict`'s list of
-       related *instances*); and `_to_form_key_value` for a `ModelChoiceField`
-       **with** `to_field_name` set (whose `model_to_dict` pk would fail `to_python`).
-       Getting any of the three wrong makes an omitted unchanged field fail where a
-       provided unchanged field passes.
+       `model_to_dict` for scalars and for a FK / one-to-one whose `ModelChoiceField`
+       resolves its choice by the column the relation stores (`to_field_name or "pk"`
+       names `ForeignKey.target_field`, as every generated field does), so the stored
+       value is already the form key and no related row is read; `_to_form_key_value`
+       per member for a real forward M2M (the `to_field_name` value, default
+       `obj.pk` — not `model_to_dict`'s list of related *instances*); and
+       `_to_form_key_value` of the related row for every other single
+       `ModelChoiceField` FK / one-to-one: a `to_field_name` naming another column, or
+       a `to_field_name`-**less** field over a `ForeignKey(to_field=…)`, which resolves
+       by pk while the column stores the `to_field` value. Getting any of the three
+       wrong makes an omitted unchanged field fail, or bind the row whose key equals
+       the stored value, where a provided unchanged field passes.
      - **A file field contributes no key at all.** `model_to_dict` yields the stored
        relative path, which is not a re-bindable `data=` value for a field fed from
        `files=`, so file fields are excluded from the reconstruction entirely.
@@ -1590,13 +1594,15 @@ plain `ContactForm`, and `products/schema.py` exposes them via
   `StampedItemModelForm` (kwarg-requiring, the `get_form_kwargs` case), `ContactForm`
   and `PingForm` (the `DenyAll` default).
 - **`library`** — `CreateShelfViaForm`, `UpdateBookViaForm`, `UpdateBookAtRepairDeskViaForm`,
-  `CreateBranchWithShelf` and `CreateBranchPair` over `ShelfRelationsForm` /
-  `BookGenresModelForm` / `BookRepairDeskForm` / `BranchWithShelfForm` / `BranchPairForm`. Library carries the cases products cannot:
+  `UpdatePatronProfileViaForm`, `CreateBranchWithShelf` and `CreateBranchPair` over
+  `ShelfRelationsForm` / `BookGenresModelForm` / `BookRepairDeskForm` /
+  `PatronProfileGenreForm` / `BranchWithShelfForm` / `BranchPairForm`. Library carries the cases products cannot:
   the **non-Relay raw-pk** relation decode, the `to_field_name` conversion, the
   request-scoped-`queryset` idiom, the plain-form `perform_mutate` rollback, and the
   write-time blank integer choice column (`Shelf.tier`), and the narrowed form choice field
   (`UpdateBookAtRepairDeskViaForm` over `BookRepairDeskForm`, whose `circulation_status`
-  admits two of the column's three values).
+  admits two of the column's three values), and a declared pk-keyed `ModelChoiceField`
+  over the `to_field` key `PatronProfile.favorite_genre` (`UpdatePatronProfileViaForm`).
 - **`scalars`** — `CreateMediaSpecimenImageViaForm`, the image-column flavor of the
   `Upload` routing.
 
@@ -1753,6 +1759,10 @@ Rationale companion: [Decision 14][rationale-d14].
   object, the decoder feeds the form `obj.serializable_value(field.to_field_name)`
   (else `obj.pk`), so a valid GraphQL id does not fail form validation
   ([Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)).
+  An `update` that omits the field rebinds the located row's related object the same
+  way whenever the form's key is not the column the relation stores, including a
+  `to_field_name`-less field over a `ForeignKey(to_field=…)`
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)).
 - **A form whose `__init__` requires constructor kwargs.** Schema-time discovery
   reads `form_class.base_fields` (no instantiation), and runtime construction goes
   through `get_form_kwargs(info, *, data, files, instance=None)` — the consumer
@@ -1818,7 +1828,9 @@ behavior reachable through `/graphql/`, package tests own internals.
   preservation** — a `name`-only `updateItemViaForm` preserves `description` and
   `category` (FK), and `unique_item_per_category` still fires when only `name` changes
   to a value already taken under the unchanged `category` (the partial-update
-  contract); a non-colliding partial update; write authorization (anonymous denied, a
+  contract); a non-colliding partial update whose reconstruction reads no category (the
+  one real `products_category` SELECT is the bound form's choice lookup); write
+  authorization (anonymous denied, a
   caller missing the model perm denied, a permitted caller succeeds); the
   visibility-scoped `update` (a caller who cannot see a private `Item` gets
   not-found); **relation visibility** — a permitted writer submitting a **hidden**
@@ -1833,7 +1845,11 @@ behavior reachable through `/graphql/`, package tests own internals.
   (`ok: false`, field-keyed `errors`) shapes, and the deny-by-default plain form
   (`submitPing`, top-level denial). **Narrowed choice field** — `updateBookAtRepairDeskViaForm`
   publishes only the two `circulationStatus` members `BookRepairDeskForm` admits, `repair`
-  writes, and `checked_out` is an enum-coercion error with no write. **Write-time `IntegrityError`** — a valid
+  writes, and `checked_out` is an enum-coercion error with no write. **Omitted
+  relation over a `to_field` key** — an `updatePatronProfileViaForm` that omits
+  `favoriteGenreId` keeps the stored genre name, including when that name is another
+  genre's id; an unset genre stays unset, a genre replaces it and `null` clears it.
+  **Write-time `IntegrityError`** — a valid
   `ModelForm.save()` that hits a constraint the form's validation excluded
   (`createDefaultCategoryItemViaForm`) surfaces the **`FieldError` envelope**, not a
   top-level GraphQL error. **Write-time blank non-text choice column** — an explicit
@@ -1901,7 +1917,9 @@ behavior reachable through `/graphql/`, package tests own internals.
     **the `get_form_kwargs` / `get_form` hook** — an override injecting `user` and one
     scoping a `ModelChoiceField.queryset` (input shape unchanged); **partial-update
     reconstruction at the unit tier** — omitted scalar / FK / M2M preserved from the
-    located instance, omitted file preserved via the bound form's `initial`, a
+    located instance (an omitted FK reads its related row only when the form's key is
+    not the column the relation stores: no query for a pk-keyed field over `Book.shelf`,
+    one for a `code`-keyed one), omitted file preserved via the bound form's `initial`, a
     **required extra non-model field omitted → required error** while an optional one
     may be omitted), and `unique_item_per_category` validating on a one-field
     change; the **plain-form `ok` + `errors` payload** and the `perform_mutate(self,

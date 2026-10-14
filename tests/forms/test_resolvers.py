@@ -1602,6 +1602,50 @@ def test_partial_update_reconstruct_with_reverse_relation_field():
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("to_field_name", "reads"),
+    [(None, 0), ("pk", 0), ("code", 1)],
+    ids=["pk_keyed_by_default", "pk_keyed_by_name_pk", "keyed_by_another_column"],
+)
+def test_partial_update_reconstruct_reads_the_related_row_only_off_the_stored_key(
+    to_field_name: str | None,
+    reads: int,
+):
+    """An omitted FK is read back from its related row only when the form key is another column.
+
+    ``Book.shelf`` stores the shelf pk. A declared ``ModelChoiceField`` resolving its
+    choice by the pk (no ``to_field_name``, or ``"pk"``) is rebound from the stored value
+    with no query; one keyed by ``code`` needs the shelf row, read once, to rebind by its
+    code. A field keyed by the target's own name (every generated field) is pinned live by
+    ``examples/fakeshop/test_query/test_products_api.py::test_update_item_via_form_non_colliding_partial_update``.
+    """
+    branch = library_models.Branch.objects.create(name=_uniq("Br"))
+    shelf = library_models.Shelf.objects.create(code=_uniq("Sh"), branch=branch)
+    book = library_models.Book.objects.create(title="Orig", shelf=shelf)
+
+    class BookForm(forms.ModelForm[library_models.Book]):
+        shelf = forms.ModelChoiceField(
+            queryset=library_models.Shelf.objects.all(),
+            to_field_name=to_field_name,
+        )
+
+        class Meta:
+            model = library_models.Book
+            fields = ("title", "shelf")
+
+    class UpdateBook(DjangoModelFormMutation):
+        class Meta:
+            form_class = BookForm
+            operation = "update"
+
+    located = library_models.Book.objects.get(pk=book.pk)
+    with CaptureQueriesContext(connection) as captured:
+        data = form_resolvers._reconstruct_partial_data(UpdateBook, located, {})
+    assert len(captured.captured_queries) == reads
+    assert data["shelf"] == (shelf.code if to_field_name == "code" else shelf.pk)
+
+
+@pytest.mark.django_db
 def test_partial_update_reconstruct_with_dangling_fk_target():
     """A ModelForm with a dangling FK does not crash reconstruction with DoesNotExist."""
     cat = product_models.Category.objects.create(name=_uniq("cat"))
@@ -1627,7 +1671,7 @@ def test_partial_update_reconstruct_with_dangling_fk_target():
 
     data = form_resolvers._reconstruct_partial_data(ItemMutation, item, {"name": "updated"})
     assert data["name"] == "updated"
-    assert data.get("category") in (None, 999999)
+    assert data["category"] == 999999
 
 
 def test_to_form_key_value_handles_serializable_value_exceptions(

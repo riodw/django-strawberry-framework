@@ -71,6 +71,10 @@ except ModuleNotFoundError:  # imported as ``scripts.build_tree_md`` (repo root 
         configure_django,
         render_parser,
     )
+try:
+    from check_trailing_commas import render_link_definitions
+except ModuleNotFoundError:  # imported as ``scripts.build_tree_md`` (repo root on path)
+    from scripts.check_trailing_commas import render_link_definitions
 
 DEFAULT_MD_PATH = REPO_ROOT / "docs" / "TREE.md"
 DEFAULT_PACKAGE_DIR = REPO_ROOT / "django_strawberry_framework"
@@ -250,31 +254,15 @@ TEST_LAYOUT_INTRO = [
     "",
     "### Current test trees",
 ]
-LINK_DEFINITIONS = """<!-- LINK DEFINITIONS -->
-
-<!-- Root -->
-[agents]: ../AGENTS.md
-[kanban]: ../KANBAN.md
-[readme]: ../README.md
-
-<!-- docs/ -->
-
-<!-- docs/SPECS/ -->
-
-<!-- docs/builder/ -->
-
-<!-- django_strawberry_framework/ -->
-
-<!-- tests/ -->
-
-<!-- examples/ -->
-
-<!-- scripts/ -->
-
-<!-- .venv/ -->
-
-<!-- External -->
-"""
+LINK_DEFINITIONS = render_link_definitions(
+    {
+        "<!-- Root -->": (
+            "[agents]: ../AGENTS.md",
+            "[kanban]: ../KANBAN.md",
+            "[readme]: ../README.md",
+        ),
+    },
+)
 T = TypeVar("T")
 
 
@@ -409,6 +397,7 @@ def display_path(path: Path) -> str:
         return str(path)
 
 
+@functools.cache
 def python_docstring(path: Path) -> str:
     """Return the parsed module docstring for a Python source file."""
     try:

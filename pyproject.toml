@@ -147,6 +147,8 @@ pg = [
 ]
 
 [tool.ruff]
+# Also read by scripts/check_trailing_commas.py at run time: a collapse must fit this width,
+# measured in ruff's display columns (an emoji is 2), not E501's 110.
 line-length = 99
 target-version = "py310"
 
@@ -167,6 +169,9 @@ select = [
     "BLE",    # flake8-blind-except
     "C4",     # flake8-comprehensions
     "C90",    # mccabe
+    # COM812 only adds commas to constructs already split across lines;
+    # scripts/check_trailing_commas.py owns single-line explode/collapse
+    # (docs/ruffing.md "Custom formatter interplay").
     "COM",    # flake8-commas (COM812 pairs with the formatter's magic trailing comma)
     "CPY",    # flake8-copyright
     "D",      # pydocstyle (Google convention)
@@ -197,7 +202,7 @@ select = [
     "ICN",    # flake8-import-conventions
     "INP",    # flake8-no-pep420
     "INT",    # flake8-gettext
-    "ISC",    # flake8-implicit-str-concat
+    "ISC",    # flake8-implicit-str-concat (ISC001 joins a concat the layout script collapses)
     "LOG",    # flake8-logging
     "N",      # pep8-naming
     "NPY",    # NumPy
@@ -294,6 +299,8 @@ quote-annotations = true
 ignore-variadic-names = true
 
 [tool.ruff.lint.isort]
+# Imports are not a layout-script construct: isort's split-on-trailing-comma (default) keeps a
+# parenthesized import exploded once it has a trailing comma.
 known-first-party = ["django_strawberry_framework"]
 
 [tool.ruff.lint.pep8-naming]
@@ -346,7 +353,8 @@ classmethod-decorators = ["django.utils.decorators.classonlymethod"]
 
 [tool.ruff.lint.pycodestyle]
 # The formatter wraps code at line-length (99); E501 only flags lines past 110
-# -- the grace covers long strings/comments the formatter cannot break.
+# -- the grace covers long strings/comments the formatter cannot break. The layout script
+# collapses only to line-length (99), never into the 99-110 grace.
 max-line-length = 110
 
 [tool.ruff.lint.pylint]

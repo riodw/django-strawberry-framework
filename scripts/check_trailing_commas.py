@@ -19,8 +19,12 @@ Four checks. The first three carry both ``--check`` (gate, exit 1) and ``--fix``
    and ```` ```json ```` / ```` ```graphql ```` fenced blocks in markdown) --
    content is normalized to its canonical pretty-printed form so every ``{``
    opens a new line. JSON goes through ``json.dumps(indent=2)`` (every object
-   brace explodes); GraphQL through graphql-core's ``print_ast`` (selection sets
-   explode; argument input-objects stay inline per the GraphQL convention).
+   brace explodes); GraphQL through this script's own printer
+   (``_format_graphql``), which explodes everything: every selection set, field
+   argument list, input-object and list value opens its own line with one
+   argument / field / item per 2-space-indented line. Only leaf values,
+   variable definitions, directives and type-system definitions go through
+   graphql-core's inline ``print_ast``.
    Detection is parse-gated: bare ``{`` in Python/JS, f-string interpolation,
    and unparseable pseudo-snippets are never touched, and the fix output is
    itself canonical (fixpoint-safe). ``.py`` string literals are out of scope,
@@ -47,7 +51,10 @@ The fixer is bidirectional:
   keep their comma (``ruff format`` leaves them multi-line and ``COM812`` owns
   them), so the fixer reaches a fixpoint with ruff rather than ping-ponging.
   The fit measurement is taken on the token stream, so whitespace inside a
-  string literal counts toward the width exactly as the formatter counts it.
+  string literal counts toward the width exactly as the formatter counts it,
+  and in display columns, not code points: an emoji the formatter counts as
+  two columns (U+1F353) counts two here, a variation selector zero
+  (``_display_width``).
 
 This covers the gap ``COM812`` cannot: ``COM812`` only adds a trailing comma to a
 construct already split across lines, so single-line layout is never enforced by
@@ -72,7 +79,11 @@ untracked and not ignored), so a sweep never reads -- or rewrites -- ``.claude/`
 agent memory or any other ignored path; a file named explicitly on the command
 line is still processed. Both modes report every violation they find, with the
 file and line. ``--fix`` edits the commas and then runs ``ruff format`` on the
-touched files so the layout actually reflows.
+touched files so the layout actually reflows -- and repeats: one comma edit can
+enable the next only after the reflow (an outer construct collapses once its
+nested children have), so each round re-checks the files the last one edited,
+in one ``ruff format`` spawn per round, until nothing changes. A file still
+changing after ``MAX_FIX_ROUNDS`` rounds is an ``unfixable`` error, never a pass.
 
 Every run ends with one summary line -- files checked, files excluded, files
 ignored (unsupported suffix), violations, errors -- so a clean pass and a pass
@@ -83,7 +94,8 @@ population is not a pass. A named file dropped by an exclusion is reported as
 is counted in the summary.
 
 ``--diff`` implies ``--check``: nothing is written, and the unified diff
-``--fix`` would apply (``ruff format`` reflow included) is printed per file.
+``--fix`` would apply (``ruff format`` reflow and every later round included) is
+printed per file.
 ``--json`` replaces all human output with one JSON document on stdout:
 ``mode``, ``paths``, ``summary`` (``checked`` / ``excluded`` / ``ignored`` /
 ``violations`` / ``errors`` / ``fixed`` / ``exit``), the ``checked`` /
@@ -92,6 +104,11 @@ of ``file`` / ``line`` / ``rule`` / ``message`` / ``fixable``, and, with
 ``--diff``, ``diffs`` keyed by file. Rule ids are stable: ``explode``,
 ``collapse``, ``md-scaffold``, ``brace-explode``, ``non-ascii`` for violations;
 ``read-error``, ``parse-error``, ``unfixable``, ``unmatched-path`` for errors.
+A violation the fixer will not repair carries ``fixable: false``; under
+``--fix`` (and ``--diff`` for a missing fixpoint) it is also an ``unfixable``
+error naming the file and line: a footer rebuild that would drop content, a
+comma edit that would not parse, an explode that would strand a suppression
+comment, and a file with no fixpoint.
 
 Exclusions are anchored to repo-relative paths (``EXCLUDE_PATTERNS``, built from
 ``EXCLUDE_SCRATCH_DIRS`` and ``EXCLUDE_SCRATCH_SUBTREES``): the per-cycle
@@ -104,6 +121,16 @@ What the fixer refuses to touch:
 
 * One-element tuples and comment-bearing constructs (``ruff format`` keeps those
   multi-line regardless, so collapsing them would just churn).
+* Bare tuples, including a bare tuple of parenthesized items such as
+  ``(1, 2), (3, 4)``: its brackets are its elements', so a comma before the last
+  ``)`` would land inside the last element.
+* An explode on a line that ends in a line-scoped suppression comment (ruff's
+  noqa, ``pyright: ignore``, ``type: ignore``). ``ruff format`` keeps the comment
+  after the closing bracket while the elements -- and the diagnostics the comment
+  silenced -- move onto lines of their own, so ruff's RUF100 would delete the
+  noqa as unused and basedpyright would report the ignore as unnecessary. The
+  violation stays (``fixable: false``) and ``--fix`` reports it as an
+  ``unfixable`` error: move the suppression onto the element it is for.
 * ``**kwargs`` signatures, by project convention (AGENTS.md). A trailing comma
   after ``*args`` OR ``**kwargs`` parses fine on every supported Python, and
   ``COM812`` adds both once a signature is multi-line; the bare ``*`` and ``/``
@@ -133,14 +160,14 @@ import shutil
 import subprocess
 import sys
 import tokenize
-from bisect import bisect_left, bisect_right
+from bisect import bisect_right
 from collections import Counter
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from fnmatch import fnmatch, fnmatchcase
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from typing_extensions import TypeIs
@@ -250,15 +277,6 @@ EXCLUDE_DOC_NAME_GLOBS = ("feedback*.md",)
 # are still scanned for the JSON/GraphQL fence rule; only the scaffold is waived.
 EXEMPT_MD_SCAFFOLD_NAMES = frozenset({"AGENTS.md", "CLAUDE.md"})
 _CLOSE_BYTES = (b")", b"]", b"}")
-_SKIP_TOK = frozenset(
-    {
-        tokenize.NL,
-        tokenize.COMMENT,
-        tokenize.NEWLINE,
-        tokenize.INDENT,
-        tokenize.DEDENT,
-    },
-)
 
 # A construct is (open_line, open_col, close_line, close_col, item_count, can_add),
 # with 0-based line indices and character columns.
@@ -280,151 +298,182 @@ def _line_starts(text: str) -> list[int]:
     return starts
 
 
+# Nodes that never contain a collection literal or a ``def``: the walk does not descend into them.
+_LEAF_NODES = (
+    ast.Name,
+    ast.Constant,
+    ast.expr_context,
+    ast.operator,
+    ast.cmpop,
+    ast.boolop,
+    ast.unaryop,
+)
+_COLLECTIONS = (
+    ast.Dict,
+    ast.List,
+    ast.Set,
+    ast.Tuple,
+)
+_DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
+_WANTED = (*_COLLECTIONS, *_DEFS)
+
+
+def _collections_and_defs(tree: ast.AST) -> Iterator[ast.AST]:
+    """Yield every collection literal and ``def`` node of ``tree``.
+
+    ``ast.walk`` minus the subtrees that can hold neither (names, constants,
+    operators): most nodes of a module are leaves, and not queueing them halves the walk.
+    """
+    stack = [tree]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, _WANTED):
+            yield node
+        stack.extend(
+            child for child in ast.iter_child_nodes(node) if not isinstance(child, _LEAF_NODES)
+        )
+
+
 def _byte_to_char(bline: bytes, byte_col: int) -> int:
     """Convert an ``ast`` byte column on a line to a character column."""
     return len(bline[:byte_col].decode("utf-8"))
 
 
-def _literal_constructs(text: str, blines: list[bytes]) -> Iterator[Construct]:
-    """Yield every >=2-item list/set/dict/parenthesized-tuple literal."""
-    for node in ast.walk(ast.parse(text)):
-        if isinstance(node, ast.Dict):
-            count = len(node.keys)
-        elif isinstance(node, (ast.List, ast.Set, ast.Tuple)):
-            count = len(node.elts)
+_BYTES_COMMENT = re.compile(rb"#[^\n]*")
+
+
+def _between(blines: list[bytes], start: tuple[int, int], end: tuple[int, int]) -> bytes:
+    """Source bytes from ``start`` to ``end``, each an ``ast`` ``(lineno, byte col)`` pair."""
+    (first, first_col), (last, last_col) = start, end
+    if first == last:
+        return blines[first - 1][first_col:last_col]
+    middle = blines[first : last - 1]
+    return b"\n".join([blines[first - 1][first_col:], *middle, blines[last - 1][:last_col]])
+
+
+def _is_bare_tuple(node: ast.Tuple, blines: list[bytes]) -> bool:
+    """Return whether a tuple starting with ``(`` does not own that parenthesis.
+
+    A tuple's own parentheses are not in the AST: ``(1, 2), (3, 4)`` is a BARE tuple
+    whose first character is its first element's ``(`` and whose last is its last
+    element's ``)``. The positions of the first two elements settle it without a
+    tokenizer: every ``(`` between the tuple's start and its first element that the
+    element does not span must be closed again before the separating comma, unless
+    one of them is the tuple's own. Only parentheses, whitespace, comments and the
+    comma can sit in those two stretches -- never a string -- so dropping comments
+    leaves nothing else to miscount.
+    """
+    first, second = node.elts[0], node.elts[1]
+    if first.end_lineno is None or first.end_col_offset is None:
+        return True  # hand-built node without end positions -- cannot prove ownership
+    head = _between(blines, (node.lineno, node.col_offset), (first.lineno, first.col_offset))
+    gap = _between(
+        blines,
+        (first.end_lineno, first.end_col_offset),
+        (second.lineno, second.col_offset),
+    )
+    opened = _BYTES_COMMENT.sub(b"", head).count(b"(")
+    closed = _BYTES_COMMENT.sub(b"", gap).split(b",", 1)[0].count(b")")
+    return opened == closed
+
+
+def _literal_construct(node: ast.AST, blines: list[bytes]) -> Construct | None:
+    """Return the >=2-item list/set/dict/parenthesized-tuple ``node`` as a construct, or ``None``.
+
+    A bare tuple is never one, including a bare tuple of parenthesized items such as
+    ``(1, 2), (3, 4)``: its first and last characters are its elements' brackets, so
+    a comma "added before the closing bracket" would land inside the last element.
+    """
+    if isinstance(node, ast.Dict):
+        count = len(node.keys)
+    elif isinstance(node, (ast.List, ast.Set, ast.Tuple)):
+        count = len(node.elts)
+    else:
+        return None
+    if count < 2:  # 0/1-item collections are never touched (incl. 1-tuples)
+        return None
+    # A hand-built node may omit its end positions; ``ast.parse`` sets both on every node.
+    end_lineno = node.end_lineno
+    end_col_offset = node.end_col_offset
+    if end_lineno is None or end_col_offset is None:
+        return None  # hand-built node without end positions
+    open_bytes = blines[node.lineno - 1]
+    if isinstance(node, ast.Tuple) and (
+        open_bytes[node.col_offset : node.col_offset + 1] != b"(" or _is_bare_tuple(node, blines)
+    ):
+        return None  # bare tuple (``a, b, c`` / ``return a, b`` / ``(a, b), (c, d)``) -- skip
+    close_byte = end_col_offset - 1
+    close_bytes = blines[end_lineno - 1]
+    if (
+        not (0 <= close_byte < len(close_bytes))
+        or close_bytes[close_byte : close_byte + 1] not in _CLOSE_BYTES
+    ):
+        return None  # self-verify: bail unless the offset really is a closing bracket
+    return (
+        node.lineno - 1,
+        _byte_to_char(open_bytes, node.col_offset),
+        end_lineno - 1,
+        _byte_to_char(close_bytes, close_byte),
+        count,
+        True,
+    )
+
+
+def _signature_construct(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    lines: list[str],
+) -> Construct | None:
+    """Return the >=2-parameter ``def`` signature of ``node`` as a construct, or ``None``.
+
+    The parameter count comes from the parsed arguments, so a bare ``/`` / ``*``
+    marker, a ``lambda`` default's own parameter list and a trailing comma are
+    never miscounted. Only the parentheses need the token stream, and only from the
+    ``def`` line to the closing parenthesis: the tokenizer is lazy, so it never
+    reads the body.
+    """
+    args = node.args
+    params = (
+        len(args.posonlyargs)
+        + len(args.args)
+        + len(args.kwonlyargs)
+        + (args.vararg is not None)
+        + (args.kwarg is not None)
+    )
+    if params < 2:
+        return None
+    rows = (f"{line}\n" for line in lines[node.lineno - 1 :])
+    open_tok = None
+    depth = 0
+    for tok in tokenize.generate_tokens(functools.partial(next, rows, "")):
+        if tok.type != tokenize.OP:
+            continue
+        if tok.string in _OPENERS:
+            if open_tok is None and depth == 0 and tok.string == "(":
+                open_tok = tok
+            depth += 1
+        elif tok.string in _CLOSERS:
+            depth -= 1
+            if depth == 0 and open_tok is not None:
+                return (
+                    node.lineno - 1 + open_tok.start[0] - 1,
+                    open_tok.start[1],
+                    node.lineno - 1 + tok.start[0] - 1,
+                    tok.start[1],
+                    params,
+                    args.kwarg is None,  # **kwargs signatures stay exempt
+                )
+    return None
+
+
+def _constructs(tree: ast.AST, blines: list[bytes], lines: list[str]) -> Iterator[Construct]:
+    """Yield every explode/collapse candidate: collection literals and ``def`` signatures."""
+    for node in _collections_and_defs(tree):
+        if isinstance(node, _DEFS):
+            construct = _signature_construct(node, lines)
         else:
-            continue
-        if count < 2:  # 0/1-item collections are never touched (incl. 1-tuples)
-            continue
-        # A hand-built node may omit its end positions; ``ast.parse`` sets both on every node.
-        end_lineno = node.end_lineno
-        end_col_offset = node.end_col_offset
-        if end_lineno is None or end_col_offset is None:
-            continue  # hand-built node without end positions
-        open_bytes = blines[node.lineno - 1]
-        if (
-            isinstance(node, ast.Tuple)
-            and open_bytes[node.col_offset : node.col_offset + 1] != b"("
-        ):
-            continue  # bare tuple (``a, b, c`` / ``return a, b``) -- skip
-        close_byte = end_col_offset - 1
-        close_bytes = blines[end_lineno - 1]
-        if (
-            not (0 <= close_byte < len(close_bytes))
-            or close_bytes[close_byte : close_byte + 1] not in _CLOSE_BYTES
-        ):
-            continue  # self-verify: bail unless the offset really is a closing bracket
-        yield (
-            node.lineno - 1,
-            _byte_to_char(open_bytes, node.col_offset),
-            end_lineno - 1,
-            _byte_to_char(close_bytes, close_byte),
-            count,
-            True,
-        )
-
-
-def _tokenize_info(text: str, starts: list[int]) -> tuple[list[Construct], list[int]]:
-    """Return (>=2-param def signatures, absolute offsets of comment tokens)."""
-    toks = list(tokenize.generate_tokens(io.StringIO(text).readline))
-    comments = [starts[t.start[0] - 1] + t.start[1] for t in toks if t.type == tokenize.COMMENT]
-    sigs: list[Construct] = []
-    n = len(toks)
-    i = 0
-    while i < n:
-        if toks[i].type == tokenize.NAME and toks[i].string == "def":
-            j = i + 1
-            while j < n and not (toks[j].type == tokenize.OP and toks[j].string == "("):
-                if toks[j].type in (tokenize.NEWLINE, tokenize.NL):
-                    break
-                j += 1
-            if j < n and toks[j].type == tokenize.OP and toks[j].string == "(":
-                open_tok = toks[j]
-                depth = 1
-                expect_seg = True
-                last_seg_kwargs = False
-                seg_content = False
-                commas = 0
-                separators = 0
-                close_tok = None
-                # A ``lambda`` default carries its OWN comma-separated parameter
-                # list at this same depth (``def f(a=lambda x, y: x, b=2)``);
-                # counting those commas inflates the signature's parameter total
-                # and can explode a below-threshold def. The list ends at the
-                # lambda's ``:``.
-                in_lambda = False
-                k = j + 1
-                while k < n:
-                    tk = toks[k]
-                    if tk.type == tokenize.OP and tk.string in ("(", "[", "{"):
-                        depth += 1
-                        expect_seg = False
-                    elif tk.type == tokenize.OP and tk.string in (")", "]", "}"):
-                        depth -= 1
-                        if depth == 0:
-                            close_tok = tk
-                            break
-                        expect_seg = False
-                    elif depth == 1 and tk.type == tokenize.NAME and tk.string == "lambda":
-                        in_lambda = True
-                        seg_content = True
-                        expect_seg = False
-                    elif depth == 1 and in_lambda and tk.type == tokenize.OP and tk.string == ":":
-                        in_lambda = False
-                    elif depth == 1 and in_lambda:
-                        pass  # inside the lambda's own parameter list
-                    elif depth == 1 and tk.type == tokenize.OP and tk.string == ",":
-                        commas += 1
-                        expect_seg = True
-                    elif tk.type in _SKIP_TOK:
-                        pass
-                    elif depth == 1 and expect_seg:
-                        # A depth-1 segment starting with a bare ``/`` (positional-
-                        # only marker) or bare ``*`` (keyword-only marker) is a
-                        # separator, NOT a parameter -- counting it would inflate
-                        # the param total and could explode a 1-arg method to the
-                        # syntactically-wrong ``def m(self, /,)``. ``*args`` /
-                        # ``**kwargs`` ARE parameters: a ``*`` followed by an
-                        # identifier is ``*args`` (real), while a ``*`` followed by
-                        # ``,`` / ``)`` is the bare keyword-only marker.
-                        is_separator = tk.string == "/"
-                        if tk.string == "*":
-                            nxt = k + 1
-                            while nxt < n and toks[nxt].type in _SKIP_TOK:
-                                nxt += 1
-                            is_separator = nxt >= n or toks[nxt].string in (",", ")")
-                        if is_separator:
-                            separators += 1
-                        else:
-                            # ``*args`` accepts a trailing comma; ``**kwargs`` is
-                            # held exempt by project convention (AGENTS.md), so
-                            # only the double star blocks the explode.
-                            last_seg_kwargs = tk.type == tokenize.OP and tk.string == "**"
-                            seg_content = True
-                        expect_seg = False
-                    k += 1
-                if close_tok is not None and seg_content:
-                    # ``expect_seg`` is True at the close only when the last
-                    # depth-1 token was a comma -- i.e. a trailing comma, which
-                    # must not be counted as an extra parameter. Bare ``/`` / ``*``
-                    # separators occupy comma-delimited slots but are not params,
-                    # so subtract them from the segment total.
-                    params = (commas if expect_seg else commas + 1) - separators
-                    if params >= 2:
-                        sigs.append(
-                            (
-                                open_tok.start[0] - 1,
-                                open_tok.start[1],
-                                close_tok.start[0] - 1,
-                                close_tok.start[1],
-                                params,
-                                not last_seg_kwargs,  # **kwargs signatures stay exempt
-                            ),
-                        )
-                i = k + 1
-                continue
-        i += 1
-    return sigs, comments
+            construct = _literal_construct(node, blines)
+        if construct is not None:
+            yield construct
 
 
 _OPENERS = ("(", "[", "{")
@@ -441,30 +490,123 @@ _LAYOUT_SKIP = frozenset(
 )
 
 
-def _significant_tokens(body: str) -> list[tokenize.TokenInfo] | None:
-    """Tokenize a bracketed construct, dropping layout-only tokens.
+def _tokens(body: str) -> list[tokenize.TokenInfo] | None:
+    """Tokenize a bracketed construct.
 
     ``None`` when the fragment does not tokenize on its own, which is the signal
-    to fall back to a conservative measurement rather than guess.
+    to leave the construct alone rather than guess.
     """
     try:
-        toks = list(tokenize.generate_tokens(io.StringIO(body).readline))
+        return list(tokenize.generate_tokens(io.StringIO(body).readline))
     except (tokenize.TokenError, SyntaxError, IndentationError):
         return None
-    return [t for t in toks if t.type not in _LAYOUT_SKIP]
 
 
-def _rendered_len(body: str) -> int:
-    """Length of a bracketed construct rendered on one line, string-literal safe.
+# Display width of the non-ASCII characters ``.py`` source may carry (see ``_is_emoji``),
+# exactly as ``ruff format`` counts it: per character, through the ``unicode-width``
+# crate's tables, which follow the newest Unicode release. A character in one of these
+# inclusive runs is two columns wide, a variation selector (U+FE00-FE0F) is zero, and
+# every other allowed character is one -- so U+1F353 STRAWBERRY counts 2 and the
+# kanban parity marker U+269B ATOM + U+FE0F counts 1 + 0. The runs are a table rather
+# than ``unicodedata.east_asian_width`` because the interpreter's Unicode version lags
+# ruff's and differs per Python (3.14 still reads U+1F6D8 as unassigned, 3.10 also
+# U+2630-2637 and U+268A-268F), and a width that differs from the formatter's makes a
+# collapse the formatter re-explodes on every run. Measured against ruff 0.17 over every
+# code point ``_is_emoji`` allows; re-measure when a ruff upgrade moves its Unicode
+# version (a formatter probe at the line-length boundary per code point).
+_WIDE_RUNS = (
+    (0x2614, 0x2615),
+    (0x2630, 0x2637),
+    (0x2648, 0x2653),
+    (0x267F, 0x267F),
+    (0x268A, 0x268F),
+    (0x2693, 0x2693),
+    (0x26A1, 0x26A1),
+    (0x26AA, 0x26AB),
+    (0x26BD, 0x26BE),
+    (0x26C4, 0x26C5),
+    (0x26CE, 0x26CE),
+    (0x26D4, 0x26D4),
+    (0x26EA, 0x26EA),
+    (0x26F2, 0x26F3),
+    (0x26F5, 0x26F5),
+    (0x26FA, 0x26FA),
+    (0x26FD, 0x26FD),
+    (0x1F004, 0x1F004),
+    (0x1F0CF, 0x1F0CF),
+    (0x1F18E, 0x1F18E),
+    (0x1F191, 0x1F19A),
+    (0x1F200, 0x1F202),
+    (0x1F210, 0x1F23B),
+    (0x1F240, 0x1F248),
+    (0x1F250, 0x1F251),
+    (0x1F260, 0x1F265),
+    (0x1F300, 0x1F320),
+    (0x1F32D, 0x1F335),
+    (0x1F337, 0x1F37C),
+    (0x1F37E, 0x1F393),
+    (0x1F3A0, 0x1F3CA),
+    (0x1F3CF, 0x1F3D3),
+    (0x1F3E0, 0x1F3F0),
+    (0x1F3F4, 0x1F3F4),
+    (0x1F3F8, 0x1F43E),
+    (0x1F440, 0x1F440),
+    (0x1F442, 0x1F4FC),
+    (0x1F4FF, 0x1F53D),
+    (0x1F54B, 0x1F54E),
+    (0x1F550, 0x1F567),
+    (0x1F57A, 0x1F57A),
+    (0x1F595, 0x1F596),
+    (0x1F5A4, 0x1F5A4),
+    (0x1F5FB, 0x1F64F),
+    (0x1F680, 0x1F6C5),
+    (0x1F6CC, 0x1F6CC),
+    (0x1F6D0, 0x1F6D2),
+    (0x1F6D5, 0x1F6D8),
+    (0x1F6DC, 0x1F6DF),
+    (0x1F6EB, 0x1F6EC),
+    (0x1F6F4, 0x1F6FC),
+    (0x1F7E0, 0x1F7EB),
+    (0x1F7F0, 0x1F7F0),
+    (0x1F90C, 0x1F93A),
+    (0x1F93C, 0x1F945),
+    (0x1F947, 0x1F9FF),
+    (0x1FA70, 0x1FA7C),
+    (0x1FA80, 0x1FA8A),
+    (0x1FA8E, 0x1FAC6),
+    (0x1FAC8, 0x1FAC8),
+    (0x1FACD, 0x1FADC),
+    (0x1FADF, 0x1FAEA),
+    (0x1FAEF, 0x1FAF8),
+)
+_WIDE_STARTS = tuple(start for start, _ in _WIDE_RUNS)
 
-    Whitespace is normalized between tokens, never inside them: collapsing runs of
-    spaces with a regex over raw source shortens ``"a          b"`` along with the
-    layout, which under-measures the construct, drops a comma the formatter then
-    puts back, and leaves the file churning on every commit.
+
+def _char_width(char: str) -> int:
+    """Columns ``ruff format`` gives one non-ASCII character of the allowed set."""
+    cp = ord(char)
+    if 0xFE00 <= cp <= 0xFE0F:
+        return 0
+    run = bisect_right(_WIDE_STARTS, cp) - 1
+    return 2 if run >= 0 and cp <= _WIDE_RUNS[run][1] else 1
+
+
+def _display_width(text: str) -> int:
+    """Width of ``text`` in formatter columns: its length unless it carries non-ASCII."""
+    if text.isascii():
+        return len(text)
+    return sum(1 if char.isascii() else _char_width(char) for char in text)
+
+
+def _rendered_len(toks: list[tokenize.TokenInfo]) -> int:
+    """Width of a bracketed construct rendered on one line, string-literal safe.
+
+    ``toks`` are the construct's tokens without layout-only ones. Whitespace is
+    normalized between tokens, never inside them: collapsing runs of spaces with a
+    regex over raw source shortens ``"a          b"`` along with the layout, which
+    under-measures the construct, drops a comma the formatter then puts back, and
+    leaves the file churning on every commit.
     """
-    toks = _significant_tokens(body)
-    if toks is None:
-        return len(body)
     parts: list[str] = []
     previous: tokenize.TokenInfo | None = None
     for position, token in enumerate(toks):
@@ -483,7 +625,7 @@ def _rendered_len(body: str) -> int:
                 parts.append(" ")
         parts.append(text)
         previous = token
-    return len("".join(parts))
+    return _display_width("".join(parts))
 
 
 def _next_string(toks: list[tokenize.TokenInfo], position: int) -> str:
@@ -492,16 +634,13 @@ def _next_string(toks: list[tokenize.TokenInfo], position: int) -> str:
     return toks[nxt].string if nxt < len(toks) else ""
 
 
-def _has_nested_trailing_comma(body: str) -> bool:
+def _has_nested_trailing_comma(toks: list[tokenize.TokenInfo]) -> bool:
     """Return whether a child construct carries its own magic trailing comma.
 
     A nested trailing comma pins that child multi-line, so the parent cannot
     collapse. Detected on the token stream rather than by matching ``,)`` in raw
     text, which also fires on the CONTENTS of a string literal such as ``"(a,)"``.
     """
-    toks = _significant_tokens(body)
-    if toks is None:
-        return True  # cannot prove it is safe to collapse
     depth = 0
     for position, token in enumerate(toks):
         if token.string in _OPENERS:
@@ -513,35 +652,76 @@ def _has_nested_trailing_comma(body: str) -> bool:
     return False
 
 
-def _inline_len(
+def _collapsible_len(
     lines: list[str],
-    oli: int,
-    ocol: int,
-    cli: int,
-    ccol: int,
+    construct: Construct,
+    toks: list[tokenize.TokenInfo],
 ) -> int:
-    """Length of the construct plus its line context, rendered on a single line."""
-    prefix = lines[oli][:ocol]
-    suffix = lines[cli][ccol + 1 :]
-    if oli == cli:
-        body = lines[oli][ocol : ccol + 1]
-    else:
-        body = "\n".join([lines[oli][ocol:], *lines[oli + 1 : cli], lines[cli][: ccol + 1]])
-    return len(prefix) + _rendered_len(body) + len(suffix)
+    """Width of the construct plus its line context, rendered on a single line.
+
+    Measured in formatter columns (``_display_width``), not code points: an emoji the
+    formatter counts as two columns must not let a construct "fit" that ``ruff format``
+    then re-explodes.
+    """
+    oli, ocol, cli, ccol, _, _ = construct
+    head, tail = lines[oli][:ocol], lines[cli][ccol + 1 :]
+    return _display_width(head) + _rendered_len(toks) + _display_width(tail)
 
 
-def _analyze(text: str, threshold: int) -> tuple[list[int], list[int], list[tuple[int, str]]]:
-    """Return (insert offsets, delete offsets, violations) for ``text``."""
+# A line-scoped suppression comment: ruff's noqa, basedpyright's pyright-ignore and the
+# type-ignore spelling. Each silences diagnostics on its own physical line only.
+_SUPPRESSION = re.compile(r"(?i:noqa)\b|pyright:\s*ignore\b|type:\s*ignore\b")
+
+
+def _trailing_suppression(tail: str) -> bool:
+    """Return whether the source after a closing bracket ends in a suppression comment.
+
+    Read off the token stream so a ``# noqa`` inside a string literal does not count.
+    The tail is a line fragment: its unmatched closers tokenize fine, and anything
+    that does not tokenize ends the search -- the comments already seen still count.
+    """
+    if "#" not in tail:
+        return False
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(tail).readline):
+            if token.type == tokenize.COMMENT and _SUPPRESSION.search(token.string):
+                return True
+    except (tokenize.TokenError, SyntaxError):
+        pass
+    return False
+
+
+class Analysis(NamedTuple):
+    """The comma edits for one ``.py`` text and the violations they repair.
+
+    ``stranded`` holds the 1-based lines whose explode is reported but withheld: the
+    line ends in a suppression comment (``_trailing_suppression``). Exploding moves
+    every element onto a line of its own while ``ruff format`` keeps the comment after
+    the closing bracket, so the diagnostics it silenced move away from it -- ruff's
+    RUF100 then deletes the ``# noqa`` as unused and basedpyright reports the
+    ``ignore`` as unnecessary. Only the author knows which element the suppression
+    was for, so the fixer refuses and says so instead of writing a broken suppression.
+    """
+
+    inserts: list[int]
+    deletes: list[int]
+    violations: list[tuple[int, str]]
+    stranded: list[int]
+
+
+def _analyze(text: str, threshold: int) -> Analysis:
+    """Return the comma edits, violations and withheld explodes for ``text``."""
     blines = text.encode("utf-8").split(b"\n")
     lines = text.split("\n")
     starts = _line_starts(text)
-    sigs, comments = _tokenize_info(text, starts)
-    constructs = list(_literal_constructs(text, blines)) + sigs
+    constructs = list(_constructs(ast.parse(text), blines, lines))
 
     inserts: list[int] = []
     deletes: list[int] = []
     violations: list[tuple[int, str]] = []
-    for oli, ocol, cli, ccol, count, can_add in constructs:
+    stranded: list[int] = []
+    for construct in constructs:
+        oli, ocol, cli, ccol, count, can_add = construct
         open_abs = starts[oli] + ocol
         close_abs = starts[cli] + ccol
         scan = close_abs - 1
@@ -552,25 +732,30 @@ def _analyze(text: str, threshold: int) -> tuple[list[int], list[int], list[tupl
 
         if count >= threshold:
             if single_line and can_add and not has_comma:
-                inserts.append(close_abs)
                 violations.append((oli + 1, "explode"))
+                if _trailing_suppression(lines[cli][ccol + 1 :]):
+                    stranded.append(oli + 1)
+                else:
+                    inserts.append(close_abs)
         elif has_comma:  # below threshold and currently exploded
             src = text[open_abs : close_abs + 1]
             if '"""' in src or "'''" in src:
                 continue  # multi-line strings -- never collapse
-            # Comment offsets arrive sorted, so the containment test is a pair
-            # of binary searches, not a scan of every comment per construct.
-            if bisect_left(comments, close_abs) - bisect_right(comments, open_abs) > 0:
+            toks = _tokens(src)
+            if toks is None:
+                continue  # cannot prove it is safe to collapse
+            if any(token.type == tokenize.COMMENT for token in toks):
                 continue  # comment inside -- ruff keeps it multi-line
+            toks = [token for token in toks if token.type not in _LAYOUT_SKIP]
             # A nested magic trailing comma (a child >= threshold, a 1-tuple, or a
             # too-long child) keeps that child multi-line, so this construct cannot
             # collapse.
-            if _has_nested_trailing_comma(src):
+            if _has_nested_trailing_comma(toks):
                 continue
-            if _inline_len(lines, oli, ocol, cli, ccol) <= line_length():
+            if _collapsible_len(lines, construct, toks) <= line_length():
                 deletes.append(scan)
                 violations.append((oli + 1, "collapse"))
-    return inserts, deletes, violations
+    return Analysis(inserts, deletes, violations, stranded)
 
 
 def _apply(text: str, inserts: list[int], deletes: list[int]) -> str:
@@ -732,8 +917,21 @@ def _parse_footer(text: str) -> tuple[str, dict[str, list[str]], list[str]]:
     return body, cats, orphan
 
 
-def _render_footer(cats: dict[str, list[str]], orphan: list[str]) -> str:
-    """Render the canonical footer with existing def lines slotted per category."""
+def render_link_definitions(cats: Mapping[str, Sequence[str]], orphan: Sequence[str] = ()) -> str:
+    """Render the canonical footer with existing def lines slotted per category.
+
+    The one renderer of the block: the scaffold fixer here and the generators that
+    emit a footer of their own (``scripts/build_tree_md.py``,
+    ``scripts/capture_pg_predicate_explain.py``) all call it, so the marker list
+    and the layout cannot drift between the gate and what the generators write.
+
+    Raises:
+        ValueError: A key of ``cats`` is not one of ``LINK_DEF_CATEGORIES`` (its def
+            lines would otherwise be dropped without a word).
+    """
+    unknown = sorted(set(cats) - set(LINK_DEF_CATEGORIES))
+    if unknown:
+        raise ValueError(f"not a link-definition category: {', '.join(unknown)}")
     parts = [LINK_DEF_HEADER, ""]
     parts.extend(orphan)
     if orphan:
@@ -763,7 +961,7 @@ def _preserves_content(before: str, after: str) -> bool:
 def fix_markdown_scaffold(text: str) -> str | None:
     """Return the canonical-footer form of ``text``, or ``None`` if that would lose content."""
     body, cats, orphan = _parse_footer(text)
-    fixed = body.rstrip("\n") + "\n\n" + _render_footer(cats, orphan)
+    fixed = body.rstrip("\n") + "\n\n" + render_link_definitions(cats, orphan)
     return fixed if _preserves_content(text, fixed) else None
 
 
@@ -774,8 +972,8 @@ def fix_markdown_scaffold(text: str) -> str | None:
 # ``.json`` / ``.graphql`` / ``.gql`` files and ```json / ```graphql fenced
 # blocks in markdown. Detection never touches bare ``{`` in Python/JS/etc.
 # Empty ``{}`` (optionally ``{ }``) is exempt. The fixer reformats through the
-# canonical pretty-printers (``json.dumps(indent=2)`` / graphql-core
-# ``print_ast``), which guarantees every ``{`` opens a new line.
+# canonical pretty-printers (``json.dumps(indent=2)`` / ``_format_graphql``),
+# which guarantees every ``{`` opens a new line.
 # ---------------------------------------------------------------------------
 
 # Fenced blocks are found by scanning lines, not by one regex over the document.
@@ -975,8 +1173,8 @@ def _noncanonical(content: str, kind: str) -> str | None:
     ``kind`` (e.g. an illustrative pseudo-snippet), GraphQL with no ``{`` at all,
     or content already canonical. The fix output is itself canonical, so re-checking after a
     fix always passes (fixpoint-safe). ``json.dumps(indent=2)`` opens every
-    object brace onto its own line; graphql-core's printer explodes selection
-    sets while keeping argument input-objects inline per the GraphQL convention.
+    object brace onto its own line; ``_format_graphql`` explodes every selection
+    set, argument list, input-object and list value, one entry per line.
     """
     if kind == "graphql" and "{" not in content:
         return None  # SDL-only fragments carry no selection set to explode
@@ -1315,6 +1513,8 @@ def non_ascii_violations(text: str) -> list[tuple[int, int, str]]:
     check exists to surface never reach the loop, and every position after one is
     reported against the wrong line.
     """
+    if text.isascii():
+        return []
     hits: list[tuple[int, int, str]] = []
     for lineno, line in enumerate(text.split("\n"), 1):
         for col, ch in enumerate(line, 1):
@@ -1408,6 +1608,206 @@ def _unified_diff(path: Path, before: str, after: str) -> str:
     )
 
 
+# ``--fix`` rounds before the run gives up on a fixpoint. One comma edit can enable the
+# next only after ``ruff format`` has reflowed it (an outer construct collapses once
+# its nested children have; a construct inside an over-long call fits only once the
+# call breaks), so a round is: analyze, edit, reformat. Nesting in this repo settles
+# in two; a third leaves headroom, and a file still moving after it is an error.
+MAX_FIX_ROUNDS = 3
+NO_FIXPOINT_MESSAGE = (
+    f"no fixpoint after {MAX_FIX_ROUNDS} --fix rounds (comma edit + ruff format) "
+    "-- NOT fully fixed; lay the construct out by hand"
+)
+SCAFFOLD_UNFIXABLE_MESSAGE = (
+    "rebuilding the LINK-DEFINITIONS footer would drop content -- NOT fixed; repair the "
+    "footer by hand"
+)
+_RECHECK_ERRORS = (
+    OSError,
+    UnicodeDecodeError,
+    SyntaxError,
+    tokenize.TokenError,
+)
+STRANDED_MESSAGE = (
+    "exploding this construct would leave the line's trailing suppression comment on "
+    "the closing-bracket line, away from the element lines its diagnostics move to "
+    "-- NOT fixed; move the suppression onto the element it silences (or explode the "
+    "construct by hand), then rerun"
+)
+
+
+@dataclass
+class _PythonPass:
+    """One comma round over a ``.py`` text.
+
+    ``new`` is the edited text (``text`` itself when there is nothing to do or the
+    edit would not parse); ``found`` holds ``(line, rule, fixable)`` per violation;
+    ``stranded`` the lines whose explode was withheld (``Analysis.stranded``);
+    ``broken`` the parse error of a rejected edit.
+    """
+
+    new: str
+    found: list[tuple[int, str, bool]]
+    stranded: list[int]
+    broken: str | None
+
+
+def _python_pass(text: str, threshold: int) -> _PythonPass:
+    """Analyze ``text`` and apply its comma edits, never returning broken syntax.
+
+    Raises:
+        SyntaxError: ``text`` does not parse.
+        tokenize.TokenError: ``text`` does not tokenize.
+    """
+    analysis = _analyze(text, threshold)
+    new, broken = text, None
+    if analysis.inserts or analysis.deletes:
+        candidate = _apply(text, analysis.inserts, analysis.deletes)
+        try:
+            _ = ast.parse(candidate)
+            new = candidate
+        except SyntaxError as exc:  # safety net -- never write broken syntax
+            broken = str(exc)
+    stranded = set(analysis.stranded)
+    found = [
+        (line, kind, broken is None and not (kind == "explode" and line in stranded))
+        for line, kind in analysis.violations
+    ]
+    return _PythonPass(new, found, analysis.stranded, broken)
+
+
+def _settle_on_disk(
+    files: list[Path],
+    *,
+    quiet: bool,
+) -> tuple[list[tuple[Path, int, str]], list[tuple[Path, int | None, str]]]:
+    """Reformat the comma-edited ``files`` and repeat the comma round until they settle.
+
+    Round 1 is the caller's. Each further round reformats every file the previous
+    round edited in ONE ``ruff format`` spawn, then re-reads and re-edits them; a file
+    that still needs an edit after ``MAX_FIX_ROUNDS`` is reported, not written.
+
+    Returns ``(fixes made after round 1 as (path, line, rule), errors as (path, line,
+    message))``.
+    """
+    fixed: list[tuple[Path, int, str]] = []
+    errors: list[tuple[Path, int | None, str]] = []
+    pending = files
+    for round_number in range(2, MAX_FIX_ROUNDS + 2):
+        if not pending:
+            break
+        _run_ruff_format(pending, quiet=quiet)
+        edited: list[Path] = []
+        for path in pending:
+            try:
+                text, newline = read_source(path)
+                result = _python_pass(text, threshold_for(path))
+            except _RECHECK_ERRORS as exc:
+                errors.append((path, None, f"re-check after ruff format failed ({exc})"))
+                continue
+            if result.broken is not None:
+                message = f"comma fix would break syntax ({result.broken}) -- NOT fixed"
+                errors.append((path, None, message))
+            if result.new == text:
+                continue
+            first = next((line for line, _, fixable in result.found if fixable), None)
+            if round_number > MAX_FIX_ROUNDS:
+                errors.append((path, first, NO_FIXPOINT_MESSAGE))
+                continue
+            write_source(path, result.new, newline)
+            fixed.extend((path, line, kind) for line, kind, fixable in result.found if fixable)
+            edited.append(path)
+        pending = edited
+    return fixed, errors
+
+
+def _settle_in_memory(text: str, path: Path) -> tuple[str, bool] | None:
+    """``_settle_on_disk`` for one text: ``(settled text, converged)``, ``None`` if ruff failed.
+
+    ``--diff`` writes nothing, so it runs the same rounds through ``ruff format``'s
+    stdin and shows the text ``--fix`` would leave.
+    """
+    after = text
+    for round_number in range(2, MAX_FIX_ROUNDS + 2):
+        reflowed = _ruff_format_text(after, path)
+        if reflowed is None:
+            return None
+        result = _python_pass(reflowed, threshold_for(path))
+        if result.new == reflowed:
+            return reflowed, True
+        if round_number > MAX_FIX_ROUNDS:
+            return reflowed, False
+        after = result.new
+    return after, False  # unreachable: the last round returns
+
+
+@dataclass
+class _Report:
+    """Human output plus the ``--json`` records of one run.
+
+    ``quiet`` (``--json``) keeps human lines off both streams; the records are kept
+    either way. ``errors`` counts the error records this run raised itself (an
+    unmatched path is counted by the caller).
+    """
+
+    quiet: bool
+    records: list[dict[str, object]] = field(default_factory=list)
+    error_records: list[dict[str, object]] = field(default_factory=list)
+    violations: int = 0
+    errors: int = 0
+
+    def say(self, message: str = "", *, err: bool = False) -> None:
+        """Print ``message`` unless the run is ``--json``."""
+        if not self.quiet:
+            print(message, file=sys.stderr if err else sys.stdout)
+
+    def violation(
+        self,
+        path: Path,
+        line: int,
+        kind: str,
+        detail: str,
+        *,
+        fixable: bool,
+    ) -> None:
+        """Report one rule violation at ``path:line``."""
+        self.say(f"{path}:{line}: should {detail}")
+        self.records.append(_record(path, line, kind, f"should {detail}", fixable=fixable))
+        self.violations += 1
+
+    def error(
+        self,
+        path: Path,
+        line: int | None,
+        rule: str,
+        message: str,
+        shown: str | None = None,
+    ) -> None:
+        """Report one error; ``shown`` replaces ``message`` in the human line."""
+        where = f"{path}:{line}" if line is not None else f"{path}"
+        self.say(f"{where}: {shown or message}", err=True)
+        self.error_records.append(_record(path, line, rule, message, fixable=False))
+        self.errors += 1
+
+
+def _diff_target(path: Path, new: str, report: _Report) -> str:
+    """Return the text ``--fix`` would leave at ``path`` given its first-round text ``new``.
+
+    A ``.py`` file runs the remaining ``--fix`` rounds in memory (``_settle_in_memory``);
+    without ruff the diff shows the comma edits only.
+    """
+    if path.suffix != ".py":
+        return new
+    settled = _settle_in_memory(new, path)
+    if settled is None:
+        report.say(f"{path}: ruff format failed; diff shows the comma edits only", err=True)
+        return new
+    after, converged = settled
+    if not converged:
+        report.error(path, None, "unfixable", NO_FIXPOINT_MESSAGE)
+    return after
+
+
 class _Args(argparse.Namespace):
     """The parsed command line: one field per ``main`` argument."""
 
@@ -1448,24 +1848,17 @@ def main(argv: list[str] | None = None) -> int:
     check = args.check or args.diff
     do_fix = not check
 
-    def say(message: str = "", *, err: bool = False) -> None:
-        if not args.json:
-            print(message, file=sys.stderr if err else sys.stdout)
-
+    report = _Report(quiet=args.json)
     selection = select_files(args.paths, SUFFIXES)
     files = selection.files
     for path in selection.skipped:
-        say(f"{path}: excluded from the source-layout rules -- not checked", err=True)
+        report.say(f"{path}: excluded from the source-layout rules -- not checked", err=True)
     for path in selection.ignored:
-        say(f"{path}: no source-layout rule covers this suffix -- ignored", err=True)
-    records: list[dict[str, object]] = []
-    error_records: list[dict[str, object]] = []
+        report.say(f"{path}: no source-layout rule covers this suffix -- ignored", err=True)
     for raw, reason in selection.unmatched:
-        say(f"{raw}: {reason} -- NOT checked", err=True)
-        error_records.append(_record(raw, None, "unmatched-path", reason, fixable=False))
+        report.say(f"{raw}: {reason} -- NOT checked", err=True)
+        report.error_records.append(_record(raw, None, "unmatched-path", reason, fixable=False))
 
-    violations = 0
-    errors = 0
     changed: list[Path] = []
     py_changed: list[Path] = []
     diffs: dict[str, str] = {}
@@ -1478,9 +1871,7 @@ def main(argv: list[str] | None = None) -> int:
             # A file that could not be read was not checked, so the run cannot
             # claim it passed: count it and fail, rather than printing and
             # exiting 0 on a file the gate never opened.
-            say(f"{path}: read error ({exc}) -- NOT checked", err=True)
-            error_records.append(_record(path, None, "read-error", str(exc), fixable=False))
-            errors += 1
+            report.error(path, None, "read-error", str(exc), f"read error ({exc}) -- NOT checked")
             continue
         new = text
         # (line, rule, fixable); the fixed text is computed in every mode so
@@ -1502,23 +1893,24 @@ def main(argv: list[str] | None = None) -> int:
                 for ln, col, ch in non_ascii_violations(text)
             )
             try:
-                inserts, deletes, comma_found = _analyze(text, threshold_for(path))
+                result = _python_pass(text, threshold_for(path))
             except (SyntaxError, tokenize.TokenError) as exc:
-                say(f"{path}: parse error ({exc}) -- NOT checked", err=True)
-                error_records.append(_record(path, None, "parse-error", str(exc), fixable=False))
-                errors += 1
+                report.error(
+                    path,
+                    None,
+                    "parse-error",
+                    str(exc),
+                    f"parse error ({exc}) -- NOT checked",
+                )
                 continue
-            comma_fixable = True
-            if inserts or deletes:
-                candidate = _apply(new, inserts, deletes)
-                try:
-                    _ = ast.parse(candidate)
-                    new = candidate
-                except SyntaxError as exc:  # safety net -- never write broken syntax
-                    comma_fixable = False
-                    if do_fix:
-                        say(f"{path}: comma fix would break syntax ({exc}) -- skipped", err=True)
-            found.extend((ln, kind, comma_fixable) for ln, kind in comma_found)
+            if do_fix:
+                if result.broken is not None:
+                    message = f"comma fix would break syntax ({result.broken}) -- NOT fixed"
+                    report.error(path, None, "unfixable", message)
+                for line in result.stranded:
+                    report.error(path, line, "unfixable", STRANDED_MESSAGE)
+            new = result.new
+            found.extend(result.found)
 
         elif path.suffix == ".md":
             scaffold_missing = (
@@ -1531,15 +1923,7 @@ def main(argv: list[str] | None = None) -> int:
                 found.append((new.count("\n") + 1, "md-scaffold", rebuilt is not None))
                 if rebuilt is None:
                     if do_fix:
-                        message = (
-                            "rebuilding the LINK-DEFINITIONS footer would drop content "
-                            "-- NOT fixed; repair the footer by hand"
-                        )
-                        say(f"{path}: {message}", err=True)
-                        error_records.append(
-                            _record(path, None, "unfixable", message, fixable=False),
-                        )
-                        errors += 1
+                        report.error(path, None, "unfixable", SCAFFOLD_UNFIXABLE_MESSAGE)
                 else:
                     new = rebuilt
             fence_lines, new = process_markdown_fences(new, do_fix=True)
@@ -1559,9 +1943,7 @@ def main(argv: list[str] | None = None) -> int:
             detail = MESSAGES[kind]
             if kind == "md-scaffold":
                 detail = f"{detail} -- first missing marker: {scaffold_missing}"
-            say(f"{path}:{lineno}: should {detail}")
-            records.append(_record(path, lineno, kind, f"should {detail}", fixable=fixable))
-            violations += 1
+            report.violation(path, lineno, kind, detail, fixable=fixable)
         if new == text:
             continue
         if do_fix:
@@ -1570,52 +1952,55 @@ def main(argv: list[str] | None = None) -> int:
             if path.suffix == ".py":
                 py_changed.append(path)
         elif args.diff:
-            after = new
-            if path.suffix == ".py":
-                reflowed = _ruff_format_text(new, path)
-                if reflowed is None:
-                    say(f"{path}: ruff format failed; diff shows the comma edits only", err=True)
-                else:
-                    after = reflowed
-            diffs[str(path)] = _unified_diff(path, text, after)
+            diffs[str(path)] = _unified_diff(path, text, _diff_target(path, new, report))
+
+    if do_fix:
+        # Later rounds: each one reformats what the previous round edited, so a
+        # comma edit that only becomes visible after the reflow is made in this run.
+        later_fixes, settle_errors = _settle_on_disk(py_changed, quiet=args.json)
+        for fixed_path, lineno, kind in later_fixes:
+            report.violation(fixed_path, lineno, kind, MESSAGES[kind], fixable=True)
+        for error_path, lineno, message in settle_errors:
+            report.error(error_path, lineno, "unfixable", message)
 
     # Non-ASCII in .py is report-only (no safe universal auto-fix) and fails in
     # BOTH modes, so the pre-commit `--fix` run catches it too, not just CI.
     for hit_path, line, col, char in ascii_hits:
         message = f"non-ASCII U+{ord(char):04X} {char!r} not allowed in .py (ASCII + emoji only)"
-        say(f"{hit_path}:{line}:{col}: {message}", err=True)
-        records.append(
+        report.say(f"{hit_path}:{line}:{col}: {message}", err=True)
+        report.records.append(
             _record(hit_path, line, "non-ascii", f"column {col}: {message}", fixable=False),
         )
 
     for diff in diffs.values():
-        say(diff.rstrip("\n"))
+        report.say(diff.rstrip("\n"))
 
+    violations, errors = report.violations, report.errors
     unmatched = len(selection.unmatched)
     if check:
         if violations:
-            say(f"\n{violations} layout violation(s); run with --fix to resolve")
+            report.say(f"\n{violations} layout violation(s); run with --fix to resolve")
         if ascii_hits:
-            say(f"{len(ascii_hits)} non-ASCII char(s) in .py; replace with ASCII (emoji allowed)")
+            report.say(
+                f"{len(ascii_hits)} non-ASCII char(s) in .py; replace with ASCII (emoji allowed)",
+            )
         exit_code = 1 if (violations or ascii_hits or errors or unmatched) else 0
     else:
-        if py_changed:
-            _run_ruff_format(py_changed, quiet=args.json)
-        say(f"Fixed {len(changed)} file(s).")
+        report.say(f"Fixed {len(changed)} file(s).")
         if ascii_hits:
-            say(
+            report.say(
                 f"{len(ascii_hits)} non-ASCII char(s) in .py need manual replacement "
                 f"(emoji allowed)",
             )
         exit_code = 1 if (ascii_hits or errors or unmatched) else 0
     if errors:
-        say(f"{errors} file(s) could not be checked")
+        report.say(f"{errors} error(s): file(s) not checked or not fully fixed")
     if unmatched:
-        say(f"{unmatched} path(s) contributed no file to check")
+        report.say(f"{unmatched} path(s) contributed no file to check")
 
     excluded_paths = [*selection.skipped, *selection.excluded]
     total_violations = violations + len(ascii_hits)
-    say(
+    report.say(
         f"source-layout: checked {len(files)} file(s); excluded {len(excluded_paths)}; "
         f"ignored {len(selection.ignored)}; violations {total_violations} "
         f"(layout {violations}, non-ASCII {len(ascii_hits)}); errors {errors + unmatched}",
@@ -1629,15 +2014,15 @@ def main(argv: list[str] | None = None) -> int:
                 "excluded": len(excluded_paths),
                 "ignored": len(selection.ignored),
                 "violations": total_violations,
-                "errors": len(error_records),
+                "errors": len(report.error_records),
                 "fixed": len(changed),
                 "exit": exit_code,
             },
             "checked": [str(path) for path in files],
             "excluded": [str(path) for path in excluded_paths],
             "ignored": [str(path) for path in selection.ignored],
-            "violations": records,
-            "errors": error_records,
+            "violations": report.records,
+            "errors": report.error_records,
         }
         if args.diff:
             document["diffs"] = diffs

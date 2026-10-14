@@ -536,6 +536,45 @@ def _line_of(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
+def _scan_windows(text: str, anchor: str, *, wrap: bool) -> list[tuple[int, int]]:
+    """Return merged line-aligned ``(start, end)`` spans of ``text`` around each ``anchor``.
+
+    Every citation pattern contains a literal anchor (``.py::`` or ``#"``), so the
+    patterns only need to run where one occurs; scanning the whole text pays the
+    path-prefix backtracking at every word of every file. ``wrap`` widens the span
+    by one line each side for the patterns that continue across a line break.
+    """
+    spans: list[tuple[int, int]] = []
+    position = text.find(anchor)
+    while position != -1:
+        start = text.rfind("\n", 0, position) + 1
+        line_end = text.find("\n", position)
+        line_end = len(text) if line_end == -1 else line_end
+        end = line_end
+        if wrap:
+            if start > 0:
+                start = text.rfind("\n", 0, start - 1) + 1
+            if end < len(text):
+                following = text.find("\n", end + 1)
+                end = len(text) if following == -1 else following
+        if spans and start <= spans[-1][1]:
+            spans[-1] = (spans[-1][0], max(spans[-1][1], end))
+        else:
+            spans.append((start, end))
+        position = text.find(anchor, line_end + 1) if line_end < len(text) else -1
+    return spans
+
+
+def _finditer_in(
+    pattern: re.Pattern[str],
+    text: str,
+    spans: list[tuple[int, int]],
+) -> Iterator[re.Match[str]]:
+    """Yield ``pattern`` matches inside ``spans`` only, positions relative to the whole ``text``."""
+    for start, end in spans:
+        yield from pattern.finditer(text, start, end)
+
+
 def iter_citation_records(text: str, *, substrings: bool = False) -> Iterator[Citation]:
     """Yield every checkable citation in ``text``, in source order.
 
@@ -549,22 +588,23 @@ def iter_citation_records(text: str, *, substrings: bool = False) -> Iterator[Ci
     """
     found: list[tuple[int, Citation]] = []
     continuations: set[int] = set()
-    for match in WRAPPED_PATH_RE.finditer(text):
+    path_spans = _scan_windows(text, ".py::", wrap=True)
+    for match in _finditer_in(WRAPPED_PATH_RE, text, path_spans):
         continuations.add(match.start(2))
         cited = match.group(1) + match.group(3)
         found.append((match.start(), _symbol_citation(text, match.start(), cited, match.group(4))))
-    for match in WRAPPED_SYMBOL_RE.finditer(text):
+    for match in _finditer_in(WRAPPED_SYMBOL_RE, text, path_spans):
         found.append(
             (match.start(), _symbol_citation(text, match.start(), match.group(1), match.group(2))),
         )
-    for match in CITATION_RE.finditer(text):
+    for match in _finditer_in(CITATION_RE, text, path_spans):
         if match.start() in continuations:
             continue
         found.append(
             (match.start(), _symbol_citation(text, match.start(), match.group(1), match.group(2))),
         )
     if substrings:
-        for match in SUBSTRING_RE.finditer(text):
+        for match in _finditer_in(SUBSTRING_RE, text, _scan_windows(text, '#"', wrap=False)):
             cited, symbol, substring = match.group(1), match.group(2), match.group(3)
             record = Citation(
                 _line_of(text, match.start()),

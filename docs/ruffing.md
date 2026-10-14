@@ -191,6 +191,45 @@ Per-file ignores:
 | `examples/fakeshop/*.py`, `examples/fakeshop/tests/*.py` | `INP001` |
 | `examples/fakeshop/test_query/**/*.py` | `INP001`, `UP031` |
 
+## Custom formatter interplay
+
+`scripts/check_trailing_commas.py` (hook `source-layout`, CI `--check`) and ruff share one pipeline, in this
+order: the script `--fix`, `ruff check --fix`, `ruff format`. The script's `--fix` runs `ruff format` on the files
+it rewrote and repeats comma edit plus format until nothing changes (`MAX_FIX_ROUNDS`, 3); a file still changing
+after that is an `unfixable` error, never a pass. No ruff rule and the script rewrite each other: the pipeline
+reaches a fixpoint, and the script's `--check` is clean after ruff's fixes. What each side owns:
+
+- Single-line collection and signature layout belongs to the script: explode at 4 items (2 in `models.py`),
+  collapse below that when the one-line form fits `[tool.ruff] line-length` (99, not E501's 110), measured in
+  ruff's display columns (an emoji is two). `COM812` only adds commas to constructs that are already multi-line;
+  `COM819` never survives the script's own format pass.
+- Imports belong to isort and the formatter: `split-on-trailing-comma` (the default) keeps a parenthesized import
+  exploded after a trailing comma. Imports are not a script construct and have no threshold.
+- `.py` string literals, docstrings (`D2xx` / `D4xx`) and quotes (`Q`) are out of the script's reach.
+- The script's ASCII check is stricter than `RUF001`-`RUF003` (it also rejects accented letters), which stay on;
+  only emoji pass both.
+
+Suppressions go on the element. The script refuses to explode a line that ends in `# noqa`,
+`# pyright: ignore` or `# type: ignore`: after the explode the comment would sit after the closing bracket while
+the diagnostic moves to an element line, so `RUF100` would delete the noqa and basedpyright would report the
+ignore as unnecessary. `--check` reports it as not fixable and `--fix` as an `unfixable` error; move the comment
+onto the element it silences.
+
+Ruff-side notes:
+
+- The hug form `(\n    a, b, c\n)` that `ruff format` writes after a lengthening autofix (a `TC` quote, a
+  `TID252` absolute import) needs `ruff check --fix` (`COM812`) and `ruff format` run twice. That is ruff against
+  itself; the script is not involved.
+- Collapsing a wrapped implicit concatenation in a below-threshold collection makes `ISC001` fire; its fix joins
+  the strings in the same pass.
+- After any `--unsafe-fixes` pass, rerun the whole pipeline script first: `PLR1714`, `SIM101` and `C4` can write a
+  single-line 4-item literal.
+
+Planned rules: the `TC`, `TID252`, `EM` and `D413` autofixes and a `CPY001` header were measured against the
+pipeline with no ping-pong. A `CPY001` header would have to be emitted by
+`scripts/build_kanban_tracked_path_constants.py::render_constants`, since the module it generates passes the same
+pipeline.
+
 ## `# noqa` breakdown
 
 Lines carrying `# noqa`: 326 (none bare) in 98 files: package 197, tests 66, examples 56, scripts 4, root 3.

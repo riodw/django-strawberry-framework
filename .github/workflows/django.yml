@@ -61,7 +61,7 @@ jobs:
         # requires a 100% score with no diagnostic outside the script's exact-match
         # allowlist (scripts/check_public_types.py).
         run: uv run python scripts/check_public_types.py
-      - name: Trailing-comma layout (>=4 elements; models.py >=2)
+      - name: Source layout (trailing commas, md link scaffold, JSON/GraphQL braces, ASCII-only)
         run: uv run python scripts/check_trailing_commas.py --check
 
       - name: Citations resolve (AGENTS.md rule 27 path::Symbol refs)
@@ -81,6 +81,12 @@ jobs:
         # fails on a diff they did not create. Enforcing the same invariant on
         # push keeps that cost on the commit that caused it.
         run: uv run python scripts/build_kanban_tracked_path_constants.py --check
+
+      - name: Kanban anchors collision-free
+        # Parity with the `check-kanban-anchors` pre-commit hook: the backstop for
+        # a card retitle committed with hooks skipped. Reads the committed board and
+        # glossary DB; writes nothing.
+        run: uv run python scripts/check_kanban_anchors.py
 
       - name: Generated docs match their generators
         # Every one of these files is script-rendered from the fakeshop DB or

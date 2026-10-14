@@ -285,3 +285,194 @@ def test_comma_layout_threshold(source: str, expected: list[tuple[int, str]]) ->
 def test_markdown_scaffold(text: str, missing: str | None) -> None:
     """The first missing scaffold marker is reported; the canonical footer passes."""
     assert ctc._scaffold_in_canonical_order(text) == missing
+
+
+STRAWBERRY = "\U0001f353"
+ATOM_EMOJI = "\u269b\ufe0f"  # the kanban parity marker: U+269B ATOM + U+FE0F
+
+
+def _two_item_list(payload: str, code_points: int) -> str:
+    """An exploded two-string list whose collapsed line is ``code_points`` code points long.
+
+    Collapsed it reads ``X = ["<payload>", "<pad>"]``: 12 code points plus both strings.
+    """
+    pad = "p" * (code_points - 12 - len(payload))
+    return f'X = [\n    "{payload}",\n    "{pad}",\n]\n'
+
+
+@pytest.mark.parametrize(
+    ("payload", "code_points", "expected"),
+    [
+        # 99 code points, 100 columns: the formatter would re-explode it.
+        (STRAWBERRY, 99, []),
+        # Control: the same length in ASCII fits the 99-column line length.
+        ("s", 99, [(1, "collapse")]),
+        # 100 code points, 99 columns: ATOM is one column, the selector zero.
+        (ATOM_EMOJI, 100, [(1, "collapse")]),
+    ],
+)
+@pytest.mark.usefixtures("repo")
+def test_collapse_fit_counts_display_columns(
+    payload: str,
+    code_points: int,
+    expected: list[tuple[int, str]],
+) -> None:
+    """The collapse fit counts formatter columns, not code points, at the line-length edge."""
+    source = _two_item_list(payload, code_points)
+    assert ctc._analyze(source, ctc.threshold_for(Path("pkg/mod.py")))[2] == expected
+
+
+def test_display_width_matches_ruff_format(repo: Path) -> None:
+    """Every non-ASCII character the ASCII rule allows has the width ``ruff format`` gives it.
+
+    Two probe statements per character: collapsed, ``x = f("<char>", <name>)`` is 99
+    columns at the table's width (ruff must join it) and 100 with a one-longer name
+    (ruff must keep it split). Ruff's join-or-split decision reads its own width back.
+    """
+    allowed = [
+        chr(cp)
+        for cp in (*range(0x2600, 0x2700), *range(0x1F000, 0x1FB00), *range(0xFE00, 0xFE10))
+        if ctc._is_emoji(cp)
+    ]
+    names: list[tuple[str, str]] = []
+    statements: list[str] = []
+    for index, char in enumerate(allowed):
+        fits = f"v{index}_".ljust(88 - ctc._display_width(char), "z")
+        names.append((fits, f"{fits}y"))
+        statements.extend(f'x = f(\n    "{char}", {name}\n)\n' for name in names[-1])
+    formatted = ctc._ruff_format_text("".join(statements), repo / "probe.py")
+    assert formatted is not None
+    joined = {
+        line.rsplit(", ", 1)[1].removesuffix(")")
+        for line in formatted.splitlines()
+        if line.startswith('x = f("')
+    }
+    mismatched = [
+        f"U+{ord(char):04X}"
+        for char, (fits, overflows) in zip(allowed, names, strict=True)
+        if fits not in joined or overflows in joined
+    ]
+    assert len(allowed) == 3088
+    assert mismatched == []
+
+
+@pytest.mark.parametrize(
+    ("source", "fixed"),
+    [
+        # A bare tuple of parenthesized items: its brackets are its elements'.
+        ("BARE = (1, 2), (3, 4), (5, 6), (7, 8)\n", None),
+        ("BARE = (a), (b, c)\n", None),
+        # Controls: the tuple's own parentheses, with and without parenthesized items.
+        ("P = ((1, 2), (3, 4), (5, 6), (7, 8))\n", "P = ((1, 2), (3, 4), (5, 6), (7, 8),)\n"),
+        ("P = ((a), b, c, d)\n", "P = ((a), b, c, d,)\n"),
+        # Only the four-item element of a bare tuple explodes, inside its own brackets.
+        ("Q = (a), (b, c, d, e)\n", "Q = (a), (b, c, d, e,)\n"),
+    ],
+)
+@pytest.mark.usefixtures("repo")
+def test_explode_comma_lands_inside_the_tuples_own_parentheses(
+    source: str,
+    fixed: str | None,
+) -> None:
+    """A comma is added before a tuple's closing parenthesis only when the tuple owns it."""
+    analysis = ctc._analyze(source, ctc.threshold_for(Path("pkg/mod.py")))
+    assert analysis.violations == ([] if fixed is None else [(1, "explode")])
+    assert ctc._apply(source, analysis.inserts, analysis.deletes) == (fixed or source)
+
+
+@pytest.mark.parametrize(
+    "comment",
+    [
+        "# noqa: T201",
+        "# NOQA",
+        "# pyright: ignore[reportUnusedCallResult]",
+        "# type: ignore",
+    ],
+)
+def test_explode_refuses_to_strand_a_trailing_suppression(
+    repo: Path,
+    capsys: pytest.CaptureFixture[str],
+    comment: str,
+) -> None:
+    """--fix leaves a line ending in a suppression unexploded and fails with the location."""
+    source = f"X = [print(1), print(2), print(3), print(4)]  {comment}\n"
+    path = _write(repo, "pkg/mod.py", source)
+    assert ctc.main(["--fix", "--json", "pkg/mod.py"]) == 1
+    document = json.loads(capsys.readouterr().out)
+    assert path.read_text(encoding="utf-8") == source
+    assert [(v["rule"], v["line"], v["fixable"]) for v in document["violations"]] == [
+        ("explode", 1, False),
+    ]
+    assert [(e["file"], e["rule"], e["line"]) for e in document["errors"]] == [
+        ("pkg/mod.py", "unfixable", 1),
+    ]
+    assert document["errors"][0]["message"] == ctc.STRANDED_MESSAGE
+    assert document["summary"]["fixed"] == 0
+    # --check reports the same explode as not fixable, and no error.
+    assert ctc.main(["--check", "--json", "pkg/mod.py"]) == 1
+    document = json.loads(capsys.readouterr().out)
+    assert [(v["rule"], v["fixable"]) for v in document["violations"]] == [("explode", False)]
+    assert document["errors"] == []
+
+
+@pytest.mark.parametrize(
+    "tail",
+    ["  # a plain comment", ', "# noqa: T201"'],
+)
+def test_explode_with_a_trailing_non_suppression_is_fixed(
+    repo: Path,
+    capsys: pytest.CaptureFixture[str],
+    tail: str,
+) -> None:
+    """Negative control: a plain comment or a ``# noqa`` inside a string does not block it."""
+    path = _write(repo, "pkg/mod.py", f"X = [print(1), print(2), print(3), print(4)]{tail}\n")
+    assert ctc.main(["--fix", "--json", "pkg/mod.py"]) == 0
+    document = json.loads(capsys.readouterr().out)
+    assert document["errors"] == []
+    assert document["summary"]["fixed"] == 1
+    assert "    print(1),\n" in path.read_text(encoding="utf-8")
+
+
+NESTED = "X = [\n    [\n        1,\n        2,\n    ],\n    [\n        3,\n        4,\n    ],\n]\n"
+
+
+def test_fix_reaches_the_fixpoint_in_one_run(
+    repo: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An outer construct that collapses only after its children have is fixed in one --fix."""
+    path = _write(repo, "pkg/mod.py", NESTED)
+    assert ctc.main(["--fix", "--json", "pkg/mod.py"]) == 0
+    document = json.loads(capsys.readouterr().out)
+    assert path.read_text(encoding="utf-8") == "X = [[1, 2], [3, 4]]\n"
+    # Two inner collapses in round 1, the outer one in round 2.
+    assert [(v["rule"], v["line"]) for v in document["violations"]] == [
+        ("collapse", 2),
+        ("collapse", 6),
+        ("collapse", 1),
+    ]
+    assert document["errors"] == []
+    assert ctc.main(["--check", "pkg/mod.py"]) == 0
+
+
+def test_diff_shows_the_fixpoint(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """--diff runs the same rounds in memory, so it shows the text --fix leaves."""
+    path = _write(repo, "pkg/mod.py", NESTED)
+    assert ctc.main(["--diff", "pkg/mod.py"]) == 1
+    assert "+X = [[1, 2], [3, 4]]\n" in capsys.readouterr().out
+    assert path.read_text(encoding="utf-8") == NESTED
+
+
+def test_fix_without_a_fixpoint_is_an_error(
+    repo: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A file still changing after the round bound fails the run instead of passing."""
+    monkeypatch.setattr(ctc, "MAX_FIX_ROUNDS", 1)
+    _write(repo, "pkg/mod.py", NESTED)
+    assert ctc.main(["--fix", "--json", "pkg/mod.py"]) == 1
+    document = json.loads(capsys.readouterr().out)
+    assert [(e["file"], e["rule"], e["line"]) for e in document["errors"]] == [
+        ("pkg/mod.py", "unfixable", 1),
+    ]

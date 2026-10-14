@@ -62,6 +62,11 @@ if TYPE_CHECKING:
 
     from django_strawberry_framework.filters import FilterSet
 
+try:
+    from check_trailing_commas import render_link_definitions
+except ModuleNotFoundError:  # imported as a ``scripts.`` module (repo root on path)
+    from scripts.check_trailing_commas import render_link_definitions
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ARTIFACT_PATH = REPO_ROOT / "docs" / "row-preserving-predicates-part1-pg-explain.md"
 
@@ -91,34 +96,13 @@ REPAIR_EVERY = 10  # book i is in repair (hidden by ``BookType``) when i % REPAI
 # markdown doc (AGENTS.md "Markdown link convention"; enforced by
 # ``scripts/check_trailing_commas.py``'s ``_scaffold_in_canonical_order``): the
 # ``<!-- LINK DEFINITIONS -->`` delimiter followed by the 10 path-based group
-# headers in canonical order, each present even when empty. This is emitted
-# verbatim as the tail of the artifact so the generated file stays BYTE-IDENTICAL
-# to the checked-in ``docs/row-preserving-predicates-part1-pg-explain.md`` and
-# passes the standing-doc link-block validation. Kept as one constant (rather
+# headers in canonical order, each present even when empty, rendered by the
+# gate's own ``render_link_definitions`` so the marker list has one source. This
+# is emitted verbatim as the tail of the artifact so the generated file stays
+# BYTE-IDENTICAL to the checked-in ``docs/row-preserving-predicates-part1-pg-explain.md``
+# and passes the standing-doc link-block validation. Kept as one constant (rather
 # than inline literals in ``main``) so the footer test can import and check it.
-LINK_DEFINITIONS_FOOTER = (
-    "<!-- LINK DEFINITIONS -->\n"
-    "\n"
-    "<!-- Root -->\n"
-    "\n"
-    "<!-- docs/ -->\n"
-    "\n"
-    "<!-- docs/SPECS/ -->\n"
-    "\n"
-    "<!-- docs/builder/ -->\n"
-    "\n"
-    "<!-- django_strawberry_framework/ -->\n"
-    "\n"
-    "<!-- tests/ -->\n"
-    "\n"
-    "<!-- examples/ -->\n"
-    "\n"
-    "<!-- scripts/ -->\n"
-    "\n"
-    "<!-- .venv/ -->\n"
-    "\n"
-    "<!-- External -->\n"
-)
+LINK_DEFINITIONS_FOOTER = render_link_definitions({})
 
 
 @dataclass(frozen=True)

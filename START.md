@@ -147,7 +147,7 @@ Four trees, one `pytest.ini`, one command: `uv run pytest`.
 Local hooks, `.pre-commit-config.yaml`, run order. All via `uv run` (shared ruff). Config file wins over this list.
 
 1. **kanban-tracked-path-constants** (`scripts/build_kanban_tracked_path_constants.py`) — REWRITES constants module from `git ls-files`. Add/delete a tracked package/test file → the hook rewrites the module and fails the commit until the rewritten module is staged too. `always_run: true`, `pass_filenames: false`, no `files:` key (deleted paths never appear in the staged list). Sees a new file only once STAGED; `--all-files` before `git add` proves nothing. Unblock: `git add` the rewritten constants module alongside the add/delete, rerun the hooks, commit once; no constants-only sync commit.
-2. **source-layout** (`scripts/check_trailing_commas.py --fix`) — trailing-comma explode-at-threshold (4; 2 in `models.py`), ASCII-only `.py`, `.md` link-def scaffold, JSON/GraphQL brace explosion. Auto-fixes; a rewrite fails the run so you re-stage. ASCII rule `.py`-only; em dashes fine in `.md`.
+2. **source-layout** (`scripts/check_trailing_commas.py --fix`) — trailing-comma explode-at-threshold (4; 2 in `models.py`), ASCII-only `.py`, `.md` link-def scaffold, JSON/GraphQL brace explosion. Auto-fixes, looping comma edit + `ruff format` to a fixpoint (no fixpoint = `unfixable` error); a rewrite fails the run so you re-stage. Refuses to explode a line ending in `# noqa` / `# pyright: ignore` / `# type: ignore` (`unfixable`): put the suppression on the element. ASCII rule `.py`-only; em dashes fine in `.md`. Ruff interplay: [docs/ruffing.md][ruffing] "Custom formatter interplay".
 3. **ruff-check --fix**, 4. **ruff-format**.
 5. **basedpyright** (`uv run basedpyright`, whole scope, `pass_filenames: false`) — fires on any staged `.py`, `pyproject.toml` or `uv.lock` (a lock-only stubs bump moves the verdict); a signature change reddens callers in files you aren't committing.
 6. **basedpyright-floor** (`uv run basedpyright -p pyrightconfig.floor.json`) — the same scope at 3.10; fires on the `basedpyright` hook's files plus its own config.
@@ -173,7 +173,7 @@ CI `lint` job (`django.yml` is authoritative for the order): `ruff check` / `ruf
 | `build_glossary_md.py` | render `docs/GLOSSARY.md` from glossary DB |
 | `build_tree_md.py` | render `docs/TREE.md` from module docstrings + board predicted-path rows; missing module docstring fails it |
 | `build_kanban_tracked_path_constants.py` | hook 1; run after adding/removing any tracked package/test file |
-| `check_trailing_commas.py` | hook 2; `--check` CI, `--fix` local; owns `EXEMPT_MD_SCAFFOLD_NAMES`, `LINK_DEF_CATEGORIES`. Default = repo-wide AUTO-FIX → always pass explicit paths (else rewrites other session's untracked files) |
+| `check_trailing_commas.py` | hook 2; `--check` CI, `--fix` local (loops to a fixpoint or exits `unfixable`); owns `EXEMPT_MD_SCAFFOLD_NAMES`, `LINK_DEF_CATEGORIES`. Default = repo-wide AUTO-FIX → always pass explicit paths (else rewrites other session's untracked files) |
 | `check_public_types.py` | hook 7; CI lint. Builds its own non-editable env (`--verifytypes` can't see the editable `.venv`); a fresh env w/o `--reinstall-package` gets uv's cached build of OLDER source |
 | `check_citations.py` | hook 9; `--check` CI |
 | `check_kanban_anchors.py` | hook 8 |
@@ -402,6 +402,7 @@ Editing it: dense. No blank lines, no periods, no code blocks.
 [glossary]: docs/GLOSSARY.md
 [hunt]: docs/bug_hunt/HUNT.md
 [review]: docs/review/REVIEW.md
+[ruffing]: docs/ruffing.md
 [tree]: docs/TREE.md
 
 <!-- docs/SPECS/ -->

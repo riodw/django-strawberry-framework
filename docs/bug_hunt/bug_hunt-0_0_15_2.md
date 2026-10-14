@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 60 done, 150 to do.
+Progress: 61 done, 150 to do.
 
 ## Done
 
@@ -52,6 +52,10 @@ Progress: 60 done, 150 to do.
   choice, date/time/UUID/decimal, FK-id paths, nested branches, nested connection arguments), and a logical arm that constrained
   nothing was TRUE (`not: {}` no rows, `or: [{}, real]` every row). Now `[]` is the empty set as in Django, strawberry-django and
   graphene-django, an inert arm is `Q()`, a raw `?x__in=` keeps django-filter's no-constraint rule (`e09b5ef1`)
+- [x] 15. `filters/inputs.py` robustness row (not a defect: the wire cannot deliver the shape): a hand-built range value the
+  range filter cannot read (a list, a scalar, an object, a mapping with a key other than `start` / `end`, so also a misspelled
+  lookup under a range head) dropped the constraint and `apply_sync` returned every row, against the GLOSSARY / spec-027
+  promise that an unknown lookup raises; it now raises `ConfigurationError`, as the list and dict arms already did (`a54ad7c8`)
 - [x] 28. Deep dive 3 (authorization on deferred paths): findings 12 and 13 done; `VenueBadgeType` and `VenueSponsorType` now
   hide marked rows, and live rows prove none leaks through the no-`related_name` reverse accessors (`16a8c179`)
 - [x] 50. A SKIP hint (and a consumer-assigned relation, and the nested-connection SKIP arm) left the relation's key column out of
@@ -193,7 +197,6 @@ tracker number are recorded there; open remainders and new defects are filed as 
 40 low-priority rows, mostly guards against classes with broken `__name__` / `__eq__` / metaclasses. Expected outcome: most are
 not real bugs and just get deleted from t3. One checkbox per area:
 
-- [ ] 15. `filters/inputs.py` (1 row)
 - [ ] 16. `forms/` (2 rows)
 - [ ] 17. `mutations/` and `auth/mutations.py` (4 rows)
 - [ ] 18. `optimizer/` (2 rows)
@@ -439,6 +442,9 @@ not real bugs and just get deleted from t3. One checkbox per area:
   an eager annotation of a module without `from __future__ import annotations`: it raises `NameError` at import on 3.10-3.13
   while ruff (`TC004` covers imports only, `F821` sees a binding) and basedpyright pass; six package modules define such names
   (all quoted today); only the floor run of `tests/base/test_init.py` catches it
+- [ ] 213. `filters/inputs.py` docstrings carry process provenance START.md bans: `_require_list_container` ("The previous
+  arms SPLATTED ...") and the GlobalID list arm ("The previous implementation eagerly decoded ..."); restate each as the
+  invariant, and sweep the older filter tests for the same wording
 
 ## To do: holes found re-checking the fixes
 
@@ -536,8 +542,9 @@ not real bugs and just get deleted from t3. One checkbox per area:
   relation error
 - [ ] 196. CHANGELOG entries for items 6 (combined querysets served as their pk set), 12 (the deadline message reads "before
   this field reached the database"; login, logout, me and `relay.node()` reject past the deadline), 50 and 83 (planned
-  `.only()` writers no longer drop selected columns) and 74 (a consumer `select_related` the selection never reads no
-  longer errors)
+  `.only()` writers no longer drop selected columns), 74 (a consumer `select_related` the selection never reads no
+  longer errors) and 15 (a hand-built range filter value that is not a `start` / `end` mapping or input object raises
+  `ConfigurationError` instead of filtering nothing)
 - [ ] 197. The per-parent visibility paths (`types/resolvers.py::_visible_many_rows`, `_visible_related_object`, relation
   connections, `resolver=`) never narrow the hook's result to the source's rows, so a hook that ignores its input shows other
   parents' rows or the wrong to-one object. Decide the contract (narrow at the five seams, with a live row for an

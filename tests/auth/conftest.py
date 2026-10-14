@@ -1,6 +1,6 @@
 """Shared fixtures for the auth test modules.
 
-Holds the ``_sync_boundary_spy`` fixture (previously duplicated verbatim in
+Holds the ``sync_boundary_spy`` fixture (previously duplicated verbatim in
 ``test_mutations`` and ``test_queries``). Plain, non-fixture helpers shared
 across the modules live in ``tests/auth/_helpers.py``.
 """
@@ -16,7 +16,7 @@ from django_strawberry_framework.utils.querysets import run_in_one_sync_boundary
 
 
 @pytest.fixture
-def _sync_boundary_spy(monkeypatch: pytest.MonkeyPatch) -> list[Callable[..., object]]:
+def sync_boundary_spy(monkeypatch: pytest.MonkeyPatch) -> list[Callable[..., object]]:
     """Spy on ``run_in_one_sync_boundary`` so async-body entry is counted deterministically.
 
     Both ``login`` / ``logout`` and ``current_user`` ride the same

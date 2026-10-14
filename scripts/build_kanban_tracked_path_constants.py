@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """Render the kanban tracked-path constants from git-tracked package and test files."""
 
 from __future__ import annotations

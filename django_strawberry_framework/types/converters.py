@@ -329,15 +329,15 @@ def _field_label(field: object) -> str:
     """Return ``Model.field`` for diagnostics, tolerating malformed field metadata."""
     try:
         model = getattr(field, "model", None)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         model = None
     try:
         model_name = getattr(model, "__name__", "<unbound>")
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         model_name = "<unbound>"
     try:
         field_name = getattr(field, "name", "<unknown>")
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         field_name = "<unknown>"
     return f"{_safe_text(model_name, '<unbound>')}.{_safe_text(field_name, '<unknown>')}"
 

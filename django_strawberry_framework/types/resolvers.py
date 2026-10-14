@@ -141,11 +141,11 @@ def _fk_attname_is_deferred(root: object, attname: str) -> bool:
         return False
     try:
         deferred = get_deferred_fields()
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return False
     try:
         return attname in deferred
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return False
 
 
@@ -174,7 +174,7 @@ def _build_fk_id_stub(root: object, field_meta: FieldMeta) -> object:
         return None
     try:
         stub = field_meta.related_model(pk=related_id)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return _FK_ELISION_UNSAFE
     state = getattr(stub, "_state", None)
     if state is not None:
@@ -970,7 +970,7 @@ def _make_file_resolver(field: "ModelField") -> _FileResolver:
 
     def file_resolver(root: object) -> object:
         value: object = getattr(root, field_name)
-        return value if value else None
+        return value or None
 
     return _name_resolver(file_resolver, field_name)
 

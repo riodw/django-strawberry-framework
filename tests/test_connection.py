@@ -2571,7 +2571,7 @@ def test_connection_instance_shadowed_all_hook_is_sealed():
 
     def _shadowed_all_hook(_cls: type[DjangoType], _qs: models.QuerySet[Category], _info: object):
         source = Category.objects.filter(is_private=False)
-        source.all = lambda: Category.objects.all()  # instance shadow (predicate-dropping)
+        source.all = Category.objects.all  # instance shadow (predicate-dropping)
         return source
 
     node_type = _make_sidecar_node_type(
@@ -2814,7 +2814,7 @@ def test_consume_window_hostile_pagination_is_graphql_error():
 
     row = Category(id=1, name="a")
     setattr(row, WINDOW_ROW_NUMBER, 1)
-    window = _WindowedConnectionRows(rows=[row], fallback=lambda: Category.objects.all())
+    window = _WindowedConnectionRows(rows=[row], fallback=Category.objects.all)
     info = make_info(
         context={},
         field_name="items",

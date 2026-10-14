@@ -30,6 +30,9 @@ class _NonHashableField:
     def __eq__(self, other: object):
         return self is other
 
+    # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
+    __hash__ = None  # pyright: ignore[reportAssignmentType]
+
 
 @pytest.fixture(autouse=True)
 # basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture

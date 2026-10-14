@@ -491,6 +491,9 @@ def test_classify_hostile_scope_eq_is_contained():
         def __eq__(self, other: object):
             raise ValueError("evil eq")
 
+        # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
+        __hash__ = None  # pyright: ignore[reportAssignmentType]
+
     evil = EvilStr("http")
     with pytest.raises(ConfigurationError, match="unsupported `type`"):
         classify_transport(_adapter({"type": evil}))
@@ -505,6 +508,9 @@ def test_classify_hostile_scope_bad_repr_is_contained():
         @override
         def __eq__(self, other: object) -> bool:
             return False
+
+        # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
+        __hash__ = None  # pyright: ignore[reportAssignmentType]
 
     with pytest.raises(ConfigurationError, match="unsupported `type`") as exc_info:
         classify_transport(_adapter({"type": BadRepr()}))
@@ -634,6 +640,9 @@ def test_classify_hostile_websocket_eq_is_contained():
             if other == "http":
                 return False
             raise RuntimeError("evil ws eq")
+
+        # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
+        __hash__ = None  # pyright: ignore[reportAssignmentType]
 
     evil = EvilWebSocket("websocket")
     with pytest.raises(ConfigurationError, match="unsupported `type`"):

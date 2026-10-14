@@ -182,7 +182,7 @@ def field_error(path: str, messages: object, *, codes: object = None) -> FieldEr
     from ..mutations.inputs import NON_FIELD_ERROR_KEY, FieldError
 
     normalized_path = _safe_text(path, fallback="")
-    key = normalized_path if normalized_path else NON_FIELD_ERROR_KEY
+    key = normalized_path or NON_FIELD_ERROR_KEY
     # Root rule: a model-wide / non-field error (an empty path, or the bare
     # ``"__all__"`` sentinel as the WHOLE path - the DRF flattener joins the top-level
     # non-field bucket to exactly that) carries an EMPTY ``path``, while ``field`` stays
@@ -218,13 +218,13 @@ def _str_list(value: object) -> list[str]:
     # are excluded from iteration but are not stringified by this first branch.
     try:
         is_str = isinstance(value, (str, Promise))
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         is_str = False
     if is_str:
         return [_safe_text(value)]
     try:
         is_iter = is_iterable(value) and not _is_text_atom(value)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         is_iter = False
     if not is_iter:
         return [_safe_text(value)]
@@ -232,38 +232,43 @@ def _str_list(value: object) -> list[str]:
         # ``is_iter`` above is the ``isinstance(value, Iterable)`` proof; neither checker
         # carries a narrowing through a bool assigned inside a ``try``.
         items = list(cast("Iterable[object]", value))
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return [_unprintable(value)]
     return [_safe_text(item) for item in items]
 
 
 # basedpyright: EAFP; ``error.messages`` / ``error.message`` are read inside the surrounding
 # try/except, which is the guard
-def _validation_messages(error: Any) -> list[object]:  # pyright: ignore[reportExplicitAny]
+def _validation_messages(error: Any) -> list[object]:  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - foreign validation leaf; EAFP
     """Read one Django validation leaf's messages without trusting its metadata."""
     try:
         msgs = error.messages
         if _is_text_atom(msgs):
             return [msgs]
-        return list(msgs)
-    except BaseException:
+        listed = list(msgs)
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         try:
             msg = error.message
             if is_list_or_tuple(msg) or is_set_or_frozenset(msg):
                 return list(msg)
-            return [msg]
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - hostile object, contained by design
             return [error]
+        else:
+            return [msg]
+    else:
+        return listed
 
 
 # basedpyright: EAFP; ``leaf.code`` is read inside the surrounding try/except, which is the guard
-def _validation_code(leaf: Any) -> object:  # pyright: ignore[reportExplicitAny]
+def _validation_code(leaf: Any) -> object:  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - foreign validation leaf; EAFP
     """Read one Django validation leaf's code, dropping hostile or empty values."""
     try:
         code = leaf.code
-        return code if code else None
-    except BaseException:
+        cleaned = code or None
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return None
+    else:
+        return cleaned
 
 
 def _validation_leaves(error: object) -> tuple[object, ...]:
@@ -281,7 +286,7 @@ def _validation_leaves(error: object) -> tuple[object, ...]:
         if _is_text_atom(error_list):
             return (error_list,)
         return tuple(error_list)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return (error,)
 
 
@@ -330,7 +335,7 @@ def _error_dict_entry(
     """Unpack one ``ValidationError.error_dict`` item without trusting its shape."""
     try:
         field_name, field_errors = item
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return None
     return field_name, field_errors
 
@@ -463,13 +468,13 @@ def validation_error_to_field_errors(
     """
     try:
         error_dict = exc.error_dict
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         error_dict = None
     if error_dict is not None:
         errors: list[FieldError] = []
         try:
             error_items = tuple(error_dict.items())
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - hostile object, contained by design
             error_items = None
         # An unreadable ``items()`` leaves the dict branch entirely and falls
         # through to the ``error_list`` / ``messages`` fallback below.
@@ -497,7 +502,7 @@ def validation_error_to_field_errors(
                 else:
                     try:
                         field_error_items = tuple(field_errors)
-                    except BaseException:
+                    except BaseException:  # noqa: BLE001 - hostile object, contained by design
                         field_error_items = (field_errors,)
                 messages: list[object] = []
 

@@ -262,17 +262,13 @@ def test_audit_marks_target_parse_failure_as_incomplete(tmp_path: Path) -> None:
 def test_explicitly_excluded_target_is_rejected(tmp_path: Path) -> None:
     target = _write(tmp_path / "private" / "target.py", "def hidden():\n    return 1\n")
 
-    try:
+    with pytest.raises(ValueError, match="explicit target path matched --exclude"):
         dry.build_audit(
             root=tmp_path,
             targets=[target],
             scan_roots=[tmp_path],
             exclude_patterns=("private/**",),
         )
-    except ValueError as exc:
-        assert "explicit target path matched --exclude" in str(exc)
-    else:
-        raise AssertionError("an explicitly excluded target must not be read")
 
 
 def test_check_reports_exact_missing_definitions_and_topics(tmp_path: Path) -> None:
@@ -331,14 +327,10 @@ def test_check_rejects_an_excluded_review_before_target_discovery(
 ) -> None:
     review = _write(tmp_path / "private" / "review.md", "Do not read this.\n")
 
-    try:
+    with pytest.raises(ValueError, match="review path matched --exclude and was not read"):
         dry.check_review(
             root=tmp_path,
             targets=[tmp_path / "missing-target.py"],
             review=review,
             exclude_patterns=("private/**",),
         )
-    except ValueError as exc:
-        assert "review path matched --exclude and was not read" in str(exc)
-    else:
-        raise AssertionError("an explicitly excluded review must not be read")

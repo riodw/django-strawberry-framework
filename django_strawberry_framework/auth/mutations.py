@@ -777,7 +777,7 @@ def _django_http_login_establish(request: HttpRequest, user: _User) -> None:
         try:
             request.user = AnonymousUser()
             request.session.flush()
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - cleanup failure must not mask the primary
             raise primary  # noqa: B904 - cleanup failure chains via __context__ (PEP 3134)
         raise
 
@@ -822,7 +822,7 @@ async def _channels_http_login_establish(
             try:
                 scope["user"] = AnonymousUser()
                 await session.aflush()
-            except BaseException:
+            except BaseException:  # noqa: BLE001 - cleanup failure must not mask the primary
                 raise primary  # noqa: B904 - cleanup chains via __context__ (PEP 3134)
             raise
 

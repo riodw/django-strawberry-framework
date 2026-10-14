@@ -250,7 +250,7 @@ class GraphQLRequestBodyBoundaryMiddleware:
             )
         try:
             mount = getattr(view_func, _BOUNDARY_MOUNT, None)
-        except Exception:  # an optional handoff cannot turn a completed boundary into a 500
+        except Exception:  # noqa: BLE001 - an optional handoff cannot turn a completed boundary into a 500
             mount = None
         if mount is not None:
             setattr(request, _BOUNDARY_PREPARED_VIEW, (mount, view))
@@ -349,7 +349,7 @@ def _package_view_instance(view_func: object) -> object:
             return None
         if not callable(getattr(view_class, _BOUNDARY_METHOD, None)):
             return None
-    except Exception:  # a read that cannot answer has recognized nothing
+    except Exception:  # noqa: BLE001 - a read that cannot answer has recognized nothing
         return None
     try:
         return view_class(**initkwargs)

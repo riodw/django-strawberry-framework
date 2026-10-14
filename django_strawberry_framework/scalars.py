@@ -201,7 +201,7 @@ def _safe_scalar_map_key_label(key: object) -> str:
     """Describe a collision key without trusting consumer-defined metadata."""
     try:
         name = getattr(key, "__name__", None)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         name = None
     # A ``__name__`` that is a ``str`` subclass is read through the base
     # ``str`` slot (parity with ``exceptions.py::_safe_type_name``): handing

@@ -165,7 +165,7 @@ def _every_backend_supports_index_column_ordering() -> bool:
         return bool(aliases) and all(
             connections[alias].features.supports_index_column_ordering for alias in aliases
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
         return False
 
 
@@ -852,7 +852,7 @@ def _connection_node_selections(
 
 # basedpyright: EAFP int() probe of a raw AST / variable value; int() is typed
 # ConvertibleToInt and a non-castable value is returned unchanged
-def _coerce_pagination_int(value: Any) -> Any:  # pyright: ignore[reportExplicitAny]
+def _coerce_pagination_int(value: Any) -> Any:  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - raw value returned unchanged
     """Coerce a pagination ``first`` / ``last`` argument to ``int`` when int-like.
 
     An inline Int literal arrives as the raw token string; a resolved variable is

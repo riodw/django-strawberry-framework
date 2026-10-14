@@ -326,7 +326,7 @@ RELATION_ID_ATOM_TYPES = (
 def materialize_relation_id_container(
     # basedpyright: EAFP; ``list(values)`` on wire input runs inside the surrounding
     # try/except, which is the guard
-    values: Any,  # pyright: ignore[reportExplicitAny]
+    values: Any,  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - wire input; EAFP
     graphql_name: str,
 ) -> tuple[list[object], None] | tuple[None, FieldError]:
     """Materialize a relation-id container, or return the uniform field-keyed error.
@@ -349,7 +349,7 @@ def materialize_relation_id_container(
         return None, relation_field_error(graphql_name)
     try:
         return list(values), None
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return None, relation_field_error(graphql_name)
 
 

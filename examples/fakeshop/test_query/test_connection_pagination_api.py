@@ -945,7 +945,6 @@ async def _override_async_none(
     _info: object,
 ):
     _ASYNC_APPLY_CALLS.append("none")
-    return None
 
 
 async def _override_async_projection(
@@ -1288,7 +1287,6 @@ async def _filter_override_async_none(
     _info: object,
 ):
     _ASYNC_APPLY_CALLS.append("filter-none")
-    return None
 
 
 async def _filter_override_async_projection(

@@ -20,6 +20,37 @@ __all__ = (
 )
 
 
+def _readable_type_name(source: type[object]) -> str | None:
+    """Return ``source``'s own ``__name__`` as a plain base ``str``, or ``None`` when unreadable.
+
+    ``None`` covers a ``__name__`` read that raises, a non-string or empty name,
+    and a name whose base ``str`` slot cannot be read, so the caller moves on to
+    the next candidate.
+    """
+    try:
+        name = source.__name__
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
+        return None
+    try:
+        # basedpyright: trust boundary: a metaclass can answer ``__name__`` with any object
+        is_str_name = isinstance(name, str)  # pyright: ignore[reportUnnecessaryIsInstance]
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
+        is_str_name = False
+    if not is_str_name:
+        return None
+    try:
+        if not name:
+            return None
+        # A metaclass can return a ``str`` subclass for ``__name__``.  Returning
+        # that object would let its ``__str__`` / ``__format__`` run while a
+        # typed error message is being assembled, replacing the framework error
+        # with an arbitrary consumer exception.  The base ``str`` slot strips
+        # the subclass before the value reaches any f-string or join operation.
+        return str.__str__(name)
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
+        return None
+
+
 def _safe_type_name(value: object) -> str:
     """Return the name identifying ``value``'s kind, without trusting its metadata.
 
@@ -33,32 +64,13 @@ def _safe_type_name(value: object) -> str:
     """
     try:
         is_type = isinstance(value, type)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         is_type = False
     sources = (cast("type[object]", value), type(value)) if is_type else (type(value),)
     for source in sources:
-        try:
-            name = source.__name__
-        except BaseException:
-            continue
-        try:
-            # basedpyright: trust boundary: a metaclass can answer ``__name__`` with any object
-            is_str_name = isinstance(name, str)  # pyright: ignore[reportUnnecessaryIsInstance]
-        except BaseException:
-            is_str_name = False
-        if not is_str_name:
-            continue
-        try:
-            if not name:
-                continue
-            # A metaclass can return a ``str`` subclass for ``__name__``.  Returning
-            # that object would let its ``__str__`` / ``__format__`` run while a
-            # typed error message is being assembled, replacing the framework error
-            # with an arbitrary consumer exception.  The base ``str`` slot strips
-            # the subclass before the value reaches any f-string or join operation.
-            return str.__str__(name)
-        except BaseException:
-            continue
+        name = _readable_type_name(source)
+        if name is not None:
+            return name
     return "object"
 
 
@@ -77,7 +89,7 @@ def _safe_arg_repr(value: object) -> str:
     """``repr(value)`` if it succeeds, else a placeholder naming the arg type."""
     try:
         return str.__str__(repr(value))
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return _unprintable(value)
 
 
@@ -102,7 +114,7 @@ def _safe_text(value: object, fallback: str = "") -> str:
     """
     try:
         rendered = str.__str__(value) if isinstance(value, str) else str.__str__(str(value))
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return _unprintable(value)
     return rendered or fallback
 
@@ -121,13 +133,13 @@ def _safe_class_name(value: object, *, qualified: bool = False) -> str:
     attribute = "__qualname__" if qualified else "__name__"
     try:
         name: object = getattr(value, attribute)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return _safe_type_name(value)
     try:
         if isinstance(name, str) and name:
             return str.__str__(name)
-    except BaseException:
-        pass
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
+        return _safe_arg_repr(name)
     return _safe_arg_repr(name)
 
 
@@ -136,14 +148,14 @@ def _safe_model_label(model: object) -> str:
     try:
         meta = getattr(model, "_meta", None)
         label = getattr(meta, "label", None)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return _safe_type_name(model)
     try:
         if isinstance(label, str):
             label_str = str(label)
             return str.__str__(label_str) or _safe_type_name(model)
-    except BaseException:
-        pass
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
+        return _safe_type_name(model)
     return _safe_type_name(model)
 
 
@@ -151,14 +163,14 @@ def _safe_terminal_label(terminal: object) -> str:
     """Return a terminal field name without trusting consumer-supplied metadata."""
     try:
         name = getattr(terminal, "name", None)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return _safe_type_name(terminal)
     try:
         if isinstance(name, str):
             name_str = str(name)
             return str.__str__(name_str) or _safe_type_name(terminal)
-    except BaseException:
-        pass
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
+        return _safe_type_name(terminal)
     return _safe_type_name(terminal)
 
 
@@ -200,7 +212,7 @@ def describe_value(value: object) -> str:
     """
     try:
         return f"{_safe_type_name(value)} {value!r}"
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         # Deliberately NOT the ``<unprintable {T}>`` spelling the standalone
         # renderers share (``_safe_arg_repr``, ``_safe_text`` through its shared
         # ``_unprintable`` placeholder, and ``DjangoStrawberryFrameworkError.__str__``):
@@ -242,7 +254,7 @@ class DjangoStrawberryFrameworkError(Exception):
         """Render ``str`` safely from the current args (see class docstring)."""
         try:
             rendered = str.__str__(super().__str__())
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - hostile object, contained by design
             rendered = (
                 f"<unprintable {_safe_type_name(self.args[0])}>"
                 if len(self.args) == 1
@@ -255,7 +267,7 @@ class DjangoStrawberryFrameworkError(Exception):
         """Render ``repr`` safely from the current args (see class docstring)."""
         try:
             rendered = str.__str__(super().__repr__())
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - hostile object, contained by design
             args = ", ".join(_safe_arg_repr(a) for a in self.args)
             rendered = f"{_safe_type_name(self)}({args})"
         return rendered
@@ -325,6 +337,7 @@ class PathResolutionError(ConfigurationError):
         field_path: str,
         segment: str,
     ) -> None:
+        """Build the message from the unclassifiable ``segment`` of ``field_path`` on ``model``."""
         model_label = _safe_model_label(model)
         super().__init__(
             f"Cannot classify path {_safe_arg_repr(field_path)} on model {model_label}: "
@@ -368,6 +381,7 @@ class LookupValidationError(ConfigurationError):
         lookup_expr: str,
         part: str,
     ) -> None:
+        """Build the message from the invalid ``part`` of ``lookup_expr`` for ``terminal``."""
         terminal_label = _safe_terminal_label(terminal)
         super().__init__(
             f"Invalid lookup expression {_safe_arg_repr(lookup_expr)} for terminal "

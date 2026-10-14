@@ -137,6 +137,7 @@ class ChannelsRequestAdapter:
     """
 
     def __init__(self, request: object, scope: ChannelsScope) -> None:
+        """Wrap the Channels ``request`` value and ``scope`` as one request-like object."""
         self._request: object = request
         self._scope: ChannelsScope = scope
 
@@ -181,13 +182,13 @@ def _channels_scope(request: object) -> Mapping[object, object] | None:
     try:
         consumer: object = getattr(request, "consumer", None)
         scope: object = getattr(consumer, "scope", None)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         scope = None
     if is_mapping(scope):
         return scope
     try:
         scope = getattr(request, "scope", None)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         scope = None
     if is_mapping(scope):
         return scope
@@ -215,11 +216,11 @@ def _context_request(context: object) -> tuple[object, bool]:
     if is_mapping(context):
         try:
             return mapping_get(context, "request"), True
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - hostile object, contained by design
             return None, False
     try:
         return getattr(context, "request", None), True
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return None, False
 
 
@@ -289,7 +290,7 @@ def request_from_info(info: object, *, family_label: str) -> object:
     """
     try:
         context: object = getattr(info, "context", None)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         context = None
     if context is None:
         raise ConfigurationError(

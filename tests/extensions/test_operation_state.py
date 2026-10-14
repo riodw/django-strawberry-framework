@@ -324,7 +324,7 @@ def test_a_binding_that_fails_partway_unwinds_the_ones_already_made():
     into whatever the task did next.
     """
     good = _Probe()
-    schema = DjangoSchema(query=_Query, extensions=[lambda: good, lambda: _Unbuilt()])
+    schema = DjangoSchema(query=_Query, extensions=[lambda: good, lambda: _Unbuilt()])  # noqa: PLW0108 - a factory entry, not the class
 
     with pytest.raises(ConfigurationError, match="has to call super"):
         schema.execute_sync("{ hello }")
@@ -337,7 +337,7 @@ def test_a_binding_that_fails_partway_unwinds_the_ones_already_made():
 async def test_a_binding_that_fails_partway_unwinds_on_the_async_path_too():
     """The async twin: one primitive, two protocol adapters, one decision."""
     good = _Probe()
-    schema = DjangoSchema(query=_Query, extensions=[lambda: good, lambda: _Unbuilt()])
+    schema = DjangoSchema(query=_Query, extensions=[lambda: good, lambda: _Unbuilt()])  # noqa: PLW0108 - a factory entry, not the class
 
     with pytest.raises(ConfigurationError, match="has to call super"):
         await schema.execute("{ hello }")

@@ -130,7 +130,7 @@ def test_package_and_middleware_imports_stay_clean_without_toolbar():
         parent = importlib.import_module(_PARENT)
         assert parent is sys.modules[_PARENT]
         namespace: dict[str, object] = {}
-        exec("from django_strawberry_framework import *", namespace)
+        exec("from django_strawberry_framework import *", namespace)  # noqa: S102 - star import is module-level syntax; literal source
         assert "DebugToolbarMiddleware" not in namespace
 
 

@@ -154,12 +154,10 @@ def default_wrapper() -> Iterator[BaseDatabaseWrapper]:
 
 
 def test_exception_serializer_triple_forms():
-    try:
+    with pytest.raises(ValueError, match="kaboom message") as raised:
         raise ValueError("kaboom message")
-    except ValueError as exc:
-        caught = exc
 
-    row = _serialize_exception(caught)
+    row = _serialize_exception(raised.value)
 
     # Independent literals - never the production keys re-imported.
     assert set(row) == {"excType", "message", "stack"}
@@ -179,7 +177,7 @@ def test_exception_serializer_chained_traceback_stack():
     """
     try:
         try:
-            raise KeyError("root cause")
+            raise KeyError("root cause")  # noqa: TRY301 - the raise builds a real traceback chain
         except KeyError as exc:
             raise ValueError("kaboom message") from exc
     except ValueError as chained:
@@ -647,9 +645,9 @@ def test_execute_sync_restores_the_prior_flag_value(
 )
 def test_mask_errors_ordering_controls_exception_visibility(debug_after_masking: bool):
     if debug_after_masking:
-        extension_list = [lambda: MaskErrors(), DjangoDebugExtension]
+        extension_list = [lambda: MaskErrors(), DjangoDebugExtension]  # noqa: PLW0108 - a factory entry, not the class
     else:
-        extension_list = [DjangoDebugExtension, lambda: MaskErrors()]
+        extension_list = [DjangoDebugExtension, lambda: MaskErrors()]  # noqa: PLW0108 - a factory entry, not the class
     schema = strawberry.Schema(query=_BoomQuery, extensions=extension_list)
 
     result = schema.execute_sync("{ boom }")

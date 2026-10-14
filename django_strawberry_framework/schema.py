@@ -847,6 +847,7 @@ class DjangoSchema(strawberry.Schema):
         # basedpyright: verbatim forward to Schema.__init__; uncapped strawberry may add params
         **kwargs: Any,  # pyright: ignore[reportExplicitAny]
     ) -> None:
+        """Build the schema, settling the two policies and forwarding the rest to Strawberry."""
         entries, declared_resource = _consumer_extension_entries(kwargs.get("extensions"))
         if declared_resource is not None and resource_policy is not None:
             raise ConfigurationError(
@@ -1076,7 +1077,7 @@ class DjangoSchema(strawberry.Schema):
             )
         try:
             resolved = super().get_extensions(sync=sync)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - boundary fails closed
             # ``describe_value`` and not ``{exc!r}``: the object being rendered
             # is a consumer exception raised by a consumer factory, and its
             # ``__repr__`` is as much consumer code as the factory was. An

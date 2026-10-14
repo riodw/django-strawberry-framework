@@ -147,15 +147,13 @@ def test_validate_orderset_class_accepts_order_set_subclass():
 
 def test_validate_orderset_class_rejects_non_order_set():
     """The validator raises ``ConfigurationError`` for non-``OrderSet`` types."""
-    import pytest as _pytest
-
     from django_strawberry_framework.exceptions import ConfigurationError
     from django_strawberry_framework.types.base import _validate_orderset_class
 
     class NotAnOrderSet:
         pass
 
-    with _pytest.raises(ConfigurationError) as exc_info:
+    with pytest.raises(ConfigurationError) as exc_info:
         _validate_orderset_class(Category, NotAnOrderSet)
     msg = str(exc_info.value)
     assert "OrderSet subclass" in msg
@@ -300,7 +298,10 @@ def test_related_order_rejects_factory_returning_non_class():
     class Owner(OrderSet):
         # basedpyright: the factory returning a non-class is the hostile input under test;
         # RelatedOrder types the parameter as _OrderSetTarget
-        shelf = RelatedOrder(lambda: object(), field_name="shelf")  # pyright: ignore[reportArgumentType]
+        shelf = RelatedOrder(
+            lambda: object(),  # noqa: PLW0108 - a factory returning an instance, not the class  # pyright: ignore[reportArgumentType]
+            field_name="shelf",
+        )
 
     with pytest.raises(ConfigurationError) as exc_info:
         _ = Owner.shelf.orderset

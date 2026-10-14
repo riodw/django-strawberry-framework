@@ -1008,7 +1008,7 @@ async def revalidate_operation_actor(handler: _AdmissionHandler) -> bool:
             websocket = handler.websocket
         except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
             raise
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - hostile object, contained by design
             return False
         try:
             await _revoke_connection(websocket)
@@ -1341,7 +1341,6 @@ async def _actor_is_current(consumer: _RevalidatedConsumer) -> bool:
         )
         # Hostile cache read/comparison must not authorize from cache; fall
         # through to the DB revalidation rather than denying outright.
-        pass
 
     try:
         refreshed = await _refreshed_actor(scope)
@@ -1408,7 +1407,6 @@ async def _actor_is_current(consumer: _RevalidatedConsumer) -> bool:
                     "connection is revoked and closed (fail-closed) rather than continuing on "
                     "the connection's cached actor.",
                 )
-                pass
     except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
         raise
     except BaseException:
@@ -1417,7 +1415,6 @@ async def _actor_is_current(consumer: _RevalidatedConsumer) -> bool:
             "connection is revoked and closed (fail-closed) rather than continuing on "
             "the connection's cached actor.",
         )
-        pass
     return True
 
 
@@ -1708,23 +1705,25 @@ async def _contain_message_loop_failure(
     if isinstance(exc, _CLIENT_FRAME_SHAPE_ESCAPES):
         code = _INVALID_MESSAGE_CLOSE_CODE
         reason = _INVALID_FRAME_CLOSE_REASON
-        logger.exception(
+        logger.error(
             "GraphQLWebSocketConsumer: a client-supplied frame escaped the %s message loop "
             "with a raw exception; the connection is refused with the protocol's own "
             "invalid-message close (fail-closed) rather than left open with a message loop "
             "that can never run again.",
             protocol,
+            exc_info=exc,
         )
     else:
         code = _INTERNAL_ERROR_CLOSE_CODE
         reason = _INTERNAL_ERROR_CLOSE_REASON
-        logger.exception(
+        logger.error(
             "GraphQLWebSocketConsumer: a server-side failure escaped the %s message loop; "
             "the connection is refused with the transport's internal-error close, which "
             "tells the client nothing about the failure. This is a package or consumer bug "
             "rather than a malformed frame, and the traceback recorded here is the only "
             "place it is reported.",
             protocol,
+            exc_info=exc,
         )
     try:
         await handler.websocket.close(code=code, reason=reason)
@@ -1901,7 +1900,7 @@ def build_revalidating_consumer_class(
             """
             try:
                 await super().handle()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - boundary fails closed
                 # ``Exception``, not ``BaseException`` minus a hard-coded trio:
                 # the containment's contract is "ordinary non-cancellation
                 # failure", and the language already draws that line. Cancellation
@@ -1959,7 +1958,7 @@ def build_revalidating_consumer_class(
             """
             try:
                 await super().handle()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - boundary fails closed
                 await _contain_message_loop_failure(self, exc, "legacy graphql-ws")
 
     class _RevocationGatedWebSocketAdapter(websocket_adapter_base):
@@ -2298,6 +2297,7 @@ class DjangoWebSocketHostValidator:
     """
 
     def __init__(self, application: ASGI3Application) -> None:
+        """Wrap ``application`` so a handshake is host-checked before it reaches it."""
         self.application: ASGI3Application = application
 
     async def __call__(

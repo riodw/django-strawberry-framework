@@ -997,6 +997,7 @@ def _collect_scopes(tree: ast.Module) -> list[_Scope]:
         body: Sequence[ast.stmt],
         prefix: str,
         class_qualname: str | None,
+        *,
         in_function: bool,
     ) -> None:
         for node in body:
@@ -1006,7 +1007,10 @@ def _collect_scopes(tree: ast.Module) -> list[_Scope]:
                 scopes.append(
                     _Scope(
                         qualname=qualname,
-                        kind=_scope_kind(node, class_qualname is not None and not in_function),
+                        kind=_scope_kind(
+                            node,
+                            is_method=class_qualname is not None and not in_function,
+                        ),
                         node=node,
                         start=start,
                         end=node.end_lineno or node.lineno,
@@ -1019,12 +1023,12 @@ def _collect_scopes(tree: ast.Module) -> list[_Scope]:
                     node.body,
                     f"{qualname}.",
                     qualname if is_class else None,
-                    in_function or not is_class,
+                    in_function=in_function or not is_class,
                 )
             else:
-                visit(_nested_statements(node), prefix, class_qualname, in_function)
+                visit(_nested_statements(node), prefix, class_qualname, in_function=in_function)
 
-    visit(tree.body, "", None, False)
+    visit(tree.body, "", None, in_function=False)
     return scopes
 
 
@@ -1054,7 +1058,7 @@ def _nested_statements(node: ast.AST) -> list[ast.stmt]:
     return [statement for statement in candidates if isinstance(statement, ast.stmt)]
 
 
-def _scope_kind(node: ast.AST, is_method: bool) -> str:
+def _scope_kind(node: ast.AST, *, is_method: bool) -> str:
     if isinstance(node, ast.ClassDef):
         return "class"
     prefix = "async " if isinstance(node, ast.AsyncFunctionDef) else ""
@@ -1524,6 +1528,7 @@ def _comments_census(
     tree: ast.Module,
     scopes: Sequence[_Scope],
     locator: _Locator,
+    *,
     is_test_module: bool,
 ) -> list[_CensusEntry]:
     entries: list[_CensusEntry] = []
@@ -1657,14 +1662,14 @@ def _analyze(
         metrics=metrics,
         module_per_row=_module_per_row(tree, markers),
         import_time=_import_time_work(tree),
-        census=_comments_census(source, tree, scopes, locator, is_test_module),
+        census=_comments_census(source, tree, scopes, locator, is_test_module=is_test_module),
     )
 
 
 # --- Text rendering -------------------------------------------------------------------
 
 
-def _render_overview(analysis: _Analysis, outline_only: bool, cap: bool) -> str:
+def _render_overview(analysis: _Analysis, *, outline_only: bool, cap: bool) -> str:
     visitor = analysis.visitor
     cite = analysis.locator.cite
     sections = [
@@ -1685,7 +1690,7 @@ def _render_overview(analysis: _Analysis, outline_only: bool, cap: bool) -> str:
         "",
         "## Quick scan",
         "",
-        _render_quick_scan(analysis, outline_only),
+        _render_quick_scan(analysis, outline_only=outline_only),
         "",
         "## Imports",
         "",
@@ -1701,7 +1706,7 @@ def _render_overview(analysis: _Analysis, outline_only: bool, cap: bool) -> str:
         "",
         "## Django / ORM markers",
         "",
-        _render_markers(analysis.marker_records, cite, cap),
+        _render_markers(analysis.marker_records, cite, cap=cap),
     ]
     if not outline_only:
         sections.extend(
@@ -1709,15 +1714,15 @@ def _render_overview(analysis: _Analysis, outline_only: bool, cap: bool) -> str:
                 "",
                 "## Calls of interest",
                 "",
-                _render_calls(visitor.calls, analysis.markers, cite, cap),
+                _render_calls(visitor.calls, analysis.markers, cite, cap=cap),
                 "",
                 "## Comments and docstrings",
                 "",
-                _render_comments_and_docstrings(analysis, cap),
+                _render_comments_and_docstrings(analysis, cap=cap),
                 "",
                 "## Repeated string literals",
                 "",
-                _render_literals(visitor.duplicate_literals, cap),
+                _render_literals(visitor.duplicate_literals, cap=cap),
                 "",
                 "## Performance leads",
                 "",
@@ -1740,7 +1745,7 @@ def _render_imports(records: Sequence[_ImportRecord], cite: _CiteFn) -> str:
     )
 
 
-def _render_quick_scan(analysis: _Analysis, outline_only: bool) -> str:
+def _render_quick_scan(analysis: _Analysis, *, outline_only: bool) -> str:
     visitor = analysis.visitor
     duplicate_count = sum(1 for count in visitor.duplicate_literals.values() if count > 1)
     lines = [
@@ -1803,7 +1808,7 @@ def _render_hotspots(records: Sequence[_HotspotRecord], locator: _Locator) -> st
     )
 
 
-def _render_markers(records: Sequence[_MarkerRecord], cite: _CiteFn, cap: bool) -> str:
+def _render_markers(records: Sequence[_MarkerRecord], cite: _CiteFn, *, cap: bool) -> str:
     if not records:
         return "None."
     lines = [
@@ -1847,6 +1852,7 @@ def _render_calls(
     records: Sequence[_CallRecord],
     markers: Sequence[str],
     cite: _CiteFn,
+    *,
     cap: bool,
 ) -> str:
     if not records:
@@ -1885,7 +1891,7 @@ def _docstring_cite(analysis: _Analysis, record: _DocstringRecord) -> str:
     return analysis.locator.symbol_cite(record.owner)
 
 
-def _render_comments_and_docstrings(analysis: _Analysis, cap: bool) -> str:
+def _render_comments_and_docstrings(analysis: _Analysis, *, cap: bool) -> str:
     comments = analysis.comment_records
     docstrings = analysis.visitor.docstrings
     cite = analysis.locator.cite
@@ -1926,7 +1932,7 @@ def _render_comments_and_docstrings(analysis: _Analysis, cap: bool) -> str:
     return "\n".join(lines)
 
 
-def _render_literals(counter: Counter[str], cap: bool) -> str:
+def _render_literals(counter: Counter[str], *, cap: bool) -> str:
     duplicates = [(literal, count) for literal, count in counter.most_common() if count > 1]
     if not duplicates:
         return "None."
@@ -2064,7 +2070,7 @@ def _blob_id(path: Path) -> tuple[str, str]:
 
 def _sha1_blob_id(data: bytes) -> str:
     """Return the git blob id of ``data``: sha1 over the ``blob <len>`` NUL header plus the bytes."""
-    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+    return hashlib.sha1(b"blob %d\0" % len(data) + data, usedforsecurity=False).hexdigest()
 
 
 def _lead_json(lead: _Lead) -> dict[str, object]:
@@ -2262,7 +2268,7 @@ def _inspect_target(
     _ = shadow_path.write_text(stripped, encoding="utf-8")
     analysis = _analyze(target, source, tree, stripped, args, markers, shadow_path, references)
     cap = not (args.no_cap or args.all)
-    overview = _render_overview(analysis, args.outline_only, cap)
+    overview = _render_overview(analysis, outline_only=args.outline_only, cap=cap)
     _ = overview_path.write_text(overview, encoding="utf-8")
     if documents is not None:
         documents.append(_analysis_json(analysis))

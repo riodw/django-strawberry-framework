@@ -366,6 +366,51 @@ class Settings:
 settings: Settings = Settings(None)
 
 
+def _validated_patch_flags(plain: dict[object, object]) -> dict[str, bool]:
+    """Validate the plain copy of an ``APPLY_UPSTREAM_PATCHES`` mapping and return its flags.
+
+    Raises ``ConfigurationError`` for a non-string key, an unknown dependency
+    name or a non-bool value. Any other exception a hostile key or value
+    raises while being inspected propagates to the caller, which reports it as
+    an unreadable mapping.
+    """
+    # Key-type guard FIRST so a non-string key never reaches the
+    # unknown-name framing below, whose ``sorted()`` would leak a bare
+    # ``TypeError`` on mixed unorderable key types instead of the
+    # promised ``ConfigurationError`` (the
+    # ``types/base.py::_validate_relation_shapes`` key-guard precedent).
+    keyed: dict[str, object] = {}
+    for name, entry in plain.items():
+        try:
+            is_str = isinstance(name, str)
+        except Exception as exc:
+            raise ConfigurationError(
+                f"`{APPLY_UPSTREAM_PATCHES_KEY}` keys must be dependency name strings; "
+                f"got {name!r}.",
+            ) from exc
+        if not is_str:
+            raise ConfigurationError(
+                f"`{APPLY_UPSTREAM_PATCHES_KEY}` keys must be dependency name strings; "
+                f"got {name!r}.",
+            )
+        keyed[name] = entry
+    unknown = set(keyed) - UPSTREAM_PATCH_DEPENDENCIES
+    if unknown:
+        raise ConfigurationError(
+            f"`{APPLY_UPSTREAM_PATCHES_KEY}` names unknown patch dependencies "
+            f"{sorted(unknown)}; valid names are {sorted(UPSTREAM_PATCH_DEPENDENCIES)}.",
+        )
+    flags: dict[str, bool] = {}
+    for name, value in keyed.items():
+        if type(value) is not bool:
+            raise ConfigurationError(
+                f"`{APPLY_UPSTREAM_PATCHES_KEY}[{name!r}]` must be a bool; "
+                f"got {_safe_type_name(value)}.",
+            )
+        flags[name] = value
+    return flags
+
+
 def upstream_patches_enabled(dependency: str) -> bool:
     """Whether ``dependency``'s upstream defensive patches apply at app load.
 
@@ -425,59 +470,26 @@ def upstream_patches_enabled(dependency: str) -> bool:
             f"to bools; got {_safe_type_name(configured)}.",
         ) from exc
     if configured_is_mapping:
+        # Defensive copy FIRST so hostile __iter__/__getitem__/__get__
+        # and one-shot generators cannot diverge between validation and
+        # the final ``get``. ``dict()`` iteration is the single
+        # consumption point; the plain copy is then the only object
+        # validated and read.
         try:
-            # Defensive copy FIRST so hostile __iter__/__getitem__/__get__
-            # and one-shot generators cannot diverge between validation and
-            # the final ``get``. ``dict()`` iteration is the single
-            # consumption point; the plain copy is then the only object
-            # validated and read.
-            try:
-                plain = dict(configured)
-            except Exception as exc:
-                raise ConfigurationError(
-                    f"`{APPLY_UPSTREAM_PATCHES_KEY}` is not a valid mapping; iteration failed.",
-                ) from exc
-            # Key-type guard FIRST so a non-string key never reaches the
-            # unknown-name framing below, whose ``sorted()`` would leak a bare
-            # ``TypeError`` on mixed unorderable key types instead of the
-            # promised ``ConfigurationError`` (the
-            # ``types/base.py::_validate_relation_shapes`` key-guard precedent).
-            keyed: dict[str, object] = {}
-            for name, entry in plain.items():
-                try:
-                    is_str = isinstance(name, str)
-                except Exception as exc:
-                    raise ConfigurationError(
-                        f"`{APPLY_UPSTREAM_PATCHES_KEY}` keys must be dependency name strings; "
-                        f"got {name!r}.",
-                    ) from exc
-                if not is_str:
-                    raise ConfigurationError(
-                        f"`{APPLY_UPSTREAM_PATCHES_KEY}` keys must be dependency name strings; "
-                        f"got {name!r}.",
-                    )
-                keyed[name] = entry
-            unknown = set(keyed) - UPSTREAM_PATCH_DEPENDENCIES
-            if unknown:
-                raise ConfigurationError(
-                    f"`{APPLY_UPSTREAM_PATCHES_KEY}` names unknown patch dependencies "
-                    f"{sorted(unknown)}; valid names are {sorted(UPSTREAM_PATCH_DEPENDENCIES)}.",
-                )
-            flags: dict[str, bool] = {}
-            for name, value in keyed.items():
-                if type(value) is not bool:
-                    raise ConfigurationError(
-                        f"`{APPLY_UPSTREAM_PATCHES_KEY}[{name!r}]` must be a bool; "
-                        f"got {_safe_type_name(value)}.",
-                    )
-                flags[name] = value
-            return flags.get(dependency, True)
+            plain = dict(configured)
+        except Exception as exc:
+            raise ConfigurationError(
+                f"`{APPLY_UPSTREAM_PATCHES_KEY}` is not a valid mapping; iteration failed.",
+            ) from exc
+        try:
+            flags = _validated_patch_flags(plain)
         except ConfigurationError:
             raise
         except Exception as exc:
             raise ConfigurationError(
                 f"`{APPLY_UPSTREAM_PATCHES_KEY}` is not a valid mapping; iteration failed.",
             ) from exc
+        return flags.get(dependency, True)
     raise ConfigurationError(
         f"`{APPLY_UPSTREAM_PATCHES_KEY}` must be a bool or a mapping of dependency names "
         f"to bools; got {_safe_type_name(configured)}.",

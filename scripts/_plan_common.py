@@ -42,7 +42,7 @@ def resolve_path(path: Path, root: Path) -> Path:
 def validate_date(value: str | None) -> str:
     """Return an ISO date, defaulting to today, or fail with a useful error."""
     if value is None:
-        return datetime.date.today().isoformat()
+        return datetime.datetime.now().astimezone().date().isoformat()
     try:
         return datetime.date.fromisoformat(value).isoformat()
     except ValueError as exc:
@@ -74,9 +74,9 @@ def atomic_write(path: Path, content: str, *, force: bool) -> None:
             _ = stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
-        os.chmod(temp_name, existing_mode)
+        Path(temp_name).chmod(existing_mode)
         if force:
-            os.replace(temp_name, path)
+            _ = Path(temp_name).replace(path)
         else:
             try:
                 os.link(temp_name, path)

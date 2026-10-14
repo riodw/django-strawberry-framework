@@ -264,7 +264,7 @@ def test_args_reassignment_and_pickle_never_leave_stale_render_caches():
     assert repr(err) == "ConfigurationError('first')"
 
     err.args = ("second",)
-    restored = pickle.loads(pickle.dumps(err))
+    restored = pickle.loads(pickle.dumps(err))  # noqa: S301 - round-trips the object this test just pickled
 
     assert str(err) == "second"
     assert repr(err) == "ConfigurationError('second')"
@@ -358,7 +358,7 @@ def test_lookup_validation_error_constructor_survives_hostile_metadata_and_value
 
 
 def _pickle_roundtrip(err: object) -> object:
-    return pickle.loads(pickle.dumps(err))
+    return pickle.loads(pickle.dumps(err))  # noqa: S301 - round-trips the object this test just pickled
 
 
 @pytest.mark.parametrize(

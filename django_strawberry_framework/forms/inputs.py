@@ -235,7 +235,7 @@ def get_form_fields(form_class: FormClass) -> dict[str, forms.Field]:
 def _form_field_basis(
     form_class: FormClass,
     # basedpyright: EAFP: a consumer hook's return; the try/except around ``dict`` guards it
-    form_fields: Any = None,  # pyright: ignore[reportExplicitAny]
+    form_fields: Any = None,  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - consumer hook return; EAFP
 ) -> dict[str, forms.Field]:
     """Return the validated field basis used by every form-input operation.
 
@@ -278,14 +278,14 @@ def _form_field_basis(
             invalid_name = (
                 not isinstance(name, str) or not name.isidentifier() or keyword.iskeyword(name)  # pyright: ignore[reportUnnecessaryIsInstance]
             )
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - hostile object, contained by design
             invalid_name = True
         if invalid_name:
             invalid_names.append(name)
         try:
             # basedpyright: trust boundary: the same hook can map a name to any value
             invalid_field = not isinstance(field, forms.Field)  # pyright: ignore[reportUnnecessaryIsInstance]
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - hostile object, contained by design
             invalid_field = True
         if invalid_field:
             invalid_fields.append(name)
@@ -337,7 +337,7 @@ def _related_model_of(field: forms.Field) -> object:
         # field's ``AttributeError`` projects ``None`` below, exactly like a hostile
         # attribute that raises.
         return getattr(getattr(field, "queryset"), "model", None)  # noqa: B009
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return None
 
 
@@ -747,7 +747,7 @@ def _choice_narrowing_identity(
         return None
     try:
         narrowing = _form_choice_narrowing(name, field, column, form_class)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return None
     if narrowing is None:
         return None

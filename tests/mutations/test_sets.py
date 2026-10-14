@@ -364,12 +364,12 @@ def test_meta_input_class_following_scheme_validates_clean():
 
 @pytest.mark.parametrize(
     ("operation", "override_name", "applies_to"),
-    (
+    [
         ("delete", "input_class", "create"),
         ("delete", "partial_input_class", "update"),
         ("create", "partial_input_class", "update"),
         ("update", "input_class", "create"),
-    ),
+    ],
 )
 def test_meta_inapplicable_input_override_raises(
     operation: str,
@@ -400,10 +400,10 @@ def test_meta_inapplicable_input_override_raises(
 
 @pytest.mark.parametrize(
     ("operation", "override_name", "other_override_name"),
-    (
+    [
         ("create", "input_class", "partial_input_class"),
         ("update", "partial_input_class", "input_class"),
-    ),
+    ],
 )
 def test_meta_applicable_input_override_is_accepted(
     operation: str,
@@ -1784,7 +1784,7 @@ def test_public_metaclasses_pin_public_identity_and_pickle():
         # Module addressability: the metaclass is reachable at module.name.
         assert getattr(importlib.import_module(module), name) is metaclass
         # Reference pickling round-trips to the very same class object.
-        assert pickle.loads(pickle.dumps(metaclass)) is metaclass
+        assert pickle.loads(pickle.dumps(metaclass)) is metaclass  # noqa: S301 - round-trips the object this test just pickled
 
     # The two consumers are distinct class objects over disjoint ledgers, not one
     # shared function-local metaclass reused under two names.
@@ -2326,6 +2326,9 @@ def test_make_declaration_registry_identity_dedup_hostile_eq_safe_containment():
         @override
         def __eq__(cls, other: object) -> bool:
             raise RuntimeError("hostile eq")
+
+        # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
+        __hash__ = None  # pyright: ignore[reportAssignmentType]
 
     class FirstClass:
         pass

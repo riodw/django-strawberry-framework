@@ -487,7 +487,7 @@ def resolve_strategy(value: object) -> NestedConnectionStrategy:
         return strategy
     try:
         plan_callable = getattr(value, "plan", None)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         # ``getattr``'s default only absorbs ``AttributeError``; a raising
         # property (or descriptor) is not a strategy, so the typed rejection
         # below applies.

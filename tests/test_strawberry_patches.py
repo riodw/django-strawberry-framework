@@ -524,7 +524,7 @@ def test_apply_fails_loudly_when_the_upload_utility_is_not_a_plain_function():
 
 def _self_only_method(_self: object) -> None:
     """A delegate whose signature lost every parameter but ``self``."""
-    return None
+    return
 
 
 def test_apply_fails_loudly_when_parse_json_signature_changes():
@@ -601,18 +601,18 @@ def test_apply_fails_loudly_when_parse_query_params_source_is_unavailable():
     """An unreadable captured original is treated as drift, not approved.
 
     ``inspect.getsource`` raises ``OSError`` for a function with no
-    retrievable source file (built here via ``exec``, the shape a
-    bytecode-only distribution would present). The validator must refuse
-    to supersede a body it cannot verify.
+    retrievable source file (built here from a code object whose file
+    does not exist, the shape a bytecode-only distribution would
+    present). The validator must refuse to supersede a body it cannot
+    verify.
     """
-    namespace: dict[str, object] = {}
-    exec("def _sourceless(self, params):\n    return dict(params)\n", namespace)
 
-    with mock.patch.object(
-        patches,
-        "_original_parse_query_params",
-        namespace["_sourceless"],
-    ):
+    def _sourceless(_self: object, _params: object) -> None:
+        """Never called; only its unreadable source matters."""
+
+    _sourceless.__code__ = _sourceless.__code__.replace(co_filename="<sourceless>")
+
+    with mock.patch.object(patches, "_original_parse_query_params", _sourceless):
         with pytest.raises(RuntimeError, match="upstream body"):
             patches.apply()
 

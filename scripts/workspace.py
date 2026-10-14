@@ -275,7 +275,7 @@ SCRUBBED_NAMES = frozenset(
 
 CELLS = ("default", "sharded", "pg")
 PG_USER = "fakeshop"
-PG_PASSWORD = "fakeshop"  # the throwaway compose container's documented credential
+PG_PASSWORD = "fakeshop"  # noqa: S105 - the throwaway compose container's documented credential
 PG_PORT = "5432/tcp"
 COMPOSE_PROJECT = "dsf-ws-postgres"
 
@@ -536,7 +536,7 @@ def item_diff(repo_root: Path, baseline: str, paths: Sequence[str]) -> bytes:
 def _still_names(path: Path, descriptor: int) -> bool:
     """Return whether ``path`` still names the file ``descriptor`` holds open."""
     try:
-        return os.path.samestat(os.fstat(descriptor), os.stat(path))
+        return os.path.samestat(os.fstat(descriptor), path.stat())
     except FileNotFoundError:
         return False
 
@@ -880,7 +880,8 @@ def wanted_files(repo_root: Path) -> dict[str, Path]:
 def file_hash(path: Path) -> str:
     """Return a sha1 of a file's bytes, or of a symlink's target text."""
     if path.is_symlink():
-        target = os.readlink(path).encode("utf-8", "surrogateescape")
+        # os.readlink keeps the link text verbatim; Path.readlink() would normalize it.
+        target = os.readlink(path).encode("utf-8", "surrogateescape")  # noqa: PTH115
         return "link:" + hashlib.sha1(target, usedforsecurity=False).hexdigest()
     digest = hashlib.sha1(usedforsecurity=False)
     with path.open("rb") as handle:
@@ -918,11 +919,12 @@ def _copy_entry(source: Path, destination: Path, repo_root: Path) -> None:
         parent.unlink()
     parent.mkdir(parents=True, exist_ok=True)
     if source.is_symlink():
-        target = os.readlink(source)
-        if os.path.isabs(target) and _is_within(Path(target), repo_root):
+        # os.readlink keeps the link text verbatim; Path.readlink() would normalize it.
+        target = os.readlink(source)  # noqa: PTH115
+        if Path(target).is_absolute() and _is_within(Path(target), repo_root):
             msg = f"{source} links into the shared tree by absolute path; a copy would share it"
             raise WorkspaceError(msg)
-        os.symlink(target, destination)
+        destination.symlink_to(target)
     else:
         _ = shutil.copy2(source, destination)
 
@@ -1412,16 +1414,15 @@ class Postgres:
         and ``test_<prefix>_gwN`` databases pytest-django derives from it, so
         ``slot1`` never matches ``slot10``.
         """
-        escaped = prefix.replace("_", r"\_")
+        rows = self.sql("SELECT datname FROM pg_database ORDER BY datname")
+        names = [row for row in rows.splitlines() if row]
         if exact:
-            clause = (
-                f"datname IN ('{prefix}', 'test_{prefix}') "
-                f"OR datname LIKE 'test\\_{escaped}\\_gw%'"
-            )
-        else:
-            clause = f"datname LIKE '{escaped}%' OR datname LIKE 'test\\_{escaped}%'"
-        rows = self.sql(f"SELECT datname FROM pg_database WHERE {clause} ORDER BY datname")
-        return [row for row in rows.splitlines() if row]
+            return [
+                name
+                for name in names
+                if name in {prefix, f"test_{prefix}"} or name.startswith(f"test_{prefix}_gw")
+            ]
+        return [name for name in names if name.startswith((prefix, f"test_{prefix}"))]
 
     def drop_matching(self, prefix: str, *, exact: bool = False) -> list[str]:
         """Drop every database ``databases`` returns for ``prefix``; return their names."""

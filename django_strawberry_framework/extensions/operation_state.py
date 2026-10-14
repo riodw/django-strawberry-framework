@@ -141,18 +141,10 @@ from ..utils.private_state import PrivateAuthority
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
     from types import TracebackType
-    from typing import TypeAlias
 
     from strawberry.extensions.context import ExtensionContextManagerBase
     from strawberry.types import ExecutionContext
-    from typing_extensions import TypeIs, Unpack
-
-    #: The three values the context-manager protocol hands ``__exit__`` / ``__aexit__``.
-    _ExcInfo: TypeAlias = tuple[
-        type[BaseException] | None,
-        BaseException | None,
-        TracebackType | None,
-    ]
+    from typing_extensions import TypeIs
 
 #: The value type of whichever context variable a binding sets and resets.
 _ValueT = TypeVar("_ValueT")
@@ -180,6 +172,7 @@ class OperationState:
     __weakref__: object
 
     def __init__(self, execution_context: ExecutionContext) -> None:
+        """Hold the operation's engine ``execution_context`` and start with no resumed bindings."""
         self.execution_context: ExecutionContext = execution_context
         self._resumed_bindings: list[Callable[[], _Binding]] = []
 
@@ -229,7 +222,7 @@ class OperationState:
 
 # The state type one operation-bound extension builds and reads back: the
 # ``OperationState`` subclass its ``_new_operation_state`` returns.
-_StateT = TypeVar("_StateT", bound=OperationState, covariant=True)
+_StateT_co = TypeVar("_StateT_co", bound=OperationState, covariant=True)
 #: One frame a streamed operation yields: whatever the stream it wraps yields.
 _FrameT = TypeVar("_FrameT")
 
@@ -423,7 +416,7 @@ def _carrier(extension: object) -> ContextVar[OperationLease[ref[OperationState]
     return carrier
 
 
-def _bound_state(extension: _OperationBoundExtension[_StateT]) -> _StateT | None:
+def _bound_state(extension: _OperationBoundExtension[_StateT_co]) -> _StateT_co | None:
     """The state bound to ``extension`` here, or ``None`` outside that binding.
 
     Two conditions, one answer. The lease is closed when the scope that bound it
@@ -437,7 +430,7 @@ def _bound_state(extension: _OperationBoundExtension[_StateT]) -> _StateT | None
     binding = lease.held()
     # An extension's carrier is only ever set to a reference to the state its own
     # ``_new_operation_state`` built (``_bind`` over ``_operation_states``).
-    return None if binding is None else cast("_StateT | None", binding())
+    return None if binding is None else cast("_StateT_co | None", binding())
 
 
 def _is_package_managed(extension: object) -> bool:
@@ -454,7 +447,7 @@ def _mark_package_managed(extension: object) -> None:
     an operation answers ``None`` rather than with an earlier schema's context.
     """
     if not _PACKAGE_MANAGED.settled(extension):
-        _PACKAGE_MANAGED.settle(extension, True)
+        _PACKAGE_MANAGED.settle(extension, state=True)
     extension.__dict__.pop("_compatibility_state", None)
 
 
@@ -482,12 +475,12 @@ def _binds_operation_state(execution_context: object) -> bool:
 
     try:
         schema = getattr(execution_context, "schema", None)
-    except Exception:
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
         return False
     return issubclass(type(schema), DjangoSchema)
 
 
-class _OperationBoundExtension(SchemaExtension, Generic[_StateT]):
+class _OperationBoundExtension(SchemaExtension, Generic[_StateT_co]):
     """A ``SchemaExtension`` whose per-operation state is bound, not stored on it.
 
     Subclasses keep their configuration wherever their own authority holds it
@@ -578,12 +571,12 @@ class _OperationBoundExtension(SchemaExtension, Generic[_StateT]):
             None if value is None else self._new_operation_state(value)
         )
 
-    def _new_operation_state(self, execution_context: ExecutionContext) -> _StateT:
+    def _new_operation_state(self, execution_context: ExecutionContext) -> _StateT_co:
         """Build the state one operation on this extension is answered from."""
         # A subclass that keeps this default declares ``OperationState`` as its state type.
-        return cast("_StateT", OperationState(execution_context))
+        return cast("_StateT_co", OperationState(execution_context))
 
-    def _operation_state(self) -> _StateT | None:
+    def _operation_state(self) -> _StateT_co | None:
         """The state this extension may write this operation's scratch on.
 
         ``None`` outside an operation, and ``None`` again in a task that copied
@@ -826,9 +819,14 @@ class _BoundScope:
             _unbind(self._bindings)
             raise
 
-    def __exit__(self, *exc_info: Unpack[_ExcInfo]) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         try:
-            return self._scope.__exit__(*exc_info)
+            return self._scope.__exit__(exc_type, exc_val, exc_tb)
         finally:
             _unbind(self._bindings)
 
@@ -840,9 +838,14 @@ class _BoundScope:
             _unbind(self._bindings)
             raise
 
-    async def __aexit__(self, *exc_info: Unpack[_ExcInfo]) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         try:
-            return await self._scope.__aexit__(*exc_info)
+            return await self._scope.__aexit__(exc_type, exc_val, exc_tb)
         finally:
             _unbind(self._bindings)
 
@@ -938,6 +941,7 @@ class DjangoExtensionsRunner(SchemaExtensionsRunner):
         execution_context: ExecutionContext,
         extensions: list[SchemaExtension] | None = None,
     ) -> None:
+        """Build the runner and file each operation-bound extension's state for this operation."""
         super().__init__(execution_context=execution_context, extensions=extensions)
         self._operation_states: _OperationStates = _operation_states(
             self.extensions,

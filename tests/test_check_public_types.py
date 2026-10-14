@@ -227,14 +227,16 @@ def test_output_that_is_not_a_scored_report_is_a_measurement_error(payload: str)
         check_public_types.completeness_score(check_public_types.parse_report(payload))
 
 
-def test_child_environments_drop_every_redirect_and_take_the_temporary_one():
+def test_child_environments_drop_every_redirect_and_take_the_temporary_one(tmp_path: Path):
     """The caller's virtualenv, import path and uv project redirects never reach a child."""
     inherited = dict.fromkeys(check_public_types.REDIRECTING_VARIABLES, "/caller")
     inherited["PATH"] = "/usr/bin"
 
-    env = check_public_types.child_environment(inherited, VIRTUAL_ENV="/tmp/env")
+    env_path = str(tmp_path / "env")
 
-    assert env == {"PATH": "/usr/bin", "VIRTUAL_ENV": "/tmp/env"}
+    env = check_public_types.child_environment(inherited, VIRTUAL_ENV=env_path)
+
+    assert env == {"PATH": "/usr/bin", "VIRTUAL_ENV": env_path}
 
 
 @pytest.mark.parametrize(

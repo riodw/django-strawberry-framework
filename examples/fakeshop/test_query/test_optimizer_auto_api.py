@@ -235,7 +235,7 @@ def install_unhashable_set_scalar_cache_schema(
     SetValue = NewType("SetValue", set[str])
     set_scalar = strawberry.scalar(
         name="SetValue",
-        serialize=lambda value: sorted(value),
+        serialize=sorted,
         parse_value=set,
     )
 

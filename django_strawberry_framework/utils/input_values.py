@@ -253,7 +253,7 @@ def raise_set_traversal_depth_exceeded(
     cap = set_traversal_depth_cap(set_cls)
     try:
         label = getattr(set_cls, "__qualname__", None)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         label = None
     if not isinstance(label, str):
         label = _safe_type_name(set_cls)
@@ -300,6 +300,7 @@ class RelatedDeclarationError(Exception):
     """
 
     def __init__(self, kind: str, value: object = None) -> None:
+        """Carry the failure ``kind`` and the offending ``value``."""
         super().__init__(kind)
         self.kind: str = kind
         self.value: object = value

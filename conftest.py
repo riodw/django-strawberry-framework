@@ -133,10 +133,10 @@ def _close_stray_postgres_connections(
 
 
 def _django_db_signature(
-    transaction: object = False,
-    reset_sequences: object = False,
+    transaction: object = False,  # noqa: FBT002
+    reset_sequences: object = False,  # noqa: FBT002
     databases: object = None,
-    serialized_rollback: object = False,
+    serialized_rollback: object = False,  # noqa: FBT002
     available_apps: object = None,
 ) -> tuple[object, object, object, object, object]:
     """Bind a ``django_db`` marker's arguments exactly as pytest-django's signature does.

@@ -400,7 +400,8 @@ async def test_async_withdrawn_badges_and_sponsors_are_absent_over_http(
     )
 
     assert payload.get("errors") is None, payload
-    assert "STEP-FREE" in str(payload) and "Acme" in str(payload), payload
+    assert "STEP-FREE" in str(payload), payload
+    assert "Acme" in str(payload), payload
     assert "VOID-RAMP" not in str(payload), payload
     assert "Withdrawn" not in str(payload), payload
     assert payload["data"] == {

@@ -91,7 +91,8 @@ def make_info(
         resolved_name = field_name or "field"
         document = f"{operation.value} {{ {resolved_name} {selections} }} {fragments}"
     else:
-        assert not (selections or fragments), "a whole document carries its own selections"
+        assert not selections, "a whole document carries its own selections"
+        assert not fragments, "a whole document carries its own selections"
         assert operation is OperationType.QUERY, "a whole document spells its own operations"
     parsed = parse(document)
     operation_node = next(

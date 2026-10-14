@@ -491,7 +491,7 @@ def test_stray_executor_thread_connections_are_tracked_for_session_close():
         try:
             django_connections["default"].ensure_connection()
             django_connections["default"].close()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - worker thread reports to the main thread
             failures.append(exc)
 
     worker = threading.Thread(target=_open_and_close_on_worker_thread)

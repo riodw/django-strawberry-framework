@@ -1378,9 +1378,9 @@ async def test_async_entry_rejects_data_rewriting_hook_too():
     data = _Data(name="AsyncRewriteItem", category_id=gid)  # pyright: ignore[reportArgumentType]
 
     with managed_write_transaction("default"):
+        pending = CreateItemRewriting.resolve_async(info, data=data, id=None)
+        assert inspect.isawaitable(pending)
         with pytest.raises(ConfigurationError, match="not the exact object the hook received"):
-            pending = CreateItemRewriting.resolve_async(info, data=data, id=None)
-            assert inspect.isawaitable(pending)
             await pending
     # The refused write never happened.
     exists = await sync_to_async(
@@ -3384,7 +3384,7 @@ def test_frozen_hook_view_freezes_the_full_value_algebra_and_fails_closed_on_opa
 
     # Genuinely-immutable scalars pass through by reference (safe, no false rejection).
     scalars: dict[str, object] = {
-        "dt": datetime.datetime(2026, 7, 15, 12, 0, 0),
+        "dt": datetime.datetime(2026, 7, 15, 12, 0, 0, tzinfo=datetime.timezone.utc),
         "dec": decimal.Decimal("1.5"),
         "id": uuid.uuid4(),
         "n": 7,
@@ -3749,7 +3749,8 @@ def test_write_witness_blocks_cross_alias_pre_save():
                     created=True,
                     using="default",
                 )
-            except BaseException as exc:  # only on regression
+            # only on regression
+            except BaseException as exc:  # noqa: BLE001 - worker thread reports to the main thread
                 errors.append(exc)
 
         thread = threading.Thread(target=_other_thread_save)
@@ -3950,7 +3951,8 @@ def test_pipeline_alias_guard_blocks_cross_alias_pre_save_and_ignores_other_thre
                     instance=product_models.Item(name="x"),
                     using="other",
                 )
-            except BaseException as exc:  # only on regression
+            # only on regression
+            except BaseException as exc:  # noqa: BLE001 - worker thread reports to the main thread
                 errors.append(exc)
 
         thread = threading.Thread(target=_other_thread_save)

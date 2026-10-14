@@ -3,14 +3,14 @@
 ruff 0.17.0 lints and formats every tracked Python file (511, the same set `git ls-files '*.py'` lists), configured in
 `pyproject.toml` `[tool.ruff]`. This file tracks the rules switched on, the rules still off, the config-level ignores
 and the `# noqa` comments still in the tree.
-A rule family is selected whole; a code in it that still reports sits in the ratchet block of `ignore` until its sites
-are fixed at the root, gated (`ruff check`, `ruff format --check`, `scripts/check_trailing_commas.py --check`, full
-suite at 100% coverage) and committed, and the line is deleted.
+A rule family is selected whole. Every stable code is on except the off-by-design block of `ignore`; the ratchet
+block is empty. A site the rule is wrong about carries a `# noqa: CODE - reason`; a whole folder the rule is wrong
+about gets a per-file ignore with its reason in `pyproject.toml`.
 
-Progress: 27 done, 8 to do. Stable rules: 815, every one named in the config: 713 on, 102 in `ignore` (25 off by
-design, 77 ratchet). The 139 preview-only rules stay off with `preview`. `# noqa` comments: 160 lines in 52 files.
+Progress: 34 done, 1 to do (item 31). Stable rules: 815, every one named in the config: 790 on, 25 in `ignore` (off
+by design). The 139 preview-only rules stay off with `preview`. `# noqa` comments: 410 lines in 114 files.
 
-Counts below were measured on ruff 0.17.0 at ee9c8161. "Root" is `conftest.py`, `line_count.py` and
+Counts below were measured on ruff 0.17.0 at ee9c8161 (items 1-27) and 8ca6a481 (items 28-35). "Root" is `conftest.py`, `line_count.py` and
 `docs/dry/export_dry_review.py`.
 
 ## Done: rules on
@@ -19,8 +19,8 @@ Counts below were measured on ruff 0.17.0 at ee9c8161. "Root" is `conftest.py`, 
 - [x] 2. `F` (Pyflakes)
 - [x] 3. `I` (isort), with `django_strawberry_framework` first-party
 - [x] 4. `UP` (pyupgrade), targeting py310
-- [x] 5. `ANN` (annotations), minus `ANN401` (item 32); tests/ and examples/ exempt
-- [x] 6. `D` (pydocstyle, Google convention), minus `D107` (item 32); tests/ and examples/ exempt
+- [x] 5. `ANN` (annotations); tests/ and examples/ exempt
+- [x] 6. `D` (pydocstyle, Google convention); tests/ and examples/ exempt
 - [x] 7. `A` (builtins)
 - [x] 8. `ARG` (unused arguments), `*args` / `**kwargs` padding exempt (`ignore-variadic-names`); tests/ and examples/
   exempt
@@ -36,10 +36,10 @@ Counts below were measured on ruff 0.17.0 at ee9c8161. "Root" is `conftest.py`, 
 - [x] 18. `SIM` (simplify)
 - [x] 19. `COM` (trailing commas; `COM812` pairs with `scripts/check_trailing_commas.py`) and `ISC` (implicit
   concatenation). ruff 0.17 reports a formatter conflict for `COM812` only
-- [x] 20. `PL` (Pylint), minus the off-by-design codes below and the ratchet codes of items 28 and 30
+- [x] 20. `PL` (Pylint), minus the off-by-design codes below
 - [x] 21. Every other stable rule with no site today, by selecting its family: `DJ`, `DTZ`, `EXE`, `FA`, `FIX`,
   `FURB`, `G`, `ICN`, `INT`, `LOG`, `PGH`, `PIE`, `PT`, `PTH`, `PYI`, `RET`, `S`, `SLOT`, `T10`, `TC`, `TD`, `TID`,
-  `TRY`, `YTT`. The codes that still report are in `ignore` (off by design below, or ratchet items 28-35)
+  `TRY`, `YTT`. The codes that reported were ratcheted in items 28-35
 - [x] 22. Dead config ignores deleted: `ANN002`, `ANN003`, `D417`, `RUF001`-`RUF003` from the global `ignore`; `F841`
   and `SIM118` from the tests/ and examples/ lists; `N806`, `B018` and `PERF` from the examples/ list; the
   `__init__.py`, `**/migrations/*.py`, `**/views.py`, `**/urls.py` and `**/admin.py` entries
@@ -58,37 +58,44 @@ Counts below were measured on ruff 0.17.0 at ee9c8161. "Root" is `conftest.py`, 
   `TODO(unscheduled ...)` anchors now carry their whole head and `):` on the first line with the description after
   it, and the card-id notes in `examples/fakeshop/apps/products/schema.py` sit on their own `# needs TODO-BETA-...:`
   line above the commented-out code they gate
+- [x] 28. The small real-signal codes (about 340 sites), fixed at the root: composite asserts split (`PT018`),
+  side-effect fixtures moved to `@pytest.mark.usefixtures` or renamed where the test reads the value (`PT019`),
+  `match=` on every `raises` / `warns` (`PT011`, `PT030`), one statement under each `raises` (`PT012`), plain asserts
+  for unittest ones (`PT009`, `PT027`), `PT006`/`PT007`/`PT013`/`PT017`/`PT022`; needless lambdas inlined (`PLW0108`),
+  `__hash__ = None` beside each `__eq__` (`PLW1641`), loop variables kept (`PLW2901`), `check=False` spelled out
+  (`PLW1510`); `PYI034` / `PYI036`, `TRY300` / `TRY301` (a raising check moved into a named helper, guarded work kept
+  inside the `try`), `PLC0105` / `PLC0207`, `PLR0402` / `PLR1711` / `PLR1714`, `RET`, `PTH`, `FURB`, `PIE`, `DTZ`,
+  `EXE001` (four script shebangs deleted, `manage.py` made executable). Kept with a `noqa`: lambdas whose late binding
+  or factory-vs-class distinction is the point, the `GraphQLTestMixin` delegating to its host `TestCase`
+  (`PT009`), `os.readlink` where `Path.readlink()` would normalize the link text (`PTH115`)
+- [x] 29. `DJ012` (model bodies reordered), `DJ001` (`noqa` where NULL is the value under test, and `Book.subtitle`,
+  where NULL means no subtitle). `DJ008` (127 throwaway test models) and `SLOT000` / `SLOT001` (hostile `str` /
+  `tuple` fixtures that model consumer values) are per-file ignores for tests/ (and `SLOT000` for examples/)
+- [x] 30. Security and boundaries. `S324` gets `usedforsecurity=False`, `S108` `tempfile` / `tmp_path`, the
+  workspace `databases()` SQL is static with Python filtering, `S110` / `S112` return from the handler or move into a
+  helper. `S603` / `S607` (fixed argv of git, uv, ruff, `sys.executable`) are per-file ignores for tests/ and
+  scripts/; `S105` / `S106` / `S107` (fixture credentials and name-heuristic hits) for tests/ and examples/. `noqa`
+  with a reason: `pickle` round trips, `exec` of literal test programs, hostile `.extra()` input, the quoted lateral
+  SQL, a seeded demo `random.Random`, the compose container's password, the four `filters/sets.py` asserts that
+  mirror django-filter. `BLE001`: `logger-objects` names the re-exported package logger, which clears the 48 handlers
+  that log; three narrow to the type actually raised, and the other 148 are deliberate containment and carry one of five reasons (`hostile object, contained by
+  design`, `consumer code may raise anything`, `boundary fails closed`, `rewrapped as the typed rejection`,
+  `worker thread reports to the main thread`), so `rg "noqa: BLE001 - hostile"` is the census
+- [x] 32. `ANN401`: `allow-star-arg-any` clears the `*args: Any, **kwargs: Any` forwards; the other 24 explicit `Any`s
+  each carry a basedpyright reason and a `noqa`. `D107`: every `__init__` documented
+- [x] 33. `FBT002` (boolean default positional argument): `utils/relations.py::relation_bool`'s `default` is
+  keyword-only, and its 7 callers that passed the default `False` positionally drop it; the 3 `conftest.py`
+  `_django_db_signature` sites take `noqa: FBT002`, since it mirrors pytest-django's positional
+  `django_db(transaction, reset_sequences, ...)` signature on purpose
+- [x] 34. `FBT001`: every package and script flag is keyword-only and passed by name, except `write_transaction.py`'s
+  two `many` parameters, which Django's `execute_wrapper` passes positionally (`noqa`)
+- [x] 35. `FBT003`: the remaining positional `True` / `False` arguments are passed by name
+- [x] `PLC0414`: `permissions.py` gets an `__all__`; the eleven `x as x` re-exports basedpyright needs for consumers
+  that import through the converter modules, `utils.inputs`, `types.relay` and `filters.base` keep the alias with a
+  `noqa`
 
 ## To do: rules still off
 
-Counts are the diagnostics each code reports when its ignore line is deleted (package / tests / examples / scripts /
-root).
-
-- [ ] 28. Small, real signal (about 340 sites), each row's codes in the ratchet block:
-
-  | Rule | Sites | Package | Tests | Examples | Scripts | Root | Catches |
-  | --- | --- | --- | --- | --- | --- | --- | --- |
-  | `PT` | 168 | 3 | 128 | 36 | 1 | 0 | composite asserts (56), fixtures injected for their side effect (52), unittest asserts (14), `raises` without `match` (12) or around several statements (12) |
-  | `PLW` | 54 | 6 | 41 | 7 | 0 | 0 | `__eq__` without `__hash__` (18), needless lambdas (29), a reassigned loop variable (3) |
-  | `PYI034`, `PYI036` | 4 | 3 | 1 | 0 | 0 | 0 | `__new__` / `__exit__` annotations |
-  | `TRY300`, `TRY301` | 18 | 14 | 2 | 1 | 1 | 0 | `return` inside `try`, `raise` caught by its own `try` |
-  | `PLC` (not `PLC0415`) | 19 | 16 | 2 | 0 | 1 | 0 | needless import alias (12), `split` without `maxsplit` |
-  | `PLR0402`, `PLR1711`, `PLR1714` | 17 | 2 | 13 | 2 | 0 | 0 | `import a.b as b`, a trailing `return None`, repeated `==` |
-  | `RET` | 15 | 1 | 8 | 6 | 0 | 0 | explicit `return None`, `else` after `return` |
-  | `PTH` | 14 | 0 | 1 | 1 | 7 | 5 | `os` / `open` where `pathlib` reads plainer |
-  | `FURB` | 10 | 6 | 2 | 0 | 2 | 0 | `x if x else y`, prefix slicing, regex flag aliases |
-  | `PIE` | 7 | 3 | 1 | 1 | 1 | 1 | a needless `pass` / `...`, chained `startswith` |
-  | `DTZ` | 5 | 0 | 4 | 0 | 1 | 0 | a naive `datetime` / `date.today()` |
-  | `EXE001` | 5 | 0 | 0 | 1 | 4 | 0 | a shebang on a file that is not executable |
-
-- [ ] 29. Larger, worth a look: `DJ001` / `DJ008` / `DJ012` (141: 127 test models without `__str__`, 8 nullable string fields,
-  6 model bodies out of Django's order), `SLOT000` / `SLOT001` (62 `str` / `tuple` subclasses without `__slots__`,
-  all in tests and examples)
-- [ ] 30. Security and boundaries: the `S` ratchet codes (package 16: `try`/`except: pass` 5, SQL strings 4, `assert`
-  4, a weak hash, ...; `S101` is by design in tests/ and examples/ but has 19 sites elsewhere: package 4, scripts 14,
-  root 1; the rest are subprocess calls, hard-coded test passwords and `pickle` in tests, examples and scripts) and
-  `BLE001` (187 `except Exception` in the package, each a deliberate boundary today; turning it on means
-  a `noqa` with its reason on each)
 - [ ] 31. Shrink the tests/ and examples/ per-file ignores. What each code hides today:
 
   | Code | Hidden | Tests | Examples |
@@ -99,39 +106,19 @@ root).
   | `ARG` | 405 | 222 | 183 |
   | `N806` | 195 | 195 | 0 |
   | `E501` | 150 | 99 | 51 |
+  | `DJ008` | 127 | 127 | 0 |
   | `SIM117` (nested `with`) | 105 | 98 | 7 |
   | `RUF043` (`match=` metacharacters) | 94 | 91 | 3 |
+  | `SLOT000`, `SLOT001` | 62 | 59 | 3 |
   | `UP031` (printf formatting) | 48 | 0 | 48 |
+  | `S106`, `S105`, `S107` | 42 | 15 | 27 |
   | `ERA001` | 36 | 15 | 21 |
   | `B018` | 35 | 35 | 0 |
+  | `S603`, `S607` | 32 | 32 | 0 |
   | `N802` | 6 | 6 | 0 |
   | `PERF` | 3 | 3 | 0 |
 
-  scripts/ drops `PERF` (16 sites).
-
-- [ ] 32. `ANN401` and `D107`: 34 explicit `Any` annotations and 22 undocumented `__init__`s in the package
-
-Boolean trap (`FBT`): every package site is internal (no exported function or class takes a positional `bool`), so
-the fix is a keyword-only flag (`def f(x, *, flag: bool)`) plus its callers passing it by name, never a public
-signature change. tests/ and examples/ drop `FBT` by design (parametrized `flag: bool` arguments and fixture helper
-calls, 243 sites). One code per item, in landing order, because a signature fix also clears the `FBT003` calls that
-target it:
-
-- [ ] 33. `FBT002` (4: package 1, root 3): `utils/relations.py::relation_bool`'s `default: bool = False` becomes
-  keyword-only; that also clears its `FBT001` site and 7 of the package's 11 `FBT003` calls (its 22 callers pass
-  `default=` by name). The 3 root sites are `conftest.py::_django_db_signature`, which mirrors pytest-django's
-  positional `django_db(transaction, reset_sequences, ...)` signature on purpose: each takes a `noqa: FBT002` with
-  that reason
-- [ ] 34. `FBT001` (35 before item 33, 34 after: package 22, scripts 12): private helpers taking a positional flag
-  (`types/base.py::_validate_connection` and its three siblings' `relay_shaped`, `optimizer/walker.py`
-  `has_custom_qs`, `list_field.py` `trusted_max_rows`, `optimizer/plans.py` `defer_mode`, the
-  `utils/_queryset_private.py` setters, `utils/write_transaction.py` `many`, the private `_DocumentBudget`'s
-  `charge_selection(aliased)`, `keyset.py::keyset_seek_greater(descending)`; scripts/ `review_inspect.py` renderers
-  `cap` / `outline_only` / `in_function`, `check_trailing_commas.py::process_markdown_fences(do_fix)`). Each becomes keyword-only;
-  `_select_path_missing_connectors` and `process_markdown_fences` take their `FBT003` call sites with them
-- [ ] 35. `FBT003` (25 before items 33-34, 15 after): the remaining positional `True` / `False` arguments,
-  passed by name: `ConnectionWindowBounds(0, first, False)`, `_meta_attr(meta, "primary", False)`,
-  `_PACKAGE_MANAGED.settle(extension, True)`, and `scripts/check_citations.py`'s eleven `Outcome(...)` constructions
+  scripts/ drops `PERF` (16 sites) and `S603` / `S607` (40).
 
 Off by design (not planned):
 
@@ -160,59 +147,80 @@ content, so the formatter owns `.py` only. No file carries a file-level `# ruff:
 
 ## Config ignores
 
-Global `ignore`, in two commented blocks:
-
-- Off by design (25): `C901`, `CPY001`, `D203`, `D213`, `D400`, `D401`, `D404`, `D413`, `EM101`, `EM102`,
-  `FIX002`, `PLC0415`, `PLR0911`, `PLR0912`, `PLR0913`, `PLR0915`, `PLR0917`,
-  `PLR2004`, `SLF001`, `TC001`-`TC003`, `TD003`, `TID252`, `TRY003`
-- Ratchet (77): the codes of items 28-30 and 32-35 (`ANN401`, `BLE001`, `D107`, `DJ*`, `DTZ*`, `EXE001`, `FBT*`, `FURB*`,
-  `PIE*`, `PLC*`, `PLR*`, `PLW*`, `PT*`, `PTH*`, `PYI*`, `RET*`, `S*`, `SLOT*`, `TRY300`, `TRY301`)
+Global `ignore`: the off-by-design block only (25): `C901`, `CPY001`, `D203`, `D213`, `D400`, `D401`, `D404`, `D413`,
+`EM101`, `EM102`, `FIX002`, `PLC0415`, `PLR0911`, `PLR0912`, `PLR0913`, `PLR0915`, `PLR0917`, `PLR2004`, `SLF001`,
+`TC001`-`TC003`, `TD003`, `TID252`, `TRY003`. Rule settings: `logger-objects` (the package logger, for `BLE001` /
+`LOG`), `flake8-annotations.allow-star-arg-any`, `flake8-import-conventions.aliases` (ruff's map minus
+`datetime = dt`).
 
 Per-file ignores:
 
 | Glob | Codes |
 | --- | --- |
-| `tests/**/*.py` | `D`, `ANN`, `ERA001`, `SIM117`, `E501`, `N802`, `N806`, `B018`, `RUF012`, `PERF`, `RUF043`, `ARG`, `S101`, `FBT` |
-| `examples/**/*.py` | `D`, `ANN`, `ERA001`, `SIM117`, `E501`, `UP031`, `RUF012`, `RUF043`, `ARG`, `S101`, `FBT` |
-| `scripts/**/*.py` | `PERF`, `T201`, `INP001` |
+| `tests/**/*.py` | `D`, `ANN`, `ERA001`, `SIM117`, `E501`, `N802`, `N806`, `B018`, `RUF012`, `PERF`, `RUF043`, `ARG`, `S101`, `FBT`, `DJ008`, `SLOT000`, `SLOT001`, `S106`, `S107`, `S603`, `S607` |
+| `examples/**/*.py` | `D`, `ANN`, `ERA001`, `SIM117`, `E501`, `UP031`, `RUF012`, `RUF043`, `ARG`, `S101`, `FBT`, `SLOT000`, `S105`, `S106` |
+| `scripts/**/*.py` | `PERF`, `T201`, `INP001`, `S603`, `S607` |
 | `line_count.py` | `T201` |
 | `docs/dry/export_dry_review.py` | `T201`, `INP001` |
 | `examples/fakeshop/*.py`, `examples/fakeshop/tests/*.py`, `examples/fakeshop/test_query/**/*.py` | `INP001` |
 
 ## `# noqa` breakdown
 
-Lines carrying `# noqa`: 160 (160 code hits, none bare) in 52 files: package 87, examples 50, tests 22, root 1.
+Lines carrying `# noqa`: 410 (none bare) in 114 files: package 278, tests 64, examples 60, scripts 4, root 4.
 
-| Code | Hits | Package | Tests | Examples | Root | Why |
+| Code | Hits | Package | Tests | Examples | Scripts / root | Why |
 | --- | --- | --- | --- | --- | --- | --- |
+| `BLE001` | 148 | 141 | 5 | 1 | 1 | deliberate containment, one of the five reasons of item 30 |
 | `A002` | 65 | 17 | 2 | 46 | 0 | an `id` parameter, the GraphQL argument name |
 | `E402` | 27 | 27 | 0 | 0 | 0 | the package `__init__` creates its logger before the subpackage imports |
+| `ANN401` | 24 | 24 | 0 | 0 | 0 | an `Any` the package does not own, each with a basedpyright reason |
+| `PLW0108` | 15 | 1 | 8 | 6 | 0 | a lambda whose late binding or factory-vs-class shape is the point |
+| `PLC0414` | 11 | 11 | 0 | 0 | 0 | explicit re-exports basedpyright needs |
 | `N802` | 10 | 10 | 0 | 0 | 0 | PascalCase field factories (`DjangoConnectionField`, ...), for graphene-django parity |
+| `S102` | 10 | 0 | 10 | 0 | 0 | `exec` of a literal program the test runs |
 | `N815` | 9 | 0 | 6 | 3 | 0 | camelCase model fields the naming tests need |
-| `B009` | 8 | 8 | 0 | 0 | 0 | `getattr` with a constant name, read past the stubs |
+| `B009`, `B004`, `B010`, `B904`, `TRY004` | 16 | 16 | 0 | 0 | 0 | `getattr` / `setattr` past the stubs, `__call__` probes, `raise` chaining, `ValueError` for bad input |
+| `DJ001`, `S301`, `S610` | 18 | 0 | 17 | 1 | 0 | NULL as fixture input, `pickle` round trips, hostile `.extra()` input |
 | `F821` | 7 | 0 | 7 | 0 | 0 | forward references the definition-order tests leave unresolved |
 | `ARG001`, `ARG003` | 6 | 5 | 0 | 0 | 1 | framework-fixed parameters (each also carries a basedpyright suppression) |
-| `N805` | 5 | 4 | 1 | 0 | 0 | metaclass methods and Django's `as_view` take `cls` |
-| `N818` | 4 | 2 | 2 | 0 | 0 | control-flow exceptions, and a `DoesNotExist` mirror |
-| `PERF203` | 3 | 3 | 0 | 0 | 0 | one `try` per attempt inside a loop |
-| `RUF063` | 3 | 1 | 2 | 0 | 0 | reading `__annotations__` from the class `__dict__` on purpose |
-| `B004`, `B010`, `B904`, `TRY004` | 8 | 8 | 0 | 0 | 0 | `__call__` probes, `setattr` past the stubs, `raise` chaining through `__context__`, `ValueError` for bad input |
-| `BLE001`, `RUF012`, `F403`, `F401`, `UP006` | 5 | 2 | 2 | 1 | 0 | one each |
+| `N805`, `N818` | 9 | 6 | 3 | 0 | 0 | metaclass methods and `as_view` take `cls`; control-flow exceptions |
+| `S101`, `S608`, `S110`, `PT009`, `PLW0603`, `PYI034`, `FBT001` | 18 | 18 | 0 | 0 | 0 | django-filter's asserts, quoted SQL, teardown passes, the unittest mixin, patched module caches, a metaclass `__new__`, Django's positional `many` |
+| `FBT002`, `PERF203`, `RUF063`, `TRY301`, `PTH115`, others | 20 | 5 | 6 | 3 | 6 | one to three each |
 
 ### Most `# noqa` per file
 
 | File | Lines |
 | --- | --- |
 | `examples/fakeshop/apps/kanban/schema.py` | 23 |
-| `django_strawberry_framework/__init__.py` | 18 |
-| `django_strawberry_framework/middleware/debug_toolbar.py` | 10 |
+| `django_strawberry_framework/__init__.py` | 19 |
+| `django_strawberry_framework/exceptions.py` | 15 |
+| `django_strawberry_framework/utils/relations.py` | 15 |
+| `django_strawberry_framework/utils/errors.py` | 13 |
+| `django_strawberry_framework/middleware/debug_toolbar.py` | 11 |
+| `django_strawberry_framework/types/definition.py` | 11 |
+| `django_strawberry_framework/mutations/sets.py` | 10 |
 | `examples/fakeshop/apps/glossary/schema.py` | 10 |
-| `django_strawberry_framework/mutations/resolvers.py` | 9 |
-| `tests/types/test_definition_order.py` | 8 |
-| `examples/fakeshop/apps/library/schema.py` | 7 |
-| `django_strawberry_framework/auth/mutations.py` | 5 |
-| `django_strawberry_framework/mutations/sets.py` | 5 |
-| `django_strawberry_framework/testing/client.py` | 5 |
+| `django_strawberry_framework/_request_body.py` | 9 |
+
+## Waiting on You
+
+- Run the suite. The ratchet landed gated on ruff, `ruff format`, `check_trailing_commas.py`, basedpyright (main and
+  floor), `check_public_types.py` and `check_citations.py`; pytest was not run. Riskiest edits: the PT012 / PT019
+  test rewrites (four `raises` blocks now await only the coroutine, slightly stricter), the exec-free
+  "sourceless function" tests in `test_django_patches.py` / `test_strawberry_patches.py`, the workspace
+  `databases()` rewrite and its new test, the `conf.py` / `filters/base.py` / `utils/relations.py` / `exceptions.py`
+  helper extractions, `_BoundScope.__exit__` / `__aexit__`, and the keyword-only signatures of item 34.
+- `consumers.py`: 38 handlers re-raise `(CancelledError, KeyboardInterrupt, SystemExit)` and then catch
+  `BaseException`, which swallows `GeneratorExit` from a coroutine closed mid-await (then `RuntimeError: coroutine
+  ignored GeneratorExit`). Narrowing them to `except Exception` is a behavior change that wants its own card and a
+  `GeneratorExit` regression test.
+- `extensions/error_policy.py` `on_operation`'s last-resort `except Exception: pass` takes a `noqa`; logging it would
+  surface a failed store that today serves the unmasked result silently. Log it?
+- `types.relay.SyncMisuseError` and `filters.base.LazyRelatedClassMixin` are back-compat re-export paths nothing in the
+  repo imports (both names live on the package root and their owner modules). Drop them?
+- The per-file ignores added here are policy calls: `DJ008`, `SLOT000` / `SLOT001`, `S105`-`S107` for tests/ and
+  examples/, `S603` / `S607` for tests/ and scripts/. The alternatives were 127 `__str__`s, 62 `__slots__ = ()`, and
+  about 115 `noqa` lines.
 
 
 <!-- LINK DEFINITIONS -->

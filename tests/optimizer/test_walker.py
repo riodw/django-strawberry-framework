@@ -1600,13 +1600,19 @@ def test_connection_child_seam_still_admits_a_sliced_hook_result():
         field,
         SlicedItemType,
         info,
-        True,
+        has_custom_qs=True,
         target_model=Item,
     )
     assert admitted.query.is_sliced
     assert unwindowable_child_queryset_reason(admitted) is not None
     with pytest.raises(ConfigurationError) as excinfo:
-        _build_child_queryset(field, SlicedItemType, info, True, target_model=Item)
+        _build_child_queryset(
+            field,
+            SlicedItemType,
+            info,
+            has_custom_qs=True,
+            target_model=Item,
+        )
     assert "returned a sliced queryset (rows 0:1)" in str(excinfo.value)
 
 
@@ -1632,7 +1638,13 @@ def test_child_hook_without_resolve_info_fails_loudly():
 
     field = FieldMeta.from_django_field(Category._meta.get_field("items"))
     with pytest.raises(OptimizerError, match=r"^HookedItemType\.get_queryset runs under an"):
-        _build_child_queryset(field, HookedItemType, None, True, target_model=Item)
+        _build_child_queryset(
+            field,
+            HookedItemType,
+            None,
+            has_custom_qs=True,
+            target_model=Item,
+        )
     assert calls == []
 
 
@@ -3139,7 +3151,7 @@ def test_relation_connections_slot_records_nothing_for_suppressed_shapes():
         genre_def = registry.get_definition(GenreType)
         assert genre_def is not None
         # The "list" narrowing suppresses synthesis, so nothing is recorded.
-        assert not (genre_def.relation_connections or {})
+        assert not genre_def.relation_connections
     finally:
         registry.clear()
 

@@ -170,7 +170,7 @@ def test_conflicting_current_user_gates_raise_the_one_declaration_error():
 
 @pytest.mark.django_db
 def test_sync_me_dispatch_never_enters_the_async_boundary(
-    _sync_boundary_spy: list[Callable[..., object]],
+    sync_boundary_spy: list[Callable[..., object]],
 ):
     """``execute_sync`` ``me`` runs the native sync body with no event-loop bridge."""
     schema = _me_schema()
@@ -179,12 +179,12 @@ def test_sync_me_dispatch_never_enters_the_async_boundary(
     assert res.errors is None, res.errors
     assert res.data is not None
     assert res.data["me"] == {"username": "me_sync"}
-    assert _sync_boundary_spy == []
+    assert sync_boundary_spy == []
 
 
 @pytest.mark.django_db(transaction=True)
 async def test_async_me_dispatch_awaits_the_native_async_body_exactly_once(
-    _sync_boundary_spy: list[Callable[..., object]],
+    sync_boundary_spy: list[Callable[..., object]],
 ):
     """``await schema.execute`` ``me`` awaits the native async body exactly once."""
     schema = _me_schema()
@@ -193,7 +193,7 @@ async def test_async_me_dispatch_awaits_the_native_async_body_exactly_once(
     assert res.errors is None, res.errors
     assert res.data is not None
     assert res.data["me"] == {"username": "me_async"}
-    assert len(_sync_boundary_spy) == 1
+    assert len(sync_boundary_spy) == 1
 
 
 @pytest.mark.django_db

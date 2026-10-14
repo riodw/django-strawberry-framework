@@ -1147,7 +1147,7 @@ def _pending_exclude(queryset_cls: type[models.QuerySet[Category]], name: str):
     ``QuerySet._filter_or_exclude`` write the ``(True, (), {...})`` tuple.
     """
     queryset = queryset_cls(model=Category)
-    set_queryset_defer_next_filter(queryset, True)
+    set_queryset_defer_next_filter(queryset, defer=True)
     return queryset.exclude(name=name)
 
 
@@ -1450,7 +1450,7 @@ async def test_predicate_dropping_override_result_is_neutralized_async():
 def _shadowed_all_hook(_cls: type, _qs: models.QuerySet[Category], _info: object):
     """Return a plain visible-only queryset whose instance ``all`` is predicate-dropping."""
     source = Category.objects.filter(is_private=False)
-    source.all = lambda: Category.objects.all()  # instance shadow (would drop the predicate)
+    source.all = Category.objects.all  # instance shadow (would drop the predicate)
     return source
 
 
@@ -2206,7 +2206,6 @@ def test_lookup_direct_rhs_attribute_hook_never_dispatches():
 
         def __getattr__(self, name: str):  # must never run
             self.log.append(name)
-            return None
 
     source = Category.objects.filter(name="keep")
     str(source.query)
@@ -2730,7 +2729,8 @@ def test_deferred_filter_bake_leaves_candidate_unmutated_and_is_repeatable():
     set_queryset_deferred_filter(result, (False, (), {"name": "later"}))
     sealed_one, defect_one = _seal_or_defect(result, Category, None)
     sealed_two, defect_two = _seal_or_defect(result, Category, None)
-    assert defect_one is None and defect_two is None
+    assert defect_one is None
+    assert defect_two is None
     assert result.__dict__.get("_deferred_filter") == (False, (), {"name": "later"})
     assert sealed_one is not None
     sql_one, params_one = sealed_one.query.get_compiler(using="default").as_sql()
@@ -2889,7 +2889,7 @@ def test_is_inert_value_uses_exact_types_not_isinstance():
     assert _is_inert_value(_EvilStr("x")) is False
     assert _is_inert_value("x") is True
     assert _is_inert_value(5) is True
-    assert _is_inert_value(datetime.datetime(2020, 1, 1)) is True
+    assert _is_inert_value(datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)) is True
     assert _is_inert_value(datetime.date(2020, 1, 1)) is True
     assert _is_inert_value(Decimal("1.5")) is True
     assert _is_inert_value(None) is True
@@ -3152,13 +3152,15 @@ def test_extra_order_by_none_and_string_sequence_seal():
     # as a sequence of order-by names
     none_source.query.extra_order_by = None  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(none_source, Category, None)
-    assert defect is None and sealed is not None
+    assert defect is None
+    assert sealed is not None
 
     str_source = Category.objects.all()
     str(str_source.query)
     str_source.query.extra_order_by = ("name",)
     sealed, defect = _seal_or_defect(str_source, Category, None)
-    assert defect is None and sealed is not None
+    assert defect is None
+    assert sealed is not None
 
 
 def test_query_extra_select_executable_sql_fails_closed_before_clone():
@@ -3240,7 +3242,7 @@ def test_extra_where_executable_sql_fails_closed_before_clone():
 
     # basedpyright: the non-str extra() SQL fragment is the hostile input under test; django-stubs
     # types QuerySet.extra's where as list[str]
-    source = Category.objects.extra(where=[_HostileSQL()])  # pyright: ignore[reportArgumentType]
+    source = Category.objects.extra(where=[_HostileSQL()])  # noqa: S610 - hostile extra() input is what this test exercises  # pyright: ignore[reportArgumentType]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "where clause sqls carries a _HostileSQL")
@@ -3266,7 +3268,7 @@ def test_extra_where_non_sequence_sqls_fails_closed():
 
     # basedpyright: the list-like extra() where container is the hostile input under test;
     # django-stubs types QuerySet.extra's where as list[str]
-    source = Category.objects.extra(where=_EvilSqls())  # pyright: ignore[reportArgumentType]
+    source = Category.objects.extra(where=_EvilSqls())  # noqa: S610 - hostile extra() input is what this test exercises  # pyright: ignore[reportArgumentType]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "where clause sqls is a _EvilSqls")
@@ -3332,7 +3334,8 @@ def test_legit_filtered_relation_seals_byte_identical():
     frq, _alias, _join = _filtered_relation_join()
     expected_sql, expected_params = frq.query.get_compiler(using="default").as_sql()
     sealed, defect = _seal_or_defect(frq, Category, None)
-    assert defect is None and sealed is not None
+    assert defect is None
+    assert sealed is not None
     got_sql, got_params = sealed.query.get_compiler(using="default").as_sql()
     assert got_sql == expected_sql
     assert list(got_params) == list(expected_params)
@@ -5123,7 +5126,8 @@ def test_prefetch_child_over_unrelated_model_fails_closed():
     code, detail = defect
     assert code == "untrusted"
     assert "'items'" in detail
-    assert "Property" in detail and "Item" in detail
+    assert "Property" in detail
+    assert "Item" in detail
 
 
 @pytest.mark.django_db
@@ -5266,7 +5270,8 @@ def test_prefetch_child_wrong_model_nested_path_fails_closed():
     code, detail = defect
     assert code == "untrusted"
     assert "'items__entries'" in detail
-    assert "Property" in detail and "Entry" in detail
+    assert "Property" in detail
+    assert "Entry" in detail
 
 
 @pytest.mark.django_db
@@ -5429,7 +5434,8 @@ def test_prefetch_child_default_accessor_wrong_model_fails_closed():
     code, detail = defect
     assert code == "untrusted"
     assert "'permission_set'" in detail
-    assert "LogEntry" in detail and "Permission" in detail
+    assert "LogEntry" in detail
+    assert "Permission" in detail
 
 
 @pytest.mark.django_db
@@ -6332,6 +6338,9 @@ def test_validate_post_orderset_result_routing_hints_hostile_eq_repr():
         def __repr__(self):
             raise AssertionError("Hostile consumer __repr__ invoked")
 
+        # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
+        __hash__ = None  # pyright: ignore[reportAssignmentType]
+
     val_a = HostileValue()
     val_b = HostileValue()
 
@@ -6596,7 +6605,7 @@ def test_routing_intent_resolves_a_write_marked_source_through_the_write_router(
     """
     source_qs = Category.objects.all()
     set_queryset_hints(source_qs, {"tenant": {"alias": "default"}})
-    set_queryset_for_write(source_qs, True)
+    set_queryset_for_write(source_qs, for_write=True)
 
     _NestedAliasRouter.calls.clear()
     intent = _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync")

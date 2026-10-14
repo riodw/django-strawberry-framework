@@ -687,7 +687,7 @@ def test_apply_window_pagination_count_free_keyset_seeks_in_base_where():
         keyset_seek=seek,
     )
     sql = str(windowed.query)
-    inner = sql.split('"qualify"')[0]
+    inner = sql.split('"qualify"', maxsplit=1)[0]
     assert "FILTER" not in sql
     assert '"number" <=' in inner  # the redundant leading bound, in the base WHERE
     # Probe overfetch: rn <= limit + 1.

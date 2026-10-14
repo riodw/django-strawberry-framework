@@ -29,7 +29,6 @@ operation is exactly the envelope the engine base's map builder cannot produce.
 """
 
 import io
-import os
 from pathlib import Path
 from typing import NoReturn
 
@@ -373,7 +372,7 @@ def test_vanished_file_resolves_size_to_null_over_http(tmp_path: Path) -> None:
         specimen = models.MediaSpecimen(label="vanished")
         specimen.attachment.save("doc.txt", ContentFile(b"hello bytes"), save=False)
         specimen.save()
-        os.remove(specimen.attachment.path)
+        Path(specimen.attachment.path).unlink()
 
         res = TestClient().query("{ allMediaSpecimens { attachment { name size } } }")
         assert res.response.status_code == 200

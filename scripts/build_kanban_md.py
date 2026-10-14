@@ -439,6 +439,7 @@ class GlossaryInliner:
     """
 
     def __init__(self, glossary_terms: list[GlossaryTermRef]) -> None:
+        """Index ``glossary_terms`` longest-title first so the longest mention wins."""
         self._pending: dict[str, tuple[GlossaryTermRef, re.Pattern[str]]] = {
             term["anchor"]: (term, term_pattern(term["title"]))
             for term in sorted(glossary_terms, key=lambda term: -len(term["title"]))

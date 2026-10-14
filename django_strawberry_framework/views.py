@@ -460,7 +460,7 @@ def _boundary_view(upstream_view: Callable[..., object]) -> Callable[..., object
 
     # basedpyright: the view instance the middleware stored on the request (an untyped
     # attribute); its dispatch is sync on one view, a coroutine on the other
-    def prepared_view(request: HttpRequest) -> Any:  # pyright: ignore[reportExplicitAny]
+    def prepared_view(request: HttpRequest) -> Any:  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - untyped request attribute
         prepared = getattr(request, _BOUNDARY_PREPARED_VIEW, None)
         if not is_exact_tuple(prepared) or len(prepared) != 2 or prepared[0] is not mount:
             return None

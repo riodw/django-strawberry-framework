@@ -82,7 +82,7 @@ def safe_truthy(value: object) -> bool:
     """
     try:
         return bool(value)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return False
 
 
@@ -122,8 +122,8 @@ def relation_attr(
 def relation_bool(
     field: object,
     name: str,
-    default: bool = False,
     *,
+    default: bool = False,
     lenient: bool = False,
 ) -> bool:
     """Read one relation flag under the strict or lenient policy.
@@ -268,7 +268,7 @@ def is_many_side_relation_kind(kind: RelationKind | None) -> bool:
     """Return ``True`` for relation kinds represented as GraphQL lists."""
     try:
         return kind in MANY_SIDE_RELATION_KINDS
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return False
 
 
@@ -331,7 +331,7 @@ def _resolve_segment_field(model: type[models.Model], segment: str) -> ModelFiel
         return model._meta.get_field(segment)
     except FieldDoesNotExist:
         raise
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - rewrapped as the typed rejection
         raise FieldDoesNotExist(segment) from None
 
 
@@ -348,8 +348,15 @@ def _is_traversable_relation(field: object) -> TypeGuard[_TraversableRelationLik
         if not relation_bool(field, "is_relation"):
             return False
         return getattr(field, "path_infos", _MISSING) is not _MISSING
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return False
+
+
+def _checked_path_infos(path_infos: Sequence[PathInfo]) -> Sequence[PathInfo]:
+    """Return ``path_infos`` when it is a non-empty ``list`` / ``tuple``, else raise ``ValueError``."""
+    if type(path_infos) not in (list, tuple) or not path_infos:
+        raise ValueError("relation path_infos is empty or malformed")
+    return path_infos
 
 
 def classify_path(model: type[models.Model], field_path: str) -> ClassifiedPath:
@@ -393,9 +400,7 @@ def classify_path(model: type[models.Model], field_path: str) -> ClassifiedPath:
             if not _is_traversable_relation(field):
                 raise PathResolutionError(current, field_path, segment)
             try:
-                path_infos = field.path_infos
-                if type(path_infos) not in (list, tuple) or not path_infos:
-                    raise ValueError("relation path_infos is empty or malformed")
+                path_infos = _checked_path_infos(field.path_infos)
                 last_path = path_infos[-1]
                 target_model = last_path.to_opts.model
                 many_side = False
@@ -403,11 +408,11 @@ def classify_path(model: type[models.Model], field_path: str) -> ClassifiedPath:
                     if relation_bool(path_info, "m2m"):
                         many_side = True
                         break
-            except BaseException:
+            except BaseException:  # noqa: BLE001 - rewrapped as the typed rejection
                 raise PathResolutionError(current, field_path, segment) from None
             try:
                 kind = relation_kind(field)
-            except BaseException:
+            except BaseException:  # noqa: BLE001 - rewrapped as the typed rejection
                 raise PathResolutionError(current, field_path, segment) from None
             hops.append(
                 RelationPathHop(
@@ -488,28 +493,28 @@ def validate_lookup_expr(terminal: ModelField, lookup_expr: str) -> type[Lookup[
     for part in transform_parts:
         try:
             transform = cursor.get_transform(part)
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - rewrapped as the typed rejection
             raise LookupValidationError(terminal, lookup_expr, part) from None
         if transform is None:
             raise LookupValidationError(terminal, lookup_expr, part)
         try:
             cursor = transform(cursor)
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - rewrapped as the typed rejection
             raise LookupValidationError(terminal, lookup_expr, part) from None
     try:
         lookup = cursor.get_lookup(final_part)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - rewrapped as the typed rejection
         raise LookupValidationError(terminal, lookup_expr, final_part) from None
     if lookup is not None:
         return lookup
     try:
         transform = cursor.get_transform(final_part)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - rewrapped as the typed rejection
         raise LookupValidationError(terminal, lookup_expr, final_part) from None
     if transform is not None:
         try:
             exact = transform(cursor).get_lookup("exact")
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - rewrapped as the typed rejection
             raise LookupValidationError(terminal, lookup_expr, final_part) from None
         if exact is not None:
             return exact
@@ -544,7 +549,7 @@ def _lenient_traverses_to_many(model: type[models.Model], field_path: str) -> bo
             # ``Field.related_model`` checks the app registry is ready, so it is a resolved
             # model class or ``None`` (``GenericForeignKey`` declares ``None``).
             related: type[models.Model] | None = getattr(field, "related_model", None)
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - hostile object, contained by design
             return False
         if related is None:
             return False
@@ -614,7 +619,7 @@ def _traverses_to_many(
         return classify(model, field_path).first_many_index is not None
     except PathResolutionError:
         return _lenient_traverses_to_many(model, field_path)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return False
 
 
@@ -660,7 +665,7 @@ def path_traverses_to_many(model: type[models.Model], field_path: str) -> bool:
     try:
         _ = hash(model)
         _ = hash(field_path)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return _traverses_to_many(classify_path, model, field_path)
     return _path_traverses_to_many_cached(model, field_path)
 
@@ -762,7 +767,7 @@ def is_forward_concrete_relation(field: object) -> bool:
             getattr(field, "column", None) is not None
             and getattr(field, "related_model", None) is not None
         )
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return False
 
 

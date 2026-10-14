@@ -786,7 +786,7 @@ def test_choice_field_narrower_than_column_publishes_admitted_values(
         ),
         pytest.param(lambda: forms.ChoiceField(choices=lambda: _DESK_CHOICES), id="callable"),
         pytest.param(lambda: forms.ChoiceField(choices=[]), id="assigned-per-request"),
-        pytest.param(lambda: forms.CharField(), id="not-a-choice-field"),
+        pytest.param(forms.CharField, id="not-a-choice-field"),
     ],
 )
 def test_choice_field_admitting_every_column_value_keeps_read_enum(
@@ -1472,7 +1472,8 @@ def test_extra_field_shadowing_reverse_relation_stays_scalar():
     from apps.products.models import Category
 
     rev = Category._meta.get_field("items")
-    assert rev.is_relation and not rev.concrete
+    assert rev.is_relation
+    assert not rev.concrete
 
     class CategoryForm(forms.ModelForm[Category]):
         items = forms.CharField()

@@ -299,10 +299,13 @@ async def test_actor_transition_failure_still_latches_provenance_and_releases_le
     scope: dict[str, object] = {}
     assert connection_was_authenticated(scope) is False
 
-    with pytest.raises(RuntimeError, match="teardown boom"):
+    async def body_that_raises():
         async with actor_transition(scope, was_authenticated=True):
             assert connection_was_authenticated(scope) is True
             raise RuntimeError("teardown boom")
+
+    with pytest.raises(RuntimeError, match="teardown boom"):
+        await body_that_raises()
 
     assert not actor_lease(scope).locked()
     assert connection_was_authenticated(scope) is True

@@ -220,7 +220,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import takewhile
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from typing_extensions import TypeIs
@@ -493,8 +493,8 @@ class MutationSite:
     def apply(self, text: str) -> str:
         """Return ``text`` with this site's mutation applied, or raise :class:`SiteError`."""
         if self.kind == PRE_IMAGE_KIND:
-            assert self.source is not None
-            image = self.source.read_bytes().decode("utf-8")
+            source = cast("Path", self.source)
+            image = source.read_bytes().decode("utf-8")
             if image == text:
                 raise SiteError(
                     f"the pre-image {self.source} is identical to {self.relative_target} as it "
@@ -1154,6 +1154,15 @@ def _lock_repository_root() -> int:
     return descriptor
 
 
+def _refuse_live_marker(directory: Path) -> None:
+    """Refuse the run when the scratch directory holds an ``ACTIVE-MUTATION.json`` marker."""
+    marker = directory / ACTIVE_MARKER_NAME
+    if marker.exists():
+        raise ScratchRootError(
+            f"{_describe_live_marker(marker)}. Nothing was run; the marker is left in place",
+        )
+
+
 def _claim_repository_root(raw_root: str | None) -> tuple[int, Path]:
     """Lock this run's tree, then resolve its scratch directory and refuse a live marker there.
 
@@ -1166,11 +1175,7 @@ def _claim_repository_root(raw_root: str | None) -> tuple[int, Path]:
     lock = _lock_repository_root()
     try:
         directory = _resolve_scratch_root(raw_root)
-        marker = directory / ACTIVE_MARKER_NAME
-        if marker.exists():
-            raise ScratchRootError(
-                f"{_describe_live_marker(marker)}. Nothing was run; the marker is left in place",
-            )
+        _refuse_live_marker(directory)
     except BaseException:
         os.close(lock)
         raise
@@ -1652,7 +1657,7 @@ def _sha256(path: Path) -> str:
 
 def git_blob_id(data: bytes) -> str:
     """Return the id ``git hash-object`` gives ``data``, computed without invoking git."""
-    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+    return hashlib.sha1(b"blob %d\0" % len(data) + data, usedforsecurity=False).hexdigest()
 
 
 @dataclass(frozen=True)

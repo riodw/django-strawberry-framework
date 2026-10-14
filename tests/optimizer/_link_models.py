@@ -123,7 +123,7 @@ class LnkOptionalPairChild(models.Model):
     """
 
     p_tenant: _NullInt = models.IntegerField(null=True)
-    p_code: _NullText = models.TextField(null=True)
+    p_code: _NullText = models.TextField(null=True)  # noqa: DJ001 - NULL is the fixture input
     name: _Text = models.TextField()
     parent: models.ForeignObject[LnkParent | None, LnkParent | None] = models.ForeignObject(
         LnkParent,

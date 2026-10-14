@@ -89,6 +89,7 @@ else:
         capture_output=True,
         text=True,
         timeout=15,
+        check=False,
     )
     assert result.returncode == 0, (
         f"fresh DRF-absent import failed: stdout={result.stdout!r}, stderr={result.stderr!r}"
@@ -96,8 +97,8 @@ else:
 
 
 @pytest.mark.parametrize("name", tuple(django_strawberry_framework._DRF_SOFT_EXPORTS))
+@pytest.mark.usefixtures("_simulate_drf_absent")
 def test_each_root_serializer_surface_lookup_raises_install_hint(
-    _simulate_drf_absent: None,
     name: str,
 ):
     """Every root serializer export stays lazy and raises the guarded install hint."""
@@ -105,22 +106,25 @@ def test_each_root_serializer_surface_lookup_raises_install_hint(
         getattr(django_strawberry_framework, name)
 
 
-def test_rest_framework_package_import_raises_install_hint(_simulate_drf_absent: None):
+@pytest.mark.usefixtures("_simulate_drf_absent")
+def test_rest_framework_package_import_raises_install_hint():
     """``import django_strawberry_framework.rest_framework`` raises the same guarded hint."""
     with pytest.raises(ImportError, match=_HINT_SUBSTRING):
         importlib.import_module("django_strawberry_framework.rest_framework")
 
 
-def test_rest_framework_sets_import_raises_install_hint(_simulate_drf_absent: None):
+@pytest.mark.usefixtures("_simulate_drf_absent")
+def test_rest_framework_sets_import_raises_install_hint():
     """``import django_strawberry_framework.rest_framework.sets`` raises the same guarded hint."""
     with pytest.raises(ImportError, match=_HINT_SUBSTRING):
         importlib.import_module("django_strawberry_framework.rest_framework.sets")
 
 
-def test_star_import_stays_drf_free_and_binds_no_serializer_surface(_simulate_drf_absent: None):
+@pytest.mark.usefixtures("_simulate_drf_absent")
+def test_star_import_stays_drf_free_and_binds_no_serializer_surface():
     """``from django_strawberry_framework import *`` succeeds and binds no DRF surface."""
     namespace: dict[str, object] = {}
-    exec("from django_strawberry_framework import *", namespace)
+    exec("from django_strawberry_framework import *", namespace)  # noqa: S102 - star import is module-level syntax; literal source
     # The star import consulted ``__all__`` (DRF-free) and never tripped the guard.
     assert not set(django_strawberry_framework._DRF_SOFT_EXPORTS) & namespace.keys()
     assert "DjangoMutation" in namespace  # a normal eager export still binds

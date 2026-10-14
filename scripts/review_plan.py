@@ -1281,7 +1281,7 @@ def parse_plan(text: str) -> list[PlanItem]:
 
 def _status_word(status: str) -> str:
     """Return the first word of a status value, lower-cased."""
-    return status.split()[0].lower() if status.split() else ""
+    return status.split(maxsplit=1)[0].lower() if status.split() else ""
 
 
 def _required_artifacts(item: PlanItem) -> tuple[str, ...]:

@@ -33,7 +33,7 @@ def count_lines(filepath: Path) -> tuple[int, int, int]:
     # The quote of the docstring the scan is inside, or None outside one.
     docstring_char: str | None = None
 
-    with open(filepath, encoding="utf-8", errors="replace") as f:
+    with Path(filepath).open(encoding="utf-8", errors="replace") as f:
         for line in f:
             total += 1
             stripped = line.strip()
@@ -46,7 +46,7 @@ def count_lines(filepath: Path) -> tuple[int, int, int]:
                 continue
 
             # Check for docstring start
-            if stripped.startswith('"""') or stripped.startswith("'''"):
+            if stripped.startswith(('"""', "'''")):
                 quote = stripped[:3]
                 comments += 1
                 # Single-line docstring (opens and closes on same line)

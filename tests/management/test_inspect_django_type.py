@@ -548,7 +548,7 @@ def test_scalar_name_uses_custom_scalar_definition_name():
     class TokenValue:
         pass
 
-    with pytest.warns(DeprecationWarning):
+    with pytest.warns(DeprecationWarning, match=r"Passing a class to strawberry\.scalar\(\)"):
         token = strawberry.scalar(TokenValue, name="OpaqueToken", serialize=str)
 
     assert _scalar_name(token) == "OpaqueToken"

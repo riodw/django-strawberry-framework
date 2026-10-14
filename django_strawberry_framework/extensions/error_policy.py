@@ -214,7 +214,7 @@ def _degraded(policy: ErrorPolicy) -> GraphQLError:
     """
     try:
         message: object = policy.message
-    except Exception:
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
         message = None
     if not isinstance(message, str) or not message:
         message = _PACKAGE_ERROR_POLICY.message
@@ -255,11 +255,11 @@ def masking_is_active(policy: ErrorPolicy) -> bool:
     """
     try:
         enabled = policy.enabled
-    except Exception:
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
         return True
     try:
         debug: object = settings.DEBUG
-    except Exception:
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
         debug = None
     return enabled and debug is not True
 
@@ -304,7 +304,7 @@ def schema_error_policy(schema: object) -> ErrorPolicy:
     """
     try:
         policy = getattr(schema, "error_policy", None)
-    except Exception:
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
         return _PACKAGE_ERROR_POLICY
     return policy if isinstance(policy, ErrorPolicy) else _PACKAGE_ERROR_POLICY
 
@@ -352,13 +352,14 @@ def mask_execution_result(
             return result
         masked = copy.copy(result)
         masked.errors = replacements
-        return masked
     except Exception:
         logger.exception(
             "The error policy could not read the execution result's errors; the response "
             "degrades to the policy message alone (fail closed).",
         )
         return degraded_result(policy)
+    else:
+        return masked
 
 
 def _replacement_for(error: GraphQLError, policy: ErrorPolicy) -> GraphQLError:
@@ -472,10 +473,10 @@ class DjangoErrorPolicyExtension(_OperationBoundExtension[OperationState]):
             )
             try:
                 policy = self._policy()
-            except Exception:
+            except Exception:  # noqa: BLE001 - boundary fails closed
                 policy = _PACKAGE_ERROR_POLICY
             try:
                 if hasattr(self, "execution_context") and self.execution_context is not None:
                     self.execution_context.result = degraded_result(policy)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 - last resort, a teardown must not raise
                 pass

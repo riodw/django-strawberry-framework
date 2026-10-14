@@ -1770,6 +1770,9 @@ def test_hashable_variable_value_safely_degrades_for_opaque_and_cyclic_values():
         def __eq__(self, other: object):
             return self is other
 
+        # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
+        __hash__ = None  # pyright: ignore[reportAssignmentType]
+
     first = _hashable_variable_value(Opaque())
     second = _hashable_variable_value(Opaque())
     assert isinstance(hash(first), int)
@@ -1836,7 +1839,10 @@ def test_library_owned_scalars_share_one_cache_identity_across_requests():
         ("cursor", "cursor"),
         (b"cursor", b"cursor"),
         (datetime.date(2026, 8, 17), datetime.date(2026, 8, 17)),
-        (datetime.datetime(2026, 8, 17, 12, 30), datetime.datetime(2026, 8, 17, 12, 30)),
+        (
+            datetime.datetime(2026, 8, 17, 12, 30, tzinfo=datetime.timezone.utc),
+            datetime.datetime(2026, 8, 17, 12, 30, tzinfo=datetime.timezone.utc),
+        ),
         (datetime.time(12, 30), datetime.time(12, 30)),
         (datetime.timedelta(hours=3), datetime.timedelta(hours=3)),
         (decimal.Decimal("1.50"), decimal.Decimal("1.50")),
@@ -1932,10 +1938,16 @@ def test_hashable_variable_value_safely_degrades_for_hostile_custom_values():
         def __eq__(cls, other: object):
             return cls is other
 
+        # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
+        __hash__ = None  # pyright: ignore[reportAssignmentType]
+
     class UnhashableType(metaclass=UnhashableMetaclass):
         @override
         def __eq__(self, other: object):
             return self is other
+
+        # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
+        __hash__ = None  # pyright: ignore[reportAssignmentType]
 
     values = (
         ExplodingHash(),
@@ -2215,6 +2227,9 @@ class _DetonatingEqObject:
     def __eq__(self, other: object):
         raise RuntimeError(_END_DETONATION)
 
+    # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
+    __hash__ = None  # pyright: ignore[reportAssignmentType]
+
 
 class _DetonatingReprObject:
     @override
@@ -2224,6 +2239,9 @@ class _DetonatingReprObject:
     @override
     def __repr__(self):
         raise RuntimeError(_END_DETONATION)
+
+    # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
+    __hash__ = None  # pyright: ignore[reportAssignmentType]
 
 
 @pytest.mark.parametrize(

@@ -330,12 +330,12 @@ class DjangoTypeDefinition:
             model_field = self.model._meta.get_field(field_name)
         except FieldDoesNotExist:
             result = None
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - hostile object, contained by design
             result = None
         else:
             try:
                 is_relation = getattr(model_field, "is_relation", False)
-            except BaseException:
+            except BaseException:  # noqa: BLE001 - hostile object, contained by design
                 is_relation = False
             if not is_relation:
                 result = None
@@ -346,21 +346,21 @@ class DjangoTypeDefinition:
                         "related_model",
                         None,
                     )
-                except BaseException:
+                except BaseException:  # noqa: BLE001 - hostile object, contained by design
                     target_model = None
                 if target_model is None:
                     result = None
                 else:
                     try:
                         target_type = registry.get(target_model)
-                    except BaseException:
+                    except BaseException:  # noqa: BLE001 - hostile object, contained by design
                         target_type = None
                     if target_type is None:
                         result = None
                     else:
                         try:
                             target_definition = registry.get_definition(target_type)
-                        except BaseException:
+                        except BaseException:  # noqa: BLE001 - hostile object, contained by design
                             target_definition = None
                         result = (
                             (target_definition, model_field)
@@ -408,13 +408,13 @@ def origin_has_custom_id_resolver(origin: type[object], pk_name: str) -> bool:
         return False
     try:
         mro: tuple[type[object], ...] = getattr(origin, "__mro__", ())
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return True
     resolver_names = (normalized_pk_name, f"resolve_{normalized_pk_name}")
     try:
         if any(_class_has_custom_id_resolver(cls, name) for cls in mro for name in resolver_names):
             return True
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return True
     return _resolves_id_off_pk(origin, normalized_pk_name)
 
@@ -445,7 +445,7 @@ def _resolves_id_off_pk(origin: type[object], pk_name: str) -> bool:
 
     try:
         is_node = issubclass(origin, relay.Node)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return True
     if not is_node:
         return False
@@ -455,7 +455,7 @@ def _resolves_id_off_pk(origin: type[object], pk_name: str) -> bool:
     except NodeIDAnnotationError:
         # No ``NodeID`` annotation: the framework default resolves to "pk".
         return False
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return True
     # A non-string or empty override result cannot name the pk column.
     normalized_id_attr = _normalize_pk_name(id_attr)
@@ -471,7 +471,7 @@ def _class_has_custom_id_resolver(type_cls: type[object], name: str) -> bool:
         if name != "resolve_id":
             return True
         descriptor = class_dict[name]
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return True
     return not _is_framework_relay_id_resolver(descriptor)
 
@@ -486,7 +486,7 @@ def _is_framework_relay_id_resolver(value: object) -> bool:
         resolver_func = getattr(value, "__func__", value)
         node_default = getattr(relay.Node, "resolve_id", None)
         node_default_func = getattr(node_default, "__func__", None)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return False
     return resolver_func is _resolve_id_default or (
         node_default_func is not None and resolver_func is node_default_func

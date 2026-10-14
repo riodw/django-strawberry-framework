@@ -208,7 +208,7 @@ class SyncMisuseError(ConfigurationError, RuntimeError):
 
 
 # basedpyright: EAFP; ``value.__name__`` is read inside the try/except, which is the guard
-def _safe_class_name(value: Any) -> str:  # pyright: ignore[reportExplicitAny]
+def _safe_class_name(value: Any) -> str:  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - reason above
     """Render a class name without allowing hostile metaclass metadata to escape.
 
     Deliberately STRICTER than the shared ``exceptions._safe_class_name``:
@@ -219,7 +219,7 @@ def _safe_class_name(value: Any) -> str:  # pyright: ignore[reportExplicitAny]
     """
     try:
         name = value.__name__
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return _safe_type_name(value)
     if isinstance(name, str):
         return str.__str__(name)
@@ -449,7 +449,7 @@ def coerce_field_value_or_none(field: ModelField | None, value: object) -> objec
     try:
         coerced: object = field.to_python(value)
         field.run_validators(coerced)
-    except Exception:
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
         return None
     return coerced
 
@@ -616,9 +616,10 @@ def _concrete_or_none(candidate: object) -> type[models.Model] | None:
         # ``ModelBase.__new__`` sets ``_meta.concrete_model`` on every model class to a
         # model class (the class itself, or its concrete ancestor for a proxy).
         concrete: type[models.Model] | None = getattr(meta, "concrete_model", None)
-        return concrete
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return None
+    else:
+        return concrete
 
 
 def _is_model_of_concrete(
@@ -2028,9 +2029,11 @@ def _reconstructed_value(value: object, memo: dict[int, object]) -> object:
         # keys the graph proofs never constrain), so a key is retained only when it is a
         # retained leaf and otherwise reconstructed -- normalized, retained as schema, or
         # failed closed -- exactly like a value in the same slot.
-        for key, item in cast("dict[object, object]", value).items():
+        for raw_key, raw_item in cast("dict[object, object]", value).items():
+            key = raw_key
             if not (key is None or type(key) in _RETAINED_TYPES):
                 key = _reconstructed_value(key, memo)
+            item = raw_item
             if not (item is None or type(item) in _RETAINED_TYPES):
                 item = _reconstructed_value(item, memo)
             rebuilt_dict[key] = item
@@ -2158,7 +2161,7 @@ def _reconstruction_defect(query: object, cls_name: str) -> tuple[str, str] | No
         _rebuild_query_payloads(query)
     except _UntrustedBoundValueError as refusal:
         return ("untrusted", f"{cls_name} {refusal}")
-    except Exception:
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
         return ("untrusted", f"{cls_name} query state cannot be reconstructed")
     return None
 
@@ -2525,7 +2528,7 @@ def _prefetch_relation_target_or_none(
     for part in path.split(LOOKUP_SEP):
         try:
             field: object = current._meta.get_field(part)
-        except Exception:
+        except Exception:  # noqa: BLE001 - consumer code may raise anything
             # Not in the field map: the default ``<model>_set`` / bare-name
             # reverse accessor spelling (a relation declared without a
             # ``related_name``) is what prefetch actually accepts, so resolve
@@ -2886,7 +2889,7 @@ def _bake_deferred_filter_or_defect(
         # Every kwarg key was proven an exact ``str`` by the loop above.
         predicate = models.Q(*args, **cast("dict[str, object]", kwargs))
         sql.Query.add_q(rebuilt_query, ~predicate if negate else predicate)
-    except Exception:
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
         return ("untrusted", f"{cls_name} carries malformed deferred-filter state")
     return None
 
@@ -3481,9 +3484,7 @@ def _is_model_column(name: str, model: type[models.Model]) -> bool:
     """Return whether ``name`` (its leading ``-`` already stripped) names a column of ``model``."""
     if name == "pk":
         return True
-    return any(
-        field.name == name or field.attname == name for field in model._meta.concrete_fields
-    )
+    return any(name in (field.name, field.attname) for field in model._meta.concrete_fields)
 
 
 def _is_carried_order_term(entry: object, model: type[models.Model]) -> bool:
@@ -3807,7 +3808,7 @@ def _seal_or_defect(
         return None, ("type", _safe_type_name(candidate))
     try:
         state: dict[str, object] = object.__getattribute__(candidate, "__dict__")
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return None, ("untrusted", "the QuerySet instance state is unreadable")
     query = state.get("_query")
     qmodel = state.get("model")
@@ -4012,8 +4013,8 @@ def _seal_or_defect(
         sealed,
         cast("tuple[str | _SealedPrefetch, ...]", sealed_prefetch),
     )
-    set_queryset_sticky_filter(sealed, state.get("_sticky_filter") is True)
-    set_queryset_for_write(sealed, state.get("_for_write") is True)
+    set_queryset_sticky_filter(sealed, sticky=state.get("_sticky_filter") is True)
+    set_queryset_for_write(sealed, for_write=state.get("_for_write") is True)
     if policy.carry_result_cache:
         # The rows the source already fetched travel onto the rebuild, so a surface
         # that only windows them re-queries nothing. The list object is taken as it
@@ -4152,13 +4153,14 @@ def _readable_queryset_state(
     try:
         # An instance dictionary, read through the base slot.
         state: dict[str, object] = object.__getattribute__(value, "__dict__")
-        return state
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - rewrapped as the typed rejection
         raise ConfigurationError(
             f"{_sentence_start(origin)} a {_safe_type_name(value)} whose "
             "QuerySet instance state is unreadable, so the row bound cannot "
             "rebuild a framework-owned queryset to apply itself to.",
         ) from None
+    else:
+        return state
 
 
 def _sentence_start(phrase: str) -> str:

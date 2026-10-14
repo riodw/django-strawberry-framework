@@ -249,6 +249,7 @@ def _validate_orderset_class(
 def _validate_connection(
     model: type[models.Model],
     connection: object,
+    *,
     relay_shaped: bool,
 ) -> dict[str, bool] | None:
     """Validate ``Meta.connection`` shape AND the Relay-Node requirement (spec-030 Decision 8).
@@ -311,6 +312,7 @@ def _is_str_tuple(entries: tuple[object, ...]) -> "TypeIs[tuple[str, ...]]":
 def _validate_cursor_field(
     model: type[models.Model],
     value: object,
+    *,
     relay_shaped: bool,
 ) -> tuple[str, ...] | None:
     """Validate ``Meta.cursor_field`` SHAPE and the Relay-Node gate (keyset cursors).
@@ -363,6 +365,7 @@ def _validate_cursor_field(
 def _validate_relation_shapes(
     model: type[models.Model],
     value: object,
+    *,
     relay_shaped: bool,
 ) -> dict[str, str] | None:
     """Validate ``Meta.relation_shapes`` shape AND the Relay-Node requirement (spec-032 Decision 7).
@@ -430,8 +433,8 @@ _GLOBALID_CALLABLE_PARAMS = ("type_cls", "model", "root")
 def _validate_globalid_strategy(
     model: type[models.Model] | None,
     value: object,
-    relay_shaped: bool,
     *,
+    relay_shaped: bool,
     source: str = "meta",
 ) -> "GlobalIDStrategy | None":
     """Validate one ``globalid_strategy``-shaped value and return the normalized form.
@@ -909,7 +912,7 @@ class DjangoType:
         # basedpyright: an override annotates ``info: strawberry.Info``, which object rejects; the
         # shared visibility runners also serve public helpers taking any info, which Info rejects;
         # the identity default reads no ``info``, but the readers pass it to every override
-        info: Any,  # pyright: ignore[reportExplicitAny, reportUnusedParameter]  # noqa: ARG003
+        info: Any,  # pyright: ignore[reportExplicitAny, reportUnusedParameter]  # noqa: ARG003, ANN401
         # basedpyright: an override returns ``super().get_queryset(...)`` as its own model's
         # queryset, which a concrete return rejects and a TypeVar return forbids non-generically
     ) -> models.QuerySet[Any, Any]:  # pyright: ignore[reportExplicitAny]
@@ -1456,7 +1459,7 @@ def _validate_meta(cls: type[DjangoType], meta: object) -> _ValidatedMeta:
     if has_fields and has_exclude:
         raise ConfigurationError("Meta.fields and Meta.exclude are mutually exclusive")
 
-    primary = _meta_attr(meta, "primary", False)
+    primary = _meta_attr(meta, "primary", default=False)
     if not isinstance(primary, bool):
         raise ConfigurationError("Meta.primary must be a bool")
 
@@ -1477,21 +1480,25 @@ def _validate_meta(cls: type[DjangoType], meta: object) -> _ValidatedMeta:
     relay_shaped = _is_relay_shaped(cls, interfaces)
     filterset_class = _validate_filterset_class(model, _meta_attr(meta, "filterset_class"))
     orderset_class = _validate_orderset_class(model, _meta_attr(meta, "orderset_class"))
-    connection = _validate_connection(model, _meta_attr(meta, "connection"), relay_shaped)
+    connection = _validate_connection(
+        model,
+        _meta_attr(meta, "connection"),
+        relay_shaped=relay_shaped,
+    )
     cursor_field = _validate_cursor_field(
         model,
         _meta_attr(meta, "cursor_field"),
-        relay_shaped,
+        relay_shaped=relay_shaped,
     )
     globalid_strategy = _validate_globalid_strategy(
         model,
         _meta_attr(meta, "globalid_strategy"),
-        relay_shaped,
+        relay_shaped=relay_shaped,
     )
     relation_shapes = _validate_relation_shapes(
         model,
         _meta_attr(meta, "relation_shapes"),
-        relay_shaped,
+        relay_shaped=relay_shaped,
     )
     # Override shape stage (spec-029 Decision 8 step 1): the two set-valued
     # keys reuse the shared collection guard (``_normalize_sequence_spec``, which

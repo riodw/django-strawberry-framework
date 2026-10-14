@@ -100,12 +100,12 @@ def _safe_qualified_class_name(value: object) -> str:
     """Return ``module.qualname`` without trusting consumer class metadata."""
     try:
         module = value.__module__
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         module = None
     if isinstance(module, str):
         try:
             module_label = str(module)
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - hostile object, contained by design
             module_label = _safe_type_name(value)
     else:
         module_label = _safe_arg_repr(module)
@@ -118,7 +118,7 @@ def _safe_field_label(value: object) -> str:
     if isinstance(value, str):
         try:
             return str(value)
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - hostile object, contained by design
             return _safe_type_name(value)
     return _safe_arg_repr(value)
 
@@ -127,7 +127,7 @@ def _safe_str(value: object) -> str:
     """Render ``str(value)`` without allowing hostile diagnostics to escape."""
     try:
         return str(value)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return _safe_arg_repr(value)
 
 
@@ -506,7 +506,7 @@ def _warn_model_label_secondary_collapse(
         try:
             app_label = _safe_str(model._meta.app_label)
             model_name = _safe_str(model._meta.model_name)
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - hostile object, contained by design
             app_label = _safe_class_name(model)
             model_name = _safe_class_name(model)
         logger.warning(

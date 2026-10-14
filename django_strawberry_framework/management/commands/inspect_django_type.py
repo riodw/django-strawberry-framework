@@ -356,7 +356,7 @@ class Command(BaseCommand):
             # its link's carrier columns, not on a column of its own.
             label = "forward ForeignObject"
         converter = f"relation: {label}"
-        nullable = "no (list)" if field_meta.is_many_side else _yes_no(field_meta.nullable)
+        nullable = "no (list)" if field_meta.is_many_side else _yes_no(value=field_meta.nullable)
         return graphql_type, nullable, converter
 
     @staticmethod
@@ -420,7 +420,7 @@ class Command(BaseCommand):
         scalar_namer = scalar_namer or _scalar_name
         annotation: object = definition.origin.__annotations__[field.name]
         graphql_type = _render_annotation(annotation, scalar_namer)
-        nullable = _yes_no(_annotation_is_optional(annotation))
+        nullable = _yes_no(value=_annotation_is_optional(annotation))
         # A FileField / ImageField column is converted on the read side by
         # ``convert_field_output`` via ``FIELD_OUTPUT_TYPE_MAP`` (-> the
         # ``DjangoFileType`` / ``DjangoImageType`` output object), NOT by
@@ -484,7 +484,7 @@ class Command(BaseCommand):
         return graphql_type, nullable, converter
 
 
-def _yes_no(value: bool) -> str:
+def _yes_no(*, value: bool) -> str:
     """Render a boolean as the ``yes`` / ``no`` nullability-column token."""
     return "yes" if value else "no"
 

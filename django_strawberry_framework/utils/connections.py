@@ -1055,4 +1055,4 @@ def derive_keyset_window_bounds(
     if is_supplied(before) or is_backward_shape(first, last):
         raise UnwindowableConnection
     assert_relay_pagination_bound("first", first, cap=cap)
-    return ConnectionWindowBounds(0, first, False)
+    return ConnectionWindowBounds(offset=0, limit=first, reverse=False)

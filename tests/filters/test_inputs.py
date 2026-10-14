@@ -1631,6 +1631,9 @@ class _EqRangeFilter(RangeFilter):
     def __eq__(self, other: object) -> bool:
         return isinstance(other, _EqRangeFilter) and self.field_name == other.field_name
 
+    # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
+    __hash__ = None  # pyright: ignore[reportAssignmentType]
+
 
 def _range_owner() -> type[FilterSet]:
     class RangeOwnerFilter(FilterSet):

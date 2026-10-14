@@ -311,7 +311,7 @@ class DebugToolbarMiddleware(_DebugToolbarMiddleware):
 
         try:
             operation_name: object = json.loads(request.body).get("operationName")
-        except Exception:  # upstream verbatim: any unreadable body degrades to "inject"
+        except Exception:  # noqa: BLE001 - upstream verbatim: any unreadable body degrades to "inject"
             operation_name = None
 
         # Do not return the payload for introspection queries, otherwise IDEs

@@ -5605,7 +5605,8 @@ def test_genre_connection_full_round_trip():
         assert node_id.isdigit()
     assert conn_one["pageInfo"]["hasNextPage"] is True
     end_cursor = conn_one["pageInfo"]["endCursor"]
-    assert isinstance(end_cursor, str) and end_cursor
+    assert isinstance(end_cursor, str)
+    assert end_cursor
     # ``totalCount`` counts the unpaginated post-filter set (4), NOT the page
     # size (2) and NOT the grand total (5).
     assert conn_one["totalCount"] == 4
@@ -5978,7 +5979,8 @@ def test_genre_connection_expanded_origin_pagination_is_row_preserving():
     assert [edge["node"]["name"] for edge in conn_one["edges"]] == ["Cardiac Care"]
     assert conn_one["pageInfo"]["hasNextPage"] is True
     end_cursor = conn_one["pageInfo"]["endCursor"]
-    assert isinstance(end_cursor, str) and end_cursor
+    assert isinstance(end_cursor, str)
+    assert end_cursor
     # Row-preserving pre-slice count: two genres, NOT four fanned-out rows.
     assert conn_one["totalCount"] == 2
 
@@ -6134,7 +6136,8 @@ def test_library_loans_deep_leaf_sql_shape_is_row_preserving():
     payload = response.json()
     assert "errors" not in payload, payload
     ids = [row["id"] for row in payload["data"]["allLibraryLoans"]]
-    assert len(ids) == 2 and len(set(ids)) == 2
+    assert len(ids) == 2
+    assert len(set(ids)) == 2
 
     loan_sql = [q["sql"] for q in captured.captured_queries if "library_loan" in q["sql"].lower()]
     # A plain list field, filter-only: exactly one root query, no count.
@@ -6271,7 +6274,8 @@ def test_library_loans_connection_mixed_or_paginates_row_preserved_roots_over_ht
         assert _edge_pks(conn_one) == [graph.relation_and_direct, graph.relation_only]
         assert conn_one["pageInfo"]["hasNextPage"] is True
         end_cursor = conn_one["pageInfo"]["endCursor"]
-        assert isinstance(end_cursor, str) and end_cursor
+        assert isinstance(end_cursor, str)
+        assert end_cursor
 
         # Every filtered connection statement (page fetch and count) owns
         # library_loan once at its top level, with no DISTINCT / self-join /

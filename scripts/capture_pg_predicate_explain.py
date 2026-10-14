@@ -283,7 +283,8 @@ def _capture(qs: models.QuerySet[models.Model], oracle_pks: list[int]) -> Captur
         cursor.execute("EXPLAIN (ANALYZE, BUFFERS) " + compiled_sql, compiled_params)
         explain_output = "\n".join(row[0] for row in cursor.fetchall())
     top = re.search(r"actual time=[\d.]+\.\.[\d.]+ rows=(\d+)", explain_output)
-    assert top is not None, "EXPLAIN output carries no actual row count"
+    if top is None:
+        raise AssertionError("EXPLAIN output carries no actual row count")
     return Capture(
         display_sql=display_sql,
         compiled_sql=compiled_sql,
@@ -297,6 +298,12 @@ def _capture(qs: models.QuerySet[models.Model], oracle_pks: list[int]) -> Captur
     )
 
 
+def _require(condition: object, message: str) -> None:
+    """Abort the capture when a recorded invariant does not hold."""
+    if not condition:
+        raise AssertionError(message)
+
+
 def _assert_row_preserving(
     capture: Capture,
     qs: models.QuerySet[models.Model],
@@ -307,16 +314,21 @@ def _assert_row_preserving(
     An artifact is only written for the real emitted query, so every invariant
     the artifact reports is asserted first.
     """
-    assert qs.query.distinct is False, "outer query carries DISTINCT"
-    assert "DISTINCT" not in capture.display_sql.upper(), "DISTINCT present in the emitted SQL"
-    assert capture.outer_tables == [root_table], (
-        f"outer statement should read only {root_table}, got {capture.outer_tables}"
+    _require(qs.query.distinct is False, "outer query carries DISTINCT")
+    _require("DISTINCT" not in capture.display_sql.upper(), "DISTINCT present in the emitted SQL")
+    _require(
+        capture.outer_tables == [root_table],
+        f"outer statement should read only {root_table}, got {capture.outer_tables}",
     )
-    assert capture.production_pks, "the seed guarantees matches, so the proof is non-vacuous"
-    assert capture.production_pks == capture.oracle_pks, "result diverged from the dedup oracle"
-    assert capture.top_actual_rows == len(capture.production_pks), (
+    _require(capture.production_pks, "the seed guarantees matches, so the proof is non-vacuous")
+    _require(
+        capture.production_pks == capture.oracle_pks,
+        "result diverged from the dedup oracle",
+    )
+    _require(
+        capture.top_actual_rows == len(capture.production_pks),
         f"top plan node returned {capture.top_actual_rows} rows, "
-        f"the result has {len(capture.production_pks)}: the outer rows multiplied"
+        f"the result has {len(capture.production_pks)}: the outer rows multiplied",
     )
 
 
@@ -445,9 +457,13 @@ def main() -> None:
             ),
         )
         _assert_row_preserving(routed, routed_qs, "scalars_scalarspecimen")
-        assert routed.exists_count == 1, f"expected exactly one EXISTS, got {routed.exists_count}"
-        assert '= ("scalars_scalarspecimen"."id")' in routed.display_sql, (
-            "the routed EXISTS is not correlated on the outer primary key"
+        _require(
+            routed.exists_count == 1,
+            f"expected exactly one EXISTS, got {routed.exists_count}",
+        )
+        _require(
+            '= ("scalars_scalarspecimen"."id")' in routed.display_sql,
+            "the routed EXISTS is not correlated on the outer primary key",
         )
 
         # Walked leaf: the oracle is the same Django lookup over the rows an
@@ -465,17 +481,19 @@ def main() -> None:
             ),
         )
         _assert_row_preserving(walked, walked_qs, "library_loan")
-        assert walked.exists_count == len(LOAN_HOPS), (
-            f"expected one EXISTS per declared hop ({len(LOAN_HOPS)}), got {walked.exists_count}"
+        _require(
+            walked.exists_count == len(LOAN_HOPS),
+            f"expected one EXISTS per declared hop ({len(LOAN_HOPS)}), got {walked.exists_count}",
         )
-        assert '= ("library_loan"."book_id")' in walked.display_sql, (
-            "the outermost hop is not correlated on the outer row's book link column"
+        _require(
+            '= ("library_loan"."book_id")' in walked.display_sql,
+            "the outermost hop is not correlated on the outer row's book link column",
         )
         raw_pks = sorted(
             loan_leaf.filter(Loan.objects.all(), NEEDLE).distinct().values_list("pk", flat=True),
         )
         hidden_matches = len(raw_pks) - len(walked.production_pks)
-        assert hidden_matches > 0, "the seed must put matches behind a hidden book"
+        _require(hidden_matches > 0, "the seed must put matches behind a hidden book")
 
         transaction.set_rollback(True)
 

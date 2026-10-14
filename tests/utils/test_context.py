@@ -179,11 +179,15 @@ def test_restored_context_keys_still_restores_when_the_body_raises():
     """Restoration runs in a ``finally``: a raising body leaves the context as found."""
     context: dict[str, object] = {}
     stash_on_context(context, "kept", "outer")
-    with pytest.raises(RuntimeError, match="boom"):
+
+    def body_that_raises():
         with restored_context_keys(context, "kept", "never-was"):
             stash_on_context(context, "kept", "inner")
             stash_on_context(context, "never-was", "transient")
             raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        body_that_raises()
     assert get_context_value(context, "kept") == "outer"
     assert get_context_value(context, "never-was", "absent") == "absent"
 

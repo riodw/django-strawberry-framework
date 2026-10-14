@@ -620,7 +620,7 @@ def test_create_card_from_spec_number_branch_places_and_shifts():
 
 @pytest.fixture
 # basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def _async_kanban_card(transactional_db: None) -> tuple[models.Card, User]:  # pyright: ignore[reportUnusedParameter]
+def async_kanban_card(transactional_db: None) -> tuple[models.Card, User]:  # pyright: ignore[reportUnusedParameter]
     """Seed lookups, a TODO card, and a staff user, committed so the async view thread sees them.
 
     ``AsyncTestClient`` posts through Django's in-process async handler, running
@@ -648,7 +648,7 @@ def _async_kanban_card(transactional_db: None) -> tuple[models.Card, User]:  # p
 
 
 async def test_set_card_status_illegal_transition_async_envelope(
-    _async_kanban_card: tuple[models.Card, User],
+    async_kanban_card: tuple[models.Card, User],
 ) -> None:
     """Drive one mutation through ``resolve_async``: an illegal transition maps to the envelope.
 
@@ -657,7 +657,7 @@ async def test_set_card_status_illegal_transition_async_envelope(
     ``ValidationError`` and returns the ``{ok: false, errors}`` write envelope
     rather than a top-level GraphQL error.
     """
-    card, user = _async_kanban_card
+    card, user = async_kanban_card
     client = AsyncTestClient()
 
     async with client.login(user):

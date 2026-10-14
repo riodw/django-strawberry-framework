@@ -25,16 +25,13 @@ from django_strawberry_framework.utils.write_transaction import managed_write_tr
 from tests._info import make_info
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from django.db import models
 
 
 @pytest.fixture(autouse=True)
 # basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def _isolate_registry(isolate_global_registry: None) -> Iterator[None]:  # pyright: ignore[reportUnusedParameter]
+def _isolate_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
     """Declare this module's types and mutation over a cleared registry."""
-    yield
 
 
 @pytest.fixture

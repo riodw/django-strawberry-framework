@@ -69,7 +69,7 @@ from ..exceptions import (
     _safe_type_name,
 )
 from ..sets_mixins import (
-    LazyRelatedClassMixin as LazyRelatedClassMixin,
+    LazyRelatedClassMixin as LazyRelatedClassMixin,  # noqa: PLC0414 - kept re-export path
 )  # re-exported via filters.__init__
 from ..sets_mixins import RelatedSetTargetMixin
 
@@ -894,7 +894,7 @@ class IntegerRangeFilter(BaseRangeFilter, NumberFilter):
             return qs
         try:
             bounds: list[object] = list(value)
-        except Exception:
+        except Exception:  # noqa: BLE001 - consumer code may raise anything
             return qs
         if len(bounds) != 2:
             return qs
@@ -980,11 +980,12 @@ def resolve_globalid_target_definition(
     current_def = owner
     segments = field_name.split("__")
 
-    for i, segment in enumerate(segments):
+    for i, raw_segment in enumerate(segments):
         current_model = getattr(current_def, "model", None)
         pk_field = getattr(getattr(current_model, "_meta", None), "pk", None)
         pk_name = getattr(pk_field, "name", None)
-        if pk_name is not None and segment == "pk":
+        segment = raw_segment
+        if pk_name is not None and raw_segment == "pk":
             segment = pk_name
 
         # Only a scalar primary key is the definition's own Relay id; a relation
@@ -1100,6 +1101,15 @@ def _filter_schema(filter_instance: Filter) -> Schema | None:
     return None
 
 
+def _global_id_from_filter_text(value: object) -> relay.GlobalID:
+    """Decode a GlobalID filter string, raising ``ValueError`` for any malformed value."""
+    # Strawberry's own decode reads the value as ``str`` and raises ``ValueError`` for
+    # anything else, so a non-string takes the same malformed-payload route.
+    if not isinstance(value, str):
+        raise ValueError("a GlobalID filter value is a base64 string")  # noqa: TRY004
+    return relay.GlobalID.from_id(value)
+
+
 def _decode_and_validate_global_id(
     value: object,
     filter_instance: Filter,
@@ -1159,11 +1169,7 @@ def _decode_and_validate_global_id(
         decoded = value
     else:
         try:
-            # Strawberry's own decode reads the value as ``str`` and raises ``ValueError`` for
-            # anything else, so a non-string takes the same malformed-payload route.
-            if not isinstance(value, str):
-                raise ValueError("a GlobalID filter value is a base64 string")  # noqa: TRY004
-            decoded = relay.GlobalID.from_id(value)
+            decoded = _global_id_from_filter_text(value)
         except ValueError as exc:
             # A malformed GlobalID filter value (bad base64 / not a
             # ``type_name:node_id`` payload) must surface as the uniform coded

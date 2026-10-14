@@ -372,6 +372,16 @@ class TargetVersion(TimeStampedModel):
             ),
         ]
 
+    @override
+    def __str__(self) -> str:
+        return f"{self.number} ({self.milestone.key})"
+
+    @override
+    def save(self, **kwargs: Unpack[_SaveOptions]) -> None:
+        """Keep the ``major``/``minor``/``patch`` triple in sync with ``number``."""
+        self.major, self.minor, self.patch = self.parse_version(self.number or "")
+        super().save(**kwargs)
+
     @staticmethod
     def parse_version(number: str) -> tuple[int, int, int]:
         """Parse the leading ``X.Y.Z`` triple from a version string.
@@ -388,16 +398,6 @@ class TargetVersion(TimeStampedModel):
             digits = "".join(ch for ch in segment if ch.isdigit())
             parts[index] = int(digits) if digits else 0
         return parts[0], parts[1], parts[2]
-
-    @override
-    def save(self, **kwargs: Unpack[_SaveOptions]) -> None:
-        """Keep the ``major``/``minor``/``patch`` triple in sync with ``number``."""
-        self.major, self.minor, self.patch = self.parse_version(self.number or "")
-        super().save(**kwargs)
-
-    @override
-    def __str__(self) -> str:
-        return f"{self.number} ({self.milestone.key})"
 
 
 class SpecDoc(TimeStampedModel):
@@ -421,14 +421,14 @@ class SpecDoc(TimeStampedModel):
         verbose_name = "spec doc"
         verbose_name_plural = "spec docs"
 
+    @override
+    def __str__(self) -> str:
+        return self.name
+
     @property
     def url(self) -> str:
         """Full GitHub blob URL, derived from the repo-relative ``path``."""
         return f"{SPEC_URL_PREFIX}/{self.path}"
-
-    @override
-    def __str__(self) -> str:
-        return self.name
 
 
 class TrackedPath(TimeStampedModel):
@@ -458,14 +458,14 @@ class TrackedPath(TimeStampedModel):
             ),
         ]
 
+    @override
+    def __str__(self) -> str:
+        return self.path
+
     @property
     def is_current(self) -> bool:
         """Whether this path exists in the working tree today (``state=current``)."""
         return self.state == TRACKED_PATH_CURRENT
-
-    @override
-    def __str__(self) -> str:
-        return self.path
 
 
 # ---------------------------------------------------------------------------
@@ -772,6 +772,10 @@ class CardReference(TimeStampedModel):
         ]
 
     @override
+    def __str__(self) -> str:
+        return f"{self.source_card.title} -> {self.target_card.title} ({self.kind.key})"
+
+    @override
     def save(self, **kwargs: Unpack[_SaveOptions]) -> None:
         """Assign a per-``source_card`` sequential ``order`` on insert.
 
@@ -791,10 +795,6 @@ class CardReference(TimeStampedModel):
             )["order__max"]
             self.order = 0 if last is None else last + 1
         super().save(**kwargs)
-
-    @override
-    def __str__(self) -> str:
-        return f"{self.source_card.title} -> {self.target_card.title} ({self.kind.key})"
 
 
 class CardGlossaryTerm(TimeStampedModel):

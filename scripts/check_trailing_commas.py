@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """Enforce the project's source-layout conventions across .py / .md / .json / .graphql.
 
 Four checks. The first three carry both ``--check`` (gate, exit 1) and ``--fix``
@@ -272,7 +271,8 @@ def _literal_constructs(text: str, blines: list[bytes]) -> Iterator[Construct]:
         # A hand-built node may omit its end positions; ``ast.parse`` sets both on every node.
         end_lineno = node.end_lineno
         end_col_offset = node.end_col_offset
-        assert end_lineno is not None and end_col_offset is not None
+        if end_lineno is None or end_col_offset is None:
+            continue  # hand-built node without end positions
         open_bytes = blines[node.lineno - 1]
         if (
             isinstance(node, ast.Tuple)
@@ -961,9 +961,7 @@ def _reindent(block: str, indent: str) -> str:
 
 def _dedent(block: str, indent: str) -> str:
     """Strip a leading ``indent`` from each line of ``block`` that carries it."""
-    return "\n".join(
-        line[len(indent) :] if line.startswith(indent) else line for line in block.split("\n")
-    )
+    return "\n".join(line.removeprefix(indent) for line in block.split("\n"))
 
 
 def _first_divergence(before: str, after: str) -> int:
@@ -1024,7 +1022,7 @@ def iter_top_level_fences(lines: list[str]) -> Iterator[tuple[int, int, str, str
         index = close + 1
 
 
-def process_markdown_fences(text: str, do_fix: bool) -> tuple[list[int], str]:
+def process_markdown_fences(text: str, *, do_fix: bool) -> tuple[list[int], str]:
     """Check/fix ```json / ```graphql fenced blocks. Returns (violation lines, new_text)."""
     lines = text.split("\n")
     violations: list[int] = []
@@ -1502,7 +1500,7 @@ def main(argv: list[str] | None = None) -> int:
                         errors += 1
                 else:
                     new = rebuilt
-            fence_lines, new = process_markdown_fences(new, True)
+            fence_lines, new = process_markdown_fences(new, do_fix=True)
             found.extend((ln, "brace-explode", True) for ln in fence_lines)
 
         else:  # .json / .graphql / .gql

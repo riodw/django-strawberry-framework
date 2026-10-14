@@ -723,7 +723,8 @@ def test_name_set_input_type_name_token_boundaries_do_not_collide():
         full_field_names=full,
     )
     assert left != right
-    assert left == "ItemA_ubCInput" and right == "ItemAB_ucInput"
+    assert left == "ItemA_ubCInput"
+    assert right == "ItemAB_ucInput"
 
 
 @dataclass(frozen=True)

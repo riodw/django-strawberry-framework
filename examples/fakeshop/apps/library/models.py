@@ -282,7 +282,7 @@ class Book(models.Model):
         REPAIR = "repair", "Repair"
 
     title: _Text = models.TextField()
-    subtitle: _NullText = models.TextField(blank=True, null=True)
+    subtitle: _NullText = models.TextField(blank=True, null=True)  # noqa: DJ001 - NULL means no subtitle
     circulation_status: _Char = models.CharField(
         max_length=20,
         choices=CirculationStatus.choices,

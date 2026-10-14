@@ -157,7 +157,8 @@ def _materialization_cleanup() -> Iterator[None]:
             delattr(module, name)
 
 
-def test_materialize_input_class_writes_to_module_global(_materialization_cleanup: None):
+@pytest.mark.usefixtures("_materialization_cleanup")
+def test_materialize_input_class_writes_to_module_global():
     """Materialization pins the class in ``sys.modules[INPUTS_MODULE_PATH]``."""
 
     class Foo:
@@ -169,7 +170,8 @@ def test_materialize_input_class_writes_to_module_global(_materialization_cleanu
     assert _materialized_names["FooInputType"] is Foo
 
 
-def test_materialize_input_class_is_idempotent_on_same_pair(_materialization_cleanup: None):
+@pytest.mark.usefixtures("_materialization_cleanup")
+def test_materialize_input_class_is_idempotent_on_same_pair():
     """Second call with the same ``(name, cls)`` short-circuits to no-op."""
 
     class Foo:
@@ -180,7 +182,8 @@ def test_materialize_input_class_is_idempotent_on_same_pair(_materialization_cle
     assert _materialized_names["FooInputType"] is Foo
 
 
-def test_materialize_input_class_raises_on_collision(_materialization_cleanup: None):
+@pytest.mark.usefixtures("_materialization_cleanup")
+def test_materialize_input_class_raises_on_collision():
     """A second class under the same name raises ``ConfigurationError``."""
 
     class FooA:
@@ -521,7 +524,8 @@ def _namespace_cleanup() -> Iterator[None]:
     OrderArgumentsFactory._type_orderset_registry.clear()
 
 
-def test_clear_order_input_namespace_resets_materialized_names_ledger(_namespace_cleanup: None):
+@pytest.mark.usefixtures("_namespace_cleanup")
+def test_clear_order_input_namespace_resets_materialized_names_ledger():
     """``_materialized_names`` is emptied."""
     from django_strawberry_framework.orders.inputs import (
         _materialized_names,
@@ -538,7 +542,8 @@ def test_clear_order_input_namespace_resets_materialized_names_ledger(_namespace
     assert _materialized_names == {}
 
 
-def test_clear_order_input_namespace_leaves_module_globals_parked(_namespace_cleanup: None):
+@pytest.mark.usefixtures("_namespace_cleanup")
+def test_clear_order_input_namespace_leaves_module_globals_parked():
     """The materialized class stays on the module dict per spec-028 Decision 9."""
     from django_strawberry_framework.orders.inputs import (
         INPUTS_MODULE_PATH,
@@ -558,7 +563,8 @@ def test_clear_order_input_namespace_leaves_module_globals_parked(_namespace_cle
     assert module.FooParkedOrderInputType is FooParked
 
 
-def test_clear_order_input_namespace_clears_factory_class_level_caches(_namespace_cleanup: None):
+@pytest.mark.usefixtures("_namespace_cleanup")
+def test_clear_order_input_namespace_clears_factory_class_level_caches():
     """``OrderArgumentsFactory`` class-level caches are emptied."""
     from django_strawberry_framework.orders.factories import OrderArgumentsFactory
     from django_strawberry_framework.orders.inputs import clear_order_input_namespace
@@ -576,9 +582,8 @@ def test_clear_order_input_namespace_clears_factory_class_level_caches(_namespac
     assert OrderArgumentsFactory._type_orderset_registry == {}
 
 
-def test_clear_order_input_namespace_resets_orderset_subclass_binding_state(
-    _namespace_cleanup: None,
-):
+@pytest.mark.usefixtures("_namespace_cleanup")
+def test_clear_order_input_namespace_resets_orderset_subclass_binding_state():
     """Every ``OrderSet`` subclass's phase-2.5 binding slots are reset."""
     from collections import OrderedDict
 
@@ -1069,9 +1074,8 @@ def test_normalize_input_value_rejects_invalid_direction_type():
         normalize_input_value(BookOrder, {"title": 123})
 
 
-def test_normalize_input_value_skips_related_branch_when_child_orderset_is_none(
-    _namespace_cleanup: None,
-):
+@pytest.mark.usefixtures("_namespace_cleanup")
+def test_normalize_input_value_skips_related_branch_when_child_orderset_is_none():
     """Covers ``orders/inputs.py::normalize_input_value`` #"if child_orderset is None:".
 
     The placeholder-branch skip: when a ``RelatedOrder`` resolves to

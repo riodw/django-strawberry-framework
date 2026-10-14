@@ -98,7 +98,7 @@ def get_context_value(context: object, key: str, default: object = None) -> obje
     if not is_dict(context):
         try:
             val: object = getattr(context, key, MISSING)
-        except Exception:
+        except Exception:  # noqa: BLE001 - consumer code may raise anything
             # A consumer context can expose a descriptor that fails while
             # answering an internal key. Treat that shape as an unreadable
             # attribute and still try its mapping interface, if any; a
@@ -114,7 +114,7 @@ def get_context_value(context: object, key: str, default: object = None) -> obje
         # Item access is attempted on any context shape: one without ``__getitem__``
         # raises ``TypeError``, which the ``except`` below turns into ``default``.
         return cast("Mapping[str, object]", context)[key]
-    except Exception:
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
         # Missing, frozen, or hostile mapping access all mean that this key is
         # unavailable. Keep the read fail-closed; write helpers intentionally
         # retain their narrower exception contract because an unexpected write
@@ -162,7 +162,6 @@ def stash_on_context(context: object, key: str, value: object) -> None:
     if not isinstance(context, dict):
         try:
             setattr(context, key, value)
-            return
         except (AttributeError, TypeError):
             # Chain into the dict-write path; covers the ``__slots__`` /
             # bridged-context case where ``setattr`` fails but
@@ -179,6 +178,8 @@ def stash_on_context(context: object, key: str, value: object) -> None:
             # is the catch-and-return pattern; this one is the
             # catch-and-chain pattern, intentionally distinct.
             pass
+        else:
+            return
     try:
         # Every context shape is tried: one without ``__setitem__`` raises ``TypeError``,
         # absorbed below like a frozen mapping's.
@@ -215,12 +216,13 @@ def clear_context_key(context: object, key: str) -> None:
     if not isinstance(context, dict):
         try:
             delattr(context, key)
-            return
         except (AttributeError, TypeError):
             # Chain into the mapping-delete path for ``__slots__`` / bridged
             # contexts where the stash landed via ``__setitem__`` (counterpart
             # to ``stash_on_context``'s setattr-fail -> dict-write chain).
             pass
+        else:
+            return
     try:
         # Every context shape is tried: one without ``__delitem__`` raises ``TypeError``,
         # absorbed below like an absent key's ``KeyError``.

@@ -314,14 +314,14 @@ class FieldMeta:
         )
         if target_field_attname is not None and not isinstance(target_field_attname, str):
             target_field_attname = None
-        is_m2m = relation_bool(field, "many_to_many", False)
-        is_o2m = relation_bool(field, "one_to_many", False)
-        is_o2o = relation_bool(field, "one_to_one", False)
+        is_m2m = relation_bool(field, "many_to_many")
+        is_o2m = relation_bool(field, "one_to_many")
+        is_o2o = relation_bool(field, "one_to_one")
         attname = relation_attr(field, "attname", None)
         if attname is not None and not isinstance(attname, str):
             attname = None
-        auto_created = relation_bool(field, "auto_created", False)
-        concrete = relation_bool(field, "concrete", False)
+        auto_created = relation_bool(field, "auto_created")
+        concrete = relation_bool(field, "concrete")
         # Django stamps ``attname`` with the RELATION NAME on fields that store
         # no column of their own. Django 6.1 does that while carrying
         # ``concrete = False`` (forward ``ManyToManyField``, ``GenericRelation``,
@@ -347,7 +347,7 @@ class FieldMeta:
         elif kind == "reverse_one_to_one":
             nullable = True
         else:
-            nullable = relation_bool(field, "null", False)
+            nullable = relation_bool(field, "null")
 
         # A forward single relation's carriers sit on the source row; every other
         # link (reverse FK / one-to-one, M2M through its through table's source
@@ -414,7 +414,7 @@ def _target_pk_name(model: type[models.Model] | None) -> str | None:
             return None
         pk_name: object = getattr(pk, "name", None)
         return pk_name if isinstance(pk_name, str) else None
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return None
 
 

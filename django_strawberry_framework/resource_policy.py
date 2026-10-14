@@ -143,6 +143,7 @@ class ResourceLimitExceeded(GraphQLError, DjangoStrawberryFrameworkError):  # py
         charged: int,
         detail: str,
     ) -> None:
+        """Name the exceeded ``bound`` with its ``limit``, the ``charged`` amount and a ``detail``."""
         super().__init__(
             f"Request exceeds the {bound} resource bound: {detail} "
             f"({charged} charged, {limit} allowed).",
@@ -868,7 +869,7 @@ def _effective_deadline(armed: float | None, mirror: object) -> float | None:
         return armed
     if armed is None:
         return mirror
-    return mirror if mirror < armed else armed
+    return min(armed, mirror)
 
 
 def _deadline_expired(deadline: object) -> bool | None:
@@ -1263,7 +1264,7 @@ def _attach_cleanup_note(primary_error: BaseException, note: str) -> None:
         # ``setattr``, not an attribute write: 3.10's typeshed declares no ``__notes__``
         # (the attribute is 3.11+ API), and the floor check reads 3.10's.
         setattr(primary_error, "__notes__", notes)  # noqa: B010
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 - the note is an attachment, never a failure of its own
         pass
 
 

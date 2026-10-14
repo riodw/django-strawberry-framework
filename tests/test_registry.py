@@ -600,7 +600,8 @@ def test_global_registry_is_a_type_registry_instance():
     assert isinstance(registry, TypeRegistry)
     # Sanity: still bound to the Django models module (smoke check that
     # the type signature didn't drift to a different shape).
-    assert isinstance(Category, type) and issubclass(Category, models.Model)
+    assert isinstance(Category, type)
+    assert issubclass(Category, models.Model)
 
 
 def test_finalize_is_idempotent(monkeypatch: pytest.MonkeyPatch):
@@ -1036,6 +1037,9 @@ def test_discard_pending_tolerates_non_hashable_django_field(fresh_registry: Typ
         @override
         def __eq__(self, other: object):
             return self is other
+
+        # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
+        __hash__ = None  # pyright: ignore[reportAssignmentType]
 
     pending = PendingRelation(
         source_type=_as_django_type(type("Src", (), {})),

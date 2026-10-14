@@ -42,7 +42,7 @@ __all__ = ("validated_field_directives",)
 
 # basedpyright: EAFP; ``tuple(directives)`` runs inside the surrounding try/except, which is
 # the guard
-def validated_field_directives(label: str, directives: Any) -> tuple[object, ...]:  # pyright: ignore[reportExplicitAny]
+def validated_field_directives(label: str, directives: Any) -> tuple[object, ...]:  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - arbitrary consumer value; EAFP
     """Return ``directives`` as a tuple, or raise the typed construction-time reject.
 
     ``label`` names the consuming factory (``"DjangoListField"``,

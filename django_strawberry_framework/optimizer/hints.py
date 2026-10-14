@@ -271,7 +271,7 @@ def hint_is_skip(hint: OptimizerHint | None) -> bool:
         return True
     try:
         return bool(getattr(hint, "skip", False))
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return False
 
 

@@ -558,7 +558,7 @@ def markdown_paragraphs(path: Path) -> list[str]:
             continue
         if in_fence:
             continue
-        if not line or line.startswith("#") or line.startswith("<!--") or line.startswith("- "):
+        if not line or line.startswith(("#", "<!--", "- ")):
             if current:
                 paragraphs.append(" ".join(current))
                 current = []

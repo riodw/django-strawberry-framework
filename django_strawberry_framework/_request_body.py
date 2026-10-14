@@ -276,7 +276,7 @@ def body_exceeds_limit(request: HttpRequest, limit: int) -> bool:
 
 
 # basedpyright: EAFP over a foreign stream whose methods may be absent; the except is the guard
-def _measured_remaining(stream: Any) -> int | _Probe:  # pyright: ignore[reportExplicitAny]
+def _measured_remaining(stream: Any) -> int | _Probe:  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - foreign stream; EAFP probe
     """The unread byte count of ``stream``, or which way the probe failed.
 
     Three outcomes, never two: a positive ``int``,
@@ -398,7 +398,7 @@ def _measured_remaining(stream: Any) -> int | _Probe:  # pyright: ignore[reportE
         return _Probe.UNMEASURABLE
     try:
         position = stream.tell()
-    except Exception:  # a probe that cannot report a position has not moved one
+    except Exception:  # noqa: BLE001 - a probe that cannot report a position has not moved one
         return _Probe.UNMEASURABLE
     if type(position) is not int:
         return _Probe.UNMEASURABLE
@@ -406,7 +406,7 @@ def _measured_remaining(stream: Any) -> int | _Probe:  # pyright: ignore[reportE
         return _Probe.UNMEASURABLE
     try:
         end = stream.seek(0, os.SEEK_END)
-    except Exception:  # the position is now unknown rather than known-intact
+    except Exception:  # noqa: BLE001 - the position is now unknown rather than known-intact
         end = None
         probed = False
     else:
@@ -439,7 +439,7 @@ def _declares_seekable(stream: object) -> bool:
     """
     try:
         seekable: object = getattr(stream, "seekable", None)
-    except Exception:  # a capability attribute that fails answers no, not maybe
+    except Exception:  # noqa: BLE001 - a capability attribute that fails answers no, not maybe
         return False
     if seekable is None:
         return True
@@ -447,7 +447,7 @@ def _declares_seekable(stream: object) -> bool:
         return False
     try:
         return bool(seekable())
-    except Exception:  # a capability query that fails answers no, not maybe
+    except Exception:  # noqa: BLE001 - a capability query that fails answers no, not maybe
         return False
 
 
@@ -472,12 +472,12 @@ def _lacks_seek(stream: object) -> bool:
     """
     try:
         return getattr(stream, "seek", None) is None
-    except Exception:  # a capability read that fails proves no absence
+    except Exception:  # noqa: BLE001 - a capability read that fails proves no absence
         return False
 
 
 # basedpyright: EAFP over a foreign stream whose methods may be absent; the except is the guard
-def _position_restored(stream: Any, position: object) -> bool:  # pyright: ignore[reportExplicitAny]
+def _position_restored(stream: Any, position: object) -> bool:  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - foreign stream; EAFP probe
     """Whether ``stream`` is provably back at ``position``.
 
     Verified with ``tell()`` rather than inferred from a ``seek`` that did not
@@ -491,7 +491,7 @@ def _position_restored(stream: Any, position: object) -> bool:  # pyright: ignor
         stream.seek(position)
         restored = stream.tell()
         return type(restored) is int and restored == position
-    except Exception:  # an unverifiable restore is a failed restore
+    except Exception:  # noqa: BLE001 - an unverifiable restore is a failed restore
         return False
 
 
@@ -536,7 +536,7 @@ def _bounded_read_exceeds_limit(request: HttpRequest, stream: object, limit: int
 
 
 # basedpyright: EAFP over a foreign stream whose close may be absent; the caller's except guards
-def _measured_by_bounded_read(request: HttpRequest, stream: Any, limit: int) -> bool:  # pyright: ignore[reportExplicitAny]
+def _measured_by_bounded_read(request: HttpRequest, stream: Any, limit: int) -> bool:  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - foreign stream; EAFP probe
     """Read at most ``limit + 1`` bytes of ``stream``; report whether that exceeds ``limit``.
 
     Reads through ``request.read`` rather than ``stream.read`` so Django keeps

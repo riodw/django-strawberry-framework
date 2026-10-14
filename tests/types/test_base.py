@@ -275,10 +275,10 @@ def test_meta_validator_diagnostics_survive_hostile_values():
     validators = (
         lambda: _validate_filterset_class(Category, hostile),
         lambda: _validate_orderset_class(Category, hostile),
-        lambda: _validate_connection(Category, hostile, False),
-        lambda: _validate_cursor_field(Category, hostile, False),
-        lambda: _validate_relation_shapes(Category, hostile, False),
-        lambda: _validate_globalid_strategy(Category, hostile, False),
+        lambda: _validate_connection(Category, hostile, relay_shaped=False),
+        lambda: _validate_cursor_field(Category, hostile, relay_shaped=False),
+        lambda: _validate_relation_shapes(Category, hostile, relay_shaped=False),
+        lambda: _validate_globalid_strategy(Category, hostile, relay_shaped=False),
         lambda: _validate_interfaces(InterfaceMeta, Category),
     )
     for validator in validators:
@@ -290,16 +290,16 @@ def test_meta_connection_unknown_keys_are_typed_for_mixed_and_hostile_keys():
     """Unknown connection keys cannot leak sorting or repr exceptions."""
 
     with pytest.raises(ConfigurationError, match="unknown sub-keys"):
-        _validate_connection(Category, {1: True, "bogus": False}, False)
+        _validate_connection(Category, {1: True, "bogus": False}, relay_shaped=False)
     with pytest.raises(ConfigurationError, match="unknown sub-keys"):
-        _validate_connection(Category, {_HostileMetaValue(): True}, False)
+        _validate_connection(Category, {_HostileMetaValue(): True}, relay_shaped=False)
 
 
 def test_meta_cursor_field_hostile_sequence_is_typed():
     """A broken sequence descriptor cannot escape as a raw runtime exception."""
 
     with pytest.raises(ConfigurationError, match="non-empty non-string sequence"):
-        _validate_cursor_field(Category, _HostileMetaSequence(), True)
+        _validate_cursor_field(Category, _HostileMetaSequence(), relay_shaped=True)
 
 
 @pytest.mark.parametrize("key", ["fields", "exclude"])
@@ -385,7 +385,7 @@ def test_meta_globalid_callable_hostile_descriptor_is_typed():
             raise RuntimeError("callable descriptor should not escape")
 
     with pytest.raises(ConfigurationError, match="could not be inspected"):
-        _validate_globalid_strategy(Category, HostileCallable(), True)
+        _validate_globalid_strategy(Category, HostileCallable(), relay_shaped=True)
 
 
 @pytest.mark.parametrize(
@@ -2048,12 +2048,12 @@ def _make_override_model():
 
     class _OverrideOwner(models.Model):
         text_value: "models.TextField[str | Combinable, str]" = models.TextField()
-        note: "models.TextField[str | Combinable | None, str | None]" = models.TextField(null=True)
+        note: "models.TextField[str | Combinable | None, str | None]" = models.TextField(null=True)  # noqa: DJ001 - NULL is the fixture input
         status: "models.TextField[str | Combinable, str]" = models.TextField(
             choices=_OVERRIDE_STATUS_CHOICES,
         )
         nullable_status: "models.TextField[str | Combinable | None, str | None]" = (
-            models.TextField(choices=_OVERRIDE_STATUS_CHOICES, null=True)
+            models.TextField(choices=_OVERRIDE_STATUS_CHOICES, null=True)  # noqa: DJ001 - NULL is the fixture input
         )
         partner: "models.ForeignKey[_OverrideOwner | Combinable | None, _OverrideOwner | None]" = (
             models.ForeignKey(
@@ -2768,7 +2768,7 @@ def _exec_pep563_module(program: str, module_name: str):
     """
     module = types.ModuleType(module_name)
     sys.modules[module_name] = module
-    exec(program, module.__dict__)
+    exec(program, module.__dict__)  # noqa: S102 - runs a literal PEP 563 test program
     return module.__dict__
 
 

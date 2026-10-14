@@ -801,7 +801,6 @@ def test_decode_provided_fields_short_circuits_on_handler_error():
 
     def dummy_scalar(spec: InputFieldSpec, val: object):
         scalar_handler_called.append((spec.input_attr, val))
-        return None
 
     error = decode_provided_fields(
         specs,
@@ -1062,7 +1061,6 @@ def test_decode_field_handlers_extra_handlers_override_the_scalar_kind():
 
     def custom(spec: InputFieldSpec, value: object):
         dest[spec.target_name] = f"custom-{value}"
-        return None
 
     handlers, _ = decode_field_handlers(
         dest,

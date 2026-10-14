@@ -62,7 +62,7 @@ def _is_safe_generator(fake: Faker, method_name: str) -> bool:
     """
     try:
         result = getattr(fake, method_name)()
-    except Exception:
+    except Exception:  # noqa: BLE001 - probing an arbitrary Faker provider call
         return False
 
     # Only accept simple scalar types that can be meaningfully stored as text
@@ -209,7 +209,7 @@ def seed_data(count: int, db_alias: str = "default") -> dict[str, int]:
     from faker import Faker
 
     fake = Faker()
-    privacy = random.Random(PRIVACY_STREAM_SEED)
+    privacy = random.Random(PRIVACY_STREAM_SEED)  # noqa: S311 - a seeded demo-data stream, not a secret
 
     total_categories = 0
     total_properties = 0

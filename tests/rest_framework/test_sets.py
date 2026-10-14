@@ -2234,9 +2234,9 @@ class HostileNestedKeyRepr:
         # Unhashable: would detonate ``field_map.get()`` with a raw TypeError.
         lambda: ["boom"],
         # A str subclass carrying a hostile ``__hash__``: would detonate the dict-set.
-        lambda: HostileNestedKeyHash(),
+        HostileNestedKeyHash,
         # A hostile ``__repr__``: would detonate the typed-error f-string assembly.
-        lambda: HostileNestedKeyRepr(),
+        HostileNestedKeyRepr,
     ],
 )
 def test_validate_nested_fields_rejects_non_plain_string_keys(key_factory: Callable[[], object]):

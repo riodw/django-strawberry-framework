@@ -907,7 +907,6 @@ def test_node_sync_with_async_consumer_resolve_node_raises_sync_misuse():
             required: bool = False,
         ):
             del cls, node_id, info, required
-            return None
 
     schema = _schema_with(
         "category",

@@ -6403,19 +6403,13 @@ def test_apply_sync_rejects_a_range_value_it_cannot_read_at_every_depth(
         filter_input = {"and_": [filter_input]}
     if depth == "related-branch":
         _register_plain_types(library_models.Patron)
+    target, value, queryset = (
+        (loan_filter, {"patron": filter_input}, library_models.Loan.objects.all())
+        if depth == "related-branch"
+        else (patron_filter, filter_input, library_models.Patron.objects.all())
+    )
     with pytest.raises(ConfigurationError) as excinfo:
-        if depth == "related-branch":
-            loan_filter.apply_sync(
-                {"patron": filter_input},
-                library_models.Loan.objects.all(),
-                _make_info(),
-            )
-        else:
-            patron_filter.apply_sync(
-                filter_input,
-                library_models.Patron.objects.all(),
-                _make_info(),
-            )
+        target.apply_sync(value, queryset, _make_info())
     assert str(excinfo.value) == _range_rejection_message(received)
 
 
@@ -7065,10 +7059,12 @@ def test_iter_visibility_steps_threads_parent_db_alias():
 
     input_value = {"shelves": {"code": {"exact": "AAA"}}}
     aliased = list(BranchFilter._iter_visibility_steps(input_value, "shard_b"))
-    assert aliased and aliased[0][4].db == "shard_b"
+    assert aliased
+    assert aliased[0][4].db == "shard_b"
     # No alias threaded -> the router default stays in place (single-DB case).
     default = list(BranchFilter._iter_visibility_steps(input_value))
-    assert default and default[0][4].db == "default"
+    assert default
+    assert default[0][4].db == "default"
 
 
 @pytest.mark.django_db
@@ -7662,7 +7658,8 @@ def test_generation_provenance_declared_never_restamped_by_later_machinery():
 
     declared = BookFilter.declared_filters["custom"]
     first = filter_generation_provenance(declared)
-    assert first is not None and first.origin == "declared"
+    assert first is not None
+    assert first.origin == "declared"
 
     # Repeated expansion passes must not restamp (same identity preserved).
     BookFilter.get_filters()
@@ -9386,11 +9383,8 @@ def test_public_filter_defaults_matches_upstream_django_filter_table():
     def _first_field(predicate: Callable[[object], bool]):
         for model in apps.get_models():
             for field in model._meta.get_fields():
-                try:
-                    if predicate(field):
-                        return field
-                except Exception:  # relation descriptors vary by kind; skip probing failures
-                    continue
+                if predicate(field):
+                    return field
         return None
 
     relation_samples = {
@@ -10346,7 +10340,7 @@ def test_release_is_audited_range_edges(raw_version: str, audited: bool):
     the installed release was reviewed must decline the rewrite, never assume it.
     """
     lower, upper = _AUDITED_DJANGO_FILTER_RANGE
-    assert lower == (25, 2) and upper == (27,), "update this test with the audited range"
+    assert (lower, upper) == ((25, 2), (27,)), "update this test with the audited range"
     assert _release_is_audited(raw_version) is audited
 
 
@@ -10835,7 +10829,7 @@ def test_projected_leaf_copies_keep_their_projected_class_and_projection(how: st
     """
     template = LoanFilter.get_filters()["patron__email_must_have_at_sign"]
     assert isinstance(template, ProjectedChildFilter)
-    restored = pickle.loads(pickle.dumps(template)) if how == "pickle" else copy.deepcopy(template)
+    restored = pickle.loads(pickle.dumps(template)) if how == "pickle" else copy.deepcopy(template)  # noqa: S301 - round-trips the object this test just pickled
     assert type(restored) is type(template)
     assert restored._projection == template._projection
     assert restored.method == "filter_email_must_have_at_sign"
@@ -13873,7 +13867,7 @@ class _NullableConditionSpecimen(django_models.Model):
     """
 
     code: _Text = django_models.TextField()
-    condition: _NullText = django_models.TextField(
+    condition: _NullText = django_models.TextField(  # noqa: DJ001 - NULL is the fixture input
         choices=[("good", "Good"), ("worn", "Worn")],
         null=True,
         blank=True,
@@ -14112,7 +14106,7 @@ def test_whitespace_bearing_enum_member_value_is_not_stripped(name: str, lookup:
 
 def _pickle_round_trip(value: object) -> object:
     """Return ``value`` after a pickle dump and load."""
-    return pickle.loads(pickle.dumps(value))
+    return pickle.loads(pickle.dumps(value))  # noqa: S301 - round-trips the object this test just pickled
 
 
 @pytest.mark.parametrize("clone", [copy.deepcopy, _pickle_round_trip])

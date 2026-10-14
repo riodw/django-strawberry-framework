@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import datetime
 import decimal
+import tempfile
 import uuid
 
 import pytest
@@ -60,7 +61,7 @@ from django_strawberry_framework.forms.converter import (
         (forms.RegexField(regex=r".*"), str),
         (forms.ChoiceField(), str),
         (forms.TypedChoiceField(), str),
-        (forms.FilePathField(path="/tmp"), str),
+        (forms.FilePathField(path=tempfile.gettempdir()), str),
         (forms.GenericIPAddressField(), str),
         (forms.Field(), str),
         (forms.IntegerField(), int),

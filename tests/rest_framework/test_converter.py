@@ -50,6 +50,7 @@ from __future__ import annotations
 import datetime
 import decimal
 import re
+import tempfile
 import uuid
 from collections.abc import Callable, Iterator
 from enum import Enum
@@ -832,7 +833,8 @@ def test_many_pk_related_field_over_generic_relation_column_emits_multi():
     """The same alignment over a ``GenericRelation`` column (also one_to_many, not m2m)."""
     _register_tagged_item_primary()
     tags_rel = library_models.Branch._meta.get_field("tags")
-    assert tags_rel.one_to_many is True and tags_rel.many_to_many is False
+    assert tags_rel.one_to_many is True
+    assert tags_rel.many_to_many is False
 
     class BranchTagSer(serializers.ModelSerializer[library_models.Branch]):
         tagged: _PkRelation[library_models.TaggedItem] = serializers.PrimaryKeyRelatedField(
@@ -1097,7 +1099,7 @@ def test_relation_target_with_no_registered_primary_raises():
     [
         (serializers.DictField(), strawberry.scalars.JSON),
         (serializers.IPAddressField(), str),
-        (serializers.FilePathField(path="/tmp"), str),
+        (serializers.FilePathField(path=tempfile.gettempdir()), str),
         (serializers.DurationField(), str),
     ],
 )
@@ -1169,7 +1171,8 @@ class _CustomHexField(serializers.Field[object, object, object, object]):
         return value
 
 
-def test_unregistered_custom_field_raises_then_registered_maps(_restore_converter_registry: None):
+@pytest.mark.usefixtures("_restore_converter_registry")
+def test_unregistered_custom_field_raises_then_registered_maps():
     """A custom field raises until a converter is registered, then maps - and no catch-all appears."""
     # Unregistered: the fail-loud raise (no silent ``String``).
     with pytest.raises(
@@ -1187,9 +1190,8 @@ def test_unregistered_custom_field_raises_then_registered_maps(_restore_converte
     assert conversion.kind == SCALAR
 
 
-def test_registered_converter_malformed_return_is_configuration_error(
-    _restore_converter_registry: None,
-):
+@pytest.mark.usefixtures("_restore_converter_registry")
+def test_registered_converter_malformed_return_is_configuration_error():
     """A registered converter must return the typed scalar conversion value object."""
     # basedpyright: the converter returning None is the hostile input under test;
     # register_serializer_field_converter types the parameter as SerializerFieldConverter
@@ -1198,9 +1200,8 @@ def test_registered_converter_malformed_return_is_configuration_error(
         convert_serializer_field(bind_unparented(_CustomHexField(), "c"))
 
 
-def test_registered_converter_exception_is_wrapped_as_configuration_error(
-    _restore_converter_registry: None,
-):
+@pytest.mark.usefixtures("_restore_converter_registry")
+def test_registered_converter_exception_is_wrapped_as_configuration_error():
     """A converter that raises is reported against the registry, not as its own exception."""
 
     def broken_converter(_field: DRFField):
@@ -1211,9 +1212,8 @@ def test_registered_converter_exception_is_wrapped_as_configuration_error(
         convert_serializer_field(bind_unparented(_CustomHexField(), "c"))
 
 
-def test_registered_converter_relation_kind_is_configuration_error(
-    _restore_converter_registry: None,
-):
+@pytest.mark.usefixtures("_restore_converter_registry")
+def test_registered_converter_relation_kind_is_configuration_error():
     """A scalar registry extension cannot bypass framework-owned relation handling."""
     register_serializer_field_converter(
         _CustomHexField,
@@ -1227,9 +1227,8 @@ def test_registered_converter_relation_kind_is_configuration_error(
         convert_serializer_field(bind_unparented(_CustomHexField(), "c"))
 
 
-def test_register_converter_resolves_unregistered_subclass_via_mro(
-    _restore_converter_registry: None,
-):
+@pytest.mark.usefixtures("_restore_converter_registry")
+def test_register_converter_resolves_unregistered_subclass_via_mro():
     """A registered converter also covers the field class's unregistered subclasses (MRO walk)."""
     register_serializer_field_converter(
         _CustomHexField,
@@ -1242,7 +1241,8 @@ def test_register_converter_resolves_unregistered_subclass_via_mro(
     assert convert_serializer_field(bind_unparented(_CustomHexSubclass(), "c")).annotation is str
 
 
-def test_register_converter_override_guard(_restore_converter_registry: None):
+@pytest.mark.usefixtures("_restore_converter_registry")
+def test_register_converter_override_guard():
     """Re-registering an already-mapped class raises unless ``override=True``."""
 
     def conv(field: DRFField) -> SerializerFieldConversion:
@@ -1266,8 +1266,8 @@ def test_register_converter_override_guard(_restore_converter_registry: None):
         pytest.param(serializers.CharField(), id="field-instance"),
     ],
 )
+@pytest.mark.usefixtures("_restore_converter_registry")
 def test_register_converter_rejects_non_field_class(
-    _restore_converter_registry: None,
     field_class: object,
 ):
     """``field_class`` must be a ``serializers.Field`` subclass."""
@@ -1280,7 +1280,8 @@ def test_register_converter_rejects_non_field_class(
         )
 
 
-def test_register_converter_rejects_non_callable(_restore_converter_registry: None):
+@pytest.mark.usefixtures("_restore_converter_registry")
+def test_register_converter_rejects_non_callable():
     """``converter`` must be callable."""
     with pytest.raises(ConfigurationError, match="must be\n?.*callable|callable"):
         # basedpyright: the non-callable converter is the hostile input under test;
@@ -1302,7 +1303,8 @@ def test_serializer_only_choicefield_becomes_enum():
     field = bound_fields(ChoiceSer())["color"]
     _attr, annotation, spec = resolve_serializer_field(field, None, "X")
     assert spec.kind == SCALAR
-    assert isinstance(annotation, type) and issubclass(annotation, Enum)
+    assert isinstance(annotation, type)
+    assert issubclass(annotation, Enum)
     assert {member.value for member in annotation} == {"r", "g"}
 
 
@@ -1386,7 +1388,8 @@ def test_declared_choicefield_allow_blank_over_model_column_enum_has_blank_membe
 
     field = bound_fields(DeclaredSer())["topic"]
     _attr, annotation, _spec = resolve_serializer_field(field, library_models.Shelf, "X")
-    assert isinstance(annotation, type) and issubclass(annotation, Enum)
+    assert isinstance(annotation, type)
+    assert issubclass(annotation, Enum)
     assert {member.name: member.value for member in annotation} == {"BLANK": "", "x": "x"}
 
 
@@ -1635,7 +1638,8 @@ def test_declared_choice_allow_blank_over_blank_choice_column_accepted():
 
     field = bound_fields(ConditionSer())["condition"]
     _attr, annotation, _spec = resolve_serializer_field(field, library_models.Shelf, "X")
-    assert isinstance(annotation, type) and issubclass(annotation, Enum)
+    assert isinstance(annotation, type)
+    assert issubclass(annotation, Enum)
     read_enum = convert_choices_to_enum(
         _concrete_field(library_models.Shelf, "condition"),
         "ShelfReadType",
@@ -1661,7 +1665,8 @@ def test_declared_choice_allow_blank_over_strict_non_choice_column_accepted():
 
     field = bound_fields(TitleChoiceSer())["title"]
     _attr, annotation, _spec = resolve_serializer_field(field, library_models.Book, "X")
-    assert isinstance(annotation, type) and issubclass(annotation, Enum)
+    assert isinstance(annotation, type)
+    assert issubclass(annotation, Enum)
     assert {member.name: member.value for member in annotation} == {"BLANK": "", "dune": "dune"}
 
 
@@ -1678,7 +1683,8 @@ def test_serializer_only_choice_allow_blank_on_model_serializer_accepted():
 
     field = bound_fields(ExtraChoiceSer())["mood"]
     _attr, annotation, _spec = resolve_serializer_field(field, library_models.Book, "X")
-    assert isinstance(annotation, type) and issubclass(annotation, Enum)
+    assert isinstance(annotation, type)
+    assert issubclass(annotation, Enum)
     assert {member.name: member.value for member in annotation} == {"BLANK": "", "calm": "calm"}
 
 
@@ -1733,7 +1739,8 @@ def test_serializer_only_choice_over_empty_label_choices_gets_no_none_member(all
 
     field = bound_fields(MoodSer())["mood"]
     _attr, annotation, _spec = resolve_serializer_field(field, None, "EmptyLabelX")
-    assert isinstance(annotation, type) and issubclass(annotation, Enum)
+    assert isinstance(annotation, type)
+    assert issubclass(annotation, Enum)
     assert {member.name: member.value for member in annotation} == {"good": "good", "worn": "worn"}
     if allow_null:
         assert field.run_validation(None) is None
@@ -2090,7 +2097,8 @@ def test_declared_flat_choice_over_grouped_column_accepted(declared: list[tuple[
     model = _grouped_choice_model()
     field = _grouped_status_field(model, declared)
     _attr, annotation, _spec = resolve_serializer_field(field, model, "X")
-    assert isinstance(annotation, type) and issubclass(annotation, Enum)
+    assert isinstance(annotation, type)
+    assert issubclass(annotation, Enum)
     assert [member.value for member in annotation] == [value for value, _label in declared]
     assert registry.get_enum(model, "status") is None
 
@@ -2308,7 +2316,7 @@ def test_serializer_only_filepathfield_stays_str_not_enum():
     """A ``FilePathField`` (a ``ChoiceField`` subclass with DYNAMIC choices) stays ``str``, never an enum."""
 
     class PathSer(serializers.Serializer[object]):
-        p = serializers.FilePathField(path="/tmp")
+        p = serializers.FilePathField(path=tempfile.gettempdir())
 
     field = bound_fields(PathSer())["p"]
     _attr, annotation, _spec = resolve_serializer_field(field, None, "X")
@@ -2546,7 +2554,8 @@ def test_declared_choicefield_over_model_column_emits_serializer_enum():
 
     field = bound_fields(ChoiceOverColumnSer())["status"]
     _attr, annotation, spec = resolve_serializer_field(field, product_models.Item, "X")
-    assert isinstance(annotation, type) and issubclass(annotation, Enum)
+    assert isinstance(annotation, type)
+    assert issubclass(annotation, Enum)
     assert {member.value for member in annotation} == {"a", "b"}
     assert spec.source == "name"  # still writes through to the model column
 

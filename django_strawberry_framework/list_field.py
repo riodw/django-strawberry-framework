@@ -207,7 +207,7 @@ def _validate_djangotype_target(
         )
     try:
         definition: object = getattr(target_type, "__django_strawberry_definition__", None)
-    except Exception:
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
         # Contained: a metaclass whose __getattr__ raises anything other than
         # AttributeError must reach the typed rejection below, not escape raw.
         definition = None
@@ -288,6 +288,7 @@ class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):  # pyrigh
         ceiling: int | None = None,
         order_argument: str | None = None,
     ) -> None:
+        """Record which argument of ``field`` failed and why; ``reason`` must be a known reason."""
         if reason not in _KNOWN_LIST_ARGUMENT_REASONS:
             raise ValueError(f"Unknown ListArgumentError reason {reason!r}.")
         self.field: str = field
@@ -457,8 +458,8 @@ def _normalize_list_arguments(
     field_name: str,
     info: Info[object, object],
     max_rows: int | None,
-    trusted_max_rows: bool,
     *,
+    trusted_max_rows: bool,
     offset: object = None,
     limit: object = None,
     order_by: object = strawberry.UNSET,
@@ -797,7 +798,7 @@ def _is_deterministic_order_field_path(
         not field.is_relation
         or related_opts is None
         or not related_opts.ordering
-        or getattr(field, "attname", None) == path.split(LOOKUP_SEP)[-1]
+        or getattr(field, "attname", None) == path.rsplit(LOOKUP_SEP, maxsplit=1)[-1]
         or path == "pk"
     ):
         return True
@@ -836,7 +837,7 @@ def _is_deterministic_order_reference(query: Query, name: str, prefix: str) -> b
     referenced = f"{prefix}{name}"
     annotation = query.annotations.get(referenced)
     if annotation is None:
-        annotation = query.annotations.get(referenced.split(LOOKUP_SEP)[0])
+        annotation = query.annotations.get(referenced.split(LOOKUP_SEP, maxsplit=1)[0])
     if annotation is not None:
         return _is_deterministic_order_term(query, annotation)
     if referenced in query.extra:
@@ -882,7 +883,7 @@ def _is_deterministic_order_name(
     """
     if name == "?":
         return False
-    col = name[1:] if name.startswith("-") else name
+    col = name.removeprefix("-")
     if opts is None:
         annotation = query.annotations.get(col)
         if annotation is None:
@@ -1274,7 +1275,7 @@ def _field_label(info: Info[object, object]) -> str:
     try:
         # A consumer ``info_class`` can shadow ``field_name`` with a descriptor that raises.
         field_name = info.field_name
-    except Exception:
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
         return "DjangoListField"
     return field_name or "DjangoListField"
 
@@ -1325,7 +1326,7 @@ def _argument_record(
         field_name,
         info,
         max_rows,
-        trusted_max_rows,
+        trusted_max_rows=trusted_max_rows,
         offset=offset,
         limit=limit,
         order_by=order_by,
@@ -1477,8 +1478,8 @@ def _execute_queryset_pipeline_sync(
     info: Info[object, object],
     args_record: _ListArguments,
     max_rows: int | None,
-    trusted_max_rows: bool,
     *,
+    trusted_max_rows: bool,
     model: type[models.Model],
     orderset_class: type[OrderSet] | None,
     is_async_context: bool,
@@ -1524,8 +1525,8 @@ async def _execute_queryset_pipeline_async(
     info: Info[object, object],
     args_record: _ListArguments,
     max_rows: int | None,
-    trusted_max_rows: bool,
     *,
+    trusted_max_rows: bool,
     model: type[models.Model],
     orderset_class: type[OrderSet] | None,
 ) -> object:
@@ -1699,7 +1700,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                     info,
                     args_record,
                     max_rows,
-                    trusted_max_rows,
+                    trusted_max_rows=trusted_max_rows,
                     model=target_model,
                     orderset_class=orderset_class,
                 )
@@ -1709,7 +1710,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                 info,
                 args_record,
                 max_rows,
-                trusted_max_rows,
+                trusted_max_rows=trusted_max_rows,
                 model=target_model,
                 orderset_class=orderset_class,
                 is_async_context=False,
@@ -1780,7 +1781,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                         info,
                         args_record,
                         max_rows,
-                        trusted_max_rows,
+                        trusted_max_rows=trusted_max_rows,
                         model=target_model,
                         orderset_class=orderset_class,
                     )
@@ -1831,7 +1832,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                         info,
                         args_record,
                         max_rows,
-                        trusted_max_rows,
+                        trusted_max_rows=trusted_max_rows,
                         model=target_model,
                         orderset_class=orderset_class,
                         is_async_context=async_execution(),

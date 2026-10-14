@@ -103,6 +103,7 @@ class PrivateAuthority(Generic[StateT]):
     """
 
     def __init__(self) -> None:
+        """Start with no owner settled."""
         self._settled: dict[int, tuple[ReferenceType[object], StateT]] = {}
 
     def settled(self, owner: object) -> bool:
@@ -232,6 +233,7 @@ class PrivateMembership(Generic[MemberT]):
     """
 
     def __init__(self, attribute: str) -> None:
+        """Hold sequences under the private ``attribute`` of their owner, with none accepted yet."""
         self._attribute: str = attribute
         self._accepted: dict[int, _Accepted[MemberT]] = {}
 

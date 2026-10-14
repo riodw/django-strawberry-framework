@@ -67,10 +67,10 @@ from ..utils.converters import (
 # copy); re-exported here (the ``as`` form marks the explicit re-export) so the
 # form resolver, the input builder, and the tests keep addressing them on
 # this module (spec-038 Decision 7).
-from ..utils.inputs import FILE as FILE
-from ..utils.inputs import RELATION_MULTI as RELATION_MULTI
-from ..utils.inputs import RELATION_SINGLE as RELATION_SINGLE
-from ..utils.inputs import SCALAR as SCALAR
+from ..utils.inputs import FILE as FILE  # noqa: PLC0414 - explicit re-export
+from ..utils.inputs import RELATION_MULTI as RELATION_MULTI  # noqa: PLC0414 - explicit re-export
+from ..utils.inputs import RELATION_SINGLE as RELATION_SINGLE  # noqa: PLC0414 - explicit re-export
+from ..utils.inputs import SCALAR as SCALAR  # noqa: PLC0414 - explicit re-export
 from ..utils.inputs import FieldConversionBase
 
 

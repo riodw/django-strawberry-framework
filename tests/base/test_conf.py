@@ -687,7 +687,7 @@ def test_upstream_patches_enabled_liar_bool_is_not_bool():
     assert isinstance(liar, bool)  # spoof works
     assert type(liar) is not bool
     s = Settings({"APPLY_UPSTREAM_PATCHES": liar})
-    import unittest.mock as mock
+    from unittest import mock
 
     with mock.patch.object(conf, "settings", s):
         # Empty liar mapping -> defensive copy is {} -> defaults to True (not disabled)
@@ -723,7 +723,7 @@ def test_upstream_patches_enabled_hostile_isinstance_becomes_configurationerror(
             raise RuntimeError("hostile __class__ boom")
 
     s = Settings({"APPLY_UPSTREAM_PATCHES": Boom()})
-    import unittest.mock as mock
+    from unittest import mock
 
     with mock.patch.object(conf, "settings", s):
         with pytest.raises(ConfigurationError, match="bool or a mapping"):
@@ -748,7 +748,7 @@ def test_upstream_patches_enabled_hostile_iter_becomes_configurationerror():
             return 1
 
     s = Settings({"APPLY_UPSTREAM_PATCHES": HostileIter()})
-    import unittest.mock as mock
+    from unittest import mock
 
     with mock.patch.object(conf, "settings", s):
         with pytest.raises(ConfigurationError, match="iteration failed"):
@@ -773,7 +773,7 @@ def test_upstream_patches_enabled_hostile_key_isinstance_becomes_configurationer
             super().__init__({hostile_key: True})
 
     s = Settings({"APPLY_UPSTREAM_PATCHES": HostileMapping()})
-    import unittest.mock as mock
+    from unittest import mock
 
     with mock.patch.object(conf, "settings", s):
         with pytest.raises(ConfigurationError, match="dependency name strings"):
@@ -787,7 +787,7 @@ def test_upstream_patches_enabled_hostile_iteration_generic_becomes_configuratio
     import builtins
 
     s = Settings({"APPLY_UPSTREAM_PATCHES": {"django": True}})
-    import unittest.mock as mock
+    from unittest import mock
 
     real_set = builtins.set
 
@@ -852,7 +852,7 @@ def test_upstream_patches_enabled_hostile_metaclass_value_contained():
         pass
 
     s = Settings({"APPLY_UPSTREAM_PATCHES": Evil()})
-    import unittest.mock as mock
+    from unittest import mock
 
     with mock.patch.object(conf, "settings", s):
         with pytest.raises(ConfigurationError, match="bool or a mapping"):
@@ -874,7 +874,7 @@ def test_upstream_patches_enabled_hostile_metaclass_mapping_value_contained():
         pass
 
     s = Settings({"APPLY_UPSTREAM_PATCHES": {"django": Evil()}})
-    import unittest.mock as mock
+    from unittest import mock
 
     with mock.patch.object(conf, "settings", s):
         with pytest.raises(ConfigurationError, match="must be a bool"):

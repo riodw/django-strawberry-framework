@@ -190,7 +190,7 @@ def _normalize_tracked_path(value: object, *, field_name: str) -> str:
             f'"{field_name}" paths must not be empty.',
             code="invalid_tracked_path",
         )
-    if path.startswith("/") or path.startswith("../") or "/../" in path or path.endswith("/.."):
+    if path.startswith(("/", "../")) or "/../" in path or path.endswith("/.."):
         raise KanbanServiceError(
             f"Tracked path must be repo-relative: {value!r}.",
             code="invalid_tracked_path",

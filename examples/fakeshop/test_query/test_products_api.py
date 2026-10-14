@@ -3254,7 +3254,7 @@ def _cascade_page_gids(model: _CascadeModel) -> list[str]:
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("field, model, _view_username", _CASCADE_ROOT_FIELDS)
+@pytest.mark.parametrize(("field", "model", "_view_username"), _CASCADE_ROOT_FIELDS)
 def test_cascade_staff_sees_everything(field: str, model: _CascadeModel, _view_username: str):
     """A staff user (``create_users`` makes ``staff_<n>`` is_staff, NOT is_superuser) bypasses the cascade.
 
@@ -3289,7 +3289,7 @@ def test_cascade_staff_sees_everything(field: str, model: _CascadeModel, _view_u
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("field, model, view_username", _CASCADE_ROOT_FIELDS)
+@pytest.mark.parametrize(("field", "model", "view_username"), _CASCADE_ROOT_FIELDS)
 def test_cascade_staff_sees_private_rows_hidden_from_non_staff(
     field: str,
     model: _CascadeModel,

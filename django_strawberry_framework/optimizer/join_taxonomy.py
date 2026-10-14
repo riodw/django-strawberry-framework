@@ -115,7 +115,7 @@ _safe_truthy = safe_truthy
 
 def _safe_flag(value: object, name: str) -> bool:
     """Read a boolean relation flag, guarding both the read and its truth test."""
-    return relation_bool(value, name, False, lenient=True)
+    return relation_bool(value, name, lenient=True)
 
 
 def _first_truthy(*values: object) -> object:
@@ -268,7 +268,7 @@ def _m2m_join_columns(field: object) -> tuple[str, ...]:
         return ()
     try:
         return (cast("str", related_model._meta.pk.attname),)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return ()
 
 
@@ -298,7 +298,7 @@ def _generic_child_attname(field: object, name_attr: str) -> str | None:
     try:
         # A resolved child field's ``attname`` is its column name, a string.
         return cast("str", related_model._meta.get_field(child_field_name).attname)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return None
 
 
@@ -314,7 +314,7 @@ def classify_relation_join(field: ModelField | FieldMeta) -> RelationJoinDescrip
     """
     try:
         kind = relation_kind(field)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         kind = "forward_single"
     is_m2m = _safe_flag(field, "many_to_many")
     windowable = kind in WINDOWABLE_RELATION_KINDS

@@ -113,7 +113,7 @@ def test_meta_interfaces_accepted():
         # Missing-comma spec spelling: Python evaluates ``(relay.Node)`` to
         # the bare class identity (not a tuple), so this case is identical
         # to the first; included verbatim per spec-015 #"canonical spelling. For user ergonomics".
-        (relay.Node),
+        (relay.Node),  # noqa: PT014 - the duplicate is the spelling under test
     ],
 )
 def test_meta_interfaces_accepts_single_interface_class(raw: object):
@@ -616,10 +616,12 @@ def test_resolve_node_applies_get_queryset():
     finalize_django_types()
     public_row = Category.objects.filter(is_private=False).first()
     private_row = Category.objects.filter(is_private=True).first()
-    assert public_row is not None and private_row is not None
+    assert public_row is not None
+    assert private_row is not None
     hooks = relay_hooks(CategoryNode, Category)
     public_result = hooks.resolve_node(info=None, node_id=public_row.pk)
-    assert public_result is not None and public_result.pk == public_row.pk
+    assert public_result is not None
+    assert public_result.pk == public_row.pk
     assert hooks.resolve_node(info=None, node_id=private_row.pk) is None
 
 
@@ -648,7 +650,8 @@ def test_resolve_node_accepts_strawberry_positional_call_shape():
     hooks = relay_hooks(CategoryNode, Category)
     # Positional node_id matches Strawberry's bound call site exactly.
     result = hooks.resolve_node(str(target.pk), info=None)
-    assert result is not None and result.pk == target.pk
+    assert result is not None
+    assert result.pk == target.pk
     # required=True via positional node_id keeps the same shape.
     required_result = hooks.resolve_node(str(target.pk), info=None, required=True)
     assert required_result.pk == target.pk
@@ -873,11 +876,13 @@ async def test_resolve_node_async_awaits_async_get_queryset():
     CategoryNode = await sync_to_async(_build_seeded_category_node_with_async_get_queryset)()
     public_row = await Category.objects.filter(is_private=False).afirst()
     private_row = await Category.objects.filter(is_private=True).afirst()
-    assert public_row is not None and private_row is not None
+    assert public_row is not None
+    assert private_row is not None
 
     hooks = async_relay_hooks(CategoryNode, Category)
     public_result = await hooks.resolve_node(public_row.pk, info=None)
-    assert public_result is not None and public_result.pk == public_row.pk
+    assert public_result is not None
+    assert public_result.pk == public_row.pk
     # Rows the async hook filters out are invisible to the node lookup.
     assert await hooks.resolve_node(private_row.pk, info=None) is None
 
@@ -896,7 +901,8 @@ async def test_resolve_nodes_async_awaits_async_get_queryset():
         row async for row in Category.objects.filter(is_private=False).order_by("id")[:2]
     ]
     private_row = await Category.objects.filter(is_private=True).afirst()
-    assert len(public_rows) == 2 and private_row is not None
+    assert len(public_rows) == 2
+    assert private_row is not None
     a, b = public_rows
 
     result = await async_relay_hooks(CategoryNode, Category).resolve_nodes(
@@ -1191,7 +1197,8 @@ def test_relay_chain_child_resolvers_do_not_recurse():
     assert row is not None
     assert child_hooks.resolve_id(row, info=None) == str(row.pk)
     child_result = child_hooks.resolve_node(str(row.pk), info=None)
-    assert child_result is not None and child_result.pk == row.pk
+    assert child_result is not None
+    assert child_result.pk == row.pk
     child_results = child_hooks.resolve_nodes(info=None, node_ids=[str(row.pk)])
     assert [obj.pk if obj is not None else None for obj in child_results] == [row.pk]
 
@@ -1516,7 +1523,8 @@ def test_resolve_nodes_default_invoked_via_helper():
     )
     assert isinstance(result, list)
     assert len(result) == 1
-    assert result[0] is not None and result[0].pk == target.pk
+    assert result[0] is not None
+    assert result[0].pk == target.pk
 
 
 def test_install_relay_node_resolvers_idempotent():
@@ -1545,8 +1553,8 @@ def test_install_relay_node_resolvers_idempotent():
     # the second install also writes framework defaults; identity should match
     # the first-pass snapshot because the underlying default callables are
     # module-level constants in ``types/relay.py``.
-    for attr in snapshot:
-        assert after[attr].__func__ is snapshot[attr].__func__
+    for attr, before in snapshot.items():
+        assert after[attr].__func__ is before.__func__
 
 
 # ---------------------------------------------------------------------------

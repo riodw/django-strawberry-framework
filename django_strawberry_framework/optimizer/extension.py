@@ -423,7 +423,7 @@ def _freeze_variable_value(value: object, active_containers: set[int]) -> "Froze
         value_is_mapping = is_mapping(value)
         value_is_set = is_abstract_set(value)
         value_is_sequence = is_list(value) or is_tuple(value)
-    except Exception:
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
         # ``Exception``, never ``BaseException`` - matching the container branch
         # below and the package's boundary policy: a hostile ``__class__`` or
         # ``__instancecheck__`` degrades to an opaque identity, while
@@ -471,7 +471,7 @@ def _freeze_variable_value(value: object, active_containers: set[int]) -> "Froze
                 value_type_id,
                 tuple(_freeze_variable_value(item, active_containers) for item in members),
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - consumer code may raise anything
             # Custom scalar parsers may return hostile container subclasses.
             # Their hash/iteration/repr behaviour is outside the optimizer's
             # control; an opaque per-value token preserves cache safety without
@@ -970,6 +970,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         execution_context: "ExecutionContext | None" = None,
         nested_connection_strategy: StrategySelection | None = None,
     ) -> None:
+        """Settle the N+1 ``strictness`` and the nested-connection strategy once per instance."""
         # Strawberry assigns ``extension.execution_context`` once per
         # operation. The documented singleton-factory form returns this SAME
         # extension instance to concurrent and to NESTED operations, so the

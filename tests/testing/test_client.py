@@ -920,32 +920,32 @@ class AssertionHelperFailureDirectionTests(GraphQLTestMixin, unittest.TestCase):
 
     def test_assert_response_no_errors_fails_on_an_errors_response(self):
         res = self._canned(errors=[{"message": "nope"}], data=None)
-        with self.assertRaises(AssertionError) as ctx:
+        with pytest.raises(AssertionError) as ctx:
             self.assertResponseNoErrors(res)
-        self.assertIn("nope", str(ctx.exception))  # the decoded errors ride the message
+        assert "nope" in str(ctx.value)  # the decoded errors ride the message
 
     def test_assert_response_no_errors_fails_readably_on_a_non_200_without_errors(self):
         # A transport failure whose JSON body has no ``errors`` key: the status
         # check fails and the message still carries the decoded content (both
         # fields), never a bare ``None``.
         res = self._canned(errors=None, data={"detail": "boom"}, status_code=500)
-        with self.assertRaises(AssertionError) as ctx:
+        with pytest.raises(AssertionError) as ctx:
             self.assertResponseNoErrors(res)
-        self.assertIn("boom", str(ctx.exception))
+        assert "boom" in str(ctx.value)
 
     def test_assert_response_no_errors_fails_with_custom_msg(self):
         res = self._canned(errors=[{"message": "nope"}], data=None)
-        with self.assertRaises(AssertionError) as ctx:
+        with pytest.raises(AssertionError) as ctx:
             self.assertResponseNoErrors(res, msg="custom no-errors failure")
-        self.assertIn("custom no-errors failure", str(ctx.exception))
+        assert "custom no-errors failure" in str(ctx.value)
 
     def test_assert_response_has_errors_fails_on_a_clean_response(self):
         res = self._canned(errors=None, data={"__typename": "Query"})
-        with self.assertRaises(AssertionError):
+        with pytest.raises(AssertionError):
             self.assertResponseHasErrors(res)
 
     def test_assert_response_has_errors_fails_with_custom_msg(self):
         res = self._canned(errors=None, data={"__typename": "Query"})
-        with self.assertRaises(AssertionError) as ctx:
+        with pytest.raises(AssertionError) as ctx:
             self.assertResponseHasErrors(res, msg="custom has-errors failure")
-        self.assertIn("custom has-errors failure", str(ctx.exception))
+        assert "custom has-errors failure" in str(ctx.value)

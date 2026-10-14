@@ -316,7 +316,7 @@ def test_mirror_copies_a_relative_symlink_and_refuses_an_absolute_one_into_the_t
     copy = tmp_path / "copy"
     workspace.mirror_tree(repo, copy)
 
-    assert os.readlink(copy / "link.py") == f"{PACKAGE}/core.py"
+    assert (copy / "link.py").readlink() == Path(f"{PACKAGE}/core.py")
 
     (repo / "link.py").unlink()
     (repo / "link.py").symlink_to(repo / PACKAGE / "core.py")
@@ -1560,23 +1560,34 @@ def test_postgres_exact_match_never_takes_slot10_for_slot1(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    statements: list[str] = []
+    names = [
+        "postgres",
+        "ws_abc_review_slot1",
+        "ws_abc_review_slot10",
+        "ws_other_review_slot1",
+        "test_ws_abc_review_slot1",
+        "test_ws_abc_review_slot1_gw0",
+        "test_ws_abc_review_slot10",
+    ]
+    rows = "\n".join([*names, ""])
     postgres = workspace.Postgres(tmp_path)
 
-    def _record_statement(statement: str, _database: str = "postgres") -> str:
-        statements.append(statement)
-        return ""
+    def _canned_sql(_statement: str, _database: str = "postgres") -> str:
+        return rows
 
-    monkeypatch.setattr(postgres, "sql", _record_statement)
+    monkeypatch.setattr(postgres, "sql", _canned_sql)
 
-    postgres.databases("ws_abc_review_slot1", exact=True)
-
-    assert statements == [
-        (
-            "SELECT datname FROM pg_database WHERE datname IN "
-            "('ws_abc_review_slot1', 'test_ws_abc_review_slot1') "
-            "OR datname LIKE 'test\\_ws\\_abc\\_review\\_slot1\\_gw%' ORDER BY datname"
-        ),
+    assert postgres.databases("ws_abc_review_slot1", exact=True) == [
+        "ws_abc_review_slot1",
+        "test_ws_abc_review_slot1",
+        "test_ws_abc_review_slot1_gw0",
+    ]
+    assert postgres.databases("ws_abc_review_slot1") == [
+        "ws_abc_review_slot1",
+        "ws_abc_review_slot10",
+        "test_ws_abc_review_slot1",
+        "test_ws_abc_review_slot1_gw0",
+        "test_ws_abc_review_slot10",
     ]
 
 
@@ -1637,7 +1648,7 @@ def _ci_floor_node() -> tuple[dict[str, str], list[str]]:
     """The push/PR compatibility node of ``django.yml``'s ``test`` job and its ``run:`` lines."""
     workflow = workspace.REPO_ROOT / ".github" / "workflows" / "django.yml"
     job = yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"]["test"]
-    lists = re.findall(r"fromJSON\('(\[.*?\])'\)", job["strategy"]["matrix"]["include"], re.S)
+    lists = re.findall(r"fromJSON\('(\[.*?\])'\)", job["strategy"]["matrix"]["include"], re.DOTALL)
     push_nodes = json.loads(lists[-1])
     floor = [node for node in push_nodes if node.get("compatibility_only") == "1"]
     lines = [

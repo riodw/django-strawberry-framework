@@ -152,12 +152,12 @@ def _raise_sentinel():
 #: the package logs for refusing it.
 _LADDER_FACTORIES = {
     "raises": (_raise_sentinel, "raised"),
-    "not-an-extension": (lambda: object(), "not a SchemaExtension instance"),
+    "not-an-extension": (lambda: object(), "not a SchemaExtension instance"),  # noqa: PLW0108 - a factory entry, not the class
     "returns-the-class": (lambda: _ConsumerExtension, "not a SchemaExtension instance"),
-    "claims-to-be-an-extension": (lambda: _ClaimsAnExtension(), "not a SchemaExtension instance"),
-    "claims-to-be-an-authority": (lambda: _ClaimsAnAuthority(), "not a SchemaExtension instance"),
-    "authority-subclass": (lambda: _AuthoritySubclass(), "claims the resource-policy authority"),
-    "hybrid": (lambda: _HybridAuthority(), "claims the resource-policy authority"),
+    "claims-to-be-an-extension": (lambda: _ClaimsAnExtension(), "not a SchemaExtension instance"),  # noqa: PLW0108 - a factory entry, not the class
+    "claims-to-be-an-authority": (lambda: _ClaimsAnAuthority(), "not a SchemaExtension instance"),  # noqa: PLW0108 - a factory entry, not the class
+    "authority-subclass": (lambda: _AuthoritySubclass(), "claims the resource-policy authority"),  # noqa: PLW0108 - a factory entry, not the class
+    "hybrid": (lambda: _HybridAuthority(), "claims the resource-policy authority"),  # noqa: PLW0108 - a factory entry, not the class
 }
 
 _LADDER_IDS = sorted(_LADDER_FACTORIES)

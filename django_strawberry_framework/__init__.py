@@ -117,7 +117,7 @@ if TYPE_CHECKING:
 
 
 # basedpyright: PEP 562 module __getattr__; a lazy re-export is whatever the named attribute is
-def __getattr__(name: str) -> Any:  # pyright: ignore[reportExplicitAny]
+def __getattr__(name: str) -> Any:  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - lazy re-export is whatever the attribute is
     """Resolve the DRF-soft-dependency names lazily through the DRF import guard (spec-039 Decision 12).
 
     PEP 562 module-level ``__getattr__``: ``from django_strawberry_framework import

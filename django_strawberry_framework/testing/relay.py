@@ -97,7 +97,7 @@ def global_id_for(
             and definition is registered_definition
             and getattr(definition, "origin", None) is type_cls
         )
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         is_registered_own_definition = False
     if not is_registered_own_definition:
         raise ConfigurationError(

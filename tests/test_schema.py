@@ -493,7 +493,6 @@ async def test_async_window_hostile_error_container_rolls_back_and_leaks_no_tran
     with (
         patch.object(ctx, "_marked_mutation_class", return_value=_ModelLessMutationMeta),
         patch.object(ExecutionContext, "execute_field", side_effect=_write_in_the_window_worker),
-        pytest.raises(RuntimeError, match="hostile len"),
     ):
         pending = ctx.execute_field(
             ctx.schema.mutation_type,
@@ -502,7 +501,8 @@ async def test_async_window_hostile_error_container_rolls_back_and_leaks_no_tran
             _MUTATION_ROOT_PATH,
         )
         assert inspect.isawaitable(pending)
-        await pending
+        with pytest.raises(RuntimeError, match="hostile len"):
+            await pending
 
     assert not connection.in_atomic_block
     assert not await run_in_one_sync_boundary(_rollback_probe_row_exists)
@@ -533,7 +533,6 @@ async def test_execute_mutation_field_async_exception_rolls_back():
             "execute_field",
             return_value=async_failing_resolve(),
         ),
-        pytest.raises(RuntimeError, match="async field crash"),
     ):
         pending = ctx.execute_field(
             ctx.schema.mutation_type,
@@ -542,7 +541,8 @@ async def test_execute_mutation_field_async_exception_rolls_back():
             _MUTATION_ROOT_PATH,
         )
         assert inspect.isawaitable(pending)
-        await pending
+        with pytest.raises(RuntimeError, match="async field crash"):
+            await pending
 
 
 def test_get_extensions_refuses_a_factory_that_resolves_to_an_authority():
@@ -716,7 +716,7 @@ def _assert_entry_survives_a_replacement_attempt(schema: DjangoSchema):
 
 @pytest.mark.parametrize(
     "entry",
-    [_MarkerExtension, lambda: _MarkerExtension()],
+    [_MarkerExtension, lambda: _MarkerExtension()],  # noqa: PLW0108 - a factory entry, not the class
     ids=["class", "factory"],
 )
 def test_an_accepted_extension_entry_still_runs_after_a_replacement_attempt(entry: object):
@@ -742,7 +742,7 @@ def test_an_accepted_extension_instance_still_runs_after_a_replacement_attempt()
     warns on it; the package still accepts it as configuration, and accepted
     configuration is what runs.
     """
-    with pytest.warns(DeprecationWarning):
+    with pytest.warns(DeprecationWarning, match="Passing an extension instance"):
         schema = DjangoSchema(
             query=_BoundedRowQuery,
             extensions=[_MarkerExtension()],
@@ -889,6 +889,9 @@ def test_a_schema_that_cannot_be_hashed_is_still_constructible_and_bounded():
         def __eq__(self, other: object):
             return self is other
 
+        # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
+        __hash__ = None  # pyright: ignore[reportAssignmentType]
+
     schema = _UnhashableSchema(query=DummyQuery, resource_policy=ResourcePolicy(max_list_rows=3))
 
     assert schema.resource_policy.max_list_rows == 3
@@ -957,7 +960,7 @@ def test_a_schema_stays_collectable_whatever_configured_it(
 
 def test_an_accepted_extension_instance_does_not_outlive_its_schema():
     """The instance spelling, whose extension holds the execution context it ran under."""
-    with pytest.warns(DeprecationWarning):
+    with pytest.warns(DeprecationWarning, match="Passing an extension instance"):
         alive = _reachability_after_dropping(
             lambda: DjangoSchema(query=DummyQuery, extensions=[_MarkerExtension()]),
             execute=True,

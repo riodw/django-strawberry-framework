@@ -113,6 +113,7 @@ from django_strawberry_framework import (
     ErrorPolicy,
     strawberry_config,
 )
+from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.extensions.resource_policy import (
     DjangoResourcePolicyExtension,
 )
@@ -633,7 +634,7 @@ class _AuthorityQuery:
                 config=strawberry_config(extra_scalar_map={OpaqueValue: _OPAQUE_SCALAR}),
                 resource_policy={"max_list_rows": 999},
             )
-        except Exception as exc:
+        except ConfigurationError as exc:
             return type(exc).__name__
         return "reconfigured"
 
@@ -791,7 +792,7 @@ class _AcceptedInstanceQuery:
             return "unreachable"
         try:
             entry.__init__(policy=ResourcePolicy(max_list_rows=999))
-        except Exception as exc:
+        except ConfigurationError as exc:
             return type(exc).__name__
         return "reconfigured"
 
@@ -1307,7 +1308,7 @@ def _entry_entry(spelling: str):
     if spelling == "class":
         return _SharedEntryExtension
     if spelling == "fresh-factory":
-        return lambda: _SharedEntryExtension()
+        return lambda: _SharedEntryExtension()  # noqa: PLW0108 - a factory entry, not the class
     if spelling == "instance":
         return _entry_extension(spelling)
     return lambda: _entry_extension(spelling)
@@ -4316,16 +4317,13 @@ def _reset_overlap_state() -> Iterator[None]:
         _ExecutionWitness.entered.clear()
 
 
+@pytest.mark.usefixtures("_reset_overlap_state")
 @pytest.mark.parametrize(
     ("spelling", "color"),
     ENTRY_ROWS,
     ids=ENTRY_IDS,
 )
-def test_an_overlapping_request_does_not_admit_an_oversized_one(
-    spelling: str,
-    color: str,
-    _reset_overlap_state: None,
-):
+def test_an_overlapping_request_does_not_admit_an_oversized_one(spelling: str, color: str):
     """Whichever object a consumer entry resolves to, the charge lands on its own document.
 
     Strawberry resolves a class and a fresh factory into a new extension per

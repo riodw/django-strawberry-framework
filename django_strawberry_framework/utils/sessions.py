@@ -317,6 +317,7 @@ class ConnectionActorState:
     __slots__: tuple[str, ...] = ("authenticated_provenance", "lock")
 
     def __init__(self) -> None:
+        """Start unauthenticated, with a fresh lock for the connection's actor lease."""
         self.authenticated_provenance: bool = False
         self.lock: asyncio.Lock = asyncio.Lock()
 

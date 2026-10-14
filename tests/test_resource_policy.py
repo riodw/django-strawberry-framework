@@ -220,7 +220,8 @@ def test_the_package_default_policy_is_bounded_on_every_axis():
         if name == "execution_deadline_seconds":
             assert value is None
             continue
-        assert isinstance(value, int) and value >= 1, name
+        assert isinstance(value, int), name
+        assert value >= 1, name
 
 
 def test_a_policy_is_frozen():
@@ -1302,7 +1303,7 @@ async def test_bounded_rows_async_survives_a_hostile_notes_list_on_the_source_er
         async def aclose(self):
             raise RuntimeError("cleanup failed")
 
-    with pytest.raises(ValueError) as caught:
+    with pytest.raises(ValueError, match="source failed") as caught:
         await bounded_rows_async(HostileNotesRows(), SimpleNamespace(context={}))
     assert str(caught.value) == "source failed"
     # The hostile surface itself survived untouched: the containment swallowed
@@ -4061,7 +4062,7 @@ def test_resource_limit_exceeded_pickle_and_copy_fidelity():
     exc.custom_tag = "tagged"  # pyright: ignore[reportAttributeAccessIssue]
 
     # Pickle serialization roundtrip
-    restored = pickle.loads(pickle.dumps(exc))
+    restored = pickle.loads(pickle.dumps(exc))  # noqa: S301 - round-trips the object this test just pickled
     assert isinstance(restored, ResourceLimitExceeded)
     assert restored.bound == "max_depth"
     assert restored.limit == 10

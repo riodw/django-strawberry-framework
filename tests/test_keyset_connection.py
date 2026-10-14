@@ -201,7 +201,7 @@ def test_backward_args_over_a_window_wrapper_fall_back_to_the_keyset_slicer():
         Issue.objects.create(periodical=periodical, number=number, title=f"i{number}")
     wrapper = _WindowedConnectionRows(
         rows=[],
-        fallback=lambda: Issue.objects.all(),
+        fallback=Issue.objects.all,
         keyset_state=_keyset_connection_context(connection_type),
     )
     # ``edges`` selected so the slicer's edge-resolution gate
@@ -247,7 +247,7 @@ def test_keyset_window_without_a_published_vocabulary_is_served_per_parent(seek:
     assert newest is not None
     decoy = Issue(id=99, number=99, title="decoy")
     vars(decoy).update({WINDOW_ROW_NUMBER: 1, WINDOW_TOTAL_COUNT: 1})
-    wrapper = _WindowedConnectionRows(rows=[decoy], fallback=lambda: Issue.objects.all())
+    wrapper = _WindowedConnectionRows(rows=[decoy], fallback=Issue.objects.all)
     info = make_info(
         field_name="issues",
         selections="{ edges }",
@@ -280,7 +280,7 @@ def test_counted_keyset_window_without_seek_count_falls_back():
     # The window columns arrive as annotations: attributes Django sets on each row it builds.
     vars(row).update({WINDOW_ROW_NUMBER: 1, WINDOW_TOTAL_COUNT: 3})
     info = make_info(field_name="issues", selections="{ pageInfo { hasNextPage } }")
-    window = _WindowedConnectionRows(rows=[row], fallback=lambda: Issue.objects.all())
+    window = _WindowedConnectionRows(rows=[row], fallback=Issue.objects.all)
     assert (
         _resolve_from_window(
             connection_type,

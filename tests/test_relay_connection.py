@@ -2679,7 +2679,7 @@ def test_consume_window_unservable_window_runs_the_sync_fallback():
     connection_cls = _windowed_book_connection_class(total_count=True)
     window = _WindowedConnectionRows(
         rows=_COUNT_LESS_WINDOW_ROWS,
-        fallback=lambda: Book.objects.none(),
+        fallback=Book.objects.none,
     )
     conn = _consume_window(
         connection_cls,
@@ -2710,7 +2710,7 @@ async def test_consume_window_unservable_window_runs_the_async_fallback():
     connection_cls = _windowed_book_connection_class(total_count=True)
     window = _WindowedConnectionRows(
         rows=_COUNT_LESS_WINDOW_ROWS,
-        fallback=lambda: Book.objects.none(),
+        fallback=Book.objects.none,
     )
     pending = _consume_window(
         connection_cls,
@@ -2749,7 +2749,7 @@ def test_consume_window_offset_unwindowable_shape_propagates():
     from django_strawberry_framework.utils.connections import UnwindowableConnection
 
     connection_cls = _windowed_book_connection_class()
-    window = _WindowedConnectionRows(rows=[], fallback=lambda: Book.objects.none())
+    window = _WindowedConnectionRows(rows=[], fallback=Book.objects.none)
     with pytest.raises(UnwindowableConnection):
         _consume_window(
             connection_cls,
@@ -2815,7 +2815,7 @@ def _consume_consumer_prefix_window(cursor_prefix: str) -> object:
         _consumer_edge_book_connection_class(),
         _WindowedConnectionRows(
             rows=_window_rows(1, 2, 3),
-            fallback=lambda: Book.objects.none(),
+            fallback=Book.objects.none,
         ),
         info=make_info(),
         before=None,

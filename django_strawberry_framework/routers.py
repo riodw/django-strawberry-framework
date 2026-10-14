@@ -92,7 +92,8 @@ if TYPE_CHECKING:
             websocket_url_pattern: str = r"^graphql/?$",
             websocket_consumer_class: object = None,
             websocket_revalidation_window: float = _DEFAULT_REVALIDATION_WINDOW,
-        ) -> None: ...
+        ) -> None:
+            """Build the router; the runtime constructor in the builder is the one that runs."""
 
 
 # The one public symbol is resolved lazily via the PEP 562 module ``__getattr__``
@@ -260,7 +261,7 @@ def _require_factory_calling_convention(
     """
     try:
         signature = inspect.signature(factory)
-    except Exception:
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
         return
     try:
         _ = signature.bind(schema=schema)
@@ -398,7 +399,7 @@ def _build_router_class_uncached() -> type[ProtocolTypeRouter]:
     half raises its own actionable ``ImportError`` chaining the original
     (spec-041 Error shapes).
     """
-    global _router_class
+    global _router_class  # noqa: PLW0603 - module cache the eviction tests reset by name
 
     _ = require_channels()
 

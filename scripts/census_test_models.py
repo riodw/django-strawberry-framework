@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """Count the Django model classes declared anywhere under ``tests/``.
 
 A plain grep for ``models.Model`` misses a multi-table-inheritance or proxy

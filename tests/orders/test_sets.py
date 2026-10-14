@@ -1808,10 +1808,13 @@ def test_capture_scope_is_reset_after_an_exception_and_isolated_per_async_task()
     info = SimpleNamespace(context={"request": HttpRequest()})
     TitleInput = _keyword_constructor(OrderArgumentsFactory(TitleOrder).arguments)
 
-    with pytest.raises(RuntimeError, match="body failed"):
+    def body_that_raises():
         with capture_applied_order_normalization():
             assert _ORDER_NORMALIZATION_CAPTURE.get() is not None
             raise RuntimeError("body failed")
+
+    with pytest.raises(RuntimeError, match="body failed"):
+        body_that_raises()
     assert _ORDER_NORMALIZATION_CAPTURE.get() is None
 
     async def one_resolution(own_input: object):
@@ -2378,7 +2381,7 @@ def test_concurrent_threads_publishing_into_one_ledger_lose_nothing(
     def apply_one(copied: contextvars.Context, order_input: object):
         try:
             copied.run(ConcurrentOrder.apply_sync, order_input, Book.objects.all(), info)
-        except BaseException as error:
+        except BaseException as error:  # noqa: BLE001 - worker thread reports to the main thread
             errors.append(error)
 
     with capture_applied_order_normalization():
@@ -2499,6 +2502,9 @@ def test_input_has_active_terms_hostile_eq_and_repr():
         @override
         def __eq__(self, other: object):
             raise RuntimeError("hostile __eq__ called")
+
+        # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
+        __hash__ = None  # pyright: ignore[reportAssignmentType]
 
     class HostileReprTerm:
         def __init__(self, val: object):

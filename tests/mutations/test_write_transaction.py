@@ -46,7 +46,7 @@ from django.db.models import Model, QuerySet
 from django.db.models.signals import post_save
 from graphql_client import JSONObject
 from strawberry import relay
-from typing_extensions import override
+from typing_extensions import Self, override
 
 from django_strawberry_framework import (
     DjangoMutation,
@@ -297,7 +297,6 @@ async def test_concurrent_async_windows_each_hold_an_outermost_transaction_of_th
         if len(observations) == 2:
             both_open.set()
         await asyncio.wait_for(both_open.wait(), timeout=2)
-        return None
 
     monkeypatch.setattr(CoreExecutionContext, "execute_field", fake_execute_field)
     variables = {"id": _item_gid(1), "d": {"name": "Concurrent"}}
@@ -338,7 +337,6 @@ def test_concurrent_async_windows_on_two_event_loops_each_hold_their_own_transac
         with observation_lock:
             observations.append(observation)
         await asyncio.to_thread(both_open.wait)
-        return None
 
     monkeypatch.setattr(CoreExecutionContext, "execute_field", fake_execute_field)
     variables = {"id": _item_gid(1), "d": {"name": "CrossLoop"}}
@@ -934,7 +932,10 @@ async def test_a_window_cancelled_during_its_enter_still_exits_the_transaction_i
 
     with _connections_really_close():
         # A fresh connect on whichever thread the window's enter lands.
-        await sync_to_async(lambda: connections["default"].close(), thread_sensitive=True)()
+        await sync_to_async(
+            lambda: connections["default"].close(),  # noqa: PLW0108 - the connection is looked up on the sync thread, not here
+            thread_sensitive=True,
+        )()
         with _the_next_off_thread_connect(_slow_connect):
             cancelled = asyncio.create_task(
                 schema.execute(_CREATE_CATEGORY, variable_values=_create_variables("window-x")),
@@ -1436,7 +1437,7 @@ class _FakeBarrierCursor:
         self._connection = connection
         self._last: tuple[object, ...] | None = None
 
-    def __enter__(self) -> _FakeBarrierCursor:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> bool:

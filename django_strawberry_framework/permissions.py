@@ -120,6 +120,7 @@ from .utils.querysets import (
     _CASCADE_SEAL_POLICY,
     _COMBINED_WHAT,
     _UNSEALABLE_STATE_CAUSES,
+    SyncMisuseError,
     _defect_message,
     _prepared_visibility_source,
     apply_type_visibility_sync,
@@ -127,20 +128,18 @@ from .utils.querysets import (
     model_for,
     run_in_one_sync_boundary,
 )
-
-# ``SyncMisuseError`` is re-exported (redundant-alias form, the established
-# ``types/relay.py`` convention) so the cascade's own error surface is importable
-# from this module (``from django_strawberry_framework.permissions import
-# SyncMisuseError``) without reaching into the private ``utils`` package. It is
-# already in the package-root ``__all__`` via ``types``, so this re-export adds no
-# new public name.
-from .utils.querysets import SyncMisuseError as SyncMisuseError
 from .utils.relations import is_single_column_foreign_key
 
 if TYPE_CHECKING:
     from .types.base import DjangoType
     from .utils.typing import ForeignKeyField, ModelField
 
+# ``SyncMisuseError`` is re-exported so the cascade's own error surface is
+# importable from this module (``from django_strawberry_framework.permissions
+# import SyncMisuseError``) without reaching into the private ``utils`` package.
+# It is already in the package-root ``__all__`` via ``types``, so this adds no new
+# public name.
+__all__ = ("SyncMisuseError", "aapply_cascade_permissions", "apply_cascade_permissions")
 
 _M = TypeVar("_M", bound=models.Model)
 _R = TypeVar("_R")

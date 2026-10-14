@@ -629,17 +629,41 @@ def _symbol_outcome(
                 f"Prefix an upstream ref with its package (`django_graphene_filters/"
                 f"{cited}`), or correct the path."
             )
-        return Outcome(relative, citation, False, require_file, None, names, message=message)
+        return Outcome(
+            relative,
+            citation,
+            resolved=False,
+            violation=require_file,
+            target=None,
+            candidates=names,
+            message=message,
+        )
     for path in candidates:
         if symbol in module_symbols(path):
-            return Outcome(relative, citation, True, False, _relative(path), names)
+            return Outcome(
+                relative,
+                citation,
+                resolved=True,
+                violation=False,
+                target=_relative(path),
+                candidates=names,
+            )
     homes = symbol_homes(symbol, corpus)
     where = ", ".join(homes[:2]) if homes else "nowhere in the tree"
     message = (
         f"{relative}:{citation.line}: cites `{cited}::{symbol}` -- "
         f"`{cited}` defines no `{symbol}`. Now lives in: {where}."
     )
-    return Outcome(relative, citation, False, True, None, names, tuple(homes), message)
+    return Outcome(
+        relative,
+        citation,
+        resolved=False,
+        violation=True,
+        target=None,
+        candidates=names,
+        hint=tuple(homes),
+        message=message,
+    )
 
 
 def _enclosing_symbols(path: Path, substring: str) -> tuple[str, ...]:
@@ -675,7 +699,15 @@ def _substring_outcome(
     names = tuple(_relative(path) for path in candidates)
     if not candidates:
         message = f"{at} no such file." if require_file else None
-        return Outcome(relative, citation, False, require_file, None, names, message=message)
+        return Outcome(
+            relative,
+            citation,
+            resolved=False,
+            violation=require_file,
+            target=None,
+            candidates=names,
+            message=message,
+        )
 
     regions: list[tuple[Path, str]] = []
     for path in candidates:
@@ -691,7 +723,16 @@ def _substring_outcome(
         homes = tuple(symbol_homes(symbol or "", corpus))
         where = ", ".join(homes[:2]) if homes else "nowhere in the tree"
         message = f"{at} `{cited}` defines no `{symbol}`. Now lives in: {where}."
-        return Outcome(relative, citation, False, True, None, names, homes, message)
+        return Outcome(
+            relative,
+            citation,
+            resolved=False,
+            violation=True,
+            target=None,
+            candidates=names,
+            hint=homes,
+            message=message,
+        )
 
     counts: dict[Path, int] = {}
     for path, region in regions:
@@ -702,14 +743,31 @@ def _substring_outcome(
         hint = tuple(name for path in candidates for name in _enclosing_symbols(path, substring))
         where = ", ".join(hint[:2]) if hint else "nowhere in the cited file"
         message = f"{at} the quoted text does not occur in {scope}. Now lives in: {where}."
-        return Outcome(relative, citation, False, True, None, names, hint, message)
+        return Outcome(
+            relative,
+            citation,
+            resolved=False,
+            violation=True,
+            target=None,
+            candidates=names,
+            hint=hint,
+            message=message,
+        )
     warning = None
     if all(counts[path] > 1 for path in holding):
         warning = (
             f"{at} the quoted text occurs {counts[holding[0]]} times in "
             f"`{_relative(holding[0])}`; a pinpoint should be unique."
         )
-    return Outcome(relative, citation, True, False, _relative(holding[0]), names, warning=warning)
+    return Outcome(
+        relative,
+        citation,
+        resolved=True,
+        violation=False,
+        target=_relative(holding[0]),
+        candidates=names,
+        warning=warning,
+    )
 
 
 def evaluate_source(

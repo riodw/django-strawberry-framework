@@ -251,85 +251,15 @@ ignore = [
     "TD003",  # TODO issue link: the anchor names a spec, not an issue
     "TID252", # relative imports inside the package
     "TRY003", # long message passed to the exception constructor
-    # Ratchet: real sites still to fix (docs/ruffing.md); delete a line once its sites are fixed.
-    "ANN401",
-    "BLE001",
-    "D107",
-    "DJ001",
-    "DJ008",
-    "DJ012",
-    "DTZ001",
-    "DTZ011",
-    "EXE001",
-    "FBT001",
-    "FBT002",
-    "FBT003",
-    "FURB110",
-    "FURB136",
-    "FURB157",
-    "FURB167",
-    "FURB188",
-    "PIE790",
-    "PIE810",
-    "PLC0105",
-    "PLC0206",
-    "PLC0207",
-    "PLC0414",
-    "PLR0402",
-    "PLR1711",
-    "PLR1714",
-    "PLW0108",
-    "PLW0603",
-    "PLW1510",
-    "PLW1641",
-    "PLW2901",
-    "PT006",
-    "PT007",
-    "PT009",
-    "PT011",
-    "PT012",
-    "PT013",
-    "PT014",
-    "PT017",
-    "PT018",
-    "PT019",
-    "PT022",
-    "PT027",
-    "PT030",
-    "PTH101",
-    "PTH105",
-    "PTH107",
-    "PTH115",
-    "PTH116",
-    "PTH117",
-    "PTH123",
-    "PTH201",
-    "PTH211",
-    "PYI034",
-    "PYI036",
-    "RET501",
-    "RET504",
-    "RET505",
-    "S101",
-    "S102",
-    "S105",
-    "S106",
-    "S107",
-    "S108",
-    "S110",
-    "S112",
-    "S301",
-    "S311",
-    "S324",
-    "S603",
-    "S607",
-    "S608",
-    "S610",
-    "SLOT000",
-    "SLOT001",
-    "TRY300",
-    "TRY301",
 ]
+# The package logger is re-exported from `django_strawberry_framework`; naming it lets BLE001 see a
+# handler that logs the exception.
+logger-objects = ["django_strawberry_framework.logger"]
+
+[tool.ruff.lint.flake8-annotations]
+# `*args: Any, **kwargs: Any` forwards verbatim to a third-party signature that varies across the
+# supported Strawberry range; each site carries its own `# basedpyright:` reason.
+allow-star-arg-any = true
 
 [tool.ruff.lint.flake8-import-conventions.aliases]
 # ruff's default alias map minus `datetime = dt`: the project imports `datetime` plainly.
@@ -384,6 +314,13 @@ known-first-party = ["django_strawberry_framework"]
     "ARG",    # an unused arg is an injected fixture or a framework-fixed signature; enforced on the package
     "S101",   # assert is the pytest idiom
     "FBT",    # parametrized `flag: bool` arguments and helper calls; enforced on the package and scripts
+    "DJ008",  # throwaway test models never reach the admin or a shell; a `__str__` on each would be unread code
+    "SLOT000", # hostile `str`-subclass fixtures model consumer values, which carry an instance `__dict__`
+    "SLOT001", # hostile `tuple`-subclass fixtures, same reason
+    "S106",   # fixture credentials, and names (token, secret) that only match the rule's heuristic
+    "S107",   # same
+    "S603",   # subprocess runs git/uv/ruff/sys.executable by name with a fixed argv
+    "S607",   # same
 ]
 "examples/**/*.py" = [
     "D",      # docstrings not required in example code
@@ -397,12 +334,17 @@ known-first-party = ["django_strawberry_framework"]
     "ARG",    # an unused arg is an injected fixture or a framework-fixed signature; enforced on the package
     "S101",   # assert is the pytest idiom
     "FBT",    # parametrized `flag: bool` arguments and helper calls; enforced on the package and scripts
+    "SLOT000", # fakeshop's hostile `str`-subclass fixtures, as in tests/
+    "S105",   # the never-deployed example's dev SECRET_KEY, seed password and fixture credentials
+    "S106",   # same
 ]
 # PERF: one-shot build/maintenance scripts are not a performance surface.
 # T201: print is the CLI output of scripts and the root tools.
+# S603/S607: dev tooling runs the maintainer's own git/uv/ruff/docker/sys.executable by name, with no
+# untrusted argv; the package and examples have no subprocess calls and stay checked.
 # INP001: these folders deliberately have no `__init__.py` (plain scripts, pytest rootdir-relative
 # test modules, and fakeshop's top-level modules on `pythonpath`).
-"scripts/**/*.py" = ["PERF", "T201", "INP001"]
+"scripts/**/*.py" = ["PERF", "T201", "INP001", "S603", "S607"]
 "line_count.py" = ["T201"]
 "docs/dry/export_dry_review.py" = ["T201", "INP001"]
 "examples/fakeshop/*.py" = ["INP001"]

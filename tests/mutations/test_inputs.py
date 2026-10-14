@@ -873,7 +873,8 @@ def test_type_name_narrowed_shape_is_deterministic_and_distinct():
     )
     assert name_a == name_b
     assert name_a != "ItemInput"
-    assert name_a.startswith("Item") and name_a.endswith("Input")
+    assert name_a.startswith("Item")
+    assert name_a.endswith("Input")
 
 
 def test_type_name_token_boundaries_do_not_collide():
@@ -902,7 +903,8 @@ def test_type_name_token_boundaries_do_not_collide():
         full_field_names=full,
     )
     assert left != right
-    assert left == "ItemA_ubCInput" and right == "ItemAB_ucInput"
+    assert left == "ItemA_ubCInput"
+    assert right == "ItemAB_ucInput"
 
 
 def test_type_name_digit_boundary_narrowings_stay_distinct():

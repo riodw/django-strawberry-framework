@@ -803,7 +803,7 @@ def prune_unsupportable_select_related(
     unsupported = [
         path
         for path in plan.select_related
-        if not _select_path_traversable(path, names, defer_mode, model)
+        if not _select_path_traversable(path, names, defer_mode=defer_mode, model=model)
     ]
     if not unsupported:
         return plan
@@ -844,6 +844,7 @@ def _consumer_projection(queryset: object) -> tuple[frozenset[str], bool] | None
 def _select_path_traversable(
     path: str,
     names: frozenset[str],
+    *,
     defer_mode: bool,
     model: type[models.Model] | None,
 ) -> bool:
@@ -855,12 +856,13 @@ def _select_path_traversable(
     conservatively dropping the path costs a fallback query, never a
     ``FieldError``.
     """
-    return _select_path_missing_connectors(path, names, defer_mode, model) == ()
+    return _select_path_missing_connectors(path, names, defer_mode=defer_mode, model=model) == ()
 
 
 def _select_path_missing_connectors(
     path: str,
     names: frozenset[str],
+    *,
     defer_mode: bool,
     model: type[models.Model] | None,
 ) -> tuple[str, ...] | None:
@@ -955,7 +957,12 @@ def apply_projection(queryset: QuerySet[_M], names: Sequence[str]) -> QuerySet[_
     projection = frozenset(entries)
     extras: list[str] = []
     for path in sorted(_flatten_select_related(queryset.query.select_related)):
-        missing = _select_path_missing_connectors(path, projection, False, model)
+        missing = _select_path_missing_connectors(
+            path,
+            projection,
+            defer_mode=False,
+            model=model,
+        )
         if missing is not None:
             append_unique_many(extras, missing)
     for attname in _prefetch_carrier_attnames(queryset):

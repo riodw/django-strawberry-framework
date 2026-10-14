@@ -125,7 +125,8 @@ class TestLookupPaths:
         result = lookup_paths(plan)
         assert result == {"category", "items"}
         # A fresh ``set`` copy, not the frozenset itself.
-        assert isinstance(result, set) and not isinstance(result, frozenset)
+        assert isinstance(result, set)
+        assert not isinstance(result, frozenset)
 
 
 def test_resolver_key_includes_parent_type_and_runtime_path():
@@ -1604,7 +1605,15 @@ def test_consumer_projection_and_traversal_defensive_shapes():
     assert _consumer_projection(SimpleNamespace()) is None
     malformed = SimpleNamespace(query=SimpleNamespace(deferred_loading=("only-one",)))
     assert _consumer_projection(malformed) is None
-    assert _select_path_traversable("title__upper", frozenset({"title"}), False, Book) is False
+    assert (
+        _select_path_traversable(
+            "title__upper",
+            frozenset({"title"}),
+            defer_mode=False,
+            model=Book,
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize(
@@ -1627,7 +1636,15 @@ def test_select_path_missing_connectors(
     expected: tuple[str, ...] | None,
 ):
     """The ``.only()`` entries a joined path still needs, or ``None`` when no entry can help."""
-    assert _select_path_missing_connectors(path, frozenset(names), defer_mode, Entry) == expected
+    assert (
+        _select_path_missing_connectors(
+            path,
+            frozenset(names),
+            defer_mode=defer_mode,
+            model=Entry,
+        )
+        == expected
+    )
 
 
 def test_apply_projection_leaves_a_filtered_relation_join_alone():

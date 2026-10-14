@@ -103,10 +103,10 @@ from ..utils.converters import (
 # ``Serializer`` (single) / ``ListSerializer`` (many), whose recursion is owned
 # by ``rest_framework/inputs.py`` (this converter module has no knowledge of
 # the recursion; it only names the kinds + detects a nested field).
-from ..utils.inputs import FILE as FILE
-from ..utils.inputs import RELATION_MULTI as RELATION_MULTI
-from ..utils.inputs import RELATION_SINGLE as RELATION_SINGLE
-from ..utils.inputs import SCALAR as SCALAR
+from ..utils.inputs import FILE as FILE  # noqa: PLC0414 - explicit re-export
+from ..utils.inputs import RELATION_MULTI as RELATION_MULTI  # noqa: PLC0414 - explicit re-export
+from ..utils.inputs import RELATION_SINGLE as RELATION_SINGLE  # noqa: PLC0414 - explicit re-export
+from ..utils.inputs import SCALAR as SCALAR  # noqa: PLC0414 - explicit re-export
 from ..utils.inputs import FieldConversionBase, InputFieldSpec
 from ..utils.strings import graphql_camel_name, pascal_case
 from .accessors import child_relation_of, declared_fields_of, is_serializer, list_child_of
@@ -620,7 +620,7 @@ def _unsupported_serializer_field(field: DRFField) -> ConfigurationError:
     """
     try:
         field_name = repr(getattr(field, "field_name", None))
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         field_name = "<unavailable>"
     return ConfigurationError(
         f"Unsupported serializer field type {_safe_type_name(field)!r} on serializer "
@@ -765,7 +765,7 @@ def serializer_field_description(field: DRFField) -> str | None:
     except BaseException as exc:
         try:
             field_name = _safe_arg_repr(getattr(field, "field_name", None))
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - hostile object, contained by design
             field_name = "<unavailable>"
         raise ConfigurationError(
             f"Serializer field {field_name} has metadata that cannot be rendered as a GraphQL "
@@ -822,7 +822,7 @@ def backing_model_field(model: type[models.Model] | None, field: DRFField) -> Mo
         field_label=f"Serializer field {field.field_name!r}",
         must_map_to="a model-column-backed field must map to a single concrete column",
     )
-    source = field.source if field.source else _bound_field_name(field)
+    source = field.source or _bound_field_name(field)
     try:
         return model._meta.get_field(source)
     except FieldDoesNotExist:
@@ -934,7 +934,7 @@ def _stored_choice_value(column: ConcreteField, value: object) -> object:
     """
     try:
         return column.to_python(value)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return value
 
 

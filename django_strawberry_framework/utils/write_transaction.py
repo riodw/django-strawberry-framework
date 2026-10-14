@@ -209,6 +209,7 @@ class WriteAliasContext:
     )
 
     def __init__(self, alias: str, *, lock: bool) -> None:
+        """Pin ``alias`` (and whether it is ``lock``-ed) with no authorized pk yet."""
         self.alias: str = alias
         self.lock: bool = lock
         self.authorized_pk: object = None
@@ -622,7 +623,7 @@ def pipeline_alias_guard(owner: str, alias: str) -> Generator[None, None, None]:
         execute: _Execute,
         sql: str,
         params: object,
-        many: bool,
+        many: bool,  # noqa: FBT001 - Django's execute_wrapper passes it positionally
         context: dict[str, object],
     ) -> object:
         if (pipeline is None or not pipeline.write_phase) and not is_read_only_sql(sql):
@@ -640,7 +641,7 @@ def pipeline_alias_guard(owner: str, alias: str) -> Generator[None, None, None]:
             execute: _Execute,
             sql: str,
             params: object,
-            many: bool,
+            many: bool,  # noqa: FBT001 - Django's execute_wrapper passes it positionally
             context: dict[str, object],
         ) -> object:
             # The ONE narrow exception: during the authorization phase, statements
@@ -789,7 +790,7 @@ def column_values_match(field: ConcreteField, first: object, second: object) -> 
     """
     try:
         return field.to_python(first) == field.to_python(second)
-    except Exception:
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
         return False
 
 
@@ -908,9 +909,11 @@ class _FileNameSnapshot(_ValueSnapshot):
         """
         try:
             current_name = current.name if isinstance(current, FieldFile) else current
-            return current_name == self.name
-        except Exception:
+            matches = current_name == self.name
+        except Exception:  # noqa: BLE001 - consumer code may raise anything
             return False
+        else:
+            return matches
 
 
 # The node budget for one field value's structural fingerprint. Consumer-
@@ -1144,7 +1147,7 @@ def assert_no_target_drift(owner: str, instance: models.Model) -> None:
                 drifted = current is not value and current != value
         except ConfigurationError:
             raise
-        except Exception:
+        except Exception:  # noqa: BLE001 - consumer code may raise anything
             # The comparison read itself is consumer-reachable surface (the code
             # this check polices can plant a hostile ``__eq__`` or break a
             # descriptor). An UNREADABLE comparison is drift the check cannot

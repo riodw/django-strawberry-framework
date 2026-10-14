@@ -159,7 +159,7 @@ def choice_fixture_model() -> type[models.Model]:
             choices=STATUS_CHOICES,
         )
         nullable_status: "models.TextField[str | Combinable | None, str | None]" = (
-            models.TextField(choices=STATUS_CHOICES, null=True)
+            models.TextField(choices=STATUS_CHOICES, null=True)  # noqa: DJ001 - NULL is the fixture input
         )
 
         class Meta:
@@ -491,7 +491,7 @@ def _blank_choice_model(
     if null:
 
         class NullableBlankChoiceFixture(models.Model):
-            status: "models.TextField[str | Combinable | None, str | None]" = models.TextField(
+            status: "models.TextField[str | Combinable | None, str | None]" = models.TextField(  # noqa: DJ001 - NULL is the fixture input
                 choices=hostile_choices,
                 blank=blank,
                 null=True,
@@ -876,7 +876,7 @@ def test_nullable_empty_label_choice_column_writes_null_as_null():
     from django_strawberry_framework import DjangoMutation, DjangoMutationField, DjangoSchema
 
     class EmptyLabelWriteOwner(models.Model):
-        status: "models.TextField[str | Combinable | None, str | None]" = models.TextField(
+        status: "models.TextField[str | Combinable | None, str | None]" = models.TextField(  # noqa: DJ001 - NULL is the fixture input
             choices=_Condition.choices,
             null=True,
             blank=True,
@@ -1507,8 +1507,6 @@ class _FakeHStoreField(models.Field[object, object]):
     before declaring a DjangoType using this field; otherwise convert_scalar's
     HStore branch never dispatches.
     """
-
-    pass
 
 
 def test_big_auto_field_still_maps_to_int():

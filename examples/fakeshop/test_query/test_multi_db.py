@@ -183,10 +183,9 @@ def _build_list_field_routing_mismatch_schema(
     _current["schema"] = None
 
 
+@pytest.mark.usefixtures("_build_list_field_routing_mismatch_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_post_orderset_routing_mismatch_rejected_on_sharded_db(
-    _build_list_field_routing_mismatch_schema: None,
-):
+def test_post_orderset_routing_mismatch_rejected_on_sharded_db():
     """Post-OrderSet validation rejects database routing intent mismatch on sharded DB."""
     models.Branch.objects.using("shard_b").create(name="Branch-ShardB", city="Boston")
     models.Branch.objects.using("default").create(name="Branch-Default", city="Boston")
@@ -256,10 +255,9 @@ def _build_connection_routing_mismatch_schema(
     _current["schema"] = None
 
 
+@pytest.mark.usefixtures("_build_connection_routing_mismatch_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_post_orderset_routing_mismatch_rejected_on_connection_field(
-    _build_connection_routing_mismatch_schema: None,
-):
+def test_post_orderset_routing_mismatch_rejected_on_connection_field():
     """The connection field runs the same post-OrderSet routing seal the list field runs.
 
     Without it the Relay window would be taken on the ``default`` rows the
@@ -340,10 +338,9 @@ def _build_list_field_hints_mismatch_schema(
     _current["schema"] = None
 
 
+@pytest.mark.usefixtures("_build_list_field_hints_mismatch_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_post_orderset_hints_routing_mismatch_rejected_on_sharded_db(
-    _build_list_field_hints_mismatch_schema: None,
-):
+def test_post_orderset_hints_routing_mismatch_rejected_on_sharded_db():
     """Post-OrderSet validation rejects routing hints mismatch when _db is None on both sides."""
     models.Branch.objects.using("default").create(name="Branch-Default", city="Boston")
 
@@ -418,10 +415,9 @@ def _branch_sql(captured: list[dict[str, str]]) -> list[str]:
     return [q["sql"] for q in captured if "library_branch" in q["sql"].lower()]
 
 
+@pytest.mark.usefixtures("_build_list_field_in_place_routing_mutation_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_post_orderset_in_place_routing_mutation_rejected_on_sharded_db(
-    _build_list_field_in_place_routing_mutation_schema: None,
-):
+def test_post_orderset_in_place_routing_mutation_rejected_on_sharded_db():
     """Routing is snapshotted BEFORE ``apply_sync`` runs, so an in-place rewrite cannot pass.
 
     The override receives the sealed ``shard_b`` queryset, points it at ``default``
@@ -494,7 +490,7 @@ class _IdentitySensitiveRouter:
 
 
 @pytest.fixture
-def _build_list_field_identity_token_schema(
+def identity_token_swap(
     _reload_project_schema_for_acceptance_tests: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[dict[str, bool]]:
@@ -533,7 +529,7 @@ def _build_list_field_identity_token_schema(
 
 @pytest.mark.django_db(databases=["default", "shard_b"])
 def test_post_orderset_equal_but_distinct_hint_token_rejected_under_identity_router(
-    _build_list_field_identity_token_schema: dict[str, bool],
+    identity_token_swap: dict[str, bool],
 ):
     """An equal-but-not-identical hint value is a routing change under a legal identity router.
 
@@ -543,7 +539,7 @@ def test_post_orderset_equal_but_distinct_hint_token_rejected_under_identity_rou
     same router would have sent that read to ``default``, so the seal rejects the
     result before any row executes and no ``library_branch`` SQL reaches either alias.
     """
-    swap = _build_list_field_identity_token_schema
+    swap = identity_token_swap
     models.Branch.objects.using("shard_b").create(name="Branch-ShardB", city="Boston")
     models.Branch.objects.using("default").create(name="Branch-Default", city="Boston")
 
@@ -625,7 +621,7 @@ class _NestedTenantRouter:
 
 
 @pytest.fixture
-def _build_list_field_mutable_hint_schema(
+def mutable_hint_token(
     _reload_project_schema_for_acceptance_tests: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[dict[str, str]]:
@@ -665,7 +661,7 @@ def _build_list_field_mutable_hint_schema(
 
 @pytest.mark.django_db(databases=["default", "shard_b"])
 def test_post_orderset_mutable_hint_cannot_reroute_the_completed_read(
-    _build_list_field_mutable_hint_schema: dict[str, str],
+    mutable_hint_token: dict[str, str],
 ):
     """A hint mutated behind a preserved identity cannot move the read to another alias.
 
@@ -679,7 +675,7 @@ def test_post_orderset_mutable_hint_cannot_reroute_the_completed_read(
     distinguishable ``default`` row does not, and no ``library_branch`` SQL
     reaches ``default`` at all.
     """
-    token = _build_list_field_mutable_hint_schema
+    token = mutable_hint_token
     models.Branch.objects.using("shard_b").create(name="Branch-ShardB", city="Boston")
     models.Branch.objects.using("default").create(name="Branch-Default", city="Boston")
 
@@ -861,8 +857,9 @@ def _seed_book_chain(alias: str, *, title: str) -> "models.Book":
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("_build_test_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_using_shard_b_resolver_returns_rows_seeded_on_shard_b(_build_test_schema: None):
+def test_using_shard_b_resolver_returns_rows_seeded_on_shard_b():
     """Seeded ``shard_b`` rows are visible through a ``.using('shard_b')`` resolver."""
     _seed_book_chain("shard_b", title="A")
     _seed_book_chain("shard_b", title="B")
@@ -888,10 +885,9 @@ def test_using_shard_b_resolver_returns_rows_seeded_on_shard_b(_build_test_schem
     assert titles == {"A", "B"}
 
 
+@pytest.mark.usefixtures("_build_test_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_cross_shard_isolation_default_rows_not_visible_via_shard_b_resolver(
-    _build_test_schema: None,
-):
+def test_cross_shard_isolation_default_rows_not_visible_via_shard_b_resolver():
     """A chain seeded on ``default`` is invisible to a ``.using('shard_b')`` resolver."""
     _seed_book_chain("default", title="default-only")
     _seed_book_chain("shard_b", title="shard-b-only")
@@ -911,8 +907,9 @@ def test_cross_shard_isolation_default_rows_not_visible_via_shard_b_resolver(
     assert "default-only" not in titles  # explicit negative pin
 
 
+@pytest.mark.usefixtures("_build_debug_test_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_debug_extension_captures_shard_b_alias_rows(_build_debug_test_schema: None):
+def test_debug_extension_captures_shard_b_alias_rows():
     """The real multi-database capture proof (spec-044 Test plan scenario 16).
 
     A live query routed to ``shard_b`` through a debug-enabled probe schema
@@ -996,10 +993,9 @@ def _seed_loan_relation_graph_on_shard_b() -> dict[str, int]:
     return {"relation_a": relation_a.pk, "relation_b": relation_b.pk, "unrelated": unrelated.pk}
 
 
+@pytest.mark.usefixtures("_build_loan_filter_test_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_row_preserving_relational_leaf_predicate_executes_on_shard_b_alias(
-    _build_loan_filter_test_schema: None,
-):
+def test_row_preserving_relational_leaf_predicate_executes_on_shard_b_alias():
     """The relational-leaf predicate runs on the ``shard_b`` alias.
 
     The production ``LoanFilter`` deep leaf ``book__loans__patron__email`` (spelled
@@ -1163,8 +1159,9 @@ def _item_gid(pk: int) -> str:
     return str(relay_module.GlobalID(type_name="products.item", node_id=str(pk)))
 
 
+@pytest.mark.usefixtures("_project_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"], transaction=True)
-def test_mutation_write_pins_locate_write_and_refetch_to_the_write_alias(_project_schema: None):
+def test_mutation_write_pins_locate_write_and_refetch_to_the_write_alias():
     """Under a divergent read/write router the WHOLE update pipeline rides ``shard_b``.
 
     The locate (visibility), the write, and the post-write re-fetch must all use
@@ -1299,8 +1296,9 @@ def test_custom_nodeid_mutation_resolves_real_pk_on_write_alias():
     )
 
 
+@pytest.mark.usefixtures("_project_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"], transaction=True)
-def test_mutation_validation_envelope_rolls_back_on_the_write_alias(_project_schema: None):
+def test_mutation_validation_envelope_rolls_back_on_the_write_alias():
     """A validation-envelope failure rolls back on ``shard_b`` (the pinned alias).
 
     Two shard_b items share a category; renaming one to the other's name trips
@@ -1415,10 +1413,9 @@ def _library_gid(type_name: str, pk: int) -> str:
     return str(relay_module.GlobalID(type_name=type_name, node_id=str(pk)))
 
 
+@pytest.mark.usefixtures("_project_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"], transaction=True)
-def test_serializer_mutation_pins_locate_relation_save_and_refetch_to_write_alias(
-    _project_schema: None,
-):
+def test_serializer_mutation_pins_locate_relation_save_and_refetch_to_write_alias():
     """Under a divergent read/write router the WHOLE serializer update rides ``shard_b``.
 
     The genre attached exists ONLY on ``shard_b``, so the relation decode, DRF's
@@ -1465,8 +1462,9 @@ def test_serializer_mutation_pins_locate_relation_save_and_refetch_to_write_alia
     assert default_book.genres.count() == 0
 
 
+@pytest.mark.usefixtures("_project_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"], transaction=True)
-def test_serializer_unique_validator_reads_write_alias(_project_schema: None):
+def test_serializer_unique_validator_reads_write_alias():
     """A default-only collision does not poison validation of the shard_b update."""
     _seed_same_pk_book_pair(91006)
     default_shelf = models.Shelf.objects.using("default").get(pk=91006)
@@ -1503,8 +1501,9 @@ def test_serializer_unique_validator_reads_write_alias(_project_schema: None):
     assert models.Book.objects.using("default").get(pk=91006).title == "ser-book-default"
 
 
+@pytest.mark.usefixtures("_project_schema")
 @pytest.mark.django_db(databases=["default", "shard_b"], transaction=True)
-def test_serializer_mutation_envelope_rolls_back_on_the_write_alias(_project_schema: None):
+def test_serializer_mutation_envelope_rolls_back_on_the_write_alias():
     """A serializer save-time failure rolls back on ``shard_b`` (the pinned alias).
 
     Renaming the shard_b book to a same-shelf sibling's title trips the

@@ -39,7 +39,7 @@ Spec: [Decision 3 — Module and test locations: flat `permissions.py` + `tests/
 
 ### Justification
 
-The card says "`django_strawberry_framework/permissions.py` or a `permissions/` package if the surface grows" — the surface is two functions and a `ContextVar`; a package is structure without content. The upstream's own `permissions.py` is a flat module. When `0.1.1` adds the FieldSet read gates the *fieldset* package grows, not this module. The redundant-alias `SyncMisuseError` re-export widens the module's import surface and not the package's (the name is already in the package-root `__all__` via `types`), so it needs no public-surface decision of its own.
+The card says "`django_strawberry_framework/permissions.py` or a `permissions/` package if the surface grows" — the surface is two functions and a `ContextVar`; a package is structure without content. The upstream's own `permissions.py` is a flat module. When `0.1.1` adds the FieldSet read gates the *fieldset* package grows, not this module. The `__all__`-listed `SyncMisuseError` re-export widens the module's import surface and not the package's (the name is already in the package-root `__all__` via `types`), so it needs no public-surface decision of its own.
 
 ### Alternatives considered (and rejected)
 

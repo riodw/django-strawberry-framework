@@ -427,7 +427,7 @@ def _decode_input_object(
 def _decode_nested(
     spec: InputFieldSpec,
     # basedpyright: EAFP: a client input value; the try/except around ``list`` guards it
-    value: Any,  # pyright: ignore[reportExplicitAny]
+    value: Any,  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - reason above
     info: Info[object, object],
     *,
     path_prefix: str,
@@ -448,7 +448,7 @@ def _decode_nested(
     if spec.kind == NESTED_MULTI:
         try:
             items = list(value)
-        except Exception:
+        except Exception:  # noqa: BLE001 - consumer code may raise anything
             return None, field_error(
                 path_prefix,
                 "Expected a list of items.",
@@ -665,15 +665,15 @@ def _upload_metadata(item: _FileAny) -> UploadMetadata:
     """
     try:
         name = getattr(item, "name", None)
-    except Exception:
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
         name = None
     try:
         size = item.size
-    except Exception:
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
         size = None
     try:
         content_type = getattr(item, "content_type", None)
-    except Exception:
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
         content_type = None
     return UploadMetadata(
         name=name,
@@ -1454,7 +1454,7 @@ def _pin_validator_querysets(serializer: DRFField, alias: str, *, path: str = ""
     """
 
     # basedpyright: the copy's ``.queryset`` is written; drf-stubs' Validator declares none
-    def _pinned(validators: Any, owner: str) -> list[Any]:  # pyright: ignore[reportExplicitAny]
+    def _pinned(validators: Any, owner: str) -> list[Any]:  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - reason above
         pinned: list[object] = []
         for validator in validators:
             queryset = getattr(validator, "queryset", None)
@@ -2261,6 +2261,7 @@ def _write_witness(
     def _record(
         sender: object,
         instance: models.Model,
+        *,
         created: bool,
         using: str | None,
         **kwargs: object,

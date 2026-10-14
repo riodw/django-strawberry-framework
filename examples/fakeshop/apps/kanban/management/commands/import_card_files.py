@@ -160,7 +160,7 @@ class Command(BaseCommand):
                         raise CommandError("; ".join(error.messages)) from error
                     updated.append(str(card))
                 if dry_run:
-                    raise _DryRunRollbackError
+                    raise _DryRunRollbackError  # noqa: TRY301 - the exception is what rolls the atomic block back
         except _DryRunRollbackError:
             self.stdout.write(self.style.WARNING("Dry run - rolled back. Would update:"))
             for line in updated:

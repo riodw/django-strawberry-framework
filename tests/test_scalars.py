@@ -108,7 +108,7 @@ def test_bigint_serialize_rejects_non_int_types():
     with pytest.raises(TypeError):
         _serialize_bigint("123")
     with pytest.raises(TypeError):
-        _serialize_bigint(Decimal("123"))
+        _serialize_bigint(Decimal(123))
     with pytest.raises(TypeError):
         _serialize_bigint(None)
 
@@ -126,19 +126,19 @@ def test_bigint_serialize_rejects_non_int_types():
 
 def test_bigint_rejects_python_bool():
     """Both ``True`` and ``False`` raise ``ValueError``."""
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="does not accept boolean"):
         _parse_bigint(True)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="does not accept boolean"):
         _parse_bigint(False)
 
 
 def test_bigint_rejects_python_float():
     """Silent-truncation guard: ``int(1.9) == 1`` would otherwise slip through."""
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="BigInt cannot parse float"):
         _parse_bigint(1.9)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="BigInt cannot parse float"):
         _parse_bigint(0.0)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="BigInt cannot parse float"):
         _parse_bigint(-1.0)
 
 
@@ -149,7 +149,7 @@ def test_bigint_rejects_none():
     unit-test calls. Tested for defense in depth so a future reader doesn't
     try to remove the parser's ``None`` check as "unreachable".
     """
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="BigInt cannot parse NoneType"):
         _parse_bigint(None)
 
 
@@ -229,6 +229,7 @@ def test_package_import_does_not_emit_strawberry_deprecation_warning():
         capture_output=True,
         text=True,
         timeout=15,
+        check=False,
     )
     assert result.returncode == 0, (
         f"Importing the package under -W error::DeprecationWarning failed:\nstderr: {result.stderr}"
@@ -340,7 +341,7 @@ def test_scalar_collision_label_falls_back_when_class_name_metadata_is_unreadabl
 def test_strawberry_config_collision_with_package_scalar_raises_value_error():
     """Collision with a package-defined scalar key raises ``ValueError`` (Decision 4)."""
     alt_def = strawberry.scalar(name="AltBigInt", serialize=str, parse_value=int)
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ValueError, match="cannot redeclare") as excinfo:
         strawberry_config(extra_scalar_map={BigInt: alt_def})
     message = str(excinfo.value)
     assert "BigInt" in message
@@ -374,7 +375,7 @@ def test_strawberry_config_collision_message_survives_hostile_key():
     assert _safe_scalar_map_key_label(hostile) == "<unprintable _HostileKey>"
 
     custom_def = strawberry.scalar(name="HostileKey", serialize=str, parse_value=str)
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ValueError, match="cannot redeclare") as excinfo:
         strawberry_config(extra_scalar_map={hostile: custom_def})
     assert "cannot redeclare" in str(excinfo.value)
 
@@ -499,17 +500,17 @@ def test_strawberry_config_combines_extra_scalar_map_and_config_kwargs():
 
 def test_strawberry_config_rejects_scalar_map_kwarg():
     """``scalar_map=`` is structurally rejected regardless of payload (Error shapes)."""
-    with pytest.raises(ValueError) as excinfo_empty:
+    with pytest.raises(ValueError, match="owns scalar_map") as excinfo_empty:
         strawberry_config(scalar_map={})
     message_empty = str(excinfo_empty.value)
     assert "scalar_map" in message_empty
     assert "extra_scalar_map" in message_empty
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="owns scalar_map"):
         strawberry_config(scalar_map=None)
 
     alt_def = strawberry.scalar(name="AltBigInt", serialize=str, parse_value=int)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="owns scalar_map"):
         strawberry_config(scalar_map={BigInt: alt_def})
 
 

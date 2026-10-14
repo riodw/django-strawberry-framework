@@ -417,6 +417,7 @@ class TestClient(_GraphQLTestClientBase[Client]):
     """
 
     def __init__(self, path: str | None = None, client: Client | None = None) -> None:
+        """Use ``client``, or a fresh ``django.test.Client``, to post to ``path``."""
         super().__init__(path, client if client is not None else Client())
 
     @override
@@ -514,6 +515,7 @@ class AsyncTestClient(_GraphQLTestClientBase[AsyncClient]):
     """
 
     def __init__(self, path: str | None = None, client: AsyncClient | None = None) -> None:
+        """Use ``client``, or a fresh ``django.test.AsyncClient``, to post to ``path``."""
         super().__init__(path, client if client is not None else AsyncClient())
 
     @override
@@ -631,8 +633,9 @@ class GraphQLTestMixin:
         fails with something readable.
         """
         details = msg if msg is not None else {"errors": resp.errors, "data": resp.data}
-        self.assertEqual(resp.response.status_code, 200, details)
-        self.assertIsNone(resp.errors, details)
+        # The mixin delegates to the host TestCase's assertions, so a bare `assert` would be wrong.
+        self.assertEqual(resp.response.status_code, 200, details)  # noqa: PT009
+        self.assertIsNone(resp.errors, details)  # noqa: PT009
 
     def assertResponseHasErrors(  # noqa: N802 - unittest/graphene assertion vocabulary
         self: _GraphQLTestHost,
@@ -645,7 +648,7 @@ class GraphQLTestMixin:
         HTTP 200 (graphene's own warning, kept). Failures carry the decoded
         ``data`` (or ``msg``) as the message.
         """
-        self.assertTrue(resp.errors, msg or resp.data)
+        self.assertTrue(resp.errors, msg or resp.data)  # noqa: PT009 - delegates to the host TestCase
 
 
 class GraphQLTestCase(GraphQLTestMixin, TestCase):

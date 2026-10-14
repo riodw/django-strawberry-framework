@@ -173,9 +173,9 @@ def test_every_job_declares_a_timeout(path: Path):
             # belongs to the jobs inside the called workflow.
             continue
         timeout = job.get("timeout-minutes")
-        assert isinstance(timeout, int) and timeout > 0, (
-            f"{path.name}: job {name!r} has no positive timeout-minutes (got {timeout!r})"
-        )
+        problem = f"{path.name}: job {name!r} has no positive timeout-minutes (got {timeout!r})"
+        assert isinstance(timeout, int), problem
+        assert timeout > 0, problem
 
 
 @pytest.mark.parametrize("path", WORKFLOW_PATHS, ids=WORKFLOW_IDS)

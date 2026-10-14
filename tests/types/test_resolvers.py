@@ -490,7 +490,7 @@ def test_check_n1_raise_strictness_raises_on_lazy_load():
         )
 
 
-@pytest.mark.parametrize("kind", ("many", "reverse_many_to_one"))
+@pytest.mark.parametrize("kind", ["many", "reverse_many_to_one"])
 def test_check_n1_many_side_kind_treats_consumer_set_attribute_as_lazy(
     kind: Literal["many", "reverse_many_to_one"],
 ):
@@ -1951,10 +1951,10 @@ _MTI_TAGS_QUERY = "{ shops { name tags { name } } }"
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("hide_prefix", "first_shop_tags"),
-    (
+    [
         pytest.param(None, ["Alpha", "Beta", "Hidden"], id="no-visibility-hook"),
         pytest.param("Hidden", ["Alpha", "Beta"], id="unplanned-visibility-reread"),
-    ),
+    ],
 )
 async def test_async_many_side_served_from_an_mti_ancestor_prefetch(
     hide_prefix: str | None,

@@ -125,6 +125,7 @@ class TypeRegistry:
     """
 
     def __init__(self) -> None:
+        """Start with no registered types, primaries, models or enums."""
         self._types: dict[type[models.Model], list[type[DjangoType]]] = {}
         self._primaries: dict[type[models.Model], type[DjangoType]] = {}
         self._models: dict[type[DjangoType], type[models.Model]] = {}

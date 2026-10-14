@@ -749,7 +749,7 @@ def raise_writable_source_ownership_errors(
             else f"writable field(s) {star_fields!r} declare"
         )
         raise ConfigurationError(
-            f"SerializerMutation {mutation_name}: {where} source='*'. DRF merges a "
+            f"SerializerMutation {mutation_name}: {where} source='*'. DRF merges a "  # noqa: S608 - error prose, not SQL
             "whole-object field's returned mapping into validated_data, so it can "
             "silently replace client or injected values under any key (including "
             "narrowed-out HiddenField / defaulted runtime fields that never reach "
@@ -775,7 +775,7 @@ def raise_writable_source_ownership_errors(
         else "multiple writable fields bind one serializer source"
     )
     raise ConfigurationError(
-        f"SerializerMutation {mutation_name}: {where}: {detail}. DRF resolves a "
+        f"SerializerMutation {mutation_name}: {where}: {detail}. DRF resolves a "  # noqa: S608 - error prose, not SQL
         "source collision last-write-wins, so one field's validated value would "
         "silently replace another's (including values from HiddenField or "
         "narrowed-out field defaults). Give every runtime writable field a "
@@ -1075,6 +1075,7 @@ def _related_model_token(related_model: type[models.Model] | None) -> str:
 def _shape_token(
     spec: InputFieldSpec,
     annotation: str,
+    *,
     required: bool,
     description: str | None,
 ) -> str:
@@ -1131,8 +1132,9 @@ def _shape_token(
     # left as-is (lowercase): the base already supplies the single leading capital, and
     # uppercasing the digest head would introduce an interior boundary, breaking
     # decomposition. No PascalCase encoder is re-spelt here - only ``pascalize_token``
-    # (imported) shapes the field token.
-    digest = hashlib.sha1(discriminant.encode()).hexdigest()[:16]
+    # (imported) shapes the field token. ``usedforsecurity=False``: a fingerprint, not a
+    # security digest (also keeps FIPS builds working).
+    digest = hashlib.sha1(discriminant.encode(), usedforsecurity=False).hexdigest()[:16]
     return f"{base}{digest}"
 
 
@@ -1167,7 +1169,7 @@ def serializer_input_type_name(
     discriminant, keeping existing all-undescribed names stable.
     """
     token = "".join(
-        _shape_token(spec, ann, req, desc)
+        _shape_token(spec, ann, required=req, description=desc)
         for spec, ann, req, desc in zip(
             field_specs,
             annotations,

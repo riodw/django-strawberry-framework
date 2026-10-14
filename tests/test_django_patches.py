@@ -43,7 +43,6 @@ cursor before ``tearDownClass``.
 """
 
 import importlib
-from types import FunctionType
 from typing import TYPE_CHECKING, NoReturn
 from unittest import mock
 
@@ -604,15 +603,17 @@ def test_apply_fails_loudly_when_upstream_source_is_unavailable():
     """An unreadable captured original is treated as drift, not approved.
 
     ``inspect.getsource`` raises ``OSError`` for a function with no
-    retrievable source file (built here via ``exec``, the shape a
-    bytecode-only Django distribution would present). The validator
-    must refuse to supersede a body it cannot verify.
+    retrievable source file (built here from a code object whose file
+    does not exist, the shape a bytecode-only Django distribution would
+    present). The validator must refuse to supersede a body it cannot
+    verify.
     """
-    namespace: dict[str, object] = {}
-    exec("def _sourceless(cls):\n    pass\n", namespace)
-    sourceless = namespace["_sourceless"]
-    assert isinstance(sourceless, FunctionType)
-    descriptor: classmethod[SimpleTestCase, ..., object] = classmethod(sourceless)
+
+    def _sourceless(_cls: type[SimpleTestCase]) -> None:
+        """Never called; only its unreadable source matters."""
+
+    _sourceless.__code__ = _sourceless.__code__.replace(co_filename="<sourceless>")
+    descriptor: classmethod[SimpleTestCase, ..., object] = classmethod(_sourceless)
 
     with mock.patch.object(_django_patches, "_original_remove_databases_failures", descriptor):
         with pytest.raises(RuntimeError, match="upstream body"):

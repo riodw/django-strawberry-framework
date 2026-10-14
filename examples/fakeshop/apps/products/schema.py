@@ -109,7 +109,7 @@ class CategoryType(DjangoType):
         user = getattr(getattr(info.context, "request", None), "user", None)
         if user and user.is_staff:
             return queryset
-        elif user and user.has_perm("products.view_category"):
+        if user and user.has_perm("products.view_category"):
             return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
         return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 
@@ -158,7 +158,7 @@ class ItemType(DjangoType):
         user = getattr(getattr(info.context, "request", None), "user", None)
         if user and user.is_staff:
             return queryset
-        elif user and user.has_perm("products.view_item"):
+        if user and user.has_perm("products.view_item"):
             return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
         return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 
@@ -203,7 +203,7 @@ class PropertyType(DjangoType):
         user = getattr(getattr(info.context, "request", None), "user", None)
         if user and user.is_staff:
             return queryset
-        elif user and user.has_perm("products.view_property"):
+        if user and user.has_perm("products.view_property"):
             return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
         return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 
@@ -249,7 +249,7 @@ class EntryType(DjangoType):
         user = getattr(getattr(info.context, "request", None), "user", None)
         if user and user.is_staff:
             return queryset
-        elif user and user.has_perm("products.view_entry"):
+        if user and user.has_perm("products.view_entry"):
             return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
         return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 

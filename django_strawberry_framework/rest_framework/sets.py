@@ -176,7 +176,7 @@ def _validate_schema_field_map(name: str, field_map: object) -> dict[str, DRFFie
     for entry in entries:
         try:
             field_name, field = entry
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - hostile object, contained by design
             errors.append(
                 "an entry could not be unpacked as (field_name, serializers.Field) "
                 f"({_safe_arg_repr(entry)})",
@@ -199,7 +199,7 @@ def _validate_schema_field_map(name: str, field_map: object) -> dict[str, DRFFie
             continue
         try:
             bound_name = field.field_name
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - hostile object, contained by design
             errors.append(
                 f"field {field_name!r} has a field_name descriptor that could not be read",
             )
@@ -208,7 +208,7 @@ def _validate_schema_field_map(name: str, field_map: object) -> dict[str, DRFFie
         # ``__ne__`` on it must not escape the comparison as a raw exception.
         try:
             name_mismatch = bound_name != field_name
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - hostile object, contained by design
             errors.append(
                 f"field {field_name!r} has a field_name whose comparison failed",
             )
@@ -360,7 +360,7 @@ def _validate_serializer_nested_fields(
     for entry in entries:
         try:
             field_name, config = entry
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - rewrapped as the typed rejection
             raise ConfigurationError(
                 f"SerializerMutation {name}.Meta.nested_fields has an entry that could not be "
                 f"unpacked as (field_name, NestedSerializerConfig) ({_safe_arg_repr(entry)}).",

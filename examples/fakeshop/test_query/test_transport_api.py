@@ -701,9 +701,11 @@ def _asgi_headers(raw: object) -> dict[str, str]:
     assert _is_list_or_tuple(raw), raw
     headers: dict[str, str] = {}
     for pair in raw:
-        assert _is_list_or_tuple(pair) and len(pair) == 2, pair
+        assert _is_list_or_tuple(pair), pair
+        assert len(pair) == 2, pair
         name, value = pair
-        assert isinstance(name, bytes) and isinstance(value, bytes), pair
+        assert isinstance(name, bytes), pair
+        assert isinstance(value, bytes), pair
         headers[name.decode()] = value.decode()
     return headers
 

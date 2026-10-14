@@ -101,6 +101,7 @@ def set_queryset_deferred_filter(
 
 def set_queryset_defer_next_filter(
     queryset: models.QuerySet[models.Model, object],
+    *,
     defer: bool,
 ) -> None:
     """Set whether ``queryset``'s next ``filter()`` is deferred instead of applied."""
@@ -111,6 +112,7 @@ def set_queryset_defer_next_filter(
 
 def set_queryset_sticky_filter(
     queryset: models.QuerySet[models.Model, object],
+    *,
     sticky: bool,
 ) -> None:
     """Set whether ``queryset``'s next two ``filter()`` calls share their multi-valued joins."""
@@ -120,6 +122,7 @@ def set_queryset_sticky_filter(
 
 def set_queryset_for_write(
     queryset: models.QuerySet[models.Model, object],
+    *,
     for_write: bool,
 ) -> None:
     """Set whether ``queryset`` routes through the router's write alias."""

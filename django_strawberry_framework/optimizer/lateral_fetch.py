@@ -345,7 +345,7 @@ def build_lateral_sql(
         from_sql = child_table
         link_table = child
     lateral_sql = (
-        f"SELECT {', '.join(inner_select)} FROM {from_sql}"
+        f"SELECT {', '.join(inner_select)} FROM {from_sql}"  # noqa: S608 - quote_name identifiers, bound values
         f" WHERE {link_table}.{qn(spec.parent_link_column)} = {pid}"
     )
 
@@ -443,7 +443,7 @@ def build_lateral_sql(
         parent_values = ", ".join(f"({parent_param})" for _ in prepared_parent_ids)
         parent_relation = f"(VALUES {parent_values})"
     sql = (
-        f"SELECT {', '.join(outer_select)}"
+        f"SELECT {', '.join(outer_select)}"  # noqa: S608 - quote_name identifiers, bound values
         f" FROM {parent_relation} AS {parents}({qn(LATERAL_PARENT_COLUMN)})"
         f" CROSS JOIN LATERAL ({lateral_sql}) {window}"
     )

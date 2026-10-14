@@ -76,7 +76,7 @@ def _bound(module: ModuleType, symbol: str):
 
 
 @pytest.mark.parametrize(
-    "consumer,symbol,owner",
+    ("consumer", "symbol", "owner"),
     SHARED_BINDINGS,
     ids=[_row_id(row) for row in SHARED_BINDINGS],
 )
@@ -93,7 +93,7 @@ def test_serializer_flavor_binds_the_shared_object_itself(
 
 
 @pytest.mark.parametrize(
-    "consumer,symbol,twin",
+    ("consumer", "symbol", "twin"),
     SHARED_CLOSURE_BODIES,
     ids=[_row_id(row) for row in SHARED_CLOSURE_BODIES],
 )

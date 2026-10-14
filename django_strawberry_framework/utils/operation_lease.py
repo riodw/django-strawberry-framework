@@ -40,10 +40,10 @@ from typing import Generic, TypeVar
 __all__ = ("OperationLease",)
 
 # Covariant: a lease only hands its payload out (``held``) or drops it (``close``).
-PayloadT = TypeVar("PayloadT", covariant=True)
+PayloadT_co = TypeVar("PayloadT_co", covariant=True)
 
 
-class OperationLease(Generic[PayloadT]):
+class OperationLease(Generic[PayloadT_co]):
     """One scope's revocable handle on the state that scope owns.
 
     Bound in place of the payload, and read through :meth:`held`. Before the
@@ -62,10 +62,11 @@ class OperationLease(Generic[PayloadT]):
     __slots__: tuple[str, ...] = ("__weakref__", "_payload")
     __weakref__: object
 
-    def __init__(self, payload: PayloadT) -> None:
-        self._payload: PayloadT | None = payload
+    def __init__(self, payload: PayloadT_co) -> None:
+        """Hold ``payload`` until :meth:`close` revokes it."""
+        self._payload: PayloadT_co | None = payload
 
-    def held(self) -> PayloadT | None:
+    def held(self) -> PayloadT_co | None:
         """The payload, or ``None`` once the scope that owned it has ended."""
         return self._payload
 

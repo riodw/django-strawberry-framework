@@ -2722,7 +2722,7 @@ def test_a_patch_without_a_section_for_the_target_is_refused(
 
 def _load_probe():
     probe = types.ModuleType(prove_failability.PROBE_MODULE_NAME)
-    exec(compile(prove_failability.PROBE_SOURCE, "probe", "exec"), probe.__dict__)
+    exec(compile(prove_failability.PROBE_SOURCE, "probe", "exec"), probe.__dict__)  # noqa: S102 - runs the script's own probe source under test
     return probe
 
 

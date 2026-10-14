@@ -523,7 +523,7 @@ def _python_named_argument(name: str) -> SimpleNamespace:
 
 def _no_argument_definition(_name: str) -> None:
     """A resolver with no definition for any parameter."""
-    return None
+    return
 
 
 def test_resolve_argument_wire_name_never_runs_the_schema_name_converter(
@@ -558,7 +558,7 @@ def test_resolve_argument_wire_name_never_runs_the_schema_name_converter(
         "items",
         _as_strawberry_info(info),
         None,
-        False,
+        trusted_max_rows=False,
         offset=10,
         limit=20,
     )
@@ -567,7 +567,13 @@ def test_resolve_argument_wire_name_never_runs_the_schema_name_converter(
     assert converter.calls == 0
 
     with pytest.raises(ListArgumentError) as exc_info:
-        _normalize_list_arguments("items", _as_strawberry_info(info), None, False, offset=-1)
+        _normalize_list_arguments(
+            "items",
+            _as_strawberry_info(info),
+            None,
+            trusted_max_rows=False,
+            offset=-1,
+        )
     assert exc_info.value.reason == "negative"
     assert exc_info.value.extensions is not None
     assert exc_info.value.extensions["argument"] == "offset"
@@ -615,7 +621,7 @@ def test_normalize_list_arguments_rejects_int_subclasses_before_their_hooks_can_
             "items",
             info,
             None,
-            False,
+            trusted_max_rows=False,
             **{argument: HostileInt(5)},
         )
     assert exc.value.argument == argument
@@ -642,7 +648,7 @@ def test_normalize_list_arguments_renders_an_unprintable_large_int_without_raisi
             "items",
             info,
             None,
-            False,
+            trusted_max_rows=False,
             offset=10**10000,
         )
     assert exc.value.reason == "over_ceiling"
@@ -692,7 +698,7 @@ def test_normalize_list_arguments_rejects_values_graphql_int_never_supplies(
             "items",
             info,
             None,
-            False,
+            trusted_max_rows=False,
             **{argument: value},
         )
     assert exc.value.argument == argument
@@ -712,7 +718,7 @@ def test_normalize_list_arguments_names_offset_before_limit_on_direct_call_non_i
             "items",
             info,
             None,
-            False,
+            trusted_max_rows=False,
             offset="bad",
             limit=101,
         )
@@ -1330,7 +1336,7 @@ def test_list_field_direct_call_safe_non_integer_rendering(
             "test_field",
             info,
             None,
-            False,
+            trusted_max_rows=False,
             offset="<script>alert(1)</script>",
         )
     assert exc_info.value.reason == "non_integer"
@@ -1352,7 +1358,7 @@ def test_list_field_error_pickle_round_trip():
     err.custom_tag = "tagged"  # pyright: ignore[reportAttributeAccessIssue]
 
     dumped = pickle.dumps(err)
-    restored = pickle.loads(dumped)
+    restored = pickle.loads(dumped)  # noqa: S301 - round-trips the object this test just pickled
 
     assert restored.field == "books"
     assert restored.argument == "offset"
@@ -1397,12 +1403,18 @@ def test_list_field_direct_call_schema_name_fallback_and_definition_lookup(
         "field",
         _as_strawberry_info(info_stub),
         None,
-        False,
+        trusted_max_rows=False,
         offset=1,
         limit=2,
     )
     with pytest.raises(ListArgumentError) as exc_info:
-        _normalize_list_arguments("field", _as_strawberry_info(info_stub), None, False, offset=-1)
+        _normalize_list_arguments(
+            "field",
+            _as_strawberry_info(info_stub),
+            None,
+            trusted_max_rows=False,
+            offset=-1,
+        )
     assert exc_info.value.extensions is not None
     assert exc_info.value.extensions["argument"] == "offset"
 
@@ -1484,14 +1496,14 @@ def test_list_field_record_independence(
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
     # Omitted arguments
-    rec_empty = _normalize_list_arguments("f", info, None, False)
+    rec_empty = _normalize_list_arguments("f", info, None, trusted_max_rows=False)
     assert rec_empty.any_argument_supplied is False
     assert rec_empty.offset is None
     assert rec_empty.limit is None
     assert rec_empty.order_by_supplied is False
 
     # offset=0 with no limit produces omission-identical window
-    rec_zero = _normalize_list_arguments("f", info, None, False, offset=0)
+    rec_zero = _normalize_list_arguments("f", info, None, trusted_max_rows=False, offset=0)
     assert rec_zero.any_argument_supplied is True
     assert rec_zero.offset == 0
     assert rec_zero.limit is None
@@ -1501,7 +1513,7 @@ def test_list_field_record_independence(
         "f",
         info,
         None,
-        False,
+        trusted_max_rows=False,
         order_by=[],
     )
     assert rec_order_empty.order_by_supplied is True
@@ -1529,7 +1541,7 @@ def test_omitted_list_arguments_do_not_resolve_policy(monkeypatch: pytest.Monkey
         "items",
         make_info(),
         None,
-        False,
+        trusted_max_rows=False,
     )
 
     assert record == _ListArguments(None, None, None, False, False)
@@ -2183,6 +2195,9 @@ def test_list_field_post_orderset_validator_zero_consumer_dispatch():
         @override
         def __repr__(self):
             raise RuntimeError("PoisonAttr __repr__ called")
+
+        # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
+        __hash__ = None  # pyright: ignore[reportAssignmentType]
 
     # Safe routing equal avoids consumer __eq__
     poison = PoisonAttr()

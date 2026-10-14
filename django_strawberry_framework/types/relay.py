@@ -45,7 +45,7 @@ from ..utils.execution_mode import async_execution
 # redundant ``as`` alias re-exports it from this module so ``from
 # ...types.relay import SyncMisuseError`` and the ``types/__init__.py`` re-export
 # keep working unchanged.
-from ..utils.querysets import SyncMisuseError as SyncMisuseError
+from ..utils.querysets import SyncMisuseError as SyncMisuseError  # noqa: PLC0414 - kept re-export path
 from ..utils.querysets import (
     apply_type_visibility_async,
     apply_type_visibility_sync,
@@ -135,7 +135,7 @@ def install_is_type_of(type_cls: type[DjangoType]) -> None:
     def is_type_of(obj: object, _info: object) -> bool:
         try:
             hinted = getattr(obj, _NODE_TYPE_HINT_ATTR, None)
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - hostile object, contained by design
             # A consumer model may expose the private hint slot through a
             # hostile descriptor. The hint is only a dispatch optimization;
             # preserve the ordinary isinstance fallback when reading it fails.

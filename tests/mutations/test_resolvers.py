@@ -297,7 +297,8 @@ def test_update_custom_node_id_resolves_payload_to_real_pk_not_wrong_row():
     schema, CategoryNode = _build_category_node_schema()
     decoy = product_models.Category.objects.create(name="decoy", description="decoy-untouched")
     target = product_models.Category.objects.create(name=str(decoy.pk), description="before")
-    assert target.pk != decoy.pk and target.name == str(decoy.pk)
+    assert target.pk != decoy.pk
+    assert target.name == str(decoy.pk)
 
     gid = global_id_for(CategoryNode, target.name)
     res = schema.execute_sync(
@@ -356,7 +357,8 @@ def test_delete_custom_node_id_resolves_payload_to_real_pk_not_wrong_row():
     schema, CategoryNode = _build_category_node_schema()
     decoy = product_models.Category.objects.create(name="decoy-del", description="x")
     target = product_models.Category.objects.create(name=str(decoy.pk), description="doomed")
-    assert target.pk != decoy.pk and target.name == str(decoy.pk)
+    assert target.pk != decoy.pk
+    assert target.name == str(decoy.pk)
 
     gid = global_id_for(CategoryNode, target.name)
     res = schema.execute_sync(_CATEGORY_DELETE, variable_values={"id": gid})
@@ -413,7 +415,8 @@ def test_coerce_lookup_id_rejects_non_globalid(raw_id: str | int):
 
     node_id, error = resolvers.coerce_lookup_id(raw_id, ItemT)
     assert node_id is None
-    assert error is not None and error.field == "id"
+    assert error is not None
+    assert error.field == "id"
 
 
 @pytest.mark.django_db
@@ -592,7 +595,7 @@ async def test_async_mutation_does_not_leak_into_later_read_optimizer_execution(
         lambda: list(product_models.Item.objects.values_list("name", flat=True)),
         thread_sensitive=True,
     )()
-    assert leaked_cats == [] and leaked_items == [], (
+    assert (leaked_cats, leaked_items) == ([], []), (
         f"FV-1 leak: an earlier async-ORM test committed rows that escaped "
         f"per-test rollback (categories={leaked_cats}, items={leaked_items}). "
         f"Async-ORM tests must use @pytest.mark.django_db(transaction=True)."

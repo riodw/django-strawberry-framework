@@ -312,13 +312,16 @@ def test_sync_login_bracket_logs_out_when_the_block_raises():
     variables = {"d": {"name": "SyncRaiseLogoutWidget", "categoryId": category_gid}}
     client = TestClient()
 
-    with pytest.raises(RuntimeError, match="sync login error"):
+    def body_that_raises() -> None:
         with client.login(user):
             granted = client.query(_CREATE_ITEM, variables=variables)
             assert granted.data is not None
             assert granted.data["createItem"]["errors"] == []
             assert granted.data["createItem"]["node"]["name"] == "SyncRaiseLogoutWidget"
             raise RuntimeError("sync login error")
+
+    with pytest.raises(RuntimeError, match="sync login error"):
+        body_that_raises()
 
     denied = client.query(
         _CREATE_ITEM,
@@ -339,13 +342,16 @@ async def test_async_login_bracket_logs_out_when_the_block_raises(
     variables = {"d": {"name": "AsyncRaiseLogoutWidget", "categoryId": category_gid}}
     client = AsyncTestClient()
 
-    with pytest.raises(RuntimeError, match="async login error"):
+    async def body_that_raises() -> None:
         async with client.login(user):
             granted = await client.query(_CREATE_ITEM, variables=variables)
             assert granted.data is not None
             assert granted.data["createItem"]["errors"] == []
             assert granted.data["createItem"]["node"]["name"] == "AsyncRaiseLogoutWidget"
             raise RuntimeError("async login error")
+
+    with pytest.raises(RuntimeError, match="async login error"):
+        await body_that_raises()
 
     denied = await client.query(
         _CREATE_ITEM,
@@ -450,14 +456,14 @@ class GraphQLTestCaseEndToEndTests(GraphQLTestCase):
         )
         self.assertResponseNoErrors(res)
         assert res.data is not None
-        self.assertEqual(len(res.data["allItems"]["edges"]), 1)
+        assert len(res.data["allItems"]["edges"]) == 1
 
     def test_invalid_query_returns_instead_of_raising_then_has_errors(self):
         # The mixin's flipped ``assert_no_errors=False`` default (graphene
         # parity): the errors response RETURNS for the helper to assert on.
         res = self.query("{ nope }")
         self.assertResponseHasErrors(res)
-        self.assertIsNone(res.data)
+        assert res.data is None
 
     @override_settings(ROOT_URLCONF=__name__)
     def test_per_call_url_routes_to_the_probe_endpoint(self):
@@ -472,8 +478,8 @@ class GraphQLTestCaseEndToEndTests(GraphQLTestCase):
         )
         self.assertResponseNoErrors(res)
         assert res.data is not None
-        self.assertTrue(res.data["allItems"]["edges"])
-        self.assertEqual(res.response[_PROBE_MARKER_HEADER], _PROBE_MARKER_VALUE)
+        assert res.data["allItems"]["edges"]
+        assert res.response[_PROBE_MARKER_HEADER] == _PROBE_MARKER_VALUE
 
 
 @override_settings(ROOT_URLCONF=__name__)
@@ -494,8 +500,8 @@ class GraphQLTestCaseClassAttrEndpointTests(GraphQLTestCase):
         res = self.query("query Items { allItems(first: 1) { edges { node { name } } } }")
         self.assertResponseNoErrors(res)
         assert res.data is not None
-        self.assertTrue(res.data["allItems"]["edges"])
-        self.assertEqual(res.response[_PROBE_MARKER_HEADER], _PROBE_MARKER_VALUE)
+        assert res.data["allItems"]["edges"]
+        assert res.response[_PROBE_MARKER_HEADER] == _PROBE_MARKER_VALUE
 
 
 class GraphQLTransactionTestCaseSmokeTests(GraphQLTransactionTestCase):
@@ -510,4 +516,4 @@ class GraphQLTransactionTestCaseSmokeTests(GraphQLTransactionTestCase):
         res = self.query("query Items { allItems(first: 1) { edges { node { name } } } }")
         self.assertResponseNoErrors(res)
         assert res.data is not None
-        self.assertTrue(res.data["allItems"]["edges"])
+        assert res.data["allItems"]["edges"]

@@ -169,7 +169,7 @@ def test_dynamic_getattr_unknown_attribute_error():
 def test_star_import_preserves_namespace_hygiene():
     """Verify `from django_strawberry_framework import *` only imports __all__."""
     ns: dict[str, object] = {}
-    exec("from django_strawberry_framework import *", ns)
+    exec("from django_strawberry_framework import *", ns)  # noqa: S102 - star import is module-level syntax; literal source
 
     assert "SerializerMutation" not in ns
     assert "_DRF_SOFT_EXPORTS" not in ns

@@ -186,7 +186,7 @@ Multiple types per model are allowed when ambiguity is resolved by `Meta.primary
 # inside _validate_meta, after the fields/exclude exclusivity check and
 # before the DEFERRED_META_KEYS check. ``_meta_attr`` reads with getattr
 # (MRO-walking) semantics, so an inherited Meta.primary is validated too.
-primary = _meta_attr(meta, "primary", False)
+primary = _meta_attr(meta, "primary", default=False)
 if not isinstance(primary, bool):
     raise ConfigurationError("Meta.primary must be a bool")
 ```

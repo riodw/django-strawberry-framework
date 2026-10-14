@@ -368,7 +368,7 @@ def decode_model_global_id(
     """
     try:
         resolved_type, node_id = decode_global_id(value, schema=schema)
-    except Exception:
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
         return DecodeResult(GlobalIDDecode.DECODE_FAILED, None, None)
     if model_for(resolved_type) is not expected_model:
         return DecodeResult(GlobalIDDecode.WRONG_MODEL, None, resolved_type)
@@ -562,7 +562,7 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
         id: strawberry.ID,  # noqa: A002
         # basedpyright: Strawberry reads this annotation for an unannotated assignment; Any keeps
         # the module docstring's "Unexpected type 'typing.Any'" build error (object changes it)
-    ) -> Any:  # pyright: ignore[reportExplicitAny]
+    ) -> Any:  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - Strawberry reads this annotation
         # The cooperative deadline (spec-047) before the decode: a refetch is a
         # visibility-scoped query, and the decode is the step that makes one
         # inevitable.
@@ -670,7 +670,7 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
         ids: list[strawberry.ID],
         # basedpyright: Strawberry reads this annotation for an unannotated assignment; Any keeps
         # the module docstring's "Unexpected type 'typing.Any'" build error (object changes it)
-    ) -> Any:  # pyright: ignore[reportExplicitAny]
+    ) -> Any:  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - Strawberry reads this annotation
         if not ids:
             # Zero database access (spec Edge cases).
             return []

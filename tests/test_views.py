@@ -474,13 +474,12 @@ def test_an_invalid_cap_value_raises_configuration_error_on_either_rung(bad: obj
     disable, or a consumer who hits it cannot tell which value to reach for.
     """
     expected_type = type(bad).__name__
-    with pytest.raises(ConfigurationError, match=rf"None to disable.*got {expected_type}\b"):
-        if rung == "kwarg":
-            with _settings_with(4096):
-                _resolved_max_request_body_bytes(bad)
-        else:
-            with _settings_with(bad):
-                _resolved_max_request_body_bytes(None)
+    setting, kwarg = (4096, bad) if rung == "kwarg" else (bad, None)
+    with (
+        pytest.raises(ConfigurationError, match=rf"None to disable.*got {expected_type}\b"),
+        _settings_with(setting),
+    ):
+        _resolved_max_request_body_bytes(kwarg)
 
 
 @pytest.mark.parametrize("rung", ["kwarg", "setting"])
@@ -501,13 +500,12 @@ def test_a_cap_value_too_large_to_render_still_raises_configuration_error(rung: 
     ``value <= 0`` arm.
     """
     bad = -(10**10000)
-    with pytest.raises(ConfigurationError, match=r"None to disable.*got an unprintable int"):
-        if rung == "kwarg":
-            with _settings_with(4096):
-                _resolved_max_request_body_bytes(bad)
-        else:
-            with _settings_with(bad):
-                _resolved_max_request_body_bytes(None)
+    setting, kwarg = (4096, bad) if rung == "kwarg" else (bad, None)
+    with (
+        pytest.raises(ConfigurationError, match=r"None to disable.*got an unprintable int"),
+        _settings_with(setting),
+    ):
+        _resolved_max_request_body_bytes(kwarg)
 
 
 class _HostileInt(int):
@@ -541,13 +539,12 @@ def test_the_cap_admits_the_builtin_int_exactly(subclass_value: int, rung: str):
     type is knowable before the comparison runs. Both precedence rungs are
     covered because either can carry the value.
     """
-    with pytest.raises(ConfigurationError, match="None to disable"):
-        if rung == "kwarg":
-            with _settings_with(4096):
-                _resolved_max_request_body_bytes(subclass_value)
-        else:
-            with _settings_with(subclass_value):
-                _resolved_max_request_body_bytes(None)
+    setting, kwarg = (4096, subclass_value) if rung == "kwarg" else (subclass_value, None)
+    with (
+        pytest.raises(ConfigurationError, match="None to disable"),
+        _settings_with(setting),
+    ):
+        _resolved_max_request_body_bytes(kwarg)
 
 
 @pytest.mark.parametrize(
@@ -913,6 +910,9 @@ class _LyingRestoredPosition(int):
     @override
     def __eq__(self, other: object):
         return True
+
+    # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
+    __hash__ = None  # pyright: ignore[reportAssignmentType]
 
 
 class _LyingRestoredPositionStream(_UndeclaredSeekableStream):
@@ -3654,9 +3654,9 @@ async def test_the_async_chain_resets_the_ordering_mark_around_the_downstream_ca
     middleware = GraphQLRequestBodyBoundaryMiddleware(downstream)
 
     assert is_marked_coroutine_function(middleware) is True
+    response = middleware(RequestFactory().get("/graphql/"))
+    assert inspect.isawaitable(response)
     with pytest.raises(RuntimeError, match="downstream chain"):
-        response = middleware(RequestFactory().get("/graphql/"))
-        assert inspect.isawaitable(response)
         await response
 
     assert bool(_CSRF_ORDERING_EXEMPTION) is True

@@ -828,7 +828,7 @@ def _consume_fallback(
     # basedpyright: the resolver's value reaches ListConnection.resolve_connection, whose
     # iterable union it may not meet; ``_pipeline_sync`` / ``_pipeline_async`` refuse a
     # non-iterable first (``_guard_non_queryset_iterable``), a direct call passes it through
-    nodes: Any,  # pyright: ignore[reportExplicitAny]
+    nodes: Any,  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - meets the resolver's iterable union
     *,
     info: Info[object, object],
     before: str | None,
@@ -1454,8 +1454,7 @@ def _build_total_count_connection(
     # ``description=None`` keeps the opted variant's shipped description-less
     # SDL shape (the bare/opted description asymmetry is shipped surface - see
     # ``_connection_type_for``).
-    generated = _generate_connection_class(target_type, definition, _populate, description=None)
-    return generated
+    return _generate_connection_class(target_type, definition, _populate, description=None)
 
 
 def _guard_total_count_countable(nodes: object, *, want_count: bool) -> None:

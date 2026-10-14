@@ -598,7 +598,8 @@ def test_nested_keyset_after_uniform_value_position_and_pre_seek_totals():
     assert botany["totalCount"] == 3
     # Childless parent with a cursor: empty page, hasPrev from the cursor.
     empty = by_name["Empty Gazette"]
-    assert empty["edges"] == [] and empty["totalCount"] == 0
+    assert empty["edges"] == []
+    assert empty["totalCount"] == 0
     assert empty["pageInfo"]["hasPreviousPage"] is True
     assert empty["pageInfo"]["hasNextPage"] is False
 

@@ -923,7 +923,7 @@ def test_auth_field_dispatch_splits_sync_and_async_resolver_bodies():
 
 @pytest.mark.django_db
 def test_sync_login_dispatch_never_enters_the_async_boundary(
-    _sync_boundary_spy: list[Callable[..., object]],
+    sync_boundary_spy: list[Callable[..., object]],
 ):
     """``execute_sync`` login runs the native sync body with no event-loop bridge."""
     schema = _login_logout_schema()
@@ -938,12 +938,12 @@ def test_sync_login_dispatch_never_enters_the_async_boundary(
     assert res.data is not None
     assert res.data["login"] == {"node": {"username": "probe"}, "errors": []}
     # Sync dispatch never touched the async body's one-sync-boundary bridge.
-    assert _sync_boundary_spy == []
+    assert sync_boundary_spy == []
 
 
 @pytest.mark.django_db(transaction=True)
 async def test_async_login_dispatch_awaits_the_native_async_body_exactly_once(
-    _sync_boundary_spy: list[Callable[..., object]],
+    sync_boundary_spy: list[Callable[..., object]],
 ):
     """``await schema.execute`` login awaits the native async body exactly once."""
     schema = _login_logout_schema()
@@ -959,12 +959,12 @@ async def test_async_login_dispatch_awaits_the_native_async_body_exactly_once(
     assert res.data is not None
     assert res.data["login"] == {"node": {"username": "probe"}, "errors": []}
     assert request.user.is_authenticated
-    assert len(_sync_boundary_spy) == 1
+    assert len(sync_boundary_spy) == 1
 
 
 @pytest.mark.django_db
 def test_sync_logout_dispatch_never_enters_the_async_boundary(
-    _sync_boundary_spy: list[Callable[..., object]],
+    sync_boundary_spy: list[Callable[..., object]],
 ):
     """``execute_sync`` logout runs the native sync body with no event-loop bridge."""
     schema = _login_logout_schema()
@@ -972,12 +972,12 @@ def test_sync_logout_dispatch_never_enters_the_async_boundary(
     assert res.errors is None, res.errors
     assert res.data is not None
     assert res.data["logout"] == {"ok": False, "errors": []}
-    assert _sync_boundary_spy == []
+    assert sync_boundary_spy == []
 
 
 @pytest.mark.django_db(transaction=True)
 async def test_async_logout_dispatch_awaits_the_native_async_body_exactly_once(
-    _sync_boundary_spy: list[Callable[..., object]],
+    sync_boundary_spy: list[Callable[..., object]],
 ):
     """``await schema.execute`` logout awaits the native async body exactly once."""
     schema = _login_logout_schema()
@@ -985,7 +985,7 @@ async def test_async_logout_dispatch_awaits_the_native_async_body_exactly_once(
     assert res.errors is None, res.errors
     assert res.data is not None
     assert res.data["logout"] == {"ok": False, "errors": []}
-    assert len(_sync_boundary_spy) == 1
+    assert len(sync_boundary_spy) == 1
 
 
 # ---------------------------------------------------------------------------

@@ -148,7 +148,7 @@ def _safe_frozenset_membership(value: object, choices: frozenset[str]) -> bool:
     """
     try:
         return value in choices
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - hostile object, contained by design
         # Deliberately ``BaseException`` (the package's hostile-dunder convention):
         # a display-adjacent probe must never propagate ``SystemExit`` /
         # ``KeyboardInterrupt`` past the typed reject.
@@ -1014,7 +1014,7 @@ class _ValidatedMutationMeta:
 def _validate_permission_classes(
     mutation_name: str,
     # basedpyright: EAFP: arbitrary consumer value; the try/except around ``list`` guards
-    value: Any,  # pyright: ignore[reportExplicitAny]
+    value: Any,  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - arbitrary consumer value; EAFP
     *,
     unset_default: tuple[WritePermissionClass, ...] = (DjangoModelPermission,),
     base_label: str = "DjangoMutation",
@@ -1067,7 +1067,7 @@ def _validate_permission_classes(
     for entry in classes:
         try:
             has_perm = getattr(entry, "has_permission", None)
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - hostile object, contained by design
             has_perm = None
         if not isinstance(entry, type) or not callable(has_perm):
             raise ConfigurationError(
@@ -1528,9 +1528,9 @@ class DjangoMutation(_ModelResolverSeamsBase, metaclass=DjangoMutationMetaclass)
         info: Info,
         operation: str,
         # basedpyright: consumer hook: a narrower base fails an override typing its own data
-        data: Any,  # pyright: ignore[reportExplicitAny]
+        data: Any,  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - consumer hook; an override narrows it
         # basedpyright: consumer hook: an override typing ``Item | None`` fails a narrower base
-        instance: Any = None,  # pyright: ignore[reportExplicitAny]
+        instance: Any = None,  # pyright: ignore[reportExplicitAny]  # noqa: ANN401 - consumer hook; an override narrows it
     ) -> bool:
         """Return whether the request is authorized for ``operation`` (spec-036 Decision 15).
 

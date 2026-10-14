@@ -591,8 +591,8 @@ def _build_child_queryset(
     field: FieldMeta,
     target_type: type[DjangoType] | None,
     info: GraphQLResolveInfo | None,
-    has_custom_qs: bool,
     *,
+    has_custom_qs: bool,
     target_model: type[models.Model] | None = None,
     policy: _SealPolicy[models.Model] = _LIST_RELATION_CHILD_POLICY,
     seed: QuerySet[models.Model] | None = None,
@@ -697,8 +697,8 @@ def _build_connection_child_queryset(
     field: FieldMeta,
     target_type: type[DjangoType] | None,
     info: GraphQLResolveInfo | None,
-    has_custom_qs: bool,
     *,
+    has_custom_qs: bool,
     target_model: type[models.Model] | None = None,
 ) -> QuerySet[models.Model]:
     """Build a nested-connection child queryset under ``_PREFETCH_CHILD_POLICY``.
@@ -714,7 +714,7 @@ def _build_connection_child_queryset(
         field,
         target_type,
         info,
-        has_custom_qs,
+        has_custom_qs=has_custom_qs,
         target_model=target_model,
         policy=_PREFETCH_CHILD_POLICY,
     )
@@ -881,7 +881,7 @@ def _walk_selections(
                 if id_attr == "pk":
                     id_attr = model._meta.pk.attname
                 db_field = next(
-                    (f for f in field_map.values() if f.name == id_attr or f.attname == id_attr),
+                    (f for f in field_map.values() if id_attr in (f.name, f.attname)),
                     None,
                 )
                 # ``enable_only`` is the G2 gate (spec-035 Decision 4): under a

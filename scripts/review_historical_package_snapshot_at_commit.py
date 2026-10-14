@@ -269,7 +269,7 @@ def _publish_staged_snapshot(staging_dir: Path, output_dir: Path) -> None:
         if backup_dir is not None:
             try:
                 _ = backup_dir.replace(output_dir)
-            except BaseException as restore_error:
+            except BaseException as restore_error:  # noqa: BLE001 - a rollback failure of any kind is reported with the publish error
                 raise RuntimeError(
                     "snapshot publication and rollback both failed; "
                     f"the previous snapshot remains at {backup_dir}: {restore_error}",

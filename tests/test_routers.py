@@ -1828,7 +1828,7 @@ def test_concurrent_first_class_access_returns_one_cached_class(monkeypatch: pyt
         try:
             ready.wait(timeout=5)
             results.append(_router_class())
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - worker thread reports to the main thread
             errors.append(exc)
 
     threads = [threading.Thread(target=load_class) for _ in range(2)]
@@ -3508,7 +3508,8 @@ def _simulate_channels_absent() -> Iterator[None]:
         yield
 
 
-def test_root_package_and_star_import_stay_channels_free(_simulate_channels_absent: None):
+@pytest.mark.usefixtures("_simulate_channels_absent")
+def test_root_package_and_star_import_stay_channels_free():
     """The root package never touches the guard; the SUBMODULE star opts in.
 
     Absence / import-guard proof; a request cannot show what is not imported. Live
@@ -3517,15 +3518,16 @@ def test_root_package_and_star_import_stay_channels_free(_simulate_channels_abse
     mod = importlib.import_module("django_strawberry_framework")
     assert mod is django_strawberry_framework
     namespace: dict[str, object] = {}
-    exec("from django_strawberry_framework import *", namespace)
+    exec("from django_strawberry_framework import *", namespace)  # noqa: S102 - star import is module-level syntax; literal source
     assert "DjangoGraphQLProtocolRouter" not in namespace
     # ``__all__`` names the lazy symbol, so ``import *`` reaches for it and
     # fires the guard (spec-041 Decision 3).
     with pytest.raises(ImportError, match=_HINT_SUBSTRING):
-        exec("from django_strawberry_framework.routers import *", {})
+        exec("from django_strawberry_framework.routers import *", {})  # noqa: S102 - star import is module-level syntax; literal source
 
 
-def test_routers_module_import_succeeds_without_channels(_simulate_channels_absent: None):
+@pytest.mark.usefixtures("_simulate_channels_absent")
+def test_routers_module_import_succeeds_without_channels():
     """``import django_strawberry_framework.routers`` itself pays no import.
 
     Absence / import-guard proof; a request cannot show what is not imported. Live
@@ -3535,14 +3537,15 @@ def test_routers_module_import_succeeds_without_channels(_simulate_channels_abse
     assert mod.__name__ == "django_strawberry_framework.routers"
 
 
-def test_symbol_access_raises_the_install_hint_without_channels(_simulate_channels_absent: None):
+@pytest.mark.usefixtures("_simulate_channels_absent")
+def test_symbol_access_raises_the_install_hint_without_channels():
     """The ``from ... import`` line raises ``ImportError`` naming the floor.
 
     Absence / import-guard proof; a request cannot show what is not imported. Live
     HTTP sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     with pytest.raises(ImportError, match=_HINT_SUBSTRING) as exc_info:
-        exec("from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter", {})
+        exec("from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter", {})  # noqa: S102 - the import statement is under test; literal source
     assert isinstance(exc_info.value.__cause__, ImportError)
 
 
@@ -3566,7 +3569,7 @@ def test_restore_is_two_sided_and_the_present_path_works_again():
         # Re-execute the module under absence (the rebinding the restore must undo).
         importlib.import_module("django_strawberry_framework.routers")
         with pytest.raises(ImportError, match=_HINT_SUBSTRING):
-            exec("from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter", {})
+            exec("from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter", {})  # noqa: S102 - the import statement is under test; literal source
 
     assert (
         django_strawberry_framework.routers is sys.modules["django_strawberry_framework.routers"]
@@ -3618,7 +3621,8 @@ def test_consumers_module_imports_with_channels_absent():
         assert "strawberry.channels" not in sys.modules
 
 
-def test_unrelated_attribute_miss_stays_a_plain_attribute_error(_simulate_channels_absent: None):
+@pytest.mark.usefixtures("_simulate_channels_absent")
+def test_unrelated_attribute_miss_stays_a_plain_attribute_error():
     """A non-router attribute miss raises ``AttributeError``, never the hint.
 
     Absence / import-guard proof; a request cannot show what is not imported. Live
@@ -3671,7 +3675,7 @@ def test_degraded_partial_install_raises_the_split_actionable_errors(
         blocked_modules(broken_submodule),
     ):
         with pytest.raises(ImportError) as exc_info:
-            exec("from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter", {})
+            exec("from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter", {})  # noqa: S102 - the import statement is under test; literal source
         message = str(exc_info.value)
         for substring in expected_substrings:
             assert substring in message
@@ -5366,7 +5370,8 @@ async def test_a_prestart_cancelled_close_task_becomes_abandoned():
     await asyncio.sleep(0)
 
     await revocation.settle()
-    assert attempt.done() and attempt.cancelled()
+    assert attempt.done()
+    assert attempt.cancelled()
     assert revocation.state == consumers_module._REVOCATION_ABANDONED
     await _discard(starter)
 
@@ -5462,7 +5467,8 @@ async def test_cancelling_the_teardown_ends_the_close_attempt_instead_of_orphani
         await settling
 
     assert attempt is not None
-    assert attempt.done() and attempt.cancelled()
+    assert attempt.done()
+    assert attempt.cancelled()
     assert revocation.state == consumers_module._REVOCATION_ABANDONED
     assert revocation.revoked
     # One attempt reached the transport, and the terminal state buys no second one.
@@ -5512,7 +5518,8 @@ async def test_a_cancelled_disconnect_leaves_no_task_retaining_the_connection(
     with pytest.raises(asyncio.CancelledError):
         await disconnecting
 
-    assert attempt.done() and attempt.cancelled()
+    assert attempt.done()
+    assert attempt.cancelled()
     assert consumer._revocation.state == consumers_module._REVOCATION_ABANDONED
     assert websocket.closes == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)]
     await consumer._revocation.settle()
@@ -5569,7 +5576,8 @@ async def test_a_teardown_cancelled_before_it_returns_still_settles_the_close(
     with pytest.raises(asyncio.CancelledError):
         await disconnecting
 
-    assert attempt.done() and not attempt.cancelled()
+    assert attempt.done()
+    assert not attempt.cancelled()
     assert consumer._revocation.state == consumers_module._REVOCATION_CLOSED
     assert websocket.closes == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)]
     await starter
@@ -5620,7 +5628,8 @@ async def test_a_teardown_that_raises_still_settles_the_close_and_propagates(
     with pytest.raises(RuntimeError, match="upstream teardown failed"):
         await disconnecting
 
-    assert attempt.done() and not attempt.cancelled()
+    assert attempt.done()
+    assert not attempt.cancelled()
     assert consumer._revocation.state == consumers_module._REVOCATION_CLOSED
     assert websocket.closes == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)]
     await starter
@@ -6002,7 +6011,7 @@ def _build_logout_schema():
 
 
 @pytest.fixture
-def _logout_schema() -> "Iterator[DjangoSchema]":
+def logout_schema() -> "Iterator[DjangoSchema]":
     """Yield the logout-carrying schema, clearing the package registry either side."""
     from django_strawberry_framework.registry import registry
 
@@ -6038,7 +6047,7 @@ async def _logout_on_this_socket(schema: "DjangoSchema", consumer: object):
 async def test_a_same_socket_logout_stops_a_running_subscription_on_both_protocols(
     subprotocol: str,
     monkeypatch: pytest.MonkeyPatch,
-    _logout_schema: "DjangoSchema",
+    logout_schema: "DjangoSchema",
 ):
     """The package's own logout revokes the connection it was sent over.
 
@@ -6063,7 +6072,7 @@ async def test_a_same_socket_logout_stops_a_running_subscription_on_both_protoco
     controller = _controller("same-socket")
     gate = _record_outbound_gate(monkeypatch)
     probe = _instrument_revalidation(monkeypatch)
-    router = _router(_logout_schema)
+    router = _router(logout_schema)
     _operation_frame, success_frame = _PROTOCOL_FRAMES[subprotocol]
 
     async with _open_ws(router, cookie=cookie, subprotocol=subprotocol) as communicator:
@@ -6077,7 +6086,7 @@ async def test_a_same_socket_logout_stops_a_running_subscription_on_both_protoco
         assert probe.reads == 2
 
         consumer = gate.consumers[0]
-        await _logout_on_this_socket(_logout_schema, consumer)
+        await _logout_on_this_socket(logout_schema, consumer)
         # The logout really did change the connection's actor identity.
         assert _connection_actor(consumer).is_anonymous
 
@@ -6094,7 +6103,7 @@ async def test_a_same_socket_logout_stops_a_running_subscription_on_both_protoco
 @pytest.mark.django_db(transaction=True)
 async def test_the_logout_mutations_own_reply_is_suppressed_by_the_connection_close(
     monkeypatch: pytest.MonkeyPatch,
-    _logout_schema: "DjangoSchema",
+    logout_schema: "DjangoSchema",
 ):
     """The pinned transition contract: the socket ends, so the reply does not arrive.
 
@@ -6117,7 +6126,7 @@ async def test_the_logout_mutations_own_reply_is_suppressed_by_the_connection_cl
     """
     _user, cookie, session_key = await _make_user_and_session("logout_frame_probe")
     probe = _instrument_revalidation(monkeypatch)
-    router = _router(_logout_schema)
+    router = _router(logout_schema)
 
     async with _open_ws(router, cookie=cookie) as communicator:
         first = await _ws_operation(communicator, "{ username }", op_id="1")
@@ -6139,7 +6148,7 @@ async def test_the_logout_mutations_own_reply_is_suppressed_by_the_connection_cl
 @pytest.mark.django_db(transaction=True)
 async def test_an_anonymous_socket_that_logs_out_keeps_the_read_free_carve_out(
     monkeypatch: pytest.MonkeyPatch,
-    _logout_schema: "DjangoSchema",
+    logout_schema: "DjangoSchema",
 ):
     """Provenance, not the current actor: a socket that was never authenticated is untouched.
 
@@ -6156,7 +6165,7 @@ async def test_an_anonymous_socket_that_logs_out_keeps_the_read_free_carve_out(
     """
     _poison_the_session_store(monkeypatch)
     probe = _instrument_revalidation(monkeypatch)
-    router = _router(_logout_schema)
+    router = _router(logout_schema)
 
     async with _open_ws(router) as communicator:
         logged_out = await _ws_operation(communicator, _LOGOUT_MUTATION, op_id="1")
@@ -6174,7 +6183,7 @@ async def test_an_anonymous_socket_that_logs_out_keeps_the_read_free_carve_out(
 @pytest.mark.django_db(transaction=True)
 async def test_a_same_socket_logout_cannot_complete_across_a_parked_protected_send(
     monkeypatch: pytest.MonkeyPatch,
-    _logout_schema: "DjangoSchema",
+    logout_schema: "DjangoSchema",
 ):
     """The send ordering: an authorized frame and a logout are serialized, not raced.
 
@@ -6209,7 +6218,7 @@ async def test_a_same_socket_logout_cannot_complete_across_a_parked_protected_se
     controller = _controller("parked-send")
     gate = _record_outbound_gate(monkeypatch)
     probe = _instrument_revalidation(monkeypatch)
-    router = _router(_logout_schema)
+    router = _router(logout_schema)
 
     async with _open_ws(router, cookie=cookie) as communicator:
         await _send_operation(communicator, _controlled_subscription("parked-send"), op_id="1")
@@ -6226,7 +6235,7 @@ async def test_a_same_socket_logout_cannot_complete_across_a_parked_protected_se
 
         # The logout takes the scope session lock and can get no further: the lease
         # it needs next is the one the parked send is holding.
-        logout_task = asyncio.create_task(_logout_on_this_socket(_logout_schema, consumer))
+        logout_task = asyncio.create_task(_logout_on_this_socket(logout_schema, consumer))
 
         def _logout_holds_the_scope_lock() -> object:
             lock = _connection_scope(consumer).get(_SCOPE_LOCK_KEY)
@@ -6265,7 +6274,7 @@ async def test_a_same_socket_logout_cannot_complete_across_a_parked_protected_se
 @pytest.mark.django_db(transaction=True)
 async def test_a_transition_in_flight_denies_both_checkpoints_inside_a_positive_window(
     monkeypatch: pytest.MonkeyPatch,
-    _logout_schema: "DjangoSchema",
+    logout_schema: "DjangoSchema",
 ):
     """The other ordering: a positive window's cache hit is not a bypass.
 
@@ -6301,7 +6310,7 @@ async def test_a_transition_in_flight_denies_both_checkpoints_inside_a_positive_
     blocked = _controller("transition-blocked")
     gate = _record_outbound_gate(monkeypatch)
     probe = _instrument_revalidation(monkeypatch)
-    router = _router(_logout_schema, websocket_revalidation_window=3600.0)
+    router = _router(logout_schema, websocket_revalidation_window=3600.0)
     native_logout = channels.auth.logout
     inside_transition = asyncio.Event()
     release_transition = asyncio.Event()
@@ -6330,7 +6339,7 @@ async def test_a_transition_in_flight_denies_both_checkpoints_inside_a_positive_
         assert probe.reads == 1
 
         consumer = gate.consumers[0]
-        logout_task = asyncio.create_task(_logout_on_this_socket(_logout_schema, consumer))
+        logout_task = asyncio.create_task(_logout_on_this_socket(logout_schema, consumer))
         await _reached(inside_transition, "the logout never opened its actor transition")
 
         # The three preconditions that make a cache hit genuinely available here.

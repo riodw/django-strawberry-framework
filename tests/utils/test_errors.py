@@ -79,6 +79,9 @@ class _HostilePath(str):
     def split(self, *args: object, **kwargs: object):
         raise RuntimeError("hostile path split")
 
+    # basedpyright: None is the runtime marker for unhashable; typeshed types the slot as a method
+    __hash__ = None  # pyright: ignore[reportAssignmentType]
+
 
 class _HostileIterable:
     def __iter__(self):

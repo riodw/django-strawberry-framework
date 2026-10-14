@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """List package Python files changed by each reachable commit.
 
 The report is intentionally narrow: it scans commit history and records only
@@ -108,8 +107,7 @@ def validate_revision(root: Path, revision: str) -> str:
 def normalize_package_dir(package_dir: str) -> str:
     """Return a git-style repo-relative package path."""
     normalized = package_dir.replace("\\", "/").strip().strip("/")
-    if normalized.startswith("./"):
-        normalized = normalized[2:]
+    normalized = normalized.removeprefix("./")
     if not normalized:
         raise GitHistoryError("--package-dir must not be empty.")
     return normalized
@@ -265,6 +263,7 @@ def collect_history(
     revision: str,
     package_dir: str,
     merge_diff: str,
+    *,
     include_empty: bool,
 ) -> tuple[str, int, list[CommitChange]]:
     """Collect commit-by-commit package Python changes."""
@@ -419,7 +418,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.revision,
         package_dir,
         args.merge_diff,
-        args.include_empty,
+        include_empty=args.include_empty,
     )
     if args.format == "json":
         report = render_json(revision, package_dir, commits_scanned, commits)

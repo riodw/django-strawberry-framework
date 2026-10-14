@@ -569,10 +569,10 @@ class _ValueBudget:
                     stack,
                     list_type,
                     path,
-                    in_mutation,
-                    argument,
-                    spec,
-                    spec_map,
+                    in_mutation=in_mutation,
+                    argument=argument,
+                    spec=spec,
+                    spec_map=spec_map,
                 ):
                     # GraphQL coerces a bare value supplied for a list input into a
                     # one-item list. Charge that synthetic container just as the
@@ -613,10 +613,10 @@ class _ValueBudget:
                     stack,
                     node_type,
                     path,
-                    in_mutation,
-                    argument,
-                    spec,
-                    spec_map,
+                    in_mutation=in_mutation,
+                    argument=argument,
+                    spec=spec,
+                    spec_map=spec_map,
                 )
                 continue
             self._charge_leaf(node_type, node_value)
@@ -627,6 +627,7 @@ class _ValueBudget:
         stack: list[_ValueFrame],
         node_type: GraphQLType | None,
         path: tuple[object, ...],
+        *,
         in_mutation: bool,
         argument: str,
         spec: InputFieldSpec | None,
@@ -668,7 +669,10 @@ class _ValueBudget:
                 entries: Collection[tuple[object, object]] = mapping.items()
                 width = len(mapping)
             else:
-                entries = self._bounded_members(lambda: mapping.items(), "max_container_width")
+                entries = self._bounded_members(
+                    lambda: mapping.items(),  # noqa: PLW0108 - read inside _bounded_members' containment
+                    "max_container_width",
+                )
                 width = len(entries)
             self._reject(
                 "max_container_width",
@@ -945,7 +949,7 @@ class _DocumentBudget:
         self.aliases: int = 0
         self.cost: int = 0
 
-    def charge_selection(self, aliased: bool) -> None:
+    def charge_selection(self, *, aliased: bool) -> None:
         """Charge one expanded field selection, and its alias when it has one."""
         self.selections += 1
         if self.selections > self.policy.max_selections:
@@ -1360,7 +1364,7 @@ class _DocumentWalk:
             # kinds continued above, so what remains is a field.
             node = cast("FieldNode", node)
             if shape:
-                self.budget.charge_selection(node.alias is not None)
+                self.budget.charge_selection(aliased=node.alias is not None)
             field_def = _field_definition(graphql_schema, parent, node.name.value)
             # A generated top-level mutation field carries its bind-time spec
             # map, which classifies the write input's fields for the whole
@@ -1570,6 +1574,7 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension[OperationState]):
     )
 
     def __init__(self, *, policy: ResourcePolicy | None = None) -> None:
+        """Settle the policy this extension enforces; ``None`` defers to the schema's policy."""
         # An accepted instance is reachable from every resolver the schema
         # serves, and so is its ``__init__``. Re-running it would nominate a new
         # budget for every later operation, which is the widening no attribute

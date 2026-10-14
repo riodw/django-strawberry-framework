@@ -1091,7 +1091,7 @@ class FilterSetMetaclass(_FilterSetMetaclassBase):
     ``OrderSetMetaclass``).
     """
 
-    def __new__(
+    def __new__(  # noqa: PYI034 - a metaclass; ruff cannot resolve the django-filter base
         cls,
         name: str,
         bases: tuple[type[object], ...],
@@ -4163,7 +4163,7 @@ class FilterSet(
         ``QuerySet`` return assertion ``BaseFilterSet.filter_queryset`` makes.
         """
         result = self._invoke_suppressing_framework_distinct(filter_instance, rows, value)
-        assert isinstance(result, models.QuerySet), (
+        assert isinstance(result, models.QuerySet), (  # noqa: S101 - mirrors django-filter's filter_queryset assertion
             f"Expected '{type(self).__name__}' filter {filter_instance.field_name!r} "
             f"to return a QuerySet, but got a {type(result).__name__} instead."
         )
@@ -4418,7 +4418,7 @@ class FilterSet(
             # The parent's own rows: the filter's original invocation, consumer
             # ``distinct`` included, as for a leaf walking no hop.
             matched = terminal.filter(queryset, value)
-            assert isinstance(matched, models.QuerySet), (
+            assert isinstance(matched, models.QuerySet), (  # noqa: S101 - mirrors django-filter's filter_queryset assertion
                 f"Expected '{type(self).__name__}' filter {terminal.field_name!r} "
                 f"to return a QuerySet, but got a {type(matched).__name__} instead."
             )
@@ -4544,7 +4544,7 @@ class FilterSet(
             routed = candidate is not None and candidate.routable
             if not routed:
                 queryset = filter_instance.filter(queryset, value)
-                assert isinstance(queryset, models.QuerySet), (
+                assert isinstance(queryset, models.QuerySet), (  # noqa: S101 - mirrors django-filter's filter_queryset assertion
                     f"Expected '{type(self).__name__}.{name}' to return a QuerySet, "
                     f"but got a {type(queryset).__name__} instead."
                 )
@@ -4555,7 +4555,7 @@ class FilterSet(
                 inner_root,
                 value,
             )
-            assert isinstance(result, models.QuerySet), (
+            assert isinstance(result, models.QuerySet), (  # noqa: S101 - mirrors django-filter's filter_queryset assertion
                 f"Expected '{type(self).__name__}.{name}' to return a QuerySet, "
                 f"but got a {type(result).__name__} instead."
             )

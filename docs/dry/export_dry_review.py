@@ -368,7 +368,7 @@ def _render_source_plan(
     def append_folder(folder: Path) -> None:
         nonlocal folder_count
         relative_folder = folder.relative_to(package_root)
-        heading = "Package root" if relative_folder == Path(".") else relative_folder.as_posix()
+        heading = "Package root" if relative_folder == Path() else relative_folder.as_posix()
         lines.extend(["", f"## {heading}", ""])
         for source_file in grouped[folder]:
             relative_file = source_file.relative_to(package_root)
@@ -378,7 +378,7 @@ def _render_source_plan(
             )
         for child in sorted(candidate for candidate in grouped if candidate.parent == folder):
             append_folder(child)
-        if relative_folder != Path("."):
+        if relative_folder != Path():
             folder_count += 1
             artifact = _artifact_name("dry-folder", relative_folder)
             lines.extend(["", f"## {relative_folder.as_posix()} integration", ""])
@@ -772,7 +772,7 @@ def _parse_python_file(
         include_nested=include_nested,
         include_constants=include_constants,
     )
-    imports = _collect_imports(tree, display, Path("."), source)
+    imports = _collect_imports(tree, display, Path(), source)
     literal_visitor = _LiteralVisitor(display, literal_min_length)
     literal_visitor.visit(tree)
     return ParsedPythonFile(
@@ -873,7 +873,7 @@ def _collect_references(
             elif isinstance(node, ast.ImportFrom):
                 module = _resolved_from_module(
                     record.path,
-                    Path("."),
+                    Path(),
                     node,
                 )
                 if module in target_modules:
@@ -1581,10 +1581,9 @@ def _run_audit(args: argparse.Namespace) -> int:
         generated_date=_validate_date(args.generated_date),
         maximum_evidence=args.max_evidence,
     )
-    if args.stdout:
+    if output is None:
         print(report)
     else:
-        assert output is not None
         _atomic_write(output, report, force=args.force)
         print(
             f"Wrote {_display_path(output, root)} "

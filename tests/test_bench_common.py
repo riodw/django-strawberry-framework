@@ -111,14 +111,14 @@ def test_report_status_is_ok_without_failures():
     assert report["status"] == "ok"
 
 
-def test_memory_db_name_is_a_shared_cache_uri_per_alias():
+def test_memory_db_name_is_a_shared_cache_uri_per_alias(tmp_path: Path):
     """Every alias gets its own named shared-cache in-memory database."""
     name = _bench_common.memory_db_name("default")
 
     assert name == "file:dsf-bench-default?mode=memory&cache=shared"
     assert _bench_common.is_memory_db_name(name)
     assert _bench_common.is_memory_db_name(":memory:")
-    assert not _bench_common.is_memory_db_name("/tmp/db.sqlite3")
+    assert not _bench_common.is_memory_db_name(str(tmp_path / "db.sqlite3"))
     assert name != _bench_common.memory_db_name("shard_b")
 
 

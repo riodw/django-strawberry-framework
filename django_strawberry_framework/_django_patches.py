@@ -434,7 +434,7 @@ def apply() -> None:
     if not upstream_patches_enabled("django"):
         return
     source = _validate_upstream_shape()
-    global _validated_remove_databases_failures_source
+    global _validated_remove_databases_failures_source  # noqa: PLW0603 - cache kept across reload
     _validated_remove_databases_failures_source = source
     if _patch_is_installed():
         return

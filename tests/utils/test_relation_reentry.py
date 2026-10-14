@@ -13,7 +13,7 @@ GraphQL operations in-process, sync and async.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 
 import pytest
 import strawberry
@@ -40,9 +40,8 @@ from django_strawberry_framework.schema import DjangoSchema
 
 @pytest.fixture(autouse=True)
 # basedpyright: requested for its side effect; pytest refuses a usefixtures mark on a fixture
-def _isolate_registry(isolate_global_registry: None) -> Iterator[None]:  # pyright: ignore[reportUnusedParameter]
+def _isolate_registry(isolate_global_registry: None) -> None:  # pyright: ignore[reportUnusedParameter]
     """Every test here declares fresh ``DjangoType`` classes over the library models."""
-    yield
 
 
 def _hiding(field: str, value: str) -> classmethod[DjangoType, ..., QuerySet[Model]]:

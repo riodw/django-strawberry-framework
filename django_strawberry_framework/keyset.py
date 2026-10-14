@@ -422,9 +422,10 @@ def _deserialize_cursor_value(field: ConcreteField, raw: object, argument: str) 
         # internally minted/test payloads) before a mismatched value reaches SQL.
         if serialize_cursor_value(field, value) != raw:
             raise _invalid_cursor_error(argument)
-        return value
     except (TypeError, ValidationError, ValueError):
         raise _invalid_cursor_error(argument) from None
+    else:
+        return value
 
 
 def keyset_contract_error(detail: str) -> GraphQLError:
@@ -599,7 +600,7 @@ def decode_keyset_cursor(
     )
 
 
-def keyset_seek_greater(descending: bool, *, flip: bool) -> bool:
+def keyset_seek_greater(*, descending: bool, flip: bool) -> bool:
     """Whether a seek comparison on one column points 'greater' in the total order.
 
     The single direction rule every seek dialect renders from: an ascending
@@ -668,7 +669,7 @@ def build_keyset_seek_plan(
     through field adapters.
     """
     return KeysetSeekPlan(
-        greater=tuple(keyset_seek_greater(flag, flip=flip) for flag in descending),
+        greater=tuple(keyset_seek_greater(descending=flag, flip=flip) for flag in descending),
         values=tuple(values),
     )
 

@@ -366,14 +366,14 @@ class GlossarySpecMention(TimeStampedModel):
         ]
         indexes = [models.Index(fields=["spec_path"])]
 
+    @override
+    def __str__(self) -> str:
+        return f"{self.spec_path}: {self.term_text}"
+
     @property
     def spec_name(self) -> str:
         """Return the basename of ``spec_path`` for compact GraphQL views."""
         return Path(self.spec_path).name
-
-    @override
-    def __str__(self) -> str:
-        return f"{self.spec_path}: {self.term_text}"
 
 
 class GlossarySourceLink(TimeStampedModel):

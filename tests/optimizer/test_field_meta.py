@@ -521,7 +521,7 @@ def test_field_meta_slots_hashing_and_copy():
     # Copy and pickle
     copied = copy.copy(fm)
     deep_copied = copy.deepcopy(fm)
-    pickled = pickle.loads(pickle.dumps(fm))
+    pickled = pickle.loads(pickle.dumps(fm))  # noqa: S301 - round-trips the object this test just pickled
     assert copied == fm
     assert deep_copied == fm
     assert pickled == fm

@@ -50,7 +50,7 @@ from .imports import import_attr_if_importable
 # ``from ..utils.inputs import graphql_camel_name`` consumers keep their import
 # path.
 from .strings import flatten_lookup_path
-from .strings import graphql_camel_name as graphql_camel_name
+from .strings import graphql_camel_name as graphql_camel_name  # noqa: PLC0414 - explicit re-export
 
 _EntryT = TypeVar("_EntryT")
 _FieldT = TypeVar("_FieldT")
@@ -345,6 +345,7 @@ class FieldConversionBase:
         kind: str = SCALAR,
         required: bool,
     ) -> None:
+        """Carry the ``annotation``, decode ``kind`` and ``required`` flag of one conversion."""
         self.annotation: object = annotation
         self.kind: str = kind
         self.required: bool = required
@@ -776,7 +777,7 @@ def name_set_input_type_name(
 def normalize_field_name_sequence(
     # basedpyright: EAFP; ``tuple(value)`` on an arbitrary Meta value runs inside the
     # surrounding try/except, which is the guard
-    value: Any,  # pyright: ignore[reportExplicitAny]
+    value: Any,  # pyright: ignore[reportExplicitAny]  # noqa: ANN401
     *,
     label: str = "fields",
     flavor: str,

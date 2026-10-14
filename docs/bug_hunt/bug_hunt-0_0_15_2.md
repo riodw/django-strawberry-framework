@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 64 done, 151 to do.
+Progress: 65 done, 152 to do.
 
 ## Done
 
@@ -169,6 +169,12 @@ Progress: 64 done, 151 to do.
   filter validated in one registration order and was unknown in another (fakeshop's library inputs moved with it). A flat
   path now follows `RelatedFilter`s until it reaches a filter set already on it, whose own filters end it there, so each set
   publishes one surface in every order, the largest any order published (`6b5d43d4`); CHANGELOG item 215; filed 216, 217
+- [x] 63. An offset `after` cursor whose page ended on `sys.maxsize` failed Strawberry's last-only `assert last is not None`
+  (the cursor at `sys.maxsize - 1 - N`, N the page the engine is handed: `first: N`, `last: 0` as `first: 0`, the cap with no
+  page argument), and one ending past it overran `islice`'s stop on a generator source or a 64-bit `LIMIT` under a
+  `sys.maxsize` page cap: a masked unexpected error on root, consumer-resolver and per-parent connections, sync and async.
+  `offset_engine_arguments` now hands the engine every forward page ending at most at `sys.maxsize - 1`, so every accepted
+  cursor serves the past-the-end page the optimized window serves (`60825338`); CHANGELOG item 218; filed 219
 
 ## Outside review of the fixes
 
@@ -459,7 +465,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## To do: holes found re-checking the fixes
 
-- [ ] 63. `after` cursor at `sys.maxsize - 1 - page` with `first: 0` / `last: 0` raises Strawberry's assert instead of an empty page
 - [ ] 64. Two cursor-decoder guards no test pins (`isascii`, the nested-window decode)
 - [ ] 66. Index advisory on a multi-table-inheritance child names an order column that lives on the parent table
 - [ ] 67. Nested serializer: a Django error raised in `create()` for a child is keyed to a renamed root input
@@ -561,6 +566,9 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 215. CHANGELOG entry for item 61: through a `RelatedFilter` cycle each filter set publishes the same flat filters
   whichever type is registered first (a flat path ends at the first set it reaches twice); flat filter inputs on cycle
   members grow (fakeshop: +965 flat fields), none is removed
+- [ ] 218. CHANGELOG entry for item 63: an offset `after` cursor near `sys.maxsize` serves the empty past-the-end page under
+  `first: N`, `last: 0` or no page argument on every source (one index per page size, and on a generator source every
+  index past it, raised a masked unexpected error); a page cap of `sys.maxsize` serves its rows with no page argument
 - [ ] 196. CHANGELOG entries for items 6 (combined querysets served as their pk set), 12 (the deadline message reads "before
   this field reached the database"; login, logout, me and `relay.node()` reject past the deadline), 50 and 83 (planned
   `.only()` writers no longer drop selected columns), 74 (a consumer `select_related` the selection never reads no
@@ -599,6 +607,9 @@ not real bugs and just get deleted from t3. One checkbox per area:
   bound or a per-declaration opt-out of flat copies
 - [ ] 217. A subclass of a `FilterSet` in a `RelatedFilter` cycle publishes one lap more than its parent (the cycle closes at
   the parent class, not the subclass); decide whether a subclass should close the cycle at itself
+- [ ] 219. Strawberry's own `ListConnection` (0.327.7 and 0.334.4) fails `assert last is not None` when `after + 1 + first`
+  equals `sys.maxsize` (its `SliceMetadata` last-only sentinel) and overruns `islice`'s stop past it on an iterator source;
+  the package now keeps its pages clear of both. Report it upstream?
 
 ## Hunt not finished in t3
 

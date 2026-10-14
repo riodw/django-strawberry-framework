@@ -155,34 +155,50 @@ target-version = "py310"
 exclude = ["*.md"]
 
 [tool.ruff.lint]
+# Every stable rule is either selected here or named in `ignore` below (docs/ruffing.md
+# keeps the count): a family is selected whole and its codes that still report are ignored.
 select = [
-    "E",      # pycodestyle errors
-    "W",      # pycodestyle warnings
-    "F",      # pyflakes
-    "I",      # isort
-    "ANN",    # flake8-annotations
     "A",      # flake8-builtins
+    "AIR",    # Airflow
+    "ANN",    # flake8-annotations
     "ARG",    # flake8-unused-arguments (contractual resolver/fixture args carry noqa)
     "ASYNC",  # flake8-async: async/await antipatterns (blocking calls in async, etc.)
     "B",      # flake8-bugbear: likely bugs (mutable defaults, bad except order, etc.)
-    "N",      # pep8-naming
+    "BLE",    # flake8-blind-except
     "C4",     # flake8-comprehensions
-    "COM812", # flake8-commas: missing-trailing-comma (pairs with magic trailing comma in formatter)
-    "COM818", # flake8-commas: trailing comma on a bare tuple (COM819 conflicts with the formatter)
-    "D",      # pydocstyle
+    "C90",    # mccabe
+    "COM",    # flake8-commas (COM812 pairs with the formatter's magic trailing comma)
+    "CPY",    # flake8-copyright
+    "D",      # pydocstyle (Google convention)
+    "D204",   # blank line after a class docstring (outside the Google convention)
+    "D215",   # over-indented section underline (ditto)
+    "D406",   # section name ends with a newline (ditto)
+    "D407",   # dashed section underline (ditto)
+    "D408",   # section underline on the line after the name (ditto)
+    "D409",   # section underline length (ditto)
     "DJ",     # flake8-django
     "DTZ",    # flake8-datetimez: naive datetimes
+    "E",      # pycodestyle errors
+    "EM",     # flake8-errmsg
     "ERA",    # eradicate
     "EXE",    # flake8-executable: shebang vs executable bit
+    "F",      # pyflakes
     "FA",     # flake8-future-annotations
+    "FAST",   # FastAPI
+    "FBT",    # flake8-boolean-trap
     "FIX",    # flake8-fixme: FIXME/XXX/HACK markers (TODO is the anchor convention)
     "FLY",    # flake8-flynt: static str .join() -> f-string
     "FURB",   # refurb: modernizing rewrites
     "G",      # flake8-logging-format: eager formatting in logging calls
+    "I",      # isort
     "ICN",    # flake8-import-conventions
+    "INP",    # flake8-no-pep420
     "INT",    # flake8-gettext
-    "ISC003", # explicit-str-concat only (ISC001/002 conflict with the formatter)
+    "ISC",    # flake8-implicit-str-concat
     "LOG",    # flake8-logging
+    "N",      # pep8-naming
+    "NPY",    # NumPy
+    "PD",     # pandas-vet
     "PERF",   # Perflint: perf antipatterns (try/except in loop, manual comprehension)
     "PGH",    # pygrep-hooks: blanket noqa / type: ignore
     "PIE",    # flake8-pie
@@ -196,6 +212,7 @@ select = [
     "RUF",    # Ruff-specific: unused-noqa (RUF100), mutable-class-default (RUF012), ...
     "S",      # flake8-bandit: security
     "SIM",    # flake8-simplify
+    "SLF",    # flake8-self
     "SLOT",   # flake8-slots
     "T10",    # flake8-debugger
     "T20",    # flake8-print
@@ -204,12 +221,27 @@ select = [
     "TID",    # flake8-tidy-imports
     "TRY",    # tryceratops
     "UP",     # pyupgrade
+    "W",      # pycodestyle warnings
     "YTT",    # flake8-2020: sys.version misuse
 ]
 ignore = [
     # Off by design (docs/ruffing.md "Off by design").
+    "C901",   # function complexity
+    "CPY001", # copyright headers
+    "D203",   # blank line before a class docstring: D211 (Google) is the opposite
+    "D213",   # summary on the second line: D212 (Google) is the opposite
+    "D400",   # summary ends with a period: Google's D415 accepts any punctuation
+    "D401",   # imperative-mood summary: not part of the Google convention
+    "D404",   # summary starting "This": ditto
+    "D413",   # blank line after the last section: ditto
+    "EM101",  # string literal in the exception constructor: exception-message style only
+    "EM102",  # f-string in the exception constructor: ditto
+    "FBT001", # boolean positional parameter: fixing it changes public signatures
+    "FBT002", # boolean default positional parameter: ditto
+    "FBT003", # boolean positional argument in a call: ditto
     "FIX002", # TODO markers are the `TODO(spec-NNN slice N)` anchor convention
     "ICN001", # conventional import aliases
+    "INP001", # examples/fakeshop/tests/ is not a package; scripts/ runs as plain files
     "PLC0415", # local imports break import cycles
     "PLR0911", # too many return statements
     "PLR0912", # too many branches
@@ -217,6 +249,7 @@ ignore = [
     "PLR0915", # too many statements
     "PLR0917", # too many positional arguments
     "PLR2004", # magic value in comparison
+    "SLF001", # private member access: the package shares underscore names across modules
     "TC001",  # first-party import used only in annotations: annotations are read at runtime
     "TC002",  # third-party import used only in annotations: ditto
     "TC003",  # stdlib import used only in annotations: ditto
@@ -228,6 +261,7 @@ ignore = [
     "TRY003", # long message passed to the exception constructor
     # Ratchet: real sites still to fix (docs/ruffing.md); delete a line once its sites are fixed.
     "ANN401",
+    "BLE001",
     "D107",
     "DJ001",
     "DJ008",
@@ -240,6 +274,7 @@ ignore = [
     "FURB157",
     "FURB167",
     "FURB188",
+    "ISC004",
     "PIE790",
     "PIE810",
     "PLC0105",

@@ -7,7 +7,8 @@ A rule family is selected whole; a code in it that still reports sits in the rat
 are fixed at the root, gated (`ruff check`, `ruff format --check`, `scripts/check_trailing_commas.py --check`, full
 suite at 100% coverage) and committed, and the line is deleted.
 
-Progress: 23 done, 5 to do. Rules enabled: 670. Ratchet block: 74 codes. `# noqa` comments: 160 lines in 52 files.
+Progress: 24 done, 5 to do. Stable rules: 815, every one named in the config: 706 on, 109 in `ignore` (33 off by
+design, 76 ratchet). The 139 preview-only rules stay off with `preview`. `# noqa` comments: 160 lines in 52 files.
 
 Counts below were measured on ruff 0.17.0 at ee9c8161. "Root" is `conftest.py`, `line_count.py` and
 `docs/dry/export_dry_review.py`.
@@ -18,8 +19,8 @@ Counts below were measured on ruff 0.17.0 at ee9c8161. "Root" is `conftest.py`, 
 - [x] 2. `F` (Pyflakes)
 - [x] 3. `I` (isort), with `django_strawberry_framework` first-party
 - [x] 4. `UP` (pyupgrade), targeting py310
-- [x] 5. `ANN` (annotations), minus `ANN401` (item 28); tests/ and examples/ exempt
-- [x] 6. `D` (pydocstyle, Google convention), minus `D107` (item 28); tests/ and examples/ exempt
+- [x] 5. `ANN` (annotations), minus `ANN401` (item 29); tests/ and examples/ exempt
+- [x] 6. `D` (pydocstyle, Google convention), minus `D107` (item 29); tests/ and examples/ exempt
 - [x] 7. `A` (builtins)
 - [x] 8. `ARG` (unused arguments), `*args` / `**kwargs` padding exempt (`ignore-variadic-names`); tests/ and examples/
   exempt
@@ -33,25 +34,27 @@ Counts below were measured on ruff 0.17.0 at ee9c8161. "Root" is `conftest.py`, 
 - [x] 16. `Q` (double quotes) and `RSE` (raise hygiene)
 - [x] 17. `RUF` (Ruff-specific, `RUF100` unused-noqa and `RUF001`-`RUF003` ambiguous Unicode included)
 - [x] 18. `SIM` (simplify)
-- [x] 19. One rule of a family: `COM812` (trailing commas, paired with `scripts/check_trailing_commas.py`), `COM818`
-  (trailing comma on a bare tuple), `ISC003` (explicit `+` concatenation; `ISC001` / `ISC002` conflict with the
-  formatter)
-- [x] 20. `PL` (Pylint), minus the off-by-design codes below and the ratchet codes of items 24 and 26
+- [x] 19. `COM` (trailing commas; `COM812` pairs with `scripts/check_trailing_commas.py`) and `ISC` (implicit
+  concatenation, minus `ISC004`, item 26). ruff 0.17 reports a formatter conflict for `COM812` only
+- [x] 20. `PL` (Pylint), minus the off-by-design codes below and the ratchet codes of items 25 and 27
 - [x] 21. Every other stable rule with no site today, by selecting its family: `DJ`, `DTZ`, `EXE`, `FA`, `FIX`,
   `FURB`, `G`, `ICN`, `INT`, `LOG`, `PGH`, `PIE`, `PT`, `PTH`, `PYI`, `RET`, `S`, `SLOT`, `T10`, `TC`, `TD`, `TID`,
-  `TRY`, `YTT`. The codes that still report are in `ignore` (off by design below, or ratchet items 24-28)
+  `TRY`, `YTT`. The codes that still report are in `ignore` (off by design below, or ratchet items 25-29)
 - [x] 22. Dead config ignores deleted: `ANN002`, `ANN003`, `D417`, `RUF001`-`RUF003` from the global `ignore`; `F841`
   and `SIM118` from the tests/ and examples/ lists; `N806`, `B018` and `PERF` from the examples/ list; the
   `__init__.py`, `**/migrations/*.py`, `**/views.py`, `**/urls.py` and `**/admin.py` entries
 - [x] 23. `T201` (print) on for everything but scripts/ and the root tools (`line_count.py`,
   `docs/dry/export_dry_review.py`), where print is the CLI output
+- [x] 24. Every remaining family selected, so the config names every stable rule: `AIR`, `FAST`, `NPY`, `PD` (on,
+  silent unless their library is imported), `BLE`, `C90`, `CPY`, `EM` (`EM103` on), `FBT`, `INP`, `SLF`; and `D204`,
+  `D215`, `D406`-`D409`, which sit outside the Google convention and report nothing
 
 ## To do: rules still off
 
 Counts are the diagnostics each code reports when its ignore line is deleted (package / tests / examples / scripts /
 root).
 
-- [ ] 24. Small, real signal (about 370 sites), each row's codes in the ratchet block:
+- [ ] 25. Small, real signal (about 370 sites), each row's codes in the ratchet block:
 
   | Rule | Sites | Package | Tests | Examples | Scripts | Root | Catches |
   | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -68,16 +71,16 @@ root).
   | `DTZ` | 5 | 0 | 4 | 0 | 1 | 0 | a naive `datetime` / `date.today()` |
   | `EXE001` | 5 | 0 | 0 | 1 | 4 | 0 | a shebang on a file that is not executable |
 
-- [ ] 25. Larger, worth a look: `ISC004` (84, not selected: implicit concatenation inside a collection literal, the
+- [ ] 26. Larger, worth a look: `ISC004` (84: implicit concatenation inside a collection literal, the
   missing-comma bug), `DJ001` / `DJ008` / `DJ012` (141: 127 test models without `__str__`, 8 nullable string fields,
   6 model bodies out of Django's order), `SLOT000` / `SLOT001` (62 `str` / `tuple` subclasses without `__slots__`,
   all in tests and examples)
-- [ ] 26. Security and boundaries: the `S` ratchet codes (package 16: `try`/`except: pass` 5, SQL strings 4, `assert`
+- [ ] 27. Security and boundaries: the `S` ratchet codes (package 16: `try`/`except: pass` 5, SQL strings 4, `assert`
   4, a weak hash, ...; `S101` is by design in tests/ and examples/ but has 19 sites elsewhere: package 4, scripts 14,
   root 1; the rest are subprocess calls, hard-coded test passwords and `pickle` in tests, examples and scripts) and
-  `BLE001` (not selected: 187 `except Exception` in the package, each a deliberate boundary today; turning it on means
+  `BLE001` (187 `except Exception` in the package, each a deliberate boundary today; turning it on means
   a `noqa` with its reason on each)
-- [ ] 27. Shrink the tests/ and examples/ per-file ignores. What each code hides today:
+- [ ] 28. Shrink the tests/ and examples/ per-file ignores. What each code hides today:
 
   | Code | Hidden | Tests | Examples |
   | --- | --- | --- | --- |
@@ -97,29 +100,28 @@ root).
 
   scripts/ drops `PERF` (16 sites).
 
-- [ ] 28. `ANN401` and `D107`: 34 explicit `Any` annotations and 22 undocumented `__init__`s in the package
+- [ ] 29. `ANN401` and `D107`: 34 explicit `Any` annotations and 22 undocumented `__init__`s in the package
 
 Off by design (not planned):
 
 - `PLC0415` (2081, import outside top level): import cycles are broken by local imports
 - `TC001`-`TC003` (607): Strawberry and Django read annotations at run time, so a typing-only import would be a
   `NameError`
-- `SLF001` (2559, private member access, not selected): the package shares underscore names across its modules
+- `SLF001` (2559, private member access): the package shares underscore names across its modules
   (`reportPrivateUsage` is off for the same reason)
 - `TID252` (917, relative imports): the package imports its siblings relatively
-- `EM` (3097 with `TRY003`, not selected) and `TRY003`: exception-message style only
-- `FBT` (306, boolean positional arguments, not selected): fixing them changes public signatures
+- `EM101`, `EM102`, `TRY003` (3097): exception-message style only
+- `FBT001`-`FBT003` (306, boolean positional arguments): fixing them changes public signatures
 - `PLR` complexity and magic values (`PLR2004` 1269, `PLR0913` 123, `PLR0912` 49, `PLR0911` 40, `PLR0917` 26,
-  `PLR0915` 24) and `C901` (97, not selected)
+  `PLR0915` 24) and `C901` (97)
 - `FIX002`, `TD002`-`TD005` (35): they clash with the `TODO(spec-NNN slice N)` anchor convention (a wrapped anchor
   carries its text on the next line); the rest of `TD` and `FIX` is on
-- `INP001` (69, not selected): `examples/fakeshop/tests/` is deliberately not a package, and scripts/ runs as plain
+- `INP001` (69): `examples/fakeshop/tests/` is deliberately not a package, and scripts/ runs as plain
   files
-- `CPY001` (511, copyright headers, not selected) and `ICN001` (38, `import datetime as dt`)
-- `COM819`, `ISC001`, `ISC002` (not selected): they conflict with the formatter
-- `AIR`, `FAST`, `NPY`, `PD` (not selected): Airflow, FastAPI, NumPy and pandas lints; the project uses none of them,
-  and `PD011` misreads Django's `TextChoices.values`
-- `D` codes the Google convention turns off (`D203`, `D213`, `D400`, `D401`, ...): selecting them does nothing
+- `CPY001` (511, copyright headers) and `ICN001` (38, `import datetime as dt`)
+- `D203`, `D213`: the opposites of `D211` and `D212`, which the Google convention selects (ruff drops one of each
+  pair)
+- `D400` (1), `D401` (170, imperative mood), `D404` (6), `D413` (71): outside the Google convention
 
 ## Files ruff skips
 
@@ -132,10 +134,11 @@ content, so the formatter owns `.py` only. No file carries a file-level `# ruff:
 
 Global `ignore`, in two commented blocks:
 
-- Off by design (18): `FIX002`, `ICN001`, `PLC0415`, `PLR0911`, `PLR0912`, `PLR0913`, `PLR0915`, `PLR0917`,
-  `PLR2004`, `TC001`, `TC002`, `TC003`, `TD002`, `TD003`, `TD004`, `TD005`, `TID252`, `TRY003`
-- Ratchet (74): the codes of items 24-26 and 28 (`ANN401`, `D107`, `DJ*`, `DTZ*`, `EXE001`, `FURB*`, `PIE*`, `PLC*`,
-  `PLR*`, `PLW*`, `PT*`, `PTH*`, `PYI*`, `RET*`, `S*`, `SLOT*`, `TRY300`, `TRY301`)
+- Off by design (33): `C901`, `CPY001`, `D203`, `D213`, `D400`, `D401`, `D404`, `D413`, `EM101`, `EM102`,
+  `FBT001`-`FBT003`, `FIX002`, `ICN001`, `INP001`, `PLC0415`, `PLR0911`, `PLR0912`, `PLR0913`, `PLR0915`, `PLR0917`,
+  `PLR2004`, `SLF001`, `TC001`-`TC003`, `TD002`-`TD005`, `TID252`, `TRY003`
+- Ratchet (76): the codes of items 25-27 and 29 (`ANN401`, `BLE001`, `D107`, `DJ*`, `DTZ*`, `EXE001`, `FURB*`,
+  `ISC004`, `PIE*`, `PLC*`, `PLR*`, `PLW*`, `PT*`, `PTH*`, `PYI*`, `RET*`, `S*`, `SLOT*`, `TRY300`, `TRY301`)
 
 Per-file ignores:
 

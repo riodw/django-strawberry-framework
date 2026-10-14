@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 65 done, 152 to do.
+Progress: 66 done, 154 to do.
 
 ## Done
 
@@ -60,6 +60,12 @@ Progress: 65 done, 152 to do.
   `base_fields` value) whose `__class__` raises escaped `_form_field_basis` raw at declaration and finalize, against the
   `get_form_fields` / `_form_basis_content_identity` docstrings; it is now an invalid field in the typed error (`32b66897`).
   The eight raw `__name__` reads in `forms/sets.py` need no code: no contract row, and the label question is item 26's
+- [x] 17. `mutations/` and `auth/mutations.py` robustness rows (not defects: application Python, no wire input). A protected
+  `USERNAME_FIELD` / `REQUIRED_FIELDS` entry that is a `str` subclass (an enum member, or one whose repr or ordering raises)
+  escaped `derive_register_fields` raw or rendered as an enum repr, against the GLOSSARY / spec-040 refusal naming the
+  field; `DjangoMutationField` checked ledger membership by equality, so a drained class equal to its redeclaration built a
+  schema whose requests failed. Both fixed (`b4d6e06a`). The raw `__name__` labels, the protocol probe and the Payload
+  name need no code: no contract row, and the name question is item 26's
 - [x] 28. Deep dive 3 (authorization on deferred paths): findings 12 and 13 done; `VenueBadgeType` and `VenueSponsorType` now
   hide marked rows, and live rows prove none leaks through the no-`related_name` reverse accessors (`16a8c179`)
 - [x] 50. A SKIP hint (and a consumer-assigned relation, and the nested-connection SKIP arm) left the relation's key column out of
@@ -218,7 +224,6 @@ tracker number are recorded there; open remainders and new defects are filed as 
 40 low-priority rows, mostly guards against classes with broken `__name__` / `__eq__` / metaclasses. Expected outcome: most are
 not real bugs and just get deleted from t3. One checkbox per area:
 
-- [ ] 17. `mutations/` and `auth/mutations.py` (4 rows)
 - [ ] 18. `optimizer/` (2 rows)
 - [ ] 19. `rest_framework/` (2 rows)
 - [ ] 20. Filter and order sets (8 rows)
@@ -462,6 +467,13 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 213. `filters/inputs.py` docstrings carry process provenance START.md bans: `_require_list_container` ("The previous
   arms SPLATTED ...") and the GlobalID list arm ("The previous implementation eagerly decoded ..."); restate each as the
   invariant, and sweep the older filter tests for the same wording
+- [ ] 221. `auth/mutations.py::derive_register_fields` still dedups and intersects the consumer's `USERNAME_FIELD` /
+  `REQUIRED_FIELDS` entries by their own `__hash__` / `__eq__`: an unhashable or raising entry escapes raw, and a `str`
+  subclass whose `__eq__` is always False slips past the protected-field refusal (`('username', 'is_staff', 'password')`).
+  Reading each entry through its base `str` slot at the read closes both but returns base `str` names
+- [ ] 222. Class membership by equality outside the mutation ledgers: `registry.py::TypeRegistry.register`
+  (`type_cls in existing_types`) and `filters/sets.py` (`if cls in path`) dispatch a metaclass `__eq__`; check each against
+  the identity contract its store records under
 
 ## To do: holes found re-checking the fixes
 
@@ -472,11 +484,22 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## Waiting on you
 
-- [ ] 26. A mutation whose `__name__` raises publishes a `<MetaclassName>Payload` type instead of failing. Fail, or keep?
-  The form flavors instead fail raw at declaration (`forms/sets.py::DjangoModelFormMutation._validate_meta`,
+- [ ] 26. A mutation class whose `__name__` raises, is not a `str`, is a format-hostile `str` subclass, or is not a
+  GraphQL name: fail at declaration with a typed error, or keep? At HEAD the model and form flavors fail raw at declaration
+  (`mutations/sets.py::DjangoMutation._validate_meta`, `forms/sets.py::DjangoModelFormMutation._validate_meta`,
   `forms/sets.py::DjangoFormMutation._validate_meta`), and a hostile form class name fails a valid declaration through
-  `forms/inputs.py::resolve_effective_form_fields`; generated input and payload names derive from `__name__`, so the answer
-  covers both flavors and the GraphQL names
+  `forms/inputs.py::resolve_effective_form_fields`. Only a rename after declaration reaches `DjangoMutationField` (the
+  `<Name>Payload` ref), `bind_mutation_outputs` and every request (`mutations/resolvers.py::run_write_pipeline_sync`). A
+  non-identifier name (`type("Create Item", ...)`) raises a raw `SyntaxError` at `DjangoMutationField`, and
+  `"Create-Item"` fails only at schema build. Input and payload names derive from `__name__`, so the answer covers every
+  flavor, the auth riders' user-model labels (`auth/mutations.py::derive_register_fields`,
+  `_resolve_user_primary_or_raise`, and the eager subject in `mutations/inputs.py::editable_input_fields`) and the GraphQL
+  names
+- [ ] 220. A `Meta.permission_classes` entry whose `__name__` raises is accepted at declaration, then every request raises it
+  raw: `mutations/permissions.py::run_permission_classes` computes `owner=permission_class.__name__` before it knows the
+  result is a bool (the request user's class name in `DjangoModelPermission.has_permission` likewise), and the conflict
+  message in `auth/mutations.py` renders permission-class names raw. Read the label only on the failure branch, reject at
+  declaration, or keep?
 - [ ] 53. Docs (parked): README async section, a hand-written `@strawberry.field` returning a QuerySet runs synchronously
 - [ ] 54. Docs (parked): glossary, a sliced combinator branch on SQLite raises Django's own `DatabaseError`
 - [ ] 57. CHANGELOG entry for item 11: model, ModelForm, plain-form and register errors now use the input name (`categoryId`, not `category`)
@@ -573,8 +596,10 @@ not real bugs and just get deleted from t3. One checkbox per area:
   this field reached the database"; login, logout, me and `relay.node()` reject past the deadline), 50 and 83 (planned
   `.only()` writers no longer drop selected columns), 74 (a consumer `select_related` the selection never reads no
   longer errors), 15 (a hand-built range filter value that is not a `start` / `end` mapping or input object raises
-  `ConfigurationError` instead of filtering nothing) and 16 (a form field basis value whose `__class__` raises is reported
-  as an invalid field in `ConfigurationError`)
+  `ConfigurationError` instead of filtering nothing), 16 (a form field basis value whose `__class__` raises is reported
+  as an invalid field in `ConfigurationError`) and 17 (`register_mutation()` names a protected field declared as a `str`
+  subclass by its value; `DjangoMutationField` refuses a class drained by `registry.clear()` even when it compares equal
+  to its redeclaration)
 - [ ] 197. The per-parent visibility paths (`types/resolvers.py::_visible_many_rows`, `_visible_related_object`, relation
   connections, `resolver=`) never narrow the hook's result to the source's rows, so a hook that ignores its input shows other
   parents' rows or the wrong to-one object. Decide the contract (narrow at the five seams, with a live row for an

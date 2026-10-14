@@ -14,7 +14,8 @@ probe schema once.
 
 Row groups, in the order a request meets them:
 
-- the document text bounds (tokens, structural depth) - charged before the parse;
+- the document text bounds (tokens, name length, structural depth) - charged
+  before the parse;
 - the expanded-document bounds (selections, aliases, collection cost) - charged
   before validation, with fragment / alias / directive evasion rows, and the
   named-operation filter (post-parse shape bounds charge only the operation
@@ -496,6 +497,7 @@ async def _carry_relation_async_view(request: HttpRequest, *args: object, **kwar
 
 MAX_TOKENS = 40
 MAX_DEPTH = 6
+MAX_NAME_BYTES = 16
 MAX_SELECTIONS = 12
 MAX_ALIASES = 3
 MAX_COST = 5_000
@@ -1410,6 +1412,7 @@ urlpatterns = [
     ),
     path("rp-tokens/", _probe_view(max_document_tokens=MAX_TOKENS)),
     path("rp-depth/", _probe_view(max_depth=MAX_DEPTH)),
+    path("rp-names/", _probe_view(max_name_bytes=MAX_NAME_BYTES)),
     path(
         "rp-shape/",
         _probe_view(max_selections=MAX_SELECTIONS, max_aliases=MAX_ALIASES),
@@ -1626,6 +1629,33 @@ def test_depth_counts_argument_and_input_object_nesting():
     )
     extensions = _rejection(_post("/rp-depth/", query))
     assert extensions["bound"] == "max_depth"
+
+
+#: Two operations spreading one fragment that reads a variable neither defines:
+#: validation reports the undefined variable once per operation, each report
+#: carrying the variable's name.
+_UNDEFINED_VARIABLE_IN_A_SHARED_FRAGMENT = (
+    "query A { ...F } query B { ...F } fragment F on Query { __type(name: $%s) { name } }"
+)
+
+
+def test_a_name_at_the_name_bound_reaches_validation_once_per_operation():
+    """At the bound the document is parsed, and every operation's report echoes the name."""
+    name = "v" * MAX_NAME_BYTES
+    payload = _post("/rp-names/", _UNDEFINED_VARIABLE_IN_A_SHARED_FRAGMENT % name)
+    _no_rejection(payload)
+    errors = payload["errors"]
+    assert len(errors) == 2, errors
+    assert all(f"${name}'" in error["message"] for error in errors), errors
+
+
+def test_a_name_over_the_name_bound_is_rejected_before_the_parse():
+    """Names are measured on the raw text, so validation never copies an oversized one."""
+    name = "v" * (MAX_NAME_BYTES + 1)
+    extensions = _rejection(_post("/rp-names/", _UNDEFINED_VARIABLE_IN_A_SHARED_FRAGMENT % name))
+    assert extensions["bound"] == "max_name_bytes"
+    assert extensions["limit"] == MAX_NAME_BYTES
+    assert extensions["charged"] == MAX_NAME_BYTES + 1
 
 
 # ---------------------------------------------------------------------------

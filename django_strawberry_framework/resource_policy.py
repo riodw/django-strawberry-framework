@@ -283,6 +283,16 @@ class ResourcePolicy:
         depth alongside selection-set nesting; the bound is deliberately
         structural rather than selection-only because a bound applied after the
         parse cannot stop the parse from recursing.
+    ``max_name_bytes``
+        Bytes in the longest name in the raw document - a field, argument,
+        variable, type, fragment or directive name - again measured before the
+        parse. A name is ASCII by the GraphQL grammar, so its length is its byte
+        count. Validation copies a name into the message of every error it
+        reports about it, and one undefined variable inside a fragment is
+        reported once for every operation that spreads the fragment, so an
+        unmeasured name is copied into the response up to a hundred times, the
+        error count at which graphql-core's validation stops. No value bound
+        sees a name: it is never a value.
     ``max_selections``
         Field selections after fragment expansion, summed across the operation.
         A fragment spread is charged wherever it is spread, so spreading one
@@ -393,6 +403,7 @@ class ResourcePolicy:
 
     max_document_tokens: int = 4_000
     max_depth: int = 20
+    max_name_bytes: int = 1_024
     max_selections: int = 500
     max_aliases: int = 100
     max_collection_cost: int = 1_000_000_000

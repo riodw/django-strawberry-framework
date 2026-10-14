@@ -224,6 +224,7 @@ package defaults. Both override sources are *trusted declarations* and may widen
 |---|---|---|
 | `max_document_tokens` | `4_000` | Lexical tokens in the raw document, before the parse. |
 | `max_depth` | `20` | Structural nesting (`{`, `(`, `[`), before the parse. |
+| `max_name_bytes` | `1_024` | Bytes in the longest name in the raw document, before the parse. |
 | `max_selections` | `500` | Field selections after fragment expansion; fragment spreads and inline fragments entered are counted against it on a count of their own. |
 | `max_aliases` | `100` | Aliased selections after fragment expansion. |
 | `max_collection_cost` | `1_000_000_000` | Multiplicative row cost of the document. |
@@ -507,15 +508,15 @@ authority, a thread-local).*
 
 ### Decision 3 — The document text scan runs BEFORE the parse
 
-Token count and structural nesting depth are charged by one lexer sweep over the raw
-document string in `on_operation`, before graphql-core parses it.
+Token count, name length and structural nesting depth are charged by one lexer sweep over
+the raw document string in `on_operation`, before graphql-core parses it.
 
 This is not an optimization. graphql-core's parser is recursive-descent, and so are the
 GraphQL validators; a depth bound applied to the parsed AST cannot stop the parse from
 exhausting the interpreter's stack, which is exactly the failure a deep document drives. A
 bound that only fires after the thing it protects has already run is not a bound.
 
-Two consequences are contractual and are documented rather than hidden:
+These consequences are contractual and are documented rather than hidden:
 
 - **Depth is structural, not selection-only.** `{`, `(` and `[` all count, so argument and
   input-object nesting counts alongside selection-set nesting. Before the parse there is
@@ -541,6 +542,14 @@ Two consequences are contractual and are documented rather than hidden:
   exception-containment invariant says must never escape an input decoder. Both HTTP views
   type-check the query before the extension runs; the WebSocket path performs no such check,
   so the decline is this scan's own contract rather than a transport's favor.
+- **A name is measured on its token, because no later pass sees it.** A name is never a
+  value, so the value walk cannot charge it, and validation copies it into the message of
+  every error it reports about it: an undefined variable inside a fragment is reported once
+  for every operation that spreads the fragment, up to graphql-core's hundred-error stop.
+  An unmeasured name therefore multiplies into the response, bounded only by the request
+  body cap. `max_name_bytes` charges each `NAME` token's length, which is its byte count
+  because the grammar admits only ASCII in a name. Its default, `1_024`, is far above any
+  name a schema declares and keeps the worst echo near a hundred kilobytes.
 
 *Alternatives rejected: see the [rationale][rationale] (`parse_options["max_tokens"]`, a
 depth `ValidationRule`, a regex or `str.count` over the document).*
@@ -1004,7 +1013,7 @@ any release in the range, in either position a consumer can give a validation ex
 
 The pre-parse text scan (pass 1) cannot: its whole job is to refuse before the parser runs,
 and a published error does not stop the parse. It raises, and upstream's streaming path has no
-conversion for an exception out of that hook, so a WebSocket **subscription** over the token or
+conversion for an exception out of that hook, so a WebSocket **subscription** over the token, name or
 structural-depth bound is refused just as hard — nothing parses, nothing executes — but its
 client observes the operation completing without data rather than an error entry. That is
 upstream's shape, not this package's choice, and building a package-owned subscription error
@@ -1075,8 +1084,8 @@ the streaming path renders like any other, so that half carries
 `extensions.code == "RESOURCE_LIMIT_EXCEEDED"` on every transport and executes on none. The
 text scan cannot publish — a published error does not stop the parse it exists to prevent — so
 it raises, and upstream's non-streaming path converts a pre-execution exception into an
-`errors` entry while its streaming path does not: a subscription refused on tokens or
-structural depth closes with `complete` instead. *The `except`-clause asymmetry that produces this is traced in the
+`errors` entry while its streaming path does not: a subscription refused on tokens, a name
+or structural depth closes with `complete` instead. *The `except`-clause asymmetry that produces this is traced in the
 [rationale][rationale].*
 
 **State the behaviour, never the private method name.** A fix here must be written against that
@@ -1303,12 +1312,13 @@ check runs rather than about how long anything takes.
   document carrying several operations does not pay those for the ones it did not run. The
   value bounds follow validation instead, which converts every definition in the document: a
   value in an operation the request did not name is still charged, per reference.
-- **`max_document_tokens` and `max_depth` are request-level bounds**, charged over the whole
-  document text including operations the request did not name. They exist to bound the parse;
-  the parse reads the whole document whatever `operationName` says, and no operation is
-  identified until it has finished. A client sending one persisted document carrying several
-  operations is charged for the document it sent, so the ceiling a deployment configures for
-  these two is a ceiling on a request, not on an operation.
+- **`max_document_tokens`, `max_name_bytes` and `max_depth` are request-level bounds**,
+  charged over the whole document text including operations the request did not name. They
+  exist to bound the parse and what validation echoes; both read the whole document whatever
+  `operationName` says, and no operation is identified until the parse has finished. A
+  client sending one persisted document carrying several operations is charged for the
+  document it sent, so the ceiling a deployment configures for these three is a ceiling on a
+  request, not on an operation.
 - **The example project keeps both relation shapes live**: `CategoryType.items`,
   `ItemType.entries` and `BookType.genres` / `GenreType.books` are explicit `"both"`
   opt-ins so the bounded raw-list surface stays covered, while `CategoryType.properties` is
@@ -1328,7 +1338,8 @@ bounds and leave every other bound at its default — so a row that rejects can 
 rejected on the bound it is about.
 
 - **Document text**: under / over the token bound with the exact charge; over the depth
-  bound; argument and input-object nesting counted toward depth; and the malformed pair —
+  bound; a name at the name bound reaching validation, which reports it once per operation
+  spreading the fragment that reads it, and one byte over refused with the exact charge; argument and input-object nesting counted toward depth; and the malformed pair —
   a malformed document answered with the parser's own syntax diagnostic rather than a
   resource rejection, and a malformed document already over the token bound before its
   garbage rejected on size. Both are live rows because a malformed document IS expressible
@@ -1480,7 +1491,7 @@ is in the [rationale][rationale].*
       the connection cap seam, and (through the shared context) the transports; per-field
       overrides narrow only, and the schema-construction policy is the sole trusted
       declaration that may widen.
-- [x] Document tokens and structural depth are charged **before** the parse; expanded
+- [x] Document tokens, name length and structural depth are charged **before** the parse; expanded
       selections, aliases, and multiplicative collection cost are charged after the parse
       and before validation, with fragments, aliases, and directives unable to evade
       accounting.

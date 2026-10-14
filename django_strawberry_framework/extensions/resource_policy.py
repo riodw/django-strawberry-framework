@@ -10,9 +10,10 @@ built through this package is bounded without opt-in boilerplate.
 Three passes, in the order a request meets them:
 
 1. **Pre-parse text scan** (``on_operation``). One lexer sweep over the raw
-   document counts tokens and structural nesting. It must run before the parse
-   because graphql-core's parser is recursive-descent: a bound applied after the
-   parse cannot stop the parse from exhausting the interpreter's stack.
+   document counts tokens and structural nesting, and measures every name. It
+   must run before the parse because graphql-core's parser is recursive-descent:
+   a bound applied after the parse cannot stop the parse from exhausting the
+   interpreter's stack.
 2. **Document budget** (``on_parse``, after the parse). One iterative,
    fragment-expanding walk over the parsed AST charges expanded selections,
    aliases, and the multiplicative collection cost. Fragment spreads are charged
@@ -75,9 +76,9 @@ Where each pass reaches, stated as the boundary rather than as parity:
 - Pass 1 is the one that still raises, because its whole job is to refuse
   before the parser runs and a published error does not stop a parse. On a
   transport whose streaming path has no conversion for an exception out of that
-  hook, a subscription over the token or structural-depth bound is refused just
-  as hard - nothing parses, nothing executes - but its client sees the
-  operation complete without data rather than an error entry.
+  hook, a subscription over the token, name or structural-depth bound is
+  refused just as hard - nothing parses, nothing executes - but its client sees
+  the operation complete without data rather than an error entry.
 """
 
 from __future__ import annotations
@@ -239,15 +240,17 @@ _TYPENAME_META_FIELD = "__typename"
 
 
 def scan_document_text(policy: ResourcePolicy, query: str | None) -> None:
-    """Charge a raw document's tokens and structural nesting, before it is parsed.
+    """Charge a raw document's tokens, names and structural nesting, before it is parsed.
 
     Charged over the WHOLE request document, including operations the request did
-    not name. Two bounds are scanned here - ``max_document_tokens`` and
-    ``max_depth`` - and they are the request-level pair: they exist to bound the
-    parse, the parse reads the whole document whatever ``operationName`` says,
-    and the operation is not identified until that parse has finished. Charging
-    only the named operation would therefore name a cost nobody pays and leave
-    the cost somebody does pay unbounded. The shape bounds charged AFTER the
+    not name. Three bounds are scanned here - ``max_document_tokens``,
+    ``max_name_bytes`` and ``max_depth`` - and they are the request-level set:
+    the first and last exist to bound the parse, the middle one to bound what
+    validation copies into its error messages, and both the parse and validation
+    read the whole document whatever ``operationName`` says, while the operation
+    is not identified until that parse has finished. Charging only the named
+    operation would therefore name a cost nobody pays and leave the cost
+    somebody does pay unbounded. The shape bounds charged AFTER the
     parse - ``max_selections``, ``max_aliases``, ``max_collection_cost`` - are
     charged against the named operation alone (:func:`charge_document`), which is
     the distinction spec-047 draws between the two halves and not a disagreement
@@ -264,9 +267,9 @@ def scan_document_text(policy: ResourcePolicy, query: str | None) -> None:
     Two consequences of that, stated as they are rather than as a stronger
     promise:
 
-    - The bounds are checked as each token is read, so a document whose size or
-      nesting passes its bound BEFORE the malformed token is rejected on the
-      bound. A document whose garbage comes first is not scanned past it at all -
+    - The bounds are checked as each token is read, so a document whose size,
+      nesting or one name passes its bound BEFORE the malformed token is
+      rejected on the bound. A document whose garbage comes first is not scanned past it at all -
       it is answered with the syntax error, and nothing executes, so the tokens
       the scan never reached are tokens no pass had to spend.
     - ``depth`` is a running bracket balance, so it is a true nesting depth only
@@ -301,6 +304,13 @@ def scan_document_text(policy: ResourcePolicy, query: str | None) -> None:
                     policy.max_document_tokens,
                     tokens,
                     "the document carries more lexical tokens than the policy allows",
+                )
+            if token.kind is TokenKind.NAME and token.end - token.start > policy.max_name_bytes:
+                raise ResourceLimitExceeded(
+                    "max_name_bytes",
+                    policy.max_name_bytes,
+                    token.end - token.start,
+                    "a name in the document is longer than the policy allows",
                 )
             if token.kind in _OPEN_TOKEN_KINDS:
                 depth += 1

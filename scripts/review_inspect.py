@@ -1673,10 +1673,14 @@ def _render_overview(analysis: _Analysis, outline_only: bool, cap: bool) -> str:
         "## Safety",
         "",
         "- The target module was parsed statically; it was not imported or executed.",
-        "- Shadow-file line numbers match the source line-for-line; a line number from "
-        "either file names the same source line.",
-        "- Every row names its enclosing symbol as `path::Qualified.Name` (module-level "
-        'rows as `path #"<line text>"`); cite that form in review artifacts.',
+        (
+            "- Shadow-file line numbers match the source line-for-line; a line number from "
+            "either file names the same source line."
+        ),
+        (
+            "- Every row names its enclosing symbol as `path::Qualified.Name` (module-level "
+            'rows as `path #"<line text>"`); cite that form in review artifacts.'
+        ),
         f"- Shadow file: `{analysis.shadow_path}`",
         "",
         "## Quick scan",
@@ -1940,9 +1944,11 @@ def _render_literals(counter: Counter[str], cap: bool) -> str:
 def _render_performance_leads(analysis: _Analysis) -> str:
     locator = analysis.locator
     lines = [
-        "Leads, not findings. Database-shaped calls: the Django / ORM markers plus "
-        f"`.{'`, `.'.join(sorted(ORM_CALL_ATTRS))}`, `.get(` with keywords or no arguments, "
-        "`.count()` with no arguments, anything through `objects.`, and `sync_to_async` hops.",
+        (
+            "Leads, not findings. Database-shaped calls: the Django / ORM markers plus "
+            f"`.{'`, `.'.join(sorted(ORM_CALL_ATTRS))}`, `.get(` with keywords or no arguments, "
+            "`.count()` with no arguments, anything through `objects.`, and `sync_to_async` hops."
+        ),
         "",
         "### Per-row work (database-shaped call or `await` inside a loop or comprehension)",
         "",
@@ -1985,8 +1991,10 @@ def _render_performance_leads(analysis: _Analysis) -> str:
     lines.extend(
         [
             "",
-            "### Import-time work (module level and class bodies; `TYPE_CHECKING` blocks and "
-            "declarative typing/container calls excluded)",
+            (
+                "### Import-time work (module level and class bodies; `TYPE_CHECKING` blocks and "
+                "declarative typing/container calls excluded)"
+            ),
             "",
         ],
     )
@@ -2009,11 +2017,13 @@ def _render_flags(flags: dict[str, list[str]]) -> str:
 
 def _render_census(analysis: _Analysis) -> str:
     lines = [
-        "Every comment block (consecutive full-line `#` comments merged; an inline comment "
-        "stands alone), every docstring, and every public symbol without one. Flags are leads, "
-        "not grades: provenance vocabulary, test docstrings opening `Tests that` / `Ensures`, "
-        "first lines not ending in `.`, `path:NN` cites. `path::Symbol` cites are listed, "
-        "not resolved (`scripts/check_citations.py` resolves them).",
+        (
+            "Every comment block (consecutive full-line `#` comments merged; an inline comment "
+            "stands alone), every docstring, and every public symbol without one. Flags are leads, "
+            "not grades: provenance vocabulary, test docstrings opening `Tests that` / `Ensures`, "
+            "first lines not ending in `.`, `path:NN` cites. `path::Symbol` cites are listed, "
+            "not resolved (`scripts/check_citations.py` resolves them)."
+        ),
         "",
     ]
     if not analysis.census:

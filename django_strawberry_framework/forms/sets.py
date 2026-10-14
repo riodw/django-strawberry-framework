@@ -192,7 +192,7 @@ register_subsystem_clear(clear_form_shape_build_cache, owner="forms.shape_cache"
 
 
 def _default_mutation_get_form_fields(
-    cls: type[DjangoModelFormMutation] | type[DjangoFormMutation],
+    cls: type[DjangoModelFormMutation | DjangoFormMutation],
 ) -> dict[str, forms.Field]:
     """Return the mutation's stable field basis from its declared ``form_class``.
 
@@ -216,7 +216,7 @@ def _default_mutation_get_form_fields(
 
 
 def _mutation_form_fields(
-    mutation_cls: type[DjangoModelFormMutation] | type[DjangoFormMutation],
+    mutation_cls: type[DjangoModelFormMutation | DjangoFormMutation],
     form_class: FormClass,
 ) -> dict[str, forms.Field]:
     """Resolve a mutation's overridable form-field hook for one build pass.
@@ -402,8 +402,8 @@ def _normalized_form_field_selection(
 
 
 def _form_kwargs_overridden(
-    cls: type[DjangoModelFormMutation] | type[DjangoFormMutation],
-    base: type[DjangoModelFormMutation] | type[DjangoFormMutation],
+    cls: type[DjangoModelFormMutation | DjangoFormMutation],
+    base: type[DjangoModelFormMutation | DjangoFormMutation],
 ) -> bool:
     """Return whether ``cls`` overrides ``get_form_kwargs`` / ``get_form`` (the waiver detection).
 
@@ -485,11 +485,11 @@ def _default_get_form(
 
 
 def _build_and_stash_form_input(
-    cls: type[DjangoModelFormMutation] | type[DjangoFormMutation],
+    cls: type[DjangoModelFormMutation | DjangoFormMutation],
     meta: _ValidatedMutationMeta,
     *,
     operation_kind: str,
-    base: type[DjangoModelFormMutation] | type[DjangoFormMutation],
+    base: type[DjangoModelFormMutation | DjangoFormMutation],
 ) -> type[object]:
     """Build + materialize a form input and stash its reverse map (both flavors' ``build_input`` tail).
 
@@ -526,7 +526,7 @@ def _build_and_stash_form_input(
 
 
 def _form_input_type_name_for(
-    mutation_cls: type[DjangoModelFormMutation] | type[DjangoFormMutation],
+    mutation_cls: type[DjangoModelFormMutation | DjangoFormMutation],
     meta: _ValidatedMutationMeta,
     operation_kind: str,
 ) -> str:

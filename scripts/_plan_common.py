@@ -155,10 +155,14 @@ def cycle_baseline_block(status_output: str | None) -> list[str]:
     return [
         "## Cycle baseline",
         "",
-        "`git status --short` at generation. Every path below is concurrent work: never edited, "
-        "reverted,",
-        "tidied, or attributed to an item. Worker-0 appends the `CYCLE_BASELINE` stash object "
-        "once at",
+        (
+            "`git status --short` at generation. Every path below is concurrent work: never edited, "
+            "reverted,"
+        ),
+        (
+            "tidied, or attributed to an item. Worker-0 appends the `CYCLE_BASELINE` stash object "
+            "once at"
+        ),
         "start and nothing afterwards; drift goes on `Drift:` lines under the run heading.",
         "",
         *body,

@@ -1502,8 +1502,10 @@ def test_extra_kwargs_allow_blank_over_strict_choice_column_refused():
             [("", "-"), ("available", "Available")],
             True,
             "''",
-            "Set blank=True on the column, or remove '' from the serializer field's choices and "
-            "drop allow_blank from the serializer field.",
+            (
+                "Set blank=True on the column, or remove '' from the serializer field's choices and "
+                "drop allow_blank from the serializer field."
+            ),
         ),
         (
             [("available", "Available"), ("zz", "Z")],
@@ -1515,8 +1517,10 @@ def test_extra_kwargs_allow_blank_over_strict_choice_column_refused():
             [("zz", "Z"), ("available", "Available")],
             True,
             "'zz', ''",
-            "Remove 'zz' from the serializer field's choices and drop allow_blank from the "
-            "serializer field.",
+            (
+                "Remove 'zz' from the serializer field's choices and drop allow_blank from the "
+                "serializer field."
+            ),
         ),
     ],
     ids=[

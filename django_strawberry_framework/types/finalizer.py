@@ -93,7 +93,7 @@ if TYPE_CHECKING:
 
 # The sidecar family one phase-2.5 binding pass runs over: every hook in one
 # ``_SidecarBindingSpec`` takes the same family's set classes.
-_SetT = TypeVar("_SetT", bound="type[FilterSet] | type[OrderSet]")
+_SetT = TypeVar("_SetT", bound="type[FilterSet | OrderSet]")
 
 
 def _safe_qualified_class_name(value: object) -> str:
@@ -1430,7 +1430,7 @@ def _check_orderset_owner_axes(
 
 
 def _check_set_owner_table_identity(
-    set_cls: type[FilterSet] | type[OrderSet],
+    set_cls: type[FilterSet | OrderSet],
     previous: DjangoTypeDefinition,
     new: DjangoTypeDefinition,
     *,
@@ -1455,7 +1455,7 @@ def _check_set_owner_table_identity(
 
 
 def _check_set_owner_get_queryset_safety(
-    set_cls: type[FilterSet] | type[OrderSet],
+    set_cls: type[FilterSet | OrderSet],
     previous: DjangoTypeDefinition,
     new: DjangoTypeDefinition,
     *,
@@ -1529,7 +1529,7 @@ def _check_filterset_owner_pk_identity(
 
 
 def _format_owner_target_mismatch_error(
-    set_cls: type[FilterSet] | type[OrderSet],
+    set_cls: type[FilterSet | OrderSet],
     previous: DjangoTypeDefinition,
     new: DjangoTypeDefinition,
     field_name: str,
@@ -1600,7 +1600,7 @@ def _format_owner_pk_mismatch_error(
 
 
 def _format_owner_get_queryset_mismatch_error(
-    set_cls: type[FilterSet] | type[OrderSet],
+    set_cls: type[FilterSet | OrderSet],
     previous: DjangoTypeDefinition,
     new: DjangoTypeDefinition,
     *,
@@ -1633,7 +1633,7 @@ def _format_owner_get_queryset_mismatch_error(
 
 
 def _format_owner_table_mismatch_error(
-    set_cls: type[FilterSet] | type[OrderSet],
+    set_cls: type[FilterSet | OrderSet],
     previous: DjangoTypeDefinition,
     new: DjangoTypeDefinition,
     *,
@@ -1662,7 +1662,7 @@ def _format_owner_table_mismatch_error(
 
 
 def _format_owner_set_model_mismatch_error(
-    set_cls: type[FilterSet] | type[OrderSet],
+    set_cls: type[FilterSet | OrderSet],
     owner: DjangoTypeDefinition,
     *,
     family: str,
@@ -1732,7 +1732,7 @@ def _format_owner_model_mismatch_error(
 
 
 def _format_orphan_sets_error(
-    orphans: Sequence[type[FilterSet] | type[OrderSet]],
+    orphans: Sequence[type[FilterSet | OrderSet]],
     *,
     family: str,
     helper: str,

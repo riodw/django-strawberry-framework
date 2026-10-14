@@ -1205,8 +1205,10 @@ _RELAY_NON_INTERFACE_HELPERS: tuple[tuple[object, str, str], ...] = (
     (
         relay.GlobalID,
         "relay.GlobalID",
-        "a scalar-like id wrapper, not an interface; Relay-Node-shaped types "
-        "get `id: GlobalID!` automatically from `relay.Node`",
+        (
+            "a scalar-like id wrapper, not an interface; Relay-Node-shaped types "
+            "get `id: GlobalID!` automatically from `relay.Node`"
+        ),
     ),
     (
         relay.NodeID,

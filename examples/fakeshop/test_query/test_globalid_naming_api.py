@@ -333,8 +333,10 @@ def test_default_spelling_of_a_renamed_type_is_rejected(
     assert payload["data"] == expected_data
     assert [(error["message"], error["extensions"]["code"]) for error in payload["errors"]] == [
         (
-            "Invalid GlobalID: No Relay-Node DjangoType is published as GraphQL type "
-            "'ItemType' in this schema",
+            (
+                "Invalid GlobalID: No Relay-Node DjangoType is published as GraphQL type "
+                "'ItemType' in this schema"
+            ),
             "GLOBALID_INVALID",
         ),
     ]
@@ -357,8 +359,10 @@ _ITEM_WRITES: dict[
         },
     ),
     "model-update": (
-        "mutation($id: ID!, $d: ItemPartialInput!) { updateItem(id: $id, data: $d) { "
-        "errors { field messages } } }",
+        (
+            "mutation($id: ID!, $d: ItemPartialInput!) { updateItem(id: $id, data: $d) { "
+            "errors { field messages } } }"
+        ),
         "products.change_item",
         lambda item, target: {
             "id": _gid("ApiItemType", item.pk),
@@ -366,16 +370,20 @@ _ITEM_WRITES: dict[
         },
     ),
     "form-create": (
-        "mutation($d: ItemModelFormInput!) { createItemViaForm(data: $d) { "
-        "errors { field messages } } }",
+        (
+            "mutation($d: ItemModelFormInput!) { createItemViaForm(data: $d) { "
+            "errors { field messages } } }"
+        ),
         "products.add_item",
         lambda item, target: {
             "d": {"name": "RenamedWidget", "categoryId": _gid("ApiCategoryType", target.pk)},
         },
     ),
     "form-update": (
-        "mutation($id: ID!, $d: ItemModelFormPartialInput!) { updateItemViaForm(id: $id, "
-        "data: $d) { errors { field messages } } }",
+        (
+            "mutation($id: ID!, $d: ItemModelFormPartialInput!) { updateItemViaForm(id: $id, "
+            "data: $d) { errors { field messages } } }"
+        ),
         "products.change_item",
         lambda item, target: {
             "id": _gid("ApiItemType", item.pk),
@@ -383,16 +391,20 @@ _ITEM_WRITES: dict[
         },
     ),
     "serializer-create": (
-        "mutation($d: ItemSerializerInput!) { createItemViaSerializer(data: $d) { "
-        "errors { field messages } } }",
+        (
+            "mutation($d: ItemSerializerInput!) { createItemViaSerializer(data: $d) { "
+            "errors { field messages } } }"
+        ),
         "products.add_item",
         lambda item, target: {
             "d": {"name": "RenamedWidget", "categoryId": _gid("ApiCategoryType", target.pk)},
         },
     ),
     "serializer-update": (
-        "mutation($id: ID!, $d: ItemSerializerPartialInput!) { updateItemViaSerializer(id: $id, "
-        "data: $d) { errors { field messages } } }",
+        (
+            "mutation($id: ID!, $d: ItemSerializerPartialInput!) { updateItemViaSerializer(id: $id, "
+            "data: $d) { errors { field messages } } }"
+        ),
         "products.change_item",
         lambda item, target: {
             "id": _gid("ApiItemType", item.pk),
@@ -835,8 +847,10 @@ def test_relation_filter_refuses_a_slot_this_schema_publishes_for_another_type()
     assert refetched == {"node": {"__typename": "CategoryNode", "name": prop.name}}
     assert payload["data"] is None
     assert [error["message"] for error in payload["errors"]] == [
-        "GlobalID type mismatch: filter expects CategoryNode but received CategoryNode, "
-        "which this schema publishes for another type",
+        (
+            "GlobalID type mismatch: filter expects CategoryNode but received CategoryNode, "
+            "which this schema publishes for another type"
+        ),
     ]
 
 

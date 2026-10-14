@@ -296,8 +296,10 @@ def _ledger_blocks() -> list[str]:
     return [
         "## Responsibility index",
         "",
-        "One row per rule the cycle has traced; family items decompose sub-rules back here as "
-        "their own",
+        (
+            "One row per rule the cycle has traced; family items decompose sub-rules back here as "
+            "their own"
+        ),
         "rows. Status: `open`, `file-local` (one file + its challenge), `consolidated`, `rejected`,",
         "`defect-routed`.",
         "",
@@ -306,14 +308,18 @@ def _ledger_blocks() -> list[str]:
         "",
         "## Families",
         "",
-        r"One `- [ ] Family \`<name>\` -- [dry-rule-<family>.md](dry-rule-<family>.md)` item per "
-        "discovered",
+        (
+            r"One `- [ ] Family \`<name>\` -- [dry-rule-<family>.md](dry-rule-<family>.md)` item per "
+            "discovered"
+        ),
         "family, added by Worker-0 as artifacts name them. None discovered at generation.",
         "",
         "## Owned changes",
         "",
-        "Path, item, symbols for every tracked edit or new file a verified item landed. A later "
-        "item may",
+        (
+            "Path, item, symbols for every tracked edit or new file a verified item landed. A later "
+            "item may"
+        ),
         "build on a path listed here; any other dirty hunk is external.",
         "",
         "## Outcomes",
@@ -1161,8 +1167,10 @@ def render_audit_markdown(
         f"Context files: {len(audit.context_files)}",
         f"Parse/read failures: {len(audit.failures)}",
         "",
-        "This is static evidence, not an automated refactoring verdict. Candidate "
-        "references are intentionally broad and must be confirmed against semantics.",
+        (
+            "This is static evidence, not an automated refactoring verdict. Candidate "
+            "references are intentionally broad and must be confirmed against semantics."
+        ),
         "",
         "## Scope",
         "",
@@ -1308,12 +1316,16 @@ def render_audit_markdown(
             "",
             "- Read every target file in full.",
             "- Resolve every target parse failure.",
-            "- Classify each reference and duplicate candidate as real reuse, deliberate "
-            "non-reuse, already shared, or false positive.",
+            (
+                "- Classify each reference and duplicate candidate as real reuse, deliberate "
+                "non-reuse, already shared, or false positive."
+            ),
             "- Search additional domain concepts discovered during reading.",
             "- Record positive reuse and tempting-but-wrong reuse.",
-            "- Run this script's `check` mode against the finished review with every "
-            "load-bearing topic passed as `--require-topic`.",
+            (
+                "- Run this script's `check` mode against the finished review with every "
+                "load-bearing topic passed as `--require-topic`."
+            ),
             "",
         ],
     )

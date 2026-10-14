@@ -1517,9 +1517,7 @@ def test_schema_fingerprint_sensitive_to_choice_allow_blank():
     [serializers.CharField, serializers.IntegerField, serializers.BooleanField],
 )
 def test_schema_fingerprint_sensitive_to_list_child_allow_null(
-    child_cls: type[serializers.CharField]
-    | type[serializers.IntegerField]
-    | type[serializers.BooleanField],
+    child_cls: type[serializers.CharField | serializers.IntegerField | serializers.BooleanField],
 ):
     """A ``ListField`` child's ``allow_null`` decides element nullability, so it is fingerprinted."""
     from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint

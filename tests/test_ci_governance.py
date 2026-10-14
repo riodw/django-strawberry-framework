@@ -473,13 +473,17 @@ MUST_FLAG_SNIPPETS = [
     ("attribute-tuple", "extensions = (DjangoDebugExtension, dsf.DjangoOptimizerExtension)"),
     (
         "import-alias-bare",
-        "from django_strawberry_framework import DjangoOptimizerExtension as Opt\n"
-        "extensions = [Opt]",
+        (
+            "from django_strawberry_framework import DjangoOptimizerExtension as Opt\n"
+            "extensions = [Opt]"
+        ),
     ),
     (
         "import-alias-lambda",
-        "from django_strawberry_framework import DjangoOptimizerExtension as Opt\n"
-        "extensions = [lambda: Opt()]",
+        (
+            "from django_strawberry_framework import DjangoOptimizerExtension as Opt\n"
+            "extensions = [lambda: Opt()]"
+        ),
     ),
 ]
 

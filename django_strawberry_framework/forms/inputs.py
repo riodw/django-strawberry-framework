@@ -109,7 +109,7 @@ if TYPE_CHECKING:
     # ``ModelForm``'s model parameter is invariant in the stubs, so ``Any`` is the one
     # argument a consumer's ``ModelForm[Item]`` satisfies.
     # basedpyright: invariant model TypeVar; a consumer's ModelForm[Item] must be accepted
-    FormClass: TypeAlias = type[forms.Form] | type[forms.ModelForm[Any]]  # pyright: ignore[reportExplicitAny]
+    FormClass: TypeAlias = type[forms.Form | forms.ModelForm[Any]]  # pyright: ignore[reportExplicitAny]
     #: Any ``ModelChoiceField``: its model parameter is read-only here.
     _ModelChoiceFieldAny: TypeAlias = forms.ModelChoiceField[models.Model]
 else:

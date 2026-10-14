@@ -2795,7 +2795,7 @@ class FilterSet(
     @staticmethod
     def _relay_filter_class_for_field(
         field: ModelField,
-    ) -> type[GlobalIDFilter] | type[GlobalIDMultipleChoiceFilter]:
+    ) -> type[GlobalIDFilter | GlobalIDMultipleChoiceFilter]:
         """Pick the Relay-aware filter class matching the relation cardinality.
 
         Multi-valued relations (`ManyToManyField`, reverse FK

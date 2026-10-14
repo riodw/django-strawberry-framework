@@ -178,8 +178,10 @@ _LINK_CONNECTION_ROOT_ROWS: list[tuple[str, Callable[[_WireData], list[_WireData
         lambda data: data["parents"],
     ),
     (
-        "{ parentsConnection(first: 10) { edges { node { label "
-        "pairChildrenConnection(first: 2) { edges { node { name } } } } } } }",
+        (
+            "{ parentsConnection(first: 10) { edges { node { label "
+            "pairChildrenConnection(first: 2) { edges { node { name } } } } } } }"
+        ),
         lambda data: [edge["node"] for edge in data["parentsConnection"]["edges"]],
     ),
 ]

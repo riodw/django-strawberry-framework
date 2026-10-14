@@ -289,9 +289,11 @@ def _folder_item(root: Path, folder: str, inits: Sequence[str]) -> Item:
 def _project_item(root: Path, inits: Sequence[str]) -> Item:
     """Build the project integration item carrying the package-root ``__init__.py``."""
     extra = (
-        "Covers: package-root modules as one component; public exports; import-time cost vs "
-        "`## Bench baseline`; end-to-end lifecycle across folders; the package-root "
-        "`__init__.py` (each folder's `__init__.py` is on its folder item)",
+        (
+            "Covers: package-root modules as one component; public exports; import-time cost vs "
+            "`## Bench baseline`; end-to-end lifecycle across folders; the package-root "
+            "`__init__.py` (each folder's `__init__.py` is on its folder item)"
+        ),
         _init_field(root, [relative for relative in inits if "/" not in relative]),
     )
     return Item(
@@ -309,11 +311,13 @@ _GATE_ITEM = Item(
     label="Final gate",
     artifacts=(),
     extra=(
-        "Runs: `uv run python scripts/workspace.py gate review` (CI's lint job, then default, "
-        "floor, `FAKESHOP_SHARDED=1` and Postgres suites in a gate copy that keeps a git index, "
-        'REVIEW.md "Final gate and closeout"), each w/ its own counts; every '
-        "`## Pending execution` command from every artifact; the `## Bench baseline` "
-        "commands at `<phase>` `gate`, delta recorded",
+        (
+            "Runs: `uv run python scripts/workspace.py gate review` (CI's lint job, then default, "
+            "floor, `FAKESHOP_SHARDED=1` and Postgres suites in a gate copy that keeps a git index, "
+            'REVIEW.md "Final gate and closeout"), each w/ its own counts; every '
+            "`## Pending execution` command from every artifact; the `## Bench baseline` "
+            "commands at `<phase>` `gate`, delta recorded"
+        ),
     ),
 )
 
@@ -504,14 +508,22 @@ def _assert_unique_artifacts(items: Sequence[Item]) -> None:
 
 _BENCH_RUN = "uv run python scripts/workspace.py run review/bench/<phase>"
 _BENCH_COMMANDS = (
-    f"{_BENCH_RUN} -- python scripts/bench_plan_cache.py "
-    "--json <scratch>/bench/<phase>/plan_cache.json",
-    f"{_BENCH_RUN} -- python scripts/bench_optimizer_walk.py "
-    "--json <scratch>/bench/<phase>/optimizer_walk.json",
-    f"{_BENCH_RUN} --cell pg -- python scripts/bench_nested_fetch.py "
-    "--json <scratch>/bench/<phase>/nested_fetch.json",
-    f"{_BENCH_RUN} -- python scripts/importtime_report.py --rounds 5 "
-    "--json <scratch>/bench/<phase>/importtime.json",
+    (
+        f"{_BENCH_RUN} -- python scripts/bench_plan_cache.py "
+        "--json <scratch>/bench/<phase>/plan_cache.json"
+    ),
+    (
+        f"{_BENCH_RUN} -- python scripts/bench_optimizer_walk.py "
+        "--json <scratch>/bench/<phase>/optimizer_walk.json"
+    ),
+    (
+        f"{_BENCH_RUN} --cell pg -- python scripts/bench_nested_fetch.py "
+        "--json <scratch>/bench/<phase>/nested_fetch.json"
+    ),
+    (
+        f"{_BENCH_RUN} -- python scripts/importtime_report.py --rounds 5 "
+        "--json <scratch>/bench/<phase>/importtime.json"
+    ),
 )
 
 
@@ -552,13 +564,17 @@ def _closing_blocks() -> list[str]:
     return [
         "## Decisions",
         "",
-        "Maintainer decisions the run surfaced: ruff rules to enable, trade-offs, contracts "
-        "nobody could cite.",
+        (
+            "Maintainer decisions the run surfaced: ruff rules to enable, trade-offs, contracts "
+            "nobody could cite."
+        ),
         "",
         LEDGER_HEADING,
         "",
-        "One row per tracked edit or new file a verified item landed. A later item may build on a "
-        "path",
+        (
+            "One row per tracked edit or new file a verified item landed. A later item may build on a "
+            "path"
+        ),
         "listed here; any other dirty hunk is external.",
         "",
         "| Path | Item | Axis | Symbols changed |",
@@ -566,8 +582,10 @@ def _closing_blocks() -> list[str]:
         "",
         OUTCOMES_HEADING,
         "",
-        "Filled by Worker-0 at closeout before any scratch is removed; a scoped run adds "
-        '"Scope of this run".',
+        (
+            "Filled by Worker-0 at closeout before any scratch is removed; a scoped run adds "
+            '"Scope of this run".'
+        ),
         "",
     ]
 
@@ -624,8 +642,10 @@ def _nothing_in_scope_lines(inventory: _Inventory) -> list[str]:
     if not inventory.nothing_in_scope or inventory.changed is None:
         return []
     return [
-        f"Nothing in scope: no committed package .py change since {inventory.changed.since}; "
-        "the run stops.",
+        (
+            f"Nothing in scope: no committed package .py change since {inventory.changed.since}; "
+            "the run stops."
+        ),
     ]
 
 
@@ -656,8 +676,10 @@ def _render_plan(
         f"Scope: {inventory.scope_label}",
         *_nothing_in_scope_lines(inventory),
         "",
-        "Method: `docs/review/REVIEW.md`. Fresh source review; findings from prior build, review, "
-        "DRY or",
+        (
+            "Method: `docs/review/REVIEW.md`. Fresh source review; findings from prior build, review, "
+            "DRY or"
+        ),
         "hunt artifacts are not imported.",
         "",
         *_plan_common.cycle_baseline_block(status_output),
@@ -679,10 +701,14 @@ def _render_plan(
                 "",
                 "## Out of scope this run",
                 "",
-                f"Not examined under `Scope: {inventory.scope_label}`; an unticked box here "
-                "is not a pending",
-                "review of this run. A later run moves an item into its scope under its own "
-                "`## Run` heading.",
+                (
+                    f"Not examined under `Scope: {inventory.scope_label}`; an unticked box here "
+                    "is not a pending"
+                ),
+                (
+                    "review of this run. A later run moves an item into its scope under its own "
+                    "`## Run` heading."
+                ),
                 "",
             ],
         )
@@ -1145,10 +1171,14 @@ def build_scope(root: Path, since: str | None) -> ScopeReport:
 def _render_scope(report: ScopeReport) -> str:
     """Render the scope report as plain text."""
     lines = [
-        f"Package .py changes since {report.since} ({report.since_sha[:12]}) to HEAD "
-        f"{report.head_sha[:12]}, plus the working tree.",
-        "A folder's `__init__.py` belongs to that folder's integration item, the package-root "
-        "`__init__.py` to the project integration item.",
+        (
+            f"Package .py changes since {report.since} ({report.since_sha[:12]}) to HEAD "
+            f"{report.head_sha[:12]}, plus the working tree."
+        ),
+        (
+            "A folder's `__init__.py` belongs to that folder's integration item, the package-root "
+            "`__init__.py` to the project integration item."
+        ),
         "",
         f"Committed ({report.since}..HEAD): {len(report.committed)}",
     ]

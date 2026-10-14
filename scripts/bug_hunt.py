@@ -109,21 +109,27 @@ method; this brief is a reminder, not a substitute.
 _SCENARIOS = (
     (
         "Pagination window semantics",
-        "connection.py, keyset.py, relay.py: cursor round trips fix schema, order and key "
-        "context; first/last/after/before algebra; a bigger document never charges less on a "
-        "named charge dimension.",
+        (
+            "connection.py, keyset.py, relay.py: cursor round trips fix schema, order and key "
+            "context; first/last/after/before algebra; a bigger document never charges less on a "
+            "named charge dimension."
+        ),
     ),
     (
         "Authorization and visibility across actors",
-        "utils/querysets.py seal, mutations/permissions.py, resource_policy.py, "
-        "optimizer/_context.py: forbidden rows absent across actor switches, prefetch and "
-        "reverse relations, cache reuse across executions, awaitable truthiness, point-in-time "
-        "authorization.",
+        (
+            "utils/querysets.py seal, mutations/permissions.py, resource_policy.py, "
+            "optimizer/_context.py: forbidden rows absent across actor switches, prefetch and "
+            "reverse relations, cache reuse across executions, awaitable truthiness, point-in-time "
+            "authorization."
+        ),
     ),
     (
         "Transaction and session lifecycle under interruption",
-        "utils/write_transaction.py, the three write pipelines, consumers.py: locks, rollback, "
-        "commit hooks, cancellation, sync_to_async boundaries, failure during failure handling.",
+        (
+            "utils/write_transaction.py, the three write pipelines, consumers.py: locks, rollback, "
+            "commit hooks, cancellation, sync_to_async boundaries, failure during failure handling."
+        ),
     ),
 )
 
@@ -315,8 +321,10 @@ def _scenarios_block() -> str:
                 f"- [ ] Scenario: {title}",
                 "    - Status: pending",
                 "    - Prompt:",
-                f"        - {prompt} Hunt the contract across every entry point; implement "
-                "every confirmed root-cause fix.",
+                (
+                    f"        - {prompt} Hunt the contract across every entry point; implement "
+                    "every confirmed root-cause fix."
+                ),
             ],
         )
     lines.extend(["", "## Integration and final gate", ""])

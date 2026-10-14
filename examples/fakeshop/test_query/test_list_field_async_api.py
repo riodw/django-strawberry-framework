@@ -86,7 +86,7 @@ _ApplyAsyncOverride: TypeAlias = Callable[
 ]
 
 #: An async view class the module route can serve in place of the stock view.
-_ContextViewClass: TypeAlias = "type[_CapturingAsyncContextView] | type[_FrozenAsyncContextView]"
+_ContextViewClass: TypeAlias = "type[_CapturingAsyncContextView | _FrozenAsyncContextView]"
 
 #: A ``Meta.ordering`` value: what ``Options.ordering`` holds, one tuple of terms.
 _ModelOrdering: TypeAlias = tuple[str | Combinable, ...]
@@ -1962,8 +1962,10 @@ _MALFORMED_APPLY_ASYNC_ROWS = (
     (
         "combined-duplicates",
         _async_combined_duplicates,
-        "BranchOrder.apply_async returned a combined queryset; the visibility boundary serves "
-        "a combined queryset as the set of Branch primary keys it selects",
+        (
+            "BranchOrder.apply_async returned a combined queryset; the visibility boundary serves "
+            "a combined queryset as the set of Branch primary keys it selects"
+        ),
         ("union: union(all=True) keeps duplicate rows, which a primary-key set cannot",),
     ),
     (

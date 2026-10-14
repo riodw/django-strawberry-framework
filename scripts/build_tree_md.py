@@ -227,22 +227,26 @@ def fakeshop_app_names(apps_dir: Path) -> tuple[str, ...]:
 TEST_LAYOUT_INTRO = [
     "## Test layout",
     "",
-    "Tests live in four deliberate places, each chosen by what the test is proving. "
-    "The root `tests/` tree protects package internals and repository tooling; its "
-    "subsystem directories broadly mirror `django_strawberry_framework/`. "
-    "`examples/fakeshop/apps/<app>/tests/` protects "
-    "one Django app at a time without live HTTP. `examples/fakeshop/tests/` protects "
-    "project-level fakeshop behavior that belongs to no single app. "
-    "`examples/fakeshop/test_query/` is the live `/graphql/` acceptance surface.",
+    (
+        "Tests live in four deliberate places, each chosen by what the test is proving. "
+        "The root `tests/` tree protects package internals and repository tooling; its "
+        "subsystem directories broadly mirror `django_strawberry_framework/`. "
+        "`examples/fakeshop/apps/<app>/tests/` protects "
+        "one Django app at a time without live HTTP. `examples/fakeshop/tests/` protects "
+        "project-level fakeshop behavior that belongs to no single app. "
+        "`examples/fakeshop/test_query/` is the live `/graphql/` acceptance surface."
+    ),
     "",
-    "**Coverage priority.** If a package line can be covered by a real fakeshop "
-    "GraphQL request, put that test in `examples/fakeshop/test_query/`. Use the "
-    "non-live fakeshop trees for services, models, admin, commands, URLs, or "
-    "in-process schema execution. Use root `tests/` for repository tooling, package "
-    "internals, invalid configuration, registry/finalizer mechanics, and paths "
-    "unreachable through a realistic GraphQL request. Mock only when the real path "
-    "is impossible. These "
-    "placement rules are pinned in [`AGENTS.md`][agents].",
+    (
+        "**Coverage priority.** If a package line can be covered by a real fakeshop "
+        "GraphQL request, put that test in `examples/fakeshop/test_query/`. Use the "
+        "non-live fakeshop trees for services, models, admin, commands, URLs, or "
+        "in-process schema execution. Use root `tests/` for repository tooling, package "
+        "internals, invalid configuration, registry/finalizer mechanics, and paths "
+        "unreachable through a realistic GraphQL request. Mock only when the real path "
+        "is impossible. These "
+        "placement rules are pinned in [`AGENTS.md`][agents]."
+    ),
     "",
     "### Current test trees",
 ]
@@ -854,11 +858,13 @@ def render_layout_disclosure() -> list[str]:
     dirnames = ", ".join(f"`{name}/`" for name in sorted(IGNORED_TREE_DIRNAMES))
     return [
         "",
-        "A logical source layout rather than a literal directory listing: every "
-        f"{filenames} file (including the package root's, which owns the public "
-        f"exports) and every {dirnames} directory are omitted from the trees below, "
-        "and each rendered directory is summarized from its own `__init__.py` "
-        "docstring.",
+        (
+            "A logical source layout rather than a literal directory listing: every "
+            f"{filenames} file (including the package root's, which owns the public "
+            f"exports) and every {dirnames} directory are omitted from the trees below, "
+            "and each rendered directory is summarized from its own `__init__.py` "
+            "docstring."
+        ),
     ]
 
 
@@ -1178,13 +1184,15 @@ def render_target_package_layout(
     return [
         "## django_strawberry_framework (target package layout)",
         "",
-        "The current package tree merged with every not-yet-existing path linked from "
-        "a WIP/TODO card. Planned paths are `TrackedPath` rows in the board database "
-        "(`examples/fakeshop/db.sqlite3`), which is the canonical source; "
-        "[`KANBAN.md`][kanban] is another rendering of the same rows, so a correction "
-        "belongs in the database, not in either document. Each planned entry names the "
-        "card that introduces it; backlog cards and DONE-card historical paths are "
-        "ignored.",
+        (
+            "The current package tree merged with every not-yet-existing path linked from "
+            "a WIP/TODO card. Planned paths are `TrackedPath` rows in the board database "
+            "(`examples/fakeshop/db.sqlite3`), which is the canonical source; "
+            "[`KANBAN.md`][kanban] is another rendering of the same rows, so a correction "
+            "belongs in the database, not in either document. Each planned entry names the "
+            "card that introduces it; backlog cards and DONE-card historical paths are "
+            "ignored."
+        ),
         *fenced_tree(
             f"{PACKAGE_ROOT_PREFIX} (+ planned card paths)",
             render_target_tree(package_dir.resolve(), PACKAGE_ROOT_PREFIX, package_planned),
@@ -1204,9 +1212,11 @@ def render_target_test_shape(planned_paths: Sequence[PlannedPath]) -> list[str]:
         "",
         "### Target test shape",
         "",
-        "The current test trees merged with the not-yet-existing test paths linked "
-        "from WIP/TODO cards, annotated the same way as the target package layout. "
-        "Test roots without planned additions match their current trees above.",
+        (
+            "The current test trees merged with the not-yet-existing test paths linked "
+            "from WIP/TODO cards, annotated the same way as the target package layout. "
+            "Test roots without planned additions match their current trees above."
+        ),
     ]
     for root in sorted(planned_by_root):
         lines.extend(

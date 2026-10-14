@@ -1153,7 +1153,7 @@ class _PlainItemInline(serializers.Serializer[object]):
 
 
 def _category_with_items(
-    child: type[serializers.Serializer[object]] | type[serializers.ModelSerializer[models.Model]],
+    child: type[serializers.Serializer[object] | serializers.ModelSerializer[models.Model]],
 ) -> type[serializers.ModelSerializer[product_models.Category]]:
     """A ``Category`` serializer nesting ``child`` as writable ``items`` (create overridden)."""
 

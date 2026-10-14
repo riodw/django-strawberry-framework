@@ -1572,9 +1572,11 @@ def test_postgres_exact_match_never_takes_slot10_for_slot1(
     postgres.databases("ws_abc_review_slot1", exact=True)
 
     assert statements == [
-        "SELECT datname FROM pg_database WHERE datname IN "
-        "('ws_abc_review_slot1', 'test_ws_abc_review_slot1') "
-        "OR datname LIKE 'test\\_ws\\_abc\\_review\\_slot1\\_gw%' ORDER BY datname",
+        (
+            "SELECT datname FROM pg_database WHERE datname IN "
+            "('ws_abc_review_slot1', 'test_ws_abc_review_slot1') "
+            "OR datname LIKE 'test\\_ws\\_abc\\_review\\_slot1\\_gw%' ORDER BY datname"
+        ),
     ]
 
 

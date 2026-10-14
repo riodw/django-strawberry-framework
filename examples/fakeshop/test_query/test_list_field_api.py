@@ -2665,8 +2665,10 @@ _MALFORMED_APPLY_SYNC_ROWS: tuple[
     (
         "combined-duplicates",
         lambda cls, order_input, queryset, info: queryset.union(queryset, all=True),
-        "BranchOrder.apply_sync returned a combined queryset; the visibility boundary serves "
-        "a combined queryset as the set of Branch primary keys it selects",
+        (
+            "BranchOrder.apply_sync returned a combined queryset; the visibility boundary serves "
+            "a combined queryset as the set of Branch primary keys it selects"
+        ),
         ("union: union(all=True) keeps duplicate rows, which a primary-key set cannot",),
         0,
     ),

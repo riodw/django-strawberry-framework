@@ -1937,8 +1937,10 @@ _CONNECTION_MALFORMED_ORDER_ROWS: tuple[_OrderRow, ...] = (
     (
         "combined-duplicates",
         lambda cls, order_input, queryset, info: queryset.union(queryset, all=True),
-        "_CategoryOrder.apply_sync returned a combined queryset; the visibility boundary serves a "
-        "combined queryset as the set of Category primary keys it selects",
+        (
+            "_CategoryOrder.apply_sync returned a combined queryset; the visibility boundary serves a "
+            "combined queryset as the set of Category primary keys it selects"
+        ),
         ("union: union(all=True) keeps duplicate rows, which a primary-key set cannot",),
     ),
     (
@@ -3403,8 +3405,10 @@ _CONNECTION_MALFORMED_FILTER_ROWS: tuple[_FilterRow, ...] = (
     (
         "combined-duplicates",
         lambda cls, input_value, queryset, info: queryset.union(queryset, all=True),
-        "_CategoryFilter.apply_sync returned a combined queryset; the visibility boundary serves a "
-        "combined queryset as the set of Category primary keys it selects",
+        (
+            "_CategoryFilter.apply_sync returned a combined queryset; the visibility boundary serves a "
+            "combined queryset as the set of Category primary keys it selects"
+        ),
         ("union: union(all=True) keeps duplicate rows, which a primary-key set cannot",),
     ),
     (

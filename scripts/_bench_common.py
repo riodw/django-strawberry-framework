@@ -107,8 +107,10 @@ class BenchProvenance:
             f"  tree      {self.repo_root} (git HEAD {self.git_head}, supplementary)",
             f"  settings  {self.settings_module}",
             f"  database  alias={self.db_alias} vendor={self.db_vendor} NAME={self.db_name}",
-            f"  versions  python {self.python}, django {self.django}, "
-            f"strawberry-graphql {self.strawberry}",
+            (
+                f"  versions  python {self.python}, django {self.django}, "
+                f"strawberry-graphql {self.strawberry}"
+            ),
             f"  platform  {self.platform}",
         ]
 

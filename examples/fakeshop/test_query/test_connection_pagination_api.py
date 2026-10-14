@@ -663,8 +663,10 @@ _CONNECTION_MALFORMED_APPLY_SYNC_ROWS: tuple[
     (
         "combined-duplicates",
         lambda cls, order_input, queryset, info: queryset.union(queryset, all=True),
-        "GenreOrder.apply_sync returned a combined queryset; the visibility boundary serves "
-        "a combined queryset as the set of Genre primary keys it selects",
+        (
+            "GenreOrder.apply_sync returned a combined queryset; the visibility boundary serves "
+            "a combined queryset as the set of Genre primary keys it selects"
+        ),
         ("union: union(all=True) keeps duplicate rows, which a primary-key set cannot",),
         0,
     ),
@@ -1061,8 +1063,10 @@ _CONNECTION_MALFORMED_APPLY_ASYNC_ROWS: tuple[
     (
         "combined-duplicates",
         _override_async_combined_duplicates,
-        "GenreOrder.apply_async returned a combined queryset; the visibility boundary serves "
-        "a combined queryset as the set of Genre primary keys it selects",
+        (
+            "GenreOrder.apply_async returned a combined queryset; the visibility boundary serves "
+            "a combined queryset as the set of Genre primary keys it selects"
+        ),
         ("union: union(all=True) keeps duplicate rows, which a primary-key set cannot",),
         None,
     ),
@@ -1398,8 +1402,10 @@ _CONNECTION_MALFORMED_FILTER_APPLY_ASYNC_ROWS: tuple[
     (
         "combined-duplicates",
         _filter_override_async_combined_duplicates,
-        "GenreFilter.apply_async returned a combined queryset; the visibility boundary serves "
-        "a combined queryset as the set of Genre primary keys it selects",
+        (
+            "GenreFilter.apply_async returned a combined queryset; the visibility boundary serves "
+            "a combined queryset as the set of Genre primary keys it selects"
+        ),
         ("union: union(all=True) keeps duplicate rows, which a primary-key set cannot",),
         None,
     ),

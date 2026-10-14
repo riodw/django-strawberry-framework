@@ -152,8 +152,10 @@ def _queries(page_size: int) -> list[tuple[str, str]]:
     return [
         (
             f"first:{page_size} count-free",
-            f"{{ shelves {{ id booksConnection(first: {page_size}) "
-            f"{{ {_PAGE_WITHOUT_COUNT} }} }} }}",
+            (
+                f"{{ shelves {{ id booksConnection(first: {page_size}) "
+                f"{{ {_PAGE_WITHOUT_COUNT} }} }} }}"
+            ),
         ),
         (
             f"first:{page_size} totalCount",

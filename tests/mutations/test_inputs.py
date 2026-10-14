@@ -1360,15 +1360,19 @@ def test_editable_fields_reject_naming_a_foreign_object(
             ["id"],
             ["id"],
             "id",
-            "Its carrier field(s) (id) are not mutation inputs, so a generated input cannot "
-            "set it; drop it from `fields`.",
+            (
+                "Its carrier field(s) (id) are not mutation inputs, so a generated input cannot "
+                "set it; drop it from `fields`."
+            ),
         ),
         (
             ["id", "p_code"],
             ["tenant", "code"],
             "id, p_code",
-            "Name its carrier field(s) (p_code) in `fields` instead. Its other carrier "
-            "field(s) (id) are not mutation inputs.",
+            (
+                "Name its carrier field(s) (p_code) in `fields` instead. Its other carrier "
+                "field(s) (id) are not mutation inputs."
+            ),
         ),
     ],
     ids=["foreign_key_carrier", "pk_carrier", "pk_and_column_carriers"],

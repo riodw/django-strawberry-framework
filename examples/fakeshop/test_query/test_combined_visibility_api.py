@@ -1299,24 +1299,30 @@ _REFUSED = {
     "branch-values": _Refused(
         lambda qs: _a(qs).union(_b(qs).values("id", "name")),
         (
-            "union: a branch projects .values('id', 'name'), which the primary-key subquery "
-            "cannot re-project",
+            (
+                "union: a branch projects .values('id', 'name'), which the primary-key subquery "
+                "cannot re-project"
+            ),
         ),
     ),
     "branch-select-for-update": _Refused(
         lambda qs: _a(qs).select_for_update().union(_b(qs)),
         (
-            "union: a branch carries select_for_update(), which the database refuses inside "
-            "a compound query",
+            (
+                "union: a branch carries select_for_update(), which the database refuses inside "
+                "a compound query"
+            ),
         ),
     ),
     "outer-order-by-transform": _Refused(
         lambda qs: _a(qs).union(_b(qs)).order_by(Lower("name").desc()),
         (
-            "union: its ordering by OrderBy(Lower(F(name)), descending=True) is not a Genre "
-            "column, so the rewritten query cannot carry it (it carries a column name or an "
-            "F() over a column, with .asc() / .desc(); never a lookup, transform or other "
-            "expression)",
+            (
+                "union: its ordering by OrderBy(Lower(F(name)), descending=True) is not a Genre "
+                "column, so the rewritten query cannot carry it (it carries a column name or an "
+                "F() over a column, with .asc() / .desc(); never a lookup, transform or other "
+                "expression)"
+            ),
         ),
     ),
     "outer-order-by-related-span": _Refused(
@@ -1338,8 +1344,10 @@ _REFUSED = {
     "nested-branch-values": _Refused(
         lambda qs: _a(qs).union(_b(qs).intersection(_b(qs)).values("id", "name")),
         (
-            "union: a nested combinator projects .values('id', 'name'), which the primary-key "
-            "subquery cannot re-project",
+            (
+                "union: a nested combinator projects .values('id', 'name'), which the primary-key "
+                "subquery cannot re-project"
+            ),
         ),
     ),
 }

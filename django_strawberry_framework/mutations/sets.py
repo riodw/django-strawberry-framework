@@ -1569,7 +1569,7 @@ if TYPE_CHECKING:
     # A write-mutation declaration class of either ledger: the model-backed
     # ``DjangoMutation`` family (model / ``ModelForm`` / serializer) or the
     # model-less ``DjangoFormMutation``.
-    WriteMutationClass: TypeAlias = type[DjangoMutation] | type[DjangoFormMutation]
+    WriteMutationClass: TypeAlias = type[DjangoMutation | DjangoFormMutation]
 
     # The payload object type one ledger's drain resolves: the primary
     # ``DjangoType`` for the model-backed ledger, ``None`` for the model-less one.

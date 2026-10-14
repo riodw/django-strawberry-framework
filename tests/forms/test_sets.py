@@ -633,7 +633,7 @@ def test_cached_build_form_input_runs_required_guard_per_declaration():
     ids=["modelform", "plain_form"],
 )
 def test_get_form_only_override_trips_the_construction_hook_waiver(
-    mutation_base: type[DjangoFormMutation] | type[DjangoModelFormMutation],
+    mutation_base: type[DjangoFormMutation | DjangoModelFormMutation],
     form_factory: Callable[[], type[forms.BaseForm]],
 ):
     """Overriding ONLY ``get_form`` counts as a construction-hook override on both flavors.
@@ -981,7 +981,7 @@ def test_get_form_fields_hook_basis_drives_required_guard():
 @pytest.mark.parametrize("mutation_base", [DjangoFormMutation, DjangoModelFormMutation])
 @pytest.mark.parametrize("bad_hook", [None, "not-callable"])
 def test_non_callable_get_form_fields_is_configuration_error(
-    mutation_base: type[DjangoFormMutation] | type[DjangoModelFormMutation],
+    mutation_base: type[DjangoFormMutation | DjangoModelFormMutation],
     bad_hook: str | None,
 ):
     """A malformed hook declaration fails as typed configuration, not raw ``TypeError``."""
@@ -1001,7 +1001,7 @@ def test_non_callable_get_form_fields_is_configuration_error(
 
 @pytest.mark.parametrize("mutation_base", [DjangoFormMutation, DjangoModelFormMutation])
 def test_plain_function_get_form_fields_hook_is_configuration_error(
-    mutation_base: type[DjangoFormMutation] | type[DjangoModelFormMutation],
+    mutation_base: type[DjangoFormMutation | DjangoModelFormMutation],
 ):
     """A plain (non-classmethod) multi-arg hook fails as typed configuration, not raw ``TypeError``.
 
@@ -1037,7 +1037,7 @@ def test_plain_function_get_form_fields_hook_is_configuration_error(
 
 @pytest.mark.parametrize("mutation_base", [DjangoFormMutation, DjangoModelFormMutation])
 def test_raising_get_form_fields_body_is_configuration_error(
-    mutation_base: type[DjangoFormMutation] | type[DjangoModelFormMutation],
+    mutation_base: type[DjangoFormMutation | DjangoModelFormMutation],
 ):
     """A hook body raising mid-call is reported as typed configuration, not the raw exception.
 
@@ -1130,7 +1130,7 @@ def test_get_form_fields_hook_raising_empty_exception_reports_no_detail():
     ["zero_arg_plain_function", "staticmethod_lambda"],
 )
 def test_zero_arg_and_staticmethod_get_form_fields_hooks_are_accepted(
-    mutation_base: type[DjangoFormMutation] | type[DjangoModelFormMutation],
+    mutation_base: type[DjangoFormMutation | DjangoModelFormMutation],
     hook_style: str,
 ):
     """A zero-arg plain function / ``@staticmethod`` hook still binds (permissive posture).
@@ -1168,7 +1168,7 @@ def test_zero_arg_and_staticmethod_get_form_fields_hooks_are_accepted(
 @pytest.mark.parametrize("mutation_base", [DjangoFormMutation, DjangoModelFormMutation])
 @pytest.mark.parametrize("bad_return", [None, ["message"], [("message",)]])
 def test_malformed_get_form_fields_return_is_configuration_error(
-    mutation_base: type[DjangoFormMutation] | type[DjangoModelFormMutation],
+    mutation_base: type[DjangoFormMutation | DjangoModelFormMutation],
     bad_return: list[str] | list[tuple[str, ...]] | None,
 ):
     """Malformed hook returns fail through the typed configuration boundary for both bases."""

@@ -1588,23 +1588,31 @@ def test_library_relation_key_matches_a_restricted_branch_for_staff_over_http():
 #: list field it filters and the response key naming each row.
 _UNDECLARED_RELATION_SPELLINGS = {
     "alt-branches": (
-        "query ($ids: [Int!]) { rows: allLibraryShelves(filter: { altBranches: { exact: $ids } })"
-        " { key: code } }",
+        (
+            "query ($ids: [Int!]) { rows: allLibraryShelves(filter: { altBranches: { exact: $ids } })"
+            " { key: code } }"
+        ),
         "hidden_branch",
     ),
     "alt-shelves": (
-        "query ($ids: [Int!]) { rows: allLibraryBranches(filter: { altShelves: { exact: $ids } })"
-        " { key: name } }",
+        (
+            "query ($ids: [Int!]) { rows: allLibraryBranches(filter: { altShelves: { exact: $ids } })"
+            " { key: name } }"
+        ),
         "secret_shelf",
     ),
     "branch-alt-shelves-flat": (
-        "query ($ids: [Int!]) { rows: allLibraryShelves("
-        "filter: { branchAltShelves: { exact: $ids } }) { key: code } }",
+        (
+            "query ($ids: [Int!]) { rows: allLibraryShelves("
+            "filter: { branchAltShelves: { exact: $ids } }) { key: code } }"
+        ),
         "secret_shelf",
     ),
     "branch-alt-shelves-nested": (
-        "query ($ids: [Int!]) { rows: allLibraryShelves("
-        "filter: { branch: { altShelves: { exact: $ids } } }) { key: code } }",
+        (
+            "query ($ids: [Int!]) { rows: allLibraryShelves("
+            "filter: { branch: { altShelves: { exact: $ids } } }) { key: code } }"
+        ),
         "secret_shelf",
     ),
 }
@@ -5696,8 +5704,10 @@ _MALFORMED_GENRE_FILTER_ROWS: tuple[
     (
         "combined-duplicates",
         lambda cls, input_value, queryset, info: queryset.union(queryset, all=True),
-        "GenreFilter.apply_sync returned a combined queryset; the visibility boundary serves "
-        "a combined queryset as the set of Genre primary keys it selects",
+        (
+            "GenreFilter.apply_sync returned a combined queryset; the visibility boundary serves "
+            "a combined queryset as the set of Genre primary keys it selects"
+        ),
         ("union: union(all=True) keeps duplicate rows, which a primary-key set cannot",),
         0,
     ),

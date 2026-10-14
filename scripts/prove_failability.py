@@ -2369,8 +2369,10 @@ def _run_provenance_lines(name: str, run: RunOutcome) -> list[str]:
 def _file_record_lines(record: FileRecord) -> list[str]:
     """Return one mutated file's blob ids, restore proof and full mutation diff."""
     lines = [
-        f"   - `{record.relative_target}` git blob before `{record.blob_before}`, mutated "
-        f"`{record.blob_mutated}`, after restore `{record.blob_after}`",
+        (
+            f"   - `{record.relative_target}` git blob before `{record.blob_before}`, mutated "
+            f"`{record.blob_mutated}`, after restore `{record.blob_after}`"
+        ),
         f"   - `{record.relative_target}` mutation as applied:",
         "",
         "     ```diff",
@@ -2383,16 +2385,18 @@ def _file_record_lines(record: FileRecord) -> list[str]:
 def _partial_record_notice(selection: ManifestSelection) -> list[str]:
     """Return the notice that a ``--only`` run's report is a subset of the manifest."""
     lines = [
-        f"**PARTIAL RECORD - `--only` NARROWED THIS RUN: {selection.selected_total} of "
-        f"{selection.manifest_total} manifest entries were selected by "
-        f"`{selection.selector_text}`, and the other {len(selection.omitted_labels)} were NOT "
-        "proved.** `docs/builder/ARTIFACT.md` `### Failability proofs` requires one entry per new "
-        "boundary the pass introduced, so this block does not satisfy that requirement on its own: "
-        "it is evidence for the entries listed below and for nothing else. Re-run without `--only` "
-        "for a complete record, or say beside this block where the remaining boundaries' proofs "
-        "are - a Worker-3 independent re-run of a subset is exactly that case, and already owes "
-        "the artifact a statement of which boundaries it re-ran and which it accepted on Worker "
-        "2's record.",
+        (
+            f"**PARTIAL RECORD - `--only` NARROWED THIS RUN: {selection.selected_total} of "
+            f"{selection.manifest_total} manifest entries were selected by "
+            f"`{selection.selector_text}`, and the other {len(selection.omitted_labels)} were NOT "
+            "proved.** `docs/builder/ARTIFACT.md` `### Failability proofs` requires one entry per new "
+            "boundary the pass introduced, so this block does not satisfy that requirement on its own: "
+            "it is evidence for the entries listed below and for nothing else. Re-run without `--only` "
+            "for a complete record, or say beside this block where the remaining boundaries' proofs "
+            "are - a Worker-3 independent re-run of a subset is exactly that case, and already owes "
+            "the artifact a statement of which boundaries it re-ran and which it accepted on Worker "
+            "2's record."
+        ),
         "",
         "Manifest entries this run did NOT prove:",
         "",

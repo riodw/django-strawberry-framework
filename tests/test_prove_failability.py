@@ -702,11 +702,13 @@ def test_a_holder_killed_mid_run_leaves_no_lock_to_clear(
         [
             sys.executable,
             "-c",
-            "import fcntl, os, sys\n"
-            "descriptor = os.open(sys.argv[1], os.O_RDONLY | os.O_DIRECTORY)\n"
-            "fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
-            "print('held', flush=True)\n"
-            "sys.stdin.read()\n",
+            (
+                "import fcntl, os, sys\n"
+                "descriptor = os.open(sys.argv[1], os.O_RDONLY | os.O_DIRECTORY)\n"
+                "fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+                "print('held', flush=True)\n"
+                "sys.stdin.read()\n"
+            ),
             str(fake_repo),
         ],
         stdin=subprocess.PIPE,

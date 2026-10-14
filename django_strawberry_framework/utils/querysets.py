@@ -1988,7 +1988,7 @@ def _reconstructed_value(value: object, memo: dict[int, object]) -> object:
         frozen = cast("tuple[object, ...] | frozenset[object]", value)
         if not frozen:
             return value
-        frozen_type = cast("type[tuple[object, ...]] | type[frozenset[object]]", value_type)
+        frozen_type = cast("type[tuple[object, ...] | frozenset[object]]", value_type)
         return frozen_type(
             [
                 item
@@ -2710,11 +2710,13 @@ def _sealed_prefetch_related_lookups(
                 lookup = entry_state.get("prefetch_through")
                 return None, (
                     "untrusted",
-                    f"{cls_name} prefetch {lookup!r} queryset is over "
-                    f"{_safe_class_name(inner_state.get('model'))} rows, but the {lookup!r} "
-                    f"relation targets {_safe_class_name(relation_target)} rows; a prefetch "
-                    "child over an unrelated table would populate the relation with rows "
-                    "the related type's visibility hook never saw",
+                    (
+                        f"{cls_name} prefetch {lookup!r} queryset is over "
+                        f"{_safe_class_name(inner_state.get('model'))} rows, but the {lookup!r} "
+                        f"relation targets {_safe_class_name(relation_target)} rows; a prefetch "
+                        "child over an unrelated table would populate the relation with rows "
+                        "the related type's visibility hook never saw"
+                    ),
                 )
             # Thread the OUTER effective alias into the child seal, which runs
             # with ``require_shared_alias``: a child explicitly pinned to a DIFFERENT
@@ -3311,7 +3313,7 @@ def require_orderset_class(
 
 def _apply_sidecar_sync(
     target_type: type[DjangoType],
-    set_class: type[FilterSet] | type[OrderSet],
+    set_class: type[FilterSet | OrderSet],
     queryset: models.QuerySet[models.Model],
     input_value: object,
     info: object,
@@ -3354,7 +3356,7 @@ def _apply_sidecar_sync(
 
 async def _apply_sidecar_async(
     target_type: type[DjangoType],
-    set_class: type[FilterSet] | type[OrderSet],
+    set_class: type[FilterSet | OrderSet],
     queryset: models.QuerySet[models.Model],
     input_value: object,
     info: object,
@@ -3845,10 +3847,12 @@ def _seal_or_defect(
         ):
             return None, (
                 "routing",
-                f"expected db={_safe_routing_repr(original_db)}, "
-                f"hints={_safe_routing_repr(original_hints)}, got "
-                f"db={_safe_routing_repr(candidate_db)}, "
-                f"hints={_safe_routing_repr(candidate_hints)}",
+                (
+                    f"expected db={_safe_routing_repr(original_db)}, "
+                    f"hints={_safe_routing_repr(original_hints)}, got "
+                    f"db={_safe_routing_repr(candidate_db)}, "
+                    f"hints={_safe_routing_repr(candidate_hints)}"
+                ),
             )
     # Validate the candidate's ENTIRE query graph BEFORE cloning it. sql.Query.clone is
     # not a no-dispatch boundary: its body calls bound methods on the source's own

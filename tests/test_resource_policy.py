@@ -1116,7 +1116,7 @@ class _SliceEscapingTuple(tuple[int, ...]):
     ids=["list", "tuple"],
 )
 def test_bounded_rows_does_not_let_a_sequence_subclass_answer_its_own_slice(
-    container: type[_SliceEscapingList] | type[_SliceEscapingTuple],
+    container: type[_SliceEscapingList | _SliceEscapingTuple],
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
 ):
     """A sequence type may override ``__getitem__``; the bound must not run through it.

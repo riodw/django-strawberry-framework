@@ -366,15 +366,23 @@ def _shape_lines(
         "",
         f"- outer `query.distinct` is `False`: **{qs.query.distinct is False}**",
         exists_line,
-        "- no `DISTINCT` anywhere (outer query or any existence body): "
-        f"**{'DISTINCT' not in capture.display_sql.upper()}**",
-        "- the outer statement reads only the root table (every related table lives "
-        f"INSIDE an `EXISTS`): **{capture.outer_tables}**",
-        f"- the result equals the dedup oracle ({len(capture.production_pks)} rows): "
-        f"**{capture.production_pks == capture.oracle_pks}**",
-        "- the top plan node's actual row count equals the result "
-        f"({capture.top_actual_rows} rows), so no outer row is multiplied: "
-        f"**{capture.top_actual_rows == len(capture.production_pks)}**",
+        (
+            "- no `DISTINCT` anywhere (outer query or any existence body): "
+            f"**{'DISTINCT' not in capture.display_sql.upper()}**"
+        ),
+        (
+            "- the outer statement reads only the root table (every related table lives "
+            f"INSIDE an `EXISTS`): **{capture.outer_tables}**"
+        ),
+        (
+            f"- the result equals the dedup oracle ({len(capture.production_pks)} rows): "
+            f"**{capture.production_pks == capture.oracle_pks}**"
+        ),
+        (
+            "- the top plan node's actual row count equals the result "
+            f"({capture.top_actual_rows} rows), so no outer row is multiplied: "
+            f"**{capture.top_actual_rows == len(capture.production_pks)}**"
+        ),
         "",
     ]
 

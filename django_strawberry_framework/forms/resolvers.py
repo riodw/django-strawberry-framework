@@ -139,7 +139,7 @@ if TYPE_CHECKING:
     from .sets import DjangoFormMutation, DjangoModelFormMutation
 
     # A form-flavor mutation class: the ``ModelForm`` or the model-less plain base.
-    _FormMutationClass: TypeAlias = type[DjangoModelFormMutation] | type[DjangoFormMutation]
+    _FormMutationClass: TypeAlias = type[DjangoModelFormMutation | DjangoFormMutation]
     # The form ``decode_step`` product: the form-keyed bound ``(data, files)`` pair.
     _DecodedForm: TypeAlias = tuple[dict[str, object], dict[str, object]]
 

@@ -1195,6 +1195,60 @@ def test_malformed_get_form_fields_return_is_configuration_error(
         )
 
 
+def _hostile_class_value(raised: type[BaseException]) -> object:
+    """A hook value whose ``__class__`` read raises ``raised`` (so ``isinstance`` raises)."""
+
+    class HostileClass:
+        @property
+        @override
+        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object
+        # is the basis guard's input
+        def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+            raise raised("hostile __class__")
+
+    return HostileClass()
+
+
+@pytest.mark.parametrize("mutation_base", [DjangoFormMutation, DjangoModelFormMutation])
+@pytest.mark.parametrize("raised", [RuntimeError, TypeError, KeyboardInterrupt])
+def test_hostile_class_hook_value_is_configuration_error(
+    mutation_base: type[DjangoFormMutation | DjangoModelFormMutation],
+    raised: type[BaseException],
+):
+    """A hook value whose ``__class__`` raises fails declaration typed for both bases.
+
+    The hook's basis is validated at class creation; a value that cannot even be
+    asked ``isinstance(value, forms.Field)`` is listed under invalid fields in the
+    typed ``ConfigurationError`` instead of escaping the declaration raw.
+    """
+
+    form_cls = _contact_form() if mutation_base is DjangoFormMutation else _item_model_form()
+    meta_attrs: dict[str, object] = (
+        {"form_class": form_cls, "permission_classes": []}
+        if mutation_base is DjangoFormMutation
+        else {"form_class": form_cls, "operation": "create"}
+    )
+
+    def get_hostile_form_fields(cls: type):
+        del cls
+        return {"message": _hostile_class_value(raised)}
+
+    with pytest.raises(ConfigurationError) as exc:
+        type(
+            "HostileClassHookMutation",
+            (mutation_base,),
+            {
+                "get_form_fields": classmethod(get_hostile_form_fields),
+                "Meta": type("Meta", (), meta_attrs),
+            },
+        )
+    assert str(exc.value) == (
+        f"DjangoFormMutation for {form_cls.__name__} get_form_fields() must return a mapping "
+        "of string names to forms.Field instances; invalid names [], invalid fields "
+        "['message']."
+    )
+
+
 def test_form_bind_is_retry_idempotent_after_fixable_later_phase_failure(
     monkeypatch: pytest.MonkeyPatch,
 ):

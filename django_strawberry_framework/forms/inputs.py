@@ -263,25 +263,32 @@ def _form_field_basis(
     # the string check and detonate as a raw ``SyntaxError`` out of the generated
     # ``__init__`` source at input-class construction. ``base_fields`` keys are
     # always identifiers (declared form attributes / model columns), so this
-    # rejects only names that could never have built an input. The per-name
+    # rejects only names that could never have built an input. Each per-entry
     # interrogation is guarded: a hook-supplied ``str`` subclass whose
-    # ``isidentifier`` (or ``__hash__`` under ``keyword.iskeyword``) raises cannot
-    # be interrogated at all, so it is invalid by the same rule instead of
-    # escaping this typed boundary as the raw exception.
+    # ``isidentifier`` (or ``__hash__`` under ``keyword.iskeyword``) raises, or a
+    # value whose ``__class__`` raises under ``isinstance``, cannot be interrogated
+    # at all, so the entry is invalid by the same rule instead of escaping this
+    # typed boundary as the raw exception.
     invalid_names: list[object] = []
-    for name in basis:
+    invalid_fields: list[object] = []
+    for name, field in basis.items():
         try:
             # basedpyright: trust boundary: a consumer ``get_form_fields`` hook can return a
             # mapping with any keys
-            invalid = (
+            invalid_name = (
                 not isinstance(name, str) or not name.isidentifier() or keyword.iskeyword(name)  # pyright: ignore[reportUnnecessaryIsInstance]
             )
         except BaseException:
-            invalid = True
-        if invalid:
+            invalid_name = True
+        if invalid_name:
             invalid_names.append(name)
-    # basedpyright: trust boundary: the same hook can map a name to any value
-    invalid_fields = [name for name, field in basis.items() if not isinstance(field, forms.Field)]  # pyright: ignore[reportUnnecessaryIsInstance]
+        try:
+            # basedpyright: trust boundary: the same hook can map a name to any value
+            invalid_field = not isinstance(field, forms.Field)  # pyright: ignore[reportUnnecessaryIsInstance]
+        except BaseException:
+            invalid_field = True
+        if invalid_field:
+            invalid_fields.append(name)
     if invalid_names or invalid_fields:
         # Each entry renders through ``_safe_arg_repr``: this message is assembled
         # at the raise site, so a hook-supplied key with a hostile ``__repr__``

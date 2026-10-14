@@ -7,8 +7,8 @@ A rule family is selected whole; a code in it that still reports sits in the rat
 are fixed at the root, gated (`ruff check`, `ruff format --check`, `scripts/check_trailing_commas.py --check`, full
 suite at 100% coverage) and committed, and the line is deleted.
 
-Progress: 27 done, 5 to do. Stable rules: 815, every one named in the config: 713 on, 102 in `ignore` (28 off by
-design, 74 ratchet). The 139 preview-only rules stay off with `preview`. `# noqa` comments: 160 lines in 52 files.
+Progress: 27 done, 8 to do. Stable rules: 815, every one named in the config: 713 on, 102 in `ignore` (25 off by
+design, 77 ratchet). The 139 preview-only rules stay off with `preview`. `# noqa` comments: 160 lines in 52 files.
 
 Counts below were measured on ruff 0.17.0 at ee9c8161. "Root" is `conftest.py`, `line_count.py` and
 `docs/dry/export_dry_review.py`.
@@ -39,7 +39,7 @@ Counts below were measured on ruff 0.17.0 at ee9c8161. "Root" is `conftest.py`, 
 - [x] 20. `PL` (Pylint), minus the off-by-design codes below and the ratchet codes of items 28 and 30
 - [x] 21. Every other stable rule with no site today, by selecting its family: `DJ`, `DTZ`, `EXE`, `FA`, `FIX`,
   `FURB`, `G`, `ICN`, `INT`, `LOG`, `PGH`, `PIE`, `PT`, `PTH`, `PYI`, `RET`, `S`, `SLOT`, `T10`, `TC`, `TD`, `TID`,
-  `TRY`, `YTT`. The codes that still report are in `ignore` (off by design below, or ratchet items 28-32)
+  `TRY`, `YTT`. The codes that still report are in `ignore` (off by design below, or ratchet items 28-35)
 - [x] 22. Dead config ignores deleted: `ANN002`, `ANN003`, `D417`, `RUF001`-`RUF003` from the global `ignore`; `F841`
   and `SIM118` from the tests/ and examples/ lists; `N806`, `B018` and `PERF` from the examples/ list; the
   `__init__.py`, `**/migrations/*.py`, `**/views.py`, `**/urls.py` and `**/admin.py` entries
@@ -111,6 +111,28 @@ root).
 
 - [ ] 32. `ANN401` and `D107`: 34 explicit `Any` annotations and 22 undocumented `__init__`s in the package
 
+Boolean trap (`FBT`): every package site is internal (no exported function or class takes a positional `bool`), so
+the fix is a keyword-only flag (`def f(x, *, flag: bool)`) plus its callers passing it by name, never a public
+signature change. tests/ and examples/ drop `FBT` by design (parametrized `flag: bool` arguments and fixture helper
+calls, 243 sites). One code per item, in landing order, because a signature fix also clears the `FBT003` calls that
+target it:
+
+- [ ] 33. `FBT002` (4: package 1, root 3): `utils/relations.py::relation_bool`'s `default: bool = False` becomes
+  keyword-only; that also clears its `FBT001` site and 7 of the package's 11 `FBT003` calls (its 22 callers pass
+  `default=` by name). The 3 root sites are `conftest.py::_django_db_signature`, which mirrors pytest-django's
+  positional `django_db(transaction, reset_sequences, ...)` signature on purpose: each takes a `noqa: FBT002` with
+  that reason
+- [ ] 34. `FBT001` (35 before item 33, 34 after: package 22, scripts 12): private helpers taking a positional flag
+  (`types/base.py::_validate_connection` and its three siblings' `relay_shaped`, `optimizer/walker.py`
+  `has_custom_qs`, `list_field.py` `trusted_max_rows`, `optimizer/plans.py` `defer_mode`, the
+  `utils/_queryset_private.py` setters, `utils/write_transaction.py` `many`, the private `_DocumentBudget`'s
+  `charge_selection(aliased)`, `keyset.py::keyset_seek_greater(descending)`; scripts/ `review_inspect.py` renderers
+  `cap` / `outline_only` / `in_function`, `check_trailing_commas.py::process_markdown_fences(do_fix)`). Each becomes keyword-only;
+  `_select_path_missing_connectors` and `process_markdown_fences` take their `FBT003` call sites with them
+- [ ] 35. `FBT003` (25 before items 33-34, 15 after): the remaining positional `True` / `False` arguments,
+  passed by name: `ConnectionWindowBounds(0, first, False)`, `_meta_attr(meta, "primary", False)`,
+  `_PACKAGE_MANAGED.settle(extension, True)`, and `scripts/check_citations.py`'s eleven `Outcome(...)` constructions
+
 Off by design (not planned):
 
 - `PLC0415` (2081, import outside top level): import cycles are broken by local imports
@@ -120,7 +142,6 @@ Off by design (not planned):
   (`reportPrivateUsage` is off for the same reason)
 - `TID252` (917, relative imports): the package imports its siblings relatively
 - `EM101`, `EM102`, `TRY003` (3097): exception-message style only
-- `FBT001`-`FBT003` (306, boolean positional arguments): fixing them changes public signatures
 - `PLR` complexity and magic values (`PLR2004` 1269, `PLR0913` 123, `PLR0912` 49, `PLR0911` 40, `PLR0917` 26,
   `PLR0915` 24) and `C901` (97)
 - `FIX002` (10), `TD003` (10): a TODO is the `TODO(spec-NNN slice N): ...` anchor convention, which names a spec or
@@ -141,18 +162,18 @@ content, so the formatter owns `.py` only. No file carries a file-level `# ruff:
 
 Global `ignore`, in two commented blocks:
 
-- Off by design (28): `C901`, `CPY001`, `D203`, `D213`, `D400`, `D401`, `D404`, `D413`, `EM101`, `EM102`,
-  `FBT001`-`FBT003`, `FIX002`, `PLC0415`, `PLR0911`, `PLR0912`, `PLR0913`, `PLR0915`, `PLR0917`,
+- Off by design (25): `C901`, `CPY001`, `D203`, `D213`, `D400`, `D401`, `D404`, `D413`, `EM101`, `EM102`,
+  `FIX002`, `PLC0415`, `PLR0911`, `PLR0912`, `PLR0913`, `PLR0915`, `PLR0917`,
   `PLR2004`, `SLF001`, `TC001`-`TC003`, `TD003`, `TID252`, `TRY003`
-- Ratchet (74): the codes of items 28-30 and 32 (`ANN401`, `BLE001`, `D107`, `DJ*`, `DTZ*`, `EXE001`, `FURB*`,
+- Ratchet (77): the codes of items 28-30 and 32-35 (`ANN401`, `BLE001`, `D107`, `DJ*`, `DTZ*`, `EXE001`, `FBT*`, `FURB*`,
   `PIE*`, `PLC*`, `PLR*`, `PLW*`, `PT*`, `PTH*`, `PYI*`, `RET*`, `S*`, `SLOT*`, `TRY300`, `TRY301`)
 
 Per-file ignores:
 
 | Glob | Codes |
 | --- | --- |
-| `tests/**/*.py` | `D`, `ANN`, `ERA001`, `SIM117`, `E501`, `N802`, `N806`, `B018`, `RUF012`, `PERF`, `RUF043`, `ARG`, `S101` |
-| `examples/**/*.py` | `D`, `ANN`, `ERA001`, `SIM117`, `E501`, `UP031`, `RUF012`, `RUF043`, `ARG`, `S101` |
+| `tests/**/*.py` | `D`, `ANN`, `ERA001`, `SIM117`, `E501`, `N802`, `N806`, `B018`, `RUF012`, `PERF`, `RUF043`, `ARG`, `S101`, `FBT` |
+| `examples/**/*.py` | `D`, `ANN`, `ERA001`, `SIM117`, `E501`, `UP031`, `RUF012`, `RUF043`, `ARG`, `S101`, `FBT` |
 | `scripts/**/*.py` | `PERF`, `T201`, `INP001` |
 | `line_count.py` | `T201` |
 | `docs/dry/export_dry_review.py` | `T201`, `INP001` |

@@ -3035,6 +3035,10 @@ class FilterSet(
           object) raises instead of normalizing to ``{}``;
         * a field or lookup the lookup table does not hold raises instead
           of being written as a form key django-filter ignores;
+        * a range value ``_normalize_range_value`` cannot read (not a
+          mapping or input object, or a key other than ``start`` /
+          ``end``, which includes a misspelled lookup under a range head)
+          raises instead of normalizing to an unconstrained patch;
         * a dict value that survives ``normalize_input_value`` on a
           NON-range filter raises via ``_reject_dict_form_value`` --
           only the positional range patch (its own ``_RangeFormPatch``

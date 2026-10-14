@@ -236,9 +236,6 @@ ignore = [
     "D413",   # blank line after the last section: ditto
     "EM101",  # string literal in the exception constructor: exception-message style only
     "EM102",  # f-string in the exception constructor: ditto
-    "FBT001", # boolean positional parameter: fixing it changes public signatures
-    "FBT002", # boolean default positional parameter: ditto
-    "FBT003", # boolean positional argument in a call: ditto
     "FIX002", # TODO markers are the `TODO(spec-NNN slice N)` anchor convention
     "PLC0415", # local imports break import cycles
     "PLR0911", # too many return statements
@@ -264,6 +261,9 @@ ignore = [
     "DTZ001",
     "DTZ011",
     "EXE001",
+    "FBT001",
+    "FBT002",
+    "FBT003",
     "FURB110",
     "FURB136",
     "FURB157",
@@ -383,6 +383,7 @@ known-first-party = ["django_strawberry_framework"]
     "RUF043", # plain `match="..."` substrings are the convention
     "ARG",    # an unused arg is an injected fixture or a framework-fixed signature; enforced on the package
     "S101",   # assert is the pytest idiom
+    "FBT",    # parametrized `flag: bool` arguments and helper calls; enforced on the package and scripts
 ]
 "examples/**/*.py" = [
     "D",      # docstrings not required in example code
@@ -395,6 +396,7 @@ known-first-party = ["django_strawberry_framework"]
     "RUF043", # plain `match="..."` substrings are the convention
     "ARG",    # an unused arg is an injected fixture or a framework-fixed signature; enforced on the package
     "S101",   # assert is the pytest idiom
+    "FBT",    # parametrized `flag: bool` arguments and helper calls; enforced on the package and scripts
 ]
 # PERF: one-shot build/maintenance scripts are not a performance surface.
 # T201: print is the CLI output of scripts and the root tools.

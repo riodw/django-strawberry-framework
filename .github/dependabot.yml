@@ -32,6 +32,12 @@ updates:
       # until the package supports 3.3, so a 3.3 bump PR can only fail.
       - dependency-name: "graphql-core"
         versions: [">=3.3"]
+      # strawberry-graphql 0.328.0 is the first release that requires
+      # graphql-core>=3.3, so under the cap above every later release is
+      # unresolvable and the update job fails instead of opening a PR. Lift both
+      # entries together with the graphql-core cap.
+      - dependency-name: "strawberry-graphql"
+        versions: [">=0.328.0"]
     groups:
       # One PR for the routine dev-tooling churn (linters, pytest plugins, test
       # fixtures) so it does not crowd out the dependency PRs that change what

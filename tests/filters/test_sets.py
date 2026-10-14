@@ -6021,6 +6021,100 @@ def test_apply_sync_rejects_an_unknown_filter_field_at_every_depth(
     )
 
 
+_RANGE_REJECTION_SHAPES = [
+    pytest.param(
+        {"rnage": {"start": 1, "end": 5}},
+        "dict {'rnage': {'start': 1, 'end': 5}}",
+        id="misspelled-lookup",
+    ),
+    pytest.param({"range": [1, 5]}, "list [1, 5]", id="list-under-the-range-lookup"),
+    pytest.param([1, 5], "list [1, 5]", id="bare-list"),
+]
+
+
+def _range_rejection_message(received: str) -> str:
+    return (
+        "RangeFilter consumes a range input with only 'start' / 'end' axes for its 'fines' "
+        f"input, but received {received}; send a mapping or input object with 'start' / 'end' "
+        "(the GraphQL schema already rejects this shape over the wire)."
+    )
+
+
+def _fines_window_filtersets() -> tuple[type[FilterSet], type[FilterSet]]:
+    """A Patron filter set with one range head and a Loan filter set relating to it."""
+    from django_strawberry_framework.filters import RangeFilter
+
+    class FinesWindowFilter(FilterSet):
+        fines = RangeFilter(field_name="lifetime_fines_cents", lookup_expr="range")
+
+        class Meta:
+            model = library_models.Patron
+            fields = []
+
+    class FinesWindowLoanFilter(FilterSet):
+        patron = RelatedFilter(FinesWindowFilter, field_name="patron")
+
+        class Meta:
+            model = library_models.Loan
+            fields = []
+
+    return FinesWindowFilter, FinesWindowLoanFilter
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("depth", ["top-level", "logic-arm", "related-branch"])
+@pytest.mark.parametrize(("fines_input", "received"), _RANGE_REJECTION_SHAPES)
+def test_apply_sync_rejects_a_range_value_it_cannot_read_at_every_depth(
+    fines_input: object,
+    received: str,
+    depth: str,
+):
+    """A hand-built range value the range filter cannot read raises, never applying nothing.
+
+    A misspelled lookup under a range head reaches the range filter as the
+    head's bare value, so it raises like any other unknown lookup.
+    """
+    patron_filter, loan_filter = _fines_window_filtersets()
+    filter_input: dict[str, object] = {"fines": fines_input}
+    if depth == "logic-arm":
+        filter_input = {"and_": [filter_input]}
+    if depth == "related-branch":
+        _register_plain_types(library_models.Patron)
+    with pytest.raises(ConfigurationError) as excinfo:
+        if depth == "related-branch":
+            loan_filter.apply_sync(
+                {"patron": filter_input},
+                library_models.Loan.objects.all(),
+                _make_info(),
+            )
+        else:
+            patron_filter.apply_sync(
+                filter_input,
+                library_models.Patron.objects.all(),
+                _make_info(),
+            )
+    assert str(excinfo.value) == _range_rejection_message(received)
+
+
+@pytest.mark.django_db
+def test_apply_async_rejects_a_misspelled_lookup_under_a_range_head():
+    """``apply_async`` reads a hand-built range value through the same guard."""
+    import asyncio
+
+    patron_filter, _loan_filter = _fines_window_filtersets()
+    with pytest.raises(ConfigurationError) as excinfo:
+        asyncio.run(
+            patron_filter.apply_async(
+                {"fines": {"rnage": {"start": 1, "end": 5}}},
+                library_models.Patron.objects.all(),
+                _make_info(),
+            ),
+        )
+    assert str(excinfo.value) == _range_rejection_message(
+        "dict {'rnage': {'start': 1, 'end': 5}}",
+    )
+
+
 @pytest.mark.django_db
 def test_check_permissions_falls_back_to_active_input_when_no_requested_fields():
     """``check_permissions`` with no explicit set routes through the active-input path."""

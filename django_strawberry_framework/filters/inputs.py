@@ -44,9 +44,9 @@ from strawberry import UNSET, relay
 from ..conf import hide_flat_filters_setting
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..registry import register_subsystem_clear
-from ..utils._narrowing import is_dict, is_list_or_tuple
+from ..utils._narrowing import is_list_or_tuple
 from ..utils.converters import MRO_CONTINUE, convert_with_mro
-from ..utils.input_values import is_inactive_value
+from ..utils.input_values import is_inactive_value, iter_input_items
 from ..utils.inputs import (
     GeneratedInputFieldSpec,
     build_strawberry_input_class,
@@ -879,6 +879,10 @@ def _build_range_input_class(
     )
 
 
+#: The axes a range input carries: ``_build_range_input_class`` declares exactly these.
+_RANGE_AXES = frozenset({"start", "end"})
+
+
 class _RangeFormPatch(dict[str, object]):
     """A range filter's positional form-data patch, ``{<name>_0, <name>_1}``.
 
@@ -908,14 +912,32 @@ def _normalize_range_value(
     for neither). Omitting ``None``-valued axes preserves the form-data
     "axis not supplied" convention ``django-filter`` consumes and keeps
     the patch keys load-bearing for any caller walking ``data.keys()``.
+
+    The value is read through ``utils/input_values.py::iter_input_items``, the
+    package's one dict-or-input-dataclass walk. The schema types every range
+    input as the ``{start, end}`` object, so the wire delivers nothing else; a
+    value that walk cannot read (a list, a scalar, an arbitrary object) or that
+    carries a key other than ``start`` / ``end`` is a hand-built mapping's
+    mistake. Its values would never be read, so it raises the typed
+    ``ConfigurationError`` instead of answering with an unconstrained patch, as
+    ``_require_list_container`` does for the list arms. A misspelled lookup
+    under a range head (``{"span": {"rnage": {...}}}``) arrives here as the
+    head's bare value, so this check is also what makes it raise like any other
+    unknown lookup.
     """
     base = field_name or filter_instance.field_name or "range"
-    start: object = (
-        getattr(raw_value, "start", None) if not is_dict(raw_value) else raw_value.get("start")
-    )
-    end: object = (
-        getattr(raw_value, "end", None) if not is_dict(raw_value) else raw_value.get("end")
-    )
+    items = iter_input_items(raw_value)
+    if items is None or any(name not in _RANGE_AXES for name, _ in items):
+        raise ConfigurationError(
+            f"{_safe_type_name(filter_instance)} consumes a range input with only "
+            f"'start' / 'end' axes for its {base!r} input, but received "
+            f"{_safe_type_name(raw_value)} {_safe_arg_repr(raw_value)}; send a mapping or "
+            "input object with 'start' / 'end' (the GraphQL schema already rejects this "
+            "shape over the wire).",
+        )
+    axes = dict(items)
+    start = axes.get("start")
+    end = axes.get("end")
     # Drop ``None``- and ``UNSET``-valued axes so partial-range inputs surface only
     # the supplied positional key. Django's ``RangeWidget.value_from_datadict``
     # treats a missing key the same as a ``None``-valued one, but emitting

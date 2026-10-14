@@ -29,7 +29,8 @@ from apps.library import models as library_models
 from apps.products.models import Category, Item
 from django.db import models
 from django.db.models import QuerySet
-from django_filters import BaseInFilter, BooleanFilter, CharFilter, ChoiceFilter
+from django_filters import BaseInFilter, BooleanFilter, CharFilter, ChoiceFilter, Filter
+from django_filters import RangeFilter as DjangoRangeFilter
 from strawberry import relay
 from typing_extensions import override
 
@@ -889,6 +890,67 @@ def test_normalize_input_value_range_filter_unwraps_enum_members():
         {"start": StatusEnum.ACTIVE, "end": StatusEnum.INACTIVE},
         field_name="status_range",
     ) == {"status_range_0": "active", "status_range_1": "inactive"}
+
+
+class _StartEndAttrs:
+    """An object exposing ``start`` / ``end`` attributes that is neither a dict nor a dataclass."""
+
+    start = 1
+    end = 5
+
+
+@pytest.mark.parametrize(
+    "filter_class",
+    [RangeFilter, DjangoRangeFilter],
+    ids=["package", "django-filter"],
+)
+@pytest.mark.parametrize(
+    "bad",
+    [
+        pytest.param([1, 5], id="list"),
+        pytest.param((1, 5), id="tuple"),
+        pytest.param(42, id="int"),
+        pytest.param("1,5", id="str"),
+        pytest.param(range(1, 5), id="python-range"),
+        pytest.param(object(), id="object"),
+        pytest.param(_StartEndAttrs(), id="start-end-attributes"),
+        pytest.param({"from": 1, "to": 5}, id="only-unknown-keys"),
+        pytest.param({"start": 1, "zzz": 5}, id="start-and-unknown-key"),
+        pytest.param({"start": 1, "end": 5, "zzz": 9}, id="both-axes-and-unknown-key"),
+    ],
+)
+def test_normalize_input_value_range_filter_rejects_a_value_it_cannot_read(
+    filter_class: type[Filter],
+    bad: object,
+):
+    """A range value that is not a ``{start, end}`` mapping or input object raises.
+
+    Answering it with an empty or partial patch would drop the caller's
+    constraint, so the error names the filter, its input and the value.
+    """
+    with pytest.raises(ConfigurationError) as excinfo:
+        normalize_input_value(filter_class(field_name="price"), bad, field_name="price_span")
+    assert str(excinfo.value) == (
+        f"{filter_class.__name__} consumes a range input with only 'start' / 'end' axes for "
+        f"its 'price_span' input, but received {type(bad).__name__} {bad!r}; send a mapping "
+        "or input object with 'start' / 'end' (the GraphQL schema already rejects this "
+        "shape over the wire)."
+    )
+
+
+def test_normalize_input_value_range_filter_reads_a_dict_subclass_through_the_base_slots():
+    """A ``dict`` subclass is a mapping: its own ``get`` never decides the axes."""
+
+    class _LyingDict(dict[str, object]):
+        @override
+        def get(self, key: object, default: object = None) -> object:
+            return 999
+
+    value = _LyingDict(start=1, end=5)
+    assert normalize_input_value(RangeFilter(field_name="price"), value) == {
+        "price_0": 1,
+        "price_1": 5,
+    }
 
 
 def test_normalize_input_value_global_id_list():

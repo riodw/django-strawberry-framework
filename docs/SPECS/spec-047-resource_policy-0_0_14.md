@@ -1358,7 +1358,7 @@ rejected on the bound it is about.
   no field charged per fragment entered; a fragment spread only from an unselected operation
   charged once; the subtree of an unknown field walked once however often its fragment
   expands; argument-less directives on a fragment and its field charging nothing however often
-  it expands, while the one directive value among them is charged per expansion;
+  it expands, while each of the two directive values among them is charged per expansion;
   `@skip(if: true)` not evading accounting; the same field under many aliases charged per
   alias; nested collections charged multiplicatively; an explicit small `first:` narrowing the
   charge.
@@ -1374,7 +1374,8 @@ rejected on the bound it is about.
   and an operation variable DEFAULT charged when the variables map omits it, with its twin
   proving a supplied variable is what its use site charges, the default charged once at its
   definition; and every value validation converts outside the selected operation's field
-  arguments — directive arguments at each location, unused, shadowed and directive-only
+  arguments — directive arguments at each location, every value of two directives on one
+  field or spread, unused, shadowed and directive-only
   defaults, untyped argument values, and literals in an unselected operation or a fragment
   the selected operation's walk did not expand.
 - **The relation-list classification, from the bind spec's side**: a raw-pk (`[Int!]`)

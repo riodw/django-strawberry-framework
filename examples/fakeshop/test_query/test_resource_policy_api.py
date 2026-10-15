@@ -29,10 +29,10 @@ Row groups, in the order a request meets them:
   and a nested value whose depth no bracket in the document reflects;
 - every value validation converts that no field argument of the selected
   operation carries - directive arguments at every location a directive
-  rides, variable defaults that are unused, shadowed by a supplied variable,
-  or read only by a directive or an unknown field, argument values nothing
-  types, and literals in an operation the request did not select or a
-  fragment no spread reaches;
+  rides, each directive's value charged when one node carries two, variable
+  defaults that are unused, shadowed by a supplied variable, or read only by a
+  directive or an unknown field, argument values nothing types, and literals
+  in an operation the request did not select or a fragment no spread reaches;
 - the raw-pk relation id sets - the write inputs whose relation ids render as
   raw pks rather than ``GlobalID``s (``[Int!]`` on the wire), charged against
   the relation bounds through their bind specs rather than the id scalar's
@@ -2508,34 +2508,73 @@ def test_fragment_definition_directive_values_are_charged_per_expansion() -> Non
     _assert_over_nodes(_post("/rp-values/", query))
 
 
+#: The input nodes one expansion of ``_mixed_directive_spreads``'s fragment charges.
+_MIXED_DIRECTIVE_VALUES = 2
+
+#: The most expansions of that fragment ``MAX_INPUT_NODES`` admits.
+_MIXED_DIRECTIVE_SPREADS = MAX_INPUT_NODES // _MIXED_DIRECTIVE_VALUES
+
+
 def _mixed_directive_spreads(count: int) -> str:
-    """``count`` spreads of a fragment whose argument-less directives surround one value.
+    """``count`` spreads of a fragment whose argument-less directives surround two values.
 
     ``@deprecated`` is a directive the schema declares and ``@nope`` one it does not;
     neither carries an argument, on the definition or on its field. The
-    definition's ``@include(if: true)`` is the one input node each expansion
-    charges.
+    definition's ``@include(if: true)`` and ``@skip(if: false)`` are the two input
+    nodes each expansion charges, one per directive that carries an argument.
     """
     spreads = " ".join("...F" for _ in range(count))
-    definition = "fragment F on Query @deprecated @include(if: true) @nope"
+    definition = "fragment F on Query @deprecated @include(if: true) @nope @skip(if: false)"
     return "{ %s } %s { __typename @deprecated @nope }" % (spreads, definition)
 
 
 def test_argument_less_directives_charge_nothing_however_often_their_fragment_expands() -> None:
-    """``MAX_INPUT_NODES`` expansions charge exactly the ``@include`` values, so the walk admits.
+    """The most expansions the node bound admits charge exactly the directive values.
 
     A directive with no argument carries no value for validation to convert,
     so it charges no bound at any expansion; what rejects the misplaced and
     unknown directives is validation, in its own words.
     """
-    payload = _post("/rp-values/", _mixed_directive_spreads(MAX_INPUT_NODES))
+    assert _MIXED_DIRECTIVE_SPREADS * _MIXED_DIRECTIVE_VALUES == MAX_INPUT_NODES
+    payload = _post("/rp-values/", _mixed_directive_spreads(_MIXED_DIRECTIVE_SPREADS))
     _no_rejection(payload)
     assert any("'@nope'" in error["message"] for error in payload["errors"]), payload
 
 
-def test_a_directive_value_among_argument_less_directives_is_charged_per_expansion() -> None:
-    """One ``@include`` value per expansion, the argument-less directives around it aside."""
-    _assert_over_nodes(_post("/rp-values/", _mixed_directive_spreads(MAX_INPUT_NODES + 1)))
+def test_every_directive_value_among_argument_less_directives_is_charged_per_expansion() -> None:
+    """Both directive values on the definition are charged at every expansion.
+
+    One expansion past the admitted count is one node past ``MAX_INPUT_NODES``
+    only when each expansion charges the ``@include`` and the ``@skip`` value.
+    """
+    payload = _post("/rp-values/", _mixed_directive_spreads(_MIXED_DIRECTIVE_SPREADS + 1))
+    _assert_over_nodes(payload)
+
+
+#: The node kinds ``_two_directive_values`` builds a document of.
+_TWO_DIRECTIVE_VALUE_SHAPES = ["field", "spread"]
+
+
+def _two_directive_values(shape: str, count: int) -> str:
+    """``count`` fields or spreads, each carrying two directives with one value apiece."""
+    directives = "@include(if: true) @skip(if: false)"
+    if shape == "field":
+        return "{ %s }" % " ".join(f"f{index}: __typename {directives}" for index in range(count))
+    spreads = " ".join(f"...F {directives}" for _ in range(count))
+    return "{ %s } fragment F on Query { __typename }" % spreads
+
+
+@pytest.mark.parametrize("shape", _TWO_DIRECTIVE_VALUE_SHAPES)
+def test_two_directive_values_on_one_node_at_the_node_bound_are_admitted(shape: str) -> None:
+    _no_rejection(_post("/rp-values/", _two_directive_values(shape, MAX_INPUT_NODES // 2)))
+
+
+@pytest.mark.parametrize("shape", _TWO_DIRECTIVE_VALUE_SHAPES)
+def test_every_directive_value_on_one_node_is_charged(shape: str) -> None:
+    """The ``@include`` and the ``@skip`` value on one node are two input nodes."""
+    _assert_over_nodes(
+        _post("/rp-values/", _two_directive_values(shape, MAX_INPUT_NODES // 2 + 1)),
+    )
 
 
 def test_a_fragment_spread_only_from_an_unselected_operation_is_charged_once() -> None:

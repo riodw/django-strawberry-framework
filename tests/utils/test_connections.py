@@ -7,6 +7,7 @@ and ``first``/``last`` refusals live in
 ``examples/fakeshop/test_query/test_library_api.py``.
 """
 
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -39,6 +40,7 @@ from django_strawberry_framework.utils.connections import (
     derive_keyset_window_bounds,
     has_connection_sidecar_input,
     has_connection_sidecar_kwargs,
+    offset_engine_arguments,
     resolve_relay_max_results,
     split_window_rows,
     validate_offset_pagination,
@@ -344,6 +346,138 @@ def test_window_bounds_decode_under_the_connection_prefix(
         last=None,
         max_results=_MAX,
         prefix=_CUSTOM_PREFIX,
+    )
+    assert bounds == expected
+
+
+#: The largest offset cursor index ``decode_offset_cursor`` accepts.
+_LARGEST_INDEX = sys.maxsize - 1
+
+
+@pytest.mark.parametrize("prefix", [_PREFIX, _CUSTOM_PREFIX], ids=["stock-edge", "custom-edge"])
+@pytest.mark.parametrize(
+    (
+        "after_index",
+        "first",
+        "expected_after_index",
+        "expected_first",
+    ),
+    [
+        (
+            _LARGEST_INDEX,
+            0,
+            _LARGEST_INDEX - 1,
+            0,
+        ),
+        (
+            _LARGEST_INDEX,
+            2,
+            _LARGEST_INDEX - 1,
+            0,
+        ),
+        (
+            _LARGEST_INDEX - 1,
+            2,
+            _LARGEST_INDEX - 1,
+            0,
+        ),
+        (
+            _LARGEST_INDEX - 2,
+            2,
+            _LARGEST_INDEX - 2,
+            1,
+        ),
+        (
+            _LARGEST_INDEX - 3,
+            2,
+            _LARGEST_INDEX - 3,
+            2,
+        ),
+    ],
+    ids=[
+        "largest-index-first-zero",
+        "largest-index",
+        "start-on-ceiling",
+        "end-past-ceiling",
+        "end-on-ceiling",
+    ],
+)
+def test_offset_engine_arguments_end_a_forward_page_below_the_sentinel(
+    prefix: str,
+    after_index: int,
+    first: int,
+    expected_after_index: int,
+    expected_first: int,
+) -> None:
+    """A forward page ending past ``sys.maxsize - 1`` reaches the engine as the page ending there.
+
+    ``first`` becomes the rows left below the ceiling; a start past the ceiling
+    (the largest index's) moves onto it, with ``after`` re-minted under the
+    connection's prefix to name the index before it. A page ending on or below
+    the ceiling is handed over unchanged.
+    """
+    engine_after, engine_first = offset_engine_arguments(
+        before=None,
+        after=to_base64(prefix, after_index),
+        first=first,
+        last=None,
+        cap=_MAX,
+        prefix=prefix,
+    )
+    assert engine_after == to_base64(prefix, expected_after_index)
+    assert decode_offset_cursor(engine_after, argument="after", prefix=prefix) == (
+        expected_after_index
+    )
+    assert engine_first == expected_first
+
+
+@pytest.mark.parametrize("prefix", [_PREFIX, _CUSTOM_PREFIX], ids=["stock-edge", "custom-edge"])
+@pytest.mark.parametrize(
+    ("after_index", "first", "expected"),
+    [
+        (_LARGEST_INDEX, 0, ConnectionWindowBounds(offset=_LARGEST_INDEX, limit=0, reverse=False)),
+        (_LARGEST_INDEX, 2, ConnectionWindowBounds(offset=_LARGEST_INDEX, limit=0, reverse=False)),
+        (
+            _LARGEST_INDEX,
+            None,
+            ConnectionWindowBounds(offset=_LARGEST_INDEX, limit=0, reverse=False),
+        ),
+        (
+            _LARGEST_INDEX - 2,
+            2,
+            ConnectionWindowBounds(offset=_LARGEST_INDEX - 1, limit=1, reverse=False),
+        ),
+    ],
+    ids=[
+        "largest-index-first-zero",
+        "largest-index",
+        "largest-index-cap",
+        "end-past-ceiling",
+    ],
+)
+def test_window_bounds_of_a_forward_page_past_the_ceiling_end_on_it(
+    prefix: str,
+    after_index: int,
+    first: int | None,
+    expected: ConnectionWindowBounds,
+) -> None:
+    """The window is the engine's slice of the re-minted arguments: a page ending on the ceiling.
+
+    A forward page whose end passes the ceiling is windowed as the page ending
+    on it. An ``after`` at the largest index starts that page past the ceiling,
+    so its window starts on the ceiling with no rows, the page every
+    past-the-end cursor serves, rather than at ``sys.maxsize`` with no upper
+    bound. The wire cannot tell those two apart (both are an empty page), so the
+    bounds are read here.
+    """
+    bounds = derive_connection_window_bounds(
+        None,
+        before=None,
+        after=to_base64(prefix, after_index),
+        first=first,
+        last=None,
+        max_results=_MAX,
+        prefix=prefix,
     )
     assert bounds == expected
 

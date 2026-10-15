@@ -67,13 +67,14 @@ Relay window, so an unsealed return would reach all three.
 Offset cursor decoding is pinned last, under the default (``DEBUG=False``)
 error policy so each row reads the exact message a client gets. A correctly
 prefixed cursor naming a negative index, and every non-minted shape (bad
-base64, no colon, foreign prefix, sign, padding, leading zero, underscore, a
-non-ASCII decimal digit alone or after an ASCII one, a superscript digit
-``str.isdigit`` accepts and ``int()`` raises on, a 5000-digit string, an index
-of ``sys.maxsize``), answers with ``Argument '<after|before>' contains a
-non-existing value.`` on every source a connection slices: list and tuple
-consumer resolvers, sync and async, under a three-row ``max_page_size`` (where
-a wrapped negative slice would serve 39 of 40 rows); a generator resolver; a
+base64, no colon, foreign prefix, sign, padding, a trailing newline, leading
+zero, underscore, a non-ASCII decimal digit alone or after an ASCII one, a
+fullwidth digit ``int()`` reads, a superscript digit ``str.isdigit`` accepts
+and ``int()`` raises on, a 5000-digit string, an index of ``sys.maxsize``),
+answers with ``Argument '<after|before>' contains a non-existing value.`` on
+every source a connection slices: list and tuple consumer resolvers, sync and
+async, under a three-row ``max_page_size`` (where a wrapped negative slice
+would serve 39 of 40 rows); a generator resolver; a
 ``QuerySet`` from an async resolver; and the shipped root
 ``allLibraryGenresConnection``. Under that root the planned nested
 ``booksConnection`` window answers every non-minted shape the same way at the
@@ -1896,9 +1897,11 @@ _MALFORMED_CURSOR_ROWS = [
     ("negative-zero", _cursor("-0")),
     ("leading-zero", _cursor("01")),
     ("leading-space", _cursor(" 1")),
+    ("trailing-newline", _cursor("1\n")),
     ("underscore", _cursor("1_0")),
     ("non-ascii-digit", _cursor(chr(0x0661))),  # ARABIC-INDIC DIGIT ONE
     ("digit-then-non-ascii-digit", _cursor("1" + chr(0x0661))),
+    ("fullwidth-digit", _cursor(chr(0xFF11))),  # FULLWIDTH DIGIT ONE: int() reads it as 1
     ("superscript-digit", _cursor(chr(0x00B2))),  # SUPERSCRIPT TWO: str.isdigit, not int()
     ("five-thousand-digits", _cursor("9" * 5000)),
 ]

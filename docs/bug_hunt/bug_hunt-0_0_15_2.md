@@ -209,8 +209,9 @@ Progress: 92 done, 149 to do.
   `ListField(child=ListField(child=ChoiceField))`) publish `[[String!]!]` by spec-039's one-level peel
   (`serializer_choice_source`). Not a defect under rule 37 (no contract row: spec-039 states `list[list[str]]`; no wire input
   writes a wrong value): they are reachable only as serializer-only fields, DRF checks every leaf with a field-keyed error
-  (`f.0.0`), declared over any column they are refused at build, and neither graphene-django nor strawberry-django types nested
-  choice lists as enums; no code. Found probing it: items 151-154
+  (`f.0.0` under `ListField(child=ListField(child=ChoiceField))`, `f.1` under `ListField(child=MultipleChoiceField)`),
+  declared over any column they are refused at build, and neither graphene-django nor strawberry-django types nested choice
+  lists as enums; no code. Found probing it: items 151-154
 - [x] 128. `testing/relay.py::global_id_for` annotated `schema` with a `TYPE_CHECKING`-only `Schema` in a module without
   `from __future__ import annotations`, so importing the public module raised `NameError` on Python 3.10-3.13 (the CI floor
   cell failed collection; nothing static caught it); the annotation is quoted (`7413c7b5`) and ruff `TC004` (quoting fix)
@@ -608,9 +609,10 @@ tracker number are recorded there; open remainders and new defects are filed as 
 
 - [ ] 241. Duplicate input-object field names escape the value budget:
   `extensions/resource_policy.py::_DocumentWalk.charge_arguments` converts an argument's whole value AST at every reference
-  but charges the converted dict, so an overwritten duplicate field is converted and never charged; 500 spreads of
-  `__typename(a: {k: [1 x2978] k: 1})` walk about 106 ms at the default policy and are admitted, against spec-047
-  Decision 13 ("runs out of node budget first")
+  but charges the converted dict, so an overwritten duplicate field is converted and never charged by any value bound (the
+  node budget and `max_container_width` alike); 500 spreads of `__typename(a: {k: [1 x2978] k: 1})` walk about 106 ms at
+  the default policy and are admitted, against spec-047's "Audited exclusion - `_charge_container`" paragraph ("runs out
+  of node budget first")
 - [ ] 243. Exact-type checks written as tuple membership (`type(x) in (list, tuple)`) dispatch a consumer metaclass
   `__eq__` (`type(L()) in (list, tuple)` is True with one call when `L`'s metaclass answers equal):
   `utils/_narrowing.py` (`is_exact_list_or_tuple` and siblings, whose docstring says each site keeps its own comparison

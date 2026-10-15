@@ -468,6 +468,30 @@ The four drift failure modes this exists to prevent, each observed in the audite
 
 ---
 
+### `related_filter_flat_opt_out`
+
+**Realistic**: 8/10 — One keyword on `RelatedFilter` and one skip in the path-relative expansion walk; the nested filter input already reaches every path the flag would drop.
+
+**Impact**: 5/10 — Lets a dense `RelatedFilter` graph stay under the flat-filter cap without raising it, and trims the published input surface relation by relation instead of all at once.
+
+**Difficulty**: 3/10 — A prototype exists: the expansion and the reachable-set walk follow only flat edges, and the cap's error message names the declaration to mark.
+
+**Source**: bug-hunt item 216 (factorial flat surface of a dense `RelatedFilter` graph), deferred by the maintainer when the per-set flat-filter cap landed.
+
+**What we'd do**: add `RelatedFilter(..., flat=False)`, which publishes no flat copy of the target's filters through that declaration, from any root set, while the nested `RelatedFilter` branch and explicit `Meta.fields` paths stay.
+
+**Spec**:
+
+- Per declaration, not per set: the flag sits on the edge whose expansion it stops.
+- The nested branch is unaffected: every path the flag removes stays reachable as a nested filter, applied as a correlated `EXISTS` per branch.
+- Two flat spellings over a to-many relation may match different rows while one nested branch needs a single row, and the nested form spells `isNull: true` and `exclude=True` differently; the docs state the semantic difference a dropped flat path loses.
+- The cap's `ConfigurationError` names `flat=False` as a remedy beside raising `MAX_FLAT_FILTERS`.
+- Measured on the prototype: a seven-set complete graph with `flat=False` on its reverse edges publishes 512 flat filters per set and builds in 0.2 s.
+
+**Upstream**: `django-graphene-filters` has no per-declaration switch. Its one setting, `HIDE_FLAT_FILTERS` (0.7.4), hides every flat argument from the schema, and its flat arguments never include copies expanded through a `RelatedFilter`; this package already carries the same global setting.
+
+---
+
 ## DoS & protection
 
 Sequencing rule for this group: the five primitive cards (`cost_limit_extension`, `depth_limit_extension`, `rate_limit_extension`, `circuit_breaker_extension`, `persisted_query_allowlist`) ship **standalone first**, each with its own settled API from real consumer use. The stack framework generalizes them afterward — locking hook signatures and error codes before the primitives have been pressure-tested is the trap DRF avoided by letting `permission_classes` emerge from individual permissions.

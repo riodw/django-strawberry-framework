@@ -60,7 +60,7 @@ class UserAdmin(BaseUserAdmin[AbstractBaseUser]):
                         messages.SUCCESS,
                     )
                 new_get = request.GET.copy()
-                new_get.pop("create_users")
+                del new_get["create_users"]
                 return redirect(f"{request.path}?{new_get.urlencode()}")
             except (ValueError, TypeError):
                 self.message_user(
@@ -82,7 +82,7 @@ class UserAdmin(BaseUserAdmin[AbstractBaseUser]):
                     messages.SUCCESS if result["users"] else messages.WARNING,
                 )
                 new_get = request.GET.copy()
-                new_get.pop("delete_users")
+                del new_get["delete_users"]
                 return redirect(f"{request.path}?{new_get.urlencode()}")
             except (ValueError, TypeError):
                 self.message_user(
@@ -170,7 +170,7 @@ class ItemAdmin(admin.ModelAdmin[Item]):
                         messages.SUCCESS,
                     )
                 new_get = request.GET.copy()
-                new_get.pop("seed_data")
+                del new_get["seed_data"]
                 return redirect(f"{request.path}?{new_get.urlencode()}")
             except (ValueError, TypeError):
                 self.message_user(
@@ -196,7 +196,7 @@ class ItemAdmin(admin.ModelAdmin[Item]):
                 summary = ", ".join(parts) if parts else "nothing"
                 self.message_user(request, f"Deleted {summary}.", messages.SUCCESS)
                 new_get = request.GET.copy()
-                new_get.pop("delete_data")
+                del new_get["delete_data"]
                 return redirect(f"{request.path}?{new_get.urlencode()}")
             except (ValueError, TypeError):
                 self.message_user(

@@ -64,10 +64,7 @@ _PROJECT_APP_SCHEMA_MODULES = (
 def _reload_or_import(module_name: str) -> None:
     """Reload ``module_name`` if already imported, else import it fresh."""
     module = sys.modules.get(module_name)
-    if module is None:
-        importlib.import_module(module_name)
-    else:
-        importlib.reload(module)
+    _ = importlib.import_module(module_name) if module is None else importlib.reload(module)
 
 
 def reload_project_schema_shell() -> None:

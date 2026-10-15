@@ -85,13 +85,16 @@ def make_glossary_term(
     status = status or make_glossary_status()
     n = _seq()
     word = fake.word()
-    fields.setdefault("title", f"`{word}{n}`")
-    fields.setdefault("title_sort", f"{word}{n}".lower())
-    fields.setdefault("anchor", f"{word}{n}".lower())
-    fields.setdefault("status_text", "shipped (`0.0.8`)")
-    fields.setdefault("body", fake.paragraph())
-    fields.setdefault("entry_order", n)
-    fields.setdefault("index_order", n)
+    fields = {
+        "title": f"`{word}{n}`",
+        "title_sort": f"{word}{n}".lower(),
+        "anchor": f"{word}{n}".lower(),
+        "status_text": "shipped (`0.0.8`)",
+        "body": fake.paragraph(),
+        "entry_order": n,
+        "index_order": n,
+        **fields,
+    }
     return models.GlossaryTerm.objects.create(status=status, **fields)
 
 
@@ -104,7 +107,7 @@ def make_glossary_alias(
     """Create an alias for ``term`` with a unique ``label`` and its normalized form."""
     term = term or make_glossary_term()
     label = label or f"{fake.word()} {_seq()}"
-    fields.setdefault("normalized", label.lower())
+    fields = {"normalized": label.lower(), **fields}
     return models.GlossaryAlias.objects.create(term=term, label=label, **fields)
 
 
@@ -119,8 +122,11 @@ def make_glossary_term_link(
     source_term = source_term or make_glossary_term()
     target_term = target_term or make_glossary_term()
     kind = kind or make_glossary_term_link_kind()
-    fields.setdefault("raw_label", "")
-    fields.setdefault("order", _next_order(source_term.outgoing_links, kind=kind))
+    fields = {
+        "raw_label": "",
+        "order": _next_order(source_term.outgoing_links, kind=kind),
+        **fields,
+    }
     return models.GlossaryTermLink.objects.create(
         source_term=source_term,
         target_term=target_term,
@@ -138,7 +144,7 @@ def make_glossary_category_membership(
     """Create a category membership for ``term`` with the next ``order`` in the category."""
     category = category or make_glossary_category()
     term = term or make_glossary_term()
-    fields.setdefault("order", _next_order(category.memberships))
+    fields = {"order": _next_order(category.memberships), **fields}
     return models.GlossaryCategoryMembership.objects.create(
         category=category,
         term=term,
@@ -153,10 +159,13 @@ def make_glossary_spec_mention(
 ) -> models.GlossarySpecMention:
     """Create a spec mention for ``term`` with a unique spec path and the next ``order``."""
     term = term or make_glossary_term()
-    fields.setdefault("spec_path", f"docs/SPECS/spec-{_seq():03d}-{fake.slug()}.md")
-    fields.setdefault("term_text", fake.word())
-    fields.setdefault("notes", "")
-    fields.setdefault("order", _next_order(term.spec_mentions))
+    fields = {
+        "spec_path": f"docs/SPECS/spec-{_seq():03d}-{fake.slug()}.md",
+        "term_text": fake.word(),
+        "notes": "",
+        "order": _next_order(term.spec_mentions),
+        **fields,
+    }
     return models.GlossarySpecMention.objects.create(term=term, **fields)
 
 
@@ -167,8 +176,11 @@ def make_glossary_source_link(
 ) -> models.GlossarySourceLink:
     """Create a source link for ``term`` with a generated label and URL and the next ``order``."""
     term = term or make_glossary_term()
-    fields.setdefault("label", fake.sentence(nb_words=3).rstrip("."))
-    fields.setdefault("target", fake.url())
-    fields.setdefault("kind", "")
-    fields.setdefault("order", _next_order(term.source_links))
+    fields = {
+        "label": fake.sentence(nb_words=3).rstrip("."),
+        "target": fake.url(),
+        "kind": "",
+        "order": _next_order(term.source_links),
+        **fields,
+    }
     return models.GlossarySourceLink.objects.create(term=term, **fields)

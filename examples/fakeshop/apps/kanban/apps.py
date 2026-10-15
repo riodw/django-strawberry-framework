@@ -18,4 +18,4 @@ class KanbanConfig(AppConfig):
     @override
     def ready(self) -> None:
         # Importing the signals module connects its receivers.
-        import_module(f"{self.name}.signals")
+        _ = import_module(f"{self.name}.signals")

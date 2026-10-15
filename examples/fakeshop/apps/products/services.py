@@ -45,6 +45,7 @@ import random
 from collections.abc import Callable
 from decimal import Decimal
 from functools import cache
+from typing import TYPE_CHECKING
 
 import faker.providers as fp
 from django.contrib.auth.models import Permission, User
@@ -53,6 +54,9 @@ from faker.providers import BaseProvider
 from typing_extensions import TypedDict
 
 from apps.products.models import Category, Entry, Item, Property
+
+if TYPE_CHECKING:
+    from django.db.models import Model, QuerySet
 
 
 def _is_safe_generator(fake: Faker, method_name: str) -> bool:
@@ -261,7 +265,7 @@ def seed_data(count: int, db_alias: str = "default") -> dict[str, int]:
                 )
                 for prop in properties
             ]
-            Entry.objects.using(db_alias).bulk_create(entries_to_create)
+            _ = Entry.objects.using(db_alias).bulk_create(entries_to_create)
             total_entries += len(entries_to_create)
 
     return {
@@ -334,7 +338,7 @@ def create_users(count: int = 1, db_alias: str = "default") -> dict[str, int]:
         # --- Staff user ---
         username = f"staff_{n}"
         if not user_manager.filter(username=username).exists():
-            user_manager.create_user(
+            _ = user_manager.create_user(
                 username=username,
                 password=TEST_USER_PASSWORD,
                 is_staff=True,
@@ -346,7 +350,7 @@ def create_users(count: int = 1, db_alias: str = "default") -> dict[str, int]:
         # --- Regular user (no permissions, not staff) ---
         username = f"regular_{n}"
         if not user_manager.filter(username=username).exists():
-            user_manager.create_user(
+            _ = user_manager.create_user(
                 username=username,
                 password=TEST_USER_PASSWORD,
                 is_staff=False,
@@ -378,6 +382,12 @@ def create_users(count: int = 1, db_alias: str = "default") -> dict[str, int]:
     return {"users": created}
 
 
+def _delete(queryset: QuerySet[Model]) -> int:
+    """Delete ``queryset`` and return how many rows of its own model went (cascades not counted)."""
+    _, per_model = queryset.delete()
+    return per_model.get(queryset.model._meta.label, 0)
+
+
 def delete_users(target: int | str) -> dict[str, int]:
     """Delete test users created by ``create_users``.
 
@@ -393,16 +403,13 @@ def delete_users(target: int | str) -> dict[str, int]:
     result: dict[str, int] = {"users": 0}
 
     if target == "all":
-        qs = User.objects.exclude(is_superuser=True)
-        result["users"] = qs.count()
-        qs.delete()
+        result["users"] = _delete(User.objects.exclude(is_superuser=True))
     else:
         count = int(target)
         qs = User.objects.exclude(is_superuser=True).order_by("pk")
         pks = list(qs.values_list("pk", flat=True)[:count])
         if pks:
-            result["users"] = len(pks)
-            User.objects.filter(pk__in=pks).delete()
+            result["users"] = _delete(User.objects.filter(pk__in=pks))
 
     return result
 
@@ -427,30 +434,22 @@ def delete_data(target: int | str) -> dict[str, int]:
     }
 
     if target == "everything":
-        result["entries"] = Entry.objects.all().count()
-        result["items"] = Item.objects.all().count()
-        result["properties"] = Property.objects.all().count()
-        result["categories"] = Category.objects.all().count()
         # Delete in FK-safe order
-        Entry.objects.all().delete()
-        Item.objects.all().delete()
-        Property.objects.all().delete()
-        Category.objects.all().delete()
+        result["entries"] = _delete(Entry.objects.all())
+        result["items"] = _delete(Item.objects.all())
+        result["properties"] = _delete(Property.objects.all())
+        result["categories"] = _delete(Category.objects.all())
 
     elif target == "all":
-        result["entries"] = Entry.objects.all().count()
-        result["items"] = Item.objects.all().count()
-        Entry.objects.all().delete()
-        Item.objects.all().delete()
+        result["entries"] = _delete(Entry.objects.all())
+        result["items"] = _delete(Item.objects.all())
 
     else:
         count = int(target)
         pks = list(Item.objects.order_by("pk").values_list("pk", flat=True)[:count])
         if pks:
-            result["entries"] = Entry.objects.filter(item__pk__in=pks).count()
-            Entry.objects.filter(item__pk__in=pks).delete()
-            result["items"] = Item.objects.filter(pk__in=pks).count()
-            Item.objects.filter(pk__in=pks).delete()
+            result["entries"] = _delete(Entry.objects.filter(item__pk__in=pks))
+            result["items"] = _delete(Item.objects.filter(pk__in=pks))
 
     return result
 

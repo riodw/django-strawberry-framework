@@ -358,8 +358,8 @@ def _sync_card_order_after_insert(card: models.Card, using: str | None) -> None:
                 .values_list("pk", "number"),
             )
             for neighbor_pk, neighbor_number in neighbors:
-                card_manager.filter(pk=neighbor_pk).update(number=neighbor_number + 1)
-            card_manager.filter(pk=card.pk).update(number=requested_number)
+                _ = card_manager.filter(pk=neighbor_pk).update(number=neighbor_number + 1)
+            _ = card_manager.filter(pk=card.pk).update(number=requested_number)
             card.number = requested_number
     finally:
         delattr(card, CARD_ORDER_REQUESTED_NUMBER_ATTR)
@@ -527,7 +527,7 @@ def create_card_path_link_uuid_rows(
         # ``instance`` is a Card; ``pk_set`` holds the added TrackedPath ids.
         links = link_manager.filter(card=instance, path_id__in=pk_set or ())
     for link in links.filter(uuid__isnull=True):
-        _manager(models.UUIDModel, using).create(cardpathlink=link)
+        _ = _manager(models.UUIDModel, using).create(cardpathlink=link)
 
 
 def create_uuid_row(
@@ -548,7 +548,7 @@ def create_uuid_row(
         link_name = sender._meta.model_name
         if link_name is None:
             raise TypeError(f"{sender!r} has no model name to link a UUID side-row by.")
-        _manager(models.UUIDModel, using).create(**{link_name: instance})
+        _ = _manager(models.UUIDModel, using).create(**{link_name: instance})
 
 
 for uuid_linked_model in UUID_LINKED_MODELS:

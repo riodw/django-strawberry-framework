@@ -81,13 +81,13 @@ class Command(BaseCommand):
     @override
     def add_arguments(self, parser: CommandParser) -> None:
         """Register the positional JSON path, --dry-run, and --kind."""
-        parser.add_argument("path", type=str, help="Path to the card/file JSON file.")
-        parser.add_argument(
+        _ = parser.add_argument("path", type=str, help="Path to the card/file JSON file.")
+        _ = parser.add_argument(
             "--dry-run",
             action="store_true",
             help="Validate and report the plan without writing to the database.",
         )
-        parser.add_argument(
+        _ = parser.add_argument(
             "--kind",
             required=True,
             choices=[models.CARD_PATH_LINK_CHANGED, models.CARD_PATH_LINK_PREDICTED],

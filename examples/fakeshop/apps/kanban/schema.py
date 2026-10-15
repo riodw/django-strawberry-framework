@@ -1216,7 +1216,7 @@ class CreateCardFromSpec(_ServiceErrorMixin):
                 spec[key] = data[key]
         if data.get("number") is not None:
             spec["number"] = data["number"]
-        services.create_card_from_spec(spec)
+        _ = services.create_card_from_spec(spec)
 
 
 class SetCardStatus(_ServiceErrorMixin):
@@ -1230,7 +1230,7 @@ class SetCardStatus(_ServiceErrorMixin):
     def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         del info
         data = form.cleaned_data
-        services.set_card_status(
+        _ = services.set_card_status(
             data["card"],
             data["status_key"],
             actor=data["actor_key"],
@@ -1249,7 +1249,7 @@ class MoveCardNumber(_ServiceErrorMixin):
     def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         del info
         data = form.cleaned_data
-        services.move_card_number(data["card"], data["number"])
+        _ = services.move_card_number(data["card"], data["number"])
 
 
 class AddDependency(_ServiceErrorMixin):
@@ -1266,7 +1266,7 @@ class AddDependency(_ServiceErrorMixin):
         kwargs = {"raw_text": data.get("raw_text", "")}
         if data.get("kind"):
             kwargs["kind"] = data["kind"]
-        services.add_dependency(data["source_card"], data["target_card"], **kwargs)
+        _ = services.add_dependency(data["source_card"], data["target_card"], **kwargs)
 
 
 class RemoveDependency(_ServiceErrorMixin):
@@ -1280,7 +1280,7 @@ class RemoveDependency(_ServiceErrorMixin):
     def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         del info
         data = form.cleaned_data
-        services.remove_dependency(
+        _ = services.remove_dependency(
             data["source_card"],
             data["target_card"],
             kind=data.get("kind") or None,
@@ -1299,7 +1299,10 @@ class SetCardItemComplete(_ServiceErrorMixin):
         del info
         data = form.cleaned_data
         complete = data.get("complete")
-        services.set_item_complete(data["item"], complete=True if complete is None else complete)
+        _ = services.set_item_complete(
+            data["item"],
+            complete=True if complete is None else complete,
+        )
 
 
 class VerifyCardItem(_ServiceErrorMixin):
@@ -1313,7 +1316,7 @@ class VerifyCardItem(_ServiceErrorMixin):
     def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         del info
         data = form.cleaned_data
-        services.verify_item(data["item"], actor=data["actor_key"], kind=data["kind_key"])
+        _ = services.verify_item(data["item"], actor=data["actor_key"], kind=data["kind_key"])
 
 
 class RecordWorkAttempt(_ServiceErrorMixin):
@@ -1327,7 +1330,7 @@ class RecordWorkAttempt(_ServiceErrorMixin):
     def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         del info
         data = form.cleaned_data
-        services.record_attempt(
+        _ = services.record_attempt(
             data["card"],
             actor=data["actor_key"],
             summary=data["summary"],
@@ -1346,7 +1349,7 @@ class FinishWorkAttempt(_ServiceErrorMixin):
     def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         del info
         data = form.cleaned_data
-        services.finish_attempt(
+        _ = services.finish_attempt(
             data["attempt"],
             outcome_key=data["outcome_key"],
             summary=data.get("summary") or None,
@@ -1364,7 +1367,7 @@ class RecordDecision(_ServiceErrorMixin):
     def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         del info
         data = form.cleaned_data
-        services.record_decision(
+        _ = services.record_decision(
             actor=data["actor_key"],
             question=data["question"],
             choice=data["choice"],

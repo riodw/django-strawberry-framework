@@ -5,7 +5,7 @@ rules still switched off and the `# pyright: ignore[...]` comments still in the 
 Each item is fixed at the root, gated (both passes 0 errors, full suite in one pass at 100% coverage), then committed.
 A split suite run on a tree other sessions are editing can drop modules from every part, so it is not a coverage gate.
 
-Progress: 23 done, 7 to do. Ignore comments: 881 lines (1897 at the start of 0.0.15's ignore sweep).
+Progress: 24 done, 9 to do. Ignore comments: 881 lines (1897 at the start of 0.0.15's ignore sweep).
 
 ## Pre-commit (`uvx pre-commit run --all-files`, 4ce779e1, clean clone)
 
@@ -74,6 +74,9 @@ Progress: 23 done, 7 to do. Ignore comments: 881 lines (1897 at the start of 0.0
   or unread private parameter is removed, and `NestedConnectionStrategy.plan` takes its arguments positional-only;
   a parameter a caller binds by name is `del`eted in the body with its reason (`del info, required  # ...`), which
   leaves no suppression
+- [x] 9. `reportUnusedCallResult` on everywhere but the tests: the example project outside its test folders (122
+  sites) joins scripts/, the package and the root files. A result taken only for the call's side effect is bound to
+  `_`; a `setdefault` chain on factory `**fields` is one dict merge; a `QueryDict` key is `del`eted, not popped
 
 ## To do: rules still off
 
@@ -90,11 +93,11 @@ of them.
   `testing/client.py`'s public `Response.response: Any`)
 - [ ] 8. `reportUnannotatedClassAttribute`: 8365 (package 0, tests 6684, examples 1681, scripts 0, root 0); on for
   scripts/, the package and the root files (their execution environments in `pyproject.toml`)
-- [ ] 9. `reportUnusedCallResult`: 4425 (package 0, tests 2897, examples 1527, scripts 0, root 0); on for scripts/, the
-  package and the root files
 
 Off by design (not planned): `reportImplicitStringConcatenation`, `reportPrivateUsage`, `reportUnusedFunction`,
-`reportImportCycles`, `reportUninitializedInstanceVariable`. The reasons are in `pyproject.toml`.
+`reportImportCycles`, `reportUninitializedInstanceVariable`. The reasons are in `pyproject.toml`. Off for tests by
+design: `reportUnusedCallResult` (tests/ and the example project's test folders, about 4300 sites): a test calls for
+side effects (fixture rows, `delete()`, a call inside `pytest.raises`).
 
 Off at the 3.10 floor only: the five `reportUnknown*` rules and `reportUnnecessaryTypeIgnoreComment`. django-stubs needs
 `typing.Self` (3.11), so at 3.10 every `-> Self` reads as unknown.

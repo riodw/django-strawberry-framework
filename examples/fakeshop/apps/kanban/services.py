@@ -240,16 +240,24 @@ def sync_tracked_paths_from_constants(*, using: str | None = None) -> None:
     current.update(dict.fromkeys(TRACKED_DIRECTORY_PATHS, True))
     existing_paths = set(manager.filter(path__in=current).values_list("path", flat=True))
     for path in sorted(set(current) - existing_paths):
-        manager.create(
+        _ = manager.create(
             path=path,
             state=models.TRACKED_PATH_CURRENT,
             is_directory=current[path],
         )
-    manager.filter(path__in=current).exclude(state=models.TRACKED_PATH_CURRENT).update(
-        state=models.TRACKED_PATH_CURRENT,
+    _ = (
+        manager.filter(path__in=current)
+        .exclude(state=models.TRACKED_PATH_CURRENT)
+        .update(
+            state=models.TRACKED_PATH_CURRENT,
+        )
     )
-    manager.exclude(path__in=current).filter(state=models.TRACKED_PATH_CURRENT).update(
-        state=models.TRACKED_PATH_HISTORICAL,
+    _ = (
+        manager.exclude(path__in=current)
+        .filter(state=models.TRACKED_PATH_CURRENT)
+        .update(
+            state=models.TRACKED_PATH_HISTORICAL,
+        )
     )
 
 
@@ -303,7 +311,7 @@ def planned_tracked_paths_for_paths(
     sync_tracked_paths_from_constants(using=using)
     manager = _manager(models.TrackedPath, using)
     for path in normalized_paths:
-        manager.get_or_create(
+        _ = manager.get_or_create(
             path=path,
             defaults={"state": models.TRACKED_PATH_PLANNED, "is_directory": path.endswith("/")},
         )
@@ -333,7 +341,7 @@ def set_card_changed_files(card: models.Card, paths: object) -> None:
     # ``through_defaults`` only applies ``kind`` to newly-created links; links
     # retained across a re-import keep their old kind, so a predicted->changed
     # flip would be lost. Force the kind on every surviving link.
-    card.path_links.exclude(kind=models.CARD_PATH_LINK_CHANGED).update(
+    _ = card.path_links.exclude(kind=models.CARD_PATH_LINK_CHANGED).update(
         kind=models.CARD_PATH_LINK_CHANGED,
     )
 
@@ -362,7 +370,7 @@ def set_card_predicted_files(
     )
     # ``through_defaults`` only applies ``kind`` to newly-created links; force the
     # kind on retained links too so a changed->predicted flip is not lost.
-    card.path_links.exclude(kind=models.CARD_PATH_LINK_PREDICTED).update(
+    _ = card.path_links.exclude(kind=models.CARD_PATH_LINK_PREDICTED).update(
         kind=models.CARD_PATH_LINK_PREDICTED,
     )
 
@@ -631,7 +639,7 @@ def remove_dependency(
     if kind is not None:
         queryset = queryset.filter(kind__key=kind)
     count = queryset.count()
-    queryset.delete()
+    _ = queryset.delete()
     return count
 
 
@@ -737,7 +745,7 @@ def move_card_number(card: models.Card, number: int, *, using: str | None = None
         _validate_move_dependency_order(card.pk, old_number, requested, using)
         # Park the moved card above the sequence so shifting a neighbour into the
         # vacated slot cannot transiently collide with the unique ``number``.
-        card_manager.filter(pk=card.pk).update(number=max_number + 1)
+        _ = card_manager.filter(pk=card.pk).update(number=max_number + 1)
         if requested < old_number:
             neighbors = (
                 card_manager.filter(number__gte=requested, number__lt=old_number)
@@ -753,8 +761,8 @@ def move_card_number(card: models.Card, number: int, *, using: str | None = None
             )
             delta = -1
         for neighbor_pk, neighbor_number in list(neighbors.values_list("pk", "number")):
-            card_manager.filter(pk=neighbor_pk).update(number=neighbor_number + delta)
-        card_manager.filter(pk=card.pk).update(number=requested)
+            _ = card_manager.filter(pk=neighbor_pk).update(number=neighbor_number + delta)
+        _ = card_manager.filter(pk=card.pk).update(number=requested)
     card.number = requested
     return card
 
@@ -772,7 +780,7 @@ def compact_card_numbers(card: models.Card, *, using: str | None = None) -> None
         card_manager.filter(number__gt=card.number).order_by("number").values_list("pk", "number"),
     )
     for shifted_pk, shifted_number in rows:
-        card_manager.filter(pk=shifted_pk).update(number=shifted_number - 1)
+        _ = card_manager.filter(pk=shifted_pk).update(number=shifted_number - 1)
 
 
 def _resolve_actor(actor: object, using: str | None) -> models.Actor:
@@ -820,20 +828,28 @@ def set_card_status(
         card.status = new_status
         card.save(update_fields=["status", "updated_date"])
         if new_status.key == DONE_STATUS_KEY:
-            _manager(models.CardReference, using).filter(
-                target_card=card,
-                kind__key__in=models.BLOCKING_REFERENCE_KIND_KEYS,
-                resolved_at__isnull=True,
-            ).update(resolved_at=timezone.now())
+            _ = (
+                _manager(models.CardReference, using)
+                .filter(
+                    target_card=card,
+                    kind__key__in=models.BLOCKING_REFERENCE_KIND_KEYS,
+                    resolved_at__isnull=True,
+                )
+                .update(resolved_at=timezone.now())
+            )
         elif from_status.key == DONE_STATUS_KEY:
             # Reopen: the card has un-shipped, so incoming ``blocked_by`` edges
             # it previously resolved become live blocks again. Clearing the
             # stamp keeps ``is_blocked`` and ``is_ready`` consistent.
-            _manager(models.CardReference, using).filter(
-                target_card=card,
-                kind__key__in=models.BLOCKING_REFERENCE_KIND_KEYS,
-                resolved_at__isnull=False,
-            ).update(resolved_at=None)
+            _ = (
+                _manager(models.CardReference, using)
+                .filter(
+                    target_card=card,
+                    kind__key__in=models.BLOCKING_REFERENCE_KIND_KEYS,
+                    resolved_at__isnull=False,
+                )
+                .update(resolved_at=None)
+            )
         return _manager(models.CardTransition, using).create(
             card=card,
             from_status=from_status,
@@ -1025,7 +1041,7 @@ def _create_parity_claims(
     using: str | None,
 ) -> None:
     for claim in parity_claims:
-        _manager(models.ParityClaim, using).create(
+        _ = _manager(models.ParityClaim, using).create(
             card=card,
             upstream=_lookup(models.Upstream, claim["upstream"], using),
             level=_lookup(models.ParityLevel, claim["level"], using),
@@ -1046,7 +1062,7 @@ def _create_sections(
             else:
                 text = bullet
                 done = False
-            append_card_item(
+            _ = append_card_item(
                 card=card,
                 section=section,
                 text=text,
@@ -1061,7 +1077,7 @@ def _create_dependencies(
     using: str | None,
 ) -> None:
     for order, dependency in enumerate(dependencies):
-        add_dependency_note(
+        _ = add_dependency_note(
             card=card,
             target_card=resolve_card(dependency["card"], using=using),
             note=dependency.get("note", ""),
@@ -1075,7 +1091,7 @@ def _create_references(
     using: str | None,
 ) -> None:
     for reference in references:
-        append_card_reference(
+        _ = append_card_reference(
             source_card=card,
             target_card=resolve_card(reference["target"], using=using),
             kind=_lookup(models.CardReferenceKind, reference.get("kind", "related"), using),

@@ -9,7 +9,7 @@ from django.core.management import execute_from_command_line
 
 def main() -> None:
     """Run Django's command-line utility for the fakeshop project."""
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+    _ = os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 
     execute_from_command_line(sys.argv)
 

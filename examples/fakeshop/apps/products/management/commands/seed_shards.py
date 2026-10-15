@@ -94,7 +94,7 @@ class Command(BaseCommand):
 
     @override
     def add_arguments(self, parser: CommandParser) -> None:
-        parser.add_argument(
+        _ = parser.add_argument(
             "--count",
             type=int,
             default=1,
@@ -115,7 +115,7 @@ class Command(BaseCommand):
         # 1. Migrate shard_b (creates schema + auth tables).
         for alias in SHARD_ALIASES:
             self.stdout.write(self.style.NOTICE(f"[{alias}] migrate"))
-            call_command("migrate", database=alias, interactive=False, verbosity=0)
+            _ = call_command("migrate", database=alias, interactive=False, verbosity=0)
 
         # 2. Create users directly on shard_b.  The secondary shard is a
         #    distinct SQLite file from the default dev DB, so it gets its

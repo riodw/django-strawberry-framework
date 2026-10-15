@@ -18,7 +18,7 @@ class Command(BaseCommand):
 
     @override
     def add_arguments(self, parser: CommandParser) -> None:
-        parser.add_argument(
+        _ = parser.add_argument(
             "target",
             type=str,
             help='Number of items to delete, "all", or "everything"',

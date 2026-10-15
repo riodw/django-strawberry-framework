@@ -150,16 +150,18 @@ def make_target_version(
 def make_spec_doc(*, card: models.Card | None = None, **fields: object) -> models.SpecDoc:
     """Create and return a saved ``SpecDoc``, filling required relations when not supplied."""
     card = card or make_card()
-    fields.setdefault("name", f"spec-{card.number:03d}-{fake.slug()}")
-    fields.setdefault("path", f"docs/SPECS/spec-{card.number:03d}-{fake.slug()}.md")
+    fields = {
+        "name": f"spec-{card.number:03d}-{fake.slug()}",
+        "path": f"docs/SPECS/spec-{card.number:03d}-{fake.slug()}.md",
+        **fields,
+    }
     return models.SpecDoc.objects.create(card=card, **fields)
 
 
 def make_tracked_path(path: str | None = None, **fields: object) -> models.TrackedPath:
     """Create a TrackedPath (``current`` by default) under the package root."""
     path = path or f"django_strawberry_framework/factory_{_seq()}.py"
-    fields.setdefault("state", models.TRACKED_PATH_CURRENT)
-    fields.setdefault("is_directory", path.endswith("/"))
+    fields = {"state": models.TRACKED_PATH_CURRENT, "is_directory": path.endswith("/"), **fields}
     obj, _ = models.TrackedPath.objects.get_or_create(path=path, defaults=fields)
     return obj
 
@@ -182,19 +184,22 @@ def make_card(*, status: models.Status | None = None, **fields: object) -> model
     link first, then flips the card to ``done``.
     """
     target_version = fields.pop("target_version", None) or make_target_version()
-    fields.setdefault("target_version", target_version)
     default_status = make_status()
-    fields.setdefault("priority", make_priority())
-    fields.setdefault("relative_size", make_relative_size())
-    fields.setdefault("number", _next_card_number())
-    fields.setdefault("title", f"Card {_seq()}: {fake.sentence(nb_words=4).rstrip('.')}")
+    fields = {
+        "target_version": target_version,
+        "priority": make_priority(),
+        "relative_size": make_relative_size(),
+        "number": _next_card_number(),
+        "title": f"Card {_seq()}: {fake.sentence(nb_words=4).rstrip('.')}",
+        **fields,
+    }
     requested_status = status or default_status
     if requested_status.key != "done":
         return models.Card.objects.create(status=requested_status, **fields)
 
     card = models.Card.objects.create(status=make_status("todo"), **fields)
-    make_spec_doc(card=card)
-    make_card_glossary_term(card=card)
+    _ = make_spec_doc(card=card)
+    _ = make_card_glossary_term(card=card)
     # The status state machine forbids a direct todo -> done move; bridge through
     # wip (todo -> wip -> done) so the done-card guards still fire on the final
     # save while every step is a legal transition.
@@ -215,8 +220,7 @@ def make_card_item(
     """Create and return a saved ``CardItem``, filling required relations when not supplied."""
     card = card or make_card()
     section = section or make_section()
-    fields.setdefault("text", fake.sentence())
-    fields.setdefault("order", _next_order(card.items, section=section))
+    fields = {"text": fake.sentence(), "order": _next_order(card.items, section=section), **fields}
     return models.CardItem.objects.create(card=card, section=section, **fields)
 
 
@@ -237,7 +241,7 @@ def make_card_reference(
     source_card = source_card or make_card()
     target_card = target_card or make_card()
     kind = kind or make_card_reference_kind()
-    fields.setdefault("raw_text", "")
+    fields = {"raw_text": "", **fields}
     return models.CardReference.objects.create(
         source_card=source_card,
         target_card=target_card,
@@ -261,7 +265,7 @@ def make_card_path_link(
     """
     card = card or make_card()
     path = path or make_tracked_path()
-    fields.setdefault("kind", models.CARD_PATH_LINK_PREDICTED)
+    fields = {"kind": models.CARD_PATH_LINK_PREDICTED, **fields}
     return models.CardPathLink.objects.create(card=card, path=path, **fields)
 
 
@@ -288,8 +292,7 @@ def make_card_glossary_term(
     """Link a kanban Card to a glossary term (creates both ends if omitted)."""
     card = card or make_card()
     term = term or make_glossary_term()
-    fields.setdefault("raw_text", "")
-    fields.setdefault("order", _next_order(card.glossary_links))
+    fields = {"raw_text": "", "order": _next_order(card.glossary_links), **fields}
     return models.CardGlossaryTerm.objects.create(card=card, term=term, **fields)
 
 
@@ -375,8 +378,7 @@ def make_decision(
     """
     card = make_card() if card is _UNSET else card
     actor = actor or make_actor()
-    fields.setdefault("question", fake.sentence())
-    fields.setdefault("choice", fake.sentence())
+    fields = {"question": fake.sentence(), "choice": fake.sentence(), **fields}
     return models.Decision.objects.create(card=card, actor=actor, **fields)
 
 
@@ -387,10 +389,13 @@ def make_board_doc(
 ) -> models.BoardDoc:
     """Create and return a saved ``BoardDoc``, filling required relations when not supplied."""
     kind = kind or make_board_doc_kind()
-    fields.setdefault("namespace", "kanban")
-    fields.setdefault("key", f"doc-{_seq()}")
-    fields.setdefault("title", fake.sentence(nb_words=3).rstrip("."))
-    fields.setdefault("body", fake.paragraph())
+    fields = {
+        "namespace": "kanban",
+        "key": f"doc-{_seq()}",
+        "title": fake.sentence(nb_words=3).rstrip("."),
+        "body": fake.paragraph(),
+        **fields,
+    }
     return models.BoardDoc.objects.create(kind=kind, **fields)
 
 
@@ -403,6 +408,5 @@ def make_board_doc_card_reference(
     """Create and return a saved ``BoardDocCardReference``, filling required relations when not supplied."""
     doc = doc or make_board_doc()
     card = card or make_card()
-    fields.setdefault("raw_text", "")
-    fields.setdefault("order", _next_order(doc.card_references))
+    fields = {"raw_text": "", "order": _next_order(doc.card_references), **fields}
     return models.BoardDocCardReference.objects.create(doc=doc, card=card, **fields)

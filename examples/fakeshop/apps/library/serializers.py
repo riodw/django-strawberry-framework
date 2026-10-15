@@ -234,7 +234,7 @@ class TargetedShelfSerializer(serializers.ModelSerializer[Shelf]):
     def create(self, validated_data: dict[str, object]) -> Shelf:
         # ``target`` was decoded + validated (proving the relation decode used the right
         # related_model), then dropped - ``Shelf`` has no ``target`` column.
-        validated_data.pop("target", None)
+        _ = validated_data.pop("target", None)
         return super().create(validated_data)
 
 
@@ -311,7 +311,7 @@ class NoteShelfSerializer(serializers.ModelSerializer[Shelf]):
     def create(self, validated_data: dict[str, object]) -> Shelf:
         # ``note`` was decoded + validated (proving the emitted nullability), then dropped -
         # ``Shelf`` has no ``note`` column.
-        validated_data.pop("note", None)
+        _ = validated_data.pop("note", None)
         return super().create(validated_data)
 
 
@@ -512,9 +512,9 @@ class ShelfMetadataSerializer(serializers.ModelSerializer[Shelf]):
         tags = validated_data.pop("tags", None)
         labels = validated_data.pop("labels", None)
         flags = validated_data.pop("flags", None)
-        validated_data.pop("attributes", None)
-        validated_data.pop("accent_color", None)
-        validated_data.pop("label", None)
+        _ = validated_data.pop("attributes", None)
+        _ = validated_data.pop("accent_color", None)
+        _ = validated_data.pop("label", None)
         if priority is not None:
             validated_data["topic"] = f"priority:{priority}"
         if tags is not None:

@@ -13,7 +13,7 @@ class Command(BaseCommand):
 
     @override
     def add_arguments(self, parser: CommandParser) -> None:
-        parser.add_argument(
+        _ = parser.add_argument(
             "count",
             nargs="?",
             type=int,

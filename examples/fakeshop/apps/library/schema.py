@@ -1594,7 +1594,7 @@ class CreateBranchWithShelf(DjangoFormMutation):
     @override
     def perform_mutate(self, form: BaseForm, info: Info) -> None:
         branch = models.Branch.objects.create(name=form.cleaned_data["branch_name"])
-        models.Shelf.objects.create(
+        _ = models.Shelf.objects.create(
             code=form.cleaned_data["shelf_code"],
             branch=branch,
         )
@@ -1615,8 +1615,8 @@ class CreateBranchPair(DjangoFormMutation):
 
     @override
     def perform_mutate(self, form: BaseForm, info: Info) -> None:
-        models.Branch.objects.create(name=form.cleaned_data["first_name"])
-        models.Branch.objects.create(name=form.cleaned_data["second_name"])
+        _ = models.Branch.objects.create(name=form.cleaned_data["first_name"])
+        _ = models.Branch.objects.create(name=form.cleaned_data["second_name"])
 
 
 # --------------------------------------------------------------------------- #

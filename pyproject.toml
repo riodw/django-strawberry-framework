@@ -451,7 +451,7 @@ reportImportCycles = "none"
 reportUninitializedInstanceVariable = "none"
 # The ratchet, off until their sites are fixed (turn one on to list them): `reportAny` is
 # on in the scripts/ and root-file environments below, the last two in those and the
-# package's.
+# package's, and `reportUnusedCallResult` in the example project outside its tests.
 reportAny = "none"
 reportUnannotatedClassAttribute = "none"
 reportUnusedCallResult = "none"
@@ -505,8 +505,33 @@ reportAny = "error"
 reportUnannotatedClassAttribute = "error"
 reportUnusedCallResult = "error"
 
+# The example project's test folders, listed before the project root: tests keep the root
+# environment's rules (a test calls for side effects: fixture rows, `delete()`, a call inside
+# `pytest.raises`).
+[[tool.basedpyright.executionEnvironments]]
+root = "examples/fakeshop/tests"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "examples/fakeshop/test_query"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "examples/fakeshop/apps/glossary/tests"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "examples/fakeshop/apps/kanban/tests"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "examples/fakeshop/apps/library/tests"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "examples/fakeshop/apps/products/tests"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "examples/fakeshop/apps/scalars/tests"
+
 [[tool.basedpyright.executionEnvironments]]
 root = "examples/fakeshop"
+reportUnusedCallResult = "error"
 
 [tool.coverage.run]
 source = ["django_strawberry_framework"]

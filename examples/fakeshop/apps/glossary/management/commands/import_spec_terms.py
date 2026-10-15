@@ -89,18 +89,18 @@ class Command(BaseCommand):
     @override
     def add_arguments(self, parser: CommandParser) -> None:
         """Register command arguments."""
-        parser.add_argument(
+        _ = parser.add_argument(
             "--repo-root",
             type=Path,
             default=REPO_ROOT,
             help="Repository root containing docs/. Defaults to the current checkout.",
         )
-        parser.add_argument(
+        _ = parser.add_argument(
             "--check",
             action="store_true",
             help="Validate DB rows against the CSVs without writing.",
         )
-        parser.add_argument(
+        _ = parser.add_argument(
             "--dry-run",
             action="store_true",
             help="Report what would be imported without writing.",
@@ -192,11 +192,13 @@ class Command(BaseCommand):
 
     def _sync_spec_mentions(self, plan: CardPlan) -> None:
         term_ids = [row.term.pk for row in plan.rows]
-        glossary_models.GlossarySpecMention.objects.filter(spec_path=plan.spec_path).exclude(
-            term_id__in=term_ids,
-        ).delete()
+        _ = (
+            glossary_models.GlossarySpecMention.objects.filter(spec_path=plan.spec_path)
+            .exclude(term_id__in=term_ids)
+            .delete()
+        )
         for row in plan.rows:
-            glossary_models.GlossarySpecMention.objects.update_or_create(
+            _ = glossary_models.GlossarySpecMention.objects.update_or_create(
                 spec_path=plan.spec_path,
                 term=row.term,
                 defaults={"term_text": row.term_text, "notes": row.notes, "order": row.order},
@@ -205,17 +207,17 @@ class Command(BaseCommand):
     def _sync_card_links(self, plan: CardPlan) -> None:
         offset = plan.card.glossary_links.count() + len(plan.rows) + 1000
         for row in plan.rows:
-            kanban_models.CardGlossaryTerm.objects.update_or_create(
+            _ = kanban_models.CardGlossaryTerm.objects.update_or_create(
                 card=plan.card,
                 term=row.term,
                 defaults={"raw_text": row.term_text, "order": offset + row.order},
             )
 
         term_ids = [row.term.pk for row in plan.rows]
-        plan.card.glossary_links.exclude(term_id__in=term_ids).delete()
+        _ = plan.card.glossary_links.exclude(term_id__in=term_ids).delete()
 
         for row in plan.rows:
-            plan.card.glossary_links.filter(term=row.term).update(
+            _ = plan.card.glossary_links.filter(term=row.term).update(
                 raw_text=row.term_text,
                 order=row.order,
             )

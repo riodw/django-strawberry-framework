@@ -179,10 +179,12 @@ Off by design (not planned):
 
 ## Files ruff skips
 
-None that it should check. `ruff check --show-files` lists exactly the 513 tracked Python files. The files it skips
-are git-ignored scratch trees (`docs/shadow/`, cycle temp files, `.venv/`, `.claude/worktrees/`), read through
-ruff's default `respect-gitignore`. `[tool.ruff.format]` excludes `*.md`: fenced Python in Markdown is verbatim example
-content, so the formatter owns `.py` only. No file carries a file-level `# ruff: noqa`.
+None that it should check. `ruff check --show-files` lists exactly the 513 tracked Python files. The files it skips are
+git-ignored scratch trees (`docs/shadow/`, cycle temp files, `.venv/`, `.claude/worktrees/`), read through ruff's
+default `respect-gitignore`, and `hunt-ws/` (`extend-exclude`), the untracked bug-hunt evidence trees: copies of the
+repo kept as found, which a repo-wide `--fix` or format pass would otherwise rewrite. `[tool.ruff.format]` excludes
+`*.md`: fenced Python in Markdown is verbatim example content, so the formatter owns `.py` only. No file carries a
+file-level `# ruff: noqa`.
 
 ## Config ignores
 

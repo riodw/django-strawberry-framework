@@ -151,6 +151,9 @@ pg = [
 # measured in ruff's display columns (an emoji is 2), not E501's 110.
 line-length = 99
 target-version = "py310"
+# A bug-hunt evidence tree (copies of the repo, kept as found) is untracked and not
+# git-ignored, so a repo-wide `ruff check --fix .` / `ruff format .` would rewrite it.
+extend-exclude = ["hunt-ws"]
 
 [tool.ruff.format]
 # Fenced blocks in .md are verbatim example content, so the formatter owns .py only.

@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 84 done, 154 to do.
+Progress: 85 done, 153 to do.
 
 ## Done
 
@@ -275,6 +275,9 @@ Progress: 84 done, 154 to do.
   so every relation key's `isNull` is a Boolean null test (carrier columns on the raw path, "no visible related row" on
   a scoped target, as on a `ForeignKey`); the policy table still mirrors django-filter. Live row: fakeshop
   `ShelfLabelFilter` `shelf` through the new `allLibraryShelfLabelsFiltered` root; CHANGELOG item 240; filed 239
+- [x] 211. A repo-wide `ruff check --fix .` / `ruff format .` rewrote untracked hunt evidence; `[tool.ruff]` now
+  `extend-exclude`s `hunt-ws`, so ruff checks only the tracked tree (git-ignored copies such as `.claude/worktrees/` were
+  already skipped); `docs/ruffing.md` "Files ruff skips" says so
 
 ## Outside review of the fixes
 
@@ -803,8 +806,6 @@ tracker number are recorded there; open remainders and new defects are filed as 
   test-run notes were never folded back
 - [ ] 210. The truthful-reads migration and its fixes sit uncommitted in the hunt worktree; decide whether it goes to main
   (every robustness row behind items 15-25 and 27 is decided on main)
-- [ ] 211. A repo-wide `ruff check --fix .` / `ruff format .` rewrote 30 untracked `.py` files of hunt evidence (11 in the
-  sealed deep-3 directory) with no copy kept; evidence trees need excluding from ruff, or AGENTS rule 17 needs explicit paths
 
 <!-- LINK DEFINITIONS -->
 

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, FieldError
 from django.db import connections, models
+from django.db.models.expressions import Col
 from django.db.models.sql.query import Query
 from graphql import GraphQLError
 from strawberry import relay
@@ -89,7 +90,6 @@ if TYPE_CHECKING:
 
     from django.contrib.postgres.indexes import BTreeIndex
     from django.db.models import QuerySet
-    from django.db.models.expressions import Col
     from django.db.models.options import Options
     from graphql.type.definition import GraphQLResolveInfo
     from strawberry.types.nodes import Arguments
@@ -243,28 +243,37 @@ def _concrete_order_terms(
     order_by: Sequence[object],
     model: type[models.Model],
 ) -> list[tuple[str, bool]] | None:
-    """Return the LOCAL concrete ``(attname, descending)`` order terms, or ``None`` if any is not.
+    """Return the child-table ``(attname, descending)`` order terms, or ``None`` if any is not.
 
-    The direction-carrying sibling of ``_concrete_order_columns``: a B-tree can
-    serve a requested ordering (or its full reverse) only when the index terms
-    match the requested ``(column, direction)`` sequence, so the composite-index
-    advisory must compare directions, not bare attnames (a mixed
-    ``title ASC, id DESC`` is NOT served by ``(title, id)`` ascending).
+    The direction-carrying counterpart of ``_concrete_order_columns``: a B-tree
+    can serve a requested ordering (or its full reverse) only when the index
+    terms match the requested ``(column, direction)`` sequence, so the
+    composite-index advisory must compare directions, not bare attnames (a mixed
+    ``title ASC, id DESC`` is NOT served by ``(title, id)`` ascending). Each
+    term's column is the one the window's ``ORDER BY`` names
+    (``_window_column``): ``"pk"`` is the child's pk column, and on a
+    multi-table-inheritance child the inherited pk name ``"id"`` is the child's
+    own parent-link column.
 
     The fail-soft tri-state begins HERE, not only at index parsing: the SQL
     ``ORDER BY`` references EVERY effective ordering term regardless of the
-    ``.only()`` projection, so a related-span lookup (``author__name``), an
-    arbitrary expression (``Lower("title")``), an alias, or an unresolvable name
-    means the order is only PARTIALLY understood. Silently dropping it and
-    coverage-checking the remaining suffix would let ``(Lower("title"), "id")``
-    be declared served by ``(parent_id, id)`` (a false positive) or recommend
-    that incomplete index as the serving shape. Return ``None`` the moment ANY
-    term cannot be represented as a local concrete ``(attname, direction)`` so
-    the advisory stays SILENT for that plan shape - this UNKNOWN dominates the
-    index-parsing tri-state exactly as an uninspectable index leaves absence
-    unproven. (The sibling projection helper ``_concrete_order_columns`` may
-    still skip such terms: forgoing a column a scalar-only selection never reads
-    is harmless, whereas a coverage CLAIM from a partial order is not.)
+    ``.only()`` projection, so a term that is not a column of the child's own
+    table - a related span through a join (``author__name``), a column a
+    multi-table-inheritance child inherits from a parent table, an arbitrary
+    expression (``Lower("title")``), an alias, an unresolvable name - means the
+    order is only PARTIALLY understood by any index the child's table can hold.
+    Silently dropping it and coverage-checking the remaining suffix would let
+    ``(Lower("title"), "id")`` be declared served by ``(parent_id, id)`` (a false
+    positive) or recommend that incomplete index as the serving shape, and
+    keeping an inherited column would recommend an index no table can hold.
+    Return ``None`` the moment ANY term cannot be represented as a child-table
+    ``(attname, direction)`` so the advisory stays SILENT for that plan shape -
+    this UNKNOWN dominates the index-parsing tri-state exactly as an
+    uninspectable index leaves absence unproven. (The projection helper
+    ``_concrete_order_columns`` may still skip or keep such terms: ``.only()``
+    accepts an inherited column and forgoing a column a scalar-only selection
+    never reads is harmless, whereas a coverage CLAIM from a partial order is
+    not.)
 
     Explicit NULLS placement is likewise UNKNOWN: an ``OrderBy`` carrying
     ``nulls_first`` / ``nulls_last`` executes ``title ASC NULLS FIRST`` (etc.),
@@ -273,8 +282,6 @@ def _concrete_order_terms(
     than collapse to a bare ``(attname, direction)`` that would falsely read as
     covered (``plans.py::order_entry_has_explicit_nulls``).
     """
-    by_name = {field.name: field.attname for field in model._meta.concrete_fields}
-    attnames = set(by_name.values())
     terms: list[tuple[str, bool]] = []
     seen: set[str] = set()
     for entry in order_by:
@@ -284,47 +291,48 @@ def _concrete_order_terms(
         if parsed is None:
             return None
         name, descending = parsed
-        if "__" in name:
+        field = _window_column(model, name)
+        if field is None:
             return None
-        if name in by_name:
-            attname = by_name[name]
-        elif name in attnames:
-            attname = name
-        else:
-            return None
-        if attname in seen:
+        if field.attname in seen:
             continue
-        seen.add(attname)
-        terms.append((attname, descending))
+        seen.add(field.attname)
+        terms.append((field.attname, descending))
     return terms
 
 
-def _window_partition_field(
-    related_model: type[models.Model],
-    partition_expr: str,
-) -> ConcreteField | None:
-    """Return the concrete column a nested window's ``PARTITION BY`` resolves to, or ``None``.
+def _window_column(related_model: type[models.Model], ref: str) -> ConcreteField | None:
+    """Return the child-table column a nested window reference resolves to, or ``None``.
 
     Resolved exactly as the window resolves it:
-    ``plans.py::apply_window_pagination`` hands ``partition_expr`` to
-    ``Window(partition_by=...)``, whose ``ExpressionList`` wraps the string in
-    ``F(partition_expr)``, and ``F.resolve_expression`` is
-    ``Query.resolve_ref`` against the child model's query. The returned field's
-    ``model`` owns the column: the child table for a reverse ``ForeignKey``
-    carrier, a one-column reverse ``ForeignObject`` carrier or a
-    ``GenericRelation``'s ``object_id``; the M2M through table for an M2M,
-    whose relation hop ``resolve_ref`` trims to the through table's parent-side
-    foreign key; a multi-table-inheritance parent table when the child inherits
-    the column (a ``GenericRelation`` to a child model whose generic foreign
-    key the parent declares). ``None`` when the expression does not resolve to
-    one column (``resolve_ref`` raises ``FieldError``).
+    ``plans.py::apply_window_pagination`` hands the partition expression to
+    ``Window(partition_by=...)`` and the order entries to
+    ``Window(order_by=...)``; each string becomes ``F(ref)`` (under an
+    ``OrderBy`` for a ``-`` prefix), and ``F.resolve_expression`` is
+    ``Query.resolve_ref`` against the child model's query, which trims a join it
+    can answer from the child's own row (a forward relation's local column, the
+    inherited pk name on a multi-table-inheritance child).
+
+    One index serves the page only when every column the window names sits on
+    the child's own table, so the resolved column must belong to the query's
+    base table. A column reached through a join carries another alias and
+    returns ``None``: an M2M's through-table foreign key, a column a
+    multi-table-inheritance child inherits from a parent table (a generic link
+    the parent declares, an inherited order column), a related row's column
+    (a self-referential relation joins the same table under a second alias).
+    ``None`` too when the reference does not resolve (``resolve_ref`` raises
+    ``FieldError``) or resolves to something other than one column (a
+    transform, a composite primary key's column pair).
     """
+    query = Query(related_model)
     try:
-        resolved = Query(related_model).resolve_ref(partition_expr)
+        resolved = query.resolve_ref(ref)
     except FieldError:
         return None
-    # A plain field path with no transform resolves to the target column's ``Col``.
-    return cast("Col", resolved).target
+    if not isinstance(resolved, Col) or resolved.alias != query.get_initial_alias():
+        return None
+    # A ``Col`` resolved from a model field path targets that concrete field.
+    return cast("ConcreteField", resolved.target)
 
 
 def _index_leading_terms(
@@ -477,9 +485,15 @@ def _model_index_shapes(meta: Options[models.Model]) -> tuple[list[list[tuple[st
     - unconditional field-based ``Meta.indexes`` entries (direction-carrying);
     - unconditional field-based ``UniqueConstraint`` entries and legacy
       ``unique_together`` (a unique btree is a usable ascending composite);
-    - single-field ``primary_key`` / ``unique`` / ``db_index`` columns (one
-      shared field-index predicate - this is what makes the FK auto-index cover
-      the partition-column-only window).
+    - single-field ``primary_key`` / ``unique`` / ``db_index`` columns on the
+      model's own table (one shared field-index predicate - this is what makes
+      the FK auto-index cover the partition-column-only window). A
+      multi-table-inheritance child's ``concrete_fields`` also lists the fields
+      it inherits, whose indexes sit on the parent's table; Django never copies a
+      concrete parent's ``Meta.indexes`` / ``constraints`` / ``unique_together``
+      onto the child, and its model checks (``models.E016``) refuse a child entry
+      naming an inherited field, so every shape here is an index on the child's
+      own table.
 
     A conditional/partial or expression ``Index``/``UniqueConstraint``, or a
     name that no longer resolves, is counted as UNINSPECTABLE (``saw_uninspectable
@@ -526,9 +540,12 @@ def _model_index_shapes(meta: Options[models.Model]) -> tuple[list[list[tuple[st
     shapes.extend(
         [(field.attname, False)]
         for field in meta.concrete_fields
-        if field.primary_key
-        or getattr(field, "unique", False)
-        or getattr(field, "db_index", False)
+        if field.model._meta.db_table == meta.db_table
+        and (
+            field.primary_key
+            or getattr(field, "unique", False)
+            or getattr(field, "db_index", False)
+        )
     )
     return shapes, saw_uninspectable
 
@@ -633,7 +650,7 @@ def _advise_composite_index(
 
     A windowed or lateral nested connection equality-constrains its partition
     column (``join.partition_expr``, resolved to its concrete column by
-    ``_window_partition_field``) - and, for a ``GenericRelation``, the
+    ``_window_column``) - and, for a ``GenericRelation``, the
     ``content_type_id`` morph column (``join.content_type_column``) ahead of it -
     then orders by the deterministic order terms, so a composite index whose
     leading columns mirror ``(content_type_id?, partition column, order terms...,
@@ -643,12 +660,17 @@ def _advise_composite_index(
     load-bearing: a B-tree serves only the requested order or its FULL reverse
     after the equality prefix.
 
-    One index can serve the page only when the partition column and the order
-    columns share the child's table. When the partition column lives on another
-    table - an M2M's through table, or a multi-table-inheritance parent table
-    holding a column the child inherits - the window's ``PARTITION BY`` and
-    ``ORDER BY`` span two tables, no single B-tree holds both, and the advisory
-    stays silent, as it does when the partition expression does not resolve.
+    One index can serve the page only when the morph column, the partition
+    column and the order columns all live on the child's table. When any of them
+    lives on another table - an M2M's through table, or a
+    multi-table-inheritance parent table holding a column the child inherits (a
+    generic link the parent declares, an inherited order column such as a
+    parent's ``name``) - the window spans two tables, no single B-tree holds every
+    column, and the advisory stays silent, as it does when the partition
+    expression does not resolve. Every column is resolved as the window resolves
+    it (``_window_column``), so the recommendation names the child-table column
+    the SQL reads (``"pk"`` and an inherited pk name read as the child's own pk
+    column).
 
     Coverage is inspected against every physical index shape Django model
     metadata REPRESENTS, not only ``Meta.indexes``: unconditional field-based
@@ -662,10 +684,11 @@ def _advise_composite_index(
     absence is proven from fully-inspectable metadata. That fail-soft tri-state
     spans BOTH ends of the comparison: a non-B-tree / expression / partial index
     (or any shape the represented metadata cannot classify) leaves index
-    coverage UNKNOWN, AND an effective ORDER term that is not a local concrete
-    column (a related span, a ``Lower("title")`` expression, an alias, an
-    unresolvable name - ``_concrete_order_terms`` returns ``None``) leaves the
-    SQL order only partially understood; either UNKNOWN keeps the advisory silent
+    coverage UNKNOWN, AND an effective ORDER term that is not a child-table
+    column (a related span through a join, an inherited column, a
+    ``Lower("title")`` expression, an alias, an unresolvable name -
+    ``_concrete_order_terms`` returns ``None``) leaves the SQL order only
+    partially understood; either UNKNOWN keeps the advisory silent
     so it never claims coverage from - or recommends an index covering only - the
     remaining suffix. A DBA-created index absent from Django model metadata is
     never visible here, so the wording frames the recommendation as advisory
@@ -681,22 +704,23 @@ def _advise_composite_index(
     """
     if join.partition_expr is None:
         return
-    partition_field = _window_partition_field(related_model, join.partition_expr)
+    partition_field = _window_column(related_model, join.partition_expr)
     if partition_field is None:
-        return
-    if partition_field.model._meta.db_table != related_model._meta.db_table:
         return
     equality: list[str] = []
     if join.content_type_column is not None:
-        append_unique(equality, join.content_type_column)
+        content_type_field = _window_column(related_model, join.content_type_column)
+        if content_type_field is None:
+            return
+        append_unique(equality, content_type_field.attname)
     append_unique(equality, partition_field.attname)
     order_terms = _concrete_order_terms(order_by, related_model)
     if order_terms is None:
         # Order-parsing UNKNOWN dominates: some effective ordering term is not a
-        # local concrete ``(attname, direction)`` (or carries explicit NULLS
-        # placement), so the SQL order is only partially understood - stay silent
-        # rather than claim a false coverage or recommend an index that omits the
-        # unrepresented term.
+        # child-table ``(attname, direction)`` (or carries explicit NULLS
+        # placement), so no index on the child's table serves the SQL order - stay
+        # silent rather than claim a false coverage or recommend an index that
+        # omits or misplaces the unrepresented term.
         return
     # The window equality-constrains every ``equality`` column (the partition
     # column, and for a ``GenericRelation`` the ``content_type_id`` morph

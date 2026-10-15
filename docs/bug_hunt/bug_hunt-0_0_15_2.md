@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 74 done, 156 to do.
+Progress: 75 done, 158 to do.
 
 ## Done
 
@@ -204,6 +204,13 @@ Progress: 74 done, 156 to do.
   decoder now matches the index against `0|[1-9][0-9]*` in full (same accepted set); live rows pin the superscript and the
   mixed non-ASCII digit on the root, and every malformed cursor on the planned nested `booksConnection` window (the nested
   field's `errors[].path`, no window statement)
+- [x] 66. The composite-index advisory recommended child-table indexes on columns the child's table does not hold: an MTI
+  child declaring its own FK or generic link and ordered by an inherited column (explicit order, `Meta.ordering`,
+  `Meta.cursor_field`) was told to add `(holder_id, name, ptr)`, which Django refuses (models.E016), and a generic link whose
+  content type sits on the parent got `content_type_id` named on the child. The advisory now resolves every column it names
+  as the window does (`Query.resolve_ref`, the query's base table only) and stays silent when any lives off the child's
+  table; `pk` orders and spans Django trims to a local column now advise, and an MTI `id` names the parent-link column;
+  CHANGELOG item 233; filed 234, 235
 - [x] 188. Re-checked at `8ca6a481`: a nested list whose `get_queryset` returns `union()` / `intersection()` /
   `difference()` no longer raises `NotSupportedError`; the combined result is served as its pk set, optimizer on and off
   (`5c5e32c5`, item 6; `test_combined_visibility_api.py` 199 passed)
@@ -529,10 +536,14 @@ Expected outcome: most are not real bugs and just get deleted from t3. One check
 - [ ] 231. KANBAN.md's "`FieldError` keying" card (rendered from the kanban DB) still says
   `validation_error_to_field_errors` is an identity pass-through and that no test covers a multi-word snake_case
   field; both are stale (the key maps and `tests/utils/test_error_keys.py` landed before)
+- [ ] 234. Index advisory on a proxy target reads the proxy's empty `Meta.indexes` / `Meta.constraints`
+  (`optimizer/nested_planner.py::_model_index_shapes` reads the proxy's `Options`) and recommends an index the concrete
+  model already declares (a `GenericRelation` to a proxy)
+- [ ] 235. Two comments in `optimizer/nested_planner.py` label a guard "the P2-3 defect" / "the P2-3 false-coverage defect",
+  a review label START "No process provenance" bans; restate each as the invariant it guards
 
 ## To do: holes found re-checking the fixes
 
-- [ ] 66. Index advisory on a multi-table-inheritance child names an order column that lives on the parent table
 - [ ] 67. Nested serializer: a Django error raised in `create()` for a child is keyed to a renamed root input
 - [ ] 70. Argument-less directives are re-walked on every fragment expansion (about 80 ms at the token bound; bounded, robustness)
 
@@ -716,6 +727,10 @@ Expected outcome: most are not real bugs and just get deleted from t3. One check
   signals, `ModelForm.save()`, `perform_mutate`, register's user save) now returns the `FieldError` envelope on the model,
   form and register flavors instead of "An unexpected error occurred." (0.0.14 masked it); whether to mark it BREAKING
   (a client branching on the top-level error sees `errors` instead) is your call
+- [ ] 233. CHANGELOG entry for item 66: the nested-connection composite-index advisory (`WARNING` under `DEBUG`) no longer
+  recommends an index naming a multi-table-inheritance parent's column (an inherited order or content-type column), now
+  advises for orders naming `pk` or a span Django trims to a local column (`shelf__id`), and names an MTI child's
+  parent-link column for an `id` order term
 
 ## Hunt not finished in t3
 

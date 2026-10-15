@@ -10,7 +10,8 @@ SILENT unless absence is PROVEN from fully-inspectable metadata. That tri-state
 spans BOTH ends of the comparison. Index side: an expression index, a PARTIAL
 index / unique constraint (a ``condition``), or a migration-lagged field name
 leaves coverage UNKNOWN (never falsely covered). Order side: an effective ORDER
-term that is not a local concrete column (a related span, a ``Lower(...)``
+term that is not a column of the child's own table (a related span through a
+join, a column a multi-table-inheritance child inherits, a ``Lower(...)``
 expression, an alias, an unresolvable name) OR that carries explicit ``NULLS
 FIRST`` / ``LAST`` leaves the SQL order only partially understood - either
 UNKNOWN keeps the advisory silent (never a false-positive warning, never a
@@ -26,25 +27,30 @@ threading) the partition key is not falsely reported absent or recommended with
 a duplicated column. Direction is carried through the comparison so a mixed
 ``title ASC, id DESC`` is served only by the requested order or its FULL
 reverse, and a ``GenericRelation`` window recommends the
-``content_type_id``-prefixed composite. The partition column is the window's
-own: ``_window_partition_field`` resolves ``partition_expr`` as ``PARTITION BY``
-does, and when that column lives off the child's table (an M2M through table, a
+``content_type_id``-prefixed composite. Every column is the window's own:
+``_window_column`` resolves the partition expression, the content-type column
+and each order name as ``PARTITION BY`` / ``ORDER BY`` do (``pk`` and a
+multi-table child's inherited pk name read as the child's parent link), and when
+any of them lives off the child's table (an M2M through table, a
 multi-table-inheritance parent that declares a ``GenericRelation`` child's
-generic foreign key) no single child-table index serves the page, so every such
-shape stays silent. The advisory is deferred until a strategy ACCEPTS a window
-(a refusing custom strategy advises nothing), and a bounded, strategy- and
-request-independent dedup makes one plan shape warn at most once even when a
-custom-``get_queryset`` plan is rebuilt every request. Package tier: the helpers
-operate on model ``_meta`` and a strategy-agnostic join descriptor, unreachable
-from a live /graphql query (no observable schema surface); the deferral is
-driven through an in-process schema.
+generic foreign key or a column the child orders by) no single child-table index
+serves the page, so every such shape stays silent. The advisory is deferred until
+a strategy ACCEPTS a window (a refusing custom strategy advises nothing), and a
+bounded, strategy- and request-independent dedup makes one plan shape warn at
+most once even when a custom-``get_queryset`` plan is rebuilt every request.
+Package tier: the helpers operate on model ``_meta`` and a strategy-agnostic join
+descriptor, unreachable from a live /graphql query (no observable schema
+surface); the deferral is driven through an in-process schema.
 
 The unmanaged ``_Idx*`` models exist because a model carries exactly one index
 set, so each index variant (bare, composite, expression, partial, reversed,
 constraint, migration-lagged, opclass, GIN) needs a model of its own, and the
 opclass / GIN variants are PostgreSQL-only DDL no SQLite-migrated fakeshop model
-can declare; ``_IdxMtiTag*`` is the multi-table-inheritance generic shape no
-fakeshop model carries; they pin the covered / absent / unknown tri-state in
+can declare; ``_IdxMtiTag*``, ``_IdxMti*`` and ``_IdxMtiNote*`` are the
+multi-table-inheritance shapes (a parent-declared generic link, a child-declared
+partition column over inherited columns, child-declared generic links) no
+fakeshop nested connection targets; they pin the covered / absent / unknown
+tri-state in
 ``django_strawberry_framework/optimizer/nested_planner.py::_index_coverage`` and
 the warning it gates in
 ``django_strawberry_framework/optimizer/nested_planner.py::_advise_composite_index``.
@@ -58,6 +64,7 @@ import pytest
 import strawberry
 from apps.glossary.models import GlossaryTerm
 from apps.library.models import Book, Branch, Genre, Shelf, TaggedItem
+from apps.scalars.models import ScalarSpecimen
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.indexes import (
@@ -108,6 +115,7 @@ from django_strawberry_framework.optimizer.nested_planner import (
 from django_strawberry_framework.optimizer.plans import OptimizationPlan
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils.imports import import_attr_if_importable
+from tests._relation_fixtures import RpCompositeParent
 
 from ._link_models import LnkParent, LnkTag
 
@@ -495,6 +503,141 @@ class _IdxMtiTagHolder(models.Model):
         managed = False
 
 
+class _IdxMtiBase(models.Model):
+    """Unmanaged multi-table-inheritance parent holding columns its children inherit."""
+
+    name: "models.TextField[str | Combinable, str]" = models.TextField()
+    code: "models.CharField[str | int | Combinable, str]" = models.CharField(
+        max_length=20,
+        unique=True,
+    )
+
+    class Meta:
+        app_label = "tests"
+        managed = False
+
+
+class _IdxMtiChild(_IdxMtiBase):
+    """Multi-table child declaring its own partition column (``holder``) and order column."""
+
+    base: "models.OneToOneField[_IdxMtiBase | Combinable, _IdxMtiBase]" = models.OneToOneField(
+        _IdxMtiBase,
+        on_delete=models.CASCADE,
+        parent_link=True,
+        primary_key=True,
+    )
+    holder: "models.ForeignKey[_IdxParent | Combinable, _IdxParent]" = models.ForeignKey(
+        _IdxParent,
+        on_delete=models.CASCADE,
+        related_name="mti_children",
+    )
+    lname: "models.TextField[str | Combinable, str]" = models.TextField()
+
+    # basedpyright: Django's ModelBase pops a concrete model's Meta (only an abstract model keeps
+    # one), so _IdxMtiBase has no Meta at run time for this one to subclass
+    class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        app_label = "tests"
+        managed = False
+
+
+class _IdxMtiGrandchild(_IdxMtiChild):
+    """Second inheritance level: ``lname`` now lives on the middle table, ``name`` on the root."""
+
+    child: "models.OneToOneField[_IdxMtiChild | Combinable, _IdxMtiChild]" = models.OneToOneField(
+        _IdxMtiChild,
+        on_delete=models.CASCADE,
+        parent_link=True,
+        primary_key=True,
+    )
+    keeper: "models.ForeignKey[_IdxParent | Combinable, _IdxParent]" = models.ForeignKey(
+        _IdxParent,
+        on_delete=models.CASCADE,
+        related_name="mti_grandchildren",
+    )
+    gname: "models.TextField[str | Combinable, str]" = models.TextField()
+
+    # basedpyright: Django's ModelBase pops a concrete model's Meta (only an abstract model keeps
+    # one), so _IdxMtiChild has no Meta at run time for this one to subclass
+    class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        app_label = "tests"
+        managed = False
+
+
+class _IdxMtiNoteBase(models.Model):
+    """Multi-table parent holding an inherited order column and a content-type column."""
+
+    label: "models.TextField[str | Combinable, str]" = models.TextField()
+    base_content_type: "models.ForeignKey[ContentType | Combinable, ContentType]" = (
+        models.ForeignKey(
+            ContentType,
+            on_delete=models.CASCADE,
+            related_name="+",
+        )
+    )
+
+    class Meta:
+        app_label = "tests"
+        managed = False
+
+
+class _IdxMtiNote(_IdxMtiNoteBase):
+    """Multi-table child declaring generic links over its own ``object_id``.
+
+    ``content_object`` keeps both link columns on the child's table;
+    ``base_object`` pairs the child's ``object_id`` with the content type the
+    parent table holds.
+    """
+
+    note_base: "models.OneToOneField[_IdxMtiNoteBase | Combinable, _IdxMtiNoteBase]" = (
+        models.OneToOneField(
+            _IdxMtiNoteBase,
+            on_delete=models.CASCADE,
+            parent_link=True,
+            primary_key=True,
+        )
+    )
+    content_type: "models.ForeignKey[ContentType | Combinable, ContentType]" = models.ForeignKey(
+        ContentType,
+        on_delete=models.CASCADE,
+        related_name="+",
+    )
+    object_id: "models.PositiveIntegerField[float | int | str | Combinable, int]" = (
+        models.PositiveIntegerField()
+    )
+    content_object = GenericForeignKey("content_type", "object_id")
+    base_object = GenericForeignKey("base_content_type", "object_id")
+    rank: "models.IntegerField[float | int | str | Combinable, int]" = models.IntegerField(
+        default=0,
+    )
+
+    # basedpyright: Django's ModelBase pops a concrete model's Meta (only an abstract model keeps
+    # one), so _IdxMtiNoteBase has no Meta at run time for this one to subclass
+    class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        app_label = "tests"
+        managed = False
+
+
+class _IdxMtiNoteHolder(models.Model):
+    """Parent whose ``GenericRelation`` fields target the multi-table child's two generic links."""
+
+    notes = GenericRelation(_IdxMtiNote)
+    base_notes = GenericRelation(_IdxMtiNote, content_type_field="base_content_type")
+
+    class Meta:
+        app_label = "tests"
+        managed = False
+
+
+class _IdxChildBareProxy(_IdxChildBare):
+    """Proxy over ``_IdxChildBare``: its query's base table is the concrete model's."""
+
+    # basedpyright: Django's ModelBase pops a concrete model's Meta (only an abstract model keeps
+    # one), so _IdxChildBare has no Meta at run time for this one to subclass
+    class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        app_label = "tests"
+        proxy = True
+
+
 def _meta(model: type[models.Model]) -> "Options[models.Model]":
     """``model``'s options read through the model base, as the planner holds them."""
     return model._meta
@@ -692,12 +835,13 @@ class TestEveryBackendSupportsIndexColumnOrdering:
 
 
 class TestConcreteOrderTerms:
-    """``_concrete_order_terms`` is tri-state: full terms, or ``None`` when any is not local.
+    """``_concrete_order_terms`` is tri-state: full terms, or ``None`` when any is off the table.
 
-    The fail-soft tri-state lives in ORDER parsing: any term
-    that is not a local concrete ``(attname, direction)`` (a related span, an
-    expression, an alias, an unresolvable name) makes the SQL order only
-    partially understood, so the helper returns ``None`` and the advisory stays
+    The fail-soft tri-state lives in ORDER parsing: any term that is not a
+    ``(attname, direction)`` on the child's own table (a related span through a
+    join, a column a multi-table-inheritance child inherits, an expression, an alias, an
+    unresolvable name) makes the SQL order only partially understood by any
+    child-table index, so the helper returns ``None`` and the advisory stays
     silent rather than claim a false coverage from the remaining suffix.
     """
 
@@ -709,7 +853,7 @@ class TestConcreteOrderTerms:
         ]
 
     def test_related_span_lookup_is_unknown(self) -> None:
-        """A ``__``-spanning lookup is not a local concrete column -> ``None`` (unknown)."""
+        """A ``__`` span resolved through a join is not a child-table column -> ``None``."""
         assert _concrete_order_terms(["parent__title", "id"], _IdxChildBare) is None
 
     def test_expression_entry_is_unknown(self) -> None:
@@ -732,6 +876,41 @@ class TestConcreteOrderTerms:
         """A column repeated in the order is emitted once (first direction wins)."""
         assert _concrete_order_terms(["title", "title"], _IdxChildBare) == [("title", False)]
 
+    def test_pk_name_reads_as_the_pk_column(self) -> None:
+        """``"pk"`` is the column the window orders by: the model's pk attname."""
+        assert _concrete_order_terms(["title", "-pk"], _IdxChildBare) == [
+            ("title", False),
+            ("id", True),
+        ]
+
+    def test_multi_table_child_reads_its_own_columns(self) -> None:
+        """On a multi-table child ``pk`` and the inherited ``id`` both read as its parent link."""
+        assert _concrete_order_terms(["lname", "-id", "pk"], _IdxMtiChild) == [
+            ("lname", False),
+            ("base_id", True),
+        ]
+
+    @pytest.mark.parametrize(
+        ("model", "order_by"),
+        [
+            pytest.param(_IdxMtiChild, ["name", "base_id"], id="inherited"),
+            pytest.param(_IdxMtiChild, ["-name", "-base_id"], id="inherited-desc"),
+            pytest.param(_IdxMtiChild, ["lname", "name", "base_id"], id="inherited-second"),
+            pytest.param(_IdxMtiChild, ["name", "lname", "base_id"], id="inherited-first"),
+            pytest.param(_IdxMtiChild, ["name", "id"], id="inherited-then-pk-name"),
+            pytest.param(_IdxMtiChild, ["code"], id="inherited-unique-terminal"),
+            pytest.param(_IdxMtiGrandchild, ["lname", "child_id"], id="middle-table"),
+            pytest.param(_IdxMtiGrandchild, ["name", "child_id"], id="root-table"),
+        ],
+    )
+    def test_inherited_column_is_unknown(
+        self,
+        model: type[models.Model],
+        order_by: list[str],
+    ) -> None:
+        """A column a multi-table child inherits lives on a parent table -> ``None``."""
+        assert _concrete_order_terms(order_by, model) is None
+
     def test_nulls_first_placement_is_unknown(self) -> None:
         """An ``OrderBy`` with explicit ``nulls_first`` is not index-provable -> ``None``.
 
@@ -753,6 +932,12 @@ class TestConcreteOrderTerms:
 
 class TestIndexCoverage:
     """``_index_coverage`` is tri-state: covered / absent / unknown."""
+
+    def test_inherited_field_indexes_are_not_child_shapes(self) -> None:
+        """A multi-table child's shapes are its own table's; the parent's pk and unique are not."""
+        shapes, saw_uninspectable = nested_planner._model_index_shapes(_meta(_IdxMtiChild))
+        assert shapes == [[("base_id", False)], [("holder_id", False)]]
+        assert not saw_uninspectable
 
     def test_composite_index_covers(self) -> None:
         """The composite index's leading columns satisfy the full shape."""
@@ -1261,12 +1446,14 @@ def _relation(
     return model._meta.get_field(name)
 
 
-class TestWindowPartitionField:
-    """``_window_partition_field`` resolves the window's own partition column and its table.
+class TestWindowColumn:
+    """``_window_column`` resolves a window reference, keeping only a child-table column.
 
-    Each row classifies a real relation and resolves its ``partition_expr``
-    against the child model the way the window's ``PARTITION BY`` does; the
-    owning table is what decides whether one index can serve the page.
+    Each relation row classifies a real relation and resolves its
+    ``partition_expr`` against the child model the way the window's
+    ``PARTITION BY`` does; the owning table is what decides whether one index can
+    serve the page, so the helper returns the column only when that table is the
+    child's. The reference rows resolve order names the way ``ORDER BY`` does.
     """
 
     @pytest.mark.parametrize(
@@ -1346,24 +1533,68 @@ class TestWindowPartitionField:
         owner_table: str,
         attname: str,
     ) -> None:
-        """The resolved column is a ``Col`` target on the table that holds it."""
+        """The partition resolves to a ``Col`` on its owner table, kept only on the child's."""
         field = _relation(model, name)
         join = classify_relation_join(field)
         assert join.windowable
-        assert field.related_model is not None
+        related_model = field.related_model
+        assert related_model is not None
         assert join.partition_expr is not None
-        assert isinstance(Query(field.related_model).resolve_ref(join.partition_expr), Col)
-        partition_field = nested_planner._window_partition_field(
-            field.related_model,
-            join.partition_expr,
-        )
-        assert partition_field is not None
-        assert partition_field.model._meta.db_table == owner_table
-        assert partition_field.attname == attname
+        resolved = Query(related_model).resolve_ref(join.partition_expr)
+        assert isinstance(resolved, Col)
+        assert resolved.target.model._meta.db_table == owner_table
+        assert resolved.target.attname == attname
+        partition_field = nested_planner._window_column(related_model, join.partition_expr)
+        if owner_table == related_model._meta.db_table:
+            assert partition_field is not None
+            assert partition_field.attname == attname
+        else:
+            assert partition_field is None
+
+    @pytest.mark.parametrize(
+        ("model", "ref", "attname"),
+        [
+            pytest.param(_IdxMtiChild, "lname", "lname", id="child-column"),
+            pytest.param(_IdxMtiChild, "holder", "holder_id", id="child-foreign-key"),
+            pytest.param(_IdxMtiChild, "name", None, id="inherited-column"),
+            pytest.param(_IdxMtiChild, "id", "base_id", id="inherited-pk-name"),
+            pytest.param(_IdxMtiChild, "pk", "base_id", id="pk-alias"),
+            pytest.param(_IdxMtiGrandchild, "lname", None, id="middle-table-column"),
+            pytest.param(_IdxMtiGrandchild, "base", "child_id", id="middle-table-parent-link"),
+            pytest.param(_IdxMtiNote, "content_type", "content_type_id", id="child-morph"),
+            pytest.param(_IdxMtiNote, "base_content_type", None, id="inherited-morph"),
+            pytest.param(Book, "shelf__id", "shelf_id", id="span-trimmed-to-local-column"),
+            pytest.param(Book, "shelf__code", None, id="span-through-join"),
+            pytest.param(ScalarSpecimen, "children", None, id="self-relation-second-alias"),
+            pytest.param(RpCompositeParent, "pk", None, id="composite-pk-column-pair"),
+            pytest.param(_IdxChildBareProxy, "title", "title", id="proxy"),
+        ],
+    )
+    def test_reference_resolves_on_the_child_table(
+        self,
+        model: type[models.Model],
+        ref: str,
+        attname: str | None,
+    ) -> None:
+        """An order or morph reference keeps its column only on the child's own table."""
+        column = nested_planner._window_column(model, ref)
+        assert (column.attname if column is not None else None) == attname
 
     def test_unresolvable_expression_is_none(self) -> None:
         """A name the child model cannot resolve returns ``None`` instead of raising."""
-        assert nested_planner._window_partition_field(Book, "no_such_relation") is None
+        assert nested_planner._window_column(Book, "no_such_relation") is None
+
+
+def _composite_index_advisories(
+    relation: models.Field[object, object] | models.ForeignObjectRel,
+    order_by: list[str],
+    caplog: pytest.LogCaptureFixture,
+) -> list[str]:
+    """The composite-index advisories ``relation``'s window ordered by ``order_by`` logs."""
+    caplog.set_level("DEBUG", logger=optimizer_logger.name)
+    assert relation.related_model is not None
+    _advise_composite_index(relation.related_model, classify_relation_join(relation), order_by)
+    return [r.getMessage() for r in caplog.records if "composite index" in r.getMessage()]
 
 
 class TestAdvisoryReadsThePartitionColumn:
@@ -1374,10 +1605,6 @@ class TestAdvisoryReadsThePartitionColumn:
     through table, a multi-table-inheritance parent) leaves no child-table index
     that serves the page, so the advisory stays silent there.
     """
-
-    @staticmethod
-    def _advisories(caplog: pytest.LogCaptureFixture) -> list[str]:
-        return [r.getMessage() for r in caplog.records if "composite index" in r.getMessage()]
 
     @override_settings(DEBUG=True)
     @pytest.mark.parametrize(
@@ -1427,11 +1654,7 @@ class TestAdvisoryReadsThePartitionColumn:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """A partition column on the child's table leads the recommended composite."""
-        caplog.set_level("DEBUG", logger=optimizer_logger.name)
-        field = _relation(model, name)
-        assert field.related_model is not None
-        _advise_composite_index(field.related_model, classify_relation_join(field), order_by)
-        advisories = self._advisories(caplog)
+        advisories = _composite_index_advisories(_relation(model, name), order_by, caplog)
         assert len(advisories) == 1
         assert f"composite index on {columns} " in advisories[0]
 
@@ -1459,11 +1682,152 @@ class TestAdvisoryReadsThePartitionColumn:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """A partition column off the child's table: no child-table index serves the page."""
-        caplog.set_level("DEBUG", logger=optimizer_logger.name)
-        field = _relation(model, name)
-        assert field.related_model is not None
-        _advise_composite_index(field.related_model, classify_relation_join(field), order_by)
-        assert not self._advisories(caplog)
+        assert not _composite_index_advisories(_relation(model, name), order_by, caplog)
+
+
+def _reverse_relation(model: type[models.Model], name: str) -> models.ForeignObjectRel:
+    """The reverse relation a parent's to-many connection classifies for ``model.name``.
+
+    Read off the forward foreign key: the unmanaged ``tests`` models belong to no
+    installed app, so Django never lists the reverse relation on the parent's
+    ``_meta``.
+    """
+    field = model._meta.get_field(name)
+    assert isinstance(field, models.ForeignKey)
+    return field.remote_field
+
+
+class TestAdvisoryReadsChildTableColumns:
+    """Every column the recommended index names lives on the child's table, or it stays silent.
+
+    A multi-table-inheritance child that declares its own partition column can
+    still order by a column it inherits; that column lives on a parent table,
+    and Django's ``models.E016`` check refuses any child index naming it, so no
+    child-table index serves the page and the advisory stays silent. Its own
+    columns, its pk (as ``pk`` or the inherited pk name, both its parent link
+    column) and the generic link columns it declares still get the exact
+    recommendation. A generic link whose content-type column sits on the parent
+    table is silent the same way.
+    """
+
+    @override_settings(DEBUG=True)
+    @pytest.mark.parametrize(
+        ("relation", "order_by", "columns"),
+        [
+            pytest.param(
+                _reverse_relation(_IdxMtiChild, "holder"),
+                ["lname", "base_id"],
+                "(holder_id, lname, base_id)",
+                id="mti-child-column",
+            ),
+            pytest.param(
+                _reverse_relation(_IdxMtiChild, "holder"),
+                ["lname", "id"],
+                "(holder_id, lname, base_id)",
+                id="mti-inherited-pk-name",
+            ),
+            pytest.param(
+                _reverse_relation(_IdxMtiChild, "holder"),
+                ["-pk"],
+                "(holder_id, base_id DESC)",
+                id="mti-pk-alias",
+            ),
+            pytest.param(
+                _reverse_relation(_IdxMtiGrandchild, "keeper"),
+                ["gname", "child_id"],
+                "(keeper_id, gname, child_id)",
+                id="mti-grandchild-column",
+            ),
+            pytest.param(
+                _relation(_IdxMtiNoteHolder, "notes"),
+                ["rank", "note_base_id"],
+                "(content_type_id, object_id, rank, note_base_id)",
+                id="mti-child-generic-link",
+            ),
+            pytest.param(
+                _relation(Shelf, "books"),
+                ["title", "pk"],
+                "(shelf_id, title, id)",
+                id="pk-alias",
+            ),
+        ],
+    )
+    def test_child_table_columns_recommend_exact_columns(
+        self,
+        relation: models.Field[object, object] | models.ForeignObjectRel,
+        order_by: list[str],
+        columns: str,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Columns all on the child's table: the recommendation names them as the SQL does."""
+        advisories = _composite_index_advisories(relation, order_by, caplog)
+        assert len(advisories) == 1
+        assert f"composite index on {columns} " in advisories[0]
+
+    @override_settings(DEBUG=True)
+    @pytest.mark.parametrize(
+        ("relation", "order_by"),
+        [
+            pytest.param(
+                _reverse_relation(_IdxMtiChild, "holder"),
+                ["name", "base_id"],
+                id="inherited",
+            ),
+            pytest.param(
+                _reverse_relation(_IdxMtiChild, "holder"),
+                ["-name", "-base_id"],
+                id="inherited-desc",
+            ),
+            pytest.param(
+                _reverse_relation(_IdxMtiChild, "holder"),
+                ["lname", "name", "base_id"],
+                id="inherited-second",
+            ),
+            pytest.param(
+                _reverse_relation(_IdxMtiChild, "holder"),
+                ["name", "-lname", "base_id"],
+                id="inherited-first-mixed-direction",
+            ),
+            pytest.param(
+                _reverse_relation(_IdxMtiChild, "holder"),
+                ["name", "id"],
+                id="keyset-cursor-field",
+            ),
+            pytest.param(
+                _reverse_relation(_IdxMtiChild, "holder"),
+                ["code"],
+                id="inherited-unique-terminal",
+            ),
+            pytest.param(
+                _reverse_relation(_IdxMtiGrandchild, "keeper"),
+                ["lname", "child_id"],
+                id="grandchild-middle-table",
+            ),
+            pytest.param(
+                _reverse_relation(_IdxMtiGrandchild, "keeper"),
+                ["gname", "name", "child_id"],
+                id="grandchild-root-table",
+            ),
+            pytest.param(
+                _relation(_IdxMtiNoteHolder, "notes"),
+                ["label", "note_base_id"],
+                id="generic-link-inherited-order",
+            ),
+            pytest.param(
+                _relation(_IdxMtiNoteHolder, "base_notes"),
+                ["rank", "note_base_id"],
+                id="generic-link-inherited-content-type",
+            ),
+        ],
+    )
+    def test_off_table_column_is_silent(
+        self,
+        relation: models.Field[object, object] | models.ForeignObjectRel,
+        order_by: list[str],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A column on a parent table: no child-table index serves the page."""
+        assert not _composite_index_advisories(relation, order_by, caplog)
 
 
 @pytest.mark.django_db

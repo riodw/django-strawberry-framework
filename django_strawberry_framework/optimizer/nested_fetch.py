@@ -49,14 +49,16 @@ Nested connection indexing
 --------------------------
 Both the windowed and lateral strategies partition each parent's children by the
 window's partition column and order them by the deterministic connection order,
-so when the partition column lives on the child's own table the database serves
-each page fastest from a composite index whose leading columns mirror
-``(partition column, order columns..., pk)``. An M2M partitions by the through
-table's parent foreign key while ordering by the related model's columns, so no
-single index serves a page whose order names a related-model column besides the
-pk (a pk-only order is the link itself, which a through-table index leading
-``(parent_fk, child_fk)`` can serve); a multi-table-inheritance child that
-inherits its partition column from a parent table is cross-table the same way.
+so the database serves each page fastest from a composite index whose leading
+columns mirror ``(partition column, order columns..., pk)`` (a
+``GenericRelation`` leads with its content-type column), which one index can
+hold only when every one of those columns lives on the child's own table. An M2M
+partitions by the through table's parent foreign key while ordering by the
+related model's columns, so no single index serves a page whose order names a
+related-model column besides the pk (a pk-only order is the link itself, which a
+through-table index leading ``(parent_fk, child_fk)`` can serve); a
+multi-table-inheritance child that inherits any of those columns from a parent
+table is cross-table the same way.
 For a keyset connection the composite mirrors ``keyset.py::keyset_seek_q``'s
 redundant-leading-bound design (the same leading columns the seek predicate
 compares). The planner emits a dev-mode advisory

@@ -803,6 +803,33 @@ def test_choice_field_admitting_every_column_value_keeps_read_enum(
     assert _enum_of(_field_map(cre)["circulation_status"]) is read_enum
 
 
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "stored",
+    [
+        pytest.param(["available", "repair"], id="rows-matching-two-values"),
+        pytest.param([], id="no-rows"),
+    ],
+)
+def test_model_choice_field_over_scalar_choice_column_keeps_read_enum(stored: list[str]) -> None:
+    """A ``ModelChoiceField`` over a scalar choice column publishes the column's read enum.
+
+    Its choices are the rows of its queryset, read per request, so no row set at build
+    narrows the input: whichever ``Genre`` rows exist (two whose ``to_field_name`` values
+    the column lists, or none), ``Book.circulation_status`` keeps its read enum and the
+    bound form resolves the value against its queryset at request time.
+    """
+    for name in stored:
+        Genre.objects.create(name=name)
+    column = library_models.Book._meta.get_field("circulation_status")
+    assert isinstance(column, models.Field)
+    read_enum = convert_choices_to_enum(column, "BookType")
+    status_field = forms.ModelChoiceField(queryset=Genre.objects.all(), to_field_name="name")
+    cre, _, par, _ = build_form_inputs(_book_status_form(status_field), operation_kind=CREATE)
+    assert _enum_of(_field_map(cre)["circulation_status"]) is read_enum
+    assert _enum_of(_field_map(par)["circulation_status"]) is read_enum
+
+
 @pytest.mark.parametrize(
     ("required", "members"),
     [(False, ["BLANK", "good", "worn"]), (True, ["good", "worn"])],

@@ -1015,7 +1015,13 @@ writes a list); a field admitting no non-empty value the column lists is a
 passes the form). The input is built once, at schema
 build, from the field basis, so callable choices (re-evaluated on every read) and choices
 assigned in `__init__` are request-time state: they keep the column's enum and the bound form
-refuses a value outside its request-time choices. A **plain
+refuses a value outside its request-time choices. A `ModelChoiceField` keeps the column's
+type too, even over a scalar choice column: its choices are its queryset's rows, read per
+request. The narrowing covers the values a client sends; a partial update validates an
+omitted narrowed field's stored value (reconstructed from the row, Decision 8) against the
+form's choices, as Django's form does, so a row holding a value the form does not admit
+cannot be partially updated through that form (a field-keyed `invalid_choice` error,
+nothing written) until the request sends an admitted replacement. A **plain
 `Form`** field with no model column (a `captcha`, a `confirm_email`) has no read-side
 equivalent and necessarily uses the form-field → Strawberry table in
 [`forms/converter.py`][forms-converter] — which is therefore genuinely net-new
@@ -1747,6 +1753,10 @@ Rationale companion: [Decision 14][rationale-d14].
   one admitting none of the column's non-empty values, or a `MultipleChoiceField` over a
   single-value choice column,
   is a schema-build `ConfigurationError`.
+  A partial update validates an omitted narrowed field's stored value against the form's
+  choices, as Django's form does: a row holding a value the form does not admit (a
+  `checked_out` book through `BookRepairDeskForm`) is refused field-keyed with nothing
+  written unless the request sends an admitted value.
 - **Relation visibility is not delegated to the form's queryset.** A
   `ModelChoiceField`'s default queryset is `Category.objects.all()` (not
   request-scoped), so the decode type- and visibility-checks the id through the
@@ -1866,7 +1876,9 @@ behavior reachable through `/graphql/`, package tests own internals.
   (`ok: false`, field-keyed `errors`) shapes, and the deny-by-default plain form
   (`submitPing`, top-level denial). **Narrowed choice field** — `updateBookAtRepairDeskViaForm`
   publishes only the two `circulationStatus` members `BookRepairDeskForm` admits, `repair`
-  writes, and `checked_out` is an enum-coercion error with no write. **Omitted
+  writes, and `checked_out` is an enum-coercion error with no write; an input omitting
+  `circulationStatus` on a stored `checked_out` book is the form's field-keyed
+  `invalid_choice` error with no `UPDATE`, and on a stored `available` book it saves. **Omitted
   relation over a `to_field` key** — an `updatePatronProfileViaForm` that omits
   `favoriteGenreId` keeps the stored genre name, including when that name is another
   genre's id; an unset genre stays unset, a genre replaces it and `null` clears it.

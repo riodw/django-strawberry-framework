@@ -990,6 +990,71 @@ def test_a_related_filter_target_is_matched_against_the_expansion_path_by_identi
     assert calls == []
 
 
+@pytest.mark.parametrize("relation", ["parent", "children"])
+def test_a_self_referential_related_filter_ends_its_path_one_step_after_the_set(
+    relation: str,
+) -> None:
+    """A set whose ``RelatedFilter`` targets the set itself publishes the target's filters once.
+
+    The root is already on the path when its own declaration expands, so the
+    target contributes its unexpanded filters, its ``RelatedFilter`` head included,
+    and the path ends there.
+    """
+    self_referential = type(
+        "SelfReferentialSpecimenFilter",
+        (FilterSet,),
+        {
+            relation: RelatedFilter(lambda: self_referential, field_name=relation),
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": scalar_models.ScalarSpecimen, "fields": {"label": ["exact"]}},
+            ),
+        },
+    )
+
+    assert set(self_referential.get_filters()) == {
+        "label",
+        relation,
+        f"{relation}__label",
+        f"{relation}__{relation}",
+    }
+
+
+def test_a_related_filter_target_off_the_path_contributes_its_own_get_filters() -> None:
+    """A target whose declarations reach no set on the path copies its own ``get_filters()``.
+
+    The target expands as it does alone, so a filter a consumer ``get_filters``
+    override adds is published under the declaring set's relation too.
+    """
+
+    class OverridingShelfFilter(FilterSet):
+        @classmethod
+        @override
+        def get_filters(cls) -> OrderedDict[str, Filter]:
+            filters = OrderedDict(super().get_filters())
+            filters["extra"] = CharFilter(field_name="topic", lookup_expr="icontains")
+            return filters
+
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class OverriddenTargetBranchFilter(FilterSet):
+        shelves = RelatedFilter(OverridingShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    assert set(OverriddenTargetBranchFilter.get_filters()) == {
+        "name",
+        "shelves",
+        "shelves__code",
+        "shelves__extra",
+    }
+
+
 # ---------------------------------------------------------------------------
 # _get_fields override
 # ---------------------------------------------------------------------------

@@ -654,8 +654,10 @@ def _form_choice_narrowing(
     no list is a value the column lists. A field admitting no non-empty value the column lists
     is refused: its input could carry at most the empty value (where the column lists ``""``
     and the form admits it), and every other value fails validation. A column without choices, a
-    relation or file column (even one declaring choices), a non-choice form field and a
-    single-value ``ChoiceField`` over an ``ArrayField`` keep the column's type.
+    relation or file column (even one declaring choices), a non-choice form field, a
+    ``ModelChoiceField`` (its choices are its queryset's rows, read per request, even over a
+    scalar choice column) and a single-value ``ChoiceField`` over an ``ArrayField`` keep the
+    column's type.
     """
     if not isinstance(field, forms.ChoiceField) or isinstance(field, forms.ModelChoiceField):
         return None

@@ -11171,6 +11171,73 @@ def test_update_book_at_repair_desk_publishes_only_the_form_choices_over_http() 
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("stored", "refused"),
+    [
+        pytest.param(models.Book.CirculationStatus.CHECKED_OUT, True, id="outside-the-form"),
+        pytest.param(models.Book.CirculationStatus.AVAILABLE, False, id="admitted-by-the-form"),
+    ],
+)
+def test_update_book_at_repair_desk_validates_the_omitted_stored_choice_over_http(
+    *,
+    stored: str,
+    refused: bool,
+) -> None:
+    """A partial update validates the omitted choice field's stored value against the form.
+
+    The omitted ``circulationStatus`` is rebuilt from the stored row and the bound form
+    validates it, as Django's form does: a stored ``checked_out`` (outside the two values
+    ``BookRepairDeskForm`` admits) refuses the update field-keyed with no ``UPDATE`` run, and
+    a stored ``available`` saves unchanged.
+    """
+    book = models.Book.objects.create(
+        title="DeskOmittedBook",
+        shelf=_seed_shelf(),
+        circulation_status=stored,
+    )
+    invalid = "Select a valid choice. checked_out is not one of the available choices."
+
+    with CaptureQueriesContext(connection) as captured:
+        _assert_graphql_data(
+            _UPDATE_BOOK_AT_REPAIR_DESK,
+            {
+                "updateBookAtRepairDeskViaForm": {
+                    "node": None,
+                    "errors": [
+                        {"field": "circulationStatus", "messages": [invalid]},
+                    ],
+                }
+                if refused
+                else {"node": {"circulationStatus": stored}, "errors": []},
+            },
+            variables={"id": global_id_for(library_schema.BookType, book.pk), "d": {}},
+        )
+    # The located row is read once; a refused form writes nothing and rolls its savepoint back.
+    assert [query["sql"].split()[0] for query in captured.captured_queries] == (
+        [
+            "SAVEPOINT",
+            "SAVEPOINT",
+            "SELECT",
+            "ROLLBACK",
+            "RELEASE",
+            "RELEASE",
+        ]
+        if refused
+        else [
+            "SAVEPOINT",
+            "SAVEPOINT",
+            "SELECT",
+            "UPDATE",
+            "SELECT",
+            "RELEASE",
+            "RELEASE",
+        ]
+    )
+    book.refresh_from_db()
+    assert book.circulation_status == stored
+
+
+@pytest.mark.django_db
 def test_update_book_via_form_partial_update_preserves_optional_nullable_scalar_over_http() -> (
     None
 ):

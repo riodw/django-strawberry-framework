@@ -1486,7 +1486,9 @@ class UpdateBookAtRepairDeskViaForm(DjangoModelFormMutation):
 
     The form's ``circulation_status`` admits ``available`` / ``repair`` only, so the
     partial input publishes ``BookRepairDeskFormPartialInputCirculationStatusEnum`` with those
-    two members; ``checked_out`` is refused by enum coercion before the form runs.
+    two members; ``checked_out`` is refused by enum coercion before the form runs. An omitted
+    ``circulationStatus`` is rebuilt from the stored row, so the form refuses a partial update
+    of a ``checked_out`` book.
     """
 
     class Meta:

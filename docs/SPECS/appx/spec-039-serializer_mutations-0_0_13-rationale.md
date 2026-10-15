@@ -268,11 +268,13 @@ choices inside that contract each reject a plausible weaker alternative:
   could reach back through reopens the bypass the frozen view closes.
 
 The save runs in its own savepoint and maps `DRFValidationError`, Django
-`ValidationError` and `IntegrityError` to the envelope outside that atomic block, through
-the shared `utils/errors.py::integrity_error_field_errors` leaf rather than the `036`
-`save_or_field_errors` wrapper: the savepoint rolls back a custom `save()` that wrote rows
-and then raised before the error is converted, and catching outside the block is what
-clears the connection's `needs_rollback` flag. `_pin_validator_querysets` shallow-copies
+`ValidationError` and `IntegrityError` to the envelope outside that atomic block: the
+savepointed closure is handed to the `036` `save_or_field_errors` wrapper, which maps the
+Django `ValidationError` and the `IntegrityError` as it does for every flavor, while the
+`DRFValidationError` passes through it to the serializer's own `except`. The savepoint
+rolls back a custom `save()` that wrote rows and then raised before the error is
+converted, and catching outside the block is what clears the connection's
+`needs_rollback` flag. `_pin_validator_querysets` shallow-copies
 each queryset-backed validator per serializer instance before pinning it to the write
 alias, because DRF shares validator objects across serializer instances and concurrent
 requests would otherwise reroute one another's validators.

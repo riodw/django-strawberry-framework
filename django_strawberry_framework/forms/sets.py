@@ -1150,8 +1150,10 @@ class DjangoFormMutation(_FormMutationBase, metaclass=DjangoFormMutationMetaclas
         ``forms.Form`` does not by default), else a no-op. A consumer overrides this
         to perform the model-less side effect (send an email, enqueue a job, write
         an audit row); the pipeline wraps the call in ``save_or_field_errors`` so a
-        post-validation ``IntegrityError`` returns the ``{ ok: false }`` envelope,
-        never a top-level error. The ``ModelForm`` flavor writes via ``form.save()``
+        post-validation ``IntegrityError``, or a Django ``ValidationError`` the
+        override raises (keyed by form field name), returns the ``{ ok: false }``
+        envelope with every write rolled back, never a top-level error. Any other
+        exception propagates. The ``ModelForm`` flavor writes via ``form.save()``
         directly (it has a real model save), so this hook is plain-flavor only.
         """
         del info

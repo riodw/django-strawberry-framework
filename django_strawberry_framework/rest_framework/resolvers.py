@@ -85,11 +85,12 @@ The serializer-specific invariants this module owns:
   envelope, so a custom ``save()`` that wrote rows then raised leaves NO partial
   write. Routing is by exception CLASS, all caught OUTSIDE the atomic
   block: a DRF ``serializers.ValidationError``'s ``.detail`` -> the recursive
-  flattener; a Django ``ValidationError`` -> the flat ``036`` mapper
-  (``error_dict`` / ``messages``, NEVER ``.detail``), its model-side names
-  (``spec.source or spec.target_name``) re-keyed to the GraphQL input names; an
-  ``IntegrityError`` -> the shared ``036`` integrity mapper - three separate ``except`` branches (DRF
-  first), never a top-level ``GraphQLError``.
+  flattener; a Django ``ValidationError`` and an ``IntegrityError`` -> the shared
+  ``036`` ``save_or_field_errors`` wrapper every flavor's save rides (the flat
+  mapper over ``error_dict`` / ``messages``, NEVER ``.detail``, its model-side
+  names - ``spec.source or spec.target_name`` - re-keyed to the GraphQL input
+  names through ``save_time_error_key_map``; the integrity mapper), never a
+  top-level ``GraphQLError``.
 
 - **The re-fetch rides the ``036`` ``refetch_optimized`` G2 path** (spec-039 Decision 9 /
   G2): the shared skeleton re-fetches the saved object by pk WITHOUT the visibility
@@ -103,9 +104,10 @@ The serializer-specific invariants this module owns:
   to, so the three flavors cannot drift on the boundary contract.
 
 Single-sourced: the locate / authorize / id-decode / re-fetch / payload / atomic
-boundary are the promoted ``036`` skeleton; the flat Django save-time mapper, the
+boundary are the promoted ``036`` skeleton; the shared save-time wrapper
+(``save_or_field_errors``: the flat Django mapper + the integrity mapper), the
 shared ``field_error`` leaf ctor, the ``NON_FIELD_ERROR_KEY`` sentinel, the
-shared ``036`` integrity mapper, the raw-pk coercion, and the
+raw-pk coercion, and the
 object-returning ``visible_related_object`` visibility query are all CALLED, not
 re-implemented (the spec-039 import manifest). The genuinely net-new code is the
 serializer-field-keyed relation decoder and the recursive serializer-error
@@ -126,10 +128,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 from django.core.exceptions import FieldDoesNotExist
-from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files import File
-from django.db import IntegrityError, transaction
-from django.db.models import Field as DjangoModelField
+from django.db import transaction
 from django.db.models.signals import post_save, pre_save
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError as DRFValidationError
@@ -146,6 +146,7 @@ from django_strawberry_framework.mutations.resolvers import (
     StepFailure,
     make_resolver_entries,
     run_write_pipeline_sync,
+    save_or_field_errors,
 )
 from django_strawberry_framework.mutations.sets import backing_model_of
 from django_strawberry_framework.utils._narrowing import (
@@ -161,11 +162,9 @@ from django_strawberry_framework.utils.errors import (
     build_error_key_map,
     empty_validation_error,
     field_error,
-    integrity_error_field_errors,
     join_error_path,
-    model_field_error_names,
     rekey_error_segment,
-    validation_error_to_field_errors,
+    save_time_error_key_map,
 )
 from django_strawberry_framework.utils.inputs import optional_input_field
 from django_strawberry_framework.utils.permissions import request_from_info
@@ -2466,14 +2465,14 @@ def _serializer_write_step(
     failure - with the savepoint rolled back first, so a failed save leaves no
     partial write.
 
-    A save-time failure routes by exception CLASS in THREE separate
-    ``except`` branches (DRF first), all caught OUTSIDE the atomic block: a DRF
-    ``serializers.ValidationError``'s ``.detail`` -> the recursive flattener; a
-    Django ``ValidationError`` -> the flat ``036`` mapper (``error_dict`` /
-    ``messages``, never ``.detail``) keyed through ``_save_time_error_key_map``; an
-    ``IntegrityError`` -> the shared ``036`` integrity mapper - never a top-level
-    ``GraphQLError`` at the write. Every validation branch builds its key map on
-    that failure path only; a successful write never builds one.
+    A save-time failure routes by exception CLASS, all caught OUTSIDE the atomic
+    block: a DRF ``serializers.ValidationError``'s ``.detail`` -> the recursive
+    flattener; a Django ``ValidationError`` / an ``IntegrityError`` -> the shared
+    ``save_or_field_errors`` wrapper every flavor's save rides (the flat ``036``
+    mapper over ``error_dict`` / ``messages``, never ``.detail``, keyed through
+    ``utils/errors.py::save_time_error_key_map``; the integrity mapper) - never a
+    top-level ``GraphQLError`` at the write. Every validation branch builds its key
+    map on that failure path only; a successful write never builds one.
     """
     # Class validation gated ``Meta.serializer_class`` to a ``ModelSerializer`` subclass.
     serializer_class = cast("type[DRFSerializer]", mutation_cls._mutation_meta.serializer_class)
@@ -2654,9 +2653,18 @@ def _guarded_serializer_write(
     # ``needs_rollback``, and only the enclosing atomic's own savepoint rollback
     # clears that flag; a manual savepoint (or a catch INSIDE the block) would
     # leave the transaction refusing every subsequent statement.
-    try:
+    def _savepointed_save() -> None:
         with transaction.atomic(using=alias):
             _do_save()
+
+    try:
+        write_error = save_or_field_errors(
+            _savepointed_save,
+            error_key_map=lambda: save_time_error_key_map(
+                mutation_cls._input_field_specs,
+                backing_model_of(mutation_cls._mutation_meta),
+            ),
+        )
     except DRFValidationError as exc:
         return StepFailure(
             serializer_errors_to_field_errors(
@@ -2664,12 +2672,8 @@ def _guarded_serializer_write(
                 build_error_key_map(mutation_cls._input_field_specs),
             ),
         )
-    except DjangoValidationError as exc:
-        return StepFailure(
-            validation_error_to_field_errors(exc, _save_time_error_key_map(mutation_cls)),
-        )
-    except IntegrityError:
-        return StepFailure(integrity_error_field_errors())
+    if write_error is not None:
+        return StepFailure(write_error)
     # The saved result is validated BEFORE the pipeline re-fetches / trusts it: correct model,
     # DRF save-bookkeeping identity, non-null pk, pinned alias, witnessed pk-snapshotted
     # INSERT on create, and - on update - the pre-hook authorized-pk snapshot.
@@ -2688,37 +2692,6 @@ def _guarded_serializer_write(
         relation_keys=relation_keys,
     )
     return saved
-
-
-def _save_time_error_key_map(mutation_cls: type[SerializerMutation]) -> ErrorKeyMap:
-    """Build the key map for a Django ``ValidationError`` raised during ``serializer.save()``.
-
-    A Django error raised by custom ``create()`` / ``update()`` / model code keys by
-    MODEL field name, which is the serializer field's ``source`` when it declares one
-    (``full_name = CharField(source="name")``) and its declared name otherwise, so the
-    keys are ``model_field_error_names`` of the backing model field named
-    ``spec.source or spec.target_name`` (``category`` and ``category_id`` for a
-    forward relation); a name with no concrete model field behind it keys by itself.
-    No two specs share a model field (the ownership check keys writable sources by
-    the attribute they resolve to, so ``category`` beside ``source="category_id"``
-    is rejected at class creation), so every name a spec lists is its own: a
-    ``category_ref = PrimaryKeyRelatedField(source="category")`` keys both
-    ``category`` and ``category_id`` to ``categoryRefId``. A model field no input
-    exposes keeps its name. Read only on this failure path.
-    """
-    model_meta = backing_model_of(mutation_cls._mutation_meta)._meta
-
-    def model_names(spec: InputFieldSpec) -> tuple[str, ...]:
-        name = spec.source or spec.target_name
-        try:
-            field = model_meta.get_field(name)
-        except FieldDoesNotExist:
-            return (name,)
-        names = model_field_error_names(field) if isinstance(field, DjangoModelField) else ()
-        # The spec's own source leads (its primary name); the field's other names follow.
-        return (name, *(other for other in names if other != name))
-
-    return build_error_key_map(mutation_cls._input_field_specs, keys_of=model_names)
 
 
 def _serializer_decode_step(

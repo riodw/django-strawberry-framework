@@ -54,7 +54,9 @@ class ItemModelForm(forms.ModelForm[Item]):
     reverse map). ``clean_name`` rejects ``REJECTED_ITEM_NAME`` so a field-level
     ``form.errors`` entry keys to ``name``; the model's ``unique_item_per_category``
     constraint surfaces automatically through ``_post_clean`` -> ``validate_constraints``
-    as a ``NON_FIELD_ERRORS`` entry the resolver maps to the ``"__all__"`` sentinel.
+    as a ``NON_FIELD_ERRORS`` entry the resolver maps to the ``"__all__"`` sentinel. A
+    ``models.SAVE_REJECTED_ITEM_NAME`` name passes validation and is refused by
+    ``Item.save()`` inside ``form.save()``: the save-time ``ValidationError`` case.
     """
 
     class Meta:

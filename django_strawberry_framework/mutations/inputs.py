@@ -146,12 +146,13 @@ class FieldError:
     Every flavor keys ``field`` to the GraphQL input field the client sent
     (``categoryId``, ``isPrivate``, a ``Meta.input_class`` rename), whether the
     error came from the input decode, ``serializer.errors``, or a validator
-    (``full_clean()``, ``form.errors``, a Django ``ValidationError`` raised during
-    a serializer save). A non-field error keys to the ``"__all__"`` sentinel. An
-    error on a field the input does not expose keeps its validator-side name (the
-    model, form or serializer field name), since there is no input field to
-    report; when an input renames a field onto such a name, two errors can share
-    one key. Defined here (spec-036 Decision 7) as the ONE
+    (``full_clean()``, ``form.errors``, a Django ``ValidationError`` raised by
+    save-time code: a ``save()`` / ``delete()`` override, a signal receiver,
+    ``perform_mutate`` or a serializer save). A non-field error keys to the
+    ``"__all__"`` sentinel. An error on a field the input does not expose keeps
+    its validator-side name (the model, form or serializer field name), since
+    there is no input field to report; when an input renames a field onto such a
+    name, two errors can share one key. Defined here (spec-036 Decision 7) as the ONE
     envelope member type: the form-based (0.0.12) and DRF-serializer / auth
     (0.0.13) flavors return this same class rather than a per-flavor mirror,
     so a client's error branch is written once. The type is ADDITIVE, not

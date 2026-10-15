@@ -19,7 +19,10 @@ wired in ``apps.products.schema`` end to end:
   anonymous and staff;
 * relation keys through a declared hop (``entriesId``, ``propertyId``)
   answering ``isNull`` and GlobalID membership over the rows the viewer
-  sees, a hidden related row answering like an absent one.
+  sees, a hidden related row answering like an absent one;
+* a save-time Django ``ValidationError`` from ``Item.save()`` / ``delete()``
+  answered by every ``Item`` write mutation (model, form, serializer) with the
+  ``name``-keyed ``FieldError`` envelope and nothing written.
 
 Form-mutation async colour uses a module-local ``/graphql-async/`` mount
 (``graphql_client.py`` is sync-only).
@@ -35,7 +38,7 @@ robust across Faker versions.
 import contextlib
 import json
 import string
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import NamedTuple
 
@@ -53,6 +56,8 @@ from django.conf import settings
 from django.contrib.auth.models import Permission, User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection, transaction
+from django.db.backends.base.base import BaseDatabaseWrapper
+from django.db.backends.signals import connection_created
 from django.db.models import QuerySet
 from django.http import HttpRequest
 from django.http.response import HttpResponseBase
@@ -5081,6 +5086,265 @@ async def test_submit_contact_plain_form_over_graphql_async() -> None:
     result = payload["data"]["submitContact"]
     assert result["ok"] is True
     assert result["errors"] == []
+
+
+# ===========================================================================
+# Save-time Django ``ValidationError`` -> ``FieldError`` envelope
+# ===========================================================================
+# ``Item.save()`` / ``Item.delete()`` refuse ``SAVE_REJECTED_ITEM_NAME`` with a
+# ``ValidationError({"name": ...})`` raised from INSIDE the write, after every
+# validation phase passed. Every ``Item`` write flavor must answer with the payload
+# envelope keyed to the GraphQL input ``name`` (never a masked top-level error),
+# with the write rolled back.
+
+
+class _SaveRejectedRow(NamedTuple):
+    """One ``Item`` write mutation the save-time rule refuses, with its exact query count."""
+
+    query: str
+    codename: str
+    operation: str
+    queries: int
+
+
+def _save_rejected_query(field: str, signature: str, arguments: str) -> str:
+    return (
+        f"mutation({signature}) {{ {field}({arguments}) {{ "
+        "node { name } errors { field messages codes path } } }"
+    )
+
+
+_SAVE_REJECTED_ROWS: dict[str, _SaveRejectedRow] = {
+    "createItem": _SaveRejectedRow(
+        _save_rejected_query("createItem", "$d: ItemInput!", "data: $d"),
+        "add_item",
+        "create",
+        12,
+    ),
+    "updateItem": _SaveRejectedRow(
+        _save_rejected_query(
+            "updateItem",
+            "$id: ID!, $d: ItemPartialInput!",
+            "id: $id, data: $d",
+        ),
+        "change_item",
+        "update",
+        15,
+    ),
+    "deleteItem": _SaveRejectedRow(
+        _save_rejected_query("deleteItem", "$id: ID!", "id: $id"),
+        "delete_item",
+        "delete",
+        11,
+    ),
+    "createItemViaForm": _SaveRejectedRow(
+        _save_rejected_query("createItemViaForm", "$d: ItemModelFormInput!", "data: $d"),
+        "add_item",
+        "create",
+        13,
+    ),
+    "updateItemViaForm": _SaveRejectedRow(
+        _save_rejected_query(
+            "updateItemViaForm",
+            "$id: ID!, $d: ItemModelFormPartialInput!",
+            "id: $id, data: $d",
+        ),
+        "change_item",
+        "update",
+        13,
+    ),
+    "createItemViaSerializer": _SaveRejectedRow(
+        _save_rejected_query(
+            "createItemViaSerializer",
+            "$d: ItemSerializerInput!",
+            "data: $d",
+        ),
+        "add_item",
+        "create",
+        15,
+    ),
+    "updateItemViaSerializer": _SaveRejectedRow(
+        _save_rejected_query(
+            "updateItemViaSerializer",
+            "$id: ID!, $d: ItemSerializerPartialInput!",
+            "id: $id, data: $d",
+        ),
+        "change_item",
+        "update",
+        15,
+    ),
+}
+
+#: The envelope every flavor returns for the save-time rule: keyed to the GraphQL
+#: input ``name``, carrying the rule's own message and code.
+_SAVE_REJECTED_ERRORS = [
+    {
+        "field": "name",
+        "messages": [models.SAVE_REJECTED_ITEM_MESSAGE],
+        "codes": [models.SAVE_REJECTED_ITEM_CODE],
+        "path": ["name"],
+    },
+]
+
+
+def _save_rejected_variables(operation: str, item: models.Item) -> JSONObject:
+    """Build the variables that drive ``operation`` into the save-time rule.
+
+    A create writes a new sentinel-named item into ``item``'s category, an update
+    renames ``item`` to the sentinel, and a delete targets ``item`` (which the caller
+    has already renamed to the sentinel through ``.update()``, so no ``save()`` ran).
+    """
+    item_id = _global_id("products.item", item.pk)
+    if operation == "create":
+        return {
+            "d": {
+                "name": models.SAVE_REJECTED_ITEM_NAME,
+                "categoryId": _global_id("products.category", item.category_id),
+            },
+        }
+    if operation == "update":
+        return {"id": item_id, "d": {"name": models.SAVE_REJECTED_ITEM_NAME}}
+    return {"id": item_id}
+
+
+def _save_rejected_target(operation: str) -> models.Item:
+    """Return the seeded item the row writes against; a delete row renames it first."""
+    item = models.Item.objects.earliest("pk")
+    if operation == "delete":
+        _ = models.Item.objects.filter(pk=item.pk).update(name=models.SAVE_REJECTED_ITEM_NAME)
+        item.refresh_from_db()
+    return item
+
+
+def _assert_save_rejected_rolled_back(operation: str, item: models.Item, before: str) -> None:
+    """Assert the refused write left the catalog as it was: nothing created, renamed or deleted."""
+    item.refresh_from_db()
+    assert item.name == before
+    expected = 1 if operation == "delete" else 0
+    assert models.Item.objects.filter(name=models.SAVE_REJECTED_ITEM_NAME).count() == expected
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("mutation", sorted(_SAVE_REJECTED_ROWS))
+def test_item_save_time_validation_error_returns_the_name_keyed_envelope(mutation: str) -> None:
+    """A ``ValidationError`` from ``Item.save()`` / ``delete()`` is the ``name``-keyed envelope.
+
+    The rule fires inside the write window of every ``Item`` write flavor: the model
+    flavor's ``save()`` / forced update ``save()`` / ``delete()``, the ``ModelForm``'s
+    ``form.save()``, and the serializer's ``serializer.save()``. Each answers with
+    ``node: null`` and one ``FieldError`` on ``name`` carrying the rule's message and
+    code (no top-level error, no masked policy message), the write rolled back, and
+    the exact query count of a request that never reached the ``INSERT`` / ``UPDATE``
+    / ``DELETE``.
+    """
+    seed_data(1)
+    create_users(1)
+    row = _SAVE_REJECTED_ROWS[mutation]
+    item = _save_rejected_target(row.operation)
+    before = item.name
+    client = _login_with_perm("staff_1", row.codename)
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            row.query,
+            client=client,
+            variables=_save_rejected_variables(row.operation, item),
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"][mutation]
+    assert result == {"node": None, "errors": _SAVE_REJECTED_ERRORS}
+    assert len(captured.captured_queries) == row.queries, [
+        query["sql"] for query in captured.captured_queries
+    ]
+    _assert_save_rejected_rolled_back(row.operation, item, before)
+
+
+#: The async rows and their exact query counts on the connection the request's write
+#: pipeline opens. Each is three below its sync row's count: the async middleware's
+#: session and user reads run on a connection opened before the request, outside the
+#: recorder, and the closing ``COMMIT`` is logged by Django from ``connection.commit()``,
+#: not through a cursor, so it reaches no execute wrapper.
+_ASYNC_SAVE_REJECTED_QUERIES: dict[str, int] = {
+    "createItem": 9,
+    "updateItem": 12,
+    "deleteItem": 8,
+    "createItemViaForm": 10,
+    "createItemViaSerializer": 12,
+}
+_REQUEST_QUERY_RECORDER_UID = "test_products_api.request_query_recorder"
+
+
+@contextlib.contextmanager
+def _record_new_connection_sql() -> Generator[list[str], None, None]:
+    """Record every statement run on a database connection opened inside the block.
+
+    ``CaptureQueriesContext`` watches the test thread's connection, while the ASGI
+    handler runs a request's sync work on a thread of its own, which opens its own
+    connection. Each connection opened inside the block gets an execute wrapper
+    appending to one shared list, so the request's statements are counted on
+    whichever thread runs them.
+    """
+    recorded: list[str] = []
+
+    def _wrapper(
+        execute: Callable[..., object],
+        sql: str,
+        params: object,
+        many: object,
+        context: object,
+    ) -> object:
+        recorded.append(sql)
+        return execute(sql, params, many, context)
+
+    def _instrument(connection: BaseDatabaseWrapper, **_kwargs: object) -> None:
+        connection.execute_wrappers.append(_wrapper)
+
+    connection_created.connect(_instrument, weak=False, dispatch_uid=_REQUEST_QUERY_RECORDER_UID)
+    try:
+        yield recorded
+    finally:
+        _ = connection_created.disconnect(dispatch_uid=_REQUEST_QUERY_RECORDER_UID)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("mutation", sorted(_ASYNC_SAVE_REJECTED_QUERIES))
+async def test_item_save_time_validation_error_returns_the_envelope_over_graphql_async(
+    mutation: str,
+) -> None:
+    """The async color: each flavor family maps the save-time rule over ``/graphql-async/``.
+
+    The async view runs the same sync write pipeline behind one ``sync_to_async``
+    boundary, so the model flavor's create / update / delete and the ``ModelForm`` and
+    serializer creates answer with the same ``name``-keyed envelope, write nothing,
+    and run the exact statement count of a request that never reached the write.
+    """
+    await sync_to_async(seed_data)(1)
+    await sync_to_async(create_users)(1)
+    row = _SAVE_REJECTED_ROWS[mutation]
+
+    def _user_and_item() -> tuple[User, models.Item]:
+        user = User.objects.get(username="staff_1")
+        perm = Permission.objects.get(codename=row.codename, content_type__app_label="products")
+        user.user_permissions.add(perm)
+        return User.objects.get(pk=user.pk), _save_rejected_target(row.operation)
+
+    user, item = await sync_to_async(_user_and_item)()
+    before = item.name
+    client = AsyncClient()
+    await sync_to_async(client.force_login)(user)
+
+    with _record_new_connection_sql() as recorded:
+        payload = await _post_async_shipped(
+            row.query,
+            client=client,
+            variables=_save_rejected_variables(row.operation, item),
+        )
+    assert "errors" not in payload, payload
+    assert payload["data"][mutation] == {"node": None, "errors": _SAVE_REJECTED_ERRORS}
+    assert len(recorded) == _ASYNC_SAVE_REJECTED_QUERIES[mutation], recorded
+    await sync_to_async(_assert_save_rejected_rolled_back)(row.operation, item, before)
 
 
 # ===========================================================================

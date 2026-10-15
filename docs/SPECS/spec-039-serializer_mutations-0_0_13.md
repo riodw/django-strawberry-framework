@@ -589,9 +589,9 @@ live-first mandate, so the resolver's reachable lines are covered by a real
     path `items.0.name`, DRF's `non_field_errors` / `NON_FIELD_ERRORS_KEY` bucket → the
     `"__all__"` sentinel `036` defines at every level — NOT the one-level `036`
     `validation_error_to_field_errors`) and returns a null-object payload; **write** via
-    `serializer.save()`, **wrapped by the shared `utils/errors.py::integrity_error_field_errors`
-    `IntegrityError` → envelope mapper** in a **value-preserving closure** (the wrapper discards its
-    callable's return, so the resolver captures `saved = serializer.save()` via
+    `serializer.save()`, **wrapped by the shared `036` `save_or_field_errors` save-time
+    mapper** (an `IntegrityError` or a Django `ValidationError` → envelope) over a savepointed
+    **value-preserving closure** (the wrapper discards its callable's return, so the resolver captures `saved = serializer.save()` via
     `nonlocal` — called exactly once); **re-fetch** the saved object by `saved.pk`
     + optimizer-plan; **return** the `<Name>Payload` (`node` / `result`). The whole
     pipeline runs inside one `transaction.atomic()`, and the async path runs the sync
@@ -1976,13 +1976,13 @@ The pipeline steps:
    forgeable, since `instance` and the returned object can be the same mutable object).
 
    **The wrapper is value-preserving — the saved object is captured, not re-derived.**
-   The model and form flavors ride `mutations/resolvers.py::save_or_field_errors`, which
+   Every flavor's save rides `mutations/resolvers.py::save_or_field_errors`, which
    returns `list[FieldError] | None` and **discards the callable's return value** (it is
    shaped for paths that already hold the instance). The serializer path needs the object
    DRF returns from `serializer.save()` **and** needs the savepoint containment above, so
-   it spells the same contract inline over the shared leaf constructor rather than through
-   that wrapper — capturing the return in the closure rather than re-deriving it (no
-   second `serializer.save()`, no re-fetch from a stale `serializer.instance`):
+   it hands that wrapper a closure that opens the savepoint around `_do_save()`, which
+   captures the return rather than re-deriving it (no second `serializer.save()`, no
+   re-fetch from a stale `serializer.instance`):
    ```python
    saved = None
    def _do_save():
@@ -2009,21 +2009,26 @@ The pipeline steps:
      `serializers.ValidationError`): route its `.detail` through the **recursive**
      `serializer_errors_to_field_errors` flattener (the same nested structure
      `serializer.errors` produces).
-   - **Django `ValidationError`** (`django.core.exceptions.ValidationError`): route through
-     the flat `036` `utils/errors.py::validation_error_to_field_errors`,
-     which already reads Django's `error_dict` / `messages` shape (verified — it does **not**
+   - **Django `ValidationError`** (`django.core.exceptions.ValidationError`): mapped by
+     the shared `save_or_field_errors` wrapper (the mapping every flavor's save-time
+     Django `ValidationError` takes) through the flat `036`
+     `utils/errors.py::validation_error_to_field_errors`, which already reads Django's `error_dict` / `messages` shape (verified — it does **not**
      read `.detail`), with the save-time key map that re-keys each model field name
      (the field behind `spec.source or spec.target_name`, and a forward relation's
-     `attname`) to its GraphQL input name ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload));
+     `attname`) to its GraphQL input name
+     (`django_strawberry_framework/utils/errors.py::save_time_error_key_map`, shared with
+     the `ModelForm` flavor; [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload));
      pushing a Django error through the DRF `.detail` path would `AttributeError` or
      silently lose structure.
    - **`IntegrityError`** (a concurrent-uniqueness race / residual db constraint): the
-     shared `utils/errors.py::integrity_error_field_errors` leaf, the same envelope the
-     `036` `save_or_field_errors` wrapper produces.
+     shared `utils/errors.py::integrity_error_field_errors` leaf, mapped by the same
+     `036` `save_or_field_errors` wrapper every flavor's save rides.
 
-   The two `ValidationError` classes are caught **separately** (DRF's first, since both
-   subclass `Exception` but neither subclasses the other) so a Django error never reaches
-   the `.detail` path and a DRF error never reaches the flat mapper. All three stay inside
+   The two `ValidationError` classes are caught **separately** (neither subclasses the
+   other): the Django one and the `IntegrityError` inside `save_or_field_errors`, the
+   DRF one by an `except` around that call, which a DRF error passes through unmapped,
+   so a Django error never reaches the `.detail` path and a DRF error never reaches the
+   flat mapper. Every catch sits outside the savepoint block. All three stay inside
    the one `transaction.atomic()`; none becomes a top-level error. (The non-field bucket
    maps to `"__all__"` in **both** flatteners via the shared `NON_FIELD_ERROR_KEY`, so the
    envelope key convention is uniform regardless of which path fired.)
@@ -2066,7 +2071,7 @@ envelope.
 **Error field names are keyed to the GraphQL input path, not the serializer path.**
 This is the rule every flavor follows (`spec-036` Decision 7): a decode error,
 `serializer.errors`, and a validator error (`full_clean()`, `form.errors`, a Django
-`ValidationError` raised during a serializer save) all key to the GraphQL input field
+`ValidationError` raised by save-time code, a serializer save included) all key to the GraphQL input field
 the client sent. `serializer.errors` keys are **serializer field names** (`category`,
 `full_name`), but a client submitted **GraphQL input names** (`categoryId`, `fullName`).
 The flattener maps each path segment **through the key map** to the GraphQL input name
@@ -2094,7 +2099,7 @@ nested child field, alias, or relation suffix reports its SDL name
 fields, so its key map is built from the model field behind `spec.source or spec.target_name`
 (its name and, for a forward relation, its `attname`, via
 `django_strawberry_framework/utils/errors.py::model_field_error_names`;
-`django_strawberry_framework/rest_framework/resolvers.py::_save_time_error_key_map`),
+`django_strawberry_framework/utils/errors.py::save_time_error_key_map`),
 and a model `name` behind `full_name = CharField(source="name")` reports as `fullName`,
 a model `category_id` behind the `category` relation as `categoryId`.
 Every key map is built on the failure branch only; a successful write builds none. The
@@ -3181,14 +3186,14 @@ The completion contract.
    [`FieldError` envelope][glossary-fielderror-envelope] via the **dedicated recursive
    flattener** (`serializer_errors_to_field_errors`; dotted path `items.0.name`;
    `non_field_errors` → `"__all__"` at every level; not the one-level `036` mapper); the
-   write is wrapped by the shared `utils/errors.py::integrity_error_field_errors` mapper in a
+   write is wrapped by the shared `036` `save_or_field_errors` mapper over a savepointed
    **value-preserving closure** (`serializer.save()` called once, its returned object captured for the
    re-fetch); a **save-time `ValidationError` is routed to the envelope by exception
    class** — a DRF `serializers.ValidationError`'s `.detail` through the recursive
    `serializer_errors_to_field_errors`, a Django `django.core.exceptions.ValidationError`
    through the flat `036` `validation_error_to_field_errors` (`error_dict` / `messages`, not
-   `.detail`), an `IntegrityError` through `integrity_error_field_errors` — never a top-level
-   `GraphQLError`; the payload object is re-fetched through the `036` optimizer path (G2:
+   `.detail`) and an `IntegrityError` through `integrity_error_field_errors`, both inside
+   `save_or_field_errors` — never a top-level `GraphQLError`; the payload object is re-fetched through the `036` optimizer path (G2:
    `select_related` / `prefetch_related` kept, no [`.only(...)`][glossary-only-projection]),
    pinned across two tiers — the behavioral half live at
    [`test_products_api.py`][test-products-api]`::test_g2_serializer_mutation_response_keeps_relation_with_bounded_query_count`,

@@ -14,7 +14,6 @@ pattern the scalars app uses.
 
 import strawberry
 from django import forms
-from django.core.exceptions import ValidationError
 from django.db.models import Exists, OuterRef, QuerySet
 from strawberry import relay
 from strawberry.types import Info
@@ -31,7 +30,7 @@ from django_strawberry_framework.filters import FilterInput
 from django_strawberry_framework.forms.resolvers import resolve_form_async, resolve_form_sync
 from django_strawberry_framework.mutations.resolvers import payload_cls_for
 from django_strawberry_framework.orders import OrderInput
-from django_strawberry_framework.utils.errors import field_error, validation_error_to_field_errors
+from django_strawberry_framework.utils.errors import field_error
 
 # ---------------------------------------------------------------------------
 # UUID side-table
@@ -1027,13 +1026,13 @@ class Query:
 #
 # Errors: the service raises ``KanbanServiceError`` (carrying a stable ``.code``) for
 # caller-correctable failures and Django ``ValidationError`` for an illegal status
-# transition (the 2F state-machine guard). ``save_or_field_errors`` (the plain-form
-# write hook wrapper) only maps ``IntegrityError``, so ``_ServiceErrorMixin`` overrides
-# the resolver seams to catch both service error classes and return the ``{ ok: false,
-# errors }`` envelope (the write already rolled back when the exception propagated out
-# of the pipeline's ``transaction.atomic()`` block). ValidationErrors flatten via the
-# shared ``validation_error_to_field_errors``; a ``KanbanServiceError`` becomes a single
-# model-wide (``__all__``) ``FieldError`` whose ``codes`` carry the stable service code.
+# transition (the 2F state-machine guard). The framework maps a ``ValidationError``
+# out of ``perform_mutate`` onto the ``{ ok: false, errors }`` envelope itself (and
+# rolls the write back); ``KanbanServiceError`` is a ``ValueError``, which the
+# framework propagates, so ``_ServiceErrorMixin`` overrides the resolver seams to
+# turn it into a single model-wide (``__all__``) ``FieldError`` whose ``codes``
+# carry the stable service code (the write already rolled back when the exception
+# propagated out of the pipeline's ``transaction.atomic()`` block).
 
 
 class IsStaffUser:
@@ -1066,24 +1065,20 @@ class IsStaffUser:
 
 def _service_error_payload(
     mutation_cls: type[DjangoFormMutation],
-    exc: services.KanbanServiceError | ValidationError,
+    exc: services.KanbanServiceError,
 ) -> object:
     """Map a service failure onto the mutation's ``{ ok: false, errors }`` payload."""
     payload_cls = payload_cls_for(mutation_cls)
-    if isinstance(exc, ValidationError):
-        errors = validation_error_to_field_errors(exc)
-    else:  # services.KanbanServiceError
-        errors = [field_error("", str(exc), codes=exc.code)]
-    return payload_cls(ok=False, errors=errors)
+    return payload_cls(ok=False, errors=[field_error("", str(exc), codes=exc.code)])
 
 
 class _ServiceErrorMixin(DjangoFormMutation):
-    """Resolver-seam override translating service errors into the write envelope.
+    """Resolver-seam override translating ``KanbanServiceError`` into the write envelope.
 
     An intermediate ``DjangoFormMutation`` base (no ``Meta``, so it is never bound
     itself) whose ``resolve_sync`` / ``resolve_async`` override the plain-form
     seams for every board mutation built on it. It delegates to the framework's plain-form pipeline
-    and only adds an outer ``except`` for the two service error classes; the pipeline's
+    and only adds an outer ``except`` for the service error class; the pipeline's
     own ``transaction.atomic()`` has already rolled the partial write back by the time
     the exception surfaces here (mirrors the pipeline's own error-envelope contract).
     """
@@ -1093,7 +1088,7 @@ class _ServiceErrorMixin(DjangoFormMutation):
     def resolve_sync(cls, info: Info[object, object], *, data: object) -> object:
         try:
             return resolve_form_sync(cls, info, data=data)
-        except (services.KanbanServiceError, ValidationError) as exc:
+        except services.KanbanServiceError as exc:
             return _service_error_payload(cls, exc)
 
     @classmethod
@@ -1101,7 +1096,7 @@ class _ServiceErrorMixin(DjangoFormMutation):
     async def resolve_async(cls, info: Info[object, object], *, data: object) -> object:
         try:
             return await resolve_form_async(cls, info, data=data)
-        except (services.KanbanServiceError, ValidationError) as exc:
+        except services.KanbanServiceError as exc:
             return _service_error_payload(cls, exc)
 
 

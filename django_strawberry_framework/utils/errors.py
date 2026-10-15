@@ -11,7 +11,9 @@ flavors):
 - ``build_error_key_map`` / ``rekey_error_segment`` / ``ErrorKeyMap`` - the one
   key map every flavor uses to report a validator-origin error under the
   GraphQL input field the client sent (``categoryId``, not ``category``), and
-  ``model_field_error_names`` - every name Django keys one model field's errors by;
+  ``model_field_error_names`` - every name Django keys one model field's errors by,
+  and ``save_time_error_key_map`` - the model-backed map a save-time Django
+  ``ValidationError`` is keyed through on the ``ModelForm`` and serializer flavors;
 - ``integrity_error_field_errors`` - the save-time ``IntegrityError`` envelope;
 - ``join_error_path`` - dotted GraphQL error-path joining for nested
   flatteners;
@@ -34,7 +36,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
-from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, FieldDoesNotExist, ValidationError
 from django.db import models
 from django.utils.functional import Promise
 
@@ -79,6 +81,7 @@ __all__ = [
     "null_field_error",
     "rekey_error_segment",
     "relation_field_error",
+    "save_time_error_key_map",
     "validation_error_to_field_errors",
 ]
 
@@ -374,8 +377,9 @@ def build_error_key_map(
     aliases (a forward relation's ``attname``); no names means no entry.
     The model flavor passes ``model_field_error_names`` of the column behind
     ``spec.input_attr`` (``category`` and ``category_id`` for input
-    ``categoryId``); the serializer's save-time Django ``ValidationError`` passes
-    the same names for the model field behind ``spec.source or spec.target_name``.
+    ``categoryId``); ``save_time_error_key_map`` (the ``ModelForm`` and
+    serializer save-time Django ``ValidationError``) passes the same names for
+    the model field behind ``spec.source or spec.target_name``.
     A nested field's ``child_map`` is the same map built over its
     ``nested_specs`` with the same ``keys_of``, so a nested error re-keys at
     every depth; every other field's is ``None``.
@@ -421,6 +425,44 @@ def model_field_error_names(field: ModelField) -> tuple[str, ...]:
     return (field.name,)
 
 
+def save_time_error_key_map(
+    specs: Iterable[InputFieldSpec],
+    model: type[models.Model],
+) -> ErrorKeyMap:
+    """Build the key map for a Django ``ValidationError`` raised at save time.
+
+    A Django error raised by consumer save-time code (a custom ``save()`` /
+    ``create()`` / ``update()``, a model ``save()``, a signal receiver) keys by MODEL
+    field name. On a model-backed flavor whose spec's ``target_name`` is not the model
+    attr - the ``ModelForm`` (the form field, named after its model field) and the
+    serializer (the declared field, or its ``source`` when it declares one:
+    ``full_name = CharField(source="name")``) - the keys are
+    ``model_field_error_names`` of the backing model field named ``spec.source or
+    spec.target_name`` (``category`` and ``category_id`` for a forward relation); a
+    name with no concrete model field behind it (a form-only or serializer-only
+    field) keys by itself. No two serializer specs share a model field (the ownership
+    check keys writable sources by the attribute they resolve to, so ``category``
+    beside ``source="category_id"`` is rejected at class creation), and a form field
+    names one model field, so every name a spec lists is its own: a ``category_ref =
+    PrimaryKeyRelatedField(source="category")`` keys both ``category`` and
+    ``category_id`` to ``categoryRefId``. A model field no input exposes keeps its
+    name. Built only on the failure path.
+    """
+    model_meta = model._meta
+
+    def model_names(spec: InputFieldSpec) -> tuple[str, ...]:
+        name = spec.source or spec.target_name
+        try:
+            field = model_meta.get_field(name)
+        except FieldDoesNotExist:
+            return (name,)
+        names = model_field_error_names(field) if isinstance(field, models.Field) else ()
+        # The spec's own source leads (its primary name); the field's other names follow.
+        return (name, *(other for other in names if other != name))
+
+    return build_error_key_map(specs, keys_of=model_names)
+
+
 def rekey_error_segment(key: str, key_map: ErrorKeyMap | None) -> tuple[str, ErrorKeyMap]:
     """Re-key ONE error-path segment to its GraphQL input name; return the child level's map.
 
@@ -451,7 +493,8 @@ def validation_error_to_field_errors(
     multi-field-constraint error surfaces under ``"__all__"``. Falls back to
     ``exc.messages`` under the sentinel for a non-dict ``ValidationError``. The
     single source for the ``full_clean()`` failure, the ``form.errors`` mapping,
-    the serializer's save-time Django ``ValidationError`` and the
+    every flavor's save-time Django ``ValidationError`` (``save_or_field_errors``
+    and its update / delete counterparts in ``mutations/resolvers.py``) and the
     ``IntegrityError``-race fallback mapping. Both leaves are built through the
     shared ``field_error`` leaf ctor so the sentinel + message coercion stay
     single-sited with the recursive DRF flattener.
@@ -527,8 +570,9 @@ def integrity_error_field_errors() -> list[FieldError]:
     "A database constraint was violated." rather than over-claiming uniqueness.
     Keys to the ``"__all__"`` sentinel - ``save()``'s ``IntegrityError`` carries
     no reliable cross-backend field mapping. The model, form, and serializer
-    write paths all return this same leaf (via ``save_or_field_errors`` or the
-    serializer's three-``except`` save mapping).
+    write paths all return this same leaf via ``save_or_field_errors`` (the model
+    flavor's update and delete through its ``forced_save_or_field_errors`` /
+    ``_delete_or_field_errors`` counterparts).
     """
     return [
         field_error(

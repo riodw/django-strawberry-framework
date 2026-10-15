@@ -51,7 +51,9 @@ class ItemSerializer(serializers.ModelSerializer[Item]):
     the object ``validate()`` reads ``self.context["request"].user`` (the request-context
     proof) and rejects a ``name`` equal to the authenticated username under
     ``"__all__"``; the model's ``unique_item_per_category`` constraint surfaces
-    automatically through DRF's ``UniqueTogetherValidator`` as a ``"__all__"`` entry.
+    automatically through DRF's ``UniqueTogetherValidator`` as a ``"__all__"`` entry. A
+    ``models.SAVE_REJECTED_ITEM_NAME`` name passes validation and is refused by ``Item.save()``
+    inside ``serializer.save()``: the save-time Django ``ValidationError`` case.
     """
 
     # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass

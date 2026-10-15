@@ -14,18 +14,26 @@ walk Faker's providers and methods to populate the catalog:
 ``ItemHold`` sits outside the Faker walk: ``seed_data`` never creates one. It is
 the catalog's guarded reference, a hold that keeps an item from being deleted
 while it stands.
+
+``Item.save()`` and ``Item.delete()`` refuse an item named ``SAVE_REJECTED_ITEM_NAME``
+with a field-keyed Django ``ValidationError``: the consumer save-time rule every
+``Item`` write flavor (model, ``ModelForm``, serializer) must report through the
+``FieldError`` envelope rather than as a top-level error.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
+from django.core.exceptions import ValidationError
 from django.db import models
 from typing_extensions import override
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from datetime import date, datetime
 
+    from django.db.models.base import ModelBase
     from django.db.models.expressions import Combinable
     from django.db.models.fields.related_descriptors import RelatedManager
 
@@ -39,6 +47,14 @@ if TYPE_CHECKING:
     _FK: TypeAlias = models.ForeignKey[_M | Combinable, _M]
     _NullFK: TypeAlias = models.ForeignKey[_M | Combinable | None, _M | None]
     _Text: TypeAlias = models.TextField[str | Combinable, str]
+
+# The ``Item.name`` value ``Item.save()`` and ``Item.delete()`` refuse - drives the
+# save-time ``ValidationError`` live case: a consumer rule raised from inside the
+# write, after every validation phase passed, keyed to ``name``. The rule reads only
+# ``self.name``, so it adds no query to any write.
+SAVE_REJECTED_ITEM_NAME = "__save_rejected__"
+SAVE_REJECTED_ITEM_MESSAGE = "An item with this name cannot be written."
+SAVE_REJECTED_ITEM_CODE = "save_rejected"
 
 
 class Category(models.Model):
@@ -123,6 +139,46 @@ class Item(models.Model):
     @override
     def __str__(self) -> str:
         return self.name
+
+    @override
+    def save(
+        self,
+        *,
+        force_insert: bool | tuple[ModelBase, ...] = False,
+        force_update: bool = False,
+        using: str | None = None,
+        update_fields: Iterable[str] | None = None,
+    ) -> None:
+        """Save the row unless it is named ``SAVE_REJECTED_ITEM_NAME``."""
+        self._reject_save_rejected_name()
+        super().save(
+            force_insert=force_insert,
+            force_update=force_update,
+            using=using,
+            update_fields=update_fields,
+        )
+
+    @override
+    def delete(
+        self,
+        using: str | None = None,
+        keep_parents: bool = False,
+    ) -> tuple[int, dict[str, int]]:
+        """Delete the row unless it is named ``SAVE_REJECTED_ITEM_NAME``."""
+        self._reject_save_rejected_name()
+        return super().delete(using=using, keep_parents=keep_parents)
+
+    def _reject_save_rejected_name(self) -> None:
+        """Raise the field-keyed ``ValidationError`` for the save-rejected sentinel name."""
+        if self.name == SAVE_REJECTED_ITEM_NAME:
+            raise ValidationError(
+                {
+                    "name": ValidationError(
+                        SAVE_REJECTED_ITEM_MESSAGE,
+                        code=SAVE_REJECTED_ITEM_CODE,
+                    ),
+                },
+            )
 
 
 class Property(models.Model):

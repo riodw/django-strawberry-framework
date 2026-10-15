@@ -334,7 +334,8 @@ package-internal; Slice 4 is the live consumer surface.
     `validation_error_to_field_errors(ValidationError(form.errors.as_data()), key_map)`)
     and returns a null-object payload; **write** via `form.save()` (`ModelForm`) /
     `perform_mutate` (plain form), **wrapped by the `036` `save_or_field_errors`
-    `IntegrityError` → envelope mapper** (no top-level error at write), the
+    save-time mapper** (an `IntegrityError` or a consumer save-time Django
+    `ValidationError` → envelope, no top-level error at write), the
     `ModelForm` save also mapping a `blank=True, null=False` non-text choice column
     the form cleaned to `""` onto that column's field-keyed `null` error; **re-fetch**
     the saved object by pk + optimizer-plan (the `ModelForm` flavor); **return** the
@@ -1414,8 +1415,17 @@ write flavor rides.
    time. This wraps **both** the `ModelForm` `form.save()` and the plain-form
    `perform_mutate` default save path. Runs inside the one `transaction.atomic()`
    boundary (the `IntegrityError` is caught at the resolver, so the atomic block is
-   exited cleanly with the envelope as the result). **The `ModelForm` save also maps
-   the one other failure a valid `ModelForm` reaches on its own**
+   exited cleanly with the envelope as the result). **A save-time Django
+   `ValidationError` maps the same way.** A `ValidationError` raised by consumer
+   save-time code (a `ModelForm.save()` / `Model.save()` override, a `pre_save` /
+   `post_save` / `m2m_changed` receiver, a plain-form `perform_mutate`) returns the
+   null-object / `{ ok: false }` envelope through the same `save_or_field_errors`,
+   keyed to the GraphQL input names: by form field name on the plain form
+   (`build_error_key_map`), by every name Django keys the backing model field by on the
+   `ModelForm` (`django_strawberry_framework/utils/errors.py::save_time_error_key_map`,
+   shared with the serializer flavor). The envelope rolls back whatever the save wrote
+   before it raised; any other exception (a `ValueError` included) propagates. **The
+   `ModelForm` save also maps the one other failure a valid `ModelForm` reaches on its own**
    ([`forms/resolvers.py`][forms-resolvers]`::_modelform_save_or_field_errors`): over
    a `blank=True, null=False` non-text choice column, Django's form field keeps
    `TypedChoiceField(empty_value="")`, so an explicit `null` (or an omission with no
@@ -1427,7 +1437,8 @@ write flavor rides.
    `null` on a non-nullable column with, and the column's Django `error_messages["null"]`
    as the message (the form is the message source of truth, so a custom or translated
    message is sent as is, where the model flavor's message is fixed); when no column explains
-   the exception it propagates unchanged. The check runs on the instance after the
+   the exception, a `ValueError` propagates unchanged and a `ValidationError` is the
+   consumer's own, mapped as above. The check runs on the instance after the
    save attempt, never before it, so a model `save()` that fills the blank value in
    (the reason Django keeps the shape) still writes. The returned envelope rolls the
    atomic block back exactly as the `IntegrityError` envelope does.
@@ -1454,13 +1465,14 @@ helpers the runner composes are public, and live in three modules:
   `authorize_or_raise` (the write-auth gate), `refetch_optimized`
   ([Decision 9](#decision-9--optimizer-composition-the-modelform-payload-re-fetch-rides-the-spec-036-g2-path)),
   `build_payload` (the uniform-slot envelope), and `save_or_field_errors` (the
-  save-time `IntegrityError` → `FieldError` mapper reused per step 5, wrapping a
-  zero-arg save callable; the `ModelForm` flavor calls it through
+  save-time `IntegrityError` / Django `ValidationError` → `FieldError` mapper reused
+  per step 5, wrapping a zero-arg save callable and a lazily built error key map; the
+  `ModelForm` flavor calls it through
   `_modelform_save_or_field_errors`, which adds step 5's blank non-text choice column
   mapping).
 - [`utils/errors.py`][utils-errors] — `validation_error_to_field_errors` and
   `build_error_key_map` (the validation-error mapper and its input-name key map, reused
-  per step 4).
+  per step 4), and `save_time_error_key_map` (the `ModelForm`'s step-5 key map).
 - [`utils/write_values.py`][utils-write-values] — `raw_choice_value` (the choice-enum
   unwrap) alongside the relation-decode spine of step 3.
 
@@ -1791,7 +1803,15 @@ Rationale companion: [Decision 14][rationale-d14].
   `save()` refuses; the
   failure returns the null-object envelope keyed by that column with code `null`,
   nothing written. A consumer `save()` that fills the value in writes; any other
-  `ValueError` / `ValidationError` out of `save()` propagates
+  `ValueError` out of `save()` propagates
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)
+  step 5).
+- **Write-time consumer `ValidationError`.** A `ValidationError` raised by consumer
+  save-time code (a `ModelForm.save()` / `Model.save()` override, a model signal
+  receiver, a plain-form `perform_mutate`) after `is_valid()` passed returns the
+  null-object / `{ ok: false }` envelope keyed to the GraphQL input names (a bare
+  message or a `NON_FIELD_ERRORS` key to `"__all__"`, a key no input exposes kept as
+  raised), with whatever the save wrote rolled back
   ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)
   step 5).
 - **Two distinct generated form inputs colliding on one GraphQL name.** Two
@@ -1853,7 +1873,12 @@ behavior reachable through `/graphql/`, package tests own internals.
   **Write-time `IntegrityError`** — a valid
   `ModelForm.save()` that hits a constraint the form's validation excluded
   (`createDefaultCategoryItemViaForm`) surfaces the **`FieldError` envelope**, not a
-  top-level GraphQL error. **Write-time blank non-text choice column** — an explicit
+  top-level GraphQL error. **Write-time consumer `ValidationError`** — `Item.save()`
+  refusing `SAVE_REJECTED_ITEM_NAME` on `createItemViaForm` / `updateItemViaForm`
+  returns the `name`-keyed envelope with nothing written (the create also over the
+  async view), and the kanban `setCardStatus` illegal transition (a `pre_save`
+  receiver under `perform_mutate`) returns `{ ok: false }` with one `"__all__"`
+  error. **Write-time blank non-text choice column** — an explicit
   `tier: null` on `createShelfViaForm` (`Shelf.tier` is a `blank=True` integer choice
   column with a default) returns the `tier` / `null` envelope with no row written, while
   a member writes and an omission keeps the default.
@@ -1911,6 +1936,10 @@ behavior reachable through `/graphql/`, package tests own internals.
     by the target field, not pk; **write-time `IntegrityError`** — a valid
     `form.save()` raising `IntegrityError` (and the plain-form `perform_mutate` save
     path) → `FieldError` envelope, not a top-level error (via `save_or_field_errors`);
+    **write-time consumer `ValidationError`** — a save-time `ValidationError` on the
+    `ModelForm` and plain-form paths keys through each flavor's key map (form field
+    name, model field name, forward-relation `attname`, `NON_FIELD_ERRORS`, an
+    unexposed key kept as raised);
     **write-time blank non-text choice column** — an integer column omitted with no
     default, decimal and date columns sent `null`, and an update sent `null` each return
     the column-keyed `null` envelope with nothing written; a model `save()` filling the
@@ -2097,7 +2126,8 @@ The completion contract.
    onto the [`FieldError` envelope][glossary-fielderror-envelope] (each form field keyed
    to its input name, `NON_FIELD_ERRORS` → `"__all__"`, via the reused
    `validation_error_to_field_errors(ValidationError(form.errors.as_data()), key_map)`); **the write is wrapped by the `036` `save_or_field_errors`
-   `IntegrityError` → envelope mapper** (no top-level error on a save-time race), and
+   save-time mapper** (no top-level error on a save-time race or a consumer save-time
+   `ValidationError`), and
    a `ModelForm` save refused over a `blank=True, null=False` non-text choice column
    cleaned to `""` returns that column's field-keyed `null` error;
    the `ModelForm` payload object is re-fetched through the

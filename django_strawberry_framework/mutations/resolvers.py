@@ -50,6 +50,14 @@ and the load-bearing invariants this module owns:
   before ``save()``; a multi-field constraint keys to the ``"__all__"``
   sentinel. A concurrent-race ``IntegrityError`` at ``save()``
   maps to the same envelope as a documented best-effort fallback.
+- **A save-time ``ValidationError`` feeds the same envelope**: a consumer
+  ``Model.save()`` / ``delete()`` override, a ``pre_save`` / ``post_save`` /
+  ``m2m_changed`` / ``pre_delete`` signal receiver, or a plain form's
+  ``perform_mutate`` that raises Django's ``ValidationError`` is mapped by the
+  write wrappers (``save_or_field_errors`` / ``forced_save_or_field_errors`` /
+  ``_delete_or_field_errors``) through the flavor's error key map, and the
+  envelope rolls back whatever the save wrote first. Any other exception (a
+  ``ValueError`` included) propagates.
 - **The post-write re-fetch is by pk WITHOUT the visibility filter** (spec-036)
   and routes through ``apply_connection_optimization`` so the
   ``spec-035`` G2 gate keeps ``select_related`` / ``prefetch_related`` and applies
@@ -1060,8 +1068,9 @@ def _model_write_step(
 
     From validation onward create and update run an IDENTICAL tail (the prior
     ``_validate_save_assign_refetch_payload``): ``full_clean(exclude=...)`` mapped to
-    the envelope, ``save()`` (race ``IntegrityError`` into the envelope), then the
-    M2M ``.set(...)`` assignment. ``mutation_cls`` supplies the bind-stashed specs the
+    the envelope, ``save()`` (a race ``IntegrityError`` or a consumer save-time
+    ``ValidationError`` into the envelope), then the M2M ``.set(...)`` assignment
+    (the same two mappings). ``mutation_cls`` supplies the bind-stashed specs the
     ``full_clean`` errors are keyed through. Returns the saved instance (the skeleton's
     ``refetch_optimized`` re-fetches it by pk under the G2 plan) or a
     ``StepFailure`` on a validation / write failure. ``instance`` (the located
@@ -1085,39 +1094,50 @@ def _model_write_step(
     if clean_errors is not None:
         return StepFailure(clean_errors)
 
+    # A save-time ``ValidationError`` keys through the same map as ``full_clean``.
+    def error_key_map() -> ErrorKeyMap:
+        return _model_error_key_map(mutation_cls)
+
     # The pinned-alias WRITE phase opens for exactly the save + M2M assignment:
     # everything before this point (full_clean included) is database-read-only
     # under the pipeline's phased alias guard.
     with pipeline_write_phase():
         if instance is None:
-            write_error = save_or_field_errors(target.save)
+            write_error = save_or_field_errors(target.save, error_key_map=error_key_map)
         else:
             # A direct model UPDATE saves with ``force_update=True``: a
             # located row a concurrent transaction deleted would otherwise be
             # silently re-INSERTed by ``save()``'s update-else-insert fallback,
             # reporting success for a write the deleter never sees. The zero-row
             # forced update maps to the in-band ``conflict`` envelope.
-            write_error = forced_save_or_field_errors(target)
-        if write_error is not None:
-            return StepFailure(write_error)
-        try:
-            _assign_m2m(target, m2m_assignments)
-        except IntegrityError:
-            return StepFailure(integrity_error_field_errors())
+            write_error = forced_save_or_field_errors(target, error_key_map=error_key_map)
+        if write_error is None:
+            write_error = save_or_field_errors(
+                lambda: _assign_m2m(target, m2m_assignments),
+                error_key_map=error_key_map,
+            )
+    if write_error is not None:
+        return StepFailure(write_error)
     return target
 
 
-def forced_save_or_field_errors(target: models.Model) -> list[FieldError] | None:
+def forced_save_or_field_errors(
+    target: models.Model,
+    *,
+    error_key_map: Callable[[], ErrorKeyMap | None],
+) -> list[FieldError] | None:
     """Run ``target.save(force_update=True)``; map races to the envelope else ``None``.
 
     The update-side counterpart of ``save_or_field_errors``, with the
     disappearing-row contract on top: a constraint race is the ``"__all__"``
     ``IntegrityError`` envelope (the standing mapping, checked FIRST -
     ``IntegrityError`` is itself a ``DatabaseError``, so the order matters under
-    the Django 5.2 untyped catch); a zero-row forced update runs through the
-    version-compat conflict disambiguation (``forced_update_conflict_errors``:
-    usable transaction + demonstrably absent row -> ``conflict`` envelope, any
-    other database error propagates and rolls back). Django 6.0 raises the typed
+    the Django 5.2 untyped catch); a save-time ``ValidationError`` maps through
+    ``error_key_map`` exactly as in ``save_or_field_errors``; a zero-row forced
+    update runs through the version-compat conflict disambiguation
+    (``forced_update_conflict_errors``: usable transaction + demonstrably absent
+    row -> ``conflict`` envelope, any other database error propagates and rolls
+    back). Django 6.0 raises the typed
     ``Model.NotUpdated``; 5.2 a bare ``DatabaseError`` (``not_updated_exceptions``).
     """
     alias = require_write_pipeline().alias
@@ -1132,6 +1152,8 @@ def forced_save_or_field_errors(target: models.Model) -> list[FieldError] | None
             target.save(force_update=True)
     except IntegrityError:
         return integrity_error_field_errors()
+    except ValidationError as exc:
+        return validation_error_to_field_errors(exc, error_key_map())
     except not_updated_exceptions(type(target)) as exc:
         return forced_update_conflict_errors(target, alias, exc)
     return None
@@ -1238,6 +1260,11 @@ def _delete_or_field_errors(instance: models.Model) -> list[FieldError] | None:
     it keys to the model-level ``""`` (``"__all__"``) bucket, since the refusal
     is about OTHER rows referencing this one, not about the ``id`` input.
 
+    A ``ValidationError`` out of a consumer ``delete()`` override or a
+    ``pre_delete`` / ``post_delete`` receiver maps to the envelope through the
+    shared mapper with no key map (a delete has no input fields, so every key is
+    reported verbatim), exactly as a save-time one does on create / update.
+
     **Zero-target-row delete is a ``conflict``.** ``Model.delete()``
     reports how many rows each model lost; the TARGET model's own count being
     zero means a concurrent transaction removed the row between the locate and
@@ -1259,6 +1286,8 @@ def _delete_or_field_errors(instance: models.Model) -> list[FieldError] | None:
         ]
     except IntegrityError:
         return integrity_error_field_errors()
+    except ValidationError as exc:
+        return validation_error_to_field_errors(exc)
     if per_model.get(instance._meta.label, 0) == 0:
         return [conflict_error()]
     return None
@@ -1353,22 +1382,45 @@ def _model_error_key_map(mutation_cls: type[DjangoMutation]) -> ErrorKeyMap:
     )
 
 
-def save_or_field_errors(save_callable: Callable[[], object]) -> list[FieldError] | None:
-    """Run ``save_callable()``; map a race ``IntegrityError`` to the envelope else ``None``.
+def save_or_field_errors(
+    save_callable: Callable[[], object],
+    *,
+    error_key_map: Callable[[], ErrorKeyMap | None],
+) -> list[FieldError] | None:
+    """Run ``save_callable()``; map a save-time failure to the envelope else ``None``.
 
     Wraps a zero-arg callable rather than a fixed ``instance.save()`` so ONE
-    ``IntegrityError`` -> envelope catch (the ``integrity_error_field_errors``
-    message policy, single-sourced) serves every save path: the ``036`` model
-    pipeline passes ``instance.save``; the form pipeline passes ``form.save`` (the
-    ``ModelForm`` flavor) / a bound ``perform_mutate`` (the plain flavor, spec-038
-    Decision 8 step 5). A post-validation ``IntegrityError`` from any of them
-    returns the same ``"__all__"`` envelope, never a top-level ``GraphQLError`` at
-    the write.
+    save-time catch serves every save path: the ``036`` model pipeline passes
+    ``instance.save`` and its M2M assignment; the form pipeline passes
+    ``form.save`` (the ``ModelForm`` flavor) / a bound ``perform_mutate`` (the
+    plain flavor, spec-038 Decision 8 step 5); the serializer passes its
+    savepointed ``serializer.save()`` closure. Two failures map, and nothing
+    else:
+
+    - a post-validation ``IntegrityError`` (a race, or a constraint validation
+      did not cover) returns the ``"__all__"`` ``integrity_error_field_errors``
+      envelope;
+    - a Django ``ValidationError`` raised by consumer save-time code (a
+      ``Model.save()`` / ``ModelForm.save()`` override, a signal receiver, a
+      ``perform_mutate``) returns ``validation_error_to_field_errors`` keyed
+      through ``error_key_map()``, the flavor's validator-name -> GraphQL input
+      name map, built only on this failure path (``None`` keys every name
+      verbatim). The mapper never raises on a key the map lacks: it keeps the
+      validator-side name.
+
+    Neither is a top-level ``GraphQLError`` at the write. The skeleton's error
+    envelope marks the pipeline's ``transaction.atomic()`` for rollback, so a
+    save that wrote rows and then raised commits nothing; no query runs between
+    the catch and that rollback, so a connection the failure left flagged
+    ``needs_rollback`` is never used. Any other exception, a ``ValueError``
+    included, propagates.
     """
     try:
         _ = save_callable()
     except IntegrityError:
         return integrity_error_field_errors()
+    except ValidationError as exc:
+        return validation_error_to_field_errors(exc, error_key_map())
     return None
 
 

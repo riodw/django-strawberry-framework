@@ -1291,8 +1291,9 @@ def _register_write_step(
     sentinel, not ``password``; ``RegisterInput`` takes no ``input_class``, so the
     input field is always ``password``). Success hashes via ``set_password`` BEFORE
     ``full_clean()`` (the ``password`` column validates against the hash, never
-    the raw input), then delegates ``full_clean`` -> ``save`` (race
-    ``IntegrityError`` -> envelope) -> M2M to the shared model write tail, which
+    the raw input), then delegates ``full_clean`` -> ``save`` (a race
+    ``IntegrityError`` or a save-time ``ValidationError`` -> envelope) -> M2M to
+    the shared model write tail, which
     keys every ``full_clean`` error to the GraphQL input field the client sent
     through ``mutation_cls``'s specs (``first_name`` -> ``firstName``) -
     ``validate_password`` + ``set_password`` are the ONLY auth-specific steps.

@@ -2,8 +2,10 @@
 
 One matrix over the flavors that run a validator ({model ``DjangoMutation``,
 ``DjangoModelFormMutation``, plain ``DjangoFormMutation``, serializer
-``is_valid()``, serializer save-time Django ``ValidationError``, auth
-``register``}) x the key shapes a validator name can take against its input
+``is_valid()``, auth ``register``}, each also at save time: a Django
+``ValidationError`` out of a model ``save()``, ``perform_mutate`` or a serializer
+``create()``; the model flavor's update save too, which runs a forced update) x the
+key shapes a validator name can take against its input
 ({multi-word, forward-key suffix, forward-key column name, rename, unexposed field,
 non-field}). Each cell
 raises one error from the flavor's own validator seam under the validator-side
@@ -14,8 +16,9 @@ shared key map is ``django_strawberry_framework/utils/errors.py::build_error_key
 a new flavor joins this matrix rather than growing its own keying.
 
 Cells a flavor cannot express are absent, not skipped: forms and ``register``
-have no ``Meta.input_class`` rename, and a form error names the form field, never
-a forward key's column name. ``register`` x forward-key needs a user model whose
+have no ``Meta.input_class`` rename, and a form's validation error names the form
+field, never a forward key's column name (a ``ModelForm``'s save-time error comes
+from model code, so it can). ``register`` x forward-key needs a user model whose
 ``REQUIRED_FIELDS`` names a forward key; the stock user has none and
 ``get_user_model()`` cannot be swapped per test, so that cell is left to the model
 flavor's forward-key cells, which run the same tail ``register`` delegates to.
@@ -27,8 +30,9 @@ library ``createPublisher`` and ``createShelfViaSubclassedSerializer``) live in
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from functools import partial
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 import pytest
 import strawberry
@@ -97,6 +101,26 @@ class _Query:
         return 1
 
 
+#: Where a cell's validator raises: the flavor's validation hook, or consumer save-time
+#: code (a model ``save()``, a ``perform_mutate``) after validation passed.
+_Seam = Literal["clean", "save"]
+
+
+def _raise_at(
+    model: type[Model],
+    seam: _Seam,
+    raised: _Raised,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Make ``model.clean`` or ``model.save`` raise the cell's Django ``ValidationError``."""
+
+    # basedpyright: a monkeypatched Model.clean / Model.save stand-in; the args are unused
+    def raising(_self: Model, *_args: Any, **_kwargs: Any) -> NoReturn:  # pyright: ignore[reportExplicitAny]
+        raise _django_error(raised)
+
+    monkeypatch.setattr(model, seam, raising)
+
+
 def _django_error(raised: _Raised) -> DjangoValidationError:
     """The Django ``ValidationError`` for ``raised``: field-keyed, or a bare non-field one."""
     name, message = raised
@@ -126,10 +150,13 @@ def _category_types() -> tuple[type[DjangoType], type[DjangoType]]:
 def _execute(
     mutation_field: object,
     data_literal: Callable[[], str],
+    *,
+    id_literal: Callable[[], str] | None = None,
 ) -> list[tuple[str, list[str]]]:
     """Finalize a one-field ``write`` schema, send ``data_literal()``, return ``(field, path)``s.
 
-    ``data_literal`` runs after finalization, so it can mint GlobalIDs.
+    ``data_literal`` (and ``id_literal``, the located row's ``id`` for an update) runs
+    after finalization, so it can mint GlobalIDs.
     """
 
     @strawberry.type
@@ -140,8 +167,10 @@ def _execute(
     schema = DjangoSchema(query=_Query, mutation=Mutation, error_policy={"enabled": False})
     request = HttpRequest()
     request.user = User(username="u")
+    id_argument = "" if id_literal is None else f'id: "{id_literal()}", '
     result = schema.execute_sync(
-        f"mutation {{ write(data: {{ {data_literal()} }}) {{ errors {{ field path }} }} }}",
+        f"mutation {{ write({id_argument}data: {{ {data_literal()} }}) "
+        "{ errors { field path } } }",
         context_value=SimpleNamespace(request=request),
     )
     assert result.errors is None, result.errors
@@ -167,8 +196,10 @@ def _run_model(
     shape: str,
     raised: _Raised,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    seam: _Seam = "clean",
 ) -> list[tuple[str, list[str]]]:
-    """``DjangoMutation`` over ``Item``; ``Item.clean`` raises inside ``full_clean()``."""
+    """``DjangoMutation`` over ``Item``; ``Item.clean`` or ``Item.save`` raises."""
     category_type, _item_type = _category_types()
     meta: dict[str, object] = {
         "model": product_models.Item,
@@ -187,14 +218,47 @@ def _run_model(
     if shape == "unexposed":
         meta["fields"] = ("name", "category")
     create_item = type("CreateItem", (DjangoMutation,), {"Meta": type("Meta", (), meta)})
-
-    def clean(_self: product_models.Item) -> None:
-        raise _django_error(raised)
-
-    monkeypatch.setattr(product_models.Item, "clean", clean)
+    _raise_at(product_models.Item, seam, raised, monkeypatch)
     return _execute(
         DjangoMutationField(create_item),
         lambda: f'{name_input}: "keyed", categoryId: "{_category_gid(category_type)}"',
+    )
+
+
+def _run_model_update_save(
+    shape: str,
+    raised: _Raised,
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str, list[str]]]:
+    """``DjangoMutation`` UPDATE over ``Item``; the forced-update ``Item.save`` raises.
+
+    The update saves through ``forced_save_or_field_errors``, whose save-time
+    ``ValidationError`` keys through the same model map the create path uses.
+    """
+    del shape
+    category_type, item_type = _category_types()
+    category, _created = product_models.Category.objects.get_or_create(name="Keyed category")
+    item = product_models.Item.objects.create(name="located", category=category)
+    update_item = type(
+        "UpdateItem",
+        (DjangoMutation,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {
+                    "model": product_models.Item,
+                    "operation": "update",
+                    "permission_classes": [_AllowAll],
+                },
+            ),
+        },
+    )
+    _raise_at(product_models.Item, "save", raised, monkeypatch)
+    return _execute(
+        DjangoMutationField(update_item),
+        lambda: f'name: "keyed", categoryId: "{_category_gid(category_type)}"',
+        id_literal=lambda: global_id_for(item_type, item.pk),
     )
 
 
@@ -205,9 +269,10 @@ def _run_modelform(
     shape: str,
     raised: _Raised,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    seam: _Seam = "clean",
 ) -> list[tuple[str, list[str]]]:
-    """``DjangoModelFormMutation`` over an ``Item`` form whose ``clean()`` raises."""
-    del monkeypatch
+    """``DjangoModelFormMutation`` over an ``Item`` form whose ``clean()`` or model save raises."""
     category_type, _item_type = _category_types()
 
     class KeyedItemForm(forms.ModelForm[product_models.Item]):
@@ -216,8 +281,13 @@ def _run_modelform(
             fields = ("name", "category", "is_private")
 
         @override
-        def clean(self) -> NoReturn:
-            raise _django_error(raised)
+        def clean(self) -> dict[str, Any] | None:  # pyright: ignore[reportExplicitAny]
+            if seam == "clean":
+                raise _django_error(raised)
+            return super().clean()
+
+    if seam == "save":
+        _raise_at(product_models.Item, seam, raised, monkeypatch)
 
     meta: dict[str, object] = {
         "form_class": KeyedItemForm,
@@ -241,8 +311,10 @@ def _run_plain_form(
     shape: str,
     raised: _Raised,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    seam: _Seam = "clean",
 ) -> list[tuple[str, list[str]]]:
-    """Plain ``DjangoFormMutation`` over a form whose ``clean()`` raises."""
+    """Plain ``DjangoFormMutation`` over a form whose ``clean()`` or ``perform_mutate`` raises."""
     del monkeypatch
     category_type, _item_type = _category_types()
 
@@ -252,13 +324,21 @@ def _run_plain_form(
         note = forms.CharField(required=False)
 
         @override
-        def clean(self) -> NoReturn:
-            raise _django_error(raised)
+        def clean(self) -> dict[str, Any] | None:  # pyright: ignore[reportExplicitAny]
+            if seam == "clean":
+                raise _django_error(raised)
+            return super().clean()
+
+    def perform_mutate(_self: object, _form: forms.Form, _info: object) -> NoReturn:
+        raise _django_error(raised)
 
     meta: dict[str, object] = {"form_class": KeyedContactForm, "permission_classes": [_AllowAll]}
     if shape == "unexposed":
         meta["fields"] = ("full_name", "category")
-    submit = type("SubmitKeyedContact", (DjangoFormMutation,), {"Meta": type("Meta", (), meta)})
+    namespace: dict[str, object] = {"Meta": type("Meta", (), meta)}
+    if seam == "save":
+        namespace["perform_mutate"] = perform_mutate
+    submit = type("SubmitKeyedContact", (DjangoFormMutation,), namespace)
     return _execute(
         DjangoMutationField(submit),
         lambda: f'fullName: "keyed", categoryId: "{_category_gid(category_type)}"',
@@ -335,6 +415,8 @@ def _run_register(
     shape: str,
     raised: _Raised,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    seam: _Seam = "clean",
 ) -> list[tuple[str, list[str]]]:
     """``register_mutation()`` over a user model requiring ``first_name``; ``clean`` raises."""
     del shape
@@ -347,11 +429,7 @@ def _run_register(
 
     assert registry.get(User) is UserT
     monkeypatch.setattr(User, "REQUIRED_FIELDS", ["email", "first_name"])
-
-    def clean(_self: User) -> None:
-        raise _django_error(raised)
-
-    monkeypatch.setattr(User, "clean", clean)
+    _raise_at(User, seam, raised, monkeypatch)
     return _execute(
         register_mutation(permission_classes=[_AllowAll]),
         lambda: (
@@ -363,11 +441,16 @@ def _run_register(
 
 _RUNNERS: dict[str, _Runner] = {
     "model": _run_model,
+    "model_save": partial(_run_model, seam="save"),
+    "model_update_save": _run_model_update_save,
     "modelform": _run_modelform,
+    "modelform_save": partial(_run_modelform, seam="save"),
     "plain_form": _run_plain_form,
+    "plain_form_save": partial(_run_plain_form, seam="save"),
     "serializer": _run_serializer(save_time=False),
     "serializer_save": _run_serializer(save_time=True),
     "register": _run_register,
+    "register_save": partial(_run_register, seam="save"),
 }
 
 #: ``(flavor, shape, raised validator-side name, expected key)``; ``None`` name = non-field.
@@ -536,6 +619,126 @@ _CELLS: list[tuple[str, str, str | None, str]] = [
     ),
     (
         "register",
+        "non_field",
+        None,
+        NON_FIELD_ERROR_KEY,
+    ),
+    (
+        "model_save",
+        "multi_word",
+        "is_private",
+        "isPrivate",
+    ),
+    (
+        "model_save",
+        "fk_suffix",
+        "category",
+        "categoryId",
+    ),
+    (
+        "model_save",
+        "fk_attname",
+        "category_id",
+        "categoryId",
+    ),
+    (
+        "model_save",
+        "rename",
+        "name",
+        "title",
+    ),
+    (
+        "model_save",
+        "unexposed",
+        "is_private",
+        "is_private",
+    ),
+    (
+        "model_save",
+        "non_field",
+        None,
+        NON_FIELD_ERROR_KEY,
+    ),
+    (
+        "model_update_save",
+        "multi_word",
+        "is_private",
+        "isPrivate",
+    ),
+    (
+        "model_update_save",
+        "fk_attname",
+        "category_id",
+        "categoryId",
+    ),
+    (
+        "modelform_save",
+        "multi_word",
+        "is_private",
+        "isPrivate",
+    ),
+    (
+        "modelform_save",
+        "fk_suffix",
+        "category",
+        "categoryId",
+    ),
+    (
+        "modelform_save",
+        "fk_attname",
+        "category_id",
+        "categoryId",
+    ),
+    (
+        "modelform_save",
+        "unexposed",
+        "is_private",
+        "is_private",
+    ),
+    (
+        "modelform_save",
+        "non_field",
+        None,
+        NON_FIELD_ERROR_KEY,
+    ),
+    (
+        "plain_form_save",
+        "multi_word",
+        "full_name",
+        "fullName",
+    ),
+    (
+        "plain_form_save",
+        "fk_suffix",
+        "category",
+        "categoryId",
+    ),
+    (
+        "plain_form_save",
+        "unexposed",
+        "note",
+        "note",
+    ),
+    (
+        "plain_form_save",
+        "non_field",
+        None,
+        NON_FIELD_ERROR_KEY,
+    ),
+    (
+        "register_save",
+        "multi_word",
+        "first_name",
+        "firstName",
+    ),
+    (
+        "register_save",
+        "unexposed",
+        "last_name",
+        "last_name",
+    ),
+    (
+        "register_save",
         "non_field",
         None,
         NON_FIELD_ERROR_KEY,

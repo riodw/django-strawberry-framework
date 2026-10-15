@@ -14,6 +14,7 @@ from __future__ import annotations
 import pytest
 from apps.kanban import factories as kf
 from apps.kanban import models
+from apps.kanban.signals import CARD_STATUS_TRANSITION_ERROR
 from django.contrib.auth.models import User
 from django.test import Client
 from graphql_client import JSONObject
@@ -68,6 +69,20 @@ _SET_STATUS = (
     "mutation($d: SetCardStatusFormInput!) { setCardStatus(data: $d) "
     "{ ok errors { field messages codes } } }"
 )
+_SET_STATUS_WITH_PATH = (
+    "mutation($d: SetCardStatusFormInput!) { setCardStatus(data: $d) "
+    "{ ok errors { field messages codes path } } }"
+)
+#: The status signal guard's save-time ``ValidationError`` (a bare message: no field,
+#: no code) as the plain-form pipeline maps it: the root ``"__all__"`` bucket.
+_ILLEGAL_TODO_TO_DONE_ERRORS = [
+    {
+        "field": "__all__",
+        "messages": [CARD_STATUS_TRANSITION_ERROR.format(old="todo", new="done")],
+        "codes": [],
+        "path": [],
+    },
+]
 
 
 @pytest.mark.django_db
@@ -90,19 +105,24 @@ def test_set_card_status_happy_path() -> None:
 
 @pytest.mark.django_db
 def test_set_card_status_illegal_transition_returns_envelope() -> None:
+    """The status signal guard's save-time ``ValidationError`` is the ``__all__`` envelope.
+
+    The guard raises from a ``pre_save`` receiver inside ``perform_mutate``; the
+    plain-form pipeline maps it to ``{ok: false}`` with one root non-field error and
+    rolls the write back.
+    """
     card = kf.make_card(status=kf.make_status("todo"))
     client = _staff_client()
 
     payload = _run(
-        _SET_STATUS,
+        _SET_STATUS_WITH_PATH,
         {"d": {"cardId": _card_gid(card), "statusKey": "done", "actorKey": "maintainer"}},
         client=client,
     )
 
     assert "errors" not in payload, payload
     envelope = payload["data"]["setCardStatus"]
-    assert envelope["ok"] is False
-    assert "Illegal kanban card status transition" in envelope["errors"][0]["messages"][0]
+    assert envelope == {"ok": False, "errors": _ILLEGAL_TODO_TO_DONE_ERRORS}
     card.refresh_from_db()
     assert card.status.key == "todo"
 
@@ -652,8 +672,8 @@ async def test_set_card_status_illegal_transition_async_envelope(
     """Drive one mutation through ``resolve_async``: an illegal transition maps to the envelope.
 
     The async color of ``test_set_card_status_illegal_transition_returns_envelope``:
-    the ``_ServiceErrorMixin.resolve_async`` seam catches the signal guard's
-    ``ValidationError`` and returns the ``{ok: false, errors}`` write envelope
+    the plain-form pipeline maps the signal guard's save-time ``ValidationError``
+    out of ``perform_mutate`` onto the ``{ok: false, errors}`` write envelope
     rather than a top-level GraphQL error.
     """
     card, user = async_kanban_card
@@ -661,13 +681,11 @@ async def test_set_card_status_illegal_transition_async_envelope(
 
     async with client.login(user):
         res = await client.query(
-            _SET_STATUS,
+            _SET_STATUS_WITH_PATH,
             variables={
                 "d": {"cardId": _card_gid(card), "statusKey": "done", "actorKey": "maintainer"},
             },
         )
 
     assert res.data is not None
-    envelope = res.data["setCardStatus"]
-    assert envelope["ok"] is False
-    assert "Illegal kanban card status transition" in envelope["errors"][0]["messages"][0]
+    assert res.data["setCardStatus"] == {"ok": False, "errors": _ILLEGAL_TODO_TO_DONE_ERRORS}

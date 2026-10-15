@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 73 done, 154 to do.
+Progress: 74 done, 156 to do.
 
 ## Done
 
@@ -213,6 +213,13 @@ Progress: 73 done, 154 to do.
   (`a5dc6ea3`, item 5)
 - [x] 195. Re-checked at `8ca6a481`: `test_audit_marks_target_parse_failure_as_incomplete` and the three `async_executor`
   rows in `tests/utils/test_querysets.py` pass; no fix commit identified (possibly stale when filed)
+- [x] 92. A Django `ValidationError` raised at save time (a consumer `Model.save()` / `delete()`, a save / delete /
+  `m2m_changed` signal, `ModelForm.save()`, `perform_mutate`, register's user save) reached the client as a masked
+  top-level error on the model, ModelForm, plain-form and register flavors, while the serializer flavor mapped it; every
+  flavor now returns the `FieldError` envelope, keyed like `full_clean()` / `form.errors` and rolled back, through one
+  catch in `mutations/resolvers.py::save_or_field_errors` (plus the forced-update and delete wrappers), with no new
+  savepoint and no query-count change; a `ValueError` still propagates. The kanban example's hand-written mapping is gone;
+  CHANGELOG item 232; filed 230, 231
 
 ## Outside review of the fixes
 
@@ -268,8 +275,6 @@ Expected outcome: most are not real bugs and just get deleted from t3. One check
 
 ## To do: found along the way
 
-- [ ] 92. A consumer `save()` raising Django's `ValidationError` escapes the ModelForm flavor as a masked top-level error, while the
-  serializer flavor maps it into the envelope
 - [ ] 97. A `FilterSet` declaring `{"<fo>": ["exact", "isnull"]}` over a forward `ForeignObject` raises django-filter's
   `AssertionError: unrecognized field type ForeignObject` at class creation, where a `ForeignKey` builds `isnull`
 - [ ] 100. A random `"?"` order (hook `order_by("?")` or `Meta.ordering = ["?"]`) on an optimized nested offset connection
@@ -518,6 +523,12 @@ Expected outcome: most are not real bugs and just get deleted from t3. One check
   error was replaced by "not a ... instance"); relevant to item 94's posture
 - [ ] 228. `exceptions.py::_safe_arg_repr` does not bound length, so a `got {...}` tail can carry a megabyte repr into the
   message (a custom `save()` returning a large string)
+- [ ] 230. Lead: login's `user_logged_in` -> `update_last_login` -> `User.save()` is a consumer save point outside every
+  write window; what a `ValidationError` raised there (a custom user `save()` or a `pre_save` receiver) does on
+  `login` was not examined
+- [ ] 231. KANBAN.md's "`FieldError` keying" card (rendered from the kanban DB) still says
+  `validation_error_to_field_errors` is an identity pass-through and that no test covers a multi-word snake_case
+  field; both are stale (the key maps and `tests/utils/test_error_keys.py` landed before)
 
 ## To do: holes found re-checking the fixes
 
@@ -701,6 +712,10 @@ Expected outcome: most are not real bugs and just get deleted from t3. One check
 - [ ] 219. Strawberry's own `ListConnection` (0.327.7 and 0.334.4) fails `assert last is not None` when `after + 1 + first`
   equals `sys.maxsize` (its `SliceMetadata` last-only sentinel) and overruns `islice`'s stop past it on an iterator source;
   the package now keeps its pages clear of both. Report it upstream?
+- [ ] 232. CHANGELOG entry for item 92: a Django `ValidationError` raised at save time (`Model.save()` / `delete()`,
+  signals, `ModelForm.save()`, `perform_mutate`, register's user save) now returns the `FieldError` envelope on the model,
+  form and register flavors instead of "An unexpected error occurred." (0.0.14 masked it); whether to mark it BREAKING
+  (a client branching on the top-level error sees `errors` instead) is your call
 
 ## Hunt not finished in t3
 

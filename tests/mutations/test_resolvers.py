@@ -22,9 +22,10 @@ replace / explicit null live in ``examples/fakeshop/test_query/test_uploads_api.
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import itertools
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, TypeVar
 from unittest import mock
@@ -41,6 +42,7 @@ from django.core.exceptions import ValidationError
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, connection, transaction
 from django.db.models import Model, QuerySet
+from django.db.models.signals import m2m_changed
 from django.utils import timezone
 from graphql_client import JSONObject
 from strawberry import relay
@@ -815,6 +817,153 @@ def test_m2m_hidden_related_id_is_field_error() -> None:
     )
     assert_mutation_field_error(res, "createBook", "genres")
     assert not library_models.Book.objects.filter(title="Dune").exists()
+
+
+_M2M_REFUSAL_DISPATCH_UID = "tests.mutations.m2m_save_time_refusal"
+
+
+def _refuse_genre_assignment(action: str, **_kwargs: object) -> None:
+    """An ``m2m_changed`` receiver refusing every genre assignment once it is made."""
+    if action == "post_add":
+        raise DjangoValidationError(
+            {
+                "genres": DjangoValidationError("Genres are frozen.", code="frozen"),
+                "shelf_id": "Shelf rejected with the genres.",
+            },
+        )
+
+
+@contextlib.contextmanager
+def _genre_assignment_refused() -> Generator[None, None, None]:
+    """Connect ``_refuse_genre_assignment`` to ``Book.genres``' through model inside the block."""
+    through = library_models.Book.genres.through
+    m2m_changed.connect(
+        _refuse_genre_assignment,
+        sender=through,
+        weak=False,
+        dispatch_uid=_M2M_REFUSAL_DISPATCH_UID,
+    )
+    try:
+        yield
+    finally:
+        _ = m2m_changed.disconnect(sender=through, dispatch_uid=_M2M_REFUSAL_DISPATCH_UID)
+
+
+def _build_update_book_schema() -> tuple[
+    strawberry.Schema,
+    tuple[type[DjangoType], type[DjangoType], type[DjangoType]],
+]:
+    """Declare Book/Genre/Shelf primaries + an update mutation over the Book M2M."""
+
+    class GenreT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Genre
+            fields = ("id", "name")
+            primary = True
+
+    class ShelfT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+            primary = True
+
+    class BookT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Book
+            fields = ("id", "title")
+            primary = True
+
+    class UpdateBook(DjangoMutation):
+        class Meta:
+            model = library_models.Book
+            operation = "update"
+            fields = ("title", "shelf", "genres")
+            permission_classes = [_AllowAll]
+
+    @strawberry.type
+    class Mutation:
+        update_book = DjangoMutationField(UpdateBook)
+
+    finalize_django_types()
+    return _schema(Mutation), (GenreT, ShelfT, BookT)
+
+
+#: The envelope the refusing receiver produces, keyed through the model key map:
+#: ``genres`` stays ``genres`` and the forward key's column ``shelf_id`` reports as
+#: ``shelfId``.
+_M2M_REFUSAL_ERRORS = [
+    {
+        "field": "genres",
+        "messages": ["Genres are frozen."],
+        "codes": ["frozen"],
+        "path": ["genres"],
+    },
+    {
+        "field": "shelfId",
+        "messages": ["Shelf rejected with the genres."],
+        "codes": [],
+        "path": ["shelfId"],
+    },
+]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("operation", ["create", "update"])
+def test_m2m_assignment_validation_error_is_the_model_keyed_envelope(operation: str) -> None:
+    """A ``ValidationError`` from an ``m2m_changed`` receiver is the envelope, nothing written.
+
+    The M2M ``.set(...)`` runs after the row's ``save()`` inside the write window, so a
+    receiver refusing the assignment raises after the ``Book`` row and its new through
+    rows were written. The model flavor maps it through the same key map as
+    ``full_clean()``, returns a null object, and rolls everything back: a create leaves
+    no book and no through row, an update leaves the stored title and genres as they
+    were.
+    """
+    shelf = _make_branch_shelf()
+    stored = library_models.Genre.objects.create(name="Stored")
+    frozen = library_models.Genre.objects.create(name="Frozen")
+    if operation == "create":
+        schema, (GenreT, ShelfT, _BookT) = _build_book_schema()
+        query = (
+            "mutation($d: BookGenresShelfTitleInput!){ createBook(data:$d){ "
+            "node{ id } errors{ field messages codes path } } }"
+        )
+        variables: dict[str, object] = {
+            "d": {
+                "title": "Refused",
+                "shelfId": global_id_for(ShelfT, shelf.pk),
+                "genres": [global_id_for(GenreT, frozen.pk)],
+            },
+        }
+        book = None
+    else:
+        schema, (GenreT, _ShelfT, BookT) = _build_update_book_schema()
+        book = library_models.Book.objects.create(title="Kept", shelf=shelf)
+        book.genres.set([stored])
+        query = (
+            "mutation($id: ID!, $d: BookGenresShelfTitlePartialInput!){ "
+            "updateBook(id:$id, data:$d){ node{ id } errors{ field messages codes path } } }"
+        )
+        variables = {
+            "id": global_id_for(BookT, book.pk),
+            "d": {"title": "Refused", "genres": [global_id_for(GenreT, frozen.pk)]},
+        }
+    with _genre_assignment_refused():
+        res = schema.execute_sync(query, variable_values=variables)
+    assert res.errors is None, res.errors
+    assert res.data == {
+        f"{operation}Book": {"node": None, "errors": _M2M_REFUSAL_ERRORS},
+    }
+    assert not library_models.Book.objects.filter(title="Refused").exists()
+    through_pairs = set(
+        library_models.Book.genres.through.objects.values_list("book_id", "genre_id"),
+    )
+    if book is None:
+        assert through_pairs == set()
+    else:
+        book.refresh_from_db()
+        assert book.title == "Kept"
+        assert through_pairs == {(book.pk, stored.pk)}
 
 
 # ---------------------------------------------------------------------------

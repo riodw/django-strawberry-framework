@@ -72,13 +72,18 @@ and the form-specific invariants this module owns:
   keying a model ``full_clean()`` failure gets.
 
 - **Write via ``form.save()`` (``ModelForm``) / ``perform_mutate`` (plain),
-  wrapped by the reused ``save_or_field_errors`` ``IntegrityError`` -> envelope
-  mapper** (Decision 8 step 5), never a top-level ``GraphQLError`` at the write.
-  The ``ModelForm`` save adds the one other failure a valid ``ModelForm`` reaches
-  on its own: a ``blank=True, null=False`` non-text choice column cleaned to
-  ``""``, which ``save()`` refuses with a ``ValueError`` / ``ValidationError``,
-  maps to that column's field-keyed ``null`` error
-  (``_modelform_save_or_field_errors``); any other save exception propagates.
+  wrapped by the reused ``save_or_field_errors`` save-time mapper** (Decision 8
+  step 5), never a top-level ``GraphQLError`` at the write: an ``IntegrityError``
+  is the ``"__all__"`` envelope, and a Django ``ValidationError`` raised by
+  consumer save-time code (a ``save()`` / ``perform_mutate`` override, a model
+  ``save()``, a signal receiver) is mapped through the flavor's key map - the
+  form field name for the plain form, every name Django keys the backing model
+  field by for the ``ModelForm`` (``save_time_error_key_map``). The ``ModelForm``
+  save adds the one failure a valid ``ModelForm`` reaches on its own: a
+  ``blank=True, null=False`` non-text choice column cleaned to ``""``, which
+  ``save()`` refuses with a ``ValueError`` / ``ValidationError``, maps to that
+  column's field-keyed ``null`` error (``_modelform_save_or_field_errors``); any
+  other ``ValueError`` propagates.
 
 - **The ``ModelForm`` re-fetch rides the ``036`` ``refetch_optimized`` G2 path**
   (Decision 9): by pk WITHOUT the visibility filter, routed through
@@ -120,6 +125,7 @@ from django_strawberry_framework.mutations.resolvers import (
 from django_strawberry_framework.mutations.sets import backing_model_of
 from django_strawberry_framework.utils.errors import (
     build_error_key_map,
+    save_time_error_key_map,
     validation_error_to_field_errors,
 )
 from django_strawberry_framework.utils.querysets import sync_pipeline_recourse
@@ -626,33 +632,52 @@ def _modelform_save_or_field_errors(
 ) -> list[FieldError] | None:
     """Run ``form.save()``; map a save-time failure to the envelope else ``None``.
 
-    The ``IntegrityError`` -> ``"__all__"`` mapping is the shared
-    ``save_or_field_errors``. On top, the one failure a VALID ``ModelForm`` can reach
-    at ``save()`` on its own: a ``blank=True, null=False`` non-text column the form
-    cleaned to ``""`` (an omitted or explicitly ``null`` optional choice column with no
-    default to fall back on), which Django's ``clean_fields`` skipped and the column's
-    ``get_prep_value`` / ``to_python`` then refuses with a ``ValueError`` or
-    ``ValidationError``. The exception is the trigger, never the diagnosis: the
-    failure is mapped only when ``_unstorable_blank_fields`` finds such a column
-    on the instance the save was attempted on. The error carries the field, code
-    ``null`` and path the model flavor's ``mutations/resolvers.py::_explicit_null_error``
-    gives the same column, with the column's Django ``error_messages["null"]`` as the
-    message (the form is the message source of truth, so a custom or translated
-    message is sent as is). Any other ``ValueError`` / ``ValidationError`` out of a
-    consumer ``save()`` propagates unchanged. Checking the instance AFTER the save
-    attempt, not before, keeps Django's own ``blank=True, null=False`` contract
-    (django-trac 13776 / 20205): a consumer ``save()`` that fills the value in never
-    sees the guard.
+    The ``IntegrityError`` -> ``"__all__"`` and consumer ``ValidationError`` mappings
+    are the shared ``save_or_field_errors``, keyed through
+    ``utils/errors.py::save_time_error_key_map`` over the backing model: a
+    ``ModelForm`` field is named after its model field, and a model ``save()`` or
+    signal receiver keys its error by the model field name or a forward relation's
+    ``attname``, so both reach the GraphQL input name. On top, the one failure a
+    VALID ``ModelForm`` can reach at ``save()`` on its own: a ``blank=True,
+    null=False`` non-text column the form cleaned to ``""`` (an omitted or
+    explicitly ``null`` optional choice column with no default to fall back on),
+    which Django's ``clean_fields`` skipped and the column's ``get_prep_value`` /
+    ``to_python`` then refuses with a ``ValueError`` or ``ValidationError``. The
+    exception is the trigger, never the diagnosis: the failure is re-raised as that
+    column's field-keyed ``ValidationError`` only when ``_unstorable_blank_fields``
+    finds such a column on the instance the save was attempted on, so the error
+    carries the field, code ``null`` and path the model flavor's
+    ``mutations/resolvers.py::_explicit_null_error`` gives the same column, with the
+    column's Django ``error_messages["null"]`` as the message (the form is the
+    message source of truth, so a custom or translated message is sent as is). Any
+    other ``ValueError`` out of a consumer ``save()`` propagates unchanged; any other
+    ``ValidationError`` is the consumer's own and maps as raised. Checking the
+    instance AFTER the save attempt, not before, keeps Django's own ``blank=True,
+    null=False`` contract (django-trac 13776 / 20205): a consumer ``save()`` that
+    fills the value in never sees the guard.
     """
-    try:
-        return save_or_field_errors(form.save)
-    except (ValueError, ValidationError):
-        unstorable_fields = _unstorable_blank_fields(form)
-        if not unstorable_fields:
-            raise
-        for field in unstorable_fields:
-            form.add_error(field.name, ValidationError(field.error_messages["null"], code="null"))
-        return _form_errors_to_field_errors(form, mutation_cls)
+
+    def save() -> None:
+        try:
+            _ = form.save()
+        except (ValueError, ValidationError):
+            unstorable_fields = _unstorable_blank_fields(form)
+            if not unstorable_fields:
+                raise
+            raise ValidationError(
+                {
+                    field.name: ValidationError(field.error_messages["null"], code="null")
+                    for field in unstorable_fields
+                },
+            ) from None
+
+    return save_or_field_errors(
+        save,
+        error_key_map=lambda: save_time_error_key_map(
+            mutation_cls._input_field_specs,
+            backing_model_of(mutation_cls._mutation_meta),
+        ),
+    )
 
 
 def _modelform_write_step(
@@ -667,8 +692,8 @@ def _modelform_write_step(
     data, runs ``is_valid()`` once (a failure maps ``form.errors`` onto the envelope
     via the reused ``validation_error_to_field_errors``), then writes via
     ``form.save()`` through ``_modelform_save_or_field_errors`` (the reused
-    ``save_or_field_errors`` ``IntegrityError`` mapper plus the blank non-text
-    choice column ``null`` mapping). Returns the saved instance (the skeleton's
+    ``save_or_field_errors`` ``IntegrityError`` / ``ValidationError`` mapper plus
+    the blank non-text choice column ``null`` mapping). Returns the saved instance (the skeleton's
     ``refetch_optimized`` re-fetches it by pk under the G2 plan) or a
     ``StepFailure`` on a validation / write failure.
     """
@@ -703,8 +728,11 @@ def _plain_form_write_step(
     """Run the plain-form ``write_step``: ``get_form`` -> ``is_valid`` -> ``perform_mutate``.
 
     Same construct/validate helper as ModelForm; the persist hook is
-    ``perform_mutate`` (default ``form.save()`` if present, else no-op). Returns
-    ``True`` on success so the skeleton's model-less tail builds ``{ ok: true }``.
+    ``perform_mutate`` (default ``form.save()`` if present, else no-op), whose
+    ``IntegrityError`` / ``ValidationError`` maps to the envelope through
+    ``save_or_field_errors``; a ``ValidationError`` keys by form field name, the
+    same map ``_form_errors_to_field_errors`` uses. Returns ``True`` on success so
+    the skeleton's model-less tail builds ``{ ok: true }``.
     """
     holder = mutation_cls()
     bound = _bound_form_or_field_errors(
@@ -723,6 +751,7 @@ def _plain_form_write_step(
     with pipeline_write_phase():
         write_error = save_or_field_errors(
             lambda: holder.perform_mutate(form, info),
+            error_key_map=lambda: build_error_key_map(mutation_cls._input_field_specs),
         )
     if write_error is not None:
         return StepFailure(write_error)

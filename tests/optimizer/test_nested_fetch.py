@@ -332,9 +332,14 @@ def test_resolve_strategy_none_reads_setting(settings: pytest_django.Settings) -
         resolve_strategy(None)
 
 
+def _construct_optimizer() -> object:
+    """Build the optimizer with defaults, so construction reads the settings."""
+    return DjangoOptimizerExtension()
+
+
 @pytest.mark.parametrize(
     "resolve",
-    [lambda: resolve_strategy(None), DjangoOptimizerExtension],
+    [lambda: resolve_strategy(None), _construct_optimizer],
     ids=["resolve-strategy-none", "extension-construction"],
 )
 @pytest.mark.parametrize(

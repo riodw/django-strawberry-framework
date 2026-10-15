@@ -1815,9 +1815,11 @@ The pipeline steps:
    against a `GlobalID`-typed field is a **top-level variable-coercion error before the
    resolver runs** (verified: products' `test_create_item_malformed_category_id_is_top_level_coercion_error`,
    because relation inputs are typed `GlobalID`, not `ID!`). The **shared decode helper**
-   accepts **both** a `GlobalID` and a raw pk because it is reused and package tests
-   exercise the raw-pk / non-Relay branch by **direct call** (no live HTTP shape exists for
-   it unless fakeshop grows a real non-Relay relation field). Each id the decoder does see
+   accepts **both** a `GlobalID` and a raw pk because it is reused; the raw-pk / non-Relay
+   branch is live wherever the relation target's primary is non-Relay (fakeshop's
+   `createShelfViaSerializer` `branchId` into `BranchType`, and `createPrintingViaSerializer` /
+   `updatePrintingViaSerializer` `editionId` / `boundWith` into the text-keyed `EditionType`),
+   and package tests also drive it by **direct call**. Each id the decoder does see
    is type-checked against the relation's **target model** — resolved from the backing FK
    via the serializer field's `source`, or, for a serializer-only relation, from the DRF
    field's `queryset.model`

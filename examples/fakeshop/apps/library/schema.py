@@ -2336,6 +2336,108 @@ class CreatePatronProfileRepointingGenre(SerializerMutation):
         permission_classes = []
 
 
+# --------------------------------------------------------------------------- #
+# Write surface over relations into the text-keyed ``Edition`` (its primary key is
+# the ISBN text column; ``EditionType`` is non-Relay), in every write flavor. The
+# ``editionId`` FK and ``boundWith`` M2M inputs are raw pks that carry the ISBN
+# text, so the relation decode meets client text before its existence query; the
+# ``Edition`` update / delete writes take that text as their raw-pk ``id``.
+# --------------------------------------------------------------------------- #
+
+
+class CreatePrinting(DjangoMutation):
+    """Create a ``Printing`` via the model pipeline (text-keyed raw-pk FK + M2M)."""
+
+    class Meta:
+        model = models.Printing
+        operation = "create"
+        fields = ("edition", "run_size", "bound_with")
+        permission_classes = []
+
+
+class UpdatePrinting(DjangoMutation):
+    """Update a ``Printing`` via the model pipeline; the update ``id`` is a ``GlobalID``."""
+
+    class Meta:
+        model = models.Printing
+        operation = "update"
+        fields = ("edition", "run_size", "bound_with")
+        permission_classes = []
+
+
+class CreatePrintingViaForm(DjangoModelFormMutation):
+    """Create a ``Printing`` via ``PrintingForm`` (text-keyed raw-pk FK + M2M)."""
+
+    class Meta:
+        form_class = forms.PrintingForm
+        operation = "create"
+        permission_classes = []
+
+
+class UpdatePrintingViaForm(DjangoModelFormMutation):
+    """Update a ``Printing`` via ``PrintingForm``; the update ``id`` is a ``GlobalID``."""
+
+    class Meta:
+        form_class = forms.PrintingForm
+        operation = "update"
+        permission_classes = []
+
+
+class CreatePrintingViaSerializer(SerializerMutation):
+    """Create a ``Printing`` via ``PrintingSerializer`` (text-keyed raw-pk FK + M2M)."""
+
+    class Meta:
+        serializer_class = serializers.PrintingSerializer
+        operation = "create"
+        permission_classes = []
+
+
+class UpdatePrintingViaSerializer(SerializerMutation):
+    """Update a ``Printing`` via ``PrintingSerializer``; the update ``id`` is a ``GlobalID``."""
+
+    class Meta:
+        serializer_class = serializers.PrintingSerializer
+        operation = "update"
+        permission_classes = []
+
+
+class UpdateEdition(DjangoMutation):
+    """Update an ``Edition``'s ``imprint`` via the model pipeline; the ``id`` is the raw ISBN."""
+
+    class Meta:
+        model = models.Edition
+        operation = "update"
+        fields = ("imprint",)
+        permission_classes = []
+
+
+class DeleteEdition(DjangoMutation):
+    """Delete an ``Edition`` via the model pipeline; the ``id`` is the raw ISBN."""
+
+    class Meta:
+        model = models.Edition
+        operation = "delete"
+        permission_classes = []
+
+
+class UpdateEditionViaForm(DjangoModelFormMutation):
+    """Update an ``Edition``'s ``imprint`` via ``EditionImprintForm``; the ``id`` is the raw ISBN."""
+
+    class Meta:
+        form_class = forms.EditionImprintForm
+        operation = "update"
+        permission_classes = []
+
+
+class UpdateEditionViaSerializer(SerializerMutation):
+    """Update an ``Edition``'s ``imprint`` via ``EditionImprintSerializer``; the ``id`` is the raw ISBN."""
+
+    class Meta:
+        serializer_class = serializers.EditionImprintSerializer
+        operation = "update"
+        permission_classes = []
+
+
 @strawberry.type
 class Mutation:
     """Library write surface (live raw-pk relation visibility + ``to_field_name``).
@@ -2370,6 +2472,10 @@ class Mutation:
     sent is resolved to the genre name the column stores.
     ``updatePatronProfileViaForm`` is the ``ModelForm`` write of the same key through a
     genre-id-keyed form field: an omitted genre is rebound by its id, never by the stored name.
+    ``createPrinting`` / ``updatePrinting`` and their ``ViaForm`` / ``ViaSerializer`` siblings
+    write relations into the text-keyed ``Edition`` in each flavor; ``updateEdition`` /
+    ``deleteEdition`` and the ``ViaForm`` / ``ViaSerializer`` updates locate an ``Edition`` by
+    its raw ISBN ``id``.
     """
 
     create_shelf_via_form = DjangoMutationField(CreateShelfViaForm)
@@ -2460,6 +2566,16 @@ class Mutation:
     create_patron_profile_replacing_genre_renamed = DjangoMutationField(
         CreatePatronProfileReplacingGenreRenamed,
     )
+    create_printing = DjangoMutationField(CreatePrinting)
+    update_printing = DjangoMutationField(UpdatePrinting)
+    create_printing_via_form = DjangoMutationField(CreatePrintingViaForm)
+    update_printing_via_form = DjangoMutationField(UpdatePrintingViaForm)
+    create_printing_via_serializer = DjangoMutationField(CreatePrintingViaSerializer)
+    update_printing_via_serializer = DjangoMutationField(UpdatePrintingViaSerializer)
+    update_edition = DjangoMutationField(UpdateEdition)
+    delete_edition = DjangoMutationField(DeleteEdition)
+    update_edition_via_form = DjangoMutationField(UpdateEditionViaForm)
+    update_edition_via_serializer = DjangoMutationField(UpdateEditionViaSerializer)
 
 
 __all__ = ("Mutation", "Query")

@@ -96,7 +96,9 @@ def unencodable_text_error(field_name: str, value: object) -> FieldError | None:
     rather than trusted to its column: whether a JSON column stores an escaped lone
     surrogate depends on the backend and on the field's encoder (one dumping with
     ``ensure_ascii=False`` cannot encode it), so the decode refuses it on every
-    backend.
+    backend. A relation id's coerced pk is held to the same rule
+    (``type_check_relation_id``), since a text-keyed target binds it into the existence
+    query.
     """
     pending: list[tuple[str, object]] = [(field_name, value)]
     while pending:
@@ -198,6 +200,7 @@ def type_check_relation_id(
     graphql_name: str,
     related_model: type[models.Model],
     info: object = None,
+    index: int | None = None,
 ) -> tuple[object, FieldError | None]:
     """Type-check + coerce ONE relation id to a pk WITHOUT a DB fetch.
 
@@ -219,6 +222,16 @@ def type_check_relation_id(
     ``relation_field_error``); a raw pk is coerced through the target pk field
     (``None`` -> the uniform error) and never reads ``info``.
 
+    The coerced pk is then held to the text storability preflight
+    (``unencodable_text_error``) before any caller binds it into an existence query: a
+    lone surrogate in the id of a text-keyed target coerces cleanly through the
+    target's text pk field, and the query would raise a raw backend
+    ``UnicodeEncodeError``. It is the same field-keyed ``invalid`` error a scalar text
+    leaf gets, keyed to ``graphql_name`` (``editionId``), or to the element's
+    ``graphql_name.<index>`` path (``boundWith.1``) when ``index`` names its position
+    in a relation-id list. A pk coerced to a non-text value (an int, a UUID) passes
+    through it unchanged.
+
     The ``decode_model_global_id`` / ``GlobalIDDecode`` import is function-local:
     the package's ``relay`` module imports ``utils.querysets`` at module level, so
     a module-level import here would risk an import cycle through the utils
@@ -234,10 +247,17 @@ def type_check_relation_id(
         )
         if result.status is not GlobalIDDecode.OK:
             return None, relation_field_error(graphql_name)
-        return result.pk, None
-    pk = coerce_relation_pk_or_none(related_model, value)
-    if pk is None:
-        return None, relation_field_error(graphql_name)
+        pk = result.pk
+    else:
+        pk = coerce_relation_pk_or_none(related_model, value)
+        if pk is None:
+            return None, relation_field_error(graphql_name)
+    text_error = unencodable_text_error(
+        graphql_name if index is None else join_error_path(graphql_name, str(index)),
+        pk,
+    )
+    if text_error is not None:
+        return None, text_error
     return pk, None
 
 
@@ -272,6 +292,7 @@ def decode_visible_relation(
     async_recourse: str,
     skip: Callable[[object], bool],
     project: Callable[[models.Model], object],
+    index: int | None = None,
 ) -> tuple[object, FieldError | None]:
     """Decode ONE relation id to its visible, flavor-projected value.
 
@@ -289,7 +310,8 @@ def decode_visible_relation(
     field-keyed ``FieldError`` (hidden and missing indistinguishable, no
     existence leak); (iv) ``project(obj)`` reduces the visible object to the
     flavor's bound-data value (the form's ``to_field_name`` key, the serializer's
-    ``obj.pk``).
+    ``obj.pk``). ``index`` is the id's position when a caller maps this over a
+    relation-id list; it keys the type-check's text error to that element.
 
     Returns ``(projected, None)`` on success or ``(None, FieldError)``. The
     form MULTI decoder maps this per element (it needs the object for
@@ -303,6 +325,7 @@ def decode_visible_relation(
         graphql_name=graphql_name,
         related_model=related_model,
         info=info,
+        index=index,
     )
     if error is not None:
         return None, error
@@ -363,6 +386,7 @@ def decode_visible_relation_ids(
     info: Info[object, object],
     async_recourse: str,
     key_attname: str | None = None,
+    single: bool = False,
 ) -> tuple[list[object] | None, FieldError | None]:
     """Type-check each relation id, then confirm the whole set in one visibility query.
 
@@ -385,6 +409,10 @@ def decode_visible_relation_ids(
     write never stores a pk where the column holds a ``to_field`` value. A visible row
     whose key is ``NULL`` cannot be linked by it and is the same relation error.
 
+    Each element's type-check keys its text error to the element's index
+    (``boundWith.1``); ``single`` marks ``values`` as one FK id the caller wrapped in a
+    list, whose error keys to ``graphql_name`` alone.
+
     Flavor null policy stays at the caller: the model M2M path rejects a
     whole-list ``None``; the serializer passes it through so ``is_valid()``
     decides. Returns ``(keys, None)`` in input order on success or ``(None, FieldError)``.
@@ -395,12 +423,13 @@ def decode_visible_relation_ids(
 
     pks: list[object] = []
     # A ``None`` error means the container materialized into a list.
-    for value in cast("list[object]", provided_values):
+    for index, value in enumerate(cast("list[object]", provided_values)):
         pk, error = type_check_relation_id(
             value,
             graphql_name=graphql_name,
             related_model=related_model,
             info=info,
+            index=None if single else index,
         )
         if error is not None:
             return None, error

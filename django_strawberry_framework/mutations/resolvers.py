@@ -143,6 +143,7 @@ from django_strawberry_framework.utils.write_values import (
     decode_visible_relation_ids,
     decoded_into,
     relation_into,
+    unencodable_text_error,
 )
 
 from . import inputs
@@ -650,10 +651,13 @@ def _decode_single_relation_id(
 
     Wraps the single value in a one-element list, delegates to
     ``decode_visible_relation_ids`` (type-check + coerce + visibility), and unwraps
-    the single stored key. A non-``GlobalID`` value (a raw pk) is coerced and
-    visibility-checked by that compose, the same contract the M2M path uses. The id
-    names the related row by pk; the value returned for the ``<field>_id`` attname is
-    the key the column stores (``ForeignKey.target_field``: the pk, or a ``to_field``
+    the single stored key. ``single=True`` tells the set decoder the list is that
+    wrapper, not a client list, so a text error keys to the FK input
+    (``editionId``), never to an element index (``editionId.0``). A non-``GlobalID``
+    value (a raw pk) is coerced and visibility-checked by that compose, the same
+    contract the M2M path uses. The id names the related row by pk; the value
+    returned for the ``<field>_id`` attname is the key the column stores
+    (``ForeignKey.target_field``: the pk, or a ``to_field``
     value), read by the same visibility query.
 
     An explicit ``None`` is the clear signal for a **nullable** FK / OneToOne and
@@ -677,6 +681,7 @@ def _decode_single_relation_id(
         info=info,
         async_recourse=_MUTATION_ASYNC_RECOURSE,
         key_attname=non_pk_relation_key_attname(relation_field),
+        single=True,
     )
     if error is not None:
         return None, error
@@ -1480,7 +1485,11 @@ def coerce_lookup_id(
     query, never a raw ``ValueError`` / backend ``OverflowError``; a coerced pk
     still meets ``locate_instance``'s visibility ``get_queryset``, so a hidden row
     and a missing row stay indistinguishable. A GlobalID string sent here is just
-    an uncoercible literal.
+    an uncoercible literal. A coerced pk holding unencodable text (a lone surrogate in
+    the id of a text-keyed primary, which coerces cleanly through its text pk field) is
+    the text preflight's ``invalid`` ``FieldError`` on ``id`` (``unencodable_text_error``)
+    before the locate query, which would otherwise raise a raw backend
+    ``UnicodeEncodeError``.
 
     Returns ``(pk, None)`` on success or ``(None, FieldError)`` otherwise.
     """
@@ -1489,6 +1498,9 @@ def coerce_lookup_id(
         pk = coerce_relation_pk_or_none(target_model, id_)
         if pk is None:
             return None, not_found_error()
+        text_error = unencodable_text_error("id", pk)
+        if text_error is not None:
+            return None, text_error
         return pk, None
     result = decode_model_global_id(id_, target_model, using=using, schema=schema)
     if result.status in (GlobalIDDecode.DECODE_FAILED, GlobalIDDecode.WRONG_MODEL):

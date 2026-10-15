@@ -19,6 +19,9 @@ consumer-visible behaviors end to end:
   ``GenreReplacingPatronProfileSerializer`` / ``GenreReplacingRenamedPatronProfileSerializer``
   and ``GenreRepointingPatronProfileSerializer`` re-point the validated genre in a custom
   ``create()`` and in a field validator (the relation-attestation live rows).
+* ``PrintingSerializer`` writes the ``edition`` FK and the ``bound_with`` M2M into the
+  text-keyed ``Edition``, so both raw-pk relation inputs carry ISBN text;
+  ``EditionImprintSerializer`` updates an ``Edition`` located by that text.
 
 ``Shelf`` is non-Relay (``ShelfType`` lists no ``relay.Node`` interface), so the ``branch``
 FK relation input is a raw pk and the payload object slot is ``result`` (not ``node``); the
@@ -44,7 +47,7 @@ from django_strawberry_framework import (
 )
 from django_strawberry_framework.rest_framework.accessors import base_fields
 
-from .models import Book, Branch, Genre, PatronProfile, Shelf
+from .models import Book, Branch, Edition, Genre, PatronProfile, Printing, Shelf
 
 #: A serializer's name-to-field map. The four ``Any``s are DRF ``Field``'s generics, which
 #: no single binding fits across a heterogeneous map.
@@ -865,3 +868,29 @@ class GenreRepointingPatronProfileSerializer(PatronProfileSerializer):
         if value is not None:
             _repoint_to_another_genre(value)
         return value
+
+
+class PrintingSerializer(serializers.ModelSerializer[Printing]):
+    """A ``Printing`` serializer over two relations into the text-keyed ``Edition``.
+
+    ``Edition``'s primary key is its ISBN text column and ``EditionType`` is not
+    Relay-Node, so ``edition`` (FK) and ``bound_with`` (M2M) generate raw-pk inputs that
+    name each edition by its ISBN.
+    """
+
+    # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+    class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        model = Printing
+        fields = ("edition", "run_size", "bound_with")
+
+
+class EditionImprintSerializer(serializers.ModelSerializer[Edition]):
+    """An ``Edition`` serializer over its ``imprint``, for updates by the text pk.
+
+    ``EditionType`` is non-Relay, so the update ``id`` is the raw ISBN text.
+    """
+
+    # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+    class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+        model = Edition
+        fields = ("imprint",)

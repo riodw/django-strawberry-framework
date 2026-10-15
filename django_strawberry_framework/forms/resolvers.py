@@ -271,6 +271,7 @@ def _decode_form_relation_single(
     related_model: type[models.Model],
     form_field: forms.Field | None,
     info: Info[object, object],
+    index: int | None = None,
 ) -> tuple[object, FieldError | None]:
     """Decode ONE relation id to its form-key value, visibility-checked.
 
@@ -307,6 +308,7 @@ def _decode_form_relation_single(
         async_recourse=_FORM_ASYNC_RECOURSE,
         skip=lambda candidate: _is_empty_form_value(candidate, form_field),
         project=lambda obj: _to_form_key_value(obj, form_field),
+        index=index,
     )
 
 
@@ -322,7 +324,8 @@ def _decode_form_relation_multi(
 
     Maps ``_decode_form_relation_single`` over each element (so every member is
     type-checked, visibility-checked on its own branch, and ``to_field_name``
-    converted) and returns the list under the form field name. The first member
+    converted) and returns the list under the form field name. Each member is passed
+    its index, so a text error keys to the element (``boundWith.1``). The first member
     error short-circuits. An empty list is a valid clear.
 
     An explicit ``null`` (or any of the form field's ``empty_values``, including
@@ -347,13 +350,14 @@ def _decode_form_relation_multi(
         return None, container_error
     keys: list[object] = []
     # The shared materializer answers the values exactly when it reports no error.
-    for value in cast("list[object]", provided_values):
+    for index, value in enumerate(cast("list[object]", provided_values)):
         key, error = _decode_form_relation_single(
             value,
             graphql_name=graphql_name,
             related_model=related_model,
             form_field=form_field,
             info=info,
+            index=index,
         )
         if error is not None:
             return None, error

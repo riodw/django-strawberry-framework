@@ -17,6 +17,8 @@ the column, so its generated input publishes only the values the form admits.
 ``PatronProfileGenreForm`` declares a genre-id-keyed ``favorite_genre`` over the ``to_field``
 key ``PatronProfile.favorite_genre``, so a partial update omitting it rebinds the stored
 genre by its id.
+``PrintingForm`` relates to the text-keyed ``Edition`` (FK + M2M), so its raw-pk
+inputs carry ISBN text; ``EditionImprintForm`` updates an ``Edition`` located by that text.
 ``BranchWithShelfForm`` and ``BranchPairForm`` add model-less plain-form
 ``perform_mutate`` write-hook and transaction-rollback cases.
 """
@@ -136,6 +138,31 @@ class PatronProfileGenreForm(forms.ModelForm[models.PatronProfile]):
     class Meta:
         model = models.PatronProfile
         fields = ("address_2", "favorite_genre")
+
+
+class PrintingForm(forms.ModelForm[models.Printing]):
+    """A ``Printing`` ``ModelForm`` over two relations into the text-keyed ``Edition``.
+
+    ``Edition``'s primary key is its ISBN text column and ``EditionType`` is not
+    Relay-Node, so ``edition`` (FK) and ``bound_with`` (M2M) generate raw-pk inputs that
+    name each edition by its ISBN. ``Printing`` is the Relay-Node ``PrintingType``
+    primary, so the update ``id`` is a ``GlobalID``.
+    """
+
+    class Meta:
+        model = models.Printing
+        fields = ("edition", "run_size", "bound_with")
+
+
+class EditionImprintForm(forms.ModelForm[models.Edition]):
+    """An ``Edition`` ``ModelForm`` over its ``imprint``, for updates by the text pk.
+
+    ``EditionType`` is non-Relay, so the update ``id`` is the raw ISBN text.
+    """
+
+    class Meta:
+        model = models.Edition
+        fields = ("imprint",)
 
 
 class BranchWithShelfForm(forms.Form):

@@ -518,6 +518,13 @@ class Printing(models.Model):
     )
     # Key column Django adds beside ``edition``, declared for the type checker.
     edition_id: str
+    # Further editions bound into the same volume as this run. A many-to-many
+    # whose target is keyed by text, so a write names each member by its ISBN.
+    bound_with: models.ManyToManyField[Edition, models.Model] = models.ManyToManyField(
+        Edition,
+        blank=True,
+        related_name="bound_printings",
+    )
     publisher_2: _NullFK[Publisher] = models.ForeignKey(
         Publisher,
         related_name="printings_2",

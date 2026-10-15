@@ -1091,7 +1091,10 @@ related object. The gate is therefore owned by one shared spine,
 write flavor rides and which the form flavor only *colors*: the spine (i) skips a
 clear / no-value unchanged, so the bound form's own validation decides required-ness,
 (ii) type-checks and coerces the id (a bad `GlobalID` or an uncoercible raw pk is the
-uniform field-keyed `FieldError`), (iii) for **both** branches **resolves the object
+uniform field-keyed `FieldError`; a coerced pk holding unencodable text, such as a lone
+surrogate in the id of a text-keyed target, is the text preflight's field-keyed `invalid`
+error, keyed to the element's index in a list, before any query), (iii) for **both**
+branches **resolves the object
 from the related primary [`DjangoType`][glossary-djangotype]'s
 [`get_queryset`][glossary-get_queryset-visibility-hook]** (the same
 `apply_type_visibility_sync(initial_queryset(...))` query every read surface applies) —
@@ -1269,7 +1272,8 @@ write flavor rides.
    reused `036` `coerce_lookup_id` — the same `node(id: ID!)` contract the shipped
    [`DjangoNodeField`][glossary-djangonodefield] uses, **distinct** from a relation
    `data:` field whose value is a
-   Strawberry-coerced `GlobalID`); a malformed / wrong-model / uncoercible `id:` is an
+   Strawberry-coerced `GlobalID`); a malformed / wrong-model / uncoercible `id:`, or a
+   raw pk holding unencodable text (a lone surrogate in a text-keyed primary's id), is an
    `id`-keyed `FieldError` **before** any lookup (no existence leak — the mutation
    surface returns the `FieldError` envelope, **not** the node field's
    `null` / `GLOBALID_INVALID`). The row is then resolved through the target type's
@@ -1296,7 +1300,7 @@ write flavor rides.
    shared [`utils/write_values.py`][utils-write-values]`::decode_visible_relation`
    spine, the single owner of the cross-flavor invariant that a writer never attaches
    a row it cannot see: it type-checks each id (`GlobalID` *or* raw pk; wrong-model /
-   uncoercible → field-keyed `FieldError`, the `036` id-type-check contract), **resolves the
+   uncoercible / unencodable text → field-keyed `FieldError`, the `036` id-type-check contract), **resolves the
    visible object through the related primary `DjangoType.get_queryset` for BOTH
    branches** (a hidden / unseeable target is the same field-keyed `FieldError`, no
    existence leak), and lands the object's `to_field_name` value (default `obj.pk`)

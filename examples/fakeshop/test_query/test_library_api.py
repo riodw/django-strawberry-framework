@@ -12603,6 +12603,346 @@ def test_serializer_unencodable_text_in_a_list_or_json_leaf_is_field_error_over_
     assert not models.Shelf.objects.filter(code="SurrogateShelf").exists()
 
 
+#: The write flavor -> (create field, update field, create input type) over ``Printing``,
+#: whose ``edition`` FK and ``bound_with`` M2M name rows of the text-keyed ``Edition``.
+_PRINTING_WRITES = {
+    "model": ("createPrinting", "updatePrinting", "PrintingBound_uwithEditionRun_usizeInput"),
+    "form": ("createPrintingViaForm", "updatePrintingViaForm", "PrintingFormInput"),
+    "serializer": (
+        "createPrintingViaSerializer",
+        "updatePrintingViaSerializer",
+        "PrintingSerializerInput",
+    ),
+}
+
+#: Statements a refused ``Printing`` write runs besides its ``Edition`` lookups: two
+#: savepoints opened, the inner one rolled back, both released, plus the update's locate.
+_PRINTING_WRITE_FRAME_QUERIES = {"create": 5, "update": 6}
+
+
+def _post_printing_write(
+    flavor: str,
+    operation: str,
+    data: Mapping[str, object],
+    printing: models.Printing,
+) -> tuple[JSONObject, list[str]]:
+    """Post one ``Printing`` create / update in ``flavor``; answer its payload + captured SQL."""
+    create_field, update_field, input_type = _PRINTING_WRITES[flavor]
+    selection = "{ node { id } errors { field messages codes path } }"
+    if operation == "create":
+        field = create_field
+        query = f"mutation($d: {input_type}!) {{ {field}(data: $d) {selection} }}"
+        variables: dict[str, object] = {"d": dict(data)}
+    else:
+        field = update_field
+        partial_type = input_type.removesuffix("Input") + "PartialInput"
+        query = (
+            f"mutation($id: ID!, $d: {partial_type}!) {{ {field}(id: $id, data: $d) {selection} }}"
+        )
+        variables = {
+            "id": global_id_for(library_schema.PrintingType, printing.pk),
+            "d": dict(data),
+        }
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(query, variables=variables)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    return (
+        cast("JSONObject", payload["data"][field]),
+        [query["sql"] for query in captured.captured_queries],
+    )
+
+
+def _edition_lookups(sql: list[str]) -> int:
+    """Count the captured statements that read the ``Edition`` table."""
+    return sum('FROM "library_edition"' in statement for statement in sql)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("flavor", ["model", "form", "serializer"])
+@pytest.mark.parametrize("operation", ["create", "update"])
+@pytest.mark.parametrize(
+    ("relation_input", "error_field", "lookups_before"),
+    [
+        ({"editionId": "\ud800"}, "editionId", {"model": 0, "form": 0, "serializer": 0}),
+        ({"editionId": "978\ud800"}, "editionId", {"model": 0, "form": 0, "serializer": 0}),
+        ({"boundWith": ["\ud800"]}, "boundWith.0", {"model": 1, "form": 1, "serializer": 1}),
+        (
+            {"boundWith": ["9780000000001", "978\ud800"]},
+            "boundWith.1",
+            {"model": 1, "form": 2, "serializer": 1},
+        ),
+    ],
+)
+def test_unencodable_text_in_a_text_keyed_relation_id_is_field_error_over_http(
+    flavor: str,
+    operation: str,
+    relation_input: dict[str, object],
+    error_field: str,
+    lookups_before: dict[str, int],
+) -> None:
+    """A lone surrogate in a relation id over a text-keyed target is refused before its lookup.
+
+    ``Edition``'s primary key is its ISBN text, so a raw-pk id carrying a lone surrogate
+    coerces cleanly through the target's pk field; binding it into the existence query
+    would raise a raw backend ``UnicodeEncodeError``. Every write flavor, on create and on
+    update, refuses it at the relation type-check with the text preflight's ``invalid``
+    error, keyed to the FK input or to the list element's index, and nothing is written.
+
+    The only ``Edition`` reads are the lookups of ids decoded before the refused one: the
+    well-formed ``editionId`` (every ``boundWith`` row) and, in the form flavor, which
+    looks members up one at a time, the list's storable first member.
+    """
+    publisher = models.Publisher.objects.create(name="SurrogatePress", house_code="SP")
+    edition = models.Edition.objects.create(isbn_13="9780000000001", publisher=publisher)
+    printing = models.Printing.objects.create(edition=edition, run_size=1)
+    data = {"editionId": edition.pk, "runSize": 2, **relation_input}
+
+    result, sql = _post_printing_write(flavor, operation, data, printing)
+
+    assert result == {
+        "node": None,
+        "errors": [
+            {
+                "field": error_field,
+                "messages": ["Text contains invalid Unicode (unpaired surrogate code points)."],
+                "codes": ["invalid"],
+                "path": error_field.split("."),
+            },
+        ],
+    }
+    assert _edition_lookups(sql) == lookups_before[flavor]
+    assert len(sql) == _PRINTING_WRITE_FRAME_QUERIES[operation] + lookups_before[flavor]
+    assert list(models.Printing.objects.values_list("pk", "edition_id", "run_size")) == [
+        (printing.pk, edition.pk, 1),
+    ]
+    assert not printing.bound_with.exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("flavor", ["model", "form", "serializer"])
+@pytest.mark.parametrize("operation", ["create", "update"])
+@pytest.mark.parametrize(
+    ("relation_input", "error_field", "lookups"),
+    [
+        ({"editionId": "9789999999999"}, "editionId", {"model": 1, "form": 1, "serializer": 1}),
+        (
+            {"boundWith": ["9780000000001", "9789999999999"]},
+            "boundWith",
+            {"model": 2, "form": 3, "serializer": 2},
+        ),
+    ],
+)
+def test_unknown_well_formed_text_keyed_relation_id_is_relation_error_over_http(
+    flavor: str,
+    operation: str,
+    relation_input: dict[str, object],
+    error_field: str,
+    lookups: dict[str, int],
+) -> None:
+    """A storable ISBN naming no edition reaches its lookup and is the uniform relation error.
+
+    The control for the surrogate rows: the same writes with a well-formed id run the
+    ``Edition`` lookup the refused id never reaches (one batched ``pk__in`` in the model and
+    serializer flavors, one per member in the form flavor) and answer the relation error
+    keyed to the input, without an element index.
+    """
+    publisher = models.Publisher.objects.create(name="SurrogatePress", house_code="SP")
+    edition = models.Edition.objects.create(isbn_13="9780000000001", publisher=publisher)
+    printing = models.Printing.objects.create(edition=edition, run_size=1)
+    data = {"editionId": edition.pk, "runSize": 2, **relation_input}
+
+    result, sql = _post_printing_write(flavor, operation, data, printing)
+
+    assert result == {
+        "node": None,
+        "errors": [
+            {
+                "field": error_field,
+                "messages": [f"Invalid id for relation '{error_field}'."],
+                "codes": ["invalid"],
+                "path": [error_field],
+            },
+        ],
+    }
+    assert _edition_lookups(sql) == lookups[flavor]
+    assert len(sql) == _PRINTING_WRITE_FRAME_QUERIES[operation] + lookups[flavor]
+
+
+#: The ``Edition`` write -> (field, data variable type or ``None`` for a delete). Every
+#: one locates its row by the raw ISBN ``id``, since ``EditionType`` is non-Relay.
+_EDITION_LOCATING_WRITES = {
+    "model-update": ("updateEdition", "EditionImprintPartialInput"),
+    "model-delete": ("deleteEdition", None),
+    "form-update": ("updateEditionViaForm", "EditionImprintFormPartialInput"),
+    "serializer-update": ("updateEditionViaSerializer", "EditionImprintSerializerPartialInput"),
+}
+
+#: Statements every ``Edition`` write refused before its locate runs: two savepoints
+#: opened, the inner one rolled back, both released.
+_EDITION_WRITE_FRAME_QUERIES = 5
+
+
+def _post_edition_locating_write(write: str, lookup_id: str) -> tuple[JSONObject, list[str]]:
+    """Post one ``Edition`` update / delete by raw ``id``; answer its payload + captured SQL."""
+    field, input_type = _EDITION_LOCATING_WRITES[write]
+    selection = "{ result { isbn13 imprint } errors { field messages codes path } }"
+    if input_type is None:
+        query = f"mutation($id: ID!) {{ {field}(id: $id) {selection} }}"
+        variables: dict[str, object] = {"id": lookup_id}
+    else:
+        query = (
+            f"mutation($id: ID!, $d: {input_type}!) {{ {field}(id: $id, data: $d) {selection} }}"
+        )
+        variables = {"id": lookup_id, "d": {"imprint": "Surrogate Imprint"}}
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(query, variables=variables)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    return (
+        cast("JSONObject", payload["data"][field]),
+        [query["sql"] for query in captured.captured_queries],
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("write", list(_EDITION_LOCATING_WRITES))
+@pytest.mark.parametrize("lookup_id", ["\ud800", "978\ud800"])
+def test_unencodable_text_in_a_text_keyed_lookup_id_is_field_error_over_http(
+    write: str,
+    lookup_id: str,
+) -> None:
+    """A lone surrogate in the raw ``id`` of a text-keyed primary is refused before the locate.
+
+    ``EditionType`` is non-Relay and ``Edition``'s primary key is its ISBN text, so the
+    update / delete ``id`` is a raw pk that coerces cleanly through the text pk field;
+    binding it into the locate query would raise a raw backend ``UnicodeEncodeError``.
+    Every flavor's update (and the model delete) answers the text preflight's ``invalid``
+    error on ``id`` without reading ``Edition``, and the row is untouched.
+    """
+    publisher = models.Publisher.objects.create(name="SurrogatePress", house_code="SP")
+    models.Edition.objects.create(isbn_13="9780000000001", publisher=publisher, imprint="Kept")
+
+    result, sql = _post_edition_locating_write(write, lookup_id)
+
+    assert result == {
+        "result": None,
+        "errors": [
+            {
+                "field": "id",
+                "messages": ["Text contains invalid Unicode (unpaired surrogate code points)."],
+                "codes": ["invalid"],
+                "path": ["id"],
+            },
+        ],
+    }
+    assert _edition_lookups(sql) == 0
+    assert len(sql) == _EDITION_WRITE_FRAME_QUERIES
+    assert list(models.Edition.objects.values_list("isbn_13", "imprint")) == [
+        ("9780000000001", "Kept"),
+    ]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("write", list(_EDITION_LOCATING_WRITES))
+def test_unknown_well_formed_text_keyed_lookup_id_is_not_found_over_http(write: str) -> None:
+    """A storable ISBN naming no edition reaches the one locate query and is not-found.
+
+    The control for the surrogate rows: the same write with a well-formed ``id`` runs the
+    locate the refused id never reaches and answers the not-found error on ``id``.
+    """
+    publisher = models.Publisher.objects.create(name="SurrogatePress", house_code="SP")
+    models.Edition.objects.create(isbn_13="9780000000001", publisher=publisher, imprint="Kept")
+
+    result, sql = _post_edition_locating_write(write, "9789999999999")
+
+    assert result == {
+        "result": None,
+        "errors": [
+            {
+                "field": "id",
+                "messages": ["No matching row found."],
+                "codes": ["not_found"],
+                "path": ["id"],
+            },
+        ],
+    }
+    assert _edition_lookups(sql) == 1
+    assert len(sql) == _EDITION_WRITE_FRAME_QUERIES + 1
+
+
+#: A storable non-ASCII ISBN key (an astral character, sent as a valid surrogate pair).
+_NON_ASCII_ISBN = "978\U0001f600"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("flavor", "statements"),
+    [("model", 11), ("form", 13), ("serializer", 16)],
+)
+def test_non_ascii_text_keyed_relation_ids_are_written_over_http(
+    flavor: str,
+    statements: int,
+) -> None:
+    """A storable non-ASCII ISBN names its edition as the FK and as an M2M member on create.
+
+    The relation type-check refuses only unencodable text: an id holding a valid
+    non-ASCII character (an astral one, which JSON carries as a surrogate PAIR) passes
+    the preflight in every write flavor, and the printing stores that edition as its
+    ``edition`` and its only ``bound_with`` member.
+    """
+    publisher = models.Publisher.objects.create(name="SurrogatePress", house_code="SP")
+    edition = models.Edition.objects.create(isbn_13=_NON_ASCII_ISBN, publisher=publisher)
+    placeholder = models.Edition.objects.create(isbn_13="9780000000001", publisher=publisher)
+    printing = models.Printing.objects.create(edition=placeholder, run_size=1)
+    data = {"editionId": _NON_ASCII_ISBN, "runSize": 2, "boundWith": [_NON_ASCII_ISBN]}
+
+    result, sql = _post_printing_write(flavor, "create", data, printing)
+
+    assert result["errors"] == []
+    created = models.Printing.objects.exclude(pk=printing.pk).get()
+    assert created.edition_id == edition.pk
+    assert list(created.bound_with.values_list("pk", flat=True)) == [_NON_ASCII_ISBN]
+    assert len(sql) == statements
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("write", "statements"),
+    [
+        ("model-update", 9),
+        ("model-delete", 9),
+        ("form-update", 7),
+        ("serializer-update", 9),
+    ],
+)
+def test_non_ascii_text_keyed_lookup_id_locates_its_row_over_http(
+    write: str,
+    statements: int,
+) -> None:
+    """A storable non-ASCII ISBN ``id`` locates its ``Edition`` for update and delete.
+
+    The lookup ``id`` is refused only for unencodable text: a valid non-ASCII key
+    passes the preflight and the write lands on the row it names.
+    """
+    publisher = models.Publisher.objects.create(name="SurrogatePress", house_code="SP")
+    models.Edition.objects.create(isbn_13=_NON_ASCII_ISBN, publisher=publisher, imprint="Kept")
+
+    result, sql = _post_edition_locating_write(write, _NON_ASCII_ISBN)
+
+    assert result["errors"] == []
+    if write == "model-delete":
+        assert not models.Edition.objects.exists()
+    else:
+        assert result["result"] == {"isbn13": _NON_ASCII_ISBN, "imprint": "Surrogate Imprint"}
+        assert list(models.Edition.objects.values_list("isbn_13", "imprint")) == [
+            (_NON_ASCII_ISBN, "Surrogate Imprint"),
+        ]
+    assert len(sql) == statements
+
+
 @pytest.mark.django_db
 def test_serializer_error_envelope_carries_codes_and_path_over_http() -> None:
     """The mutation error envelope carries structured ``codes`` + ``path`` alongside ``field`` / ``messages``.

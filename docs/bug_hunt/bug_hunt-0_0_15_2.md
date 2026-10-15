@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 92 done, 149 to do.
+Progress: 93 done, 150 to do.
 
 ## Done
 
@@ -305,6 +305,12 @@ Progress: 92 done, 149 to do.
   removes the wrong one, truncates a flat filter path, drops an interface, reports a false cycle, admits a different
   permission set or escapes raw; specs 001, 015, 018, 027, 034, 039 and 040 say so (before Python 3.12 `inspect` still
   compares a class with `type` / `object` by equality when Strawberry reads its signature)
+- [x] 244. A lone surrogate in a raw relation id over a text-pk target (`editionId: "\ud800"`, a `boundWith` member) or
+  in an update / delete `id` over a text-pk non-Relay primary escaped as the masked "An unexpected error occurred." in the
+  model, form and serializer flavors (the text preflight ran on scalar leaves only): `type_check_relation_id` and
+  `coerce_lookup_id` now run it on the coerced pk before any query, keyed `editionId`, `boundWith.<i>` or `id`, `invalid`;
+  well-formed non-ASCII ids still write; fakeshop gains `Printing.bound_with` and the Printing / Edition write mutations
+  that reach it; specs 038 and 039 say so
 
 ## Outside review of the fixes
 
@@ -823,6 +829,8 @@ tracker number are recorded there; open remainders and new defects are filed as 
   reverse or a `GenericRelation` now builds a Boolean null test like a `ForeignKey`'s instead of raising django-filter's
   "unrecognized field type" `AssertionError` at `FilterSet` class creation (0.0.14 raised for every lookup on a
   `ForeignObject` key); under `unknown_field_behavior` WARN / IGNORE the leaf is now built instead of dropped
+- [ ] 245. CHANGELOG entry for item 244: a lone surrogate in a text-keyed relation id or update / delete `id` is a
+  field-keyed `invalid` error on every mutation flavor (0.0.14 masked it as "An unexpected error occurred.")
 
 ## Hunt not finished in t3
 

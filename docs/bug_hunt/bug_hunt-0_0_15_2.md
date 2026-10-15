@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 71 done, 151 to do.
+Progress: 72 done, 155 to do.
 
 ## Done
 
@@ -74,6 +74,15 @@ Progress: 71 done, 151 to do.
   Prefetch test is now a guarded `isinstance` (subclasses and proxies still pass); the str and class tests ask the real
   type (`utils/_narrowing.py::is_str`, `is_class`) (`f788edcf`). `unwindowable_child_queryset_reason` needs no code: no
   contract row, Django-private input
+- [x] 19. `rest_framework/` robustness rows (not defects: consumer hook and serializer Python, no wire input). A field-map,
+  `nested_fields` or hook-return value whose `__class__` raised, a non-string hook key whose `__repr__` raised, a hostile
+  `write_alias` and a hostile `save()` return escaped raw against their docstring / GLOSSARY / spec-039 typed-error
+  promises; the frozen hook view passed `__class__` spoofs and lazy proxies of immutables by reference against its
+  fails-closed promise; and a kept serializer field named by a non-identifier or a keyword passed class creation, then raised
+  an unnamed `SyntaxError` at finalize. Mapping and Field tests are now guarded `isinstance` (proxies still pass); the
+  freeze, the alias and the saved result ask the real type; renders use the guarded repr; kept input names are checked at
+  class creation, root and nested (`5cbe15de`). The raw `__name__` labels need no code (item 26's); `_error_node_children`'s
+  `str(key)` needs none: no contract row, and DRF keeps detail keys as given
 - [x] 28. Deep dive 3 (authorization on deferred paths): findings 12 and 13 done; `VenueBadgeType` and `VenueSponsorType` now
   hide marked rows, and live rows prove none leaks through the no-`related_name` reverse accessors (`16a8c179`)
 - [x] 50. A SKIP hint (and a consumer-assigned relation, and the nested-connection SKIP arm) left the relation's key column out of
@@ -238,11 +247,10 @@ tracker number are recorded there; open remainders and new defects are filed as 
 
 ## To do: t3 robustness rows
 
-31 low-priority rows across items 19-25 plus item 27's unfiled leads (the rows behind items 15-18 are done and item
+29 low-priority rows across items 20-25 plus item 27's unfiled leads (the rows behind items 15-19 are done and item
 26's moved to "Waiting on you"), mostly guards against classes with broken `__name__` / `__eq__` / metaclasses.
 Expected outcome: most are not real bugs and just get deleted from t3. One checkbox per area:
 
-- [ ] 19. `rest_framework/` (2 rows)
 - [ ] 20. Filter and order sets (8 rows)
 - [ ] 21. `routers.py`, `list_field.py` (2 rows)
 - [ ] 22. `types/` (7 rows)
@@ -492,6 +500,18 @@ Expected outcome: most are not real bugs and just get deleted from t3. One check
   `extension.py` (`self.strictness != "off"`) and `types/resolvers.py` (`strictness == "raise"` / `"warn"`) dispatch the
   consumer's `__eq__` on every request; storing the matched vocabulary constant (as `resolve_strategy` returns registry
   instances) closes it
+- [ ] 225. `forms/inputs.py::_form_field_basis` checks identifier names over the whole basis before `Meta.fields` /
+  `Meta.exclude` narrowing, so a narrowed-away non-identifier form field is refused although it never becomes an input
+  attribute; the serializer flavor checks only the kept set (`rest_framework/inputs.py::resolve_effective_serializer_fields`)
+- [ ] 226. A nested serializer's own `.fields` map gets none of the field-map checks the root gets
+  (`rest_framework/inputs.py::read_nested_serializer_fields`): no plain-`str` key gate, no `serializers.Field` test before
+  `writable_serializer_fields` reads `.read_only` and a bare `isinstance(field, HiddenField)`, and it catches `Exception`, not
+  `BaseException`
+- [ ] 227. `exceptions.py::_safe_predicate(isinstance, ...)` evaluates a lazy proxy and turns any exception raised while doing
+  so into `False`, the package's own `ConfigurationError` included (a lazy `save()` return ran write SQL and its alias-guard
+  error was replaced by "not a ... instance"); relevant to item 94's posture
+- [ ] 228. `exceptions.py::_safe_arg_repr` does not bound length, so a `got {...}` tail can carry a megabyte repr into the
+  message (a custom `save()` returning a large string)
 
 ## To do: holes found re-checking the fixes
 
@@ -514,6 +534,10 @@ Expected outcome: most are not real bugs and just get deleted from t3. One check
   flavor, the auth riders' user-model labels (`auth/mutations.py::derive_register_fields`,
   `_resolve_user_primary_or_raise`, and the eager subject in `mutations/inputs.py::editable_input_fields`) and the GraphQL
   names
+- [ ] 229. Input field names that are Python identifiers but not GraphQL names (`"é"`, a leading `__`, and on Python
+  3.10-3.13 NFKC-unnormalized identifiers such as `"ａ"`) pass both mutation flavors' class-creation checks and fail later
+  with graphql-core's or the stdlib's raw error. Add a GraphQL-name check on kept input names in both flavors, or keep the
+  identifier-only rule?
 - [ ] 220. A `Meta.permission_classes` entry whose `__name__` raises is accepted at declaration, then every request raises it
   raw: `mutations/permissions.py::run_permission_classes` computes `owner=permission_class.__name__` before it knows the
   result is a bool (the request user's class name in `DjangoModelPermission.has_permission` likewise), and the conflict
@@ -633,7 +657,10 @@ Expected outcome: most are not real bugs and just get deleted from t3. One check
   subclass by its value; `DjangoMutationField` refuses a class drained by `registry.clear()` even when it compares equal
   to its redeclaration) and 18 (`OptimizerHint` prefetch and strategy values, `nested_connection_strategy=`,
   `NESTED_CONNECTION_STRATEGY` and `strictness=` values whose `__class__` raises or claims `str`, and lazy proxies of a
-  strategy or strictness name, raise the typed error instead of a raw `RuntimeError` / `TypeError`)
+  strategy or strictness name, raise the typed error instead of a raw `RuntimeError` / `TypeError`) and 19 (a kept
+  serializer input field named by a non-identifier or a keyword is refused at class creation instead of a raw `SyntaxError`
+  at finalize; serializer hook values whose `__class__` raises are typed; lazy proxies and `__class__` spoofs in hook data
+  fail the frozen view closed; a non-`str` `context["write_alias"]` is a conflict)
 - [ ] 197. The per-parent visibility paths (`types/resolvers.py::_visible_many_rows`, `_visible_related_object`, relation
   connections, `resolver=`) never narrow the hook's result to the source's rows, so a hook that ignores its input shows other
   parents' rows or the wrong to-one object. Decide the contract (narrow at the five seams, with a live row for an
@@ -682,7 +709,7 @@ Expected outcome: most are not real bugs and just get deleted from t3. One check
   `filters/inputs.py` and the two-lookup raise are behaviour changes filed as robustness; eight items from the hunt's
   test-run notes were never folded back
 - [ ] 210. The truthful-reads migration and its fixes sit uncommitted in the hunt worktree; decide whether it and the
-  remaining robustness rows (items 19-25, 27) go to main
+  remaining robustness rows (items 20-25, 27) go to main
 - [ ] 211. A repo-wide `ruff check --fix .` / `ruff format .` rewrote 30 untracked `.py` files of hunt evidence (11 in the
   sealed deep-3 directory) with no copy kept; evidence trees need excluding from ruff, or AGENTS rule 17 needs explicit paths
 

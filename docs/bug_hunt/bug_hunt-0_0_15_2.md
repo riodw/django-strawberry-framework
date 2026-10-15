@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 75 done, 158 to do.
+Progress: 82 done, 153 to do.
 
 ## Done
 
@@ -83,6 +83,41 @@ Progress: 75 done, 158 to do.
   freeze, the alias and the saved result ask the real type; renders use the guarded repr; kept input names are checked at
   class creation, root and nested (`5cbe15de`). The raw `__name__` labels need no code (item 26's); `_error_node_children`'s
   `str(key)` needs none: no contract row, and DRF keeps detail keys as given
+- [x] 20. Filter and order set robustness rows (not defects: application Python, no wire input). The `Meta.fields` shape
+  gate let a value whose `__class__` raises escape raw on both families (fixed with item 23). The rest need no code: the
+  set-class, owner and Filter-class name reads are message labels (item 26's question), and a hostile `__eq__` / `__ne__`
+  on `Meta.fields` or a raising `__bool__` owner in `resolve_lazy_class` meets no contract row (django-filter and
+  django-graphene-filters read them the same way)
+- [x] 21. `list_field.py` and `routers.py` robustness rows (not defects: application Python, no wire input). A field target
+  whose `__class__` raised or claimed `type`, or whose registry lookup or replaced definition raised, escaped
+  `_validate_djangotype_target` raw on all four field factories against its docstring and spec-020 Decision 5; a factory
+  return whose `__class__` raised escaped `_factory_application` raw against spec-046 Decision 11. The class test now asks
+  the real type (`is_class`), both definition reads sit inside the contained read with `origin` read only off the
+  registry's own definition, and the coroutine test is a guarded `isinstance` (a lazy-proxied coroutine is still closed)
+- [x] 22. `types/` robustness rows (not defects: application Python and settings, no wire input). A `Meta` value or entry
+  whose `__class__` raised or claimed a type (`model`, `name`, `description`, `primary`, `connection`, `cursor_field`,
+  `relation_shapes`, `globalid_strategy` and `RELAY_GLOBALID_STRATEGY`, `interfaces`, `fields` / `exclude` and the other
+  field sequences, `optimizer_hints`), a class attribute shadowing a model field, a non-string annotation key whose
+  `__repr__` raised, and a `resolve_id_attr` result that is not really a string escaped raw against the GLOSSARY /
+  docstring typed-error promises. Each gate is now a guarded `isinstance` (lazy proxies still pass), `Meta.name` /
+  `Meta.description` and annotation keys ask the real type, keys render through the guarded repr, and the
+  `resolve_id_attr` result is normalized inside its fail-closed guard. Labels, hostile iteration, `__mro__` reads and
+  hostile `str`-subclass methods need no code (no contract row)
+- [x] 23. `utils/` robustness rows (not defects: application Python and settings, no wire input). A `Meta.fields` whose
+  `__class__` raised now gets the typed re-readable rejection on both set families (`canonicalize_set_meta_fields`,
+  `FilterSet.get_fields`, `is_re_readable_field_declaration`); `normalize_field_name_sequence`,
+  `filter_input_type` / `order_input_type`, the string helpers, `session_store_class`, `resolve_policy`,
+  `validated_field_directives`, the `ValidationError` mapper, the input-walk field name and depth label, and the SQL
+  statement classifier now keep their documented typed outcome for a value whose `__class__` raises or claims `str`. The
+  dynamic-set-class rows were stale (code deleted in `899cb35b`); the `__name__` labels in `utils/inputs.py`,
+  `querysets.py` and `write_transaction.py` and the depth-cap knob reads need no code (no contract row)
+- [x] 24. Trailing-comma lint rows: t3-only (both were in t3's own hunks); `scripts/check_trailing_commas.py --check` passes on
+  main
+- [x] 25. Stale test-fixture row: already fixed on main (`a01a2ab8` gave the proxy-target fixtures a private `Meta.apps`)
+- [x] 27. Unfiled robustness leads: the `str(key)` and `save()` repr leads were item 19's; the annotation-key, cursor-field,
+  adjacent-gate and `__mro__` leads were item 22's; the `Meta.fields` liar was item 23's; the cross-model unwired subclass
+  is item 73's question. The relay-seam `__mro__`, `resolve_lazy_class` `__module__` and the orders-skip-unknown-key
+  divergence need no code (no contract row; hand-built input only for the last)
 - [x] 28. Deep dive 3 (authorization on deferred paths): findings 12 and 13 done; `VenueBadgeType` and `VenueSponsorType` now
   hide marked rows, and live rows prove none leaks through the no-`related_name` reverse accessors (`16a8c179`)
 - [x] 50. A SKIP hint (and a consumer-assigned relation, and the nested-connection SKIP arm) left the relation's key column out of
@@ -264,21 +299,6 @@ tracker number are recorded there; open remainders and new defects are filed as 
 | C24. The KANBAN glossary inliner linked terms inside existing links | Partial; remainder item 147 | `09d0caa0` |
 | C44. The test-model census conflated same-named classes across scopes (fixed); imports still resolve through one flat map | Partial; remainder item 148 | `f7000986` |
 | C15. An in-place change to the settings `OrderedDict` stays stale | Not a defect: configuration is trusted after construction; only an exact `dict` source is held by reference (other mappings are copied by design, per `conf.py::_normalize_user_settings`), and replacing or overriding the setting reloads (`override_settings` fires `setting_changed`) | none |
-
-## To do: t3 robustness rows
-
-29 low-priority rows across items 20-25 plus item 27's unfiled leads (the rows behind items 15-19 are done and item
-26's moved to "Waiting on you"), mostly guards against classes with broken `__name__` / `__eq__` / metaclasses.
-Expected outcome: most are not real bugs and just get deleted from t3. One checkbox per area:
-
-- [ ] 20. Filter and order sets (8 rows)
-- [ ] 21. `routers.py`, `list_field.py` (2 rows)
-- [ ] 22. `types/` (7 rows)
-- [ ] 23. `utils/` (9 rows)
-- [ ] 24. Trailing-comma lint in two test files (2 rows; main passes `scripts/check_trailing_commas.py --check` at
-  `8ca6a481`, so these are t3-only)
-- [ ] 25. Stale test-fixture row in `tests/utils/test_querysets.py` (item 41's fix `cab934a0` did not touch this file)
-- [ ] 27. Unfiled leads from the same family (triage with the rows above)
 
 ## To do: found along the way
 
@@ -517,7 +537,9 @@ Expected outcome: most are not real bugs and just get deleted from t3. One check
 - [ ] 224. `DjangoOptimizerExtension(strictness=)` accepts a `str` subclass by content but stores the value itself, so
   `extension.py` (`self.strictness != "off"`) and `types/resolvers.py` (`strictness == "raise"` / `"warn"`) dispatch the
   consumer's `__eq__` on every request; storing the matched vocabulary constant (as `resolve_strategy` returns registry
-  instances) closes it
+  instances) closes it. Set `Meta.fields` entries that are `str` subclasses (a StrEnum member) are refused on both
+  families with misleading messages (`FilterSet`: "Cannot classify path"; `OrderSet`: "entries must be field-name
+  strings")
 - [ ] 225. `forms/inputs.py::_form_field_basis` checks identifier names over the whole basis before `Meta.fields` /
   `Meta.exclude` narrowing, so a narrowed-away non-identifier form field is refused although it never becomes an input
   attribute; the serializer flavor checks only the kept set (`rest_framework/inputs.py::resolve_effective_serializer_fields`)
@@ -541,6 +563,16 @@ Expected outcome: most are not real bugs and just get deleted from t3. One check
   model already declares (a `GenericRelation` to a proxy)
 - [ ] 235. Two comments in `optimizer/nested_planner.py` label a guard "the P2-3 defect" / "the P2-3 false-coverage defect",
   a review label START "No process provenance" bans; restate each as the invariant it guards
+- [ ] 236. One guarded-`isinstance` idiom and one set of hostile test values: `types/base.py` keeps private TypeIs-typed
+  `_guarded_isinstance` / `_guarded_issubclass` / `_guarded_narrow`, while `utils/inputs.py`, `filters/sets.py`,
+  `sets_mixins.py` and `routers.py` call `exceptions.py::_safe_predicate(isinstance, ...)` and `cast` after it; move the
+  typed helpers beside `_safe_predicate` and drop the casts. `tests/_idioms.py::ClassReadRaises` / `ClaimsClass` are
+  re-declared locally in `tests/types/test_base.py`, `test_definition_relations.py`, `tests/test_list_field.py`,
+  `test_routers.py`, `tests/utils/test_directives.py`, `test_errors.py`, `test_input_values.py` and
+  `tests/mutations/test_write_transaction.py`
+- [ ] 237. An honest `SimpleLazyObject({...})` `Meta.fields` on an `OrderSet` raises a raw `TypeError` from
+  `utils/inputs.py::canonicalize_set_meta_fields` (`is_dict` answers through the proxy, then `dict.items` refuses it) and a
+  lazy set is "an unreadable SimpleLazyObject container", while a `FilterSet` accepts both
 
 ## To do: holes found re-checking the fixes
 
@@ -559,7 +591,9 @@ Expected outcome: most are not real bugs and just get deleted from t3. One check
   `"Create-Item"` fails only at schema build. Input and payload names derive from `__name__`, so the answer covers every
   flavor, the auth riders' user-model labels (`auth/mutations.py::derive_register_fields`,
   `_resolve_user_primary_or_raise`, and the eager subject in `mutations/inputs.py::editable_input_fields`) and the GraphQL
-  names
+  names. The same question covers `FilterSet` / `OrderSet` / `Filter` class names: the `Meta.fields` rejection, the
+  related-target owner label, the order-input leaf rejection, the set-class labels in `filters/sets.py` /
+  `orders/sets.py` / `utils/inputs.py`, and the `Projected<Filter>` class name
 - [ ] 229. Input field names that are Python identifiers but not GraphQL names (`"é"`, a leading `__`, and on Python
   3.10-3.13 NFKC-unnormalized identifiers such as `"ａ"`) pass both mutation flavors' class-creation checks and fail later
   with graphql-core's or the stdlib's raw error. Add a GraphQL-name check on kept input names in both flavors, or keep the
@@ -593,7 +627,8 @@ Expected outcome: most are not real bugs and just get deleted from t3. One check
 - [ ] 79. CHANGELOG entry for item 52: connection fields no longer send consumer-source or row-hydration exception text to the
   client; pagination rejections keep their messages and are the new public `PaginationArgumentError`
 - [ ] 73. A set subclass used only as a `RelatedFilter` / `RelatedOrder` target, never wired to a type, inherits its base's owner and
-  that owner's visibility. Keep, or fall back to the target model's registered type?
+  that owner's visibility. Keep, or fall back to the target model's registered type? It also crosses models: an unwired
+  `Sub(Base)` on another model reads `Base`'s owner, so its own-pk filter becomes a `GlobalIDFilter` under a relay owner
 - [ ] 84. `range: []` applies no constraint on every generated `range` (and `range: [1]` is a validation error), where Django
   raises on both. Make `[]` an arity error like `[1]`, or keep?
 - [ ] 85. A nested branch that constrains nothing (`shelves: {}`, `shelves: { condition: { in: null } }`) still keeps only parents
@@ -686,7 +721,11 @@ Expected outcome: most are not real bugs and just get deleted from t3. One check
   strategy or strictness name, raise the typed error instead of a raw `RuntimeError` / `TypeError`) and 19 (a kept
   serializer input field named by a non-identifier or a keyword is refused at class creation instead of a raw `SyntaxError`
   at finalize; serializer hook values whose `__class__` raises are typed; lazy proxies and `__class__` spoofs in hook data
-  fail the frozen view closed; a non-`str` `context["write_alias"]` is a conflict)
+  fail the frozen view closed; a non-`str` `context["write_alias"]` is a conflict) and 21-23 (field targets, factory
+  returns, `Meta` values, set `Meta.fields`, input and policy helpers whose `__class__` raises or claims a type now raise
+  the typed error instead of a raw `RuntimeError` / `TypeError`; `Meta.name` / `Meta.description`, a string-helper input
+  and a `SESSION_ENGINE` that is a lazy proxy of a `str` are typed rejections; a lazy proxy of a class as a field target
+  now reads "requires a DjangoType class")
 - [ ] 197. The per-parent visibility paths (`types/resolvers.py::_visible_many_rows`, `_visible_related_object`, relation
   connections, `resolver=`) never narrow the hook's result to the source's rows, so a hook that ignores its input shows other
   parents' rows or the wrong to-one object. Decide the contract (narrow at the five seams, with a live row for an
@@ -742,8 +781,8 @@ Expected outcome: most are not real bugs and just get deleted from t3. One check
 - [ ] 209. The hunt's owned-changes ledger misses `field_name_map` and `check_deadline`, six files and the dive-5 pins;
   `filters/inputs.py` and the two-lookup raise are behaviour changes filed as robustness; eight items from the hunt's
   test-run notes were never folded back
-- [ ] 210. The truthful-reads migration and its fixes sit uncommitted in the hunt worktree; decide whether it and the
-  remaining robustness rows (items 20-25, 27) go to main
+- [ ] 210. The truthful-reads migration and its fixes sit uncommitted in the hunt worktree; decide whether it goes to main
+  (every robustness row behind items 15-25 and 27 is decided on main)
 - [ ] 211. A repo-wide `ruff check --fix .` / `ruff format .` rewrote 30 untracked `.py` files of hunt evidence (11 in the
   sealed deep-3 directory) with no copy kept; evidence trees need excluding from ruff, or AGENTS rule 17 needs explicit paths
 

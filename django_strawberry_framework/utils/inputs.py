@@ -41,10 +41,11 @@ from typing_extensions import override
 from django_strawberry_framework.exceptions import (
     ConfigurationError,
     _safe_arg_repr,
+    _safe_predicate,
     _safe_type_name,
 )
 
-from ._narrowing import dict_items, is_dict, is_mapping, is_set_or_frozenset
+from ._narrowing import dict_items, is_dict, is_mapping, is_set_or_frozenset, is_str
 from .canonical import base_container_values, canonical_sort_key
 from .imports import import_attr_if_importable
 
@@ -577,14 +578,21 @@ def canonicalize_set_meta_fields(fields: object) -> object:
     ``set`` / ``frozenset`` become ``repr``-sorted lists so class-Meta expansion
     is identical across ``PYTHONHASHSEED``. Dict-shaped lookup
     bags keep key insertion order and sort set-valued lookup lists. Ordered
-    ``list`` / ``tuple`` and scalar ``"__all__"`` pass through unchanged.
+    ``list`` / ``tuple`` and scalar ``"__all__"`` pass through unchanged, and so
+    does a value whose ``__class__`` cannot be read, which the re-readable gate
+    then rejects.
     """
-    if is_set_or_frozenset(fields):
+    if _safe_predicate(is_set_or_frozenset, fields):
         return _sorted_meta_values(fields)
-    if is_dict(fields):
+    if _safe_predicate(is_dict, fields):
+        # The guarded test answered ``True`` just above; the checker does not narrow through it.
         return {
-            key: (_sorted_meta_values(value) if is_set_or_frozenset(value) else value)
-            for key, value in dict_items(fields)
+            key: (
+                _sorted_meta_values(value)
+                if _safe_predicate(is_set_or_frozenset, value)
+                else value
+            )
+            for key, value in dict_items(cast("dict[object, object]", fields))
         }
     return fields
 
@@ -817,16 +825,18 @@ def normalize_field_name_sequence(
     masking a malformed declaration), failing loud naming the repeated field(s).
     ``label`` names which key (``fields`` / ``exclude``) is at fault; ``flavor``
     names the mutation base(s) in the message (e.g. ``"DjangoMutation"`` or
-    ``"DjangoFormMutation / DjangoModelFormMutation"``).
+    ``"DjangoFormMutation / DjangoModelFormMutation"``). A value whose ``__class__``
+    cannot be read is neither a string nor a set, so it meets the readable-sequence
+    rejection; an entry is a name only if its real type is a string.
     """
     if value is None:
         return None
-    if isinstance(value, str):
+    if _safe_predicate(isinstance, value, str):
         raise ConfigurationError(
             f"{flavor} Meta.fields / Meta.exclude must be a sequence of field "
             f"names, not a bare string: {_safe_arg_repr(value)}.",
         )
-    if is_set_or_frozenset(value):
+    if _safe_predicate(is_set_or_frozenset, value):
         raise ConfigurationError(
             f"{flavor} Meta.{label} must be an ordered sequence of field name "
             f"strings (a list or tuple), not an unordered {type(value).__name__}: "
@@ -841,7 +851,7 @@ def normalize_field_name_sequence(
             f"{flavor} Meta.{label} must be a readable sequence of field name strings; "
             f"got {_safe_type_name(value)}.",
         ) from exc
-    non_strings = [name for name in names if not isinstance(name, str)]
+    non_strings = [name for name in names if not is_str(name)]
     if non_strings:
         raise ConfigurationError(
             f"{flavor} Meta.{label} must be a sequence of field name strings; "
@@ -1294,11 +1304,22 @@ def build_lazy_input_annotation(
     has materialized the input class as a module global. The type name is passed
     as a runtime-computed string into ``Annotated[...]`` (NOT interpolated into a
     literal outside the call) so the ForwardRef wrapping holds.
+
+    ``TypeError`` for ANY other argument, including one whose ``__class__`` raises or
+    claims a class it is not and one whose ``repr`` raises; a lazy proxy of a set class is
+    judged by the class it proxies.
     """
-    if not (isinstance(set_class, type) and issubclass(set_class, expected_base)):
-        raise TypeError(f"{helper_spelling} requires {expected_label} subclass; got {set_class!r}")
-    ledger.add(set_class)
-    return Annotated[input_type_name_for(set_class), strawberry.lazy(module_path)]
+    # ``set_class`` is only read as a class once the guarded ``isinstance`` below answers ``True``.
+    set_type = cast("type[_FactorySetT]", set_class)
+    if not (
+        _safe_predicate(isinstance, set_class, type)
+        and _safe_predicate(issubclass, set_type, expected_base)
+    ):
+        raise TypeError(
+            f"{helper_spelling} requires {expected_label} subclass; got {_safe_arg_repr(set_class)}",
+        )
+    ledger.add(set_type)
+    return Annotated[input_type_name_for(set_type), strawberry.lazy(module_path)]
 
 
 def iter_set_subclasses(root: type[_SetT]) -> list[type[_SetT]]:

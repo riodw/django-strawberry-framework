@@ -532,13 +532,12 @@ def validation_error_to_field_errors(
                 if normalized_name == NON_FIELD_ERRORS
                 else rekey_error_segment(normalized_name, key_map)[0]
             )
-            if _is_text_atom(field_errors):
-                field_error_items: tuple[object, ...] = (field_errors,)
-            else:
-                try:
-                    field_error_items = tuple(field_errors)
-                except BaseException:  # noqa: BLE001 - hostile object, contained by design
-                    field_error_items = (field_errors,)
+            try:
+                field_error_items: tuple[object, ...] = (
+                    (field_errors,) if _is_text_atom(field_errors) else tuple(field_errors)
+                )
+            except BaseException:  # noqa: BLE001 - hostile object, contained by design
+                field_error_items = (field_errors,)
             messages: list[object] = []
 
             for error in field_error_items:

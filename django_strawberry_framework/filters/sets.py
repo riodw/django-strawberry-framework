@@ -52,7 +52,11 @@ from graphql import GraphQLError
 from strawberry import UNSET
 from typing_extensions import override
 
-from django_strawberry_framework.exceptions import ConfigurationError, _safe_arg_repr
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_predicate,
+)
 from django_strawberry_framework.optimizer.predicates import (
     attach_exists,
     correlated_inner_root,
@@ -2149,7 +2153,7 @@ class FilterSet(
         routes through both narrowings.
         """
         meta_fields = getattr(cls._meta, "fields", None)
-        if meta_fields is not None and not isinstance(meta_fields, str):
+        if meta_fields is not None and not _safe_predicate(isinstance, meta_fields, str):
             # ``str`` is exempt here (unlike the order family): the top-level
             # ``"__all__"`` shorthand IS a string declaration, and any other
             # string is upstream's to reject.

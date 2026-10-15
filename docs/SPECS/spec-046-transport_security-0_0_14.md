@@ -1302,12 +1302,12 @@ the right events — is observable only by running a real connection through the
 router construction must not do, and an arity check on the result would falsely reject
 legitimate `*args` middleware, `functools.partial` mounts, and callable instances whose
 `__call__` is a C slot. So the validation converts every shape that *cannot* be an ASGI
-application (`None`, a scalar, a mapping, a coroutine) into an actionable
-`ConfigurationError` naming the contract, the factory, and the received value, and
-deliberately leaves a callable that merely misbehaves to fail at the handshake, where its
-own traceback is the useful signal. A `TypeError` raised from inside a correct factory's
-body is never normalized — that is why the convention is pre-bound rather than caught
-around the call.
+application (`None`, a scalar, a mapping, a coroutine, a value whose `__class__` cannot be
+read) into an actionable `ConfigurationError` naming the contract, the factory, and the
+received value, and deliberately leaves a callable that merely misbehaves to fail at the
+handshake, where its own traceback is the useful signal. A `TypeError` raised from inside a
+correct factory's body is never normalized — that is why the convention is pre-bound rather
+than caught around the call.
 
 `None` selects the package's own `GraphQLWebSocketConsumer`, a thin `GraphQLWSConsumer`
 subclass that revalidates the session actor at both of
@@ -2862,8 +2862,8 @@ Maintainer-invoked gates only, per [`AGENTS.md`][agents].
     the value it is rejecting; accepted numbers arrive at the consumer coerced to `float`.
 32. The injected-factory contract, at construction: a factory that cannot accept `schema=`
     (with the binding `TypeError` as `__cause__`), one returning a non-callable (`None`, a
-    scalar, a mapping, a value whose `repr` cannot be rendered), and an `async def` factory
-    (whose refused coroutine is closed, so no "never awaited" warning escapes into the
+    scalar, a mapping, a value whose `repr` or `__class__` cannot be read), and an `async def`
+    factory (whose refused coroutine is closed, so no "never awaited" warning escapes into the
     consumer's process) are each a [`ConfigurationError`][glossary-configurationerror]; a
     sync factory returning an async ASGI callable is mounted **by identity** inside both
     wrappers; a `TypeError` raised from a correct factory's own body is not normalized; and a

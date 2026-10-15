@@ -53,7 +53,13 @@ from typing import TYPE_CHECKING, ClassVar, TypeVar, cast
 from django.db.models.constants import LOOKUP_SEP
 from django.utils.module_loading import import_string
 
-from .exceptions import ConfigurationError, _safe_arg_repr, _safe_class_name, _safe_type_name
+from .exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_class_name,
+    _safe_predicate,
+    _safe_type_name,
+)
 from .utils.input_values import SetInputTraversal, is_inactive_value
 from .utils.permissions import (
     active_permission_targets,
@@ -609,9 +615,14 @@ def is_re_readable_field_declaration(value: object) -> bool:
     ``map`` / ``filter`` objects) that expand correctly ONCE and silently to
     nothing afterwards. The check is structural, so a hostile ``__iter__`` is
     never entered: an object that only defines ``__iter__`` is not a
-    ``Collection``.
+    ``Collection``. A value whose ``__class__`` cannot be read is not a container
+    an expansion may walk, so it answers ``False`` and the caller's typed
+    rejection names it.
     """
-    return isinstance(value, Collection) and not isinstance(value, _TEXT_ATOM_TYPES)
+    return _safe_predicate(isinstance, value, Collection) and not isinstance(
+        value,
+        _TEXT_ATOM_TYPES,
+    )
 
 
 def require_re_readable_field_declaration(

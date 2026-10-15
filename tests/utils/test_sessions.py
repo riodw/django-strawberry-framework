@@ -21,6 +21,7 @@ from django.contrib.sessions.backends.signed_cookies import (
     SessionStore as SignedCookieSessionStore,
 )
 from django.test import override_settings
+from django.utils.functional import SimpleLazyObject
 from typing_extensions import override
 
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -34,7 +35,7 @@ from django_strawberry_framework.utils.sessions import (
     note_authenticated_actor,
     session_store_class,
 )
-from tests._idioms import stub_module
+from tests._idioms import ClaimsClass, ClassReadRaises, stub_module
 from tests.auth._helpers import _drain_until
 
 # ---------------------------------------------------------------------------
@@ -189,6 +190,68 @@ def test_session_store_class_repr_hostile_engine_names_the_engine_path() -> None
     message (which module could not be imported) survives.
     """
     with pytest.raises(ConfigurationError, match=r"tests\.utils\._no_such_engine"):
+        session_store_class()
+
+
+@pytest.mark.parametrize(
+    ("engine", "rendered"),
+    [
+        pytest.param(
+            ClassReadRaises(RuntimeError),
+            "ClassReadRaises <ClassReadRaises>",
+            id="class-read-raises",
+        ),
+        pytest.param(
+            ClassReadRaises(KeyboardInterrupt),
+            "ClassReadRaises <ClassReadRaises>",
+            id="class-read-interrupts",
+        ),
+        pytest.param(ClaimsClass(str), "ClaimsClass <ClaimsClass>", id="claims-str"),
+        pytest.param(
+            SimpleLazyObject(lambda: "django.contrib.sessions.backends.db"),
+            "SimpleLazyObject <SimpleLazyObject: ",
+            id="lazy-str",
+        ),
+    ],
+)
+def test_session_store_class_rejects_an_engine_that_is_not_really_a_string(
+    engine: object,
+    rendered: str,
+) -> None:
+    """The engine is a string only if its real type is: its ``__class__`` is never consulted.
+
+    A ``__class__`` that raises or claims ``str`` would otherwise escape the typed rejection
+    (the base ``str`` slot below refuses an object that is not really a ``str``).
+    """
+    with override_settings(SESSION_ENGINE=engine), pytest.raises(ConfigurationError) as excinfo:
+        session_store_class()
+    assert str(excinfo.value).startswith(f"SESSION_ENGINE must be a string; got {rendered}")
+
+
+class _TruthinessHostileEngine(str):
+    """An engine whose ``__bool__`` and ``__len__`` raise when its truthiness is tested."""
+
+    def __bool__(self) -> NoReturn:
+        raise RuntimeError("hostile __bool__")
+
+    @override
+    def __len__(self) -> NoReturn:
+        raise RuntimeError("hostile __len__")
+
+
+def test_session_store_class_resolves_a_truthiness_hostile_engine() -> None:
+    """The emptiness test reads the flattened engine, never the subclass's ``__bool__`` / ``__len__``."""
+    engine = _TruthinessHostileEngine("django.contrib.sessions.backends.signed_cookies")
+    with override_settings(SESSION_ENGINE=engine):
+        assert session_store_class() is SignedCookieSessionStore
+
+
+def test_session_store_class_rejects_an_empty_truthiness_hostile_engine() -> None:
+    """An empty hostile engine meets the typed emptiness rejection, not its own exception."""
+    with (
+        override_settings(SESSION_ENGINE=_TruthinessHostileEngine("")),
+        pytest.raises(ConfigurationError, match="SESSION_ENGINE must be a non-empty string"),
+    ):
         session_store_class()
 
 

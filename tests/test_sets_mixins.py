@@ -28,6 +28,7 @@ from apps.library import models as library_models
 from apps.library.filters import BookFilter
 from apps.library.models import Book
 from django.db.models import Model
+from django.utils.functional import SimpleLazyObject
 from strawberry import UNSET
 from strawberry import UNSET as _UNSET
 from typing_extensions import override
@@ -55,7 +56,7 @@ from django_strawberry_framework.sets_mixins import (
 )
 from django_strawberry_framework.utils.input_values import SetInputTraversal
 from django_strawberry_framework.utils.inputs import GeneratedInputFieldSpec
-from tests._idioms import definition_raises
+from tests._idioms import ClassReadRaises, definition_raises
 
 _SHARED_PERMISSION_METHODS = (
     "_request_from_info",
@@ -924,6 +925,42 @@ def test_re_readable_gate_never_iterates_the_declaration() -> None:
             raise RuntimeError("boom")  # never entered
 
     assert is_re_readable_field_declaration(_Boom()) is False
+
+
+@pytest.mark.parametrize("escape", [RuntimeError, KeyboardInterrupt])
+def test_re_readable_gate_rejects_a_value_whose_class_read_raises(
+    escape: type[BaseException],
+) -> None:
+    """A ``__class__`` that raises is "not a container", so the typed rejection can name it."""
+    assert is_re_readable_field_declaration(ClassReadRaises(escape)) is False
+
+
+def test_re_readable_gate_keeps_the_honest_lazy_proxies_it_always_judged_by_class() -> None:
+    """A lazy proxy of a collection is a collection; a lazy proxy of a string is still text."""
+    assert is_re_readable_field_declaration(SimpleLazyObject(lambda: ["code"])) is True
+    assert is_re_readable_field_declaration(SimpleLazyObject(lambda: "code")) is False
+
+
+def test_re_readable_gate_rejection_names_a_value_whose_class_read_raises() -> None:
+    """The ``got`` tail renders the value without reading its ``__class__``."""
+
+    class _Probe:
+        pass
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        require_re_readable_field_declaration(
+            _Probe,
+            ClassReadRaises(),
+            subject="OrderSet",
+            accepted="'__all__' or a re-readable collection of field names",
+        )
+    assert str(excinfo.value) == (
+        f"OrderSet {_Probe.__qualname__}.Meta.fields must be '__all__' or a re-readable "
+        "collection of field names; got ClassReadRaises (<ClassReadRaises>). "
+        "Accepted: a re-readable collection of field names -- list, tuple, set, frozenset, "
+        "dict keys/values, or another sized collection; not a one-shot iterator or generator, "
+        "and not a bare string."
+    )
 
 
 def test_re_readable_gate_message_names_the_receipt_and_the_contract() -> None:

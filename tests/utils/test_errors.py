@@ -12,7 +12,7 @@ is ``tests/utils/test_error_keys.py``.
 import ast
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, NoReturn, cast
 
 import pytest
 from apps.library import models as library_models
@@ -319,6 +319,58 @@ def test_field_error_and_join_path_survive_hostile_class_property() -> None:
     # basedpyright: the object whose __class__ raises is the hostile input under test;
     # join_error_path types the parameter as str
     assert join_error_path(bad, "child") == "<unprintable _HostileClass>.child"  # pyright: ignore[reportArgumentType]
+
+
+def _raising_class_leaf(raised: type[BaseException]) -> object:
+    """A leaf whose ``__class__`` read raises ``raised`` (so a bare ``isinstance`` raises)."""
+
+    class RaisingClassLeaf:
+        messages = ("hostile-leaf message",)
+        code = "hostile_leaf"
+
+        @property
+        @override
+        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object
+        # is the guard's input
+        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
+            raise raised("hostile __class__")
+
+    return RaisingClassLeaf()
+
+
+@pytest.mark.parametrize("raised", [RuntimeError, KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("route", ["duck", "post_construction"])
+def test_validation_error_mapper_contains_an_error_dict_value_whose_class_read_raises(
+    route: str,
+    raised: type[BaseException],
+) -> None:
+    """The atom check on each ``error_dict`` value is contained like every sibling check.
+
+    The value is a lone leaf carrying its own message and code, exactly as a value the
+    mapper cannot classify is treated everywhere else in this module. ``duck`` is a
+    consumer exception exposing an ``error_dict``; ``post_construction`` is a real
+    ``ValidationError`` whose ``error_dict`` was edited after Django flattened it.
+    """
+    leaf = _raising_class_leaf(raised)
+    if route == "duck":
+
+        class _Duck:
+            error_dict = {"title": leaf}
+
+        exception = _as_validation_error(_Duck())
+    else:
+        exception = ValidationError({"title": ["placeholder"]})
+        # basedpyright: the post-construction edit this row pins puts a non-``ValidationError``
+        # value into the typed ``error_dict``
+        cast("dict[str, object]", exception.error_dict)["title"] = leaf
+
+    (error,) = validation_error_to_field_errors(exception)
+
+    assert (error.field, error.messages, error.codes) == (
+        "title",
+        ["hostile-leaf message"],
+        ["hostile_leaf"],
+    )
 
 
 def test_validation_error_mapper_handles_leaf_with_message_collection_when_messages_raises() -> (

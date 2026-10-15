@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, ClassVar, NoReturn
 
 import pytest
 import strawberry
+from django.utils.functional import SimpleLazyObject
 from typing_extensions import override
 
 from django_strawberry_framework import strawberry_config
@@ -55,7 +56,7 @@ from django_strawberry_framework.utils.inputs import (
     resolve_set_meta_fields,
     set_input_type_name,
 )
-from tests._idioms import module_binding
+from tests._idioms import ClaimsClass, ClassReadRaises, module_binding
 from tests._soft_dependency import blocked_modules
 
 if TYPE_CHECKING:
@@ -541,6 +542,93 @@ def test_meta_fields_canonicalization_bypasses_hostile_containers_and_reprs() ->
         _HostileDict(name=_HostileSet(["exact", "contains"])),
     ) == {"name": ["contains", "exact"]}
     assert _sorted_meta_values(_HostileList(["z", "a"])) == ["a", "z"]
+
+
+@pytest.mark.parametrize("escape", [RuntimeError, KeyboardInterrupt])
+def test_meta_fields_canonicalization_passes_a_value_whose_class_read_raises_through(
+    escape: type[BaseException],
+) -> None:
+    """A value whose ``__class__`` raises is neither a set nor a dict, so it is returned untouched.
+
+    The re-readable gate that follows names it in its typed rejection; the canonicalizer's
+    own kind tests must not raise first. The same holds for a lookup-bag value.
+    """
+    hostile = ClassReadRaises(escape)
+
+    assert canonicalize_set_meta_fields(hostile) is hostile
+    bag = canonicalize_set_meta_fields({"name": hostile})
+    assert isinstance(bag, dict)
+    assert bag["name"] is hostile
+
+
+def test_meta_fields_canonicalization_keeps_a_lazy_set_a_typed_rejection() -> None:
+    """A lazy proxy of a set is judged by its class (a set) and refused as unreadable, as before.
+
+    Letting it through would hand the expansion a set in hash order.
+    """
+    with pytest.raises(ConfigurationError) as excinfo:
+        canonicalize_set_meta_fields(SimpleLazyObject(lambda: {"b", "a"}))
+    assert str(excinfo.value) == (
+        "Generated set metadata contains an unreadable SimpleLazyObject container."
+    )
+
+
+@pytest.mark.parametrize("escape", [RuntimeError, KeyboardInterrupt])
+def test_normalize_field_name_sequence_rejects_a_value_whose_class_read_raises(
+    escape: type[BaseException],
+) -> None:
+    """The bare-string and unordered-set tests tolerate a ``__class__`` that raises.
+
+    Such a value is neither, so it reaches the tuple read, which it fails typed.
+    """
+    with pytest.raises(ConfigurationError) as excinfo:
+        normalize_field_name_sequence(ClassReadRaises(escape), flavor="Probe")
+    assert str(excinfo.value) == (
+        "Probe Meta.fields must be a readable sequence of field name strings; got ClassReadRaises."
+    )
+
+
+@pytest.mark.parametrize(
+    ("entry", "rendered"),
+    [
+        pytest.param(ClassReadRaises(RuntimeError), "<ClassReadRaises>", id="class-read-raises"),
+        pytest.param(
+            ClassReadRaises(KeyboardInterrupt),
+            "<ClassReadRaises>",
+            id="class-read-interrupts",
+        ),
+        pytest.param(ClaimsClass(str), "<ClaimsClass>", id="claims-str"),
+    ],
+)
+def test_normalize_field_name_sequence_rejects_an_entry_that_is_not_really_a_string(
+    entry: object,
+    rendered: str,
+) -> None:
+    """An entry is a name only if its real type is a string: its ``__class__`` is never consulted.
+
+    The base ``str`` slot the accepted names are copied through refuses an object that is not
+    really a ``str``, so a ``__class__`` that raises or claims ``str`` must be listed as a
+    non-string entry before it gets there.
+    """
+    with pytest.raises(ConfigurationError) as excinfo:
+        normalize_field_name_sequence(["name", entry], flavor="Probe")
+    assert str(excinfo.value) == (
+        "Probe Meta.fields must be a sequence of field name strings; "
+        f"got non-string entry(ies): [{rendered}]."
+    )
+
+
+def test_normalize_field_name_sequence_judges_a_lazy_whole_value_by_its_class() -> None:
+    """A lazy proxy of a string is a bare string (refused); a lazy proxy of a list is a list.
+
+    The whole-value tests keep asking the proxied class: reading the real type instead would
+    iterate the string into one name per character.
+    """
+    with pytest.raises(ConfigurationError, match="not a bare string"):
+        normalize_field_name_sequence(SimpleLazyObject(lambda: "name"), flavor="Probe")
+    assert normalize_field_name_sequence(SimpleLazyObject(lambda: ["name"]), flavor="Probe") == (
+        "name",
+    )
 
 
 def test_resolve_set_meta_fields_promotes_the_alias_on_a_meta_class() -> None:

@@ -37,6 +37,7 @@ from apps.scalars import models as scalar_models
 from django import forms
 from django.db import models
 from django.db.models import QuerySet
+from django.utils.functional import SimpleLazyObject
 from django_filters import (
     BaseInFilter,
     BaseRangeFilter,
@@ -104,7 +105,7 @@ from django_strawberry_framework.sets_mixins import ClassBasedTypeNameMixin
 from django_strawberry_framework.types.finalizer import finalize_django_types
 from django_strawberry_framework.types.relay import apply_interfaces
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
-from tests._idioms import is_object_list
+from tests._idioms import ClaimsClass, ClassReadRaises, is_object_list
 from tests._soft_dependency import blocked_modules
 from tests.filters.fixtures.filtersets import ShelfFilter
 
@@ -1231,6 +1232,85 @@ def test_filter_input_subscript_rejects_non_filterset_naming_the_subscript() -> 
         # types the parameter as type[FilterSet]
         filter_input_type(NotAFilter)  # pyright: ignore[reportArgumentType]
     assert _helper_referenced_filtersets == set()
+
+
+class _RaisingRepr:
+    """A value whose ``repr`` raises while the rejection message is being built."""
+
+    @override
+    def __repr__(self) -> str:
+        raise RuntimeError("hostile __repr__")
+
+
+def _filter_input_call_form(value: object) -> object:
+    # basedpyright: the hostile value is the input under test; filter_input_type types the
+    # parameter as type[FilterSet]
+    return filter_input_type(value)  # pyright: ignore[reportArgumentType]
+
+
+def _filter_input_subscript_form(value: object) -> object:
+    # basedpyright: the hostile value is the input under test; FilterInput types its
+    # subscript as a FilterSet subclass
+    return FilterInput[value]  # pyright: ignore[reportInvalidTypeArguments]
+
+
+@pytest.mark.parametrize(
+    ("spell", "prefix"),
+    [
+        pytest.param(
+            _filter_input_call_form,
+            "filter_input_type() requires a FilterSet subclass; got ",
+            id="call-form",
+        ),
+        pytest.param(
+            _filter_input_subscript_form,
+            "FilterInput[...] requires a FilterSet subclass; got ",
+            id="subscript-form",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("value", "rendered"),
+    [
+        pytest.param(ClassReadRaises(RuntimeError), "<ClassReadRaises>", id="class-read-raises"),
+        pytest.param(
+            ClassReadRaises(KeyboardInterrupt),
+            "<ClassReadRaises>",
+            id="class-read-interrupts",
+        ),
+        pytest.param(ClaimsClass(type), "<ClaimsClass>", id="claims-type"),
+        pytest.param(_RaisingRepr(), "<unprintable _RaisingRepr>", id="raising-repr"),
+    ],
+)
+def test_filter_input_helpers_type_reject_a_value_whose_class_hooks_fail(
+    spell: Callable[[object], object],
+    prefix: str,
+    value: object,
+    rendered: str,
+) -> None:
+    """The helpers promise ``TypeError`` for any non-FilterSet argument, whatever its hooks do.
+
+    ``isinstance`` / ``issubclass`` fall back to the argument's ``__class__``, which can raise
+    or claim a class it is not, and the message quotes the argument's ``repr``.
+    """
+    with pytest.raises(TypeError) as excinfo:
+        spell(value)
+    assert str(excinfo.value) == f"{prefix}{rendered}"
+    assert _helper_referenced_filtersets == set()
+
+
+def test_filter_input_type_accepts_a_lazy_proxy_of_a_filterset() -> None:
+    """A lazily resolved FilterSet is still a FilterSet: the guard asks the proxied class."""
+
+    class MyFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    result = filter_input_type(SimpleLazyObject(lambda: MyFilter))  # pyright: ignore[reportArgumentType]
+    inner = get_args(result)[0]
+    assert isinstance(inner, typing.ForwardRef)
+    assert inner.__forward_arg__ == "MyFilterInputType"
 
 
 # ---------------------------------------------------------------------------

@@ -10,6 +10,7 @@ from typing import NoReturn
 
 import pytest
 import strawberry
+from django.utils.functional import SimpleLazyObject
 from typing_extensions import override
 
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -458,6 +459,62 @@ def test_field_name_bypasses_hostile_str_subclass_str_override() -> None:
     assert input_field_value({key: "value"}, key) == "value"
 
 
+def _raising_class_value(raised: type[BaseException]) -> object:
+    """A value whose ``__class__`` read raises ``raised`` (so a bare ``isinstance`` raises)."""
+
+    class RaisingClass:
+        @property
+        @override
+        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object
+        # is the guard's input
+        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
+            raise raised("hostile __class__")
+
+    return RaisingClass()
+
+
+class _ClaimsStr:
+    """A non-``str`` value whose ``__class__`` claims ``str``."""
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
+    def __class__(self) -> type[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
+        return str
+
+
+_FIELD_NAME_REFUSAL = (
+    "Set input field names must be strings; received an invalid field name in an input of "
+    "type dict."
+)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        pytest.param(_raising_class_value(RuntimeError), id="raising-class"),
+        pytest.param(_raising_class_value(KeyboardInterrupt), id="raising-class-interrupt"),
+        pytest.param(_ClaimsStr(), id="claims-str"),
+        pytest.param(SimpleLazyObject(lambda: "field_name"), id="lazy-proxy-of-str"),
+    ],
+)
+def test_field_name_asks_the_real_type_and_refuses_a_key_that_is_not_one(key: object) -> None:
+    """A key that only claims ``str`` (or whose class read raises) is the typed refusal.
+
+    ``str.__str__`` accepts only a real ``str``, so a ``__class__``-based answer lets the
+    key through the check and into a raw ``TypeError`` / the key's own exception. Both
+    entry points share the check.
+    """
+    with pytest.raises(ConfigurationError) as walk:
+        iter_input_items({key: "value"})
+    assert str(walk.value) == _FIELD_NAME_REFUSAL
+    with pytest.raises(ConfigurationError) as single:
+        # basedpyright: the key is the hostile non-``str`` input under test; the parameter is typed
+        # ``str``
+        input_field_value({"field_name": "value"}, key)  # pyright: ignore[reportArgumentType]
+    assert str(single.value) == _FIELD_NAME_REFUSAL
+
+
 def test_order_list_elements_reject_primitive_values() -> None:
     """When handle_top_level_list is True, non-mapping list elements raise ConfigurationError."""
 
@@ -631,6 +688,66 @@ def test_assert_set_traversal_depth_words_knobless_sets_with_the_default_sentenc
             branch="related-branch",
             input_noun="related",
         )
+
+
+@pytest.mark.parametrize("subject", ["", "FilterSet"])
+def test_depth_cap_error_label_survives_a_str_subclass_qualname(subject: str) -> None:
+    """A walk that decided to fail names the class through the base ``str`` slot.
+
+    The ``str`` subclass overrides ``__str__`` and ``__format__`` to raise, so a label
+    interpolated as-is replaces the typed depth error with the consumer's exception.
+    """
+
+    class _HostileQualname(str):
+        @override
+        def __str__(self) -> str:
+            raise RuntimeError("hostile qualname __str__")
+
+        @override
+        def __format__(self, format_spec: str) -> str:
+            raise RuntimeError("hostile qualname __format__")
+
+    class _Set:
+        _MAX_LOGIC_DEPTH = 1
+
+    _Set.__qualname__ = _HostileQualname("Hostile.Set")
+    with pytest.raises(ConfigurationError) as excinfo:
+        assert_set_traversal_depth(
+            _Set,
+            2,
+            branch="logical-branch",
+            input_noun="filter",
+            subject=subject,
+        )
+    label = f"{subject} Hostile.Set" if subject else "Hostile.Set"
+    assert str(excinfo.value) == (
+        f"{label}: logical-branch nesting exceeded _MAX_LOGIC_DEPTH=1. Flatten the "
+        "filter input or split into multiple queries."
+    )
+
+
+@pytest.mark.parametrize("raised", [RuntimeError, KeyboardInterrupt])
+def test_depth_cap_error_label_survives_a_qualname_whose_class_read_raises(
+    raised: type[BaseException],
+) -> None:
+    """The label asks the real type, so a ``__class__`` that raises falls back to the type name."""
+
+    class _HostileMeta(type):
+        @override
+        def __getattribute__(cls, name: str) -> object:
+            if name == "__qualname__":
+                return _raising_class_value(raised)
+            return super().__getattribute__(name)
+
+    class _Set(metaclass=_HostileMeta):
+        _MAX_LOGIC_DEPTH = 1
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        assert_set_traversal_depth(_Set, 2, branch="logical-branch", input_noun="filter")
+    assert str(excinfo.value) == (
+        "_Set: logical-branch nesting exceeded _MAX_LOGIC_DEPTH=1. Flatten the "
+        "filter input or split into multiple queries."
+    )
 
 
 def test_depth_cap_error_label_reads_qualname_defensively() -> None:

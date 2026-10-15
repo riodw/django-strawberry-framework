@@ -9,6 +9,7 @@ from collections.abc import Callable
 from typing import NoReturn
 
 import pytest
+from django.utils.functional import SimpleLazyObject
 from typing_extensions import override
 
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -19,6 +20,7 @@ from django_strawberry_framework.utils.strings import (
     pascal_case_or_raise,
     snake_case,
 )
+from tests._idioms import ClaimsClass, ClassReadRaises
 
 
 class _HostileString(str):
@@ -196,6 +198,45 @@ def test_string_helpers_reject_non_string_inputs(helper: Callable[[str], object]
     with pytest.raises(ConfigurationError, match="must be a string"):
         # basedpyright: a non-string input is the bad value the helper must reject
         helper(42)  # pyright: ignore[reportArgumentType]
+
+
+@pytest.mark.parametrize(
+    "helper",
+    [
+        snake_case,
+        pascal_case,
+        graphql_camel_name,
+        flatten_lookup_path,
+    ],
+)
+@pytest.mark.parametrize(
+    ("value", "type_name"),
+    [
+        pytest.param(ClassReadRaises(RuntimeError), "ClassReadRaises", id="class-read-raises"),
+        pytest.param(
+            ClassReadRaises(KeyboardInterrupt),
+            "ClassReadRaises",
+            id="class-read-interrupts",
+        ),
+        pytest.param(ClaimsClass(str), "ClaimsClass", id="claims-str"),
+        pytest.param(SimpleLazyObject(lambda: "a_b"), "SimpleLazyObject", id="lazy-str"),
+    ],
+)
+def test_string_helpers_reject_a_value_that_is_not_really_a_string(
+    helper: Callable[[str], object],
+    value: object,
+    type_name: str,
+) -> None:
+    """A value is a string only if its real type is: its ``__class__`` is never consulted.
+
+    ``str.__str__`` refuses an object that is not really a ``str`` with a bare ``TypeError``, so
+    a value whose ``__class__`` raises or claims ``str`` (or a lazy proxy of a string) has to meet
+    the typed rejection before that slot, without its ``__class__`` being read.
+    """
+    with pytest.raises(ConfigurationError) as excinfo:
+        # basedpyright: a non-string input is the bad value the helper must reject
+        helper(value)  # pyright: ignore[reportArgumentType]
+    assert str(excinfo.value) == f"String helper input must be a string; got {type_name}."
 
 
 def test_snake_case_preserves_lru_cache_controls() -> None:

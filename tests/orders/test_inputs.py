@@ -20,7 +20,7 @@ import dataclasses
 import subprocess
 import sys
 from collections import OrderedDict
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Annotated, ForwardRef, get_args, get_origin
@@ -29,7 +29,9 @@ import pytest
 from apps.library.models import Book, Shelf
 from django.db.models import F
 from django.db.models.expressions import OrderBy
+from django.utils.functional import SimpleLazyObject
 from strawberry import UNSET
+from typing_extensions import override
 
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.orders import (
@@ -60,6 +62,7 @@ from django_strawberry_framework.orders.inputs import (
 from django_strawberry_framework.registry import registry
 from tests._definition import make_definition
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
+from tests._idioms import ClaimsClass, ClassReadRaises
 from tests._soft_dependency import blocked_modules
 
 # The module declares function-scope ``OrderSet`` subclasses whose class-derived
@@ -656,6 +659,86 @@ def test_order_input_subscript_rejects_non_orderset_naming_the_subscript() -> No
         "order_input_type() requires an OrderSet subclass; got <class 'int'>"
     )
     assert _helper_referenced_ordersets == initial
+
+
+class _RaisingRepr:
+    """A value whose ``repr`` raises while the rejection message is being built."""
+
+    @override
+    def __repr__(self) -> str:
+        raise RuntimeError("hostile __repr__")
+
+
+def _order_input_call_form(value: object) -> object:
+    # basedpyright: the hostile value is the input under test; order_input_type types the
+    # parameter as type[OrderSet]
+    return order_input_type(value)  # pyright: ignore[reportArgumentType]
+
+
+def _order_input_subscript_form(value: object) -> object:
+    # basedpyright: the hostile value is the input under test; OrderInput types its
+    # subscript as an OrderSet subclass
+    return OrderInput[value]  # pyright: ignore[reportInvalidTypeArguments]
+
+
+@pytest.mark.parametrize(
+    ("spell", "prefix"),
+    [
+        pytest.param(
+            _order_input_call_form,
+            "order_input_type() requires an OrderSet subclass; got ",
+            id="call-form",
+        ),
+        pytest.param(
+            _order_input_subscript_form,
+            "OrderInput[...] requires an OrderSet subclass; got ",
+            id="subscript-form",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("value", "rendered"),
+    [
+        pytest.param(ClassReadRaises(RuntimeError), "<ClassReadRaises>", id="class-read-raises"),
+        pytest.param(
+            ClassReadRaises(KeyboardInterrupt),
+            "<ClassReadRaises>",
+            id="class-read-interrupts",
+        ),
+        pytest.param(ClaimsClass(type), "<ClaimsClass>", id="claims-type"),
+        pytest.param(_RaisingRepr(), "<unprintable _RaisingRepr>", id="raising-repr"),
+    ],
+)
+def test_order_input_helpers_type_reject_a_value_whose_class_hooks_fail(
+    spell: Callable[[object], object],
+    prefix: str,
+    value: object,
+    rendered: str,
+) -> None:
+    """The helpers promise ``TypeError`` for any non-OrderSet argument, whatever its hooks do.
+
+    ``isinstance`` / ``issubclass`` fall back to the argument's ``__class__``, which can raise
+    or claim a class it is not, and the message quotes the argument's ``repr``.
+    """
+    initial = set(_helper_referenced_ordersets)
+    with pytest.raises(TypeError) as excinfo:
+        spell(value)
+    assert str(excinfo.value) == f"{prefix}{rendered}"
+    assert _helper_referenced_ordersets == initial
+
+
+def test_order_input_type_accepts_a_lazy_proxy_of_an_orderset() -> None:
+    """A lazily resolved OrderSet is still an OrderSet: the guard asks the proxied class."""
+
+    class HelperOrderLazy(OrderSet):
+        pass
+
+    initial = set(_helper_referenced_ordersets)
+    annotation = order_input_type(SimpleLazyObject(lambda: HelperOrderLazy))  # pyright: ignore[reportArgumentType]
+    inner = get_args(annotation)[0]
+    assert isinstance(inner, ForwardRef)
+    assert inner.__forward_arg__ == "HelperOrderLazyInputType"
+    _helper_referenced_ordersets.intersection_update(initial)
 
 
 # ---------------------------------------------------------------------------

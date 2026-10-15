@@ -87,7 +87,10 @@ from typing_extensions import Self, override
 
 import django_strawberry_framework.resource_policy as rp
 from django_strawberry_framework import (
+    DjangoConnectionField,
     DjangoListField,
+    DjangoNodeField,
+    DjangoNodesField,
     DjangoOptimizerExtension,
     DjangoSchema,
     DjangoType,
@@ -421,6 +424,100 @@ def test_djangolistfield_definition_read_failure_is_typed_not_raw() -> None:
 
     with pytest.raises(ConfigurationError, match="is not a registered DjangoType"):
         DjangoListField(TrappedBase)
+
+
+_RAISING_CLASS_ERRORS = [RuntimeError, TypeError, KeyboardInterrupt]
+
+
+class _RaisingClassTarget:
+    """A non-class target whose ``__class__`` read raises (so a bare ``isinstance`` raises)."""
+
+    def __init__(self, raised: type[BaseException]) -> None:
+        self._raised = raised
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is the
+    # target guard's input
+    def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
+        raise self._raised("hostile __class__")
+
+    @override
+    def __repr__(self) -> str:
+        return "<hostile target>"
+
+
+class _ClaimsTypeTarget:
+    """A non-class target whose ``__class__`` claims ``type`` (so ``isinstance(x, type)`` is True)."""
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__``: the forged type is the target guard's
+    # input
+    def __class__(self) -> type[type]:  # pyright: ignore[reportIncompatibleMethodOverride]
+        return type
+
+    @override
+    def __repr__(self) -> str:
+        return "<forged target>"
+
+
+@pytest.mark.parametrize(
+    ("target", "tail"),
+    [
+        pytest.param(
+            _RaisingClassTarget(RuntimeError),
+            "<hostile target>",
+            id="class-read-raises",
+        ),
+        pytest.param(
+            _RaisingClassTarget(TypeError),
+            "<hostile target>",
+            id="class-read-raises-typeerror",
+        ),
+        pytest.param(
+            _RaisingClassTarget(KeyboardInterrupt),
+            "<hostile target>",
+            id="class-read-raises-keyboardinterrupt",
+        ),
+        pytest.param(_ClaimsTypeTarget(), "<forged target>", id="class-read-claims-type"),
+    ],
+)
+def test_djangolistfield_rejects_a_target_whose_class_cannot_be_trusted(
+    target: object,
+    tail: str,
+) -> None:
+    """The class test asks the value's real type, so its ``__class__`` cannot decide it.
+
+    ``inspect.isclass`` is ``isinstance(x, type)``, which falls back to reading
+    ``x.__class__``: a property that raises would escape raw, and one that claims
+    ``type`` would carry the non-class into ``issubclass``, whose own ``TypeError``
+    would replace the typed rejection. Neither value is a class, so both are the
+    first guard's rejection.
+    """
+    with pytest.raises(ConfigurationError) as exc_info:
+        # basedpyright: the non-class value is the hostile input under test; DjangoListField types
+        # the parameter as type[object]
+        DjangoListField(target)  # pyright: ignore[reportArgumentType]
+    assert str(exc_info.value) == f"DjangoListField requires a DjangoType class; got {tail}."
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [DjangoConnectionField, DjangoNodeField, DjangoNodesField],
+    ids=lambda factory: factory.__name__,
+)
+def test_every_field_factory_shares_the_class_test_of_the_target_guard(
+    factory: Callable[[type[object]], object],
+) -> None:
+    """The connection and node fields run the same single-sited target guard."""
+    with pytest.raises(ConfigurationError) as exc_info:
+        # basedpyright: the non-class value is the hostile input under test; the factories type
+        # the parameter as type[object]
+        factory(_RaisingClassTarget(RuntimeError))  # pyright: ignore[reportArgumentType]
+    assert str(exc_info.value) == (
+        f"{factory.__name__} requires a DjangoType class; got <hostile target>."
+    )
 
 
 def test_djangolistfield_rejects_bare_string_directives() -> None:
@@ -2581,6 +2678,114 @@ def test_djangolistfield_accepts_and_captures_the_registrys_exact_object() -> No
     )
     assert definition is registry.get_definition(CanonicalTargetType)
     assert definition is CanonicalTargetType.__django_strawberry_definition__
+
+
+class _ArmedHashMeta(type):
+    """A metaclass whose ``__hash__`` raises only while armed, so the class can be created."""
+
+    armed = False
+
+    @override
+    def __hash__(cls) -> int:
+        if _ArmedHashMeta.armed:
+            raise RuntimeError("hostile __hash__")
+        return type.__hash__(cls)
+
+
+def test_djangolistfield_registry_lookup_failure_is_typed_not_raw() -> None:
+    """A target the registry cannot be asked about cannot be PROVEN registered.
+
+    The registry lookup hashes the target, so a metaclass ``__hash__`` that
+    raises is contained like the definition-attribute read beside it. The
+    failure is the same typed rejection.
+    """
+
+    class HashedTarget(DjangoType, metaclass=_ArmedHashMeta):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    _ArmedHashMeta.armed = True
+    try:
+        with pytest.raises(ConfigurationError) as exc_info:
+            DjangoListField(HashedTarget)
+    finally:
+        _ArmedHashMeta.armed = False
+    assert str(exc_info.value) == (
+        "DjangoListField target HashedTarget is not a registered DjangoType. "
+        "This usually means HashedTarget's `Meta` is missing a `model` declaration, or it "
+        "inherits a definition from a parent without declaring its own `Meta`."
+    )
+
+
+class _RaisingOriginDefinition:
+    """A stand-in definition whose ``origin`` read raises."""
+
+    def __init__(self, raised: type[BaseException]) -> None:
+        self._raised = raised
+
+    @property
+    def origin(self) -> NoReturn:
+        raise self._raised("hostile origin")
+
+
+@pytest.mark.parametrize("raised", _RAISING_CLASS_ERRORS)
+def test_djangolistfield_never_reads_origin_off_a_replaced_definition(
+    raised: type[BaseException],
+) -> None:
+    """The attribute is compared to the registry's object before ``origin`` is read.
+
+    A definition attribute reassigned to an object that is not the registry's
+    is rejected by identity, so a stand-in whose ``origin`` raises is never
+    asked for it.
+    """
+
+    class ReplacedTarget(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    with (
+        pytest.raises(ConfigurationError) as exc_info,
+        _swap_definition_attribute(ReplacedTarget, _RaisingOriginDefinition(raised)),
+    ):
+        DjangoListField(ReplacedTarget)
+    assert str(exc_info.value) == (
+        "DjangoListField target ReplacedTarget is not a registered DjangoType. "
+        "This usually means ReplacedTarget's `Meta` is missing a `model` declaration, or it "
+        "inherits a definition from a parent without declaring its own `Meta`."
+    )
+
+
+def test_djangolistfield_rejects_a_definition_registered_for_another_class() -> None:
+    """The registry's object must also name THIS class as its origin.
+
+    Identity with the registry's object is not enough when the registry's object
+    belongs to a different class: a type whose attribute and registry entry are
+    both another type's definition is not a registered target of its own.
+    """
+
+    class OwnerType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class BorrowerType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    owner_definition = OwnerType.__django_strawberry_definition__
+    registry.unregister(BorrowerType)
+    registry.register_definition(BorrowerType, owner_definition)
+    with (
+        pytest.raises(
+            ConfigurationError,
+            match=r"DjangoListField target BorrowerType is not a registered DjangoType",
+        ),
+        _swap_definition_attribute(BorrowerType, owner_definition),
+    ):
+        DjangoListField(BorrowerType)
 
 
 # ---------------------------------------------------------------------------

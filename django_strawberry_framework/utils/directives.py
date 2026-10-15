@@ -14,7 +14,9 @@ assignment line that supplied it:
   without ``__strawberry_directive__``: a raw ``AttributeError`` at schema build
   for ``str``, and a silent build that crashes SDL render for the byte flavors;
 - an iterator that raises midway escapes as whatever it raised;
-- a non-iterable detonates as a raw ``TypeError`` inside ``strawberry.field``.
+- a non-iterable detonates as a raw ``TypeError`` inside ``strawberry.field``;
+- a value whose ``__class__`` read raises escapes the text-or-bytes check itself,
+  before any iteration starts.
 
 This module owns the ONE containment behind all of them. It was three
 near-identical inline copies before, and they had already drifted (different
@@ -55,14 +57,12 @@ def validated_field_directives(label: str, directives: Any) -> tuple[object, ...
     """
     # Text and bytes-like values are ``Iterable`` but their elements are never directives:
     # ``bytearray`` and ``memoryview`` iterate into ``int`` exactly as ``bytes`` does, so
-    # they share the reject arm rather than silently building integer directives.
-    if is_text_or_bytes(directives):
-        raise ConfigurationError(
-            f"{label} directives must be a sequence of directive instances; "
-            f"got {_safe_type_name(directives)}.",
-        )
+    # they share the reject arm rather than silently building integer directives. The class
+    # check sits inside the containment with the iteration: ``isinstance`` falls back to a
+    # ``__class__`` read, and deployment-supplied code can make that raise too.
     try:
-        return tuple(directives)
+        if not is_text_or_bytes(directives):
+            return tuple(directives)
     except Exception as exc:
         # Naming the escaping exception's TYPE (never its message, which a
         # hostile ``__str__`` owns) keeps the diagnostic useful without
@@ -71,3 +71,7 @@ def validated_field_directives(label: str, directives: Any) -> tuple[object, ...
         raise ConfigurationError(
             f"{label} directives could not be read ({_safe_type_name(exc)}).",
         ) from exc
+    raise ConfigurationError(
+        f"{label} directives must be a sequence of directive instances; "
+        f"got {_safe_type_name(directives)}.",
+    )

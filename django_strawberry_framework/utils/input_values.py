@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, NoReturn, cast
 
 from django_strawberry_framework.exceptions import ConfigurationError, _safe_attr, _safe_type_name
 
-from ._narrowing import dict_get, dict_items, is_dict, is_list, is_mapping, list_iter
+from ._narrowing import dict_get, dict_items, is_dict, is_list, is_mapping, is_str, list_iter
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
@@ -78,8 +78,12 @@ LEAF = "leaf"
 
 
 def _field_name(value: object, *, input_value: object) -> str:
-    """Normalize one input key or reject it before lookup/permission dispatch."""
-    if not isinstance(value, str):
+    """Normalize one input key or reject it before lookup/permission dispatch.
+
+    The key's real type decides (``is_str``): a ``__class__`` property can neither
+    claim ``str`` for an object the base ``str`` slot refuses nor raise out of the check.
+    """
+    if not is_str(value):
         raise ConfigurationError(
             "Set input field names must be strings; received an invalid field name in an "
             f"input of type {_safe_type_name(input_value)}.",
@@ -253,9 +257,11 @@ def raise_set_traversal_depth_exceeded(
     only one of the two copies.
     """
     cap = set_traversal_depth_cap(set_cls)
-    label = _safe_attr(set_cls, "__qualname__")
-    if not isinstance(label, str):
-        label = _safe_type_name(set_cls)
+    qualname = _safe_attr(set_cls, "__qualname__")
+    # The base ``str`` slot strips a ``str`` subclass before its ``__str__`` / ``__format__``
+    # can run inside the message below; ``is_str`` asks the real type, which a ``__class__``
+    # property cannot restate.
+    label = str.__str__(qualname) if is_str(qualname) else _safe_type_name(set_cls)
     if subject:
         label = f"{subject} {label}"
     cap_detail = (

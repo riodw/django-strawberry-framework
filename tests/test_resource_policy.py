@@ -122,7 +122,7 @@ from django_strawberry_framework.utils.operation_lease import OperationLease
 from django_strawberry_framework.utils.querysets import materialized_rows, normalized_row_source
 from tests._django_private import has_apply_rel_filters
 from tests._execution import make_execution_context
-from tests._idioms import pickle_roundtrip
+from tests._idioms import ClassReadRaises, pickle_roundtrip
 
 _M = TypeVar("_M", bound=Model)
 _QuerySetT = TypeVar("_QuerySetT", bound="QuerySet[Model, object]")
@@ -394,6 +394,18 @@ def test_a_non_mapping_policy_argument_is_rejected() -> None:
         # basedpyright: the non-mapping policy is the hostile input under test;
         # resolve_resource_policy types the parameter as ResourcePolicy | Mapping[str, object] | None
         resolve_resource_policy(12)  # pyright: ignore[reportArgumentType]
+
+
+def test_a_policy_argument_whose_class_read_raises_is_rejected() -> None:
+    """A value that cannot be classified is "not a policy, not a mapping", so the typed rejection names it."""
+    with pytest.raises(ConfigurationError) as excinfo:
+        # basedpyright: the unclassifiable policy is the hostile input under test;
+        # resolve_resource_policy types the parameter as ResourcePolicy | Mapping[str, object] | None
+        resolve_resource_policy(ClassReadRaises())  # pyright: ignore[reportArgumentType]
+    assert str(excinfo.value) == (
+        "The resource policy must be a ResourcePolicy or a mapping of bound names to values; "
+        "got ClassReadRaises <ClassReadRaises>."
+    )
 
 
 def test_an_unknown_bound_name_is_rejected_with_the_valid_vocabulary() -> None:

@@ -51,6 +51,7 @@ from django.db.backends.signals import connection_created
 from django.db.backends.sqlite3 import base as sqlite_base
 from django.db.models import Model, QuerySet
 from django.db.models.signals import post_save
+from django.utils.functional import SimpleLazyObject
 from graphql.execution.execute import ExecutionContext as CoreExecutionContext
 from graphql_client import JSONObject
 from strawberry import relay
@@ -1808,6 +1809,47 @@ def test_is_read_only_sql_fails_closed_on_a_non_string_statement() -> None:
     assert is_read_only_sql(_HostileStr()) is False
     assert is_read_only_sql(None) is False
     assert is_read_only_sql(b"SELECT 1") is False  # bytes SQL is not DB-API either
+
+
+class _SqlClaimsStr:
+    """A non-``str`` statement whose ``__class__`` claims ``str``."""
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
+    def __class__(self) -> type[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
+        return str
+
+
+class _SqlRaisingClass:
+    """A non-``str`` statement whose ``__class__`` read raises."""
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is the
+    # guard's input
+    def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
+        raise RuntimeError("hostile __class__")
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        pytest.param(_SqlClaimsStr(), id="claims-str"),
+        pytest.param(_SqlRaisingClass(), id="raising-class"),
+        pytest.param(SimpleLazyObject(lambda: "SELECT 1"), id="lazy-proxy-of-str"),
+    ],
+)
+def test_is_read_only_sql_fails_closed_on_a_statement_that_is_not_really_a_string(
+    statement: object,
+) -> None:
+    """The statement's REAL type decides, never a ``__class__`` the object supplies.
+
+    ``str.__str__`` refuses anything that is not a real ``str``, so an ``isinstance``
+    answer taken from ``__class__`` turns the documented ``False`` into a raw
+    ``TypeError`` (a claim) or the object's own exception (a raising read).
+    """
+    assert is_read_only_sql(statement) is False
 
 
 @pytest.mark.django_db

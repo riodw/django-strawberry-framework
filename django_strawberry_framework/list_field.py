@@ -90,7 +90,7 @@ from .resource_policy import (
 )
 from .types import DjangoType
 from .types.base import _is_relay_shaped
-from .utils._narrowing import is_list_or_tuple, is_set_or_frozenset
+from .utils._narrowing import is_class, is_list_or_tuple, is_set_or_frozenset
 from .utils.directives import validated_field_directives
 from .utils.execution_mode import async_execution, operation_is_async
 from .utils.querysets import (
@@ -185,12 +185,23 @@ def _validate_djangotype_target(
     metaclass ``__name__`` property that raises cannot detonate the message
     assembly and replace the typed rejection with a raw ``RuntimeError``.
 
-    The definition read is contained: ``getattr``'s default suppresses only
+    The class test asks the value's REAL type (``utils/_narrowing.py::is_class``),
+    not ``inspect.isclass``: ``isinstance`` falls back to a ``__class__`` read, so
+    a property that raises would escape raw and one that claims ``type`` would
+    carry a non-class into ``issubclass``. A proxy of a class is not a target
+    either way: the registry's definition names the proxied class as its
+    ``origin``, never the proxy.
+
+    The definition reads are contained: ``getattr``'s default suppresses only
     ``AttributeError``, so a metaclass ``__getattr__`` raising anything else
     would escape raw and the typed "not a registered DjangoType" rejection
-    would never exist. A read that cannot be answered is a target that cannot
-    be PROVEN registered, so the failure is the same typed reject (fail
-    closed, matching ``forms/inputs.py::_model_column_for``'s posture).
+    would never exist, and the registry lookup hashes the target, which a
+    metaclass can make raise. A read that cannot be answered is a target that
+    cannot be PROVEN registered, so the failure is the same typed reject (fail
+    closed, matching ``forms/inputs.py::_model_column_for``'s posture). The
+    attribute is compared to the registry's object by identity before ``origin``
+    is read, so ``origin`` is only ever read off the registry's own definition,
+    never off a replacement object the attribute was reassigned to.
 
     Raises ``ConfigurationError`` on failure; returns the canonical
     ``DjangoTypeDefinition`` when every guard passes, so the Relay validator
@@ -199,7 +210,7 @@ def _validate_djangotype_target(
     detonate a second raw one). The caller runs any factory-specific guards
     (e.g. the connection field's Relay-Node guard) AFTER this returns.
     """
-    if not inspect.isclass(target_type):
+    if not is_class(target_type):
         raise ConfigurationError(
             f"{field} requires a DjangoType class; got {_safe_arg_repr(target_type)}.",
         )
@@ -209,16 +220,12 @@ def _validate_djangotype_target(
         )
     try:
         definition: object = getattr(target_type, "__django_strawberry_definition__", None)
+        canonical = registry.get_definition(target_type)
     except Exception:  # noqa: BLE001 - consumer code may raise anything
-        # Contained: a metaclass whose __getattr__ raises anything other than
-        # AttributeError must reach the typed rejection below, not escape raw.
-        definition = None
-    canonical = registry.get_definition(target_type)
-    if (
-        definition is None
-        or getattr(definition, "origin", None) is not target_type
-        or definition is not canonical
-    ):
+        # Contained: a metaclass whose __getattr__ or __hash__ raises anything other
+        # than AttributeError must reach the typed rejection below, not escape raw.
+        definition = canonical = None
+    if canonical is None or definition is not canonical or canonical.origin is not target_type:
         raise ConfigurationError(
             f"{field} target {_safe_class_name(target_type)} is not a registered DjangoType. "
             f"This usually means {_safe_class_name(target_type)}'s `Meta` is missing a `model` "
@@ -226,9 +233,7 @@ def _validate_djangotype_target(
         )
     if resolver is not None and not callable(resolver):
         raise ConfigurationError(f"{field} resolver must be callable.")
-    # The guards above proved ``definition is canonical`` and not None; neither
-    # checker narrows a read attribute by identity with a non-literal value.
-    return cast("DjangoTypeDefinition", definition)
+    return canonical
 
 
 def _validate_relay_djangotype_target(

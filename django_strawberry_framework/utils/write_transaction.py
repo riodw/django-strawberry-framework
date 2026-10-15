@@ -84,7 +84,7 @@ from django_strawberry_framework.exceptions import (
 )
 from django_strawberry_framework.utils.errors import FIELD_ERROR_CODE_CONFLICT, field_error
 
-from ._narrowing import is_dict, is_list_or_tuple, is_set_or_frozenset
+from ._narrowing import is_dict, is_list_or_tuple, is_set_or_frozenset, is_str
 from ._queryset_private import queryset_db
 from .canonical import base_container_values, canonical_sort_key
 
@@ -492,7 +492,9 @@ def _sql_statement_token(sql: object) -> str:
 
     A NON-string statement returns ``""`` - unclassifiable, therefore never
     read-only (fail closed): reading it would mean running consumer code, and
-    no verdict that code could hand back is load-bearing.
+    no verdict that code could hand back is load-bearing. "String" is asked of
+    the statement's real type, so an object that only CLAIMS ``str`` through a
+    ``__class__`` property is non-string too.
     """
     # ``execute_wrapper`` receives the object handed to ``cursor.execute``.
     # A consumer can supply a ``str`` subclass whose indexing / slicing methods
@@ -500,7 +502,7 @@ def _sql_statement_token(sql: object) -> str:
     # subclass's base string content. Normalize through ``str.__str__`` before
     # lexical inspection so the phase guard classifies exactly the text the
     # adapter sees, never consumer-controlled string behavior.
-    if not isinstance(sql, str):
+    if not is_str(sql):
         return ""
     text = str.__str__(sql)
     index = 0

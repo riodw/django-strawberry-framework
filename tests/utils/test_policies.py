@@ -24,6 +24,7 @@ from django_strawberry_framework.error_policy import resolve_error_policy
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.resource_policy import resolve_resource_policy
 from django_strawberry_framework.utils.policies import resolve_policy
+from tests._idioms import ClaimsClass, ClassReadRaises
 
 
 @dataclass(frozen=True)
@@ -270,3 +271,81 @@ def test_a_hashable_non_string_key_is_typed_rejected_at_the_key_guard(
         # basedpyright: the int-keyed mapping is the hostile input under test; each resolver types
         # the parameter as Mapping[str, object]
         resolver({42: 1})  # pyright: ignore[reportArgumentType]
+
+
+# ---------------------------------------------------------------------------
+# Deployment values whose class hooks cannot be trusted
+# ---------------------------------------------------------------------------
+
+
+def _resolve_through(slot: str, value: object) -> _ProbePolicy:
+    """Resolve ``value`` as the explicit argument or as the deployment setting."""
+    if slot == "explicit":
+        # basedpyright: the hostile value is the input under test; the parameter is typed as
+        # a policy or a mapping
+        return _resolve(explicit=value)  # pyright: ignore[reportArgumentType]
+    return _resolve(setting=value)
+
+
+@pytest.mark.parametrize("slot", ["explicit", "setting"])
+def test_a_policy_value_whose_class_read_raises_is_typed_rejected(slot: str) -> None:
+    """A value whose ``__class__`` raises is classified "not a policy, not a mapping".
+
+    ``isinstance`` falls back to the value's ``__class__``, so the kind tests that
+    route a deployment value to the instance, mapping or rejection arm would
+    otherwise leak the value's own exception out of schema construction.
+    """
+    with pytest.raises(ConfigurationError) as excinfo:
+        _resolve_through(slot, ClassReadRaises())
+    assert str(excinfo.value) == (
+        "The probe policy must be a _ProbePolicy or a mapping of bound names to values; "
+        "got ClassReadRaises <ClassReadRaises>."
+    )
+
+
+@pytest.mark.parametrize("slot", ["explicit", "setting"])
+@pytest.mark.parametrize(
+    "key",
+    [
+        pytest.param(ClassReadRaises(), id="class-read-raises"),
+        pytest.param(ClaimsClass(str), id="claims-str"),
+    ],
+)
+def test_a_key_that_is_not_really_a_string_is_typed_rejected(slot: str, key: object) -> None:
+    """A key is a name only if its real type is a string: its ``__class__`` is never consulted."""
+    with pytest.raises(ConfigurationError) as excinfo:
+        _resolve_through(slot, {key: 1})
+    assert str(excinfo.value) == (
+        f"The probe policy bound names must be strings; got {type(key).__name__} {key!r}."
+    )
+
+
+class _ComparisonHostileKey(str):
+    """A key whose comparisons raise, so membership and ``sorted`` cannot read it directly."""
+
+    __hash__ = str.__hash__
+
+    @override
+    def __eq__(self, other: object) -> NoReturn:
+        raise RuntimeError("hostile __eq__")
+
+    @override
+    def __lt__(self, other: str) -> NoReturn:
+        raise RuntimeError("hostile __lt__")
+
+
+@pytest.mark.parametrize("slot", ["explicit", "setting"])
+def test_a_comparison_hostile_valid_key_resolves(slot: str) -> None:
+    """A valid name resolves through its base ``str`` copy: the membership test never compares it."""
+    assert _resolve_through(slot, {_ComparisonHostileKey("width"): 5}) == _ProbePolicy(width=5)
+
+
+@pytest.mark.parametrize("slot", ["explicit", "setting"])
+def test_comparison_hostile_unknown_keys_are_named_in_the_typed_rejection(slot: str) -> None:
+    """Unknown keys are sorted and joined as base ``str`` copies, so the typed message is built."""
+    with pytest.raises(ConfigurationError) as excinfo:
+        _resolve_through(
+            slot,
+            {_ComparisonHostileKey("bbb"): 1, _ComparisonHostileKey("aaa"): 2},
+        )
+    assert str(excinfo.value) == "Unknown probe-policy bound(s): aaa, bbb. Valid bounds: width."

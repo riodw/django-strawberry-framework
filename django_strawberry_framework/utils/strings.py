@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, cast
 
 from django_strawberry_framework.exceptions import ConfigurationError, _safe_type_name
 
+from ._narrowing import is_str
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import Protocol
@@ -52,14 +54,15 @@ __all__ = (
 def _plain_text(value: object) -> str:
     """Return ``value`` as an exact ``str``; raise ``ConfigurationError`` for a non-string.
 
-    A ``str`` subclass is copied through ``str.__str__`` so its overridden
-    ``__hash__`` / ``split`` / ``replace`` never run inside these helpers or the
-    ``lru_cache``. The exact-``str`` test runs first: it is every call the
-    optimizer walker makes.
+    A string is a value whose real type is one: a lazy proxy, or an object whose
+    ``__class__`` raises or claims ``str``, is a non-string. A ``str`` subclass is
+    copied through ``str.__str__`` so its overridden ``__hash__`` / ``split`` /
+    ``replace`` never run inside these helpers or the ``lru_cache``. The
+    exact-``str`` test runs first: it is every call the optimizer walker makes.
     """
     if type(value) is str:
         return value
-    if not isinstance(value, str):
+    if not is_str(value):
         raise ConfigurationError(
             f"String helper input must be a string; got {_safe_type_name(value)}.",
         )

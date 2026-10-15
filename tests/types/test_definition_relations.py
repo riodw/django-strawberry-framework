@@ -24,11 +24,13 @@ registry-resolved ``DjangoTypeDefinition``:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import SimpleNamespace
-from typing import NoReturn
+from typing import NoReturn, cast
 
 import pytest
 from apps.library.models import Book, Genre, Loan, MembershipCard, Patron, Shelf, TaggedItem
+from django.utils.functional import SimpleLazyObject
 from strawberry import relay
 from typing_extensions import override
 
@@ -344,6 +346,79 @@ def test_custom_id_detection_fails_closed_for_hostile_relay_resolver() -> None:
 
     assert origin_has_custom_id_resolver(_RaisingNode, "id") is True
     assert origin_has_custom_id_resolver(_NonStringNode, "id") is True
+
+
+class _ClassReadRaises:
+    """An id attribute whose ``__class__`` read raises, so a bare ``isinstance`` on it raises."""
+
+    def __init__(self, raised: type[BaseException]) -> None:
+        self._raised = raised
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile result is the
+    # guard's input
+    def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
+        raise self._raised("class read")
+
+
+class _ClaimsStr:
+    """An id attribute that is not a ``str`` whose ``__class__`` says it is one."""
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__`` that forges a type: the forged result
+    # is the guard's input
+    def __class__(self) -> type[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
+        return str
+
+
+class _LoudStr(str):
+    """A ``str`` whose own ``__str__`` is consumer code that must never run."""
+
+    @override
+    def __str__(self) -> str:
+        raise RuntimeError("the subclass's own __str__ is never run")
+
+
+_UNREADABLE_ID_ATTRS = [
+    pytest.param(lambda: _ClassReadRaises(RuntimeError), True, id="class-read-raises-runtime"),
+    pytest.param(
+        lambda: _ClassReadRaises(KeyboardInterrupt),
+        True,
+        id="class-read-raises-base-exception",
+    ),
+    pytest.param(_ClaimsStr, True, id="class-claims-str"),
+    pytest.param(lambda: SimpleLazyObject(lambda: "id"), True, id="lazy-str"),
+    pytest.param(lambda: "id", False, id="pk-name"),
+    pytest.param(lambda: "pk", False, id="pk-alias"),
+    pytest.param(lambda: _LoudStr("id"), False, id="str-subclass-pk-name"),
+    pytest.param(lambda: "slug", True, id="other-column"),
+    pytest.param(lambda: "", True, id="empty"),
+]
+
+
+@pytest.mark.parametrize(("make_id_attr", "custom"), _UNREADABLE_ID_ATTRS)
+def test_custom_id_detection_normalizes_the_resolve_id_attr_result_under_its_guard(
+    make_id_attr: Callable[[], object],
+    custom: bool,  # noqa: FBT001 - a parametrized expectation, not a call flag
+) -> None:
+    """The ``resolve_id_attr`` result is read under the guard that contains the call.
+
+    A result whose class cannot be read, one that only claims ``str`` and a lazy proxy of a
+    string all fail closed (the type counts as custom); a plain or ``str``-subclass name
+    that is the pk name or ``pk`` does not.
+    """
+    id_attr = make_id_attr()
+
+    class _Node(relay.Node):
+        @classmethod
+        @override
+        # basedpyright: the hook may answer any object; the id attribute is the guard's input
+        def resolve_id_attr(cls) -> str:
+            return cast("str", id_attr)
+
+    assert origin_has_custom_id_resolver(_Node, "id") is custom
 
 
 def test_related_target_for_caches_resolved_pair_after_finalize() -> None:

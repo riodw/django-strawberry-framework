@@ -44,7 +44,7 @@ from __future__ import annotations
 import inspect
 import re
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from django.urls import re_path
 
@@ -54,12 +54,12 @@ from .consumers import (
     build_revalidating_consumer_class,
     resolved_revalidation_window,
 )
-from .exceptions import ConfigurationError, describe_value
+from .exceptions import ConfigurationError, _safe_predicate, describe_value
 from .utils._narrowing import is_class
 from .utils.imports import CHANNELS_FLOOR, STRAWBERRY_FLOOR, require_optional_module
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Coroutine
     from types import ModuleType
     from typing import Protocol
 
@@ -304,10 +304,11 @@ def _factory_application(
        awaiting, emitting the right event dicts - is observable only by running a
        real connection through it, which construction must not do. So this is a
        floor, not a conformance proof: it converts every shape that CANNOT be an
-       ASGI application (``None``, a scalar, a mapping, a coroutine object) into
-       an actionable construction error, and leaves a callable that merely
-       misbehaves to fail at the handshake, where its own traceback is the useful
-       signal. Rejected alternative: arity-checking the RESULT with
+       ASGI application (``None``, a scalar, a mapping, a coroutine object, an
+       object whose ``__class__`` cannot be read) into an actionable construction
+       error, and leaves a callable that merely misbehaves to fail at the
+       handshake, where its own traceback is the useful signal. Rejected
+       alternative: arity-checking the RESULT with
        ``bind(scope, receive, send)``, which would falsely reject legitimate
        ``*args`` middleware, ``functools.partial`` mounts and callable instances
        whose ``__call__`` is a C slot - a real cost for no security gain.
@@ -323,13 +324,17 @@ def _factory_application(
 
     received = describe_value(application)
     addendum = ""
-    if inspect.iscoroutine(application):
+    # Guarded: ``iscoroutine`` is ``isinstance``, which reads the value's ``__class__`` when
+    # its real type does not match, and a ``__class__`` that raises must not replace the
+    # rejection. A faithful proxy of a coroutine still answers True and is closed.
+    if _safe_predicate(inspect.iscoroutine, application):
         # Close the coroutine this rejection refuses. Dropping it un-awaited makes
         # CPython emit an unraisable "coroutine ... was never awaited"
         # RuntimeWarning from the garbage collector at an unrelated moment - noise
         # that points at the package instead of at the factory, and a hard error
-        # in any consumer running under ``-W error``.
-        application.close()
+        # in any consumer running under ``-W error``. The guarded predicate is the
+        # coroutine proof; a ``bool`` from a helper carries no narrowing.
+        cast("Coroutine[object, object, object]", application).close()
         addendum = _ASYNC_FACTORY_HINT
     raise ConfigurationError(
         f"{_FACTORY_CONTRACT_HINT}{addendum} The factory {describe_value(factory)} returned "

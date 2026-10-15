@@ -66,7 +66,7 @@ from django_strawberry_framework.utils.relations import (
     path_traverses_to_many as _path_traverses_to_many,
 )
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
-from tests._idioms import is_object_list, run_capturing
+from tests._idioms import ClassReadRaises, is_object_list, run_capturing
 
 _M = TypeVar("_M", bound=Model)
 
@@ -1081,6 +1081,39 @@ def test_orderset_expand_meta_fields_rejects_non_iterable_fields() -> None:
         match="must be '__all__' or a re-readable collection of field names",
     ):
         ObjFieldsOrder.get_fields()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("escape", [RuntimeError, KeyboardInterrupt])
+def test_orderset_expand_meta_fields_rejects_a_declaration_whose_class_read_raises(
+    escape: type[BaseException],
+) -> None:
+    """``Meta.fields`` whose ``__class__`` raises is the typed re-readability rejection.
+
+    The canonicalizer that runs before the gate dispatches on the value's class, so a
+    ``__class__`` that raises has to reach the gate (which names it) instead of escaping it.
+    """
+    meta = type("Meta", (), {"model": Book, "fields": ClassReadRaises(escape)})
+    hostile = type("HostileFieldsOrder", (OrderSet,), {"Meta": meta})
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        hostile.get_fields()
+    assert str(excinfo.value) == (
+        "OrderSet HostileFieldsOrder.Meta.fields must be '__all__' or a re-readable "
+        "collection of field names; got ClassReadRaises (<ClassReadRaises>). "
+        "Accepted: a re-readable collection of field names -- list, tuple, set, frozenset, "
+        "dict keys/values, or another sized collection; not a one-shot iterator or generator, "
+        "and not a bare string."
+    )
+
+
+@pytest.mark.django_db
+def test_orderset_expand_meta_fields_reads_the_keys_of_a_lookup_bag_with_a_hostile_value() -> None:
+    """A lookup-bag value is never an order path, so a hostile one is not consulted."""
+    meta = type("Meta", (), {"model": Book, "fields": {"title": ClassReadRaises()}})
+    bag = type("HostileValueOrder", (OrderSet,), {"Meta": meta})
+
+    assert list(bag.get_fields()) == ["title"]
 
 
 @pytest.mark.django_db

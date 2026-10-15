@@ -66,6 +66,7 @@ from django_strawberry_framework.conf import RELAY_GLOBALID_STRATEGY_KEY
 from django_strawberry_framework.exceptions import (
     ConfigurationError,
     _safe_arg_repr,
+    _safe_predicate,
     _safe_text,
     _safe_type_name,
 )
@@ -74,10 +75,12 @@ from django_strawberry_framework.optimizer.field_meta import FieldMeta
 from django_strawberry_framework.optimizer.hints import OptimizerHint
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils._narrowing import (
+    is_abstract_set,
     is_class,
     is_dict,
     is_list_or_tuple,
     is_mapping,
+    is_str,
 )
 from django_strawberry_framework.utils.relations import is_single_column_foreign_key
 from django_strawberry_framework.utils.typing import is_async_callable
@@ -99,6 +102,7 @@ if TYPE_CHECKING:
     from .definition import GlobalIDStrategy
 
 _SidecarT = TypeVar("_SidecarT")
+_T = TypeVar("_T")
 
 DEFERRED_META_KEYS: frozenset[str] = frozenset(
     {"aggregate_class", "fields_class", "search_fields"},
@@ -286,7 +290,7 @@ def _validate_connection(
     """
     if connection is None:
         return None
-    if not is_dict(connection):
+    if not _guarded_narrow(connection, is_dict):
         raise ConfigurationError(
             f"{model.__name__}.Meta.connection must be a dict; got {_safe_arg_repr(connection)}",
         )
@@ -303,7 +307,7 @@ def _validate_connection(
     options: dict[str, bool] = {}
     if "total_count" in connection:
         total_count = connection["total_count"]
-        if not isinstance(total_count, bool):
+        if not _guarded_isinstance(total_count, bool):
             raise ConfigurationError(
                 f"{model.__name__}.Meta.connection['total_count'] must be a bool; "
                 f"got {_safe_arg_repr(total_count)}",
@@ -319,7 +323,7 @@ def _validate_connection(
 
 def _is_str_tuple(entries: tuple[object, ...]) -> "TypeIs[tuple[str, ...]]":
     """Return whether every entry of ``entries`` is a ``str``."""
-    return all(isinstance(entry, str) for entry in entries)
+    return all(_guarded_isinstance(entry, str) for entry in entries)
 
 
 def _validate_cursor_field(
@@ -343,7 +347,7 @@ def _validate_cursor_field(
     """
     if value is None:
         return None
-    if isinstance(value, str) or not isinstance(value, Sequence):
+    if _guarded_isinstance(value, str) or not _guarded_narrow(value, _is_sequence):
         raise ConfigurationError(
             f"{model.__name__}.Meta.cursor_field must be a non-empty non-string "
             f"sequence of order strings; got {_safe_arg_repr(value)}",
@@ -399,22 +403,22 @@ def _validate_relation_shapes(
     """
     if value is None:
         return None
-    if not is_dict(value):
+    if not _guarded_narrow(value, is_dict):
         raise ConfigurationError(
             f"{model.__name__}.Meta.relation_shapes must be a dict mapping relation "
             f"field names to shapes; got {_safe_arg_repr(value)}",
         )
     shapes: dict[str, str] = {}
     for key, shape in value.items():
-        if not isinstance(key, str):
+        if not _guarded_isinstance(key, str):
             raise ConfigurationError(
                 f"{model.__name__}.Meta.relation_shapes keys must be relation field "
                 f"name strings; got {_safe_arg_repr(key)}.",
             )
-        # ``isinstance`` first so an unhashable value (e.g. ``{"items":
+        # The ``str`` test comes first so an unhashable value (e.g. ``{"items":
         # ["both"]}``) raises the configured ConfigurationError rather than
         # leaking ``TypeError: unhashable type`` from the set membership.
-        if not isinstance(shape, str) or shape not in RELATION_SHAPE_VALUES:
+        if not _guarded_isinstance(shape, str) or shape not in RELATION_SHAPE_VALUES:
             raise ConfigurationError(
                 f"{model.__name__}.Meta.relation_shapes[{_safe_arg_repr(key)}] "
                 f"got unknown shape {_safe_arg_repr(shape)}; valid shapes are "
@@ -477,7 +481,7 @@ def _validate_globalid_strategy(
         if model is not None
         else RELAY_GLOBALID_STRATEGY_KEY
     )
-    if isinstance(value, str):
+    if _guarded_isinstance(value, str):
         if value not in STRING_GLOBALID_STRATEGIES:
             raise ConfigurationError(
                 f"{subject} got unknown strategy {_safe_arg_repr(value)}; "
@@ -627,6 +631,44 @@ def _is_relay_shaped(cls: "type[DjangoType]", interfaces: tuple[type[object], ..
     return any(issubclass(i, relay.Node) for i in interfaces) or issubclass(cls, relay.Node)
 
 
+def _guarded_isinstance(value: object, cls: "type[_T] | tuple[type[_T], ...]") -> "TypeIs[_T]":
+    """Return ``isinstance(value, cls)``, or ``False`` when answering it raises.
+
+    The test every ``Meta`` shape gate applies to a consumer-supplied value. ``isinstance``
+    falls back to a ``__class__`` read when the real type does not match, and a ``__class__``
+    that raises is not an instance of anything, so the gate's rejection stays the typed
+    ``ConfigurationError``. Subclasses and faithful proxies (``SimpleLazyObject``) still
+    pass, exactly as under a bare ``isinstance``; a ``BaseException`` is absorbed too
+    (``exceptions.py::_safe_predicate``), the posture ``_meta_attr`` already takes.
+    """
+    return _safe_predicate(isinstance, value, cls)
+
+
+def _guarded_narrow(value: object, predicate: "Callable[[object], TypeIs[_T]]") -> "TypeIs[_T]":
+    """Return ``predicate(value)``, or ``False`` when the predicate raises.
+
+    ``_guarded_isinstance`` for the container narrowings (``utils/_narrowing.py::is_dict``,
+    ``is_mapping``, ``is_list_or_tuple``, ``is_abstract_set`` and ``_is_sequence``), which
+    keep their element types ``object`` where a bare ``isinstance`` would leave them
+    ``Unknown``.
+    """
+    return _safe_predicate(predicate, value)
+
+
+def _is_sequence(value: object) -> "TypeIs[Sequence[object]]":
+    """Return whether ``value`` is a ``collections.abc.Sequence``, its elements ``object``."""
+    return isinstance(value, Sequence)
+
+
+def _guarded_issubclass(value: type[object], cls: type[_T]) -> "TypeIs[type[_T]]":
+    """Return ``issubclass(value, cls)``, or ``False`` when answering it raises.
+
+    ``issubclass`` raises ``TypeError`` for a value that passed ``isinstance(value, type)``
+    through a ``__class__`` that claims ``type`` without being a class.
+    """
+    return _safe_predicate(issubclass, value, cls)
+
+
 def _meta_attr(meta: object, key: str, default: object = None) -> object:
     """Read one ``Meta`` attribute, containing hostile attribute access.
 
@@ -726,14 +768,12 @@ class DjangoType:
         # policy as ``_normalize_fields_spec``.
         annotation_keys: Iterable[object] = consumer_annotations
         non_string_annotation_keys = sorted(
-            # basedpyright: trust boundary: the metaclass-injected keys described above
-            (key for key in annotation_keys if not isinstance(key, str)),  # pyright: ignore[reportUnnecessaryIsInstance]
-            key=repr,
+            _safe_arg_repr(key) for key in annotation_keys if not is_str(key)
         )
         if non_string_annotation_keys:
             raise ConfigurationError(
                 f"{cls.__name__}: class annotations must have string names; got non-string "
-                f"keys {non_string_annotation_keys}. Annotation keys are field names; "
+                f"keys [{', '.join(non_string_annotation_keys)}]. Annotation keys are field names; "
                 "non-string keys cannot be synthesized or exposed.",
             )
         # ``field: auto`` is the "declare-but-infer" marker (the fifth corner of the
@@ -998,25 +1038,25 @@ def _normalize_fields_spec(value: object) -> tuple[str, ...] | Literal["__all__"
     """Normalize ``Meta.fields`` for storage on ``DjangoTypeDefinition``."""
     if value is None:
         return value
-    if isinstance(value, str):
+    if _guarded_isinstance(value, str):
         if value == "__all__":
             return "__all__"
         raise ConfigurationError(
             "Meta.fields must be '__all__' or a non-string sequence of field names",
         )
-    if not isinstance(value, Sequence):
+    if not _guarded_narrow(value, _is_sequence):
         raise ConfigurationError(
             "Meta.fields must be '__all__' or a non-string sequence of field names",
         )
     try:
-        entries = tuple(value)
+        entries: tuple[object, ...] = tuple(value)
     except BaseException as exc:
         raise ConfigurationError(
             "Meta.fields must be '__all__' or a non-string sequence of field names",
         ) from exc
     names: list[str] = []
     for entry in entries:
-        if not isinstance(entry, str):
+        if not _guarded_isinstance(entry, str):
             raise ConfigurationError(
                 f"Meta.fields must contain field name strings; got {_safe_arg_repr(entry)}",
             )
@@ -1043,19 +1083,21 @@ def _normalize_sequence_spec(value: object, key: str = "exclude") -> tuple[str, 
     """
     if value is None:
         return None
-    if isinstance(value, str) or not isinstance(value, (Sequence, AbstractSet)):
+    if _guarded_isinstance(value, str) or not (
+        _guarded_narrow(value, _is_sequence) or _guarded_narrow(value, is_abstract_set)
+    ):
         raise ConfigurationError(
             f"Meta.{key} must be a non-string sequence or set of field names",
         )
     try:
-        entries = tuple(value)
+        entries: tuple[object, ...] = tuple(value)
     except BaseException as exc:
         raise ConfigurationError(
             f"Meta.{key} must be a non-string sequence or set of field names",
         ) from exc
     names: list[str] = []
     for entry in entries:
-        if not isinstance(entry, str):
+        if not _guarded_isinstance(entry, str):
             raise ConfigurationError(
                 f"Meta.{key} must contain field name strings; got {_safe_arg_repr(entry)}",
             )
@@ -1112,7 +1154,7 @@ def _consumer_assigned_fields(
         if field.name not in class_dict:
             continue
         value = class_dict[field.name]
-        if isinstance(value, StrawberryField):
+        if _guarded_isinstance(value, StrawberryField):
             if field.is_relation:
                 relation_assigned.add(field.name)
             else:
@@ -1137,7 +1179,7 @@ def _meta_optimizer_hints(meta: object, model: type[models.Model]) -> dict[str, 
     value = _meta_attr(meta, "optimizer_hints")
     if value is None:
         return {}
-    if not is_mapping(value):
+    if not _guarded_narrow(value, is_mapping):
         raise ConfigurationError(
             f"{model.__name__}.Meta.optimizer_hints must be a mapping of field names to OptimizerHint "
             f"instances, got {type(value).__name__}.",
@@ -1145,7 +1187,7 @@ def _meta_optimizer_hints(meta: object, model: type[models.Model]) -> dict[str, 
     # One pass over the consumer mapping: the keys checked are the keys returned.
     hints: dict[str, object] = {}
     for key, hint in dict(value).items():
-        if not isinstance(key, str):
+        if not _guarded_isinstance(key, str):
             raise ConfigurationError(
                 f"{model.__name__}.Meta.optimizer_hints keys must be field name strings; "
                 f"got {_safe_arg_repr(key)}.",
@@ -1272,12 +1314,12 @@ def _validate_interfaces(meta: object, model: type[models.Model]) -> tuple[type[
     raw = _meta_attr(meta, "interfaces")
     if raw is None:
         return ()
-    if isinstance(raw, str):
+    if _guarded_isinstance(raw, str):
         raise ConfigurationError(_interfaces_shape_error(model, "a string"))
     if is_class(raw):
         # Consumer-declared entries stay unproven until the loop below checks each one.
         entries: tuple[object, ...] = (raw,)
-    elif is_list_or_tuple(raw):
+    elif _guarded_narrow(raw, is_list_or_tuple):
         entries = tuple(raw)
     else:
         raise ConfigurationError(_interfaces_shape_error(model, type(raw).__name__))
@@ -1287,7 +1329,7 @@ def _validate_interfaces(meta: object, model: type[models.Model]) -> tuple[type[
     duplicates: list[str] = []
     interfaces: list[type[object]] = []
     for entry in entries:
-        if isinstance(entry, str):
+        if _guarded_isinstance(entry, str):
             raise ConfigurationError(
                 f"{model.__name__}.Meta.interfaces must contain interface classes, "
                 f"not strings (got {_safe_arg_repr(entry)}). Lazy/forward-reference interface lookup is "
@@ -1371,6 +1413,11 @@ def _validate_meta(cls: type[DjangoType], meta: object) -> _ValidatedMeta:
     gate needs can see direct ``relay.Node`` inheritance, not only the declared
     ``Meta.interfaces`` tuple.
 
+    Every shape gate tests a consumer value through a guarded test (``_guarded_isinstance``,
+    ``_guarded_issubclass``, ``_guarded_narrow``) or a real-type one (``is_str``, ``is_class``),
+    so a value whose ``__class__`` read raises is rejected with the same ``ConfigurationError``
+    as any other malformed value.
+
     Validation order:
 
     1. ``Meta.model`` is required and must be a Django model class.
@@ -1411,12 +1458,12 @@ def _validate_meta(cls: type[DjangoType], meta: object) -> _ValidatedMeta:
     model = _meta_attr(meta, "model")
     if model is None:
         raise ConfigurationError("Meta.model is required")
-    if not isinstance(model, type) or not issubclass(model, models.Model):
+    if not _guarded_isinstance(model, type) or not _guarded_issubclass(model, models.Model):
         raise ConfigurationError("Meta.model must be a Django model class")
 
     raw_name = _meta_attr(meta, "name")
     if raw_name is not None:
-        if not isinstance(raw_name, str):
+        if not is_str(raw_name):
             raise ConfigurationError(
                 f"{model.__name__}.Meta.name must be a non-empty string; "
                 f"got {_safe_arg_repr(raw_name)}.",
@@ -1436,10 +1483,10 @@ def _validate_meta(cls: type[DjangoType], meta: object) -> _ValidatedMeta:
 
     raw_description = _meta_attr(meta, "description")
     description: str | Promise | None
-    if raw_description is None or isinstance(raw_description, Promise):
+    if raw_description is None or _guarded_isinstance(raw_description, Promise):
         # A lazy translation string stays lazy until finalize, which renders it once.
         description = raw_description
-    elif isinstance(raw_description, str):
+    elif is_str(raw_description):
         # A str subclass's own ``__str__`` is consumer code; keep the plain text it holds.
         description = str.__str__(raw_description)
     else:
@@ -1470,7 +1517,7 @@ def _validate_meta(cls: type[DjangoType], meta: object) -> _ValidatedMeta:
         raise ConfigurationError("Meta.fields and Meta.exclude are mutually exclusive")
 
     primary = _meta_attr(meta, "primary", default=False)
-    if not isinstance(primary, bool):
+    if not _guarded_isinstance(primary, bool):
         raise ConfigurationError("Meta.primary must be a bool")
 
     deferred = sorted(declared & DEFERRED_META_KEYS)
@@ -1628,7 +1675,7 @@ def _validate_optimizer_hints(
                 available=selected_relation_names,
             ),
         )
-    bad_values = sorted(k for k, v in hints.items() if not isinstance(v, OptimizerHint))
+    bad_values = sorted(k for k, v in hints.items() if not _guarded_isinstance(v, OptimizerHint))
     if bad_values:
         raise ConfigurationError(
             f"optimizer_hints values must be OptimizerHint instances, "

@@ -140,7 +140,7 @@ from django_strawberry_framework.sets_mixins import collect_related_declarations
 from django_strawberry_framework.testing.relay import global_id_for
 from django_strawberry_framework.types.relay import SyncMisuseError, apply_interfaces
 from django_strawberry_framework.utils.relations import ClassifiedPath, classify_path
-from tests._idioms import definition_raises, is_object_dict, pickle_roundtrip
+from tests._idioms import ClassReadRaises, definition_raises, is_object_dict, pickle_roundtrip
 from tests.optimizer import _link_models
 
 if TYPE_CHECKING:
@@ -1012,6 +1012,29 @@ def test_filterset_get_fields_rejects_one_shot_iterator_at_class_creation() -> N
     assert "'__all__', a lookup-bag dict, or a re-readable collection of field names" in message
     assert "dict keys/values" in message
     assert "not a one-shot iterator or generator" in message
+
+
+@pytest.mark.parametrize("escape", [RuntimeError, KeyboardInterrupt])
+def test_filterset_get_fields_rejects_a_declaration_whose_class_read_raises(
+    escape: type[BaseException],
+) -> None:
+    """``Meta.fields`` whose ``__class__`` raises is rejected at class creation, typed.
+
+    The shape gate runs before upstream consumes the declaration; the ``str`` exemption in
+    front of it must not read the value's ``__class__`` unguarded, or the value's own
+    exception replaces the typed rejection.
+    """
+    meta = type("Meta", (), {"model": library_models.Shelf, "fields": ClassReadRaises(escape)})
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        type("HostileFieldsFilter", (FilterSet,), {"Meta": meta})
+    assert str(excinfo.value) == (
+        "FilterSet HostileFieldsFilter.Meta.fields must be '__all__', a lookup-bag dict, "
+        "or a re-readable collection of field names; got ClassReadRaises (<ClassReadRaises>). "
+        "Accepted: a re-readable collection of field names -- list, tuple, set, frozenset, "
+        "dict keys/values, or another sized collection; not a one-shot iterator or generator, "
+        "and not a bare string."
+    )
 
 
 def test_filterset_get_fields_rejects_builtin_iterator_too() -> None:

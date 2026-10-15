@@ -167,6 +167,7 @@ from django.core.handlers.asgi import ASGIRequest
 from django.http import HttpRequest, JsonResponse
 from django.test import AsyncClient, RequestFactory, override_settings
 from django.urls import URLPattern, path
+from django.utils.functional import SimpleLazyObject
 from graphql import GraphQLError
 from graphql_client import JSONObject
 from strawberry.channels import GraphQLWSConsumer
@@ -2184,6 +2185,79 @@ def test_an_async_factory_is_rejected_and_the_refused_coroutine_is_closed() -> N
 
     [refused] = coroutines
     assert refused.cr_frame is None, "the router must close the coroutine it refuses"
+
+
+@pytest.mark.parametrize("raised", [RuntimeError, TypeError, KeyboardInterrupt])
+def test_a_factory_returning_a_value_whose_class_cannot_be_read_fails_at_construction(
+    raised: type[BaseException],
+) -> None:
+    """The returned object is judged without trusting its ``__class__``.
+
+    The coroutine test that decides whether the refused object is closed is an
+    ``isinstance`` check, which falls back to reading the value's ``__class__``.
+    A non-callable whose class read raises is still a non-callable: it is the
+    same construction error as any other value that cannot be an application,
+    not the consumer's exception from inside the router.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
+    """
+
+    class _ClassReadRaises:
+        @property
+        @override
+        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is
+        # the factory result under test
+        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
+            raise raised("hostile __class__")
+
+        @override
+        def __repr__(self) -> str:
+            return "<hostile result>"
+
+    def factory(*, schema: object) -> object:
+        del schema  # the router passes schema= by keyword; this factory ignores it
+        return _ClassReadRaises()
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        _router(websocket_consumer_class=factory)
+
+    message = str(exc_info.value)
+    assert _FACTORY_CONTRACT_SUBSTRING in message
+    assert _ASYNC_FACTORY_SUBSTRING not in message
+    assert message.endswith("returned _ClassReadRaises <hostile result>.")
+
+
+def test_a_factory_returning_a_lazy_proxy_of_a_coroutine_still_closes_it() -> None:
+    """A faithful proxy of a coroutine is recognized as one, and the coroutine is closed.
+
+    The guarded ``isinstance`` answers through the proxy's ``__class__``, which is
+    what lets the router close a coroutine handed back behind a lazy wrapper. A
+    check of the value's real type would see only the proxy, leave the coroutine
+    un-awaited, and let CPython report it from the collector at an unrelated
+    moment.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
+    """
+
+    async def inner() -> None:
+        return None
+
+    coroutines: list[CoroutineType[object, object, None]] = []
+
+    def factory(*, schema: object) -> object:
+        del schema  # the router passes schema= by keyword; this factory ignores it
+        coroutine = inner()
+        coroutines.append(coroutine)
+        return SimpleLazyObject(lambda: coroutine)
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        _router(websocket_consumer_class=factory)
+
+    assert _ASYNC_FACTORY_SUBSTRING in str(exc_info.value)
+    [refused] = coroutines
+    assert refused.cr_frame is None, "the router must close the coroutine behind the proxy"
 
 
 def test_a_factory_that_cannot_accept_the_schema_keyword_fails_at_construction() -> None:

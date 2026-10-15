@@ -432,15 +432,15 @@ def _resolves_id_off_pk(origin: type[object], pk_name: str) -> bool:
     try:
         if not issubclass(origin, relay.Node):
             return False
-        # A consumer ``Node`` may override ``resolve_id_attr`` to return anything.
-        id_attr: object = origin.resolve_id_attr()
+        # A consumer ``Node`` may override ``resolve_id_attr`` to return anything, so the
+        # result is normalized under the same guard that contains the call.
+        normalized_id_attr = _normalize_pk_name(origin.resolve_id_attr())
     except NodeIDAnnotationError:
         # No ``NodeID`` annotation: the framework default resolves to "pk".
         return False
     except BaseException:  # noqa: BLE001 - hostile object, contained by design
         return True
     # A non-string or empty override result cannot name the pk column.
-    normalized_id_attr = _normalize_pk_name(id_attr)
     return normalized_id_attr is None or normalized_id_attr not in ("pk", pk_name)
 
 

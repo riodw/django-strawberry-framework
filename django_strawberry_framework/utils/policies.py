@@ -15,7 +15,9 @@ anything reads it, so validation and construction see the same keys even when
 the mapping is stateful, one-shot, or otherwise hostile - a Mapping that
 diverges between passes, yields an unhashable key, or raises mid-iteration is
 a typed ``ConfigurationError``, never a raw ``TypeError`` / ``RuntimeError``
-leaking out of schema construction. Domain validation stays with the policy
+leaking out of schema construction. The same holds for a value or key whose
+``__class__`` raises, and a ``str`` subclass key is compared and joined as its
+base ``str`` copy. Domain validation stays with the policy
 classes themselves (``__post_init__``), so an instance from any path was
 validated on the same terms.
 """
@@ -23,11 +25,11 @@ validated on the same terms.
 from __future__ import annotations
 
 from dataclasses import fields
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from django_strawberry_framework.exceptions import ConfigurationError, describe_value
 
-from ._narrowing import is_mapping
+from ._narrowing import is_mapping, is_str
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -105,6 +107,20 @@ def canonical_policy(policy: object, *, policy_cls: type[PolicyT], display_name:
     return policy_cls(**values)
 
 
+def _holds(test: Callable[..., bool], /, *args: object) -> bool:
+    """Return ``test(*args)``, or ``False`` when the test raises an ``Exception``.
+
+    A deployment-supplied policy value is classified by ``isinstance`` / ``Mapping``
+    checks that fall back to the value's ``__class__``, so a value whose ``__class__``
+    raises answers "not that kind" and reaches the typed rejection instead of leaking
+    its own exception out of schema construction.
+    """
+    try:
+        return test(*args)
+    except Exception:  # noqa: BLE001 - consumer code may raise anything
+        return False
+
+
 def _article(name: str) -> str:
     """Return the indefinite article for a class name: "an ErrorPolicy", "a ResourcePolicy"."""
     return "an" if name[0] in "AEIOU" else "a"
@@ -140,19 +156,19 @@ def resolve_policy(
     configures nothing gets the same guarantee as one that configures
     everything.
     """
-    if isinstance(explicit, policy_cls):
+    if _holds(isinstance, explicit, policy_cls):
         return canonical_policy(explicit, policy_cls=policy_cls, display_name=display_name)
     overrides = explicit if explicit is not None else read_setting()
     if overrides is None:
         return canonical_policy(default, policy_cls=policy_cls, display_name=display_name)
-    if isinstance(overrides, policy_cls):
+    if _holds(isinstance, overrides, policy_cls):
         # An instance behind the SETTING slot is the same declaration the
         # explicit argument accepts - the two override sources are one ladder
         # with two spellings, so an instance from either is canonicalized on the
         # same terms. (Rejecting it here made the typed message name the policy
         # class as the received type while claiming it must be one.)
         return canonical_policy(overrides, policy_cls=policy_cls, display_name=display_name)
-    if not is_mapping(overrides):
+    if not _holds(is_mapping, overrides):
         raise ConfigurationError(
             f"The {display_name} must be {_article(policy_cls.__name__)} "
             f"{policy_cls.__name__} or a mapping of {unit} names to values; "
@@ -167,7 +183,8 @@ def resolve_policy(
     # consumption point is the same hardening ``conf.py::
     # upstream_patches_enabled`` applies to its own settings mapping.
     try:
-        plain = dict(overrides)
+        # ``_holds(is_mapping, ...)`` answered ``True`` above; the checker does not narrow through it.
+        plain = dict(cast("Mapping[object, object]", overrides))
     except ConfigurationError:
         raise
     except Exception as exc:
@@ -180,11 +197,14 @@ def resolve_policy(
     # ``conf.py::upstream_patches_enabled`` key-guard precedent).
     named: dict[str, object] = {}
     for name, value in plain.items():
-        if not isinstance(name, str):
+        if not is_str(name):
             raise ConfigurationError(
                 f"The {display_name} {unit} names must be strings; got {describe_value(name)}.",
             )
-        named[name] = value
+        # A ``str`` subclass key is copied through the base slot, so its ``__eq__`` /
+        # ``__lt__`` / ``__str__`` never run in the membership test, ``sorted`` or
+        # ``join`` below.
+        named[str.__str__(name)] = value
     known = {field.name for field in fields(policy_cls)}
     unknown = sorted(name for name in named if name not in known)
     if unknown:

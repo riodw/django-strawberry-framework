@@ -29,7 +29,7 @@ import inspect
 import itertools
 import sys
 import types
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from typing import NoReturn
 
 import pytest
@@ -40,7 +40,7 @@ from apps.products.models import Category, Entry, Item, Property
 from apps.scalars.models import MediaSpecimen
 from django.db import models
 from django.db.models.expressions import Combinable
-from django.utils.functional import Promise
+from django.utils.functional import Promise, SimpleLazyObject
 from django.utils.translation import gettext_lazy
 from strawberry import relay
 from strawberry.types import get_object_definition
@@ -58,6 +58,9 @@ from django_strawberry_framework.types.base import (
     ALLOWED_META_KEYS,
     DEFERRED_META_KEYS,
     _detect_custom_get_queryset,
+    _meta_optimizer_hints,
+    _normalize_fields_spec,
+    _normalize_sequence_spec,
     _select_fields,
     _validate_connection,
     _validate_cursor_field,
@@ -398,6 +401,496 @@ def test_meta_globalid_callable_hostile_descriptor_is_typed() -> None:
 
     with pytest.raises(ConfigurationError, match="could not be inspected"):
         _validate_globalid_strategy(Category, HostileCallable(), relay_shaped=True)
+
+
+# ---------------------------------------------------------------------------
+# Meta values whose class cannot be read, or that claim another class
+# ---------------------------------------------------------------------------
+
+_CLASS_READ_ERRORS = [RuntimeError, KeyboardInterrupt]
+_CLASS_READ_ERROR_IDS = ["RuntimeError", "KeyboardInterrupt"]
+
+
+class _ClassReadRaises:
+    """A value whose ``__class__`` read raises, so a bare ``isinstance`` on it raises."""
+
+    def __init__(self, raised: type[BaseException]) -> None:
+        self._raised = raised
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile value is the
+    # gate's input
+    def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
+        raise self._raised("class read")
+
+    @override
+    def __repr__(self) -> str:
+        return "<class-read-raises>"
+
+
+class _ClaimsClass:
+    """A value that is not a ``claimed`` instance whose ``__class__`` says it is one."""
+
+    def __init__(self, claimed: type[object]) -> None:
+        self._claimed = claimed
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__`` that forges a type: the forged value is
+    # the gate's input
+    def __class__(self) -> type[object]:  # pyright: ignore[reportIncompatibleMethodOverride]
+        return self._claimed
+
+    @override
+    def __repr__(self) -> str:
+        return "<claims-class>"
+
+
+_HINT = OptimizerHint.prefetch_related()
+_STRATEGY_TYPES = "['model', 'type', 'type+model']"
+_SHAPES_TAIL = "valid shapes are ['both', 'connection', 'list']."
+_CURSOR_SHAPE = (
+    "Category.Meta.cursor_field must be a non-empty non-string sequence of order strings; "
+    "got {shown}"
+)
+_FIELDS_SHAPE = "Meta.fields must be '__all__' or a non-string sequence of field names"
+_SET_SHAPE = "Meta.{key} must be a non-string sequence or set of field names"
+
+# (route, Meta attributes built from the hostile value, message). ``{shown}`` is the value's
+# ``repr`` and ``{kind}`` its class name, the two renderings a rejection prints.
+_UNREADABLE_META_ROUTES: tuple[tuple[str, Callable[[object], dict[str, object]], str], ...] = (
+    ("model", lambda v: {"model": v}, "Meta.model must be a Django model class"),
+    ("name", lambda v: {"name": v}, "Category.Meta.name must be a non-empty string; got {shown}."),
+    (
+        "description",
+        lambda v: {"description": v},
+        "Category.Meta.description must be a string or a lazy translation string; got {shown}.",
+    ),
+    ("primary", lambda v: {"primary": v}, "Meta.primary must be a bool"),
+    ("fields", lambda v: {"fields": v}, _FIELDS_SHAPE),
+    (
+        "fields-entry",
+        lambda v: {"fields": ("id", v)},
+        "Meta.fields must contain field name strings; got {shown}",
+    ),
+    ("exclude", lambda v: {"exclude": v}, _SET_SHAPE.format(key="exclude")),
+    (
+        "exclude-entry",
+        lambda v: {"exclude": (v,)},
+        "Meta.exclude must contain field name strings; got {shown}",
+    ),
+    (
+        "nullable_overrides",
+        lambda v: {"nullable_overrides": v},
+        _SET_SHAPE.format(key="nullable_overrides"),
+    ),
+    (
+        "required_overrides",
+        lambda v: {"required_overrides": v},
+        _SET_SHAPE.format(key="required_overrides"),
+    ),
+    (
+        "filesystem_path_fields",
+        lambda v: {"filesystem_path_fields": v},
+        _SET_SHAPE.format(key="filesystem_path_fields"),
+    ),
+    (
+        "filesystem_path_fields-entry",
+        lambda v: {"filesystem_path_fields": (v,)},
+        "Meta.filesystem_path_fields must contain field name strings; got {shown}",
+    ),
+    (
+        "optimizer_hints",
+        lambda v: {"optimizer_hints": v},
+        (
+            "Category.Meta.optimizer_hints must be a mapping of field names to OptimizerHint "
+            "instances, got {kind}."
+        ),
+    ),
+    (
+        "optimizer_hints-key",
+        lambda v: {"optimizer_hints": {v: _HINT}},
+        "Category.Meta.optimizer_hints keys must be field name strings; got {shown}.",
+    ),
+    (
+        "optimizer_hints-value",
+        lambda v: {"fields": ("id", "items"), "optimizer_hints": {"items": v}},
+        (
+            "optimizer_hints values must be OptimizerHint instances, "
+            "got non-OptimizerHint for: ['items']"
+        ),
+    ),
+    (
+        "interfaces",
+        lambda v: {"interfaces": v},
+        (
+            "Category.Meta.interfaces must be a tuple/list of Strawberry interface classes "
+            "or a single interface class, got {kind}."
+        ),
+    ),
+    (
+        "interfaces-entry",
+        lambda v: {"interfaces": (v,)},
+        "Category.Meta.interfaces must contain interface classes, got {shown}.",
+    ),
+    (
+        "connection",
+        lambda v: {"connection": v, "interfaces": (relay.Node,)},
+        "Category.Meta.connection must be a dict; got {shown}",
+    ),
+    (
+        "connection-total_count",
+        lambda v: {"connection": {"total_count": v}, "interfaces": (relay.Node,)},
+        "Category.Meta.connection['total_count'] must be a bool; got {shown}",
+    ),
+    (
+        "cursor_field",
+        lambda v: {"cursor_field": v, "interfaces": (relay.Node,)},
+        _CURSOR_SHAPE,
+    ),
+    (
+        "cursor_field-entry",
+        lambda v: {"cursor_field": (v,), "interfaces": (relay.Node,)},
+        _CURSOR_SHAPE.replace("{shown}", "({shown},)"),
+    ),
+    (
+        "relation_shapes",
+        lambda v: {"relation_shapes": v, "interfaces": (relay.Node,)},
+        (
+            "Category.Meta.relation_shapes must be a dict mapping relation field names to "
+            "shapes; got {shown}"
+        ),
+    ),
+    (
+        "relation_shapes-key",
+        lambda v: {"relation_shapes": {v: "list"}, "interfaces": (relay.Node,)},
+        "Category.Meta.relation_shapes keys must be relation field name strings; got {shown}.",
+    ),
+    (
+        "relation_shapes-value",
+        lambda v: {"relation_shapes": {"items": v}, "interfaces": (relay.Node,)},
+        "Category.Meta.relation_shapes['items'] got unknown shape {shown}; " + _SHAPES_TAIL,
+    ),
+    (
+        "globalid_strategy",
+        lambda v: {"globalid_strategy": v, "interfaces": (relay.Node,)},
+        (
+            f"Category.Meta.globalid_strategy must be one of {_STRATEGY_TYPES} or a callable; "
+            "got {shown}."
+        ),
+    ),
+)
+
+
+@pytest.mark.parametrize("raised", _CLASS_READ_ERRORS, ids=_CLASS_READ_ERROR_IDS)
+@pytest.mark.parametrize(
+    ("make_meta", "message"),
+    [(make_meta, message) for _, make_meta, message in _UNREADABLE_META_ROUTES],
+    ids=[route for route, _, _ in _UNREADABLE_META_ROUTES],
+)
+def test_meta_value_whose_class_cannot_be_read_is_the_typed_rejection(
+    make_meta: Callable[[object], dict[str, object]],
+    message: str,
+    raised: type[BaseException],
+) -> None:
+    """A ``Meta`` value (or entry) whose ``__class__`` read raises is rejected like any malformed one.
+
+    Every gate asks the value's class through a guarded test, so the rejection each
+    key's contract promises is the one raised, never the consumer's own exception.
+    """
+    meta = type("Meta", (), {"model": Category, **make_meta(_ClassReadRaises(raised))})
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        type("T", (DjangoType,), {"Meta": meta})
+
+    assert str(excinfo.value) == message.format(
+        shown="<class-read-raises>",
+        kind="_ClassReadRaises",
+    )
+
+
+@pytest.mark.parametrize("raised", _CLASS_READ_ERRORS, ids=_CLASS_READ_ERROR_IDS)
+def test_relay_globalid_setting_whose_class_cannot_be_read_is_the_typed_rejection(
+    settings: pytest_django.Settings,
+    raised: type[BaseException],
+) -> None:
+    """The ``RELAY_GLOBALID_STRATEGY`` setting runs the same gate as ``Meta.globalid_strategy``."""
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {
+        "RELAY_GLOBALID_STRATEGY": _ClassReadRaises(raised),
+    }
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        _validated_globalid_setting()
+
+    assert str(excinfo.value) == (
+        f"RELAY_GLOBALID_STRATEGY must be one of {_STRATEGY_TYPES} or a callable; "
+        "got <class-read-raises>."
+    )
+
+
+@pytest.mark.parametrize(
+    ("route", "value", "message"),
+    [
+        (
+            "name-claims-str",
+            _ClaimsClass(str),
+            "Category.Meta.name must be a non-empty string; got <claims-class>.",
+        ),
+        (
+            "description-claims-str",
+            _ClaimsClass(str),
+            (
+                "Category.Meta.description must be a string or a lazy translation string; "
+                "got <claims-class>."
+            ),
+        ),
+        ("model-claims-type", _ClaimsClass(type), "Meta.model must be a Django model class"),
+    ],
+    ids=["name-claims-str", "description-claims-str", "model-claims-type"],
+)
+def test_meta_value_claiming_the_class_it_is_not_is_the_typed_rejection(
+    route: str,
+    value: object,
+    message: str,
+) -> None:
+    """A value whose ``__class__`` claims ``str`` / ``type`` is refused, never read as one.
+
+    ``Meta.name`` and ``Meta.description`` read the text through the base ``str`` slot and
+    ``Meta.model`` is handed to ``issubclass``, both of which refuse a value that is not
+    really a ``str`` / class, so the gate asks the real type.
+    """
+    key = route.split("-", maxsplit=1)[0]
+    meta = type("Meta", (), {"model": Category, "fields": CATEGORY_SCALAR_FIELDS, key: value})
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        type("T", (DjangoType,), {"Meta": meta})
+
+    assert str(excinfo.value) == message
+
+
+@pytest.mark.parametrize("key", ["name", "description"])
+def test_meta_text_that_is_a_lazy_proxy_of_a_string_is_the_typed_rejection(key: str) -> None:
+    """A ``SimpleLazyObject`` around a ``str`` is not a ``str``, so ``Meta.name`` refuses it.
+
+    ``Meta.description`` refuses it the same way.
+
+    The base ``str`` slot refuses a proxy, so the gate asks the real type.
+    """
+    meta = type(
+        "Meta",
+        (),
+        {
+            "model": Category,
+            "fields": CATEGORY_SCALAR_FIELDS,
+            key: SimpleLazyObject(lambda: "Named"),
+        },
+    )
+
+    with pytest.raises(ConfigurationError, match=rf"Category\.Meta\.{key} must be a "):
+        type("T", (DjangoType,), {"Meta": meta})
+
+
+def test_meta_class_that_inherits_str_still_contributes_the_text_it_holds() -> None:
+    """The real-type test passes a ``str`` subclass, and only its text is kept."""
+
+    class ShoutingName(str):
+        @override
+        def __str__(self) -> str:
+            raise RuntimeError("the subclass's own __str__ is never run")
+
+    class NamedType(DjangoType):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+            name = ShoutingName("CategoryNode")
+            description = ShoutingName("About categories")
+
+    definition = NamedType.__django_strawberry_definition__
+    assert type(definition.name) is str
+    assert definition.name == "CategoryNode"
+    assert type(definition.description) is str
+    assert definition.description == "About categories"
+
+
+def _lazy(value: object) -> object:
+    """A faithful lazy proxy around ``value`` (``isinstance`` answers as the wrapped value)."""
+    return SimpleLazyObject(lambda: value)
+
+
+@pytest.mark.parametrize(
+    ("accepts", "expected"),
+    [
+        (lambda: _normalize_fields_spec(_lazy(("id", "name"))), ("id", "name")),
+        (lambda: _normalize_fields_spec(("id", _lazy("name"))), ("id", "name")),
+        (lambda: _normalize_sequence_spec(_lazy(["name"])), ("name",)),
+        (lambda: _normalize_sequence_spec(_lazy({"name"})), ("name",)),
+        (lambda: _validate_connection(Category, _lazy({}), relay_shaped=True), {}),
+        (
+            lambda: _validate_connection(
+                Category,
+                {"total_count": SimpleLazyObject(lambda: True)},
+                relay_shaped=True,
+            ),
+            {"total_count": True},
+        ),
+        (
+            lambda: _validate_cursor_field(Category, _lazy(("id",)), relay_shaped=True),
+            ("id",),
+        ),
+        (
+            lambda: _validate_cursor_field(Category, (_lazy("id"),), relay_shaped=True),
+            ("id",),
+        ),
+        (
+            lambda: _validate_relation_shapes(
+                Category,
+                _lazy({"items": "both"}),
+                relay_shaped=True,
+            ),
+            {"items": "both"},
+        ),
+        (lambda: _validate_globalid_strategy(Category, _lazy("type"), relay_shaped=True), "type"),
+        (
+            lambda: _validate_interfaces(
+                type("M", (), {"interfaces": _lazy((relay.Node,))}),
+                Category,
+            ),
+            (relay.Node,),
+        ),
+        (
+            lambda: _meta_optimizer_hints(
+                type("M", (), {"optimizer_hints": _lazy({"items": _HINT})}),
+                Category,
+            ),
+            {"items": _HINT},
+        ),
+    ],
+    ids=[
+        "fields-proxy",
+        "fields-entry-proxy",
+        "exclude-list-proxy",
+        "exclude-set-proxy",
+        "connection-proxy",
+        "connection-total_count-proxy",
+        "cursor_field-proxy",
+        "cursor_field-entry-proxy",
+        "relation_shapes-proxy",
+        "globalid_strategy-proxy",
+        "interfaces-proxy",
+        "optimizer_hints-proxy",
+    ],
+)
+def test_meta_gates_keep_accepting_a_faithful_proxy_of_the_right_class(
+    accepts: Callable[[], object],
+    expected: object,
+) -> None:
+    """The gates ask ``isinstance``, so a lazy proxy of a valid value passes as the value itself."""
+    assert accepts() == expected
+
+
+def test_meta_model_and_primary_proxies_register_the_type() -> None:
+    """A lazy proxy of the model class and of the ``primary`` flag are accepted at class creation."""
+
+    class ProxiedType(DjangoType):
+        class Meta:
+            model = _lazy(Category)
+            fields = CATEGORY_SCALAR_FIELDS
+            primary = SimpleLazyObject(lambda: True)
+
+    assert bool(ProxiedType.__django_strawberry_definition__.primary) is True
+
+
+def _inject_annotation_key(*keys: object) -> type[type]:
+    """A metaclass that adds each of ``keys`` to the class annotations before the class exists."""
+
+    class InjectAnnotationKeysMeta(type):
+        def __new__(
+            mcs,
+            name: str,
+            bases: tuple[type, ...],
+            namespace: dict[str, object],
+            **kwargs: object,
+        ) -> type:
+            namespace["__annotations__"] = dict.fromkeys(keys, str)
+            return super().__new__(mcs, name, bases, namespace, **kwargs)
+
+    return InjectAnnotationKeysMeta
+
+
+_NON_STRING_KEYS_TAIL = (
+    ". Annotation keys are field names; non-string keys cannot be synthesized or exposed."
+)
+
+
+@pytest.mark.parametrize(
+    ("keys", "shown"),
+    [
+        ((1,), "[1]"),
+        ((2, 1), "[1, 2]"),
+        ((_HostileMetaValue(),), "[<unprintable _HostileMetaValue>]"),
+        ((_ClassReadRaises(RuntimeError),), "[<class-read-raises>]"),
+        ((_ClassReadRaises(KeyboardInterrupt),), "[<class-read-raises>]"),
+        ((_ClaimsClass(str),), "[<claims-class>]"),
+    ],
+    ids=[
+        "int",
+        "ints-sorted-by-repr",
+        "repr-raises",
+        "class-read-raises-runtime",
+        "class-read-raises-base-exception",
+        "class-claims-str",
+    ],
+)
+def test_non_string_annotation_key_is_rejected_whatever_its_class_or_repr(
+    keys: tuple[object, ...],
+    shown: str,
+) -> None:
+    """A metaclass-injected annotation key that is not really a ``str`` takes the typed rejection.
+
+    The keys are rendered through the guarded repr and sorted by their rendering, and the test
+    asks the key's real type, so a key whose ``__repr__`` raises, whose ``__class__`` raises,
+    or whose ``__class__`` claims ``str`` is reported alongside the honest ones.
+    """
+    with pytest.raises(ConfigurationError) as excinfo:
+
+        @definition_raises
+        class ProbeKeysType(DjangoType, metaclass=_inject_annotation_key(*keys)):
+            class Meta:
+                model = Category
+                fields = CATEGORY_SCALAR_FIELDS
+
+    assert str(excinfo.value) == (
+        f"ProbeKeysType: class annotations must have string names; got non-string keys {shown}"
+        + _NON_STRING_KEYS_TAIL
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "kind"),
+    [("name", "scalar"), ("items", "relation")],
+    ids=["scalar", "relation"],
+)
+@pytest.mark.parametrize("raised", _CLASS_READ_ERRORS, ids=_CLASS_READ_ERROR_IDS)
+def test_class_attribute_whose_class_cannot_be_read_is_a_shadow_rejection(
+    field: str,
+    kind: str,
+    raised: type[BaseException],
+) -> None:
+    """A class attribute shadowing a model field is not a ``StrawberryField`` when its class is unreadable."""
+    namespace = {
+        "Meta": type("Meta", (), {"model": Category, "fields": ("id", field)}),
+        field: _ClassReadRaises(raised),
+    }
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        type("ProbeShadowType", (DjangoType,), namespace)
+
+    assert str(excinfo.value) == (
+        f"ProbeShadowType.{field} shadows a Django {kind} field with an unsupported "
+        "class attribute. Use a type annotation for type overrides, or use "
+        "strawberry.field(resolver=...) / @strawberry.field for resolver overrides."
+    )
 
 
 @pytest.mark.parametrize(

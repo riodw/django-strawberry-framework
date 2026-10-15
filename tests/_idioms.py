@@ -55,6 +55,13 @@ reads its result as the original type rather than ``Any``.
 it runs ``fn`` and appends whatever it raises to ``errors``, so the main thread asserts the
 list is empty after ``join`` instead of every worker body carrying its own catch-all.
 
+``ClassReadRaises`` / ``ClaimsClass`` are the two hostile values a guard on a consumer-supplied
+value is tested against: one whose ``__class__`` read raises (so a bare ``isinstance`` raises
+with it), and one whose ``__class__`` claims a class its real type is not (so a bare
+``isinstance`` is true and the base slot that follows refuses it). Both render as
+``<ClassReadRaises>`` / ``<ClaimsClass>`` so a rejection message that quotes the value is
+deterministic.
+
 ``is_object_dict`` / ``is_object_list`` narrow an ``object`` (a JSON payload, a GraphQL
 result, a hook's input) the way ``isinstance`` does at run time, but to ``dict[object,
 object]`` / ``list[object]``: a bare ``isinstance`` on an ``object`` narrows to the class
@@ -65,12 +72,22 @@ import inspect
 import pickle
 from collections.abc import Callable, Iterable, Mapping
 from types import FunctionType, ModuleType
-from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, TypeGuard, TypeVar, overload
+from typing import (
+    TYPE_CHECKING,
+    ClassVar,
+    Literal,
+    NoReturn,
+    Protocol,
+    TypeGuard,
+    TypeVar,
+    overload,
+)
 
 from django.db.models import Model, QuerySet
 from django.test.testcases import SimpleTestCase
 from rest_framework import serializers
 from strawberry import relay
+from typing_extensions import override
 
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.utils.querysets import model_for
@@ -121,6 +138,41 @@ def is_object_dict(value: object) -> "TypeIs[dict[object, object]]":
 def is_object_list(value: object) -> "TypeIs[list[object]]":
     """Whether ``value`` is a ``list`` (subclasses included), its items typed ``object``."""
     return isinstance(value, list)
+
+
+class ClassReadRaises:
+    """A value whose ``__class__`` read raises ``escape``, so ``isinstance(value, C)`` raises it."""
+
+    def __init__(self, escape: type[BaseException] = RuntimeError) -> None:
+        self._escape = escape
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is the
+    # guard's input
+    def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
+        raise self._escape("hostile __class__")
+
+    @override
+    def __repr__(self) -> str:
+        return "<ClassReadRaises>"
+
+
+class ClaimsClass:
+    """A plain object whose ``__class__`` claims ``claimed``: ``isinstance(value, claimed)`` is true."""
+
+    def __init__(self, claimed: type) -> None:
+        self._claimed = claimed
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
+    def __class__(self) -> type:  # pyright: ignore[reportIncompatibleMethodOverride]
+        return self._claimed
+
+    @override
+    def __repr__(self) -> str:
+        return "<ClaimsClass>"
 
 
 def pickle_roundtrip(value: _T) -> _T:

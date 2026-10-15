@@ -109,6 +109,8 @@ from django_strawberry_framework.exceptions import (
     describe_value,
 )
 
+from ._narrowing import is_str
+
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
@@ -223,7 +225,8 @@ def session_store_class() -> type[SessionBase]:
     own ``import_string``, so a consumer-authored engine subclass resolves
     identically to a shipped one. ``settings`` is read at CALL time, never
     captured, so ``override_settings(SESSION_ENGINE=...)`` is honored. A
-    deployment-supplied engine that is a hostile ``str`` subclass is flattened
+    deployment-supplied engine is a string only if its real type is one (its
+    ``__class__`` is never read), and a hostile ``str`` subclass is flattened
     through the base ``str`` slot before it reaches either interpolation below,
     so a raising ``__format__`` / ``__repr__`` cannot replace the typed
     ``ConfigurationError`` with an arbitrary consumer exception while the import
@@ -242,21 +245,22 @@ def session_store_class() -> type[SessionBase]:
             "SESSION_ENGINE could not be read from settings "
             f"({type(exc).__name__}); check settings.SESSION_ENGINE.",
         ) from exc
-    if not isinstance(engine, str):
+    if not is_str(engine):
         raise ConfigurationError(
             f"SESSION_ENGINE must be a string; got {describe_value(engine)}.",
         )
+    # ``engine`` came from the deployment and may be a ``str`` subclass whose
+    # dunders raise. ``str.__str__`` on a non-exact ``str`` returns a plain base
+    # copy without dispatching the subclass's ``__str__``, so the truthiness test
+    # and both f-string interpolations below (the import path here and the
+    # ``{engine!r}`` tail at the raise site) run through C slots that cannot run
+    # consumer code - the same guarantee ``describe_value`` gives the non-string
+    # rejection above.
+    engine = str.__str__(engine)
     if not engine:
         raise ConfigurationError(
             "SESSION_ENGINE must be a non-empty string; got empty value.",
         )
-    # ``engine`` came from the deployment and may be a ``str`` subclass whose
-    # dunders raise. ``str.__str__`` on a non-exact ``str`` returns a plain base
-    # copy without dispatching the subclass's ``__str__``, so both f-string
-    # interpolations below (the import path here and the ``{engine!r}`` tail at
-    # the raise site) render through C slots that cannot run consumer code - the
-    # same guarantee ``describe_value`` gives the non-string rejection above.
-    engine = str.__str__(engine)
     try:
         # Django's session-engine contract: the module exports a ``SessionBase`` subclass.
         return cast("type[SessionBase]", import_string(f"{engine}.SessionStore"))

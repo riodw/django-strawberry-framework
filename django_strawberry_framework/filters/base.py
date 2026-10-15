@@ -884,11 +884,11 @@ class IntegerRangeFilter(BaseRangeFilter, NumberFilter):
     def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
         """Apply the range as a decomposed ``gte`` + ``lte`` pair (never a raw ``BETWEEN``).
 
-        The ``isinstance`` shape check runs BEFORE any value probe: the old
-        leading ``value in EMPTY_VALUES`` membership detonated on a hostile
-        value whose ``__eq__`` raises, and the shapes it skipped (``None`` /
-        ``""`` / ``()``) are all covered by the shape check's skip arm anyway,
-        so the probe was redundant for every evaluable value. The materialize
+        The ``isinstance`` shape check runs BEFORE any value probe: a leading
+        ``value in EMPTY_VALUES`` membership would detonate on a hostile value
+        whose ``__eq__`` raises, and the shapes it would skip (``None`` /
+        ``""`` / ``()``) all take the shape check's skip arm, so no
+        ``EMPTY_VALUES`` probe is needed. The materialize
         keeps a lying ``list`` subclass (raising ``__len__`` / ``__iter__``)
         from detonating inside ``len(value)`` / the unpack -- same containment
         as ``_materialize_list_shaped_values``.

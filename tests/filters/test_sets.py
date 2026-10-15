@@ -1377,9 +1377,9 @@ def test_filter_for_field_fk_to_pk_relation_globalid_carries_no_marker() -> None
 # cardinality-only reselection produced. These tests drive the real
 # ``FilterSet.get_filters()`` generation path (not a hand-built primitive) so
 # they prove the generated class, its list-shaped input annotation, and its
-# execution. Red->green: before the fix, ``shelf__in`` / ``target__in``
-# generated ``GlobalIDFilter`` and rejected the list at decode time
-# ("Invalid GlobalID: [...] is not a valid GlobalID ...").
+# execution. A scalar ``GlobalIDFilter`` on ``shelf__in`` / ``target__in``
+# would reject the list at decode time ("Invalid GlobalID: [...] is not a
+# valid GlobalID ...").
 # ---------------------------------------------------------------------------
 
 
@@ -2567,12 +2567,12 @@ def test_generated_deep_to_many_path_correctness_is_row_preserving() -> None:
     """A generated deep to-many leaf is row-preserving via correlated EXISTS.
 
     A framework-generated deep lookup crossing a to-many
-    relation no longer fans out through JOIN + global ``DISTINCT``. The applied
+    relation never fans out through JOIN + global ``DISTINCT``. The applied
     queryset carries ``query.distinct is False``, its ``alias_map`` contains
     NEITHER the M2M through-table nor the terminal ``library_genre`` table, and
     an ``EXISTS`` owns the membership join -- yielding the SAME single correct
-    row. The permanent test-local oracle (the old production behavior: invoke the
-    same filter instance directly on the outer queryset, then its own
+    row. The permanent test-local oracle (the direct-invocation baseline: invoke
+    the same filter instance directly on the outer queryset, then its own
     ``distinct``) is asserted to yield the identical row set.
     """
 
@@ -2611,9 +2611,9 @@ def test_generated_deep_to_many_path_correctness_is_row_preserving() -> None:
     production_rows = list(result.values_list("pk", flat=True))
     assert production_rows == [matching_book.pk]
 
-    # Permanent test-local oracle: the OLD production behavior (direct outer
+    # Permanent test-local oracle: the direct-invocation baseline (direct outer
     # invocation of the same filter instance, then its own distinct) yields the
-    # same rows the row-preserving production adapter now yields.
+    # same rows the row-preserving production adapter yields.
     oracle_rows = list(
         generated.filter(outer_qs, "cardio").distinct().values_list("pk", flat=True),
     )
@@ -2661,8 +2661,8 @@ def test_flattened_related_filter_leaf_is_row_preserving() -> None:
     assert list(result.values_list("pk", flat=True)) == [matching_book.pk]
     assert result.count() == 1
 
-    # Permanent test-local oracle: the OLD behavior (direct outer invocation of
-    # the same distinct=False leaf) still duplicates the parent row.
+    # Permanent test-local oracle: the direct-invocation baseline (direct outer
+    # invocation of the same distinct=False leaf) duplicates the parent row.
     oracle_rows = list(leaf.filter(outer_qs, "cardio").values_list("pk", flat=True))
     assert oracle_rows == [matching_book.pk, matching_book.pk]
 
@@ -3139,16 +3139,16 @@ def test_qs_and_apply_sync_and_async_over_eligible_candidate() -> None:
 # For every supported candidate shape, the production ``FilterSet`` path
 # (correlated ``EXISTS``) must return the SAME ordered primary-key sequence and
 # count as the permanent test-local oracle: the same filter instance invoked
-# DIRECTLY on the outer queryset (django-filter's plain pre-rewrite behavior).
+# DIRECTLY on the outer queryset (django-filter's plain behavior).
 # ``distinct=True`` baseline leaves are NOT double-``.distinct()``-ed here -
 # upstream ``Filter.filter`` already calls ``qs.distinct()`` when
-# ``self.distinct`` is set, so the direct invocation IS the old behavior; a
+# ``self.distinct`` is set, so the direct invocation IS that behavior; a
 # ``.distinct()`` chained after it only mirrors the framework's own suppressed
 # outer distinct and is applied only where noted (many-side membership leaves).
 #
-# Cases already proven by the landed C.1-flipped tests
+# Cases already proven by the row-preserving tests
 # (``test_generated_deep_to_many_path_correctness_is_row_preserving``,
-# ``test_flattened_related_filter_leaf_is_row_preserving``) and the C.3 adapter
+# ``test_flattened_related_filter_leaf_is_row_preserving``) and the adapter
 # tests are NOT re-added: forward M2M single-parent equivalence, the
 # expanded-vs-root classification EXECUTION equivalence (matrix row 13, covered
 # by ``test_flattened_related_filter_leaf_is_row_preserving`` which compares the
@@ -3157,7 +3157,7 @@ def test_qs_and_apply_sync_and_async_over_eligible_candidate() -> None:
 # restrictive-empty membership.
 #
 # Matrix row 7 (``to_field`` FK-to-non-pk hop) is proven by
-# ``test_c4_to_field_reverse_to_many_children_is_row_preserving`` below, over the
+# ``test_to_field_reverse_to_many_children_is_row_preserving`` below, over the
 # ``Genre`` reverse to-many ``favoring_profiles__postal_code`` (whose join binds
 # on the non-pk ``name`` column of ``PatronProfile.favorite_genre``).
 #
@@ -3167,7 +3167,7 @@ def test_qs_and_apply_sync_and_async_over_eligible_candidate() -> None:
 #   generated as a ``GlobalIDMultipleChoiceFilter``; its form field is
 #   constructible because the replacement strips the model-choice-only extras
 #   (``_strip_model_choice_extras``), and the decode/apply round-trip is covered
-#   by ``test_c4_global_id_list_over_flat_relay_m2m_is_row_preserving`` below.
+#   by ``test_global_id_list_over_flat_relay_m2m_is_row_preserving`` below.
 #   The flat leaf stays package-tier: the fakeshop filtersets declare
 #   ``RelatedFilter``s under the same base names, and a declared name shadows
 #   the flat leaf in the generated GraphQL input, so no live surface reaches it.
@@ -3197,7 +3197,7 @@ def _make_scalar_specimen(
 
 
 @pytest.mark.django_db
-def test_c4_reverse_fk_loans_note_is_row_preserving() -> None:
+def test_reverse_fk_loans_note_is_row_preserving() -> None:
     """Matrix row 1 (reverse FK) + row 14 (ordinary generated ``CharFilter``).
 
     ``Book`` root, generated ``loans__note`` ``icontains`` leaf (a plain upstream
@@ -3242,7 +3242,7 @@ def test_c4_reverse_fk_loans_note_is_row_preserving() -> None:
 
 
 @pytest.mark.django_db
-def test_c4_forward_m2m_multiple_parents_is_row_preserving() -> None:
+def test_forward_m2m_multiple_parents_is_row_preserving() -> None:
     """Matrix row 2 (forward M2M) gap: MULTIPLE parents, one direct, one via dups.
 
     ``Book`` root over the forward M2M ``Book.genres``. One book matches through a
@@ -3281,7 +3281,7 @@ def test_c4_forward_m2m_multiple_parents_is_row_preserving() -> None:
 
 
 @pytest.mark.django_db
-def test_c4_reverse_m2m_genre_books_title_is_row_preserving() -> None:
+def test_reverse_m2m_genre_books_title_is_row_preserving() -> None:
     """Matrix row 3 (reverse M2M): ``Genre`` root over ``books__title``.
 
     A genre linked to two matching books is returned once; ordered equivalence
@@ -3318,7 +3318,7 @@ def test_c4_reverse_m2m_genre_books_title_is_row_preserving() -> None:
 
 
 @pytest.mark.django_db
-def test_c4_generic_relation_branch_tags_is_row_preserving() -> None:
+def test_generic_relation_branch_tags_is_row_preserving() -> None:
     """Matrix row 4 (``GenericRelation``): ``Branch`` root over ``tags__tag``.
 
     ``Meta.fields = {"tags__tag": ["icontains"]}`` DOES generate through
@@ -3356,7 +3356,7 @@ def test_c4_generic_relation_branch_tags_is_row_preserving() -> None:
 
 
 @pytest.mark.django_db
-def test_c4_isnull_on_nullable_child_field_is_row_preserving() -> None:
+def test_isnull_on_nullable_child_field_is_row_preserving() -> None:
     """Matrix row 5 (``isnull`` on a nullable child field over a to-many hop).
 
     ``Genre`` root over ``books__subtitle`` (``subtitle`` is nullable). Both
@@ -3396,7 +3396,7 @@ def test_c4_isnull_on_nullable_child_field_is_row_preserving() -> None:
 
 
 @pytest.mark.django_db
-def test_c4_nullable_intermediate_to_one_hop_is_row_preserving() -> None:
+def test_nullable_intermediate_to_one_hop_is_row_preserving() -> None:
     """Matrix row 6 (nullable intermediate to-one hop in the multiplying chain).
 
     ``ScalarSpecimen`` root over ``parent__children__label`` - a nullable self-FK
@@ -3434,7 +3434,7 @@ def test_c4_nullable_intermediate_to_one_hop_is_row_preserving() -> None:
 
 
 @pytest.mark.django_db
-def test_c4_to_field_reverse_to_many_children_is_row_preserving() -> None:
+def test_to_field_reverse_to_many_children_is_row_preserving() -> None:
     """Matrix row 7 (``to_field`` FK-to-non-pk hop), now executable.
 
     ``Genre`` root over its reverse to-many ``favoring_profiles__postal_code`` --
@@ -3489,15 +3489,15 @@ def test_c4_to_field_reverse_to_many_children_is_row_preserving() -> None:
 
 
 @pytest.mark.django_db
-def test_c4_two_active_leaves_same_relation_cross_row_and() -> None:
+def test_two_active_leaves_same_relation_cross_row_and() -> None:
     """Matrix row 8 (two active leaves on one relation, cross-row AND).
 
     ``Book`` root with TWO active leaves on the M2M ``genres`` relation matching
     DIFFERENT genre rows of the same book (name ``icontains`` matches one genre,
     ``id__gt`` matches the other). The book qualifies because each ``EXISTS`` is
     independently true; TWO reserved aliases / ``EXISTS`` bodies appear in the
-    SQL. The old baseline (two separate ``.filter`` invocations, each its own
-    join alias) ALSO matches cross-row, so equivalence holds.
+    SQL. The direct-invocation baseline (two separate ``.filter`` invocations,
+    each its own join alias) ALSO matches cross-row, so equivalence holds.
     """
     shelf = _library_shelf()
     book = library_models.Book.objects.create(shelf=shelf, title="CrossRow")
@@ -3538,7 +3538,7 @@ def test_c4_two_active_leaves_same_relation_cross_row_and() -> None:
 
 
 @pytest.mark.django_db
-def test_c4_range_binds_to_single_child_row() -> None:
+def test_range_binds_to_single_child_row() -> None:
     """Matrix row 9 (positive multi-lookup single-invocation binding).
 
     A ``range`` leaf on ``Book.loans__id``: both bounds must bind to ONE child row
@@ -3581,7 +3581,7 @@ def test_c4_range_binds_to_single_child_row() -> None:
 
 
 @pytest.mark.django_db
-def test_c4_negated_split_across_rows_range_counterexample() -> None:
+def test_negated_split_across_rows_range_counterexample() -> None:
     """Matrix row 10 (negated split-across-rows range counterexample).
 
     The framework's generated FLAT leaves never carry ``exclude=True`` (proven
@@ -3636,8 +3636,7 @@ def test_generated_flat_leaves_never_carry_exclude() -> None:
     sees a negated leaf. This enumerates a representative generated ``FilterSet``
     across scalar and to-many hops and every lookup, asserting each leaf is
     framework-generated (carries provenance) and non-excluding. A future
-    regression that emits ``exclude=True`` on a generated leaf fails here loudly,
-    replacing what used to be a bare prose claim.
+    regression that emits ``exclude=True`` on a generated leaf fails here loudly.
     """
 
     class RepresentativeFilter(FilterSet):
@@ -3658,7 +3657,7 @@ def test_generated_flat_leaves_never_carry_exclude() -> None:
 
 
 @pytest.mark.django_db
-def test_c4_integer_in_over_to_many_path() -> None:
+def test_integer_in_over_to_many_path() -> None:
     """Matrix row 11 (integer ``in`` semantics over an eligible to-many path).
 
     ``Genre`` root over ``books__id`` ``in``: an explicit empty list is the empty
@@ -3666,7 +3665,7 @@ def test_c4_integer_in_over_to_many_path() -> None:
     membership filters on the valid member only; an all-invalid membership matches
     nothing.
     (The GlobalID-list sub-case is covered by
-    ``test_c4_global_id_list_over_flat_relay_m2m_is_row_preserving`` below.)
+    ``test_global_id_list_over_flat_relay_m2m_is_row_preserving`` below.)
     """
     shelf = _library_shelf()
     g1 = library_models.Genre.objects.create(name="g1")
@@ -3754,7 +3753,7 @@ def test_flat_relay_fk_leaf_builds_form_field_without_model_choice_extras() -> N
 
 
 @pytest.mark.django_db
-def test_c4_global_id_list_over_flat_relay_m2m_is_row_preserving() -> None:
+def test_global_id_list_over_flat_relay_m2m_is_row_preserving() -> None:
     """Matrix row 11, GlobalID-list sub-case: decode + row-preserving apply.
 
     A flat Relay M2M ``in`` leaf decodes real ``global_id_for``-minted ids and
@@ -3808,7 +3807,7 @@ def test_c4_global_id_list_over_flat_relay_m2m_is_row_preserving() -> None:
 
 
 @pytest.mark.django_db
-def test_c4_untouched_surfaces_attach_no_reserved_alias() -> None:
+def test_untouched_surfaces_attach_no_reserved_alias() -> None:
     """Matrix row 12 (untouched surfaces): declared / method / custom / overrides.
 
     Each ineligible surface must run today's unchanged path: no reserved
@@ -3987,7 +3986,7 @@ def _apply_book_genre_leaf(
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("shape", _BOOK_GENRE_LEAF_SHAPES)
-def test_c4_multiset_non_fanned_input_each_row_once(shape: str) -> None:
+def test_multiset_non_fanned_input_each_row_once(shape: str) -> None:
     """(a) Non-fanned input: each matching book exactly once, consumer order kept."""
     two, one, _no = _seed_multiset_book_genre_graph()
 
@@ -4002,7 +4001,7 @@ def test_c4_multiset_non_fanned_input_each_row_once(shape: str) -> None:
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("shape", _BOOK_GENRE_LEAF_SHAPES)
-def test_c4_multiset_pre_fanned_consumer_input_multiplicity_survives(shape: str) -> None:
+def test_multiset_pre_fanned_consumer_input_multiplicity_survives(shape: str) -> None:
     """(b) Pre-fanned consumer input: existing duplicates that match survive; non-matches drop.
 
     The consumer deliberately fans the queryset on ``genres__name icontains
@@ -4033,7 +4032,7 @@ def test_c4_multiset_pre_fanned_consumer_input_multiplicity_survives(shape: str)
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("shape", _BOOK_GENRE_LEAF_SHAPES)
-def test_c4_multiset_consumer_distinct_input_is_preserved(shape: str) -> None:
+def test_multiset_consumer_distinct_input_is_preserved(shape: str) -> None:
     """(c) Explicitly consumer-distinct input: consumer's own distinct collapses duplicates."""
     two, one, _no = _seed_multiset_book_genre_graph()
 
@@ -4051,11 +4050,11 @@ def test_c4_multiset_consumer_distinct_input_is_preserved(shape: str) -> None:
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("shape", _BOOK_GENRE_LEAF_SHAPES)
-def test_c4_multiset_custom_filter_produced_input_multiplicity_survives(shape: str) -> None:
+def test_multiset_custom_filter_produced_input_multiplicity_survives(shape: str) -> None:
     """(d) Custom-filter-produced input: the fanned multiplicity from a declared leaf survives.
 
     A consumer-declared ``CharFilter`` with ``distinct=False`` on a to-many
-    path (the old fan-out shape, consumer-owned) runs first and fans the rows;
+    path (the fan-out shape, consumer-owned) runs first and fans the rows;
     the eligible framework leaf then preserves that multiplicity.
     """
     two, one, _no = _seed_multiset_book_genre_graph()
@@ -4114,7 +4113,7 @@ def _routed_deep_loan_filter() -> type[FilterSet]:
 
 
 @pytest.mark.django_db
-def test_c4_medtrics_loanfilter_deep_leaf_sql_shape() -> None:
+def test_medtrics_loanfilter_deep_leaf_sql_shape() -> None:
     """The Medtrics deep leaf composes as ONE correlated EXISTS with no root fan-out."""
     DeepLoanFilter = _routed_deep_loan_filter()
 
@@ -4149,7 +4148,7 @@ def test_c4_medtrics_loanfilter_deep_leaf_sql_shape() -> None:
 
 
 @pytest.mark.django_db
-def test_c4_medtrics_loanfilter_deep_leaf_package_tier_pagination() -> None:
+def test_medtrics_loanfilter_deep_leaf_package_tier_pagination() -> None:
     """Two-edge page-size-1 boundary over the filtered loans (package-tier slicing).
 
     ``all_library_loans`` is a plain list field (no connection surface), so
@@ -4748,19 +4747,18 @@ def test_apply_sync_nested_related_gate_fires_once_not_per_level() -> None:
     Call-count has no wire shape. Nested denial over HTTP:
     ``test_products_api.py::test_products_items_related_category_name_permission_fires_for_anonymous``.
 
-    Regression test for the double-fire defect: the related-visibility
-    derivation invoked the child filterset's ``apply_sync``, which runs
-    ``_run_permission_checks``, AND the top-level dedicated
-    ``_run_permission_checks`` pass ALSO recursed into the child -- so a
-    nested ``check_<field>_permission`` gate fired once per enclosing level
-    (twice at one level of relation nesting, three times at two levels,
-    compounding with depth). This violated the documented contract that the
-    derivation / tree-composition paths do NOT re-run permission checks
-    (only the single up-front pass fires gates) and double-invoked
-    side-effectful gates (audit logging, rate limiting, metrics).
-
-    The fix threads ``run_permissions=False`` into the derivation's child
-    ``apply_*`` calls so the child's gates fire only via the top-level pass.
+    The related-visibility derivation invokes the child filterset's
+    ``apply_*``, and the top-level dedicated ``_run_permission_checks`` pass
+    ALSO recurses into the child. Were the child to run its own
+    ``_run_permission_checks`` too, a nested ``check_<field>_permission`` gate
+    would fire once per enclosing level (twice at one level of relation
+    nesting, three times at two levels, compounding with depth), breaking the
+    documented contract that the derivation / tree-composition paths do NOT
+    re-run permission checks (only the single up-front pass fires gates) and
+    double-invoking side-effectful gates (audit logging, rate limiting,
+    metrics). The derivation threads ``run_permissions=False`` into the
+    child's ``apply_*`` calls so the child's gates fire only via the top-level
+    pass.
     """
     branch = library_models.Branch.objects.create(name="alpha")
     shelf = library_models.Shelf.objects.create(branch=branch, code="AAA")
@@ -4821,8 +4819,8 @@ def test_apply_sync_nested_related_gate_fires_once_not_per_level() -> None:
 
     # Two levels of relation nesting: the deepest gate
     # (``BookFilter.check_title_permission``) must fire EXACTLY ONCE, not
-    # three times (pre-fix: once per enclosing derivation level plus the
-    # dedicated pass).
+    # three times (once per enclosing derivation level plus the dedicated
+    # pass).
     fired.clear()
     BranchFilter.apply_sync(
         {"shelves": {"books": {"title": {"i_contains": "T"}}}},
@@ -5314,9 +5312,9 @@ def test_get_filters_skips_none_target_related_filter() -> None:
 def test_normalize_input_rejects_non_walkable_input() -> None:
     """A non-walkable top-level input fails loud instead of normalizing to ``{}``.
 
-    The old contract normalized any non-dict / non-dataclass input to
-    ``{}``: ``apply_sync("name", qs, info)`` returned the FULL queryset
-    with every predicate dropped AND every ``check_*`` gate skipped --
+    Normalizing a non-dict / non-dataclass input to ``{}`` would make
+    ``apply_sync("name", qs, info)`` return the FULL queryset with every
+    predicate dropped AND every ``check_*`` gate skipped --
     the same permission + filter bypass ``_validate_logic_branch_shape``
     fails loud for one level down, here at the top of the whole request.
     Only an inactive value (``None`` / ``UNSET``) and a walkable-but-empty
@@ -5345,8 +5343,8 @@ def test_apply_sync_scalar_top_level_input_fails_loud() -> None:
     """``apply_sync("name", ...)`` raises instead of returning every row.
 
     End-to-end proof of the non-walkable-input guard through the public
-    apply surface: the scalar input used to normalize to ``{}`` and the
-    resolver returned the unfiltered queryset while skipping every gate.
+    apply surface: a scalar input normalized to ``{}`` would return the
+    unfiltered queryset while skipping every gate.
     """
     fired: list[str] = []
 
@@ -5370,11 +5368,12 @@ def test_apply_sync_scalar_top_level_input_fails_loud() -> None:
 def test_normalize_input_rejects_dict_value_on_scalar_filter() -> None:
     """A dict value on a non-range filter fails loud instead of splatting form keys.
 
-    The scalar-branch merge (``data.update(normalized)``) used to splat any
+    The scalar-branch merge (``data.update(normalized)``) would splat any
     dict return from ``normalize_input_value`` into the form data: the top
-    -level field key was REPLACED by the dict's own keys, which django-filter's
-    form silently ignores as unknown -- an explicit filter input applying NO
-    filtering (``{"name": {"nope": "x"}}`` filtered nothing). Only a
+    -level field key would be REPLACED by the dict's own keys, which
+    django-filter's form silently ignores as unknown -- an explicit filter
+    input applying NO filtering (``{"name": {"nope": "x"}}`` would filter
+    nothing). Only a
     range-kind filter may return the positional dict patch.
     """
 
@@ -5391,7 +5390,7 @@ def test_normalize_input_rejects_dict_value_on_scalar_filter() -> None:
     with pytest.raises(ConfigurationError):
         CategoryFilter._normalize_input({"name": {"exact": {"k": "v"}}})
     # The wire spelling of the ``in`` lookup (schema name, not the ``in_``
-    # python attr) is not a bag key either -- it used to splat verbatim.
+    # python attr) is not a bag key either; it must not splat verbatim.
     with pytest.raises(ConfigurationError):
         CategoryFilter._normalize_input({"name": {"in": ["foo"]}})
 
@@ -5400,10 +5399,10 @@ def test_normalize_input_rejects_dict_value_on_scalar_filter() -> None:
 def test_apply_sync_dict_valued_scalar_filter_fails_loud() -> None:
     """A dict value under a known lookup fails loud through the full apply pipeline.
 
-    ``{"name": {"exact": {"k": "v"}}}`` used to normalize to
-    ``{"k": "v"}`` -- the field association was lost, django-filter's form
-    silently ignored the unknown ``k`` key, and the request returned every
-    row while the consumer believed ``name`` was filtered.
+    Normalizing ``{"name": {"exact": {"k": "v"}}}`` to ``{"k": "v"}`` would
+    lose the field association: django-filter's form silently ignores the
+    unknown ``k`` key, and the request would return every row while the
+    consumer believed ``name`` was filtered.
     """
 
     class CategoryFilter(FilterSet):
@@ -5459,12 +5458,11 @@ def test_range_patch_dict_values_still_merge_positional_keys() -> None:
 def test_operator_bag_items_walks_lookup_attr_dict() -> None:
     """``_operator_bag_items`` walks a dict whose keys are all lookup attrs.
 
-    The old dict rejection routed a dict-shaped bag down the scalar
-    branch, where the range-patch ``data.update(...)`` splatted its keys
-    into the form data as unknown fields the form silently ignores - an
-    explicit filter input applying NO filtering for direct ``apply_*``
-    callers. A dict whose keys are all recognized lookup attrs is now
-    walked like a dataclass bag.
+    Routing a dict-shaped bag down the scalar branch would let the
+    range-patch ``data.update(...)`` splat its keys into the form data as
+    unknown fields the form silently ignores - an explicit filter input
+    applying NO filtering for direct ``apply_*`` callers. A dict whose keys
+    are all recognized lookup attrs is walked like a dataclass bag.
     """
 
     class CategoryFilter(FilterSet):
@@ -5598,8 +5596,8 @@ def test_evaluate_logic_tree_skips_inactive_or_arms() -> None:
 
     ``_collect_nested_visibility_querysets_async`` already skips inactive
     children; ``_evaluate_logic_tree`` must do the same. An inactive arm under
-    ``or`` previously materialized as ``pk__in=<full qs>`` (match-all) and
-    silently defeated every real sibling arm. GraphQL rejects null list
+    ``or`` materialized as ``pk__in=<full qs>`` (match-all) would silently
+    defeat every real sibling arm. GraphQL rejects null list
     elements (``[BranchFilterInputType!]``), so this is an ``apply_*`` dict /
     direct-call contract pin rather than a live ``/graphql`` case.
     """
@@ -6450,10 +6448,10 @@ def test_check_permissions_falls_back_to_active_input_when_no_requested_fields()
 def test_derive_related_visibility_querysets_async_raises_for_unregistered_target() -> None:
     """The async derive raises for an active branch whose target type is unregistered.
 
-    The old contract skipped the branch (``result == {}``), which dropped
-    the constraint entirely: a filter the consumer supplied input for
-    silently returned unfiltered parent rows. Both derive methods route
-    through ``_iter_visibility_steps``, which now raises
+    Skipping the branch (``result == {}``) would drop the constraint
+    entirely: a filter the consumer supplied input for would silently return
+    unfiltered parent rows. Both derive methods route through
+    ``_iter_visibility_steps``, which raises
     ``ConfigurationError`` for the active-but-unresolvable branch.
     """
 
@@ -6531,8 +6529,8 @@ def test_iter_visibility_steps_raises_for_branch_without_resolved_target() -> No
     The guard lives in the helper so each derive method stays a tight
     loop carrying only the two awaits / calls per step. An active branch
     (the consumer supplied input for it) whose ``target_type`` cannot be
-    resolved raises ``ConfigurationError`` - the old skip contract
-    dropped the constraint and silently returned unfiltered parent rows
+    resolved raises ``ConfigurationError`` - skipping it would drop the
+    constraint and silently return unfiltered parent rows
     (mirrors the sibling async test, but pins the helper directly).
     """
 
@@ -6623,8 +6621,8 @@ def test_apply_async_nested_or_branch_with_async_get_queryset_does_not_raise_syn
     )
     # The async-only ``get_queryset`` ran, the nested branch constrained
     # the parent, and only ``alpha`` (which owns the matching shelf) leaks
-    # through. Before the fix, ``.qs`` would raise ``SyncMisuseError``
-    # before this assertion could run.
+    # through. A sync ``.qs`` would raise ``SyncMisuseError`` before this
+    # assertion could run.
     assert list(qs.values_list("name", flat=True)) == ["alpha"]
 
 
@@ -7674,11 +7672,11 @@ def test_borrowed_generated_leaf_becomes_declared_and_fails_closed() -> None:
     django-filter's declarative machinery lets a consumer deepcopy a filter
     instance obtained from another filterset's ``base_filters`` -- which still
     carries an ``origin="framework_default"`` stamp -- and assign it as a class
-    attribute. Before the fix the metaclass preserved the framework origin (it
-    stamped ``declared`` only when NO record existed), so the candidate builder
-    treated the now-consumer declaration as framework-generated and routed it
-    through the correlated adapter with its ``distinct`` suppressed. The
-    declaration-ownership boundary now transitions the own declaration to
+    attribute. A metaclass that kept the framework origin (stamping ``declared``
+    only when NO record existed) would let the candidate builder treat the
+    consumer declaration as framework-generated and route it through the
+    correlated adapter with its ``distinct`` suppressed. The
+    declaration-ownership boundary transitions the own declaration to
     ``declared`` unconditionally, so it earns no candidate row at all and runs on
     the OUTER queryset.
     """
@@ -7699,7 +7697,7 @@ def test_borrowed_generated_leaf_becomes_declared_and_fails_closed() -> None:
     assert source_record.origin == "framework_default"
 
     borrowed = copy.deepcopy(source_leaf)
-    # Precondition the fix must correct: the deepcopy still reads as an eligible
+    # Precondition the metaclass must correct: the deepcopy still reads as an eligible
     # framework leaf -- the origin stamp survives ``copy.deepcopy``.
     assert _provenance(borrowed).origin == "framework_default"
 
@@ -9189,9 +9187,9 @@ def test_public_filter_defaults_is_deepcopyable() -> None:
 
     The public table is a plain ``dict`` of plain ``dict`` entries (the ``extra``
     providers are module-level functions ``deepcopy`` treats as atomic), so
-    ``copy.deepcopy`` succeeds -- restoring django-filter's inherited customization
-    seam the previous nested-``MappingProxyType`` install broke on both the Python 3.10
-    floor and current Python. This is a pure ``deepcopy`` of plain dicts, so it is
+    ``copy.deepcopy`` succeeds -- keeping django-filter's inherited customization seam,
+    which a nested ``MappingProxyType`` would break on both the Python 3.10 floor and
+    current Python. This is a pure ``deepcopy`` of plain dicts, so it is
     version-independent (passes identically on the 3.10 floor). A nested entry replaced
     in the copy does NOT mutate the package table, and another ``FilterSet`` on the same
     model is unaffected.
@@ -9702,7 +9700,7 @@ def test_positive_controls_unchanged_converts_replacement_preserved() -> None:
 
 
 @pytest.mark.django_db
-def test_r6_relation_isnull_stays_boolean_m2m() -> None:
+def test_relation_isnull_stays_boolean_m2m() -> None:
     """A to-many M2M ``isnull`` under a Relay target is a BooleanFilter, not a GlobalID."""
     _register_relay(library_models.Genre)
 
@@ -9717,7 +9715,7 @@ def test_r6_relation_isnull_stays_boolean_m2m() -> None:
 
 
 @pytest.mark.django_db
-def test_r6_relation_isnull_stays_boolean_fk() -> None:
+def test_relation_isnull_stays_boolean_fk() -> None:
     """A forward-FK ``isnull`` under a Relay target is a BooleanFilter, not a GlobalID."""
     _register_relay(library_models.Shelf)
 
@@ -9732,12 +9730,12 @@ def test_r6_relation_isnull_stays_boolean_fk() -> None:
 
 
 @pytest.mark.django_db
-def test_r6_relation_isnull_filters_correctly_no_500() -> None:
+def test_relation_isnull_filters_correctly_no_500() -> None:
     """End-to-end: a Relay-target relation ``isnull`` filters rows instead of raising.
 
-    Before the fix the leaf was a ``GlobalIDMultipleChoiceFilter``, so a boolean
-    ``isnull`` input compiled a list-shaped GlobalID predicate and raised
-    ``ValueError`` at bind. The BooleanFilter now compiles the null test correctly (the
+    A ``GlobalIDMultipleChoiceFilter`` leaf would compile a boolean ``isnull`` input
+    as a list-shaped GlobalID predicate and raise ``ValueError`` at bind. The
+    BooleanFilter compiles the null test correctly (the
     to-many path routes it row-preservingly through the correlated ``EXISTS`` adapter,
     which the pk-correlated inner root compiles the null semantics inside).
     """
@@ -10065,7 +10063,7 @@ def test_nullable_two_column_foreign_object_isnull_tests_the_carriers(
 
 
 @pytest.mark.django_db
-def test_r6_override_shadowed_by_more_derived_default_stays_framework() -> None:
+def test_override_shadowed_by_more_derived_default_stays_framework() -> None:
     """A ``filter_overrides`` entry shadowed by a more-derived default does NOT govern.
 
     ``MembershipCard.patron`` is a ``OneToOneField``; base ``FILTER_DEFAULTS`` has a
@@ -10094,7 +10092,7 @@ def test_r6_override_shadowed_by_more_derived_default_stays_framework() -> None:
 
 
 @pytest.mark.django_db
-def test_r6_override_that_actually_governs_is_consumer_owned() -> None:
+def test_override_that_actually_governs_is_consumer_owned() -> None:
     """Positive control: an override that WINS the merged walk stays consumer-owned.
 
     A ``filter_overrides`` entry keyed on the EXACT field class (``OneToOneField``)
@@ -10124,7 +10122,7 @@ def test_r6_override_that_actually_governs_is_consumer_owned() -> None:
 
 
 @pytest.mark.django_db
-def test_r6_benign_base_override_does_not_block_to_many_routing() -> None:
+def test_benign_base_override_does_not_block_to_many_routing() -> None:
     """A shadowed override must NOT drop a genuine framework to-many leaf from routing.
 
     ``Loan.note`` is a ``TextField`` with its own base ``FILTER_DEFAULTS`` entry; a
@@ -10311,10 +10309,10 @@ def test_exact_match_keeps_registered_subclass_and_base_distinct(
 
 
 def test_integer_in_resolves_by_exact_type_and_bare_base_in_is_unregistered() -> None:
-    """``IntegerInFilter`` resolves by exact key; the removed ``BaseInFilter`` base is None.
+    """``IntegerInFilter`` resolves by exact key; the bare ``BaseInFilter`` base is None.
 
-    ``BaseInFilter`` / ``BaseRangeFilter`` are no longer registry keys (their MRO-walk job
-    moved to the structural validator), so a bare ``BaseInFilter`` instance resolves to no
+    ``BaseInFilter`` / ``BaseRangeFilter`` are not registry keys (the structural validator
+    does their MRO-walk job), so a bare ``BaseInFilter`` instance resolves to no
     profile -- only the STATIC package ``IntegerInFilter`` (an exact key) still routes.
     """
     assert IntegerInFilter in _FILTER_FAMILY_REGISTRY

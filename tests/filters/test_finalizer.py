@@ -196,10 +196,9 @@ def test_phase_2_5_rejects_multi_owner_with_diverging_pk_identity() -> None:
     ``_check_filterset_owner_pk_identity`` rather than silently pinning
     the first owner.
 
-    Historical note: this test previously simulated divergence on the
-    relation-TARGET axis by hand-planting a ``FakeOwnerDefinition`` on the
-    filterset before finalize. That shape is structurally impossible now:
-    the finalizer's pre-bind reset (``clear_filter_input_namespace`` in
+    Divergence on the relation-TARGET axis (a ``FakeOwnerDefinition``
+    hand-planted on the filterset before finalize) is structurally
+    impossible: the finalizer's pre-bind reset (``clear_filter_input_namespace`` in
     the before-bind loop) delattrs every FilterSet's ``_owner_definition``
     back to the default ``None``, wiping any pre-seed; and relation
     targets resolve via the process-global ``registry.primary_for(model)``
@@ -759,13 +758,12 @@ def test_orphan_filter_input_type_reference_raises_at_finalize() -> None:
 def test_phase_2_5_orphan_check_runs_before_materialization() -> None:
     """Orphan failure leaves no partial state in the materialization ledgers.
 
-    Subpass 3 (orphan validation) now runs BEFORE subpass 4
+    Subpass 3 (orphan validation) runs BEFORE subpass 4
     (materialization), so a failed finalize does not leave wired
     filtersets' input classes registered in ``_materialized_names`` /
-    ``FilterArgumentsFactory.input_object_types``. The previous
-    ordering meant a re-run of ``finalize_django_types()`` after
-    fixing the orphan would see stale ledger entries from the prior
-    failed attempt.
+    ``FilterArgumentsFactory.input_object_types``; otherwise a re-run of
+    ``finalize_django_types()`` after fixing the orphan would see stale
+    ledger entries from the failed attempt.
     """
 
     class WiredFilter(FilterSet):
@@ -1242,12 +1240,11 @@ def test_phase_2_5_unregistered_target_check_walks_transitive_filtersets() -> No
 def test_phase_2_5_non_import_get_filters_failure_rewraps_as_configuration_error() -> None:
     """Non-ImportError raised during ``get_filters()`` surfaces as ``ConfigurationError``.
 
-    Subpass 2 only special-cased ``ImportError`` previously; any other
-    exception (e.g. a ``RelatedFilter`` callable factory that raises
-    ``ValueError`` when evaluated) used to bubble unwrapped, breaking
-    the package's "finalize-time errors are ``ConfigurationError``"
-    convention. The non-import branch now rewraps with the original on
-    ``__cause__`` so consumer error-matching stays uniform.
+    Subpass 2 rewraps any exception, not only ``ImportError`` (e.g. a
+    ``RelatedFilter`` callable factory that raises ``ValueError`` when
+    evaluated), with the original on ``__cause__``: the package's
+    "finalize-time errors are ``ConfigurationError``" convention holds and
+    consumer error-matching stays uniform.
     """
 
     def _broken_factory() -> NoReturn:
@@ -1710,11 +1707,11 @@ def test_finalize_surfaces_the_related_filter_target_gate_identity() -> None:
 
     It never surfaces as a raw ``AttributeError``.
 
-    Pre-gate, the mis-typed target survived declaration + binding + expansion
-    and detonated inside ``_expand_related_filter``'s
+    Ungated, the mis-typed target would survive declaration + binding +
+    expansion and detonate inside ``_expand_related_filter``'s
     ``target.get_filters()`` as a raw ``AttributeError``, typed only
     ACCIDENTALLY by subpass 2's blanket ``except Exception`` rewrap
-    ("raised during expansion"). The ``.filterset`` gate now raises the
+    ("raised during expansion"). The ``.filterset`` gate raises the
     typed ``ConfigurationError`` at first resolution, and subpass 2's
     ``except ConfigurationError: raise`` propagates it BY IDENTITY -- the
     original gate message survives, never the rewrap.

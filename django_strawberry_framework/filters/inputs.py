@@ -778,14 +778,14 @@ def _require_list_container(
     / ``ListFilter`` / ``ArrayFilter`` normalize by iterating ``raw_value``.
     The schema declares every such input as a GraphQL list, so the wire can
     only deliver a list; the reachable non-list shapes are direct-Python
-    ``apply_sync`` caller mistakes. The previous arms SPLATTED whatever they
-    were handed: a ``{'start': 1, 'end': 5}`` patch normalized to its KEYS
-    (``['start', 'end']``) and a string normalized to its CHARACTERS -- both
-    silently dropped the intended predicate and poisoned the form-data dict
-    with junk members. The shape is invalid, not merely iterable, so it
-    raises the typed ``ConfigurationError`` (fail loud, never a silent
-    keys-for-values swap). Returns ``raw_value``, narrowed to the list or
-    tuple it proved, for the arm to iterate.
+    ``apply_sync`` caller mistakes. Iterating one would splat it: a
+    ``{'start': 1, 'end': 5}`` patch would normalize to its KEYS
+    (``['start', 'end']``) and a string to its CHARACTERS, silently dropping
+    the intended predicate and filling the form-data dict with junk members.
+    The shape is invalid, not merely iterable, so it raises the typed
+    ``ConfigurationError`` (fail loud, never a silent keys-for-values swap).
+    Returns ``raw_value``, narrowed to the list or tuple it proved, for the
+    arm to iterate.
     """
     if not is_list_or_tuple(raw_value):
         raise ConfigurationError(
@@ -811,10 +811,9 @@ def _encode_global_id_input(value: object) -> object:
     ``type_name`` so ``GlobalIDFilter.filter`` /
     ``GlobalIDMultipleChoiceFilter.filter`` can validate it against the
     target GraphQL type (spec-027 Decision 4) before any queryset clause runs.
-    The previous implementation eagerly decoded the object down to its
-    bare ``node_id`` here -- stripping the ``type_name`` *before*
-    validation, so a wrong-type GlobalID object silently passed the gate.
-    Re-encoding to the base64 wire string preserves the type, survives
+    Decoding the object down to its bare ``node_id`` here would strip the
+    ``type_name`` *before* validation, so a wrong-type GlobalID object would
+    silently pass the gate. Re-encoding to the base64 wire string preserves the type, survives
     the ``django-filter`` form ``clean`` step, and lets the bound filter
     run the canonical decode-and-validate path. A ``str`` value is
     already wire-form and passes through unchanged, so the GraphQL string
@@ -831,9 +830,9 @@ def _unwrap_enum_member(value: object) -> object:
     Structural ``isinstance(value, enum.Enum)`` rather than duck-typing on
     ``.value`` / ``.name``: a ``@strawberry.enum`` decorates a Python
     ``enum.Enum``, so its members ARE ``enum.Enum`` instances. The structural
-    check also correctly unwraps a member whose ``.value`` is legitimately
-    ``None`` (the prior value-truthiness guard returned such a member
-    un-unwrapped), and it never misfires on plain objects that merely expose a
+    check also unwraps a member whose ``.value`` is legitimately ``None``
+    (a value-truthiness guard would return such a member un-unwrapped), and
+    it never misfires on plain objects that merely expose a
     ``.value`` attribute (e.g. ``decimal.Decimal``).
 
     Single-level unwrap - nested-list / nested-dict inputs are not

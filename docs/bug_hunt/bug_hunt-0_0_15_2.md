@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 89 done, 151 to do.
+Progress: 90 done, 150 to do.
 
 ## Done
 
@@ -290,6 +290,9 @@ Progress: 89 done, 151 to do.
 - [x] 209. Moot: the owned-changes ledger belonged to the removed hunt worktree (archived with it, item 208)
 - [x] 210. Not taken to main: every robustness row it served is decided on main; the migration survives only in item
   208's archive
+- [x] 213. The `filters/` docstrings and comments (`filters/inputs.py` x3, `filters/base.py`, `filters/sets.py`) and the
+  `tests/filters/` docstrings that narrated an earlier implementation ("previously", "used to", "the old", "before the
+  fix", "pre-gate") state the invariant instead; 25 `test_c4_` / `test_r6_` names lose the review label
 
 ## Outside review of the fixes
 
@@ -550,9 +553,6 @@ tracker number are recorded there; open remainders and new defects are filed as 
   an eager annotation of a module without `from __future__ import annotations`: it raises `NameError` at import on 3.10-3.13
   while ruff (`TC004` covers imports only, `F821` sees a binding) and basedpyright pass; six package modules define such names
   (all quoted today); only the floor run of `tests/base/test_init.py` catches it
-- [ ] 213. `filters/inputs.py` docstrings carry process provenance START.md bans: `_require_list_container` ("The previous
-  arms SPLATTED ...") and the GlobalID list arm ("The previous implementation eagerly decoded ..."); restate each as the
-  invariant, and sweep the older filter tests for the same wording
 - [ ] 221. `auth/mutations.py::derive_register_fields` still dedups and intersects the consumer's `USERNAME_FIELD` /
   `REQUIRED_FIELDS` entries by their own `__hash__` / `__eq__`: an unhashable or raising entry escapes raw, and a `str`
   subclass whose `__eq__` is always False slips past the protected-field refusal (`('username', 'is_staff', 'password')`).

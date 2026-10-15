@@ -508,7 +508,7 @@ def test_excluded_empty_membership_matches_every_row_as_a_constraint(
 # and clears decode + strategy + type-name validation, but an empty identifier is
 # not a valid resource id: the shared ``_decode_and_validate_global_id`` boundary
 # raises ``GLOBALID_INVALID`` (naming the list index when present) so a client can
-# no longer widen a restrictive membership predicate by supplying ``type:``. An
+# never widen a restrictive membership predicate by supplying ``type:``. An
 # explicit ``[]`` (match-none) and a ``None`` value (omission) remain non-error
 # paths and are asserted separately.
 # ---------------------------------------------------------------------------
@@ -1083,7 +1083,7 @@ def test_filter_model_strategy_accepts_predecoded_global_id() -> None:
 
 
 def test_filter_model_strategy_rejects_type_name() -> None:
-    """Under `model`, the old bare GraphQL type name is rejected."""
+    """Under `model`, the bare GraphQL type name is rejected."""
     owner = _owner("model")
     f = _global_id_filter_with_owner("id", owner)
     encoded = relay.to_base64("OwnerType", "42")
@@ -1354,10 +1354,10 @@ def test_integer_in_filter_unbound_and_missing_model() -> None:
     # None (omission) passes through without crashing.
     assert f.filter(qs, None) is qs
 
-    # A non-list scalar is a CODED reject since the shape gate: a string
-    # used to iterate char-by-char through the coercion loop ("26"
+    # A non-list scalar is a CODED reject at the shape gate: iterated, a
+    # string would go char-by-char through the coercion loop ("26"
     # coercing to [2, 6] -- a wrong-result membership) and a bare int
-    # leaked ``TypeError: 'int' object is not iterable``.
+    # would leak ``TypeError: 'int' object is not iterable``.
     with pytest.raises(GraphQLError) as exc_info:
         f.filter(qs, "")
     assert exc_info.value.extensions == {"code": "FILTER_INVALID"}
@@ -1400,11 +1400,10 @@ def test_filters_base_edge_cases() -> None:
 def test_related_filter_get_queryset_mistyped_target_is_typed() -> None:
     """``RelatedFilter.get_queryset`` rejects a mis-typed target with the gate's typed error.
 
-    Replaces the pre-gate silent ``None`` propagation: a non-FilterSet
-    target made the fallback return ``None`` (its ``_meta`` read came back
-    empty), leaking a ``None`` queryset into django-filter's field build.
-    The gate rejects the mis-typed target at the ``.filterset`` read
-    instead.
+    Ungated, a non-FilterSet target would make the fallback return ``None``
+    (its ``_meta`` read comes back empty), leaking a ``None`` queryset into
+    django-filter's field build. The gate rejects the mis-typed target at the
+    ``.filterset`` read instead.
     """
 
     class _NoModelFilterSet:

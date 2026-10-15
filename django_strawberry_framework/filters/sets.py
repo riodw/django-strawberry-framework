@@ -305,10 +305,10 @@ def _strip_model_choice_extras(extra: Mapping[str, object]) -> dict[str, object]
 #      from stable importable django-filter filter CLASSES and PACKAGE-OWNED,
 #      module-level ``extra`` provider functions -- never read from the mutable
 #      global. It is installed as the public ``FilterSet.FILTER_DEFAULTS``. Being a
-#      plain, deepcopyable ``dict`` restores django-filter's inherited consumer
+#      plain, deepcopyable ``dict`` keeps django-filter's inherited consumer
 #      customization seam (``copy.deepcopy(cls.FILTER_DEFAULTS)`` /
-#      ``dict(cls.FILTER_DEFAULTS)`` / ``[cls][key] = ...``), which the previous
-#      nested-``MappingProxyType`` install broke on every Python version.
+#      ``dict(cls.FILTER_DEFAULTS)`` / ``[cls][key] = ...``), which a nested
+#      ``MappingProxyType`` would break on every Python version.
 #      django-filter reads ``FILTER_DEFAULTS`` only through
 #      ``dict(cls.FILTER_DEFAULTS)`` (a fresh shallow copy) plus entry ``.get`` and
 #      never mutates it (verified in the installed

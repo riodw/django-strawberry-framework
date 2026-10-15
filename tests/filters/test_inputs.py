@@ -774,8 +774,8 @@ def test_normalize_input_value_unwraps_enum_member() -> None:
 def test_normalize_input_value_unwraps_enum_member_with_none_value() -> None:
     """An enum member whose ``.value`` is ``None`` unwraps to ``None``.
 
-    The structural ``isinstance(value, enum.Enum)`` check unwraps it; the prior
-    value-truthiness guard returned the member object un-unwrapped instead.
+    The structural ``isinstance(value, enum.Enum)`` check unwraps it; a
+    value-truthiness guard would return the member object un-unwrapped instead.
     """
 
     class Tri(Enum):
@@ -1005,11 +1005,11 @@ def test_normalize_input_value_none_returns_none() -> None:
 def test_normalize_input_value_rejects_dict_on_csv_filter() -> None:
     """A mapping into a CSV filter fails loud instead of leaking its KEYS.
 
-    The ``in`` / ``range`` arms iterate ``raw_value`` element-by-element;
-    the pre-guard arms SPLATTED a mapping container into its keys -- a direct
-    ``apply_sync`` patch like ``{'start': 1, 'end': 5}`` on a ``__range`` CSV
-    leaf normalized to ``['start', 'end']``, silently swapping the caller's
-    values for the mapping's keys in the form-data dict. The shape is invalid
+    The ``in`` / ``range`` arms iterate ``raw_value`` element-by-element, so
+    a mapping container would splat into its keys -- a direct ``apply_sync``
+    patch like ``{'start': 1, 'end': 5}`` on a ``__range`` CSV leaf would
+    normalize to ``['start', 'end']``, silently swapping the caller's values
+    for the mapping's keys in the form-data dict. The shape is invalid
     (the schema declares these inputs as GraphQL lists), so the normalizer
     fails loud with the typed error instead of guessing an element source.
     """
@@ -1025,9 +1025,9 @@ def test_normalize_input_value_rejects_dict_on_csv_filter() -> None:
 def test_normalize_input_value_rejects_scalar_on_list_filter() -> None:
     """A scalar (string / int) into a list-consuming arm fails loud.
 
-    A ``str`` container previously iterated its CHARACTERS -- ``"abc"``
-    became ``['a', 'b', 'c']`` -- the same silent shape-coercion defect class
-    as the dict-keys leak, so the guard rejects every non-list container.
+    Iterating a ``str`` container would yield its CHARACTERS -- ``"abc"``
+    would become ``['a', 'b', 'c']`` -- the same silent shape coercion as the
+    dict-keys leak, so the guard rejects every non-list container.
     """
     with pytest.raises(ConfigurationError, match="non-list container"):
         normalize_input_value(ListFilter(), "abc")
@@ -1447,9 +1447,9 @@ def test_convert_filter_to_input_annotation_typed_filter_uses_model_scalar() -> 
 def test_filter_convert_and_normalize_ride_shared_kind_table() -> None:
     """Convert and normalize walk one most-specific-first filter-class table.
 
-    The two ladders used to be independent ``isinstance`` chains (spec-053 C3
-    drift hazard). Both now zip ``_FILTER_INPUT_KIND_TYPES`` into
-    ``convert_with_mro`` prechecks; ``object`` is last (the original ``else``).
+    Two independent ``isinstance`` chains could drift apart (spec-053 C3), so
+    both zip ``_FILTER_INPUT_KIND_TYPES`` into ``convert_with_mro`` prechecks;
+    ``object`` is last (the catch-all arm).
     """
     for fn in (inputs_mod.convert_filter_to_input_annotation, inputs_mod.normalize_input_value):
         assert "convert_with_mro" in fn.__code__.co_names
@@ -1882,15 +1882,15 @@ def test_range_input_type_name_is_scoped_per_filterset() -> None:
     r1 = _range_cls_of(bag1)
     r2 = _range_cls_of(bag2)
 
-    # Owning-filterset qualifier makes the two names distinct (pre-fix: both
-    # were ``PriceRangeInputType``).
+    # Owning-filterset qualifier makes the two names distinct (unqualified, both
+    # would be ``PriceRangeInputType``).
     assert r1.__name__ == "ScalarPriceFilterPriceRangeInputType"
     assert r2.__name__ == "TextPriceFilterPriceRangeInputType"
     assert r1.__name__ != r2.__name__
     assert r1.__annotations__["start"] != r2.__annotations__["start"]
 
     # Both nested range types survive when both operator bags land in one schema;
-    # pre-fix the name clash silently collapsed the two into a single input type
+    # a name clash would silently collapse the two into a single input type
     # (Strawberry keeps whichever it registers first and drops the other).
     @strawberry.type
     class Query:
@@ -2101,15 +2101,16 @@ def test_range_input_type_name_preserves_digit_boundary_in_field_name() -> None:
 def test_build_input_fields_keeps_underscore_edge_operator_bags_distinct() -> None:
     """``price`` / ``price_`` mint DISTINCT operator-bag GraphQL type names.
 
-    ``pascal_case`` used to drop leading / trailing underscore runs, so two
-    members whose names differ only at the edges collapsed to one type-name
-    stem even though BOTH emission guards passed (the Python attrs and the
-    camel GraphQL field names stay distinct for edge variants). The two bag
-    classes are embedded in annotations (not the spec-027 Decision 9 ledger),
-    so Strawberry silently kept whichever registered first and dropped the
-    other -- a ``CharFilter`` bag and a ``RangeFilter`` bag shared one wire
-    type and one member's lookups vanished from the schema. The stem now
-    preserves the edge runs (the Pascal dual of ``graphql_camel_name``).
+    A ``pascal_case`` that dropped leading / trailing underscore runs would
+    collapse two members whose names differ only at the edges to one
+    type-name stem even though BOTH emission guards pass (the Python attrs and
+    the camel GraphQL field names stay distinct for edge variants). The two
+    bag classes are embedded in annotations (not the spec-027 Decision 9
+    ledger), so Strawberry would silently keep whichever registered first and
+    drop the other -- a ``CharFilter`` bag and a ``RangeFilter`` bag would
+    share one wire type and one member's lookups would vanish from the schema.
+    The stem preserves the edge runs (the Pascal dual of
+    ``graphql_camel_name``).
     """
 
     class UnderscoreEdgeFilter(FilterSet):
@@ -2147,7 +2148,7 @@ def test_build_input_fields_keeps_underscore_edge_operator_bags_distinct() -> No
         "UnderscoreEdgeFilterPrice_FilterInputType",
     }
     # The range sub-input of the trailing-underscore member survives too
-    # (pre-fix the whole bag was silently dropped at registration).
+    # (a clashing bag would be silently dropped at registration).
     assert "UnderscoreEdgeFilterCityRangeInputType" in sdl
 
 

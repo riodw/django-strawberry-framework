@@ -25,7 +25,11 @@ field on a partial input, ``to_field_name`` reconstruction, ImageField
 reconstruction key absence, decode-helper envelopes, optimizer
 ``dst_optimizer_plan`` G2, and the save-time blank non-text choice column shapes
 fakeshop has no column for (omitted with no default, decimal / date, update
-``null``, a filling-in model ``save()``, an unrelated consumer ``ValueError``).
+``null``, a filling-in model ``save()``, an unrelated consumer ``ValueError``), and
+the keying of a save-time Django ``ValidationError`` by a name fakeshop's own
+``Item.save()`` rule never raises (a relation ``attname``, a name only the form
+declares, a dotted name): the ``ModelForm`` reads it against the backing model, the
+model-less plain form against its own form fields.
 """
 
 from __future__ import annotations
@@ -45,9 +49,10 @@ from apps.library import models as library_models
 from apps.products import models as product_models
 from apps.scalars import models as scalars_models
 from django import forms
-from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
+from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist, ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection, models
+from django.db.models.signals import pre_save
 from django.test.utils import CaptureQueriesContext
 from strawberry import relay
 from strawberry.types.base import get_object_definition
@@ -1033,6 +1038,206 @@ def test_required_extra_field_omitted_on_update_is_coercion_error() -> None:
     assert res.errors is not None
     assert "confirm" in str(res.errors[0]).lower()
     assert res.data is None
+
+
+# ---------------------------------------------------------------------------
+# save-time Django ValidationError keying: ModelForm (backing model) vs plain form (form)
+# ---------------------------------------------------------------------------
+
+_ITEM_SAVE_REFUSAL_DISPATCH_UID = "tests.forms.item_save_time_refusal"
+
+
+@contextlib.contextmanager
+def _item_save_refused(error_key: str) -> Generator[None, None, None]:
+    """Refuse every ``Item`` save inside the block with a Django error keyed ``error_key``."""
+
+    def _refuse(**_kwargs: object) -> None:
+        raise ValidationError({error_key: ValidationError("Refused at save.", code="refused")})
+
+    pre_save.connect(
+        _refuse,
+        sender=product_models.Item,
+        weak=False,
+        dispatch_uid=_ITEM_SAVE_REFUSAL_DISPATCH_UID,
+    )
+    try:
+        yield
+    finally:
+        _ = pre_save.disconnect(
+            sender=product_models.Item,
+            dispatch_uid=_ITEM_SAVE_REFUSAL_DISPATCH_UID,
+        )
+
+
+class ItemSubmitForm(forms.Form):
+    """A model-less form whose field names differ from the ``Item`` columns it writes."""
+
+    item_name = forms.CharField()
+    category = forms.ModelChoiceField(queryset=product_models.Category.objects.all())
+
+
+def _save_refusal_schema(flavor: str) -> tuple[strawberry.Schema, str, str, str]:
+    """Build the ``flavor`` mutation writing one ``Item``.
+
+    Returns the schema, the create query, the input name of the ``Item`` name and a
+    ``Category`` GlobalID.
+    """
+    if flavor == "modelform":
+        (
+            schema,
+            (
+                CategoryT,
+                _ItemT,
+                _C,
+                _U,
+            ),
+        ) = _build_item_form_schema()
+        query = (
+            "mutation($d: ItemModelFormInput!){ createItem(data:$d){ "
+            "node{ id } errors{ field messages codes path } } }"
+        )
+        name_input = "name"
+    else:
+        CategoryT = type(
+            "CategoryT",
+            (DjangoType, relay.Node),
+            {
+                "Meta": type(
+                    "Meta",
+                    (),
+                    {"model": product_models.Category, "fields": ("id", "name"), "primary": True},
+                ),
+            },
+        )
+
+        class SubmitItem(DjangoFormMutation):
+            class Meta:
+                form_class = ItemSubmitForm
+                permission_classes = [_AllowAll]
+
+            @override
+            def perform_mutate(
+                self,
+                form: forms.BaseForm,
+                info: strawberry.Info[object, object],
+            ) -> None:
+                _ = product_models.Item.objects.create(
+                    name=form.cleaned_data["item_name"],
+                    category=form.cleaned_data["category"],
+                )
+
+        @strawberry.type
+        class Mutation:
+            create_item = DjangoMutationField(SubmitItem)
+
+        finalize_django_types()
+        schema = _schema(Mutation)
+        query = (
+            "mutation($d: ItemSubmitFormInput!){ createItem(data:$d){ "
+            "ok errors{ field messages codes path } } }"
+        )
+        name_input = "itemName"
+    category = product_models.Category.objects.create(name=_uniq("Cat"))
+    return schema, query, name_input, global_id_for(CategoryT, category.pk)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    (
+        "flavor",
+        "error_key",
+        "field",
+        "path",
+    ),
+    [
+        pytest.param("modelform", "name", "name", ["name"], id="modelform-model-field"),
+        pytest.param(
+            "modelform",
+            "is_private",
+            "isPrivate",
+            ["isPrivate"],
+            id="modelform-multi-word",
+        ),
+        pytest.param(
+            "modelform",
+            "category",
+            "categoryId",
+            ["categoryId"],
+            id="modelform-relation",
+        ),
+        pytest.param(
+            "modelform",
+            "category_id",
+            "categoryId",
+            ["categoryId"],
+            id="modelform-relation-attname",
+        ),
+        pytest.param("modelform", "code", "code", ["code"], id="modelform-no-such-model-field"),
+        pytest.param(
+            "modelform",
+            "shelves.1.code",
+            "shelves.1.code",
+            ["shelves", "1", "code"],
+            id="modelform-dotted-name-verbatim",
+        ),
+        pytest.param("plain", "item_name", "itemName", ["itemName"], id="plain-form-field"),
+        pytest.param("plain", "category", "categoryId", ["categoryId"], id="plain-form-relation"),
+        pytest.param("plain", "name", "name", ["name"], id="plain-model-field-is-no-form-field"),
+        pytest.param(
+            "plain",
+            "category_id",
+            "category_id",
+            ["category_id"],
+            id="plain-attname-is-no-form-field",
+        ),
+        pytest.param(
+            "plain",
+            "shelves.1.code",
+            "shelves.1.code",
+            ["shelves", "1", "code"],
+            id="plain-dotted-name-verbatim",
+        ),
+    ],
+)
+def test_save_time_django_validation_error_keys_against_the_flavor_field_set(
+    flavor: str,
+    error_key: str,
+    field: str,
+    path: list[str],
+) -> None:
+    """A save-time Django error keys each name against the flavor's one field set.
+
+    A ``pre_save`` receiver refuses the ``Item`` write with one name. The ``ModelForm``
+    reads it as a field of the backing ``Item`` (``save_time_error_key_map``): the
+    relation keys to ``categoryId`` under its name and its ``attname``, and a name
+    ``Item`` lacks keeps it. The model-less ``DjangoFormMutation`` has no model and
+    reads it as a field of its form: ``item_name`` lands on ``itemName``, while the
+    ``Item`` columns ``name`` and ``category_id``, which name no form field, keep their
+    names. On both, a dotted name is kept verbatim (its ``path`` split at the dots),
+    never re-keyed. Nothing is written.
+    """
+    schema, query, name_input, category_gid = _save_refusal_schema(flavor)
+    with _item_save_refused(error_key):
+        res = schema.execute_sync(
+            query,
+            variable_values={"d": {name_input: "Refused", "categoryId": category_gid}},
+        )
+    assert res.errors is None, res.errors
+    failed_slot: dict[str, object] = {"node": None} if flavor == "modelform" else {"ok": False}
+    assert res.data == {
+        "createItem": {
+            **failed_slot,
+            "errors": [
+                {
+                    "field": field,
+                    "messages": ["Refused at save."],
+                    "codes": ["refused"],
+                    "path": path,
+                },
+            ],
+        },
+    }
+    assert not product_models.Item.objects.filter(name="Refused").exists()
 
 
 # ---------------------------------------------------------------------------

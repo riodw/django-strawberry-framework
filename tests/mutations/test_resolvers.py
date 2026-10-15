@@ -9,8 +9,11 @@ async-row leak isolation, Relay M2M hide on a second ``Genre`` primary
 live process), raw-pk M2M *update* (no shipped ``updateShelf``), unregistered
 primary existence-only decode, ``TaggedItem.object_id`` GFK indexing,
 relation-override visibility (no shipped override declares a relation field, so
-the composite is package-only), pipeline pk-drift, and ``ScalarSpecimen`` writes
-(the scalars app exposes no ``ScalarSpecimen`` mutation). Consumer-visible
+the composite is package-only), pipeline pk-drift, ``ScalarSpecimen`` writes
+(the scalars app exposes no ``ScalarSpecimen`` mutation), and the keying of a
+save-time Django ``ValidationError`` against the backing model through a renamed
+``Meta.input_class`` input, a relation ``attname`` and a dotted name (fakeshop's
+``Item.save()`` rule raises only ``name``). Consumer-visible
 create/update/delete, empty-name ``full_clean``, unresolvable relation ids, M2M
 replace/clear/omit, choice-enum unwrap, raw-pk create visibility, the
 ``PROTECT`` / ``RESTRICT`` refused delete and the ``blank=True, null=False`` FK
@@ -42,7 +45,7 @@ from django.core.exceptions import ValidationError
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, connection, transaction
 from django.db.models import Model, QuerySet
-from django.db.models.signals import m2m_changed
+from django.db.models.signals import m2m_changed, pre_save
 from django.utils import timezone
 from graphql_client import JSONObject
 from strawberry import relay
@@ -964,6 +967,98 @@ def test_m2m_assignment_validation_error_is_the_model_keyed_envelope(operation: 
         book.refresh_from_db()
         assert book.title == "Kept"
         assert through_pairs == {(book.pk, stored.pk)}
+
+
+_ITEM_SAVE_REFUSAL_DISPATCH_UID = "tests.mutations.item_save_time_refusal"
+
+
+@contextlib.contextmanager
+def _item_save_refused(error_key: str) -> Generator[None, None, None]:
+    """Refuse every ``Item`` save inside the block with a Django error keyed ``error_key``."""
+
+    def _refuse(**_kwargs: object) -> None:
+        raise DjangoValidationError(
+            {error_key: DjangoValidationError("Refused at save.", code="refused")},
+        )
+
+    pre_save.connect(
+        _refuse,
+        sender=product_models.Item,
+        weak=False,
+        dispatch_uid=_ITEM_SAVE_REFUSAL_DISPATCH_UID,
+    )
+    try:
+        yield
+    finally:
+        _ = pre_save.disconnect(
+            sender=product_models.Item,
+            dispatch_uid=_ITEM_SAVE_REFUSAL_DISPATCH_UID,
+        )
+
+
+@strawberry.input
+class _RenamedItemName:
+    """A ``Meta.input_class`` override exposing ``Item.name`` as ``itemName``."""
+
+    name: str = strawberry.field(name="itemName")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("error_key", "field", "path"),
+    [
+        pytest.param("name", "itemName", ["itemName"], id="renamed-input"),
+        pytest.param("category", "categoryId", ["categoryId"], id="relation-name"),
+        pytest.param("category_id", "categoryId", ["categoryId"], id="relation-attname"),
+        pytest.param("is_private", "isPrivate", ["isPrivate"], id="multi-word"),
+        pytest.param("code", "code", ["code"], id="no-such-model-field"),
+        pytest.param(
+            "shelves.1.code",
+            "shelves.1.code",
+            ["shelves", "1", "code"],
+            id="dotted-name-verbatim",
+        ),
+    ],
+)
+def test_save_time_django_validation_error_reads_its_names_as_model_fields(
+    error_key: str,
+    field: str,
+    path: list[str],
+) -> None:
+    """A save-time Django error keys each name as a field of the mutation's own model.
+
+    A ``pre_save`` receiver refuses the ``Item`` write with one name. The model
+    flavor reads it through ``_model_error_key_map``: the model field ``name`` lands
+    on the renamed root input ``itemName``, the relation under both its name and its
+    ``attname`` on ``categoryId``, ``is_private`` on ``isPrivate``. ``code``, which
+    ``Item`` lacks, keeps its name, and a dotted name is kept verbatim (its ``path``
+    split at the dots), never re-keyed. Nothing is written.
+    """
+    schema, (CategoryT, _ItemT) = _build_item_schema(input_cls=_RenamedItemName)
+    category = product_models.Category.objects.create(name=_category_name())
+    with _item_save_refused(error_key):
+        res = schema.execute_sync(
+            "mutation($d: ItemInput!){ createItem(data:$d){ "
+            "node{ id } errors{ field messages codes path } } }",
+            variable_values={
+                "d": {"itemName": "Refused", "categoryId": global_id_for(CategoryT, category.pk)},
+            },
+        )
+    assert res.errors is None, res.errors
+    assert res.data == {
+        "createItem": {
+            "node": None,
+            "errors": [
+                {
+                    "field": field,
+                    "messages": ["Refused at save."],
+                    "codes": ["refused"],
+                    "path": path,
+                },
+            ],
+        },
+    }
+    assert not product_models.Item.objects.filter(name="Refused").exists()
 
 
 # ---------------------------------------------------------------------------

@@ -456,8 +456,9 @@ def save_time_error_key_map(
     belong to, so every name it carries is read as a field of the backing model:
     an error the save-time code raises about another row (a nested serializer
     item, a related object a signal receiver validates) lands on the input that
-    backs a same-named field of this model, else keeps its name, and never on a
-    nested path. A nested item fails at save time through a DRF
+    backs a same-named field of this model, else keeps its name; no name is
+    re-keyed onto a nested path (a name written as a dotted path matches no
+    entry and is kept verbatim). A nested item fails at save time through a DRF
     ``serializers.ValidationError`` in the nested shape (``{"shelves": [{},
     {"code": [...]}]}``), which the serializer flattener keys to the item's path
     (``shelves.1.code``).

@@ -1407,8 +1407,10 @@ def save_or_field_errors(
       name map, built only on this failure path (``None`` keys every name
       verbatim). The mapper never raises on a key the map lacks: it keeps the
       validator-side name. A Django error names no model or nested item, so
-      every name reads as a field of the mutation's own model, the one model
-      the map is built from (``utils/errors.py::save_time_error_key_map``).
+      each map reads every name one level, against one field set: the backing
+      model's on a model-backed flavor (``_model_error_key_map``,
+      ``utils/errors.py::save_time_error_key_map``), the form's on the
+      model-less plain form (``build_error_key_map`` over its specs).
 
     Neither is a top-level ``GraphQLError`` at the write. The skeleton's error
     envelope marks the pipeline's ``transaction.atomic()`` for rollback, so a

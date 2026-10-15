@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 90 done, 150 to do.
+Progress: 91 done, 149 to do.
 
 ## Done
 
@@ -293,6 +293,10 @@ Progress: 90 done, 150 to do.
 - [x] 213. The `filters/` docstrings and comments (`filters/inputs.py` x3, `filters/base.py`, `filters/sets.py`) and the
   `tests/filters/` docstrings that narrated an earlier implementation ("previously", "used to", "the old", "before the
   fix", "pre-gate") state the invariant instead; 25 `test_c4_` / `test_r6_` names lose the review label
+- [x] 221. `derive_register_fields` reads `USERNAME_FIELD` and every `REQUIRED_FIELDS` entry as plain text (real-type
+  `str` gate, base-slot read and iteration), so no consumer dunder decides the dedup or the protected refusal and the
+  derived tuple holds base `str` only; a `REQUIRED_FIELDS` that is not a list or tuple (Django's `auth.E001`) or a
+  non-string entry raises `ConfigurationError` naming the model; spec-040 Decision 6 and Test plan say so
 
 ## Outside review of the fixes
 
@@ -553,10 +557,6 @@ tracker number are recorded there; open remainders and new defects are filed as 
   an eager annotation of a module without `from __future__ import annotations`: it raises `NameError` at import on 3.10-3.13
   while ruff (`TC004` covers imports only, `F821` sees a binding) and basedpyright pass; six package modules define such names
   (all quoted today); only the floor run of `tests/base/test_init.py` catches it
-- [ ] 221. `auth/mutations.py::derive_register_fields` still dedups and intersects the consumer's `USERNAME_FIELD` /
-  `REQUIRED_FIELDS` entries by their own `__hash__` / `__eq__`: an unhashable or raising entry escapes raw, and a `str`
-  subclass whose `__eq__` is always False slips past the protected-field refusal (`('username', 'is_staff', 'password')`).
-  Reading each entry through its base `str` slot at the read closes both but returns base `str` names
 - [ ] 222. Class membership by equality outside the mutation ledgers: `registry.py::TypeRegistry.register`
   (`type_cls in existing_types`) and `filters/sets.py` (`if cls in path`) dispatch a metaclass `__eq__`; check each against
   the identity contract its store records under
@@ -756,7 +756,9 @@ tracker number are recorded there; open remainders and new defects are filed as 
   returns, `Meta` values, set `Meta.fields`, input and policy helpers whose `__class__` raises or claims a type now raise
   the typed error instead of a raw `RuntimeError` / `TypeError`; `Meta.name` / `Meta.description`, a string-helper input
   and a `SESSION_ENGINE` that is a lazy proxy of a `str` are typed rejections; a lazy proxy of a class as a field target
-  now reads "requires a DjangoType class")
+  now reads "requires a DjangoType class") and 221 (`register_mutation()` refuses a protected field declared as a `str`
+  subclass whatever its `__eq__`, and a `REQUIRED_FIELDS` that is not a list or tuple or holds a non-string entry, with a
+  `ConfigurationError` naming the model instead of a raw `TypeError` / consumer exception)
 - [ ] 197. The per-parent visibility paths (`types/resolvers.py::_visible_many_rows`, `_visible_related_object`, relation
   connections, `resolver=`) never narrow the hook's result to the source's rows, so a hook that ignores its input shows other
   parents' rows or the wrong to-one object. Decide the contract (narrow at the five seams, with a live row for an

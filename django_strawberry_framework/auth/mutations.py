@@ -73,6 +73,13 @@ from django_strawberry_framework.mutations.sets import (
 )
 from django_strawberry_framework.registry import register_subsystem_clear, registry
 from django_strawberry_framework.resource_policy import check_deadline
+from django_strawberry_framework.utils._narrowing import (
+    is_list,
+    is_str,
+    is_tuple,
+    list_iter,
+    tuple_iter,
+)
 from django_strawberry_framework.utils.directives import validated_field_directives
 from django_strawberry_framework.utils.errors import (
     FIELD_ERROR_CODE_INVALID,
@@ -1191,40 +1198,62 @@ def derive_register_fields(user_model: type[AbstractBaseUser]) -> tuple[str, ...
     ``get_user_model()`` inline - so both the default and a
     custom-``USERNAME_FIELD`` / custom-``REQUIRED_FIELDS`` model are directly
     testable with a test-scoped model (no ``AUTH_USER_MODEL`` swap). A
-    non-string ``USERNAME_FIELD`` raises a ``ConfigurationError`` naming the
-    model before any name is validated. Unknown / non-editable / reverse names
-    are rejected by DELEGATING to the standard
-    ``editable_input_fields`` validation (which already raises a
-    ``ConfigurationError`` naming field + model), never a re-implemented check.
-    Known account-control fields (``is_active`` / ``is_staff`` /
-    ``is_superuser`` / ``groups`` / ``user_permissions``) are rejected if a
-    custom model places them in ``USERNAME_FIELD`` or ``REQUIRED_FIELDS``. This
-    keeps privilege and activation state server-owned instead of silently
-    turning an unusual user-model declaration into public registration input.
+    ``USERNAME_FIELD`` that is not a string, a ``REQUIRED_FIELDS`` that is not a
+    list or tuple (Django's own ``auth.E001`` rule), or a ``REQUIRED_FIELDS`` entry
+    that is not a string raises a ``ConfigurationError`` naming the model before
+    any name is validated. Every name is read as plain text through the base
+    ``str`` slot, so a ``str`` subclass's ``__eq__`` / ``__hash__`` / ``__repr__``
+    / ``__lt__`` never decides the dedup, the protected check or the returned
+    tuple, which holds plain ``str`` names only. Unknown / non-editable / reverse
+    names are rejected by DELEGATING to the standard ``editable_input_fields``
+    validation (which already raises a ``ConfigurationError`` naming field +
+    model), never a re-implemented check. Known account-control fields
+    (``is_active`` / ``is_staff`` / ``is_superuser`` / ``groups`` /
+    ``user_permissions``) are rejected if a custom model places them in
+    ``USERNAME_FIELD`` or ``REQUIRED_FIELDS``. This keeps privilege and
+    activation state server-owned instead of silently turning an unusual
+    user-model declaration into public registration input.
     """
-    # Django reads ``USERNAME_FIELD`` as a field name but never checks its type when the
-    # model class is built, and django-stubs declares it only on ``AbstractUser`` (its
-    # ``ModelBase.__getattr__`` admits only ``objects``), so the attribute is read by
-    # name and the value is an ``object`` until the check below proves it a ``str``.
+    model_name = user_model.__name__
+    # Django reads ``USERNAME_FIELD`` / ``REQUIRED_FIELDS`` as field names but never checks
+    # their types when the model class is built, and django-stubs declares them only on
+    # ``AbstractUser`` / ``AbstractBaseUser`` (its ``ModelBase.__getattr__`` admits only
+    # ``objects``), so both are read by name and each value is an ``object`` until the
+    # checks below prove its type. Each check asks the value's real type, which a
+    # ``__class__`` property cannot restate, and iteration runs through the base
+    # ``list`` / ``tuple`` slot, which a subclass's ``__iter__`` cannot replace.
     username_field: object = getattr(user_model, "USERNAME_FIELD")  # noqa: B009
-    if not isinstance(username_field, str):
+    if not is_str(username_field):
         raise ConfigurationError(
-            f"register_mutation() needs {user_model.__name__}.USERNAME_FIELD to be a field "
+            f"register_mutation() needs {model_name}.USERNAME_FIELD to be a field "
             f"name string; got {_safe_arg_repr(username_field)}.",
         )
-    names = [username_field, *user_model.REQUIRED_FIELDS, "password"]
+    required_fields: object = getattr(user_model, "REQUIRED_FIELDS")  # noqa: B009
+    if issubclass(type(required_fields), list) and is_list(required_fields):
+        entries = list_iter(required_fields)
+    elif issubclass(type(required_fields), tuple) and is_tuple(required_fields):
+        entries = tuple_iter(required_fields)
+    else:
+        raise ConfigurationError(
+            f"register_mutation() needs {model_name}.REQUIRED_FIELDS to be a list or "
+            f"tuple; got {_safe_arg_repr(required_fields)}.",
+        )
+    names = [_safe_text(username_field)]
+    for entry in entries:
+        if not is_str(entry):
+            raise ConfigurationError(
+                f"register_mutation() needs every {model_name}.REQUIRED_FIELDS entry to be "
+                f"a field name string; got {_safe_arg_repr(entry)}.",
+            )
+        names.append(_safe_text(entry))
+    names.append("password")
     deduped = tuple(dict.fromkeys(names))
-    # A matched entry is the consumer's own value, possibly a ``str`` subclass (an enum
-    # member, say) whose ``__repr__`` / ``__lt__`` would otherwise run while the reject is
-    # sorted and rendered; read through the base ``str`` slot, each entry names its field
-    # by value and sorts as plain text.
-    protected = sorted(
-        _safe_text(name) for name in _REGISTER_PROTECTED_FIELDS.intersection(deduped)
-    )
+    # Every name is a plain ``str``, so the matched entries sort and render as plain text.
+    protected = sorted(_REGISTER_PROTECTED_FIELDS.intersection(deduped))
     if protected:
         raise ConfigurationError(
             f"register_mutation() cannot auto-expose protected user field(s) {protected!r} "
-            f"derived from {user_model.__name__}.USERNAME_FIELD / REQUIRED_FIELDS; remove "
+            f"derived from {model_name}.USERNAME_FIELD / REQUIRED_FIELDS; remove "
             "those fields from the automatic registration surface and initialize account "
             "privileges and activation state in server-owned registration logic.",
         )

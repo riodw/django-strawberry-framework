@@ -1023,9 +1023,12 @@ to `Register`** with:
   `get_user_model()` inline — and the rule is exact: `USERNAME_FIELD` first, then
   each distinct `REQUIRED_FIELDS` entry in declaration order, then `password`
   exactly once, deduplicated (an entry repeating `USERNAME_FIELD` or `password`
-  appears once). A non-string `USERNAME_FIELD` raises a
+  appears once). A non-string `USERNAME_FIELD`, a `REQUIRED_FIELDS` that is not a
+  list or tuple, or a non-string `REQUIRED_FIELDS` entry raises a
   [`ConfigurationError`][glossary-configurationerror] naming the model before any
-  name is validated. Unknown / non-editable / reverse names are rejected as a
+  name is validated. Every name is read as plain text, so a `str` subclass's own
+  dunders never decide the dedup or the protected check and the derived tuple holds
+  base `str` only. Unknown / non-editable / reverse names are rejected as a
   declaration-time [`ConfigurationError`][glossary-configurationerror] naming field +
   model by **delegating to the standard `editable_input_fields` validation**
   ([`mutations/inputs.py`][mutations-inputs] — which already raises naming field +
@@ -2195,8 +2198,12 @@ schemas (below).
   custom-`USERNAME_FIELD` / custom-`REQUIRED_FIELDS` model (a test-scoped model
   passed as the argument — no second Django project, no `AUTH_USER_MODEL` swap;
   fakeshop pins the default `auth.User`), including the protected-field raise, the
-  unknown / non-editable rejection delegating to `editable_input_fields`, and the
-  non-string `USERNAME_FIELD` raise; the protected-field raise reaching the consumer
+  unknown / non-editable rejection delegating to `editable_input_fields`, the
+  non-string `USERNAME_FIELD` raise, the malformed-declaration rows (a
+  `REQUIRED_FIELDS` that is not a list or tuple, a non-string entry), and the
+  plain-text rows (`str`-subclass names derive a base-`str` tuple deduplicated by
+  value, and a list / tuple subclass is read through the base iteration slot); the
+  protected-field raise reaching the consumer
   through `register_mutation()` itself at declaration time; the exclusion-seam helper
   test — `password`'s value captured out of the constructed attrs **while its
   provided-marker is preserved**, and the no-exclusion decode keeping its three-tuple;

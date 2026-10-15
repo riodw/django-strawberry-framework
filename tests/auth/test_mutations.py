@@ -1236,13 +1236,15 @@ _PROTECTED_FIELD_REJECT = (
 
 
 def _privilege_required_user(
-    username_field: str = "username",
-    required_fields: Iterable[str] = ("is_staff",),
+    username_field: object = "username",
+    required_fields: object = ("is_staff",),
 ) -> type[AbstractBaseUser]:
     """Return a freshly declared user model whose ``REQUIRED_FIELDS`` exposes ``is_staff``.
 
-    ``username_field`` / ``required_fields`` replace the two declarations, so a
-    caller can declare a protected name as a ``str`` subclass. A factory rather
+    ``username_field`` / ``required_fields`` replace the two declarations verbatim,
+    so a caller can declare a name as a ``str`` subclass, an entry that is no
+    string, or a ``REQUIRED_FIELDS`` that is no list or tuple; ``email`` is the
+    ordinary editable column such a declaration names. A factory rather
     than one shared class: each call needs its own ``_unique_app_label()`` so
     Django's app registry does not warn about a re-registered model, and the class
     name is load-bearing - ``_PROTECTED_FIELD_REJECT`` matches on it.
@@ -1254,10 +1256,12 @@ def _privilege_required_user(
 
     class PrivilegeRequiredUser(AbstractBaseUser):
         username: _Char = djmodels.CharField(max_length=150)
+        email: _Email = djmodels.EmailField(blank=True)
         is_staff: _Bool = djmodels.BooleanField(default=False)
 
         USERNAME_FIELD = username_field
-        REQUIRED_FIELDS = list(required_fields)
+        # basedpyright: the declaration under test may be malformed; django-stubs types it list[str]
+        REQUIRED_FIELDS = required_fields  # pyright: ignore[reportAssignmentType]
 
         class Meta(AbstractBaseUser.Meta):
             app_label = _unique_app_label()
@@ -1327,6 +1331,127 @@ class _UserField(str, Enum):
     IS_STAFF = "is_staff"
 
 
+class _NeverEqualName(str):
+    """A field name equal to nothing, itself included; read as text it still names its field."""
+
+    __slots__ = ()
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        return False
+
+    __hash__ = str.__hash__
+
+
+class _AlwaysEqualName(str):
+    """A field name that claims equality with every value and hashes to a constant."""
+
+    __slots__ = ()
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    @override
+    def __hash__(self) -> int:
+        return 1
+
+
+class _HashRaisingName(str):
+    """A field name whose hash raises."""
+
+    __slots__ = ()
+
+    @override
+    def __hash__(self) -> int:
+        raise RuntimeError("hash boom")
+
+
+class _EqRaisingName(str):
+    """A field name whose equality raises."""
+
+    __slots__ = ()
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        raise RuntimeError("eq boom")
+
+    __hash__ = str.__hash__
+
+
+class _ClaimsStr:
+    """A non-string whose ``__class__`` claims ``str``; only its real type tells it apart."""
+
+    __slots__ = ()
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
+    def __class__(self) -> type[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
+        return str
+
+    @override
+    def __repr__(self) -> str:
+        return "<claims str>"
+
+
+class _ClaimsList:
+    """A non-list whose ``__class__`` claims ``list``; only its real type tells it apart."""
+
+    __slots__ = ()
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
+    def __class__(self) -> type[list[str]]:  # pyright: ignore[reportIncompatibleMethodOverride]
+        return list
+
+    @override
+    def __repr__(self) -> str:
+        return "<claims list>"
+
+
+class _ClassRaising:
+    """A value whose ``__class__`` read raises; only its real type answers without running it.
+
+    Declared as a ``REQUIRED_FIELDS`` entry: Django's model metaclass reads the
+    ``__class__`` of every class attribute itself, so the model declaration refuses
+    one as ``USERNAME_FIELD`` / ``REQUIRED_FIELDS`` before any package code runs.
+    """
+
+    __slots__ = ()
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__`` that raises, the guard's hostile input
+    def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
+        raise RuntimeError("hostile __class__ boom")
+
+    @override
+    def __repr__(self) -> str:
+        return "<class raises>"
+
+
+class _IterRaisingList(list[str]):
+    """A ``list`` of field names whose own ``__iter__`` raises."""
+
+    __slots__ = ()
+
+    @override
+    def __iter__(self) -> Iterator[str]:
+        raise RuntimeError("iter boom")
+
+
+class _IterRaisingTuple(tuple[str, ...]):
+    """A ``tuple`` of field names whose own ``__iter__`` raises."""
+
+    __slots__ = ()
+
+    @override
+    def __iter__(self) -> Iterator[str]:
+        raise RuntimeError("iter boom")
+
+
 @pytest.mark.parametrize(
     ("username_field", "required_fields", "named"),
     [
@@ -1338,12 +1463,16 @@ class _UserField(str, Enum):
             "['is_staff', 'is_superuser']",
         ),
         ("username", [_UserField.IS_STAFF], "['is_staff']"),
+        ("username", [_NeverEqualName("is_staff")], "['is_staff']"),
+        (_NeverEqualName("is_superuser"), [], "['is_superuser']"),
     ],
     ids=[
         "repr-raises-required",
         "repr-raises-username",
         "order-raises",
         "str-enum",
+        "never-equal-required",
+        "never-equal-username",
     ],
 )
 def test_derive_register_fields_names_a_protected_str_subclass_by_value(
@@ -1361,6 +1490,152 @@ def test_derive_register_fields_names_a_protected_str_subclass_by_value(
         "those fields from the automatic registration surface and initialize account "
         "privileges and activation state in server-owned registration logic."
     )
+
+
+@pytest.mark.parametrize(
+    ("username_field", "required_fields", "derived"),
+    [
+        ("username", [_NeverEqualName("email")], ("username", "email", "password")),
+        ("username", [_NeverEqualName("username")], ("username", "password")),
+        (_NeverEqualName("username"), ["username"], ("username", "password")),
+        ("username", [_AlwaysEqualName("email")], ("username", "email", "password")),
+        ("username", [_HashRaisingName("email")], ("username", "email", "password")),
+        ("username", [_EqRaisingName("username")], ("username", "password")),
+        ("username", _IterRaisingList(["email"]), ("username", "email", "password")),
+        ("username", _IterRaisingTuple(("email",)), ("username", "email", "password")),
+    ],
+    ids=[
+        "never-equal",
+        "never-equal-repeats-username",
+        "never-equal-username",
+        "always-equal",
+        "hash-raises",
+        "eq-raises-repeats-username",
+        "list-iter-raises",
+        "tuple-iter-raises",
+    ],
+)
+def test_derive_register_fields_reads_str_subclass_names_as_plain_text(
+    username_field: str,
+    required_fields: object,
+    derived: tuple[str, ...],
+) -> None:
+    """Names declared as ``str`` subclasses derive the plain-text tuple, deduplicated by value.
+
+    The entry's own ``__eq__`` / ``__hash__`` never decides the dedup or reaches the
+    returned tuple, and a ``list`` / ``tuple`` subclass's own ``__iter__`` never decides
+    which entries are read.
+    """
+    model = _privilege_required_user(username_field, required_fields)
+    result = derive_register_fields(model)
+    assert result == derived
+    assert [type(name) for name in result] == [str] * len(derived)
+
+
+@pytest.mark.parametrize(
+    ("username_field", "required_fields", "message"),
+    [
+        (
+            _ClaimsStr(),
+            [],
+            (
+                "register_mutation() needs PrivilegeRequiredUser.USERNAME_FIELD to be a field "
+                "name string; got <claims str>."
+            ),
+        ),
+        (
+            "username",
+            [["email"]],
+            (
+                "register_mutation() needs every PrivilegeRequiredUser.REQUIRED_FIELDS entry to "
+                "be a field name string; got ['email']."
+            ),
+        ),
+        (
+            "username",
+            ["email", 3],
+            (
+                "register_mutation() needs every PrivilegeRequiredUser.REQUIRED_FIELDS entry to "
+                "be a field name string; got 3."
+            ),
+        ),
+        (
+            "username",
+            [_ClaimsStr()],
+            (
+                "register_mutation() needs every PrivilegeRequiredUser.REQUIRED_FIELDS entry to "
+                "be a field name string; got <claims str>."
+            ),
+        ),
+        (
+            "username",
+            [_ClassRaising()],
+            (
+                "register_mutation() needs every PrivilegeRequiredUser.REQUIRED_FIELDS entry to "
+                "be a field name string; got <class raises>."
+            ),
+        ),
+        (
+            "username",
+            "email",
+            (
+                "register_mutation() needs PrivilegeRequiredUser.REQUIRED_FIELDS to be a list or "
+                "tuple; got 'email'."
+            ),
+        ),
+        (
+            "username",
+            None,
+            (
+                "register_mutation() needs PrivilegeRequiredUser.REQUIRED_FIELDS to be a list or "
+                "tuple; got None."
+            ),
+        ),
+        (
+            "username",
+            {"email"},
+            (
+                "register_mutation() needs PrivilegeRequiredUser.REQUIRED_FIELDS to be a list or "
+                "tuple; got {'email'}."
+            ),
+        ),
+        (
+            "username",
+            _ClaimsList(),
+            (
+                "register_mutation() needs PrivilegeRequiredUser.REQUIRED_FIELDS to be a list or "
+                "tuple; got <claims list>."
+            ),
+        ),
+    ],
+    ids=[
+        "username-claims-str",
+        "unhashable-entry",
+        "int-entry",
+        "entry-claims-str",
+        "entry-class-raises",
+        "required-is-str",
+        "required-is-none",
+        "required-is-set",
+        "required-claims-list",
+    ],
+)
+def test_derive_register_fields_rejects_a_malformed_declaration(
+    username_field: object,
+    required_fields: object,
+    message: str,
+) -> None:
+    """A non-string name or a ``REQUIRED_FIELDS`` that is no list or tuple is refused, typed.
+
+    Django checks neither type when the model class is built (its ``auth.E001``
+    system check requires a list or tuple), so the reject names the model and the
+    offending value before any name is validated; each type is asked of the value's
+    real type, which a ``__class__`` property cannot restate.
+    """
+    model = _privilege_required_user(username_field, required_fields)
+    with pytest.raises(ConfigurationError) as exc:
+        derive_register_fields(model)
+    assert str(exc.value) == message
 
 
 def test_register_mutation_rejects_a_protected_required_field_at_the_factory_call(

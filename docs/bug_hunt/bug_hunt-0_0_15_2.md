@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 70 done, 151 to do.
+Progress: 71 done, 151 to do.
 
 ## Done
 
@@ -67,6 +67,13 @@ Progress: 70 done, 151 to do.
   field; `DjangoMutationField` checked ledger membership by equality, so a drained class equal to its redeclaration built a
   schema whose requests failed. Both fixed (`b4d6e06a`). The raw `__name__` labels, the protocol probe and the Payload
   name need no code: no contract row, and the name question is item 26's
+- [x] 18. `optimizer/` robustness rows (not defects: application Python and settings values, no wire input). A
+  `prefetch_obj` whose `__class__` raised escaped `_require_prefetch` raw; a strategy selection or `strictness=` value whose
+  `__class__` raised or claimed `str` (and a lazy proxy of a name) escaped `resolve_strategy` / `_is_valid_strictness` raw on
+  every route, the `NESTED_CONNECTION_STRATEGY` setting included, against their docstrings' typed-error promises. The
+  Prefetch test is now a guarded `isinstance` (subclasses and proxies still pass); the str and class tests ask the real
+  type (`utils/_narrowing.py::is_str`, `is_class`) (`f788edcf`). `unwindowable_child_queryset_reason` needs no code: no
+  contract row, Django-private input
 - [x] 28. Deep dive 3 (authorization on deferred paths): findings 12 and 13 done; `VenueBadgeType` and `VenueSponsorType` now
   hide marked rows, and live rows prove none leaks through the no-`related_name` reverse accessors (`16a8c179`)
 - [x] 50. A SKIP hint (and a consumer-assigned relation, and the nested-connection SKIP arm) left the relation's key column out of
@@ -231,11 +238,10 @@ tracker number are recorded there; open remainders and new defects are filed as 
 
 ## To do: t3 robustness rows
 
-33 low-priority rows across items 18-25 plus item 27's unfiled leads (the rows behind items 15-17 are done and item
+31 low-priority rows across items 19-25 plus item 27's unfiled leads (the rows behind items 15-18 are done and item
 26's moved to "Waiting on you"), mostly guards against classes with broken `__name__` / `__eq__` / metaclasses.
 Expected outcome: most are not real bugs and just get deleted from t3. One checkbox per area:
 
-- [ ] 18. `optimizer/` (2 rows)
 - [ ] 19. `rest_framework/` (2 rows)
 - [ ] 20. Filter and order sets (8 rows)
 - [ ] 21. `routers.py`, `list_field.py` (2 rows)
@@ -482,6 +488,10 @@ Expected outcome: most are not real bugs and just get deleted from t3. One check
 - [ ] 222. Class membership by equality outside the mutation ledgers: `registry.py::TypeRegistry.register`
   (`type_cls in existing_types`) and `filters/sets.py` (`if cls in path`) dispatch a metaclass `__eq__`; check each against
   the identity contract its store records under
+- [ ] 224. `DjangoOptimizerExtension(strictness=)` accepts a `str` subclass by content but stores the value itself, so
+  `extension.py` (`self.strictness != "off"`) and `types/resolvers.py` (`strictness == "raise"` / `"warn"`) dispatch the
+  consumer's `__eq__` on every request; storing the matched vocabulary constant (as `resolve_strategy` returns registry
+  instances) closes it
 
 ## To do: holes found re-checking the fixes
 
@@ -621,7 +631,9 @@ Expected outcome: most are not real bugs and just get deleted from t3. One check
   `ConfigurationError` instead of filtering nothing), 16 (a form field basis value whose `__class__` raises is reported
   as an invalid field in `ConfigurationError`) and 17 (`register_mutation()` names a protected field declared as a `str`
   subclass by its value; `DjangoMutationField` refuses a class drained by `registry.clear()` even when it compares equal
-  to its redeclaration)
+  to its redeclaration) and 18 (`OptimizerHint` prefetch and strategy values, `nested_connection_strategy=`,
+  `NESTED_CONNECTION_STRATEGY` and `strictness=` values whose `__class__` raises or claims `str`, and lazy proxies of a
+  strategy or strictness name, raise the typed error instead of a raw `RuntimeError` / `TypeError`)
 - [ ] 197. The per-parent visibility paths (`types/resolvers.py::_visible_many_rows`, `_visible_related_object`, relation
   connections, `resolver=`) never narrow the hook's result to the source's rows, so a hook that ignores its input shows other
   parents' rows or the wrong to-one object. Decide the contract (narrow at the five seams, with a live row for an
@@ -670,7 +682,7 @@ Expected outcome: most are not real bugs and just get deleted from t3. One check
   `filters/inputs.py` and the two-lookup raise are behaviour changes filed as robustness; eight items from the hunt's
   test-run notes were never folded back
 - [ ] 210. The truthful-reads migration and its fixes sit uncommitted in the hunt worktree; decide whether it and the
-  remaining robustness rows (items 18-25, 27) go to main
+  remaining robustness rows (items 19-25, 27) go to main
 - [ ] 211. A repo-wide `ruff check --fix .` / `ruff format .` rewrote 30 untracked `.py` files of hunt evidence (11 in the
   sealed deep-3 directory) with no copy kept; evidence trees need excluding from ruff, or AGENTS rule 17 needs explicit paths
 

@@ -29,6 +29,7 @@ model's ``unique_shelf_code_per_branch`` constraint surfaces through DRF's
 import json
 from typing import Any, NoReturn, TypeAlias
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Model
 from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
@@ -712,6 +713,12 @@ class BranchWithShelvesSerializer(serializers.ModelSerializer[Branch]):
     ``shelves`` (visibility-checking each nested ``alt_branches`` pk, flattening nested validation
     errors to structured paths) but NEVER auto-saves the nested relation. ``name`` is unique;
     ``city`` is optional (``blank=True``).
+
+    ``create()`` checks each shelf's ``unique_shelf_code_per_branch`` constraint against the
+    shelves it already wrote and fails the offending item with a DRF ``ValidationError`` in the
+    nested shape, so the error keys to that item's ``shelves.<i>.code`` path. A Django
+    ``ValidationError`` names no nested item, so raised as is it would be read as naming ``Branch``
+    fields.
     """
 
     shelves = NestedShelfSerializer(many=True)
@@ -728,9 +735,19 @@ class BranchWithShelvesSerializer(serializers.ModelSerializer[Branch]):
         # resolved Branch instances), and this create() persists the branch + each shelf.
         shelves_data = validated_data.pop("shelves", [])
         branch = Branch.objects.create(**validated_data)
-        for shelf_data in shelves_data:
+        for index, shelf_data in enumerate(shelves_data):
             alt_branches = shelf_data.pop("alt_branches", [])
-            shelf = Shelf.objects.create(branch=branch, **shelf_data)
+            shelf = Shelf(branch=branch, **shelf_data)
+            try:
+                shelf.validate_constraints()
+            except DjangoValidationError as exc:
+                # ``unique_shelf_code_per_branch`` is Shelf's only constraint, so every message
+                # belongs to ``code``. The leading ``{}`` entries mark the earlier items valid,
+                # as DRF's own nested errors do; the flattener emits nothing for them.
+                item_errors: list[dict[str, list[str]]] = [{} for _ in range(index)]
+                item_errors.append({"code": exc.messages})
+                raise serializers.ValidationError({"shelves": item_errors}) from exc
+            shelf.save()
             if alt_branches:
                 shelf.alt_branches.set(alt_branches)
         return branch

@@ -380,9 +380,12 @@ def build_error_key_map(
     ``categoryId``); ``save_time_error_key_map`` (the ``ModelForm`` and
     serializer save-time Django ``ValidationError``) passes the same names for
     the model field behind ``spec.source or spec.target_name``.
-    A nested field's ``child_map`` is the same map built over its
-    ``nested_specs`` with the same ``keys_of``, so a nested error re-keys at
-    every depth; every other field's is ``None``.
+    Without ``keys_of``, a nested field's ``child_map`` is the same map built over
+    its ``nested_specs``, so a nested serializer error re-keys at every depth.
+    With ``keys_of``, the map is one level: ``keys_of`` reads one model's field
+    names, and a nested level writes another model, so a nested field's
+    ``child_map`` is ``None`` (the Django ``ValidationError`` such a map keys
+    carries no nesting level to descend by). Every non-nested field's is ``None``.
 
     Primary names win: every spec's primary name is entered first, and an alias
     only fills a name no primary claimed. Two specs can share names only through
@@ -397,8 +400,8 @@ def build_error_key_map(
     entries: list[tuple[tuple[str, ...], tuple[str, ErrorKeyMap | None]]] = []
     for spec in specs:
         child = (
-            build_error_key_map(spec.nested_specs, keys_of=keys_of)
-            if spec.nested_specs is not None
+            build_error_key_map(spec.nested_specs)
+            if spec.nested_specs is not None and keys_of is None
             else None
         )
         names = keys_of(spec) if keys_of is not None else (spec.target_name,)
@@ -447,6 +450,17 @@ def save_time_error_key_map(
     PrimaryKeyRelatedField(source="category")`` keys both ``category`` and
     ``category_id`` to ``categoryRefId``. A model field no input exposes keeps its
     name. Built only on the failure path.
+
+    The map is one level, read against the backing model only. A Django
+    ``ValidationError`` names fields, never the model or the nested item they
+    belong to, so every name it carries is read as a field of the backing model:
+    an error the save-time code raises about another row (a nested serializer
+    item, a related object a signal receiver validates) lands on the input that
+    backs a same-named field of this model, else keeps its name, and never on a
+    nested path. A nested item fails at save time through a DRF
+    ``serializers.ValidationError`` in the nested shape (``{"shelves": [{},
+    {"code": [...]}]}``), which the serializer flattener keys to the item's path
+    (``shelves.1.code``).
     """
     model_meta = model._meta
 
@@ -504,7 +518,9 @@ def validation_error_to_field_errors(
     validator error under the GraphQL input field the client sent; a field the
     input does not expose keeps its validator-side name. ``None`` keys every
     name verbatim (a caller with no generated input, such as a service-layer
-    error mapped into an envelope).
+    error mapped into an envelope). Only the top-level names are keyed: Django
+    flattens a nested ``error_dict`` value to its messages, so the error has no
+    nested path to re-key.
     """
     # An unreadable ``error_dict`` or ``items()`` leaves the dict branch entirely
     # and falls through to the ``error_list`` / ``messages`` fallback below.

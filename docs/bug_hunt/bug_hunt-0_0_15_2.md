@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 82 done, 153 to do.
+Progress: 83 done, 153 to do.
 
 ## Done
 
@@ -246,6 +246,12 @@ Progress: 82 done, 153 to do.
   as the window does (`Query.resolve_ref`, the query's base table only) and stays silent when any lives off the child's
   table; `pk` orders and spans Django trims to a local column now advise, and an MTI `id` names the parent-link column;
   CHANGELOG item 233; filed 234, 235
+- [x] 67. A Django `ValidationError` names no model and no nested item, so a save-time error about a child or related row
+  was re-keyed through the backing model's map (a child's `name` landing on the root's renamed `title`, on every flavor)
+  while the README, spec-036, spec-039 and the GLOSSARY promised the input the client sent at every depth. The docs now state
+  the backing-model reading and the route for failing a nested item at save time (DRF `ValidationError` in the nested shape,
+  keyed `shelves.<i>.code`, shown by the fakeshop nested-shelves `create()`); the save-time key map is one level (it built an
+  unread child map against the root model). No package wire key moves; CHANGELOG item 238
 - [x] 188. Re-checked at `8ca6a481`: a nested list whose `get_queryset` returns `union()` / `intersection()` /
   `difference()` no longer raises `NotSupportedError`; the combined result is served as its pk set, optimizer on and off
   (`5c5e32c5`, item 6; `test_combined_visibility_api.py` 199 passed)
@@ -576,7 +582,6 @@ tracker number are recorded there; open remainders and new defects are filed as 
 
 ## To do: holes found re-checking the fixes
 
-- [ ] 67. Nested serializer: a Django error raised in `create()` for a child is keyed to a renamed root input
 - [ ] 70. Argument-less directives are re-walked on every fragment expansion (about 80 ms at the token bound; bounded, robustness)
 
 ## Waiting on you
@@ -770,6 +775,10 @@ tracker number are recorded there; open remainders and new defects are filed as 
   recommends an index naming a multi-table-inheritance parent's column (an inherited order or content-type column), now
   advises for orders naming `pk` or a span Django trims to a local column (`shelf__id`), and names an MTI child's
   parent-link column for an `id` order term
+- [ ] 238. CHANGELOG entry for item 67: the docs state that a Django `ValidationError` raised at save time is read as naming
+  the mutation's own model fields (one level, never a nested path) and that a serializer fails a nested item at save time by
+  raising DRF's `ValidationError` in the nested shape (keyed `shelves.<i>.code`); the fakeshop nested-shelves create reports a
+  duplicate shelf code at `shelves.<i>.code` instead of the `__all__` constraint error
 
 ## Hunt not finished in t3
 

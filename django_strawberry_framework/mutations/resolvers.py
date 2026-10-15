@@ -1406,7 +1406,9 @@ def save_or_field_errors(
       through ``error_key_map()``, the flavor's validator-name -> GraphQL input
       name map, built only on this failure path (``None`` keys every name
       verbatim). The mapper never raises on a key the map lacks: it keeps the
-      validator-side name.
+      validator-side name. A Django error names no model or nested item, so
+      every name reads as a field of the mutation's own model, the one model
+      the map is built from (``utils/errors.py::save_time_error_key_map``).
 
     Neither is a top-level ``GraphQLError`` at the write. The skeleton's error
     envelope marks the pipeline's ``transaction.atomic()`` for rollback, so a

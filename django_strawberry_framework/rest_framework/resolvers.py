@@ -89,8 +89,10 @@ The serializer-specific invariants this module owns:
   ``036`` ``save_or_field_errors`` wrapper every flavor's save rides (the flat
   mapper over ``error_dict`` / ``messages``, NEVER ``.detail``, its model-side
   names - ``spec.source or spec.target_name`` - re-keyed to the GraphQL input
-  names through ``save_time_error_key_map``; the integrity mapper), never a
-  top-level ``GraphQLError``.
+  names through ``save_time_error_key_map``, one level, since a Django error names
+  no nested item; the integrity mapper), never a top-level ``GraphQLError``. A
+  nested item fails at save time through a DRF ``ValidationError`` in the nested
+  shape, which the flattener keys to the item's path.
 
 - **The re-fetch rides the ``036`` ``refetch_optimized`` G2 path** (spec-039 Decision 9 /
   G2): the shared skeleton re-fetches the saved object by pk WITHOUT the visibility
@@ -2470,9 +2472,10 @@ def _serializer_write_step(
     flattener; a Django ``ValidationError`` / an ``IntegrityError`` -> the shared
     ``save_or_field_errors`` wrapper every flavor's save rides (the flat ``036``
     mapper over ``error_dict`` / ``messages``, never ``.detail``, keyed through
-    ``utils/errors.py::save_time_error_key_map``; the integrity mapper) - never a
-    top-level ``GraphQLError`` at the write. Every validation branch builds its key
-    map on that failure path only; a successful write never builds one.
+    ``utils/errors.py::save_time_error_key_map``, top-level names only; the
+    integrity mapper) - never a top-level ``GraphQLError`` at the write. Every
+    validation branch builds its key map on that failure path only; a successful
+    write never builds one.
     """
     # Class validation gated ``Meta.serializer_class`` to a ``ModelSerializer`` subclass.
     serializer_class = cast("type[DRFSerializer]", mutation_cls._mutation_meta.serializer_class)

@@ -885,6 +885,63 @@ def test_save_time_django_validation_error_keys_a_renamed_relation_by_both_colum
 
 
 @pytest.mark.django_db
+def test_save_time_django_validation_error_reads_its_names_as_backing_model_fields() -> None:
+    """A Django error raised about a nested item keys as a field of the backing model.
+
+    A Django ``ValidationError`` names no model or nested item, so the save-time key
+    map reads each name against the backing ``Category`` only: ``name`` lands on the
+    root input ``title`` that backs ``Category.name`` even when the nested ``Item``
+    raised it, and ``category``, which ``Category`` lacks, keeps its name. Neither
+    reaches an ``items.<i>`` path; that takes a DRF ``ValidationError`` in the nested
+    shape.
+    """
+
+    class ItemChild(ModelSerializerBase[product_models.Item]):
+        class Meta:
+            model = product_models.Item
+            fields = ("name",)
+
+    class ItemRaisingCategorySerializer(ModelSerializerBase[product_models.Category]):
+        title = serializers.CharField(source="name")
+        items = ItemChild(many=True)
+
+        class Meta:
+            model = product_models.Category
+            fields = ("title", "items")
+
+        @override
+        def create(self, validated_data: dict[str, object]) -> NoReturn:
+            items = cast("list[dict[str, object]]", validated_data.pop("items"))
+            category = product_models.Category.objects.create(**validated_data)
+            for item in items:
+                _ = product_models.Item.objects.create(category=category, **item)
+            raise DjangoValidationError(
+                {"name": ["item name"], "category": ["item category"]},
+            )
+
+    mutation_cls = _bind_item_serializer_mutation(
+        ItemRaisingCategorySerializer,
+        nested_fields={"items": NestedSerializerConfig()},
+    )
+    request = HttpRequest()
+    request.user = User(username="u")
+    info = make_info(context=SimpleNamespace(request=request))
+
+    with write_pipeline("default", lock=False):
+        result = serializer_resolvers._serializer_write_step(
+            mutation_cls,
+            info,
+            None,
+            {"title": "BackingReadCat", "items": [{"name": "BackingReadItem"}]},
+        )
+    assert isinstance(result, StepFailure)
+    assert [(fe.field, fe.path, fe.messages) for fe in result.errors] == [
+        ("title", ["title"], ["item name"]),
+        ("category", ["category"], ["item category"]),
+    ]
+
+
+@pytest.mark.django_db
 def test_save_time_integrity_error_maps_to_all_sentinel_envelope() -> None:
     """A save-time `IntegrityError` (a race) maps to the `"__all__"` envelope via `save_or_field_errors`."""
 

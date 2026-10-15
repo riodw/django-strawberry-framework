@@ -13722,6 +13722,50 @@ def test_nested_shelf_validation_error_flattens_to_structured_path_over_http() -
     assert not models.Branch.objects.filter(name="NestedBadCode").exists()
 
 
+@pytest.mark.parametrize(
+    ("codes", "index"),
+    [
+        pytest.param(["DUP", "DUP"], "1", id="second-item"),
+        pytest.param(["OK1", "DUP", "DUP"], "2", id="third-item"),
+    ],
+)
+@pytest.mark.django_db
+def test_nested_shelf_save_time_error_keys_to_the_item_path_over_http(
+    codes: list[str],
+    index: str,
+) -> None:
+    """A nested item failed at save time keys to its own ``shelves.<i>.code`` path.
+
+    ``BranchWithShelvesSerializer.create()`` checks each shelf's ``(branch, code)``
+    constraint against the shelves it already wrote and fails the repeated ``"DUP"`` with
+    a DRF ``ValidationError`` in the nested shape. The serializer flattener keys it to the
+    item that failed, not to a top-level input, and the whole write rolls back.
+    """
+    top_input = _mutation_data_input_type_name("createBranchWithNestedShelves")
+
+    response = _post_graphql(
+        "mutation($d: " + top_input + "!) { createBranchWithNestedShelves(data: $d) { "
+        "result { name } errors { field messages path } } }",
+        variables={
+            "d": {"name": "NestedDupCode", "shelves": [{"code": code} for code in codes]},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createBranchWithNestedShelves"]
+    assert result["result"] is None
+    assert result["errors"] == [
+        {
+            "field": f"shelves.{index}.code",
+            "messages": ["Shelf with this Branch and Code already exists."],
+            "path": ["shelves", index, "code"],
+        },
+    ]
+    assert not models.Branch.objects.filter(name="NestedDupCode").exists()
+    assert not models.Shelf.objects.filter(code="DUP").exists()
+
+
 # ---------------------------------------------------------------------------
 # Golden SDL coverage for the serializer-mutation input lane
 # ---------------------------------------------------------------------------

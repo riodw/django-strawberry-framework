@@ -2017,7 +2017,9 @@ The pipeline steps:
      (the field behind `spec.source or spec.target_name`, and a forward relation's
      `attname`) to its GraphQL input name
      (`django_strawberry_framework/utils/errors.py::save_time_error_key_map`, shared with
-     the `ModelForm` flavor; [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload));
+     the `ModelForm` flavor; [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)),
+     one level and read against the backing model only, since a Django error names no
+     nested item;
      pushing a Django error through the DRF `.detail` path would `AttributeError` or
      silently lose structure.
    - **`IntegrityError`** (a concurrent-uniqueness race / residual db constraint): the
@@ -2095,13 +2097,19 @@ normalizes DRF's `non_field_errors` bucket to `"__all__"`
 nested child field, alias, or relation suffix reports its SDL name
 (`shelves.0.altBranches`, never `shelves.0.alt_branches`); numeric indexes, a
 `JSONField`'s own keys, and the `"__all__"` non-field sentinel are preserved as they are.
-**A Django `ValidationError` raised during `save()` keys the same way:** it names MODEL
+**A Django `ValidationError` raised during `save()` keys to input names too, top level only:** it names MODEL
 fields, so its key map is built from the model field behind `spec.source or spec.target_name`
 (its name and, for a forward relation, its `attname`, via
 `django_strawberry_framework/utils/errors.py::model_field_error_names`;
 `django_strawberry_framework/utils/errors.py::save_time_error_key_map`),
 and a model `name` behind `full_name = CharField(source="name")` reports as `fullName`,
-a model `category_id` behind the `category` relation as `categoryId`.
+a model `category_id` behind the `category` relation as `categoryId`. The map is read
+against the backing model only: a Django error names no model or nested item, so a
+`name` raised about a nested item lands on the root input backing the root model's `name`
+(or stays `name` when no root input backs it), never on `shelves.0.name`. A nested item
+fails at save time through a DRF `serializers.ValidationError` in the nested shape
+(`{"shelves": [{}, {"code": [...]}]}`), which the recursive flattener keys to the item's path
+(`shelves.1.code`).
 Every key map is built on the failure branch only; a successful write builds none. The
 choice is locked by a **live renamed-field error test** ([Test plan](#test-plan)), not only
 a plain `name` error, so decode errors, validation errors, and renamed-field errors all
@@ -2740,6 +2748,10 @@ co-clear block) — `clear_serializer_input_namespace` registers through the
   pushing a Django error down the `.detail` path would `AttributeError` or lose structure).
   Both terminate in the same envelope, the non-field bucket mapping to `"__all__"` either
   way; an `IntegrityError` stays the `utils/errors.py::integrity_error_field_errors` branch.
+  Only the DRF error can name a nested item: a Django error raised about one keys its names
+  one level against the backing model (a child `name` lands on the root input over the
+  root model's `name`), so `create()` / `update()` fails a nested item by raising the DRF
+  error in the nested shape (`shelves.<i>.code`).
 - **Two distinct generated serializer inputs colliding on one GraphQL name.** Two
   **different** serializer classes with the same `__name__` both emit
   `<__name__>Input` and **always** raise a finalize-time
@@ -3639,15 +3651,19 @@ contract:
   suffix reports its SDL name (`shelves.0.altBranches`, not `shelves.0.alt_branches`), while
   numeric indexes and the `__all__` non-field sentinel are preserved. A nested framework decode
   error (a hidden relation id) is keyed to the same FULL nested path with the `invalid` code
-  and rolls the write back. The runtime schema/runtime agreement guard recurses into the nested
-  serializer too.
+  and rolls the write back. The serializer's own `create()` / `update()` fails a nested item
+  the same way, by raising a DRF `serializers.ValidationError` in the nested shape (keyed to
+  `shelves.<i>.code`); a Django `ValidationError` it raises names no nested item, so it keys
+  one level against the backing model (see the keying rule above). The runtime schema/runtime
+  agreement guard recurses into the nested serializer too.
 
 The nested input dedupes on its `SerializerInputShape` descriptor (folded into the parent
 descriptor identity + the per-shape build cache, so two nested shapes never collide on one name)
 and materializes through the same ledger. Earned live by `createBranchWithNestedShelves` (a
 `Branch` with a nested `shelves` list carrying a raw-pk `altBranches` M2M) — the happy nested
-write, the hidden-nested-relation structured-path error + rollback, and the nested DRF
-validation-error flattening; the fail-loud / guard / config-validation / source-axis / recursive
+write, the hidden-nested-relation structured-path error + rollback, the nested DRF
+validation-error flattening, and a nested item failed by `create()` (a duplicate shelf code)
+keyed to `shelves.<i>.code`; the fail-loud / guard / config-validation / source-axis / recursive
 re-keying / opt-in-gated-fingerprint branches are package-tested.
 
 <!-- LINK DEFINITIONS -->

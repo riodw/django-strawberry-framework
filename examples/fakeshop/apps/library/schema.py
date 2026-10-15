@@ -2209,7 +2209,9 @@ class CreateBranchWithNestedShelves(SerializerMutation):
     * a nested ``altBranches`` id is visibility-decoded (a ``city="restricted"`` branch is hidden),
       surfacing as a structured ``shelves.<i>.altBranches`` relation error with NO partial write;
     * a nested DRF validation error (``code == "BANNED"``) flattens to the structured
-      ``shelves.<i>.code`` path.
+      ``shelves.<i>.code`` path;
+    * a shelf that ``create()`` fails at save time (a duplicate ``code`` within the branch) keys
+      to the same ``shelves.<i>.code`` path through the DRF ``ValidationError`` it raises.
 
     Opens to any caller via ``permission_classes = []`` so it isolates the nested behavior, not
     write-auth. ``BranchType`` is non-Relay, so the payload slot is ``result``.

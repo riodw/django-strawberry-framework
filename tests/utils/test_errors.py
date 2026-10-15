@@ -44,6 +44,7 @@ from django_strawberry_framework.utils.errors import (
     null_field_error,
     rekey_error_segment,
     relation_field_error,
+    save_time_error_key_map,
     validation_error_to_field_errors,
 )
 from django_strawberry_framework.utils.inputs import RELATION_SINGLE, SCALAR, InputFieldSpec
@@ -721,8 +722,12 @@ def test_build_error_key_map_recurses_into_nested_specs() -> None:
     assert rekey_error_segment("alt_branches", child_map) == ("altBranches", {})
 
 
-def test_build_error_key_map_keys_by_keys_of_at_every_depth() -> None:
-    """``keys_of`` replaces ``target_name`` as the validator-side names, nested levels included."""
+def test_build_error_key_map_keyed_by_keys_of_is_one_level() -> None:
+    """``keys_of`` replaces ``target_name`` as the validator-side names, top level only.
+
+    ``keys_of`` reads one model's field names, so a nested field gets no child map: a
+    nested level writes another model, whose names it cannot read.
+    """
     child = (
         InputFieldSpec(
             input_attr="code",
@@ -774,7 +779,7 @@ def test_build_error_key_map_keys_by_keys_of_at_every_depth() -> None:
         "is_private": ("isPrivate", None),
         "category": ("categoryId", None),
         "category_id": ("categoryId", None),
-        "shelves": ("shelves", {"code": ("shelfCode", None)}),
+        "shelves": ("shelves", None),
     }
     assert "full_name" not in by_source
 
@@ -828,3 +833,43 @@ def test_model_field_error_names_add_a_forward_relation_attname(
 ) -> None:
     """A forward relation answers to its ``attname`` too; every other field to its name alone."""
     assert model_field_error_names(model._meta.get_field(name)) == expected
+
+
+def test_save_time_error_key_map_reads_the_backing_model_one_level() -> None:
+    """The save-time map keys the backing model's names and gives a nested field no child map.
+
+    A Django ``ValidationError`` names no nested item, so the map is read against
+    ``Category`` alone: ``title`` (``source="name"``) owns ``name``, and the nested
+    ``items`` level, which writes ``Item``, is not descended into.
+    """
+    child = (
+        InputFieldSpec(
+            input_attr="category_id",
+            graphql_name="categoryId",
+            target_name="category",
+            kind=RELATION_SINGLE,
+        ),
+    )
+    specs = [
+        InputFieldSpec(
+            input_attr="title",
+            graphql_name="title",
+            target_name="title",
+            kind=SCALAR,
+            source="name",
+        ),
+        InputFieldSpec(
+            input_attr="items",
+            graphql_name="items",
+            target_name="items",
+            # The map reads only ``nested_specs``; the serializer's nested kinds live
+            # behind the DRF soft dependency, so a plain kind stands in.
+            kind=SCALAR,
+            nested_specs=child,
+        ),
+    ]
+
+    assert save_time_error_key_map(specs, product_models.Category) == {
+        "name": ("title", None),
+        "items": ("items", None),
+    }

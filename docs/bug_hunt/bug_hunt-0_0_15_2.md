@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 86 done, 153 to do.
+Progress: 89 done, 151 to do.
 
 ## Done
 
@@ -284,6 +284,12 @@ Progress: 86 done, 153 to do.
 - [x] 211. A repo-wide `ruff check --fix .` / `ruff format .` rewrote untracked hunt evidence; `[tool.ruff]` now
   `extend-exclude`s `hunt-ws`, so ruff checks only the tracked tree (git-ignored copies such as `.claude/worktrees/` were
   already skipped); `docs/ruffing.md` "Files ruff skips" says so
+- [x] 208. Not synced: the hunt worktree `t3code-1cc21548` and its branch are removed (0 commits ahead of main). The
+  whole tree, `hunt-ws/` evidence and untracked records included, is archived in `~/t3code-1cc21548-final-2026-10-15.tgz`,
+  its uncommitted diff in `~/t3code-1cc21548-uncommitted-2026-10-15.patch`; the remaining cleanup decisions are item 242
+- [x] 209. Moot: the owned-changes ledger belonged to the removed hunt worktree (archived with it, item 208)
+- [x] 210. Not taken to main: every robustness row it served is decided on main; the migration survives only in item
+  208's archive
 
 ## Outside review of the fixes
 
@@ -807,15 +813,8 @@ tracker number are recorded there; open remainders and new defects are filed as 
 ## Hunt not finished in t3
 
 - [ ] 29. The hunt's final test gate was never run (the Postgres and sharded runs included)
-- [ ] 208. t3 is behind main (0 ahead, 106 behind at `8ca6a481`): a file-by-file sync (overlapping `8d4f66bd`) is due, its dive-3 BLOCKED
-  text purge and hunt-doc edit are uncommitted, it still carries the superseded refuse-combined patch, and two of its test
-  pairs assert opposite outcomes (a hostile `__eq__` drift check; a hostile file replacement). Then decide removing the
-  dry-0015 worktree, `~/t3code-1cc21548-pre-ff.tgz` and, after item 114 lands, `refs/scratch/admission-wip`
-- [ ] 209. The hunt's owned-changes ledger misses `field_name_map` and `check_deadline`, six files and the dive-5 pins;
-  `filters/inputs.py` and the two-lookup raise are behaviour changes filed as robustness; eight items from the hunt's
-  test-run notes were never folded back
-- [ ] 210. The truthful-reads migration and its fixes sit uncommitted in the hunt worktree; decide whether it goes to main
-  (every robustness row behind items 15-25 and 27 is decided on main)
+- [ ] 242. Decide removing the dry-0015 worktree, `~/t3code-1cc21548-pre-ff.tgz` and, after item 114 lands,
+  `refs/scratch/admission-wip`
 
 <!-- LINK DEFINITIONS -->
 

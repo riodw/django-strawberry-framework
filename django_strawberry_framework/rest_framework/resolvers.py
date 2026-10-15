@@ -135,7 +135,12 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.settings import api_settings
 
-from django_strawberry_framework.exceptions import ConfigurationError, _safe_type_name
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_predicate,
+    _safe_type_name,
+)
 from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY, FieldError
 from django_strawberry_framework.mutations.resolvers import (
     StepFailure,
@@ -148,6 +153,7 @@ from django_strawberry_framework.utils._narrowing import (
     is_list,
     is_list_or_tuple,
     is_mapping,
+    is_str,
 )
 from django_strawberry_framework.utils.errors import (
     FIELD_ERROR_CODE_INVALID,
@@ -711,24 +717,32 @@ def _hook_mapping(
     shape; the str-key gate also keeps every downstream key-hashing consumer (the exact-match
     injection comparison, the shadow/model-field save-kwarg checks) operating on plain string
     keys no hostile key object can destabilize.
+
+    Nothing here lets the return's own code replace the typed error: the mapping test is a
+    guarded ``isinstance`` (a ``Mapping`` subclass and a faithful proxy pass; a ``__class__``
+    read that raises is "not a mapping"), and each non-string key is rendered once through
+    the guarded repr before the offender list is sorted, so the list is built and sorted from
+    plain strings and a key whose ``__repr__`` / ``__hash__`` raises is never asked again
+    after ``dict()`` stored it.
     """
-    if not is_mapping(value):
+    if not _safe_predicate(is_mapping, value):
         raise ConfigurationError(
             f"SerializerMutation {mutation_cls.__name__}.{hook_name} must return a mapping; "
             f"got {_safe_type_name(value)}.",
         )
     try:
-        materialized: dict[object, object] = dict(value)
+        # The guarded test above is the ``Mapping`` proof; ``dict()`` itself is guarded too.
+        materialized: dict[object, object] = dict(cast("Mapping[object, object]", value))
     except BaseException as exc:
         raise ConfigurationError(
             f"SerializerMutation {mutation_cls.__name__}.{hook_name} returned a mapping that "
             "could not be materialized for the serializer pipeline.",
         ) from exc
-    offenders = sorted({key for key in materialized if type(key) is not str}, key=repr)
+    offenders = sorted(_safe_arg_repr(key) for key in materialized if type(key) is not str)
     if offenders:
         raise ConfigurationError(
             f"SerializerMutation {mutation_cls.__name__}.{hook_name} returned a mapping with "
-            f"non-string key(s) {[repr(key) for key in offenders]!r}; hook mappings become "
+            f"non-string key(s) {offenders!r}; hook mappings become "
             "serializer kwargs / data keys, so every key must be a plain string.",
         )
     # Every key is exactly ``str`` once the offender check passed; the filter states it.
@@ -782,8 +796,18 @@ _FROZEN_VIEW_CONTAINERS: tuple[
 
 
 def _is_frozen_container(value: object) -> TypeIs[_FrozenContainer]:
-    """Return whether ``value`` is one of the containers the hook view freezes (subclasses included)."""
-    return isinstance(value, _FROZEN_VIEW_CONTAINERS)
+    """Return whether ``value`` IS one of the containers the hook view freezes, asked of its real type.
+
+    ``issubclass(type(value), ...)`` (subclasses included) rather than ``isinstance``, which
+    falls back to a ``__class__`` read when the real type does not match: a ``__class__``
+    property can raise or claim a container the value is not.
+    """
+    return issubclass(type(value), _FROZEN_VIEW_CONTAINERS)
+
+
+def _is_real_dict(value: object) -> TypeIs[dict[object, object]]:
+    """Return whether ``value`` IS a ``dict`` (subclasses included), asked of its real type."""
+    return issubclass(type(value), dict)
 
 
 @overload
@@ -808,6 +832,12 @@ def _frozen_hook_view(value: object) -> object:
     data - it FAILS CLOSED with a ``ConfigurationError`` instead of a false promise of
     immutability.
 
+    Every class test the freeze makes asks the value's REAL type (``type(value)``), never its
+    ``__class__``: the promise is about the actual object, and a proxy or a value whose
+    ``__class__`` claims ``str`` / ``dict`` / ``File`` is not that object (a lazy proxy of a
+    string can be rebound in place), so it is an opaque leaf and fails closed; a ``__class__``
+    read that raises is never made at all.
+
     Iterative (an explicit stack, post-order), NOT recursive: a ``JSONField``
     input is client-controlled and json-parseable nesting easily exceeds Python's
     recursion limit, so a recursive freeze would let a deeply-nested payload crash
@@ -818,11 +848,13 @@ def _frozen_hook_view(value: object) -> object:
     """
 
     def _freeze_leaf(item: object) -> object:
-        if isinstance(item, File):
-            return _upload_metadata(item)
-        if isinstance(item, bytearray):
-            return bytes(item)
-        if isinstance(item, _IMMUTABLE_LEAF_TYPES):
+        # Each real-type test is the proof the cast after it states.
+        leaf_type = type(item)
+        if issubclass(leaf_type, File):
+            return _upload_metadata(cast("_FileAny", item))
+        if issubclass(leaf_type, bytearray):
+            return bytes(cast("bytearray", item))
+        if issubclass(leaf_type, _IMMUTABLE_LEAF_TYPES):
             return item
         raise ConfigurationError(
             "SerializerMutation hook data contains a value of type "
@@ -837,18 +869,16 @@ def _frozen_hook_view(value: object) -> object:
         return _freeze_leaf(value)
 
     def _entries(container: _FrozenContainer) -> Iterator[tuple[object, object]]:
-        return (
-            iter(container.items()) if isinstance(container, dict) else iter(enumerate(container))
-        )
+        return iter(container.items()) if _is_real_dict(container) else iter(enumerate(container))
 
     def _new_acc(container: object) -> _FrozenAccumulator:
-        return {} if isinstance(container, dict) else []
+        return {} if _is_real_dict(container) else []
 
     def _finalize(source: object, acc: _FrozenAccumulator) -> object:
-        if isinstance(source, dict):
+        if _is_real_dict(source):
             # ``_new_acc`` built a dict accumulator for exactly this dict source.
             return MappingProxyType(cast("dict[object, object]", acc))
-        if isinstance(source, (set, frozenset)):
+        if issubclass(type(source), (set, frozenset)):
             return frozenset(acc)
         return tuple(acc)
 
@@ -1056,13 +1086,15 @@ def _merged_serializer_kwargs(
     request = request_from_info(info, family_label="SerializerMutation")
     raw_context = kwargs.get("context")
     if raw_context is not None:
-        if not is_mapping(raw_context):
+        # A guarded ``isinstance`` (the ``_hook_mapping`` test): a faithful proxy passes, a
+        # ``__class__`` read that raises is "not a mapping".
+        if not _safe_predicate(is_mapping, raw_context):
             raise ConfigurationError(
                 f"SerializerMutation {mutation_cls.__name__}.get_serializer_kwargs returned a "
                 f"`context` that is not a mapping; got {_safe_type_name(raw_context)}.",
             )
         try:
-            context: dict[object, object] = dict(raw_context)
+            context: dict[object, object] = dict(cast("Mapping[object, object]", raw_context))
         except BaseException as exc:
             raise ConfigurationError(
                 f"SerializerMutation {mutation_cls.__name__}.get_serializer_kwargs returned a "
@@ -1077,13 +1109,18 @@ def _merged_serializer_kwargs(
             "context['request'] object; the framework owns the request context (the actor "
             "check_permission authorized against). Drop context['request'] from the override.",
         )
+    # A database alias is a real ``str`` (Django's ``connections[alias]`` requires one), so the
+    # override agrees only when its real type is ``str`` and the base ``str`` slot finds the same
+    # text: no override's ``__eq__`` / ``__ne__`` runs, and a ``str`` subclass matches by content.
     override_alias = context.get("write_alias")
-    if override_alias is not None and override_alias != alias:
+    if override_alias is not None and not (
+        is_str(override_alias) and str.__eq__(override_alias, alias)
+    ):
         raise ConfigurationError(
             f"SerializerMutation {mutation_cls.__name__}.get_serializer_kwargs set "
-            f"context['write_alias'] to {override_alias!r}, but the mutation's transaction is "
-            f"pinned to {alias!r}; the write alias is framework-owned (one transaction, one "
-            "alias). Drop context['write_alias'] from the override.",
+            f"context['write_alias'] to {_safe_arg_repr(override_alias)}, but the mutation's "
+            f"transaction is pinned to {alias!r}; the write alias is framework-owned (one "
+            "transaction, one alias). Drop context['write_alias'] from the override.",
         )
     context["request"] = request
     context["write_alias"] = alias
@@ -1612,8 +1649,12 @@ def _assert_save_kwargs_no_shadow(
     ``validated_data``: a renamed input (``source=``), a ``Meta.injected_fields`` injection, a
     serializer default, and a ``HiddenField``. Save kwargs are for server-side data OUTSIDE the
     validated payload.
+
+    The shadowed names are read from the save-kwargs side, whose keys ``_hook_mapping`` already
+    proved plain ``str``, so the message never renders a key a custom ``validate()`` returned.
     """
-    shadowed = sorted(set(save_kwargs) & set(serializer.validated_data))
+    validated_keys = set(serializer.validated_data)
+    shadowed = sorted(key for key in save_kwargs if key in validated_keys)
     if shadowed:
         raise ConfigurationError(
             f"SerializerMutation {mutation_cls.__name__}.get_serializer_save_kwargs returned "
@@ -2343,12 +2384,17 @@ def _checked_saved_result(
     """
     model = backing_model_of(mutation_cls._mutation_meta)
     name = type(serializer).__name__
-    if not isinstance(saved, model):
+    # The return must really be a row of the model (the identity check below then proves it is
+    # ``serializer.instance``), so the test asks its real type: a ``__class__`` that raises or
+    # claims the model is never read, and a lazy proxy is never evaluated. The rejection renders
+    # it through the guarded repr, so a drifted return cannot replace this error with its own.
+    if not issubclass(type(saved), model):
         raise ConfigurationError(
-            f"SerializerMutation {mutation_cls.__name__}: {name}.save() returned {saved!r}, not "
-            f"a {model.__name__} instance; the serializer's create()/update() must return the "
-            "written model row.",
+            f"SerializerMutation {mutation_cls.__name__}: {name}.save() returned "
+            f"{_safe_arg_repr(saved)}, not a {model.__name__} instance; the serializer's "
+            "create()/update() must return the written model row.",
         )
+    saved = cast("models.Model", saved)
     if saved is not serializer.instance:
         raise ConfigurationError(
             f"SerializerMutation {mutation_cls.__name__}: {name}.save() returned a "

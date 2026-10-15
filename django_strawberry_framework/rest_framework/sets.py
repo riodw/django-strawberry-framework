@@ -63,7 +63,11 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 from rest_framework import serializers
 from typing_extensions import override
 
-from django_strawberry_framework.exceptions import ConfigurationError, _safe_arg_repr
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_predicate,
+)
 from django_strawberry_framework.mutations.inputs import CREATE
 from django_strawberry_framework.mutations.operations import NON_DELETE_OPERATION_INPUT_KIND
 from django_strawberry_framework.mutations.sets import (
@@ -157,14 +161,20 @@ def _validate_schema_field_map(name: str, field_map: object) -> dict[str, DRFFie
     validating that contract here turns malformed hook values into the package's typed
     configuration error instead of leaking ``AttributeError`` / ``TypeError`` during class
     creation or finalization.
+
+    The map and each value are class-tested with a guarded ``isinstance``: a ``Mapping`` /
+    ``serializers.Field`` subclass and a faithful proxy (``SimpleLazyObject``) pass, and a
+    ``__class__`` read that raises answers "not a mapping" / "not a field", so it is reported
+    with every other malformed entry instead of escaping as the consumer's exception.
     """
-    if not is_mapping(field_map):
+    if not _safe_predicate(is_mapping, field_map):
         raise ConfigurationError(
             f"SerializerMutation {name}.get_serializer_for_schema() must return a mapping of "
             f"field name -> DRF serializers.Field; got {_safe_arg_repr(field_map)}.",
         )
-    # Keys and values stay ``object`` until the per-entry guards below.
-    schema_map = field_map
+    # The guarded test above is the ``Mapping`` proof (a ``bool`` from a helper carries no
+    # narrowing); keys and values stay ``object`` until the per-entry guards below.
+    schema_map = cast("Mapping[object, object]", field_map)
     try:
         entries = tuple(schema_map.items())
     except BaseException as exc:
@@ -194,14 +204,16 @@ def _validate_schema_field_map(name: str, field_map: object) -> dict[str, DRFFie
                 f"a field-map key must be a plain string; got {_safe_arg_repr(field_name)}",
             )
             continue
-        if not isinstance(field, serializers.Field):
+        if not _safe_predicate(isinstance, field, serializers.Field):
             errors.append(
                 f"field {field_name!r} must be a DRF serializers.Field; got "
                 f"{_safe_arg_repr(field)}",
             )
             continue
+        # The guarded ``isinstance`` above is the ``serializers.Field`` proof.
+        drf_field = cast("DRFField", field)
         try:
-            bound_name = field.field_name
+            bound_name = drf_field.field_name
         except BaseException:  # noqa: BLE001 - hostile object, contained by design
             errors.append(
                 f"field {field_name!r} has a field_name descriptor that could not be read",
@@ -222,7 +234,7 @@ def _validate_schema_field_map(name: str, field_map: object) -> dict[str, DRFFie
                 f"{_safe_arg_repr(bound_name)}",
             )
             continue
-        normalized[field_name] = field
+        normalized[field_name] = drf_field
 
     if errors:
         details = "; ".join(errors)

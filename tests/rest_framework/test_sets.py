@@ -46,6 +46,7 @@ from __future__ import annotations
 import re
 import sys
 from collections.abc import Callable, Iterator, Mapping
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, NoReturn
 
 import pytest
@@ -54,7 +55,10 @@ import strawberry as _sb
 from apps.library import models as library_models
 from apps.library.models import Book
 from apps.products import models as product_models
+from django.contrib.auth.models import AnonymousUser
 from django.db import models
+from django.http import HttpRequest
+from django.utils.functional import SimpleLazyObject
 from rest_framework import serializers
 from strawberry.types.base import get_object_definition
 from strawberry.types.enum import StrawberryEnumDefinition
@@ -66,6 +70,7 @@ from django_strawberry_framework import (
     DjangoModelPermission,
     DjangoMutation,
     DjangoMutationField,
+    DjangoSchema,
     DjangoType,
     SerializerMutation,
     finalize_django_types,
@@ -1655,6 +1660,297 @@ def test_schema_hook_invalid_value_with_hostile_repr_is_typed() -> None:
             # basedpyright: deliberately a non-mapping with a hostile repr, the input class creation refuses
             def get_serializer_for_schema(cls) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]
                 return HostileRepr()
+
+
+class _ClassReadRaises:
+    """A value whose ``__class__`` read raises ``escape``: ``isinstance`` falls back to that read."""
+
+    def __init__(self, escape: type[BaseException] = RuntimeError) -> None:
+        self._escape = escape
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__`` that raises, the guard's hostile input
+    def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
+        raise self._escape("hostile __class__ boom")
+
+    @override
+    def __repr__(self) -> str:
+        return "<ClassReadRaises>"
+
+
+_CLASS_READ_RAISES_ROWS: list[
+    tuple[Callable[[dict[str, DRFField], type[BaseException]], object], str]
+] = [
+    (
+        lambda _fields, escape: _ClassReadRaises(escape),
+        (
+            "SerializerMutation M.get_serializer_for_schema() must return a mapping of field "
+            "name -> DRF serializers.Field; got <ClassReadRaises>."
+        ),
+    ),
+    (
+        lambda _fields, escape: {"name": _ClassReadRaises(escape)},
+        (
+            "SerializerMutation M.get_serializer_for_schema() returned an invalid field map: "
+            "field 'name' must be a DRF serializers.Field; got <ClassReadRaises>. Return a "
+            "mapping of bound field name -> DRF serializers.Field."
+        ),
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("map_factory", "message"),
+    _CLASS_READ_RAISES_ROWS,
+    ids=["map-class-read-raises", "value-class-read-raises"],
+)
+@pytest.mark.parametrize("escape", [RuntimeError, KeyboardInterrupt])
+def test_schema_field_map_class_read_that_raises_is_typed(
+    map_factory: Callable[[dict[str, DRFField], type[BaseException]], object],
+    message: str,
+    escape: type[BaseException],
+) -> None:
+    """A ``__class__`` read that raises (any ``BaseException``) answers "not a mapping" / "not a field"."""
+    field_map = map_factory(dict(bound_fields(_item_serializer()())), escape)
+    with pytest.raises(ConfigurationError, match=f"^{re.escape(message)}$"):
+        _validate_schema_field_map("M", field_map)
+
+
+def _lazy_map(fields: dict[str, DRFField]) -> object:
+    def load() -> dict[str, DRFField]:
+        return fields
+
+    return SimpleLazyObject(load)
+
+
+def _lazy_field(field: DRFField) -> object:
+    def load() -> DRFField:
+        return field
+
+    return SimpleLazyObject(load)
+
+
+def _lazy_values(fields: dict[str, DRFField]) -> object:
+    return {name: _lazy_field(field) for name, field in fields.items()}
+
+
+@pytest.mark.parametrize("wrap", [_lazy_map, _lazy_values], ids=["lazy-map", "lazy-values"])
+def test_schema_field_map_accepts_faithful_lazy_proxies(
+    wrap: Callable[[dict[str, DRFField]], object],
+) -> None:
+    """A lazy proxy of an honest map or field still validates (the test is ``isinstance``)."""
+    fields = dict(bound_fields(_item_serializer()()))
+    assert list(_validate_schema_field_map("M", wrap(fields))) == list(fields)
+
+
+def _category_serializer_with(
+    extra: Callable[[], dict[str, DRFField]],
+) -> type[ModelSerializerBase[product_models.Category]]:
+    """A ``Category`` ``ModelSerializer`` whose ``get_fields()`` adds ``extra()`` beside ``name``."""
+
+    class CategoryExtra(ModelSerializerBase[product_models.Category]):
+        class Meta:
+            model = product_models.Category
+            fields = ("name",)
+
+        @override
+        def get_fields(self) -> dict[str, DRFField]:
+            return {**base_fields(super()), **extra()}
+
+    return CategoryExtra
+
+
+def _unusable_name_message(serializer_name: str, names: str) -> str:
+    return (
+        f"SerializerMutation for {serializer_name} keeps input field name(s) [{names}] that "
+        "cannot be attributes of the generated input class: each must be a Python identifier "
+        "that is not a keyword. Rename the field, make it read_only, or narrow it out with "
+        "Meta.fields / Meta.exclude (NestedSerializerConfig.fields / exclude for a nested "
+        "serializer)."
+    )
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "with space",
+        "9lead",
+        "a-b",
+        "class",
+        "from",
+        "",
+    ],
+)
+def test_serializer_input_field_name_must_be_a_non_keyword_identifier(key: str) -> None:
+    """A kept input field whose name cannot be a generated attribute fails typed at class creation.
+
+    The name becomes an attribute of the generated input dataclass, whose ``__init__`` source
+    renders it; without the gate the declaration finalizes into a raw ``SyntaxError``.
+    """
+    serializer_cls = _category_serializer_with(
+        lambda: {key: serializers.CharField(required=False, write_only=True)},
+    )
+    message = _unusable_name_message("CategoryExtra", repr(key))
+    with pytest.raises(ConfigurationError, match=f"^{re.escape(message)}$"):
+
+        @definition_raises
+        class UnusableNameMutation(SerializerMutation):
+            class Meta:
+                serializer_class = serializer_cls
+                operation = "create"
+                permission_classes = []
+
+
+def test_nested_serializer_input_field_name_must_be_a_non_keyword_identifier() -> None:
+    """An opted-in nested level is held to the same rule at class creation."""
+
+    class Child(serializers.Serializer[object]):
+        @override
+        def get_fields(self) -> dict[str, DRFField]:
+            return {"9lead": serializers.CharField()}
+
+    class Parent(ModelSerializerBase[product_models.Category]):
+        child = Child()
+
+        class Meta:
+            model = product_models.Category
+            fields = ("name", "child")
+
+        @override
+        def create(self, validated_data: dict[str, object]) -> NoReturn:
+            raise AssertionError("the nested-write check reads this override; nothing calls it")
+
+    message = _unusable_name_message("Child", "'9lead'")
+    with pytest.raises(ConfigurationError, match=f"^{re.escape(message)}$"):
+
+        @definition_raises
+        class UnusableNestedNameMutation(SerializerMutation):
+            class Meta:
+                serializer_class = Parent
+                operation = "create"
+                nested_fields = {"child": NestedSerializerConfig()}
+                permission_classes = []
+
+
+@pytest.mark.parametrize(
+    ("extra", "meta_fields"),
+    [
+        (lambda: {"with space": serializers.CharField(source="name", read_only=True)}, None),
+        (lambda: {"a-b": serializers.CharField(required=False, write_only=True)}, ("name",)),
+    ],
+    ids=["read-only", "narrowed-away"],
+)
+@pytest.mark.django_db
+def test_serializer_field_outside_the_input_may_carry_any_name(
+    extra: Callable[[], dict[str, DRFField]],
+    meta_fields: tuple[str, ...] | None,
+) -> None:
+    """Only the kept input set is checked: a read-only or narrowed-away field keeps any name.
+
+    The declaration builds, finalizes, and writes a row through a real mutation request.
+    """
+    _declare_products_primaries()
+    serializer_cls = _category_serializer_with(extra)
+
+    class AnyNameOutsideInput(SerializerMutation):
+        class Meta:
+            serializer_class = serializer_cls
+            operation = "create"
+            fields = meta_fields
+            permission_classes = []
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def ping(self) -> int:
+            return 1
+
+    @strawberry.type
+    class Mutation:
+        create_category = DjangoMutationField(AnyNameOutsideInput)
+
+    finalize_django_types()
+    input_cls = AnyNameOutsideInput._input_class
+    assert input_cls is not None
+    assert set(_input_fields(input_cls)) == {"name"}
+    input_definition = get_object_definition(input_cls, strict=True)
+    schema = DjangoSchema(query=Query, mutation=Mutation)
+    request = HttpRequest()
+    request.user = AnonymousUser()
+    result = schema.execute_sync(
+        f"mutation($d: {input_definition.name}!){{ createCategory(data: $d){{ "
+        "node{ name } errors{ field } } }",
+        variable_values={"d": {"name": "AnyName"}},
+        context_value=SimpleNamespace(request=request),
+    )
+    assert result.errors is None, result.errors
+    assert result.data == {"createCategory": {"node": {"name": "AnyName"}, "errors": []}}
+    assert list(product_models.Category.objects.values_list("name", flat=True)) == ["AnyName"]
+
+
+@pytest.mark.parametrize("key", ["type", "match", "_"])
+def test_serializer_input_field_may_carry_a_soft_keyword_name(key: str) -> None:
+    """A kept input field named by a soft keyword (or ``_``) is an identifier, so it builds.
+
+    Soft keywords are valid attribute names: only hard keywords break the generated input.
+    """
+    _declare_products_primaries()
+    serializer_cls = _category_serializer_with(
+        lambda: {key: serializers.CharField(required=False, write_only=True)},
+    )
+
+    class SoftKeywordNameMutation(SerializerMutation):
+        class Meta:
+            serializer_class = serializer_cls
+            operation = "create"
+            permission_classes = []
+
+    finalize_django_types()
+    assert SoftKeywordNameMutation._input_class is not None
+    assert key in _input_fields(SoftKeywordNameMutation._input_class)
+
+
+class _IsIdentifierRaisesStr(str):
+    """A ``str`` key whose ``isidentifier`` override raises; its text is a valid identifier."""
+
+    __slots__ = ()
+
+    @override
+    def isidentifier(self) -> NoReturn:
+        raise RuntimeError("hostile isidentifier boom")
+
+
+def test_input_field_name_check_reads_the_base_str_slot() -> None:
+    """The identifier test asks the base ``str`` method, so a key's own override never runs."""
+    _declare_products_primaries()
+
+    class Child(serializers.Serializer[object]):
+        @override
+        def get_fields(self) -> dict[str, DRFField]:
+            return {_IsIdentifierRaisesStr("ok"): serializers.CharField()}
+
+    class Parent(ModelSerializerBase[product_models.Category]):
+        child = Child()
+
+        class Meta:
+            model = product_models.Category
+            fields = ("name", "child")
+
+        @override
+        def create(self, validated_data: dict[str, object]) -> NoReturn:
+            raise AssertionError("the nested-write check reads this override; nothing calls it")
+
+    class BaseSlotNameMutation(SerializerMutation):
+        class Meta:
+            serializer_class = Parent
+            operation = "create"
+            nested_fields = {"child": NestedSerializerConfig()}
+            permission_classes = []
+
+    finalize_django_types()
+    assert BaseSlotNameMutation._input_class is not None
+    assert set(_input_fields(BaseSlotNameMutation._input_class)) == {"name", "child"}
 
 
 # NOTE: the same-serializer hook-shape collision (two mutations over one serializer whose

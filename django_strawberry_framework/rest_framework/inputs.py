@@ -52,6 +52,7 @@ The shape is the ``038`` form discipline adapted to DRF (spec-039 Decision 7):
 from __future__ import annotations
 
 import hashlib
+import keyword
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from types import GenericAlias
@@ -62,9 +63,14 @@ from django.db import models
 from rest_framework import serializers
 from rest_framework.fields import empty
 
-from django_strawberry_framework.exceptions import ConfigurationError, _safe_arg_repr
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_predicate,
+)
 from django_strawberry_framework.mutations.inputs import CREATE, PARTIAL
 from django_strawberry_framework.registry import register_subsystem_clear
+from django_strawberry_framework.utils._narrowing import is_str
 from django_strawberry_framework.utils.inputs import (
     InputFieldSpec,
     build_strawberry_input_class,
@@ -251,12 +257,12 @@ def normalize_nested_serializer_configs(
     """
     if nested_configs is None:
         return None
-    # basedpyright: the annotation is the contract; the check rejects a caller without a type
-    # checker (a consumer-built ``NestedSerializerConfig.nested_fields`` reaches here
-    # unvalidated), per GOAL.md "Trust boundary": configuration is validated at construction
-    if not isinstance(nested_configs, Mapping):  # pyright: ignore[reportUnnecessaryIsInstance]
-        # basedpyright: unreachable under the annotation, for the trust boundary above
-        raise ConfigurationError(  # pyright: ignore[reportUnreachable]
+    # The annotation is the contract; the check rejects a caller without a type checker (a
+    # consumer-built ``NestedSerializerConfig.nested_fields`` reaches here unvalidated), per
+    # GOAL.md "Trust boundary": configuration is validated at construction. The ``isinstance``
+    # is guarded, so a ``__class__`` read that raises is this typed rejection too.
+    if not _safe_predicate(isinstance, nested_configs, Mapping):
+        raise ConfigurationError(
             f"nested_configs must be a mapping of {{field_name: NestedSerializerConfig}}; "
             f"got {_safe_arg_repr(nested_configs)}.",
         )
@@ -266,10 +272,11 @@ def normalize_nested_serializer_configs(
     normalized: dict[str, NestedSerializerConfig] = {}
     next_path = _mapping_path | {mapping_id}
     for field_name, config in nested_configs.items():
-        # basedpyright: trust boundary: ``NestedSerializerConfig.nested_fields`` is the public
-        # contract; a consumer-built config can nest any value, which
-        # ``require_nested_serializer_config`` rejects
-        if not isinstance(config, NestedSerializerConfig):  # pyright: ignore[reportUnnecessaryIsInstance]
+        # Trust boundary: ``NestedSerializerConfig.nested_fields`` is the public contract; a
+        # consumer-built config can nest any value, which ``require_nested_serializer_config``
+        # rejects (the same guarded ``isinstance``, so the two cannot disagree on a value whose
+        # ``__class__`` read raises).
+        if not _safe_predicate(isinstance, config, NestedSerializerConfig):
             normalized[field_name] = config
             continue
         normalized[field_name] = NestedSerializerConfig(
@@ -339,9 +346,11 @@ def require_nested_fields_mapping(owner_name: str, nested_fields: object) -> Non
     The container rejection is worded once for the ``Meta`` validation
     (``rest_framework/sets.py::_validate_serializer_nested_fields``) and the per-level key
     validation (``validate_nested_config_keys``), which reject the same shape at two
-    depths of the same opt-in tree.
+    depths of the same opt-in tree. The ``isinstance`` is guarded: a ``Mapping`` subclass and
+    a faithful proxy (``SimpleLazyObject``) pass, and a ``__class__`` read that raises is this
+    typed rejection instead of the consumer's exception.
     """
-    if not isinstance(nested_fields, Mapping):
+    if not _safe_predicate(isinstance, nested_fields, Mapping):
         raise ConfigurationError(
             f"SerializerMutation {owner_name}.Meta.nested_fields must be a mapping of "
             f"{{field_name: NestedSerializerConfig}}; got {_safe_arg_repr(nested_fields)}.",
@@ -352,9 +361,9 @@ def require_nested_serializer_config(owner_name: str, field_name: object, config
     """Reject a ``nested_fields`` value that is not a ``NestedSerializerConfig``.
 
     The per-entry value rejection paired with ``require_nested_fields_mapping``; the same
-    two callers apply it.
+    two callers apply it, with the same guarded ``isinstance``.
     """
-    if not isinstance(config, NestedSerializerConfig):
+    if not _safe_predicate(isinstance, config, NestedSerializerConfig):
         raise ConfigurationError(
             f"SerializerMutation {owner_name}.Meta.nested_fields[{field_name!r}] must be a "
             f"NestedSerializerConfig; got {_safe_arg_repr(config)}.",
@@ -807,7 +816,12 @@ def resolve_effective_serializer_fields(
        exclusive; bare-string incl. ``"__all__"`` / duplicate rejection via the shared
        ``normalize_field_name_sequence(flavor="SerializerMutation")`` - called directly,
        no per-flavor wrapper, spec-039; an unknown name raises);
-    4. an empty effective set raises (the ``036`` / ``038`` empty-input guard).
+    4. an empty effective set raises (the ``036`` / ``038`` empty-input guard);
+    5. a kept name that is not a Python identifier, or is a keyword, raises
+       (``_is_input_attribute_name``): each kept field becomes a generated input attribute.
+       Only the kept set is checked, so a read-only or narrowed-away field may carry any name.
+       This is the one place both the root and every opted-in nested level pass at class
+       creation (``SerializerMutation._validate_meta`` and the nested ownership walk).
 
     ``Meta.fields`` / ``Meta.exclude`` are BOTH validated against the WRITABLE field set
     (after the read-only / ``HiddenField`` drop) - so naming a ``read_only`` (or
@@ -825,7 +839,7 @@ def resolve_effective_serializer_fields(
     # form flavor; this wrapper supplies the WRITABLE basis + the serializer message
     # knobs so the read-only drop stays intrinsic to the serializer flavor.
     writable = writable_serializer_fields(discovered)
-    return resolve_effective_fields(
+    effective = resolve_effective_fields(
         writable,
         fields=fields,
         exclude=exclude,
@@ -839,6 +853,30 @@ def resolve_effective_serializer_fields(
             "at least one field."
         ),
     )
+    unusable = [name for name in effective if not _is_input_attribute_name(name)]
+    if unusable:
+        raise ConfigurationError(
+            f"SerializerMutation for {serializer_class.__name__} keeps input field name(s) "
+            f"[{', '.join(_safe_arg_repr(name) for name in unusable)}] that cannot be "
+            "attributes of the generated input class: each must be a Python identifier that is "
+            "not a keyword. Rename the field, make it read_only, or narrow it out with "
+            "Meta.fields / Meta.exclude (NestedSerializerConfig.fields / exclude for a nested "
+            "serializer).",
+        )
+    return effective
+
+
+def _is_input_attribute_name(name: object) -> bool:
+    """Return whether ``name`` can be a generated input attribute: an identifier, not a keyword.
+
+    The generated input is a dataclass whose ``__init__`` source renders every attribute name,
+    so any other name (``"with space"``, ``"9lead"``, ``"a-b"``, ``""``, ``"class"``) detonates
+    as a raw ``SyntaxError`` out of that source at finalization. Each test reads the real
+    ``str`` value through base slots: ``is_str`` asks the real type, ``str.isidentifier`` is
+    the base method, and ``keyword.iskeyword`` receives the exact ``str`` copy
+    ``str.__str__`` returns, so no ``str`` subclass override runs here.
+    """
+    return is_str(name) and str.isidentifier(name) and not keyword.iskeyword(str.__str__(name))
 
 
 def resolve_optional_fields(

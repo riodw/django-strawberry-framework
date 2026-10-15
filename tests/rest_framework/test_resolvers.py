@@ -69,6 +69,7 @@ from django.db.models import Model, QuerySet
 from django.db.models.signals import post_save, pre_save
 from django.db.utils import OperationalError
 from django.http import HttpRequest
+from django.utils.functional import SimpleLazyObject
 from rest_framework import serializers
 from rest_framework.exceptions import ErrorDetail
 from rest_framework.validators import UniqueTogetherValidator, UniqueValidator
@@ -177,6 +178,89 @@ def _as_serializer_mutation(stand_in: object) -> type[SerializerMutation]:
     # lists, a ``_mutation_meta`` snapshot), so a slot can be malformed or absent; the serializer
     # resolver internals type the parameter as type[SerializerMutation]
     return stand_in  # pyright: ignore[reportReturnType]
+
+
+class _ClassReadRaises:
+    """A value whose ``__class__`` read raises ``escape``: ``isinstance`` falls back to that read."""
+
+    def __init__(self, escape: type[BaseException] = RuntimeError) -> None:
+        self._escape = escape
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__`` that raises, the guard's hostile input
+    def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
+        raise self._escape("hostile __class__ boom")
+
+    @override
+    def __repr__(self) -> str:
+        return "<ClassReadRaises>"
+
+
+class _ReprRaises:
+    """A value whose ``__repr__`` raises (a key or a return the rejection must still render)."""
+
+    @override
+    def __repr__(self) -> str:
+        raise RuntimeError("hostile __repr__ boom")
+
+
+class _ReprRaisesStr(str):
+    """A ``str`` subclass whose ``__repr__`` raises; equal to and hashed like its text."""
+
+    __slots__ = ()
+
+    @override
+    def __repr__(self) -> str:
+        raise RuntimeError("hostile __repr__ boom")
+
+
+class _CompareRaisesStr(str):
+    """A ``str`` subclass whose ``__eq__`` / ``__ne__`` raise; its text is still a real ``str``."""
+
+    __slots__ = ()
+
+    @override
+    def __eq__(self, other: object) -> NoReturn:
+        raise RuntimeError("hostile __eq__ boom")
+
+    @override
+    def __ne__(self, other: object) -> NoReturn:
+        raise RuntimeError("hostile __ne__ boom")
+
+    @override
+    def __hash__(self) -> int:
+        return str.__hash__(self)
+
+
+class _ClaimsStr:
+    """A mutable object whose ``__class__`` claims ``str``."""
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
+    def __class__(self) -> type[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
+        return str
+
+
+class _ClaimsDict:
+    """An object whose ``__class__`` claims ``dict`` but which has no ``items()``."""
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
+    def __class__(self) -> type[dict[object, object]]:  # pyright: ignore[reportIncompatibleMethodOverride]
+        return dict
+
+
+class _ListClaimsDict(list[object]):
+    """A real ``list`` whose ``__class__`` claims ``dict``."""
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
+    def __class__(self) -> type[dict[object, object]]:  # pyright: ignore[reportIncompatibleMethodOverride]
+        return dict
 
 
 @runtime_checkable
@@ -1969,6 +2053,68 @@ def test_hook_mapping_wraps_a_mapping_that_cannot_be_materialized(
         )
 
 
+_HOOK_MAPPING_TAIL = (
+    "; hook mappings become serializer kwargs / data keys, so every key must be a plain string."
+)
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        (
+            _ClassReadRaises(),
+            "SerializerMutation M.get_data must return a mapping; got _ClassReadRaises.",
+        ),
+        (
+            _ClassReadRaises(KeyboardInterrupt),
+            "SerializerMutation M.get_data must return a mapping; got _ClassReadRaises.",
+        ),
+        (
+            {_ReprRaises(): 1, "ok": 2},
+            (
+                "SerializerMutation M.get_data returned a mapping with non-string key(s) "
+                f"['<unprintable _ReprRaises>']{_HOOK_MAPPING_TAIL}"
+            ),
+        ),
+        (
+            {None: 1, 1: 2, "ok": 3},
+            (
+                "SerializerMutation M.get_data returned a mapping with non-string key(s) "
+                f"['1', 'None']{_HOOK_MAPPING_TAIL}"
+            ),
+        ),
+    ],
+    ids=[
+        "class-read-raises",
+        "class-read-KeyboardInterrupt",
+        "key-repr-raises",
+        "honest-non-str-keys",
+    ],
+)
+def test_hook_mapping_rejection_never_runs_the_return_code(value: object, message: str) -> None:
+    """The hook-boundary rejection is typed and byte-stable whatever the return's own code does.
+
+    The mapping test is a guarded ``isinstance`` and each offending key renders once through the
+    guarded repr, so neither a ``__class__`` read nor a key ``__repr__`` that raises replaces the
+    typed error; an honest offender list keeps its ``['1', 'None']`` spelling.
+    """
+    with pytest.raises(ConfigurationError, match=f"^{re.escape(message)}$"):
+        serializer_resolvers._hook_mapping(
+            _as_serializer_mutation(type("M", (), {})),
+            "get_data",
+            value,
+        )
+
+
+def test_hook_mapping_accepts_a_faithful_lazy_mapping() -> None:
+    """A ``SimpleLazyObject`` over a str-keyed dict still materializes (the test is ``isinstance``)."""
+    assert serializer_resolvers._hook_mapping(
+        _as_serializer_mutation(type("M", (), {})),
+        "get_data",
+        SimpleLazyObject(lambda: {"k": 1}),
+    ) == {"k": 1}
+
+
 # ===========================================================================
 # Explicit injection contract runtime verification
 # ===========================================================================
@@ -2626,6 +2772,36 @@ def test_save_kwargs_shadowing_validated_key_raises() -> None:
         )
 
 
+def test_save_kwargs_shadow_message_renders_the_save_kwarg_not_the_validated_key() -> None:
+    """A ``validate()`` key whose ``__repr__`` raises cannot replace the typed shadow error.
+
+    The shadowed names come from the save-kwargs side (plain ``str`` keys), so the message
+    renders ``'code'`` even though the colliding ``validated_data`` key is a hostile object.
+    """
+
+    class CodeSer(serializers.Serializer[object]):
+        code = serializers.CharField()
+
+        @override
+        def validate(self, attrs: dict[str, object]) -> dict[str, object]:
+            return {_ReprRaisesStr("code"): attrs["code"]}
+
+    serializer = _validated_serializer(CodeSer, {"code": "X"})
+    message = (
+        "SerializerMutation M.get_serializer_save_kwargs returned kwarg(s) ['code'] that shadow "
+        "key(s) in the serializer's validated_data; DRF merges save kwargs over validated_data, "
+        "so the value would silently replace the validated one (client input, injection, "
+        "default, or hidden field). Save kwargs are for server-side data outside the validated "
+        "payload (rename them, or drop the colliding field)."
+    )
+    with pytest.raises(ConfigurationError, match=f"^{re.escape(message)}$"):
+        serializer_resolvers._assert_save_kwargs_no_shadow(
+            _as_serializer_mutation(type("M", (), {})),
+            serializer,
+            {"code": "clobber"},
+        )
+
+
 def test_save_kwargs_not_shadowing_validated_key_is_allowed() -> None:
     """A save kwarg NOT in ``validated_data`` (server-side data) is allowed."""
 
@@ -2968,6 +3144,156 @@ def test_merged_kwargs_hook_conflicting_write_alias_is_configuration_error() -> 
             alias="default",
             hook_context=_hook_ctx(),
         )
+
+
+_WRITE_ALIAS_TAIL = (
+    ", but the mutation's transaction is pinned to 'default'; the write alias is "
+    "framework-owned (one transaction, one alias). Drop context['write_alias'] from the override."
+)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("context", "message"),
+    [
+        (
+            _ClassReadRaises(),
+            (
+                "SerializerMutation ReservedMutation.get_serializer_kwargs returned a `context` "
+                "that is not a mapping; got _ClassReadRaises."
+            ),
+        ),
+        (
+            _ClassReadRaises(KeyboardInterrupt),
+            (
+                "SerializerMutation ReservedMutation.get_serializer_kwargs returned a `context` "
+                "that is not a mapping; got _ClassReadRaises."
+            ),
+        ),
+        (
+            {"write_alias": _CompareRaisesStr("other")},
+            (
+                "SerializerMutation ReservedMutation.get_serializer_kwargs set "
+                f"context['write_alias'] to 'other'{_WRITE_ALIAS_TAIL}"
+            ),
+        ),
+        (
+            {"write_alias": _ReprRaisesStr("other")},
+            (
+                "SerializerMutation ReservedMutation.get_serializer_kwargs set "
+                f"context['write_alias'] to <unprintable _ReprRaisesStr>{_WRITE_ALIAS_TAIL}"
+            ),
+        ),
+        (
+            {"write_alias": 5},
+            (
+                "SerializerMutation ReservedMutation.get_serializer_kwargs set "
+                f"context['write_alias'] to 5{_WRITE_ALIAS_TAIL}"
+            ),
+        ),
+    ],
+    ids=[
+        "context-class-read-raises",
+        "context-class-read-KeyboardInterrupt",
+        "alias-compare-raises",
+        "alias-repr-raises",
+        "alias-int",
+    ],
+)
+def test_merged_kwargs_context_rejection_never_runs_the_override_code(
+    context: object,
+    message: str,
+) -> None:
+    """The ``context`` / ``write_alias`` rejections are typed whatever the override's code does.
+
+    The context test is a guarded ``isinstance``; the alias agrees only when its real type is
+    ``str`` and the base ``str`` slot finds the pinned alias's text, so no override ``__eq__`` /
+    ``__ne__`` runs; the rejection renders the alias through the guarded repr.
+    """
+
+    def hook(
+        _self: SerializerMutation,
+        _info: object,
+        *,
+        data: Mapping[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        return {"data": data, "context": context}
+
+    mutation_cls = _reserved_kwarg_mutation(hook)
+    with pytest.raises(ConfigurationError, match=f"^{re.escape(message)}$"):
+        serializer_resolvers._merged_serializer_kwargs(
+            mutation_cls,
+            _info_with_request(),
+            final_data={"name": "X"},
+            instance=None,
+            alias="default",
+            hook_context=_hook_ctx(),
+        )
+
+
+@pytest.mark.django_db
+def test_merged_kwargs_lazy_write_alias_is_conflicting() -> None:
+    """A lazy proxy of the pinned alias is not the alias: a database alias is a real ``str``."""
+
+    def hook(
+        _self: SerializerMutation,
+        _info: object,
+        *,
+        data: Mapping[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        return {"data": data, "context": {"write_alias": SimpleLazyObject(lambda: "default")}}
+
+    mutation_cls = _reserved_kwarg_mutation(hook)
+    pattern = (
+        re.escape(
+            "SerializerMutation ReservedMutation.get_serializer_kwargs set context['write_alias'] "
+            "to <SimpleLazyObject: ",
+        )
+        + ".*"
+        + re.escape(_WRITE_ALIAS_TAIL)
+    )
+    with pytest.raises(ConfigurationError, match=f"^{pattern}$"):
+        serializer_resolvers._merged_serializer_kwargs(
+            mutation_cls,
+            _info_with_request(),
+            final_data={"name": "X"},
+            instance=None,
+            alias="default",
+            hook_context=_hook_ctx(),
+        )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "override",
+    [_CompareRaisesStr("default"), _ReprRaisesStr("default"), "default"],
+    ids=["str-subclass-compare-raises", "str-subclass-repr-raises", "plain-str"],
+)
+def test_merged_kwargs_write_alias_equal_by_text_is_accepted(override: str) -> None:
+    """An override whose real ``str`` text is the pinned alias agrees, whatever its dunders do."""
+
+    def hook(
+        _self: SerializerMutation,
+        _info: object,
+        *,
+        data: Mapping[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        return {"data": data, "context": {"write_alias": override}}
+
+    mutation_cls = _reserved_kwarg_mutation(hook)
+    kwargs = serializer_resolvers._merged_serializer_kwargs(
+        mutation_cls,
+        _info_with_request(),
+        final_data={"name": "X"},
+        instance=None,
+        alias="default",
+        hook_context=_hook_ctx(),
+    )
+    assert type(kwargs["context"]["write_alias"]) is str
+    assert kwargs["context"]["write_alias"] == "default"
 
 
 @pytest.mark.django_db
@@ -3409,6 +3735,55 @@ def test_frozen_hook_view_freezes_the_full_value_algebra_and_fails_closed_on_opa
         serializer_resolvers._frozen_hook_view({"weird": object()})
 
 
+_OPAQUE_LEAF_TAIL = (
+    " that cannot be frozen into an immutable hook view. The frozen view exposes only immutable "
+    "scalars, uploads (as UploadMetadata), and dict/list/tuple/set containers; an opaque, "
+    "possibly-mutable leaf is rejected rather than passed by reference (a hook could mutate it "
+    "and thereby mutate the authoritative serializer data). Supply a plain JSON-compatible value."
+)
+
+
+@pytest.mark.parametrize(
+    ("value", "type_name"),
+    [
+        ({"x": _ClassReadRaises()}, "_ClassReadRaises"),
+        ({"x": [_ClaimsStr()]}, "_ClaimsStr"),
+        ({"x": _ClaimsDict()}, "_ClaimsDict"),
+        (_ClaimsDict(), "_ClaimsDict"),
+        ({"x": SimpleLazyObject(lambda: "s")}, "SimpleLazyObject"),
+    ],
+    ids=[
+        "class-read-raises",
+        "claims-str",
+        "claims-dict",
+        "root-claims-dict",
+        "lazy-str",
+    ],
+)
+def test_frozen_hook_view_asks_the_real_type(value: object, type_name: str) -> None:
+    """A leaf is frozen by what it IS, never by what its ``__class__`` says.
+
+    A value claiming ``str`` / ``dict`` (or a lazy proxy of one, which can be rebound in place)
+    is not that immutable object, so it fails closed as an opaque leaf; a ``__class__`` read
+    that raises is never made.
+    """
+    message = (
+        f"SerializerMutation hook data contains a value of type {type_name!r}{_OPAQUE_LEAF_TAIL}"
+    )
+    with pytest.raises(ConfigurationError, match=f"^{re.escape(message)}$"):
+        serializer_resolvers._frozen_hook_view(value)
+
+
+def test_frozen_hook_view_descends_a_real_list_whatever_its_class_claims() -> None:
+    """A real ``list`` whose ``__class__`` claims ``dict`` is frozen as the list it is."""
+    view = serializer_resolvers._frozen_hook_view({"x": _ListClaimsDict(["a", {"n": 1}])})
+    frozen = view["x"]
+    assert is_tuple(frozen)
+    assert type(frozen) is tuple
+    assert frozen[0] == "a"
+    assert type(frozen[1]) is MappingProxyType
+
+
 def _saved_result_fixture() -> tuple[type[object], serializers.Serializer[object]]:
     """A fake mutation + serializer name for the saved-result validation tests."""
 
@@ -3436,6 +3811,64 @@ def test_saved_result_wrong_model_is_configuration_error() -> None:
             "default",
             [],
         )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("saved", "rendered"),
+    [(_ClassReadRaises(), "<ClassReadRaises>"), (_ReprRaises(), "<unprintable _ReprRaises>")],
+    ids=["class-read-raises", "repr-raises"],
+)
+def test_saved_result_drifted_return_rejection_never_runs_the_return_code(
+    saved: object,
+    rendered: str,
+) -> None:
+    """A drifted ``save()`` return is the typed rejection even when its own dunders raise."""
+    fake, serializer = _saved_result_fixture()
+    message = (
+        f"SerializerMutation SavedMut: FakeSer.save() returned {rendered}, not a Item instance; "
+        "the serializer's create()/update() must return the written model row."
+    )
+    with pytest.raises(ConfigurationError, match=f"^{re.escape(message)}$"):
+        serializer_resolvers._checked_saved_result(
+            _as_serializer_mutation(fake),
+            serializer,
+            saved,
+            None,
+            "default",
+            [],
+        )
+
+
+@pytest.mark.django_db
+def test_saved_result_lazy_proxy_is_rejected_without_being_evaluated() -> None:
+    """A lazy proxy of a row is not the row: the check asks the real type and never evaluates it."""
+    fake, serializer = _saved_result_fixture()
+    evaluated: list[bool] = []
+
+    def load() -> product_models.Item:
+        evaluated.append(True)
+        return product_models.Item(name="x")
+
+    lazy = SimpleLazyObject(load)
+    pattern = (
+        re.escape("SerializerMutation SavedMut: FakeSer.save() returned <SimpleLazyObject: ")
+        + ".*"
+        + re.escape(
+            ", not a Item instance; the serializer's create()/update() must return the written "
+            "model row.",
+        )
+    )
+    with pytest.raises(ConfigurationError, match=f"^{pattern}$"):
+        serializer_resolvers._checked_saved_result(
+            _as_serializer_mutation(fake),
+            serializer,
+            lazy,
+            None,
+            "default",
+            [],
+        )
+    assert evaluated == []
 
 
 @pytest.mark.django_db

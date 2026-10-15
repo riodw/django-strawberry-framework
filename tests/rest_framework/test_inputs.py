@@ -39,6 +39,7 @@ from apps.library import models as library_models
 from apps.library.models import Book, Genre
 from apps.products import models as product_models
 from django.db import models
+from django.utils.functional import SimpleLazyObject
 from rest_framework import serializers
 from strawberry import UNSET, relay
 from strawberry.types.base import StrawberryOptional, get_object_definition
@@ -70,6 +71,8 @@ from django_strawberry_framework.rest_framework.inputs import (
     materialize_serializer_input_class,
     normalize_nested_serializer_configs,
     raise_writable_source_ownership_errors,
+    require_nested_fields_mapping,
+    require_nested_serializer_config,
     resolve_effective_serializer_fields,
     resolve_injected_field_specs,
     resolve_optional_fields,
@@ -2093,6 +2096,96 @@ def test_normalize_nested_serializer_configs_rejects_non_mapping() -> None:
         # basedpyright: the non-mapping config is the hostile input under test;
         # normalize_nested_serializer_configs types the parameter as Mapping[str, NestedSerializerConfig]
         normalize_nested_serializer_configs(["invalid"])  # pyright: ignore[reportArgumentType]
+
+
+class _ClassReadRaises:
+    """A value whose ``__class__`` read raises ``escape``: ``isinstance`` falls back to that read."""
+
+    def __init__(self, escape: type[BaseException] = RuntimeError) -> None:
+        self._escape = escape
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__`` that raises, the guard's hostile input
+    def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
+        raise self._escape("hostile __class__ boom")
+
+    @override
+    def __repr__(self) -> str:
+        return "<ClassReadRaises>"
+
+
+def _require_mapping(value: object) -> object:
+    return require_nested_fields_mapping("M", value)
+
+
+def _require_config(value: object) -> object:
+    return require_nested_serializer_config("M", "child", value)
+
+
+def _normalize_mapping(value: object) -> object:
+    # basedpyright: the hostile value is the input under test; the parameter is typed as a mapping
+    return normalize_nested_serializer_configs(value)  # pyright: ignore[reportArgumentType]
+
+
+@pytest.mark.parametrize(
+    ("check", "message"),
+    [
+        (
+            _require_mapping,
+            (
+                "SerializerMutation M.Meta.nested_fields must be a mapping of "
+                "{field_name: NestedSerializerConfig}; got <ClassReadRaises>."
+            ),
+        ),
+        (
+            _require_config,
+            (
+                "SerializerMutation M.Meta.nested_fields['child'] must be a NestedSerializerConfig; "
+                "got <ClassReadRaises>."
+            ),
+        ),
+        (
+            _normalize_mapping,
+            (
+                "nested_configs must be a mapping of {field_name: NestedSerializerConfig}; "
+                "got <ClassReadRaises>."
+            ),
+        ),
+    ],
+    ids=["nested-fields-mapping", "nested-config-value", "nested-configs-normalizer"],
+)
+@pytest.mark.parametrize("escape", [RuntimeError, KeyboardInterrupt])
+def test_nested_config_class_read_that_raises_is_typed(
+    check: Callable[[object], object],
+    message: str,
+    escape: type[BaseException],
+) -> None:
+    """A ``__class__`` read that raises (any ``BaseException``) answers "not a mapping" / "not a config"."""
+    with pytest.raises(ConfigurationError, match=f"^{re.escape(message)}$"):
+        check(_ClassReadRaises(escape))
+
+
+def test_nested_config_normalizer_leaves_an_unreadable_value_for_the_typed_rejection() -> None:
+    """The normalizer passes a value it cannot class-test through for the per-entry rejection."""
+    hostile = _ClassReadRaises()
+    # basedpyright: the hostile value is the input under test; the parameter is typed as a mapping
+    normalized = normalize_nested_serializer_configs({"child": hostile})  # pyright: ignore[reportArgumentType]
+    assert normalized is not None
+    assert normalized["child"] is hostile
+
+
+def test_nested_config_checks_accept_faithful_lazy_proxies() -> None:
+    """A lazy proxy of an honest mapping / config still passes (the test is ``isinstance``)."""
+
+    def load_mapping() -> dict[str, NestedSerializerConfig]:
+        return {}
+
+    def load_config() -> NestedSerializerConfig:
+        return NestedSerializerConfig()
+
+    require_nested_fields_mapping("M", SimpleLazyObject(load_mapping))
+    require_nested_serializer_config("M", "child", SimpleLazyObject(load_config))
 
 
 def test_build_serializer_input_class_rejects_non_nested_config_items() -> None:

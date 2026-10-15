@@ -1650,7 +1650,13 @@ unknown name, or an empty effective set raises
 sentinel** for these keys: the package's `"__all__"` is the non-field-error envelope key
 alone, never a field selector, so an all-optional create input is expressed by listing
 the fields in `optional_fields`, not by `optional_fields = "__all__"` (rejected as a
-bare string, with a message pointing at the explicit list).
+bare string, with a message pointing at the explicit list). Every name the effective set
+keeps becomes an attribute of the generated input class, so a kept name that is not a
+Python identifier, or is a keyword (`"with space"`, `"9lead"`, `"class"`), raises a
+class-creation [`ConfigurationError`][glossary-configurationerror] naming it, at the root
+and at every opted-in nested level
+(`rest_framework/inputs.py::resolve_effective_serializer_fields`); a `read_only` /
+`HiddenField` or narrowed-away field never reaches the input and may carry any name.
 
 **Create-required narrowing guard (bind-time, per declaration).** `Meta.fields` /
 `Meta.exclude` are validated against the serializer field set, but a *valid* narrowing

@@ -81,8 +81,9 @@ def base_container_values(value: object) -> tuple[object, ...]:
     is the silent one - an ``__iter__`` that returns DIFFERENT members per call
     fingerprints a lie without raising anything. There is no base slot to read
     for a type the interpreter does not define, so the honest answer is a typed
-    refusal. Both callers gate on the five built-in types before arriving here
+    refusal. Every caller gates on the five built-in types before arriving here
     (``utils/inputs.py::canonicalize_set_meta_fields``,
+    ``utils/inputs.py::plain_set_meta_fields``,
     ``utils/write_transaction.py::_field_fingerprint``), so
     the refusal fires only for a future caller that widened its gate without
     deciding how an arbitrary iterable should be read.

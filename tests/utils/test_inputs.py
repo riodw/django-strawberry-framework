@@ -7,9 +7,9 @@ Shipped filter/order input names live in
 """
 
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, NoReturn
+from typing import TYPE_CHECKING, ClassVar, NoReturn, cast
 
 import pytest
 import strawberry
@@ -25,13 +25,23 @@ from django_strawberry_framework.orders import OrderSet
 from django_strawberry_framework.orders import inputs as order_inputs
 from django_strawberry_framework.orders import sets as order_sets
 from django_strawberry_framework.rest_framework import inputs as ser_inputs
-from django_strawberry_framework.sets_mixins import ClassBasedTypeNameMixin
+from django_strawberry_framework.sets_mixins import (
+    ClassBasedTypeNameMixin,
+    is_re_readable_field_declaration,
+)
+from django_strawberry_framework.utils._narrowing import (
+    is_dict,
+    is_list,
+    is_set_or_frozenset,
+    is_tuple,
+)
 from django_strawberry_framework.utils.canonical import base_container_values
 from django_strawberry_framework.utils.inputs import (
     FILTERSET_FIELDS_ALIAS,
     GeneratedInputArgumentsFactory,
     GeneratedInputFieldSpec,
     InputFieldSpec,
+    _PlainNames,
     _safe_import,
     _sorted_meta_values,
     build_strawberry_input_class,
@@ -51,12 +61,19 @@ from django_strawberry_framework.utils.inputs import (
     optional_field_kwargs,
     optional_input_field,
     pascalize_token,
+    plain_set_meta_fields,
     promote_set_meta_fields,
     read_set_meta_fields,
     resolve_set_meta_fields,
     set_input_type_name,
 )
-from tests._idioms import ClaimsClass, ClassReadRaises, module_binding
+from tests._idioms import (
+    STR_SUBCLASS_KINDS,
+    ClaimsClass,
+    ClassReadRaises,
+    module_binding,
+    str_subclass_name,
+)
 from tests._soft_dependency import blocked_modules
 
 if TYPE_CHECKING:
@@ -701,6 +718,156 @@ def test_read_set_meta_fields_canonicalizes_sets_without_mutating_source() -> No
         "name": sorted(["contains", "exact"], key=repr),
     }
     assert read_set_meta_fields(None) is None
+
+
+class _Names(Collection[object]):
+    """A project ``Collection`` of field names: re-readable, with no base slot to read."""
+
+    def __init__(self, *names: object) -> None:
+        super().__init__()
+        self._names = names
+
+    @override
+    def __iter__(self) -> Iterator[object]:
+        return iter(self._names)
+
+    @override
+    def __len__(self) -> int:
+        return len(self._names)
+
+    @override
+    def __contains__(self, item: object) -> bool:
+        return item in self._names
+
+
+class _NameList(list[object]):
+    """A ``list`` subclass declaration."""
+
+
+def _plain_text_only(value: object) -> bool:
+    """Whether every ``str`` reachable in ``value`` (keys, members, lookups) is exactly ``str``."""
+    if isinstance(value, str):
+        return type(value) is str
+    if is_dict(value):
+        return all(
+            _plain_text_only(key) and _plain_text_only(lookups)
+            for key, lookups in base_container_values(value)
+        )
+    if is_list(value) or is_tuple(value) or is_set_or_frozenset(value):
+        return all(_plain_text_only(member) for member in base_container_values(value))
+    if isinstance(value, _PlainNames):
+        return all(_plain_text_only(member) for member in value)
+    return True
+
+
+_PLAIN_SHAPES: dict[str, tuple[Callable[[Callable[[str], str]], object], object]] = {
+    "name": (lambda n: n("title"), "title"),
+    "top-level __all__": (lambda n: n("__all__"), "__all__"),
+    "list": (lambda n: [n("title"), "isbn"], ["title", "isbn"]),
+    "list subclass": (lambda n: _NameList([n("title")]), ["title"]),
+    "tuple": (lambda n: (n("title"), "isbn"), ("title", "isbn")),
+    "set": (lambda n: {n("title"), "isbn"}, {"title", "isbn"}),
+    "frozenset": (lambda n: frozenset({n("title")}), frozenset({"title"})),
+    "non-str member": (lambda n: [n("title"), None], ["title", None]),
+    "dict key": (
+        lambda n: {"isbn": ["exact"], n("title"): ["exact", "icontains"]},
+        {"isbn": ["exact"], "title": ["exact", "icontains"]},
+    ),
+    "dict lookup value": (lambda n: {"title": [n("icontains")]}, {"title": ["icontains"]}),
+    "dict per-field __all__": (lambda n: {"title": n("__all__")}, {"title": "__all__"}),
+    "dict_keys": (lambda n: {n("title"): None}.keys(), _PlainNames(("title",))),
+    "custom Collection": (lambda n: _Names(n("title"), "isbn"), _PlainNames(("title", "isbn"))),
+}
+
+
+@pytest.mark.parametrize("kind", STR_SUBCLASS_KINDS)
+@pytest.mark.parametrize("shape", list(_PLAIN_SHAPES))
+def test_plain_set_meta_fields_reads_every_str_subclass_name_as_plain_text(
+    shape: str,
+    kind: str,
+) -> None:
+    """Every name a set-family declaration can hold comes back as the plain ``str`` it spells.
+
+    The container keeps its built-in kind (a ``list`` subclass becomes a
+    ``list``; a view or project ``Collection`` becomes a ``tuple``), a lookup-bag
+    ``dict`` keeps its key order, a non-``str`` member passes through, and no
+    dunder of the subclass runs on the way.
+    """
+    calls: list[str] = []
+    build, expected = _PLAIN_SHAPES[shape]
+    declaration = build(lambda text: str_subclass_name(kind, text, calls))
+    calls.clear()
+
+    plain = plain_set_meta_fields(declaration)
+
+    assert calls == []
+    assert _plain_text_only(plain)
+    assert type(plain) is type(expected)
+    if isinstance(expected, _PlainNames):
+        # No base slot to rebuild from: an ordered, re-readable copy that is, like the
+        # declaration, no ``list`` / ``tuple`` / ``set``.
+        assert list(cast("_PlainNames", plain)) == list(expected)
+        assert list(cast("_PlainNames", plain)) == list(cast("_PlainNames", plain))
+        assert is_re_readable_field_declaration(plain)
+        assert not isinstance(
+            plain,
+            (
+                list,
+                tuple,
+                set,
+                frozenset,
+            ),
+        )
+    else:
+        assert plain == expected
+    if is_dict(expected):
+        assert list(base_container_values(plain)) == list(base_container_values(expected))
+
+
+@pytest.mark.parametrize("shape", list(_PLAIN_SHAPES))
+def test_plain_set_meta_fields_returns_a_plain_declaration_as_the_same_object(shape: str) -> None:
+    """A declaration holding no ``str`` subclass is returned unchanged, by identity."""
+    build, _expected = _PLAIN_SHAPES[shape]
+    declaration = build(str)
+    assert plain_set_meta_fields(declaration) is declaration
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        None,
+        b"title",
+        (name for name in ["title"]),
+        {"title": None},
+    ],
+    ids=[
+        "None",
+        "bytes",
+        "one-shot iterator",
+        "lookup-less dict",
+    ],
+)
+def test_plain_set_meta_fields_passes_other_values_through(declaration: object) -> None:
+    """A value that names nothing through a ``str`` subclass is left for each family's own gate."""
+    assert plain_set_meta_fields(declaration) is declaration
+
+
+@pytest.mark.parametrize("kind", STR_SUBCLASS_KINDS)
+def test_read_set_meta_fields_orders_a_str_subclass_set_as_the_plain_names(kind: str) -> None:
+    """A ``set`` declaration holding a ``str`` subclass sorts exactly as the plain names would."""
+    calls: list[str] = []
+
+    class Meta:
+        fields = {str_subclass_name(kind, "title", calls), "subtitle", "isbn"}
+
+    calls.clear()
+    names = read_set_meta_fields(Meta)
+
+    assert calls == []
+    assert names == read_set_meta_fields(
+        type("PlainMeta", (), {"fields": {"title", "subtitle", "isbn"}}),
+    )
+    assert _plain_text_only(names)
 
 
 def test_make_shape_build_cache_returns_dict_and_clear() -> None:

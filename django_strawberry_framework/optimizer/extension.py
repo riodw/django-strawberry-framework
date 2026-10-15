@@ -185,12 +185,18 @@ _MAX_PLAN_CACHE_SIZE = 256
 _STRICTNESS_MODES = ("off", "warn", "raise")
 
 
-def _is_valid_strictness(strictness: object) -> bool:
-    """Content-match ``strictness`` against the strictness vocabulary.
+def _matched_strictness(strictness: object) -> str | None:
+    """Return the vocabulary constant ``strictness`` names by content, or ``None``.
 
-    The membership read never dispatches into the candidate value's dunders: a
-    ``str`` candidate is compared through the base ``str`` slot (content decides,
-    the same slot discipline ``nested_fetch.resolve_strategy`` documents), and a
+    The answer is the module's own constant, never the candidate, so what the
+    extension stores - and what every request then compares against ``"off"`` /
+    ``"warn"`` / ``"raise"`` - is a plain ``str`` the package owns: a ``str``
+    subclass with the right content (an enum member, a hostile ``__eq__``) is
+    accepted by content and then plays no further part.
+
+    The match never dispatches into the candidate value's dunders: a ``str``
+    candidate is compared through the base ``str`` slot (content decides, the
+    same slot discipline ``nested_fetch.resolve_strategy`` documents), and a
     non-``str`` candidate is rejected without any equality probe. Whether the
     candidate is a ``str`` is asked of its real type (``utils/_narrowing.py::is_str``),
     so a ``__class__`` property can neither claim ``str`` nor raise. A hostile
@@ -198,8 +204,11 @@ def _is_valid_strictness(strictness: object) -> bool:
     replace the typed ``ValueError`` with its own exception.
     """
     if not is_str(strictness):
-        return False
-    return any(str.__eq__(strictness, mode) is True for mode in _STRICTNESS_MODES)
+        return None
+    for mode in _STRICTNESS_MODES:
+        if str.__eq__(strictness, mode) is True:
+            return mode
+    return None
 
 
 # The Relay pagination argument names whose variable-supplied values must key
@@ -991,7 +1000,8 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         # at construction so typos (``strict=True``) surface at the call site
         # rather than being silently absorbed.
         self.execution_context: ExecutionContext | None = execution_context
-        if not _is_valid_strictness(strictness):
+        accepted_strictness = _matched_strictness(strictness)
+        if accepted_strictness is None:
             msg = f"strictness must be 'off', 'warn', or 'raise', got {_safe_arg_repr(strictness)}"
             raise ValueError(msg)
         # The nested-connection fetch strategy is fixed per extension INSTANCE
@@ -1006,7 +1016,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         _OPTIMIZER_CONFIGURATION.settle(
             self,
             _AcceptedOptimizerConfiguration(
-                strictness=strictness,
+                strictness=accepted_strictness,
                 nested_connection_strategy=resolve_strategy(nested_connection_strategy),
             ),
         )
@@ -1042,6 +1052,9 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
     def strictness(self) -> str:
         """The N+1 strictness this extension was constructed with, as a read.
 
+        Always the vocabulary's own plain ``str`` (``"off"`` / ``"warn"`` /
+        ``"raise"``), whatever ``str`` subclass spelled it at construction, so
+        every per-request comparison is the package's and never the caller's.
         Read-only, because it is armed for the whole of every execution and one
         write would disarm a deployment's guard for every later request rather
         than for the one that made it.

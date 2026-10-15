@@ -134,7 +134,7 @@ from django_strawberry_framework.utils.querysets import (
     wrap_async_queryset_adapter,
 )
 from tests._definition import make_definition
-from tests._idioms import definition_raises
+from tests._idioms import STR_SUBCLASS_KINDS, definition_raises, str_subclass_name
 from tests._info import make_info, response_path
 
 if TYPE_CHECKING:
@@ -2330,7 +2330,64 @@ def test_strictness_accepts_content_equal_str_subclass() -> None:
             raise RuntimeError(_END_DETONATION)
 
     extension = DjangoOptimizerExtension(strictness=ContentRaise("raise"))
+    assert type(extension.strictness) is str
     assert extension.strictness == "raise"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("mode", ["warn", "raise"])
+@pytest.mark.parametrize("kind", STR_SUBCLASS_KINDS)
+def test_str_subclass_strictness_arms_the_guard_as_its_text(
+    kind: str,
+    mode: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A ``str`` subclass spelling ``"warn"`` / ``"raise"`` arms exactly that mode.
+
+    The extension stores the vocabulary's own constant, so every request compares
+    a plain ``str`` the package owns: a subclass whose ``__eq__`` never matches
+    still warns or raises on an unplanned relation, one whose comparison raises
+    never turns a request into an error of its own, and none of its dunders run
+    after construction.
+    """
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    assert registry.get(Category) is CategoryType
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+            optimizer_hints = {"category": OptimizerHint.SKIP}
+
+    @strawberry.type
+    class Query:
+        @strawberry.field(graphql_type=list[ItemType])
+        def projected_items(self) -> QuerySet[Item]:
+            return Item.objects.order_by("id").only("name")
+
+    finalize_django_types()
+    calls: list[str] = []
+    optimizer = DjangoOptimizerExtension(strictness=str_subclass_name(kind, mode, calls))
+    assert type(optimizer.strictness) is str
+    assert optimizer.strictness == mode
+    schema = strawberry.Schema(query=Query, extensions=[lambda: optimizer])
+
+    caplog.set_level("WARNING", logger="django_strawberry_framework")
+    result = schema.execute_sync("{ projectedItems { name category { name } } }")
+
+    if mode == "raise":
+        assert result.errors is not None
+        assert [error.message for error in result.errors] == ["Unplanned N+1: category"]
+    else:
+        assert result.errors is None
+        assert any("Potential N+1 on category" in r.message for r in caplog.records)
+    assert calls == []
 
 
 @pytest.mark.parametrize(

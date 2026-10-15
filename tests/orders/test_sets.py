@@ -66,7 +66,13 @@ from django_strawberry_framework.utils.relations import (
     path_traverses_to_many as _path_traverses_to_many,
 )
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
-from tests._idioms import ClassReadRaises, is_object_list, run_capturing
+from tests._idioms import (
+    STR_SUBCLASS_KINDS,
+    ClassReadRaises,
+    is_object_list,
+    run_capturing,
+    str_subclass_name,
+)
 
 _M = TypeVar("_M", bound=Model)
 
@@ -1169,6 +1175,52 @@ def test_orderset_expand_meta_fields_rejects_non_string_entries_with_model() -> 
 
     with pytest.raises(ConfigurationError, match="entries must be field-name strings"):
         BytesEntryOrder.get_fields()
+
+
+_STR_SUBCLASS_ORDER_SHAPES: dict[str, Callable[[Callable[[str], str]], object]] = {
+    "list": lambda n: [n("title"), "subtitle"],
+    "tuple": lambda n: (n("title"), "subtitle"),
+    "set": lambda n: {n("title"), "subtitle", "circulation_status"},
+    "frozenset": lambda n: frozenset({n("title"), "subtitle"}),
+    "dict key": lambda n: {n("title"): ["exact"], "subtitle": ["exact"]},
+    "dict_keys": lambda n: {n("title"): None, "subtitle": None}.keys(),
+    "top-level __all__": lambda n: n("__all__"),
+}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("kind", STR_SUBCLASS_KINDS)
+@pytest.mark.parametrize("shape", list(_STR_SUBCLASS_ORDER_SHAPES))
+def test_orderset_meta_names_a_field_through_a_str_subclass_by_its_text(
+    shape: str,
+    kind: str,
+) -> None:
+    """A ``str``-subclass name in ``Meta.fields`` expands exactly as the plain name it spells.
+
+    The expanded field map is keyed by plain ``str`` in the same order the
+    plain declaration gives (a ``set`` sorts as the plain names would), and no
+    dunder of the subclass runs.
+    """
+    calls: list[str] = []
+    declare = _STR_SUBCLASS_ORDER_SHAPES[shape]
+    meta = type(
+        "Meta",
+        (),
+        {"model": Book, "fields": declare(lambda t: str_subclass_name(kind, t, calls))},
+    )
+    plain_meta = type("Meta", (), {"model": Book, "fields": declare(str)})
+    calls.clear()
+
+    probe = type("StrSubclassOrder", (OrderSet,), {"Meta": meta, "__module__": __name__})
+    plain = type("PlainOrder", (OrderSet,), {"Meta": plain_meta, "__module__": __name__})
+    assert issubclass(probe, OrderSet)
+    assert issubclass(plain, OrderSet)
+    names = list(probe.get_fields())
+
+    assert calls == []
+    assert all(type(name) is str for name in names)
+    assert names == list(plain.get_fields())
+    assert "title" in names
 
 
 @pytest.mark.django_db

@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 93 done, 150 to do.
+Progress: 94 done, 155 to do.
 
 ## Done
 
@@ -311,6 +311,13 @@ Progress: 93 done, 150 to do.
   `coerce_lookup_id` now run it on the coerced pk before any query, keyed `editionId`, `boundWith.<i>` or `id`, `invalid`;
   well-formed non-ASCII ids still write; fakeshop gains `Printing.bound_with` and the Printing / Edition write mutations
   that reach it; specs 038 and 039 say so
+- [x] 224. A `str`-subclass value (a `StrEnum` member, an honest subclass, one whose `__eq__` lies or raises) is read as
+  its text: `DjangoOptimizerExtension(strictness=)` stores the vocabulary's own constant, so a lying `__eq__` no longer
+  disarms the N+1 guard and a raising one no longer fails every request; `FilterSet` / `OrderSet` `Meta.fields` (list,
+  tuple, set, dict keys and lookup values, `filter_fields`, `"__all__"`, any re-readable collection) and `FilterSet`
+  `Meta.exclude` read through `utils/inputs.py::plain_set_meta_fields`, so the field its text spells is filtered,
+  ordered or excluded instead of refused with a false message or escaping raw; a plain declaration keeps its identity
+  and kind; specs 027 and 028 say so
 
 ## Outside review of the fixes
 
@@ -571,12 +578,6 @@ tracker number are recorded there; open remainders and new defects are filed as 
   an eager annotation of a module without `from __future__ import annotations`: it raises `NameError` at import on 3.10-3.13
   while ruff (`TC004` covers imports only, `F821` sees a binding) and basedpyright pass; six package modules define such names
   (all quoted today); only the floor run of `tests/base/test_init.py` catches it
-- [ ] 224. `DjangoOptimizerExtension(strictness=)` accepts a `str` subclass by content but stores the value itself, so
-  `extension.py` (`self.strictness != "off"`) and `types/resolvers.py` (`strictness == "raise"` / `"warn"`) dispatch the
-  consumer's `__eq__` on every request; storing the matched vocabulary constant (as `resolve_strategy` returns registry
-  instances) closes it. Set `Meta.fields` entries that are `str` subclasses (a StrEnum member) are refused on both
-  families with misleading messages (`FilterSet`: "Cannot classify path"; `OrderSet`: "entries must be field-name
-  strings")
 - [ ] 225. `forms/inputs.py::_form_field_basis` checks identifier names over the whole basis before `Meta.fields` /
   `Meta.exclude` narrowing, so a narrowed-away non-identifier form field is refused although it never becomes an input
   attribute; the serializer flavor checks only the kept set (`rest_framework/inputs.py::resolve_effective_serializer_fields`)
@@ -625,6 +626,26 @@ tracker number are recorded there; open remainders and new defects are filed as 
   order), `extensions/resource_policy.py` (`_EXACT_SEQUENCE_TYPES`, `_bounds_by_its_own_slice`),
   `optimizer/nested_planner.py` (`_BTREE_INDEX_TYPES` over `Meta.indexes`) and `utils/relations.py::_checked_path_infos`;
   check each against an `is` comparison
+- [ ] 246. `DjangoType` `Meta` names and vocabulary values keep the consumer's `str` subclass: `types/base.py`
+  `_normalize_fields_spec`, `_normalize_sequence_spec` (`exclude`, `nullable_overrides`, `required_overrides`,
+  `filesystem_path_fields`), `_meta_optimizer_hints` keys, `_validate_relation_shapes` keys and values,
+  `_validate_cursor_field` and `_validate_globalid_strategy` (plus `RELAY_GLOBALID_STRATEGY`, compared at finalize in
+  `types/relay.py`); an always-unequal `__eq__` is refused as "unknown fields" / "unknown shape" / "unknown strategy" and a
+  raising one escapes raw; read each as plain text and store the matched vocabulary constant
+- [ ] 247. `Meta.operation` on `DjangoMutation` and the form / serializer flavors is accepted by frozenset membership
+  (the consumer's reflected `__eq__`) and then read off the consumer `Meta` on every request (`mutations/resolvers.py`
+  `== "update"` / `"delete"`, `NON_DELETE_OPERATION_INPUT_KIND[meta.operation]` in `forms/sets.py` and
+  `mutations/sets.py`); an always-unequal `str` subclass gets a false "must be one of" refusal; settle the matched
+  constant once at declaration
+- [ ] 248. `permissions.py::apply_cascade_permissions(fields=)` compares `str`-subclass entries by their own dunders: an
+  always-unequal entry is refused as "not cascadable" and a raising one escapes raw; read entries as plain text
+- [ ] 249. A set-shaped `FilterSet` `Meta.fields` expands in hash order: `{'name', 'description', 'id', 'is_private'}`
+  gave four `base_filters` orders under `PYTHONHASHSEED` 1-4 (an `OrderSet` gives one), because `FilterSet.get_fields`
+  never calls `utils/inputs.py::canonicalize_set_meta_fields`, whose docstring promises one order under every seed;
+  check the generated filter input SDL order too
+- [ ] 250. A set-family `Meta.fields` / `Meta.exclude` value whose `__class__` claims `dict` (not a container) runs the
+  claimed `__class__` through `dict.__instancecheck__` in `utils/inputs.py::plain_set_meta_fields` and
+  `canonicalize_set_meta_fields` and escapes raw (`TypeError`) instead of the typed re-readable-declaration refusal
 ## To do: holes found re-checking the fixes
 
 
@@ -831,6 +852,9 @@ tracker number are recorded there; open remainders and new defects are filed as 
   `ForeignObject` key); under `unknown_field_behavior` WARN / IGNORE the leaf is now built instead of dropped
 - [ ] 245. CHANGELOG entry for item 244: a lone surrogate in a text-keyed relation id or update / delete `id` is a
   field-keyed `invalid` error on every mutation flavor (0.0.14 masked it as "An unexpected error occurred.")
+- [ ] 251. CHANGELOG entry for item 224: a `str`-subclass `strictness` (a `StrEnum` member) is stored as the plain mode,
+  and `FilterSet` / `OrderSet` `Meta.fields` and `FilterSet` `Meta.exclude` accept `str`-subclass names as the fields they
+  spell (0.0.14 refused them as "Cannot classify path" / "entries must be field-name strings")
 
 ## Hunt not finished in t3
 

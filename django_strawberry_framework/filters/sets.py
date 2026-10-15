@@ -94,6 +94,7 @@ from django_strawberry_framework.utils.input_values import (
 )
 from django_strawberry_framework.utils.inputs import (
     FILTERSET_FIELDS_ALIAS,
+    plain_set_meta_fields,
     promote_set_meta_fields,
 )
 from django_strawberry_framework.utils.permissions import (
@@ -2156,11 +2157,33 @@ class FilterSet(
         applied here before the first consumption so the declaration fails
         closed at class creation.
 
+        Before all three, every name is read as plain ``str`` text
+        (``utils/inputs.py::plain_set_meta_fields``): django-filter hashes and
+        compares ``Meta.fields`` / ``Meta.exclude`` entries itself and stores each
+        as a generated filter's ``field_name``, so a ``str`` subclass (a
+        ``StrEnum`` member) filters exactly as the plain name it spells and no
+        consumer ``__eq__`` / ``__hash__`` runs on the way.
+
         The upstream method is named ``get_fields`` (no underscore prefix);
         we override the same name so `super().get_filters()`'s internal call
         routes through both narrowings.
         """
-        meta_fields = getattr(cls._meta, "fields", None)
+        # This is the first read of ``_meta.fields`` / ``_meta.exclude`` (upstream's metaclass
+        # calls it inside ``__new__`` to build ``base_filters``), so the plain-text copy is
+        # written back here, onto the options object django-filter built for this class alone
+        # (the consumer's ``Meta`` is never touched). The write is idempotent: a declaration
+        # already plain comes back as the same object, so every later expansion reads the
+        # same value. The ``cast`` restates django-filter's stub type for the slot; the plain
+        # copy keeps the declaration's container kind (a collection with no built-in kind
+        # becomes one that is still no ``list`` / ``tuple``), so django-filter takes the same
+        # branches for it that it takes for the declaration.
+        options = cls._meta
+        options.fields = cast(
+            "Sequence[str] | dict[str, Sequence[str]] | str | None",
+            plain_set_meta_fields(options.fields),
+        )
+        options.exclude = cast("Sequence[str] | None", plain_set_meta_fields(options.exclude))
+        meta_fields = options.fields
         if meta_fields is not None and not _safe_predicate(isinstance, meta_fields, str):
             # ``str`` is exempt here (unlike the order family): the top-level
             # ``"__all__"`` shorthand IS a string declaration, and any other

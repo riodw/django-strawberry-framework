@@ -42,6 +42,7 @@ from apps.kanban import models as kanban_models
 from apps.library import models as library_models
 from apps.library.filters import BookFilter, LoanFilter, PatronFilter
 from apps.library.filters_genre import GenreFilter
+from apps.products import services
 from apps.products.models import Category, Item
 from apps.scalars import models as scalar_models
 from asgiref.sync import sync_to_async
@@ -141,11 +142,14 @@ from django_strawberry_framework.testing.relay import global_id_for
 from django_strawberry_framework.types.relay import SyncMisuseError, apply_interfaces
 from django_strawberry_framework.utils.relations import ClassifiedPath, classify_path
 from tests._idioms import (
+    STR_ENUM,
+    STR_SUBCLASS_KINDS,
     ClassReadRaises,
     comparing_metaclass,
     definition_raises,
     is_object_dict,
     pickle_roundtrip,
+    str_subclass_name,
 )
 from tests.optimizer import _link_models
 
@@ -1289,6 +1293,193 @@ def test_filterset_accepts_a_computed_re_readable_collection() -> None:
     # gate exists to guarantee).
     assert set(KeysViewForm.get_fields()) == {"code"}
     assert set(CustomCollectionForm.get_fields()) == {"code"}
+
+
+_Namer: TypeAlias = Callable[[str], str]
+
+
+class _StrSubclassMetaShape(NamedTuple):
+    """One ``Meta`` spelling a ``str``-subclass name and the filter it must generate and apply."""
+
+    meta: Callable[[_Namer], dict[str, object]]
+    applied: str  # the generated filter the row applies
+    lookup: str  # its operator-bag key in the filter input
+    absent: str | None = None  # a model field the declaration must NOT generate
+
+
+def _meta_list(n: _Namer) -> dict[str, object]:
+    return {"fields": [n("name")]}
+
+
+def _meta_tuple(n: _Namer) -> dict[str, object]:
+    return {"fields": (n("name"),)}
+
+
+def _meta_set(n: _Namer) -> dict[str, object]:
+    return {"fields": {n("name")}}
+
+
+def _meta_dict_key(n: _Namer) -> dict[str, object]:
+    return {"fields": {n("name"): ["exact", "icontains"]}}
+
+
+def _meta_dict_lookup(n: _Namer) -> dict[str, object]:
+    return {"fields": {"name": [n("icontains")]}}
+
+
+def _meta_dict_all(n: _Namer) -> dict[str, object]:
+    return {"fields": {"name": n("__all__")}}
+
+
+def _meta_alias(n: _Namer) -> dict[str, object]:
+    return {"filter_fields": [n("name")]}
+
+
+def _meta_all(n: _Namer) -> dict[str, object]:
+    return {"fields": n("__all__")}
+
+
+def _meta_exclude(n: _Namer) -> dict[str, object]:
+    return {"fields": "__all__", "exclude": [n("name")]}
+
+
+def _meta_exclude_view(n: _Namer) -> dict[str, object]:
+    return {"fields": "__all__", "exclude": {n("name"): None}.keys()}
+
+
+_STR_SUBCLASS_FILTER_SHAPES: dict[str, _StrSubclassMetaShape] = {
+    "list": _StrSubclassMetaShape(_meta_list, "name", "exact"),
+    "tuple": _StrSubclassMetaShape(_meta_tuple, "name", "exact"),
+    "set": _StrSubclassMetaShape(_meta_set, "name", "exact"),
+    "dict key": _StrSubclassMetaShape(_meta_dict_key, "name__icontains", "i_contains"),
+    "dict lookup value": _StrSubclassMetaShape(_meta_dict_lookup, "name__icontains", "i_contains"),
+    "dict per-field __all__": _StrSubclassMetaShape(
+        _meta_dict_all,
+        "name__icontains",
+        "i_contains",
+    ),
+    "filter_fields alias": _StrSubclassMetaShape(_meta_alias, "name", "exact"),
+    "top-level __all__": _StrSubclassMetaShape(_meta_all, "name", "exact"),
+    "exclude": _StrSubclassMetaShape(_meta_exclude, "description", "exact", absent="name"),
+    "exclude dict view": _StrSubclassMetaShape(
+        _meta_exclude_view,
+        "description",
+        "exact",
+        absent="name",
+    ),
+}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("kind", STR_SUBCLASS_KINDS)
+@pytest.mark.parametrize("shape", list(_STR_SUBCLASS_FILTER_SHAPES))
+def test_filterset_meta_names_a_field_through_a_str_subclass_by_its_text(
+    shape: str,
+    kind: str,
+) -> None:
+    """A ``str``-subclass name in ``Meta.fields`` / ``filter_fields`` / ``Meta.exclude`` is its text.
+
+    Every generated filter is keyed by plain ``str`` and carries a plain ``str``
+    ``field_name`` / ``lookup_expr``, the filter applies to the rows its text
+    names, an excluded name is excluded, and no dunder of the subclass runs.
+    """
+    services.seed_data(1)
+    category = Category.objects.order_by("pk").first()
+    assert category is not None
+    spec = _STR_SUBCLASS_FILTER_SHAPES[shape]
+    calls: list[str] = []
+    meta = type(
+        "Meta",
+        (),
+        {"model": Category, **spec.meta(lambda text: str_subclass_name(kind, text, calls))},
+    )
+    calls.clear()
+
+    probe = type("StrSubclassProbe", (FilterSet,), {"Meta": meta, "__module__": __name__})
+    filters = probe.get_filters()
+    assert issubclass(probe, FilterSet)
+    value = category.description if spec.applied == "description" else category.name
+    head = spec.applied.split("__", maxsplit=1)[0]
+    rows = probe.apply_sync({head: {spec.lookup: value}}, Category.objects.all(), _make_info())
+
+    assert calls == []
+    assert all(type(name) is str for name in filters)
+    generated = [fltr for fltr in filters.values() if fltr.field_name is not None]
+    assert generated
+    assert all(type(fltr.field_name) is str for fltr in generated)
+    assert all(type(fltr.lookup_expr) is str for fltr in generated)
+    assert spec.applied in filters
+    if spec.absent is not None:
+        assert spec.absent not in filters
+    expected = Category.objects.filter(**{spec.applied: value}).order_by("pk")
+    assert expected.exists()
+    assert list(rows.order_by("pk")) == list(expected)
+
+
+class _FieldNames:
+    """Field names behind ``__iter__`` / ``__len__`` / ``__contains__``, with no ``list`` / ``tuple`` base.
+
+    A ``collections.abc.Collection`` by structure only (it does not subclass it).
+    """
+
+    def __init__(self, *names: str) -> None:
+        super().__init__()
+        self._names = names
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._names)
+
+    def __len__(self) -> int:
+        return len(self._names)
+
+    def __contains__(self, item: object) -> bool:
+        return item in self._names
+
+
+def _declared_filter_probe_error(fields: object) -> str:
+    """The error declaring a set with a ``custom`` declared filter named in ``fields`` raises."""
+    meta = type("Meta", (), {"model": Category, "fields": fields})
+    namespace = {"custom": CharFilter(field_name="name"), "Meta": meta, "__module__": __name__}
+    with pytest.raises(TypeError, match="must not contain non-model field names") as exc_info:
+        _ = type("DeclaredInFieldsProbe", (FilterSet,), namespace)
+    return str(exc_info.value)
+
+
+_DECLARED_NAME_COLLECTIONS: dict[str, Callable[[_Namer], object]] = {
+    "custom Collection": lambda n: _FieldNames(n("name"), "custom"),
+    "dict_keys": lambda n: {n("name"): None, "custom": None}.keys(),
+}
+
+
+@pytest.mark.parametrize("kind", STR_SUBCLASS_KINDS)
+@pytest.mark.parametrize("shape", list(_DECLARED_NAME_COLLECTIONS))
+def test_a_str_subclass_name_keeps_a_collection_out_of_the_declared_filter_allowance(
+    shape: str,
+    kind: str,
+) -> None:
+    """Reading the names as plain text never changes which declared filters ``Meta.fields`` may name.
+
+    django-filter lets a ``list`` / ``tuple`` ``Meta.fields`` name a declared
+    filter and refuses one in any other collection. A collection holding a
+    ``str``-subclass name is refused exactly as its plain twin is: the plain-text
+    copy is no ``list`` / ``tuple`` either.
+    """
+    calls: list[str] = []
+    declare = _DECLARED_NAME_COLLECTIONS[shape]
+    fields = declare(lambda text: str_subclass_name(kind, text, calls))
+    calls.clear()
+
+    assert _declared_filter_probe_error(fields) == _declared_filter_probe_error(declare(str))
+    assert calls == []
+
+
+def test_a_str_enum_class_meta_fields_is_refused_a_declared_filter_like_a_collection() -> None:
+    """A ``StrEnum`` class as ``Meta.fields`` is a collection of its members' text, not a list."""
+    names = STR_ENUM("FieldNames", {"NAME": "name", "CUSTOM": "custom"})
+
+    assert _declared_filter_probe_error(names) == _declared_filter_probe_error(
+        _FieldNames("name", "custom"),
+    )
 
 
 # ---------------------------------------------------------------------------

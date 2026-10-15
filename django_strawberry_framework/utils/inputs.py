@@ -21,8 +21,9 @@ them on the family module. Set-family Decision-9 ledgers ride
 ``make_input_namespace`` (light clear). Set-family ``Meta.fields``
 fingerprints ride ``resolve_set_meta_fields`` (synonym rule),
 ``promote_set_meta_fields`` (class-Meta write-back), ``read_set_meta_fields``
-(expansion / apply read), and ``canonicalize_set_meta_fields`` (unordered
-shapes). FilterSet uses ``FILTERSET_FIELDS_ALIAS``; OrderSet has no synonym.
+(expansion / apply read), ``plain_set_meta_fields`` (every name as plain
+``str`` text), and ``canonicalize_set_meta_fields`` (unordered shapes).
+FilterSet uses ``FILTERSET_FIELDS_ALIAS``; OrderSet has no synonym.
 
 This module depends on neither family package, so both can import it without a
 cycle (same contract as ``utils/connections.py``).
@@ -32,8 +33,9 @@ from __future__ import annotations
 
 import sys
 from collections import Counter
+from collections.abc import Collection
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Generic, TypeVar, cast, final
 
 import strawberry
 from typing_extensions import override
@@ -45,7 +47,17 @@ from django_strawberry_framework.exceptions import (
     _safe_type_name,
 )
 
-from ._narrowing import dict_items, is_dict, is_mapping, is_set_or_frozenset, is_str
+from ._narrowing import (
+    dict_items,
+    is_dict,
+    is_frozenset,
+    is_list,
+    is_mapping,
+    is_set,
+    is_set_or_frozenset,
+    is_str,
+    is_tuple,
+)
 from .canonical import base_container_values, canonical_sort_key
 from .imports import import_attr_if_importable
 
@@ -560,7 +572,7 @@ def resolve_set_meta_fields(
     ``filter_fields`` onto a subclass Meta that inherits ``fields``.
     Write-back is ``promote_set_meta_fields`` (class Meta copies onto
     ``.fields`` and leaves the consumer alias in place). Expansion reads
-    ``read_set_meta_fields`` (resolve + canonicalize, no mutation).
+    ``read_set_meta_fields`` (resolve + plain text + canonicalize, no mutation).
     """
     if source is None:
         return None, False
@@ -597,6 +609,108 @@ def canonicalize_set_meta_fields(fields: object) -> object:
     return fields
 
 
+def _is_member_container(value: object) -> bool:
+    """Return whether ``value`` is a ``list`` / ``tuple`` / ``set`` / ``frozenset`` (subclasses included)."""
+    return is_list(value) or is_tuple(value) or is_set_or_frozenset(value)
+
+
+def _plain_name(value: object) -> object:
+    """Return a ``str`` subclass as the plain base ``str`` it spells; any other value unchanged.
+
+    Both tests read the real type (``type`` / ``utils/_narrowing.py::is_str``), so an
+    exact ``str`` comes back as the same object and no consumer dunder runs.
+    """
+    if type(value) is str or not is_str(value):
+        return value
+    return str.__str__(value)
+
+
+@final
+class _PlainNames(Collection[object]):
+    """The plain-text copy of a re-readable ``Meta.fields`` that is no built-in container.
+
+    Its kind stands in for the declaration's: an ordered collection walked any
+    number of times, and no ``list`` / ``tuple`` / ``set``, so every reader that
+    branches on the container kind takes the branch the declaration took.
+    """
+
+    __slots__ = ("_names",)
+
+    def __init__(self, names: tuple[object, ...]) -> None:
+        self._names = names
+
+    @override
+    def __iter__(self) -> Iterator[object]:
+        return iter(self._names)
+
+    @override
+    def __len__(self) -> int:
+        return len(self._names)
+
+    @override
+    def __contains__(self, value: object) -> bool:
+        return value in self._names
+
+
+def plain_set_meta_fields(fields: object) -> object:
+    """Return a set family's ``Meta.fields`` / ``Meta.exclude`` with every name as plain ``str``.
+
+    Django, django-filter and DRF all read a field name by its text, so a ``str``
+    subclass (a ``StrEnum`` member) names the field its text spells. The set
+    families compare, hash and classify those names - and hand them to
+    django-filter, which does the same - so each one is read once here through
+    the base ``str`` slot after a real-type check: a subclass's ``__eq__`` /
+    ``__hash__`` / ``__repr__`` / ``split`` never runs on the way to a filter or
+    an order term, and the strict path classifier
+    (``utils/relations.py::classify_path``) receives the plain text it requires.
+
+    A declaration holding no ``str`` subclass is returned as the same object, so
+    every shape that already worked keeps its identity and container kind.
+    Otherwise a name becomes plain text; a ``list`` / ``tuple`` / ``set`` /
+    ``frozenset`` is rebuilt as the same built-in kind over its base-slot members
+    (``utils/canonical.py::base_container_values``); a lookup-bag ``dict`` keeps
+    its key order with plain keys and plain lookups; any other re-readable
+    collection (a ``dict`` view, a custom ``Collection``, an enum class) has no
+    base slot, so it is iterated once into ``_PlainNames``, which is re-readable
+    like the declaration and, like it, neither a ``list`` / ``tuple`` (so
+    django-filter's declared-filter allowance for those two kinds does not newly
+    apply) nor a ``set`` (so the canonical sort does not newly apply). Members
+    that are not ``str`` pass through for each family's own typed rejection.
+    """
+    if _safe_predicate(is_dict, fields):
+        pairs = base_container_values(cast("dict[object, object]", fields))
+        plain_pairs = tuple(
+            (_plain_name(key), plain_set_meta_fields(lookups)) for key, lookups in pairs
+        )
+        # Identity, never ``==``: the comparison must not reach a consumer ``__eq__``.
+        if all(
+            plain_key is key and plain_lookups is lookups
+            for (key, lookups), (plain_key, plain_lookups) in zip(pairs, plain_pairs, strict=True)
+        ):
+            return fields
+        return dict(plain_pairs)
+    if _safe_predicate(_is_member_container, fields):
+        members = base_container_values(fields)
+        plain = tuple(_plain_name(member) for member in members)
+        if _unchanged(members, plain):
+            return fields
+        if _safe_predicate(is_frozenset, fields):
+            return frozenset(plain)
+        if _safe_predicate(is_set, fields):
+            return set(plain)
+        return plain if _safe_predicate(is_tuple, fields) else list(plain)
+    if not is_str(fields) and _safe_predicate(isinstance, fields, Collection):
+        members = tuple(cast("Collection[object]", fields))
+        plain = tuple(_plain_name(member) for member in members)
+        return fields if _unchanged(members, plain) else _PlainNames(plain)
+    return _plain_name(fields)
+
+
+def _unchanged(members: tuple[object, ...], plain: tuple[object, ...]) -> bool:
+    """Return whether ``_plain_name`` left every member as the same object (identity, never ``==``)."""
+    return all(new is old for old, new in zip(members, plain, strict=True))
+
+
 def promote_set_meta_fields(source: object, *, fields_alias: str | None = None) -> object:
     """Resolve ``fields`` and copy an alias onto class Meta when needed.
 
@@ -618,12 +732,14 @@ def promote_set_meta_fields(source: object, *, fields_alias: str | None = None) 
 def read_set_meta_fields(source: object, *, fields_alias: str | None = None) -> object:
     """Return resolved, process-stable ``Meta.fields`` without mutating ``source``.
 
-    The expansion / apply reader: ``resolve_set_meta_fields`` then
+    The expansion / apply reader: ``resolve_set_meta_fields``, then
+    ``plain_set_meta_fields`` (every name as plain ``str`` text), then
     ``canonicalize_set_meta_fields``, so class-declared ``set``-shaped fields
-    expand in one order under every ``PYTHONHASHSEED``.
+    expand in one order under every ``PYTHONHASHSEED`` and a ``str``-subclass
+    name sorts and expands exactly as the plain name it spells.
     """
     fields, _from_alias = resolve_set_meta_fields(source, fields_alias=fields_alias)
-    return canonicalize_set_meta_fields(fields)
+    return canonicalize_set_meta_fields(plain_set_meta_fields(fields))
 
 
 def make_shape_build_cache() -> tuple[dict[_KeyT, _ValueT], Callable[[], None]]:

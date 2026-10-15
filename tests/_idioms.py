@@ -70,12 +70,22 @@ hash-keyed stores keep finding the class by identity. ``against`` narrows the ho
 to comparisons with that one class (any other comparison is ``NotImplemented`` and unrecorded),
 for a row whose class also passes through a standard-library equality test it cannot avoid.
 
+``str_subclass_name`` spells a field name through one of the ``str`` subclass kinds a
+consumer can hand a declaration (``STR_SUBCLASS_KINDS``): an honest subclass, one whose
+``__eq__`` / ``__ne__`` answer "never equal", one whose comparisons raise, a ``(str, Enum)``
+member and an ``enum.StrEnum`` member (its own shape spelled by hand before 3.11). The three plain
+subclasses record every ``__eq__`` / ``__ne__`` / ``__hash__`` / ``__repr__`` / ``__str__``
+call into ``calls``, so a row asserts both the honest outcome and that nothing read the name
+through its own dunders. Build the declaration first, then clear ``calls``: building a ``set``
+or ``dict`` hashes its members.
+
 ``is_object_dict`` / ``is_object_list`` narrow an ``object`` (a JSON payload, a GraphQL
 result, a hook's input) the way ``isinstance`` does at run time, but to ``dict[object,
 object]`` / ``list[object]``: a bare ``isinstance`` on an ``object`` narrows to the class
 over Unknown element types, which every later read inherits.
 """
 
+import enum
 import inspect
 import pickle
 from collections.abc import Callable, Iterable, Mapping
@@ -88,6 +98,7 @@ from typing import (
     Protocol,
     TypeGuard,
     TypeVar,
+    cast,
     overload,
 )
 
@@ -149,6 +160,68 @@ def comparing_metaclass(
     meta = type(f"{verdict.title()}EqMeta", (base,), namespace)
     assert issubclass(meta, base)
     return meta
+
+
+#: The ``str`` subclass kinds ``str_subclass_name`` builds, as parametrize values.
+STR_SUBCLASS_KINDS = (
+    "honest",
+    "unequal",
+    "raises",
+    "str-enum-mixin",
+    "str-enum",
+)
+
+
+class _StrEnum(str, enum.Enum):
+    """``enum.StrEnum``'s shape where the interpreter predates it: ``str()`` is the value."""
+
+    __str__ = str.__str__
+    __format__ = str.__format__
+
+
+#: ``enum.StrEnum`` (Python 3.11+), or the same shape spelled by hand below it; call it with
+#: the functional enum API to declare a whole ``StrEnum`` class of field names.
+STR_ENUM = cast("type[enum.Enum]", getattr(enum, "StrEnum", _StrEnum))
+
+
+def str_subclass_name(kind: str, text: str, calls: list[str]) -> str:
+    """``text`` as an instance of the ``str`` subclass ``kind`` names; its dunders record into ``calls``."""
+    if kind == "str-enum-mixin":
+        member: object = enum.Enum("Names", {"MEMBER": text}, type=str)["MEMBER"]
+    elif kind == "str-enum":
+        member = STR_ENUM("Names", {"MEMBER": text})["MEMBER"]
+    else:
+        assert kind in ("honest", "unequal", "raises"), kind
+
+        def compare(*, equal: bool) -> Callable[[str, object], bool]:
+            def answer(self: str, other: object) -> bool:
+                calls.append("__eq__" if equal else "__ne__")
+                if kind == "raises":
+                    raise RuntimeError("str subclass comparison")
+                if kind == "unequal":
+                    return not equal
+                return str.__eq__(self, other) if equal else str.__ne__(self, other)
+
+            return answer
+
+        def record(name: str, slot: Callable[[str], _T]) -> Callable[[str], _T]:
+            def read(self: str) -> _T:
+                calls.append(name)
+                return slot(self)
+
+            return read
+
+        namespace = {
+            "__eq__": compare(equal=True),
+            "__ne__": compare(equal=False),
+            "__hash__": record("__hash__", str.__hash__),
+            "__repr__": record("__repr__", str.__repr__),
+            "__str__": record("__str__", str.__str__),
+        }
+        member = type(f"{kind.title()}Name", (str,), namespace)(text)
+    assert isinstance(member, str)
+    assert type(member) is not str
+    return member
 
 
 def resolver_function(field: "StrawberryField") -> FunctionType:

@@ -568,12 +568,16 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
           concrete ``queryset.model`` at apply time, but the entry type is
           checked here so a ``None`` / bytes / non-hashable entry raises the
           typed declaration error instead of silently landing in the
-          expansion (or raising raw ``TypeError`` from the dict write).
+          expansion (or raising raw ``TypeError`` from the dict write). A
+          ``str`` subclass (a ``StrEnum`` member) is a string: the shared
+          reader has already read it as the plain text it spells
+          (``utils/inputs.py::plain_set_meta_fields``), so the exact-``str``
+          gate below sees only the entries that are not strings at all.
         """
         fields: OrderedDict[str, RelatedOrder | None] = OrderedDict()
         meta = getattr(cls, "Meta", None)
-        # Shared reader: synonym resolve + unordered ``set`` / ``frozenset``
-        # canonicalization. No write-back here -- the
+        # Shared reader: synonym resolve + every name read as plain ``str`` text +
+        # unordered ``set`` / ``frozenset`` canonicalization. No write-back here -- the
         # metaclass owns alias promotion; expansion must not mutate class Meta.
         meta_fields = read_set_meta_fields(meta)
         if meta_fields is None:

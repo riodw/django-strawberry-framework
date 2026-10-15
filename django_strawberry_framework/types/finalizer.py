@@ -891,9 +891,9 @@ def finalize_django_types() -> None:
     ``if definition.finalized: continue`` guard at the head of each
     phase loop skips already-decorated types on the rerun, and
     ``apply_interfaces`` re-mutating ``__bases__`` is a no-op because
-    it filters via ``iface not in type_cls.__mro__``. ``registry.clear()``
-    is the recommended path only when the consumer cannot fix the
-    offending type in place.
+    it skips every interface already on ``type_cls.__mro__`` (by identity).
+    ``registry.clear()`` is the recommended path only when the consumer
+    cannot fix the offending type in place.
 
     Lifecycle of the finalized flag: ``registry.mark_finalized()`` runs
     as the last statement of this function and only on Phase 3 success.

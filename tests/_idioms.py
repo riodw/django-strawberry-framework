@@ -62,6 +62,14 @@ with it), and one whose ``__class__`` claims a class its real type is not (so a 
 ``<ClassReadRaises>`` / ``<ClaimsClass>`` so a rejection message that quotes the value is
 deterministic.
 
+``comparing_metaclass`` derives a metaclass from ``base`` whose ``__eq__`` answers every
+comparison of its classes with ``verdict`` (equal, unequal, or a raised ``RuntimeError``) and
+records each call, so a row declares a consumer class under it and asserts both the honest
+outcome and that nothing compared the class by equality. ``__hash__`` stays ``base``'s, so
+hash-keyed stores keep finding the class by identity. ``against`` narrows the hostile answer
+to comparisons with that one class (any other comparison is ``NotImplemented`` and unrecorded),
+for a row whose class also passes through a standard-library equality test it cannot avoid.
+
 ``is_object_dict`` / ``is_object_list`` narrow an ``object`` (a JSON payload, a GraphQL
 result, a hook's input) the way ``isinstance`` does at run time, but to ``dict[object,
 object]`` / ``list[object]``: a bare ``isinstance`` on an ``object`` narrows to the class
@@ -100,6 +108,7 @@ if TYPE_CHECKING:
     from django_strawberry_framework.rest_framework.serializer_converter import DRFField
 
 _ClassT = TypeVar("_ClassT", bound=type)
+_MetaT = TypeVar("_MetaT", bound=type)
 _T = TypeVar("_T")
 _ModelT = TypeVar("_ModelT", bound=Model)
 _DRFFieldT = TypeVar("_DRFFieldT", bound="DRFField")
@@ -117,6 +126,29 @@ def declare_django_type(name: str, namespace: Mapping[str, object]) -> type[Djan
     declared = type(name, (DjangoType,), dict(namespace))
     assert issubclass(declared, DjangoType)
     return declared
+
+
+def comparing_metaclass(
+    base: type[_MetaT],
+    verdict: Literal["equal", "unequal", "raises"],
+    calls: list[str],
+    *,
+    against: type | None = None,
+) -> type[_MetaT]:
+    """A metaclass over ``base`` whose ``__eq__`` answers ``verdict`` and records each call."""
+
+    def answer(cls: type, other: object) -> bool:
+        if against is not None and other is not against:
+            return NotImplemented
+        calls.append(cls.__name__)
+        if verdict == "raises":
+            raise RuntimeError("metaclass __eq__")
+        return verdict == "equal"
+
+    namespace = {"__eq__": answer, "__hash__": base.__hash__}
+    meta = type(f"{verdict.title()}EqMeta", (base,), namespace)
+    assert issubclass(meta, base)
+    return meta
 
 
 def resolver_function(field: "StrawberryField") -> FunctionType:

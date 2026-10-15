@@ -400,7 +400,12 @@ def _reject_conflicting_permission_classes(
     ``directives`` are per-field presentation kwargs and never enter the key.
     """
     declared = list(declared_cls._mutation_meta.permission_classes)
-    if declared != list(permission_classes):
+    # Element-wise identity, not ``!=``: list equality would dispatch a consumer
+    # metaclass ``__eq__`` on each permission class.
+    same = len(declared) == len(permission_classes) and all(
+        stored is given for stored, given in zip(declared, permission_classes, strict=True)
+    )
+    if not same:
         factory = _SURFACE_FACTORY_NAMES[surface]
         raise ConfigurationError(
             f"auth {factory} is already declared in this process with permission_classes="

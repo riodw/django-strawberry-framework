@@ -10,7 +10,7 @@ internals a request cannot name.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import get_args
+from typing import Literal, get_args
 
 import pytest
 import strawberry
@@ -31,7 +31,8 @@ from django_strawberry_framework.filters.factories import FilterArgumentsFactory
 from django_strawberry_framework.filters.inputs import _field_specs
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.relay import apply_interfaces
-from tests._idioms import definition_raises
+from django_strawberry_framework.utils.inputs import GeneratedInputArgumentsFactory
+from tests._idioms import comparing_metaclass, definition_raises
 from tests.filters.fixtures.filtersets import SelfReferentialBranchFilter
 
 
@@ -405,6 +406,35 @@ def test_filter_arguments_factory_rejects_subclassing() -> None:
             pass
 
     assert "does not support subclassing" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("shape", ["grand_subclass", "direct"])
+@pytest.mark.parametrize("verdict", ["equal", "unequal", "raises"])
+def test_factory_subclassing_check_finds_the_base_by_identity(
+    verdict: Literal["equal", "unequal", "raises"],
+    shape: Literal["grand_subclass", "direct"],
+) -> None:
+    """A mixin listed before the factory cannot change whether subclassing is rejected.
+
+    The subclassing check looks for ``GeneratedInputArgumentsFactory`` among the new class's
+    bases by identity, so a consumer metaclass ``__eq__`` on a mixin listed first is never
+    called: an always-equal answer cannot pass a grand-subclass of ``FilterArgumentsFactory``
+    off as a direct family factory, a raising one cannot escape class creation, and a direct
+    family factory behind the same mixin is still accepted. The mixin answers only comparisons
+    with ``GeneratedInputArgumentsFactory``: ``typing``'s ``Generic.__init_subclass__`` runs
+    first and tests ``Generic in cls.__bases__``, which compares every base by equality outside
+    the package.
+    """
+    calls: list[str] = []
+    meta = comparing_metaclass(type, verdict, calls, against=GeneratedInputArgumentsFactory)
+    mixin = meta("HostileMixin", (), {})
+    if shape == "grand_subclass":
+        with pytest.raises(TypeError, match="does not support subclassing"):
+            _ = meta("GrandFactory", (mixin, FilterArgumentsFactory), {})
+    else:
+        direct = meta("DirectFactory", (mixin, GeneratedInputArgumentsFactory), {})
+        assert direct.__bases__[1] is GeneratedInputArgumentsFactory
+    assert calls == []
 
 
 @pytest.mark.django_db

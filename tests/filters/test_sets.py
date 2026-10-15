@@ -30,7 +30,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, NamedTuple, NoReturn, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Literal, NamedTuple, NoReturn, TypeAlias, TypeVar
 from unittest import mock
 
 import django_filters
@@ -140,7 +140,13 @@ from django_strawberry_framework.sets_mixins import collect_related_declarations
 from django_strawberry_framework.testing.relay import global_id_for
 from django_strawberry_framework.types.relay import SyncMisuseError, apply_interfaces
 from django_strawberry_framework.utils.relations import ClassifiedPath, classify_path
-from tests._idioms import ClassReadRaises, definition_raises, is_object_dict, pickle_roundtrip
+from tests._idioms import (
+    ClassReadRaises,
+    comparing_metaclass,
+    definition_raises,
+    is_object_dict,
+    pickle_roundtrip,
+)
 from tests.optimizer import _link_models
 
 if TYPE_CHECKING:
@@ -932,6 +938,56 @@ def test_a_related_filter_cycle_through_a_set_with_a_placeholder_declaration_exp
     assert {name: set(fs.get_filters()) for name, fs in sets.items()} == (
         _PLACEHOLDER_CYCLE_FILTERS[owner]
     )
+
+
+@pytest.mark.parametrize("hostile", ["path", "target"])
+@pytest.mark.parametrize("verdict", ["equal", "unequal", "raises"])
+def test_a_related_filter_target_is_matched_against_the_expansion_path_by_identity(
+    verdict: Literal["equal", "unequal", "raises"],
+    hostile: Literal["path", "target"],
+) -> None:
+    """A ``RelatedFilter`` target expands whatever its or a path set's metaclass ``__eq__`` says.
+
+    The cycle rule finds a set already on the path by identity, so a consumer metaclass
+    ``__eq__`` (on the target set or on the set whose path it extends) is never called: an
+    always-equal answer cannot end the path early, a raising one cannot escape ``get_filters``.
+    """
+    calls: list[str] = []
+    meta = comparing_metaclass(FilterSetMetaclass, verdict, calls)
+
+    class IdentityBranchFilter(FilterSet):
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    class IdentityShelfFilter(
+        FilterSet,
+        metaclass=meta if hostile == "target" else FilterSetMetaclass,
+    ):
+        branch = RelatedFilter(IdentityBranchFilter, field_name="branch")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class IdentityBookFilter(
+        FilterSet,
+        metaclass=meta if hostile == "path" else FilterSetMetaclass,
+    ):
+        shelf = RelatedFilter(IdentityShelfFilter, field_name="shelf")
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    assert set(IdentityBookFilter.get_filters()) == {
+        "title",
+        "shelf",
+        "shelf__code",
+        "shelf__branch",
+        "shelf__branch__name",
+    }
+    assert calls == []
 
 
 # ---------------------------------------------------------------------------

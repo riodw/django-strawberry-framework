@@ -47,7 +47,7 @@ import re
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, Literal, NoReturn
 
 import pytest
 import strawberry
@@ -99,7 +99,7 @@ from django_strawberry_framework.rest_framework.sets import (
     _validate_serializer_nested_fields,
 )
 from django_strawberry_framework.types import base as types_base
-from tests._idioms import ModelSerializerBase, definition_raises
+from tests._idioms import ModelSerializerBase, comparing_metaclass, definition_raises
 from tests._info import unread_info
 
 if TYPE_CHECKING:
@@ -2969,6 +2969,59 @@ def test_nested_fields_cycle_raises_configuration_error_at_class_creation() -> N
                 serializer_class = RecursiveCategorySerializer
                 operation = "create"
                 nested_fields = {"parent": NestedSerializerConfig()}
+
+
+@pytest.mark.parametrize("hostile", ["path", "nested"])
+@pytest.mark.parametrize("verdict", ["equal", "unequal", "raises"])
+def test_nested_serializer_cycle_check_matches_the_nesting_path_by_identity(
+    verdict: Literal["equal", "unequal", "raises"],
+    hostile: Literal["path", "nested"],
+) -> None:
+    """An acyclic nested serializer binds whatever the serializers' metaclass ``__eq__`` says.
+
+    The cycle check looks for the nested serializer class on the nesting path by identity, so a
+    consumer metaclass ``__eq__`` (on the parent serializer on the path or on the nested one) is
+    never called: an always-equal answer cannot report a false cycle, a raising one cannot
+    escape the declaration or the bind.
+    """
+    _declare_products_primaries()
+    calls: list[str] = []
+    meta = comparing_metaclass(serializers.SerializerMetaclass, verdict, calls)
+
+    class IdentityItemInline(
+        ModelSerializerBase[product_models.Item],
+        metaclass=meta if hostile == "nested" else serializers.SerializerMetaclass,
+    ):
+        class Meta:
+            model = product_models.Item
+            fields = ("name",)
+
+    class IdentityCategoryWithItems(
+        ModelSerializerBase[product_models.Category],
+        metaclass=meta if hostile == "path" else serializers.SerializerMetaclass,
+    ):
+        items = IdentityItemInline(many=True)
+
+        class Meta:
+            model = product_models.Category
+            fields = ("name", "items")
+
+        @override
+        def create(self, validated_data: dict[str, object]) -> NoReturn:
+            raise AssertionError("the nested-write check reads this override; nothing calls it")
+
+    class CreateIdentityCategory(SerializerMutation):
+        class Meta:
+            serializer_class = IdentityCategoryWithItems
+            operation = "create"
+            nested_fields = {"items": NestedSerializerConfig()}
+            permission_classes = []
+
+    finalize_django_types()
+
+    assert CreateIdentityCategory._input_class is not None
+    assert "IdentityItemInlineInput" in serializer_materialized_names
+    assert calls == []
 
 
 def test_mutual_nested_fields_cycle_raises_configuration_error_at_class_creation() -> None:

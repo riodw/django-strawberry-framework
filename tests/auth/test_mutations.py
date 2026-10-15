@@ -31,7 +31,7 @@ from collections.abc import Callable, Generator, Iterable, Iterator, MutableMapp
 from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, NoReturn, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, NoReturn, Protocol, runtime_checkable
 
 import channels.auth
 import pytest
@@ -114,7 +114,7 @@ from django_strawberry_framework.registry import (
 from django_strawberry_framework.utils.permissions import ChannelsRequestAdapter
 from django_strawberry_framework.utils.querysets import SyncMisuseError
 from django_strawberry_framework.utils.sessions import connection_actor_state
-from tests._idioms import resolver_function
+from tests._idioms import comparing_metaclass, resolver_function
 from tests._info import make_info, unread_info
 from tests.auth._helpers import _drain_until, _session_request
 
@@ -416,6 +416,40 @@ def test_conflicting_permission_classes_second_call_raises() -> None:
     login_mutation()
     with pytest.raises(ConfigurationError, match=r"auth login_mutation\(\) is already declared"):
         login_mutation(permission_classes=[_AllowAll])
+
+
+@pytest.mark.parametrize("shape", ["declared_differs", "repeat_differs", "same"])
+@pytest.mark.parametrize("verdict", ["equal", "unequal", "raises"])
+def test_conflict_key_compares_permission_classes_by_identity(
+    verdict: Literal["equal", "unequal", "raises"],
+    shape: Literal["declared_differs", "repeat_differs", "same"],
+) -> None:
+    """The conflict check reads each permission class by identity, whatever its ``__eq__`` says.
+
+    A permission class whose metaclass ``__eq__`` answers ``verdict`` is declared first
+    (``declared_differs``), repeated against a different first declaration
+    (``repeat_differs``), or declared twice (``same``). The consumer ``__eq__`` is never
+    called: an always-equal answer cannot pass a different class off as the cached one, a
+    raising one cannot escape the factory, and the same class twice stays the cached holder.
+    """
+    calls: list[str] = []
+    meta = comparing_metaclass(type, verdict, calls)
+    hostile = meta("HostileAllowAll", (_AllowAll,), {})
+    first = [_AllowAll] if shape == "repeat_differs" else [hostile]
+    repeat = [_AllowAll] if shape == "declared_differs" else [hostile]
+
+    login_mutation(permission_classes=first)
+    holder = _declared_auth_surface("login")
+    if shape == "same":
+        login_mutation(permission_classes=repeat)
+        assert _declared_auth_surface("login") is holder
+    else:
+        with pytest.raises(
+            ConfigurationError,
+            match=r"auth login_mutation\(\) is already declared",
+        ):
+            login_mutation(permission_classes=repeat)
+    assert calls == []
 
 
 def test_declarations_survive_the_pre_bind_reset() -> None:

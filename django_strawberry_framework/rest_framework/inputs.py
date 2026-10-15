@@ -1521,12 +1521,14 @@ def guard_nested_recursion(
 
     ``nested_path`` is the tuple of serializer classes already on the recursion path (the
     parent chain, including the serializer whose ``field_name`` field is being descended into).
-    A ``nested_class`` already on the path is a CYCLE (a serializer that nests itself directly or
-    transitively - recursion would never terminate); a path at or beyond ``_NESTED_MAX_DEPTH`` is
-    the DEPTH cap (an absurdly deep but acyclic nesting). Both are class-creation / bind-time
-    configuration errors, not silent truncation.
+    A ``nested_class`` already on the path (by identity) is a CYCLE (a serializer that nests
+    itself directly or transitively - recursion would never terminate); a path at or beyond
+    ``_NESTED_MAX_DEPTH`` is the DEPTH cap (an absurdly deep but acyclic nesting). Both are
+    class-creation / bind-time configuration errors, not silent truncation.
     """
-    if nested_class in nested_path:
+    # Identity scan, not ``in``: ``nested_path`` is a chain of class objects, and
+    # ``tuple.__contains__`` would dispatch a consumer metaclass ``__eq__``.
+    if any(visited is nested_class for visited in nested_path):
         raise ConfigurationError(
             f"Nested serializer field {field_name!r} re-enters {nested_class.__name__}, which is "
             "already on the nesting path (a nested-serializer cycle); the recursive input build "

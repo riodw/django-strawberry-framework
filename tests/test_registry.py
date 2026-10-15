@@ -29,10 +29,11 @@ DjangoType-wrapper collision and enum-caching through
 import functools
 from collections.abc import Callable, Iterator
 from enum import Enum
-from typing import NoReturn, ParamSpec, TypeVar
+from typing import Literal, NoReturn, ParamSpec, TypeVar
 
 import pytest
 import strawberry
+from apps.library.models import Book
 from apps.products.models import Category, Item, Property
 from django.db import models
 from strawberry import relay
@@ -55,7 +56,7 @@ from django_strawberry_framework.registry import (
 from django_strawberry_framework.types import finalizer as finalizer_module
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
 from django_strawberry_framework.types.relations import PendingRelation, PendingRelationAnnotation
-from tests._idioms import definition_raises
+from tests._idioms import comparing_metaclass, definition_raises
 from tests._soft_dependency import blocked_modules
 
 
@@ -1241,6 +1242,111 @@ def test_register_same_type_twice_is_idempotent(fresh_registry: TypeRegistry) ->
     second = fresh_registry.register(Item, ItemType)
     assert second is False
     assert fresh_registry.types_for(Item) == (ItemType,)
+
+
+@pytest.mark.parametrize("hostile", ["stored", "incoming"])
+@pytest.mark.parametrize("verdict", ["equal", "unequal", "raises"])
+def test_register_matches_a_model_registered_types_by_identity(
+    verdict: Literal["equal", "unequal", "raises"],
+    hostile: Literal["stored", "incoming"],
+) -> None:
+    """A second ``DjangoType`` registers whatever either type's metaclass ``__eq__`` says.
+
+    The re-register check compares the model's registered types by identity, so a consumer
+    metaclass ``__eq__`` (on the stored type or the incoming one) is never called: an
+    always-equal answer cannot drop the second type, a raising one cannot escape the
+    declaration. Registry lifecycle: ``types_for`` / ``model_for_type`` after declaration. A
+    live request cannot show the maps. No live sibling.
+    """
+    calls: list[str] = []
+    meta = comparing_metaclass(type, verdict, calls)
+
+    class StoredBookType(DjangoType, metaclass=meta if hostile == "stored" else type):
+        class Meta:
+            model = Book
+            fields = ("id",)
+
+    class IncomingBookType(DjangoType, metaclass=meta if hostile == "incoming" else type):
+        class Meta:
+            model = Book
+            fields = ("id",)
+
+    registered = registry.types_for(Book)
+    assert len(registered) == 2
+    assert registered[0] is StoredBookType
+    assert registered[1] is IncomingBookType
+    assert registry.model_for_type(IncomingBookType) is Book
+    assert calls == []
+
+
+@pytest.mark.parametrize("hostile", ["sibling", "removed"])
+@pytest.mark.parametrize("verdict", ["equal", "unequal", "raises"])
+def test_unregister_removes_exactly_the_type_by_identity(
+    verdict: Literal["equal", "unequal", "raises"],
+    hostile: Literal["sibling", "removed"],
+) -> None:
+    """``unregister`` drops the named ``DjangoType`` and keeps its sibling, whatever ``__eq__`` says.
+
+    The model's registered types are removed by identity, so a consumer metaclass ``__eq__``
+    (on the surviving sibling or on the removed type) is never called: an always-equal answer
+    cannot remove the sibling instead, a raising one cannot escape ``unregister``. The removed
+    type is the second one registered, so the scan meets the sibling first. Registry lifecycle:
+    ``types_for`` / ``model_for_type`` after teardown. A live request cannot show the maps. No
+    live sibling.
+    """
+    calls: list[str] = []
+    meta = comparing_metaclass(type, verdict, calls)
+
+    class SiblingBookType(DjangoType, metaclass=meta if hostile == "sibling" else type):
+        class Meta:
+            model = Book
+            fields = ("id",)
+
+    class RemovedBookType(DjangoType, metaclass=meta if hostile == "removed" else type):
+        class Meta:
+            model = Book
+            fields = ("id",)
+
+    registry.unregister(RemovedBookType)
+
+    registered = registry.types_for(Book)
+    assert len(registered) == 1
+    assert registered[0] is SiblingBookType
+    assert registry.model_for_type(SiblingBookType) is Book
+    assert registry.model_for_type(RemovedBookType) is None
+    assert calls == []
+
+
+@pytest.mark.parametrize("hostile", ["sibling", "removed"])
+@pytest.mark.parametrize("verdict", ["equal", "unequal", "raises"])
+def test_register_with_definition_rollback_detaches_exactly_the_type_by_identity(
+    fresh_registry: TypeRegistry,
+    verdict: Literal["equal", "unequal", "raises"],
+    hostile: Literal["sibling", "removed"],
+) -> None:
+    """A rolled-back registration detaches only its own type, whatever ``__eq__`` says.
+
+    The rollback shares ``unregister``'s identity removal. A ``DjangoType`` declaration
+    registers the type and its definition together, so no declaration reaches this rollback
+    with a sibling on the model; the row drives the registry directly with a definition pinned
+    before the type is registered. Registry lifecycle: isolated ``TypeRegistry`` maps. No live
+    sibling.
+    """
+    calls: list[str] = []
+    meta = comparing_metaclass(type, verdict, calls)
+    sibling = _as_django_type((meta if hostile == "sibling" else type)("SiblingType", (), {}))
+    removed = _as_django_type((meta if hostile == "removed" else type)("RemovedType", (), {}))
+    fresh_registry.register(Book, sibling)
+    fresh_registry.register_definition(removed, _as_definition(object()))
+
+    with pytest.raises(ConfigurationError, match="already has a registered DjangoTypeDefinition"):
+        fresh_registry.register_with_definition(Book, removed, _as_definition(object()))
+
+    registered = fresh_registry.types_for(Book)
+    assert len(registered) == 1
+    assert registered[0] is sibling
+    assert fresh_registry.model_for_type(removed) is None
+    assert calls == []
 
 
 def test_register_primary_flag_sets_primary_for(fresh_registry: TypeRegistry) -> None:

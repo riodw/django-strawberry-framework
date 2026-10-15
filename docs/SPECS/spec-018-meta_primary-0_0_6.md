@@ -36,13 +36,13 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
   - [ ] `django_strawberry_framework/registry.py::TypeRegistry` stores `_types: dict[type[models.Model], list[type[DjangoType]]]` per [Decision 2](#decision-2--registry-data-model). Append-on-register; insertion order preserved; identity-based duplicate no-op.
   - [ ] `_primaries: dict[type[models.Model], type[DjangoType]]` tracks the explicit primary. Single source of truth for which type is primary for each model.
   - [ ] `_models: dict[type[DjangoType], type[models.Model]]` stays one-type-to-one-model (the reverse lookup).
-  - [ ] `register(model, type_cls, *, primary: bool = False) -> bool` per [Decision 3](#decision-3--register-signature-and-collision-rules). **Return value:** `True` if state was added (a new entry appended to `_types[model]` and/or `_primaries[model]` set); `False` if the call was an idempotent no-op (same `type_cls` already in `_types[model]`). Drives the snapshot-rollback path in `register_with_definition`.
+  - [ ] `register(model, type_cls, *, primary: bool = False) -> bool` per [Decision 3](#decision-3--register-signature-and-collision-rules). **Return value:** `True` if state was added (a new entry appended to `_types[model]` and/or `_primaries[model]` set); `False` if the call was an idempotent no-op (the same `type_cls` already in `_types[model]`, found by identity so a consumer metaclass `__eq__` is never consulted). Drives the snapshot-rollback path in `register_with_definition`.
     - First registration for `model`: append; if `primary=True`, set `_primaries[model] = type_cls`. Returns `True`.
     - Subsequent registration for `model` of the *same* `type_cls` (idempotent re-import) **with the same effective `primary` state** (both `False`, or both `True` against the already-stored primary): no-op. Returns `False`.
     - Subsequent registration for `model` of the *same* `type_cls` with a `primary` flag that disagrees with the stored value — in **either direction** (`False`→`True` *or* `True`→`False`): raise `ConfigurationError("<type> is already registered for <model>; primary flag cannot be flipped on re-register")`.
     - Subsequent registration for `model` of a *different* `type_cls`: append. If new `primary=True` and `_primaries[model]` already set to a different class: raise `ConfigurationError` (duplicate primary). Otherwise add to list; if `primary=True`, set `_primaries[model] = type_cls`. Returns `True`.
     - Reverse-collision guard (same `type_cls`, different `model`): raise `ConfigurationError`.
-  - [ ] `register_with_definition(model, type_cls, definition, *, primary: bool = False)` forwards the `primary` keyword. **Rollback:** snapshot `pre_primary = self._primaries.get(model)` before calling `register()`; capture `appended = self.register(model, type_cls, primary=primary)`. If `register_definition` then raises, roll back only what this call added: if `appended` is `True`, `_detach_type_from_model` removes `type_cls` from `_types[model]` (popping the model key when the list empties) and pops `_models[type_cls]`, and the rollback restores `_primaries[model]` to `pre_primary` (popping the key when `pre_primary is None`). If `appended` is `False`, perform no rollback — the existing state was not touched by this call.
+  - [ ] `register_with_definition(model, type_cls, definition, *, primary: bool = False)` forwards the `primary` keyword. **Rollback:** snapshot `pre_primary = self._primaries.get(model)` before calling `register()`; capture `appended = self.register(model, type_cls, primary=primary)`. If `register_definition` then raises, roll back only what this call added: if `appended` is `True`, `_detach_type_from_model` removes `type_cls` from `_types[model]` by identity, so a consumer metaclass `__eq__` never picks a sibling instead (popping the model key when the list empties) and pops `_models[type_cls]`, and the rollback restores `_primaries[model]` to `pre_primary` (popping the key when `pre_primary is None`). If `appended` is `False`, perform no rollback — the existing state was not touched by this call.
   - [ ] `get(model) -> type[DjangoType] | None` per [Decision 4](#decision-4--registryget-semantics):
     - If `_primaries[model]` set: return it.
     - Else if exactly one type registered for `model`: return that single type.
@@ -225,8 +225,9 @@ def register(
 
     existing_types = self._types.setdefault(model, [])
 
-    # Idempotent re-register of the same class: no-op.
-    if type_cls in existing_types:
+    # Idempotent re-register of the same class: no-op. Identity scan, not ``in``:
+    # ``list.__contains__`` would dispatch a consumer metaclass ``__eq__``.
+    if any(stored is type_cls for stored in existing_types):
         stored_as_primary = self._primaries.get(model) is type_cls
         if primary != stored_as_primary:
             # Re-register with a flag flip in EITHER direction is rejected —

@@ -2084,14 +2084,17 @@ class FilterSet(
     def _filters_along(cls, path: tuple[type[FilterSet], ...]) -> OrderedDict[str, Filter]:
         """Return the filters this set contributes as the target of the last set on ``path``.
 
-        The cycle rule of the flat surface. A set already on ``path`` contributes
-        its own filters unexpanded (``_unexpanded_filters``), its
-        ``RelatedFilter`` heads included, so every path ends one step after it
-        returns to a set it passed. A set that reaches no set on ``path``
-        expands exactly as it does alone, so its own surface (``get_filters``,
-        cached) is copied; any other set expands along ``path`` without caching.
+        The cycle rule of the flat surface. A set already on ``path`` (by identity,
+        so a metaclass ``__eq__`` is never consulted) contributes its own filters
+        unexpanded (``_unexpanded_filters``), its ``RelatedFilter`` heads included,
+        so every path ends one step after it returns to a set it passed. A set
+        that reaches no set on ``path`` expands exactly as it does alone, so its
+        own surface (``get_filters``, cached) is copied; any other set expands
+        along ``path`` without caching.
         """
-        if cls in path:
+        # Identity scan, not ``in``: ``path`` is a chain of class objects, and
+        # ``tuple.__contains__`` would dispatch a consumer metaclass ``__eq__``.
+        if any(visited is cls for visited in path):
             return cls._unexpanded_filters()
         if _reachable_filtersets(cls).isdisjoint(path):
             return cls.get_filters()

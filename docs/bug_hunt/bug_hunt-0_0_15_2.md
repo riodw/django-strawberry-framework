@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 91 done, 149 to do.
+Progress: 92 done, 149 to do.
 
 ## Done
 
@@ -297,6 +297,13 @@ Progress: 91 done, 149 to do.
   `str` gate, base-slot read and iteration), so no consumer dunder decides the dedup or the protected refusal and the
   derived tuple holds base `str` only; a `REQUIRED_FIELDS` that is not a list or tuple (Django's `auth.E001`) or a
   non-string entry raises `ConfigurationError` naming the model; spec-040 Decision 6 and Test plan say so
+- [x] 222. Class membership over class objects is an identity scan wherever a consumer metaclass reaches it:
+  `TypeRegistry.register` / `_detach_type_from_model`, `FilterSet._filters_along`, `apply_interfaces`,
+  `guard_nested_recursion`, `apply_cascade_permissions`, the auth `permission_classes` conflict key and the
+  `GeneratedInputArgumentsFactory` subclassing check; an always-equal or raising metaclass `__eq__` no longer drops a type,
+  removes the wrong one, truncates a flat filter path, drops an interface, reports a false cycle, admits a different
+  permission set or escapes raw; specs 001, 015, 018, 027, 034, 039 and 040 say so (before Python 3.12 `inspect` still
+  compares a class with `type` / `object` by equality when Strawberry reads its signature)
 
 ## Outside review of the fixes
 
@@ -557,9 +564,6 @@ tracker number are recorded there; open remainders and new defects are filed as 
   an eager annotation of a module without `from __future__ import annotations`: it raises `NameError` at import on 3.10-3.13
   while ruff (`TC004` covers imports only, `F821` sees a binding) and basedpyright pass; six package modules define such names
   (all quoted today); only the floor run of `tests/base/test_init.py` catches it
-- [ ] 222. Class membership by equality outside the mutation ledgers: `registry.py::TypeRegistry.register`
-  (`type_cls in existing_types`) and `filters/sets.py` (`if cls in path`) dispatch a metaclass `__eq__`; check each against
-  the identity contract its store records under
 - [ ] 224. `DjangoOptimizerExtension(strictness=)` accepts a `str` subclass by content but stores the value itself, so
   `extension.py` (`self.strictness != "off"`) and `types/resolvers.py` (`strictness == "raise"` / `"warn"`) dispatch the
   consumer's `__eq__` on every request; storing the matched vocabulary constant (as `resolve_strategy` returns registry
@@ -607,6 +611,12 @@ tracker number are recorded there; open remainders and new defects are filed as 
   but charges the converted dict, so an overwritten duplicate field is converted and never charged; 500 spreads of
   `__typename(a: {k: [1 x2978] k: 1})` walk about 106 ms at the default policy and are admitted, against spec-047
   Decision 13 ("runs out of node budget first")
+- [ ] 243. Exact-type checks written as tuple membership (`type(x) in (list, tuple)`) dispatch a consumer metaclass
+  `__eq__` (`type(L()) in (list, tuple)` is True with one call when `L`'s metaclass answers equal):
+  `utils/_narrowing.py` (`is_exact_list_or_tuple` and siblings, whose docstring says each site keeps its own comparison
+  order), `extensions/resource_policy.py` (`_EXACT_SEQUENCE_TYPES`, `_bounds_by_its_own_slice`),
+  `optimizer/nested_planner.py` (`_BTREE_INDEX_TYPES` over `Meta.indexes`) and `utils/relations.py::_checked_path_infos`;
+  check each against an `is` comparison
 ## To do: holes found re-checking the fixes
 
 

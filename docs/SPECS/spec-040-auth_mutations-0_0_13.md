@@ -2164,7 +2164,8 @@ schemas (below).
   with a *different* `permission_classes` succeeds with a fresh holder / rider,
   because the cache / conflict state IS the ledger; the
   **conflicting-declaration raise** — a second call with a different permission set
-  raises `ConfigurationError`, **keyed on `permission_classes` only** — a repeat call
+  raises `ConfigurationError`, **keyed on `permission_classes` only** (compared element by
+  element by identity, so a consumer metaclass `__eq__` is never consulted) — a repeat call
   differing solely in `description` / `deprecation_reason` / `directives` returns the
   cached class / holder, never raises ([Edge cases](#edge-cases-and-constraints));
   the sealed holder snapshot and holder `_mutation_meta` head;

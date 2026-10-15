@@ -64,7 +64,7 @@ import threading
 import uuid
 from collections.abc import Callable, Generator, Iterator
 from types import SimpleNamespace
-from typing import NoReturn, TypeAlias
+from typing import Literal, NoReturn, TypeAlias
 
 import pytest
 import pytest_django
@@ -117,7 +117,7 @@ from django_strawberry_framework.utils._queryset_private import (
     set_queryset_query,
 )
 from tests._django_private import has_values_method
-from tests._idioms import is_object_dict
+from tests._idioms import comparing_metaclass, is_object_dict
 from tests.optimizer import _link_models
 
 #: A ``get_queryset`` hook as ``_make_type`` installs it (``classmethod``-wrapped).
@@ -261,6 +261,60 @@ def test_mutual_cycle_fails_closed_with_path() -> None:
         apply_cascade_permissions(venue_type, Venue.objects.all(), _INFO)
     # Every token reset fired despite the raise.
     assert _cascade_state.get() is None
+
+
+@pytest.mark.parametrize("hostile", ["active", "entering"])
+@pytest.mark.parametrize("verdict", ["equal", "unequal", "raises"])
+def test_cascade_cycle_check_matches_active_types_by_identity(
+    verdict: Literal["equal", "unequal", "raises"],
+    hostile: Literal["active", "entering"],
+) -> None:
+    """An acyclic cascade composes whatever the types' metaclass ``__eq__`` says.
+
+    The cycle check looks for the entering type among the active types by identity, so a
+    consumer metaclass ``__eq__`` (on the active root type or on the type the walk enters) is
+    never called: an always-equal answer cannot report a false cycle, a raising one cannot
+    escape the walk. No fakeshop type carries a consumer metaclass, and giving one such a
+    metaclass would put a test-only class shape into the acceptance schema, so the row is
+    package tier. The walk needs only the registry, so the row does not finalize (before
+    Python 3.12, Phase 3's ``strawberry.type`` reads the class signature and ``inspect`` tests
+    ``obj in (type, object)``, which dispatches the same ``__eq__`` outside the package).
+    """
+    calls: list[str] = []
+    meta = comparing_metaclass(type, verdict, calls)
+
+    def declare(
+        name: str,
+        model: type[models.Model],
+        hook: _Hook,
+        *,
+        hostile_here: bool,
+    ) -> type:
+        namespace = {
+            "__module__": __name__,
+            "Meta": type("Meta", (), {"model": model, "fields": ("id",)}),
+            "get_queryset": classmethod(hook),
+        }
+        return (meta if hostile_here else type)(name, (DjangoType,), namespace)
+
+    shelf_type = declare(
+        "IdentityShelfType",
+        Shelf,
+        _cascading_hook(code="hidden_shelf"),
+        hostile_here=hostile == "active",
+    )
+    _ = declare(
+        "IdentityBranchType",
+        Branch,
+        _cascading_hook(name="hidden_branch"),
+        hostile_here=hostile == "entering",
+    )
+    assert issubclass(shelf_type, DjangoType)
+
+    result = apply_cascade_permissions(shelf_type, Shelf.objects.all(), _INFO)
+    assert "IN (SELECT" in str(result.query)
+    assert "hidden_branch" in str(result.query)
+    assert calls == []
 
 
 def test_hook_exception_propagates_and_resets_state() -> None:

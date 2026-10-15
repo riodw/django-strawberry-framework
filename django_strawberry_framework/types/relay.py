@@ -174,7 +174,12 @@ def apply_interfaces(type_cls: type[DjangoType], definition: DjangoTypeDefinitio
             (spec-015 Decision 1 #"never as a raw layout error").
 
     """
-    additions = tuple(iface for iface in definition.interfaces if iface not in type_cls.__mro__)
+    # Identity scan, not ``not in``: ``tuple.__contains__`` over the MRO would dispatch a
+    # consumer metaclass ``__eq__``.
+    mro = type_cls.__mro__
+    additions = tuple(
+        iface for iface in definition.interfaces if not any(klass is iface for klass in mro)
+    )
     if not additions:
         return
     try:

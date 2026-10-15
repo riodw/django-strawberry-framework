@@ -10,7 +10,7 @@ none of those are a JSON selection.
 
 import enum
 import functools
-from typing import Any, NoReturn
+from typing import Any, Literal, NoReturn
 
 import pytest
 import pytest_django
@@ -49,7 +49,7 @@ from django_strawberry_framework.types.relay import (
     published_node_type_name,
 )
 from django_strawberry_framework.utils.querysets import model_for
-from tests._idioms import async_relay_hooks, relay_hooks
+from tests._idioms import async_relay_hooks, comparing_metaclass, relay_hooks
 from tests._info import make_info, unread_info
 
 pytestmark = pytest.mark.usefixtures("isolate_global_registry")
@@ -1399,6 +1399,49 @@ def test_non_relay_interface_works() -> None:
     assert "resolve_node" not in CategoryNode.__dict__
     assert "resolve_id" not in CategoryNode.__dict__
     assert not implements_relay_node(CategoryNode)
+
+
+@pytest.mark.parametrize("hostile", ["type", "interface"])
+@pytest.mark.parametrize("verdict", ["equal", "unequal", "raises"])
+def test_apply_interfaces_finds_an_interface_on_the_mro_by_identity(
+    verdict: Literal["equal", "unequal", "raises"],
+    hostile: Literal["type", "interface"],
+) -> None:
+    """A declared interface is injected whatever the type's or the interface's ``__eq__`` says.
+
+    ``apply_interfaces`` looks for each interface on the type's MRO by identity, so a consumer
+    metaclass ``__eq__`` (on the ``DjangoType`` or on the interface) is never called: an
+    always-equal answer cannot pass the interface off as already inherited, a raising one cannot
+    escape the Phase 2.5 injection. The row calls ``apply_interfaces`` itself with a stand-in
+    definition: before Python 3.12 ``inspect`` tests ``obj in (type, object)`` when Strawberry
+    reads a class signature (``@strawberry.interface``, Phase 3's ``strawberry.type``), which
+    dispatches the same ``__eq__`` outside the package, so the hostile interface is a plain
+    class and nothing is finalized.
+    """
+    calls: list[str] = []
+    meta = comparing_metaclass(type, verdict, calls)
+    interface: type[object]
+    if hostile == "interface":
+        interface = meta("Auditable", (), {})
+    else:
+
+        @strawberry.interface
+        class Auditable:
+            name: str
+
+        interface = Auditable
+
+    class CategoryNode(DjangoType, metaclass=meta if hostile == "type" else type):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    apply_interfaces(
+        CategoryNode,
+        _as_definition(type("Definition", (), {"interfaces": (interface,)})),
+    )
+    assert any(base is interface for base in CategoryNode.__bases__)
+    assert calls == []
 
 
 def test_apply_interfaces_skips_already_present_bases() -> None:

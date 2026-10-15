@@ -3632,7 +3632,8 @@ contract:
   "opted in via Meta.nested_fields..." materialization error at class validation, shadowing the
   canonical opt-in error.
 - **Depth / cycle guarded.** Recursion is bounded by the finite, immutable `NestedSerializerConfig`
-  tree; a serializer class that reappears on the recursion path is a fail-loud cycle, and a
+  tree; a serializer class that reappears on the recursion path (the same class object,
+  compared by identity, never by a metaclass `__eq__`) is a fail-loud cycle, and a
   path at or beyond `_NESTED_MAX_DEPTH` is a fail-loud depth cap (`guard_nested_recursion`).
 - **The framework NEVER auto-saves the nested relation.** A NON-EMPTY `Meta.nested_fields`
   REQUIRES the serializer to override `create()` (create op) / `update()` (update op) —

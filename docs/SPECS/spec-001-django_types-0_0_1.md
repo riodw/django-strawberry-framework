@@ -315,6 +315,8 @@ Registration is many-to-one, not one-to-one: several `DjangoType`s may register 
 
 Three registration collisions raise [`ConfigurationError`][glossary-configurationerror]: registering one `DjangoType` class against a second model (the reverse collision — the class-to-model map stays one-to-one); declaring a second primary for a model that already has one; and flipping the `primary` flag on an otherwise idempotent re-register, because primary status is a declaration rather than a mutable property.
 
+A re-register is the same class object: the registry finds and removes a model's registered types by identity, so a consumer metaclass `__eq__` never decides whether a second `DjangoType` is new or which type `unregister` drops.
+
 The registry carries no `lazy_ref`. Definition-order independence is delivered by the pending-relation bookkeeping named under "Relation field conversion" — `add_pending_relation` / `iter_pending_relations` / `discard_pending` plus the `finalize_django_types()` pass — rather than by a lazy forward-reference factory. The candidate resolution approaches, and why pending-relation bookkeeping won, are in the [rationale file][spec-001-rationale].
 
 ## `get_queryset`

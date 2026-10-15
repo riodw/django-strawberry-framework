@@ -1485,9 +1485,11 @@ class GeneratedInputArgumentsFactory(Generic[_FactorySetT]):
         """Allow the direct family factories; reject any deeper subclassing."""
         super().__init_subclass__(**kwargs)
         # The two family factories subclass this base directly. A class whose
-        # bases do NOT include the base is a grand-subclass of a concrete
+        # bases do NOT include the base (by identity) is a grand-subclass of a concrete
         # factory -- reject it (its caches would be the family's, not its own).
-        if GeneratedInputArgumentsFactory not in cls.__bases__:
+        # Identity scan, not ``not in``: ``tuple.__contains__`` over the bases would
+        # dispatch a consumer metaclass ``__eq__`` on a mixin listed before the factory.
+        if not any(base is GeneratedInputArgumentsFactory for base in cls.__bases__):
             parent = cls.__bases__[0]
             raise TypeError(
                 f"{parent.__name__} does not support subclassing "

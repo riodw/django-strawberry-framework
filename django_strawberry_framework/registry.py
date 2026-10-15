@@ -181,7 +181,9 @@ class TypeRegistry:
         own call).
         """
         types = self._types[model]
-        types.remove(type_cls)
+        # Identity removal, not ``list.remove``: the store records classes by identity, and
+        # ``remove`` would dispatch a consumer metaclass ``__eq__``.
+        types[:] = [stored for stored in types if stored is not type_cls]
         if not types:
             _ = self._types.pop(model, None)
         _ = self._models.pop(type_cls, None)
@@ -219,11 +221,11 @@ class TypeRegistry:
         - First registration appends ``type_cls`` to ``_types[model]`` and
           sets ``_primaries[model] = type_cls`` when ``primary=True``.
           Returns ``True``.
-        - Idempotent re-register of the same ``type_cls`` for the same
-          model is a no-op when the ``primary`` flag matches the stored
-          state; returns ``False``.  A mismatched ``primary`` flag in
-          either direction raises (primary status is a declaration, not a
-          mutable property).
+        - Idempotent re-register of the same ``type_cls`` (by identity, so a
+          metaclass ``__eq__`` is never consulted) for the same model is a
+          no-op when the ``primary`` flag matches the stored state; returns
+          ``False``.  A mismatched ``primary`` flag in either direction
+          raises (primary status is a declaration, not a mutable property).
         - Registering a different ``type_cls`` for the same model appends
           to ``_types[model]``. If ``primary=True`` and ``_primaries[model]``
           is already set to a different class, raise ``ConfigurationError``.
@@ -243,7 +245,9 @@ class TypeRegistry:
         if existing_model is not None and existing_model is not model:
             raise self._already_registered("against", type_cls.__name__, existing_model.__name__)
         existing_types = self._types.setdefault(model, [])
-        if type_cls in existing_types:
+        # Identity scan, not ``in``: the store records classes by identity, and
+        # ``list.__contains__`` would dispatch a consumer metaclass ``__eq__``.
+        if any(stored is type_cls for stored in existing_types):
             stored_as_primary = self._primaries.get(model) is type_cls
             if primary != stored_as_primary:
                 raise ConfigurationError(

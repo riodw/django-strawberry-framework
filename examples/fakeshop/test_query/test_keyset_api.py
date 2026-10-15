@@ -12,7 +12,9 @@ newest-first mixed-direction shape) and ``PeriodicalType.issuesConnection``
 - omitting every pagination argument serves the full set when it is under the
   Relay cap;
 - nested seeks apply UNIFORM VALUE-POSITION semantics across every parent
-  partition, and the batched window stays one prefetch query;
+  partition, and the batched window stays one prefetch query, a random
+  ``Meta.ordering`` on the target included (the declared ``cursor_field`` stays
+  the order);
 - tampered, foreign-order, and offset (``arrayconnection``) cursors are
   rejected with the uniform invalid-cursor error;
 - minted cursors are deterministic across requests and do not disclose
@@ -30,10 +32,12 @@ newest-first mixed-direction shape) and ``PeriodicalType.issuesConnection``
   byte-identical from the root connection, the planned window and the
   per-parent pipeline (sync and async); one relation name windowed twice in
   an operation (``children`` under two root fields) keeps each window's own
-  vocabulary; an order no cursor can anchor is the same keyset error nested
-  as at the root, ``strictness="raise"`` included, and a malformed ``after:``
-  on a relation the planner refuses stays the cursor error under
-  ``strictness="raise"``.
+  vocabulary; an order no cursor can anchor (an expression, ``"?"``,
+  ``Random()``) is the same keyset error nested as at the root,
+  ``strictness="raise"`` included, while on an offset relation a random hook
+  order is an unplanned per-parent access ``strictness="raise"`` reports, and a
+  malformed ``after:`` on a relation the planner refuses stays the cursor error
+  under ``strictness="raise"``.
 
 Resolver-contract refusals (a list source, an already-sliced QuerySet) and the
 async slicer colour (``acount``, async iteration, deferred cursor columns) ride
@@ -66,7 +70,7 @@ from django.contrib.auth.models import User
 from django.db import connection
 from django.db.models import QuerySet
 from django.db.models.expressions import Combinable
-from django.db.models.functions import Lower
+from django.db.models.functions import Lower, Random
 from django.http import HttpRequest
 from django.http.response import HttpResponseBase
 from django.test import override_settings
@@ -577,6 +581,46 @@ def test_nested_keyset_window_is_one_batched_query() -> None:
     assert by_name["Botany Monthly"]["totalCount"] == 3
     assert by_name["Empty Gazette"]["totalCount"] == 0
     assert by_name["Empty Gazette"]["edges"] == []
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("ordering", [("?",), (Random(),)], ids=["name", "expression"])
+def test_nested_keyset_window_pages_the_cursor_field_under_a_random_model_ordering(
+    ordering: tuple[object, ...],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A random ``Meta.ordering`` on a keyset target leaves the nested window planned.
+
+    Nothing orders the child queryset, so the connection's order is the declared
+    ``cursor_field`` and the model default never reaches it: both pages stay one
+    batched ``ROW_NUMBER() OVER`` statement with no random function, edge for
+    edge the pages the shipped ordering serves.
+    """
+    _seed_periodicals()
+    shipped_first = _nested_by_periodical(first=2)
+    shipped_after = _nested_by_periodical(
+        first=2,
+        after=shipped_first["Astronomy Weekly"]["pageInfo"]["endCursor"],
+    )
+    monkeypatch.setattr(models.Issue._meta, "ordering", ordering)
+    with CaptureQueriesContext(connection) as first_captured:
+        first = _nested_by_periodical(first=2)
+    with CaptureQueriesContext(connection) as after_captured:
+        after = _nested_by_periodical(
+            first=2,
+            after=first["Astronomy Weekly"]["pageInfo"]["endCursor"],
+        )
+    issue_sql = [
+        q["sql"]
+        for captured in (first_captured, after_captured)
+        for q in captured.captured_queries
+        if "library_issue" in q["sql"]
+    ]
+    assert [("OVER (" in sql, "RAND" in sql.upper()) for sql in issue_sql] == [
+        (True, False),
+        (True, False),
+    ], issue_sql
+    assert [first, after] == [shipped_first, shipped_after]
 
 
 @pytest.mark.django_db
@@ -1190,6 +1234,13 @@ _UNANCHORABLE_ORDER = (
 )
 
 
+#: The strictness error for each shape's nested connection left to the per-parent pipeline.
+_RANDOM_ORDER_N_PLUS_ONE = {
+    shape: f"Unplanned N+1: {relation} (not window-planned; resolving per-parent)"
+    for shape, relation in (("fk", "issues"), ("m2m", "books"))
+}
+
+
 def _hook_order_schema(
     shape: str,
     hook_order: tuple[str | Combinable, ...] | None,
@@ -1515,22 +1566,30 @@ def test_hook_ordered_single_parent_fast_path_pages_on() -> None:
     ids=["planned", "unplanned", "strict"],
 )
 @pytest.mark.parametrize("shape", ["fk", "m2m"])
+@pytest.mark.parametrize(
+    "hook_order",
+    [(Lower("title"),), ("?",), (Random(),)],
+    ids=["expression", "random-name", "random-expression"],
+)
 def test_unanchorable_hook_order_raises_the_root_keyset_error_nested(
     shape: str,
+    hook_order: tuple[str | Combinable, ...],
     *,
     optimizer: bool,
     strictness: str,
 ) -> None:
-    """An expression hook order is refused nested exactly as at the root, on every mount.
+    """An expression or random hook order is refused nested as at the root, on every mount.
 
     The planner leaves the relation to the per-parent pipeline and records it
     as accounted for, so even ``strictness="raise"`` surfaces the keyset error,
-    not an N+1 error.
+    not an N+1 error. A random order meets the keyset refusal before the
+    planner's random-order fallback, which would leave the relation
+    strictness-visible.
     """
     _seed_hook_order_rows(shape, with_b=False)
     schema = _hook_order_schema(
         shape,
-        (Lower("title"),),
+        hook_order,
         optimizer=optimizer,
         strictness=strictness,
     )
@@ -1538,6 +1597,32 @@ def test_unanchorable_hook_order_raises_the_root_keyset_error_nested(
     nested = _post_holder(schema, _nested_hook_query(shape), variables={"first": 1})
     assert [error["message"] for error in root["errors"]] == [_UNANCHORABLE_ORDER]
     assert [error["message"] for error in nested["errors"]] == [_UNANCHORABLE_ORDER]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("shape", ["fk", "m2m"])
+@pytest.mark.parametrize(
+    "hook_order",
+    [("?",), (Random(),)],
+    ids=["random-name", "random-expression"],
+)
+def test_random_hook_order_on_an_offset_relation_is_an_unplanned_access_under_strictness(
+    shape: str,
+    hook_order: tuple[str | Combinable, ...],
+) -> None:
+    """A random hook order leaves an offset relation unplanned and strictness-visible.
+
+    With no ``cursor_field`` no keyset refusal comes first: the planner leaves
+    the relation to the per-parent pipeline without recording it as accounted
+    for, so ``strictness="raise"`` reports the per-parent access as an unplanned
+    N+1, while the root connection, which orders its one page query once, serves.
+    """
+    _seed_hook_order_rows(shape, with_b=False)
+    schema = _hook_order_schema(shape, hook_order, keyset=False, strictness="raise")
+    root = _post_holder(schema, "{ children(first: 1) { edges { cursor } } }")
+    nested = _post_holder(schema, _nested_hook_query(shape), variables={"first": 1})
+    assert root.get("errors") is None, root
+    assert [error["message"] for error in nested["errors"]] == [_RANDOM_ORDER_N_PLUS_ONE[shape]]
 
 
 @pytest.mark.django_db

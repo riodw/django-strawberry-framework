@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 94 done, 155 to do.
+Progress: 95 done, 156 to do.
 
 ## Done
 
@@ -318,6 +318,13 @@ Progress: 94 done, 155 to do.
   `Meta.exclude` read through `utils/inputs.py::plain_set_meta_fields`, so the field its text spells is filtered,
   ordered or excluded instead of refused with a false message or escaping raw; a plain declaration keeps its identity
   and kind; specs 027 and 028 say so
+- [x] 100. A random order on a nested connection's target (`"?"` from a hook or `Meta.ordering`, a `Random()` bare,
+  composed, behind an alias / `F` / transform, or read in a `When` condition) went into the optimizer window, which
+  evaluates the order up to three times per statement: `"?"` raised a masked "Cannot resolve keyword '?'" at plan time
+  (the whole root field lost) and `Random()` served wrong cursors and pageInfo, while the root and the optimizer-off
+  path served both; `optimizer/plans.py::has_random_term` now leaves such a relation to the per-parent pipeline
+  (strictness-visible, a keyset target keeps its own error and its `cursor_field` window), a condition's string value
+  stays a literal; spec-033 lists the arm
 
 ## Outside review of the fixes
 
@@ -358,8 +365,6 @@ tracker number are recorded there; open remainders and new defects are filed as 
 
 ## To do: found along the way
 
-- [ ] 100. A random `"?"` order (hook `order_by("?")` or `Meta.ordering = ["?"]`) on an optimized nested offset connection
-  raises "Cannot resolve keyword '?' into field" (masked), reversed or not, `first:` or `last:`; the root path serves it
 - [ ] 101. `manage.py import_spec_terms --check` fails on spec-020's terms CSV on main (seen at `eb30dd7e`); a later run
   reported eight specs failing (020, 027, 028, 032, 036, 037, 043 and one more)
 - [ ] 107. A writable primary-key relation (MTI parent link, OneToOne `primary_key=True`) in an update input fails at request
@@ -646,6 +651,11 @@ tracker number are recorded there; open remainders and new defects are filed as 
 - [ ] 250. A set-family `Meta.fields` / `Meta.exclude` value whose `__class__` claims `dict` (not a container) runs the
   claimed `__class__` through `dict.__instancecheck__` in `utils/inputs.py::plain_set_meta_fields` and
   `canonicalize_set_meta_fields` and escapes raw (`TypeError`) instead of the typed re-readable-declaration refusal
+- [ ] 252. A hook `order_by("<relation>")` on a nested connection's target windows on the `<relation>_id` column
+  while the pipeline's compiler expands the name into the related model's `Meta.ordering`: Entry
+  `order_by("property")` with `Property.Meta.ordering = ["-name"]` pages `entriesConnection(first: 2)` as {pm, pd}
+  optimized and {px, pm} without the optimizer; a random related `Meta.ordering` reached this way also escapes
+  `has_random_term`
 ## To do: holes found re-checking the fixes
 
 
@@ -855,6 +865,9 @@ tracker number are recorded there; open remainders and new defects are filed as 
 - [ ] 251. CHANGELOG entry for item 224: a `str`-subclass `strictness` (a `StrEnum` member) is stored as the plain mode,
   and `FilterSet` / `OrderSet` `Meta.fields` and `FilterSet` `Meta.exclude` accept `str`-subclass names as the fields they
   spell (0.0.14 refused them as "Cannot classify path" / "entries must be field-name strings")
+- [ ] 253. CHANGELOG entry for item 100: a nested connection whose target orders at random (`"?"`, `Random()`) is served
+  per parent with the optimizer on, as it is without it (0.0.14 raised "Cannot resolve keyword '?'" for `"?"` and
+  minted wrong cursors and pageInfo for `Random()`); under `strictness="raise"` it is an unplanned N+1
 
 ## Hunt not finished in t3
 

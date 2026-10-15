@@ -68,6 +68,7 @@ from .plans import (
     deferred_loading_of,
     effective_connection_order,
     effective_cursor_state,
+    has_random_term,
     local_cursor_attnames,
     normalize_order_direction,
     order_entry_has_explicit_nulls,
@@ -1564,6 +1565,16 @@ def plan_connection_relation(
         )
         if not keyed_windows:
             return NestedConnectionPlanResult(plan=plan)
+
+    # A random order (``"?"`` or ``Random()``, ``plans.py::has_random_term``) is
+    # a fresh draw each time the database evaluates it, and the window evaluates
+    # its order more than once per statement, so no window can serve one page of
+    # ONE permutation. The per-parent pipeline orders each page query once:
+    # leave the relation to it. A keyset order never reaches here random - the
+    # cursor vocabulary above refuses it first, with its own error.
+    if has_random_term(order_by, child_queryset.query):
+        _log_connection_fallback(relation_field_name, _response_keys(sel), "random order")
+        return NestedConnectionPlanResult(plan=plan)
 
     # A scalar-only (pageInfo/totalCount) selection unwrapped to [] node children,
     # so the child plan added no `.only()` projection; restrict it to the minimal

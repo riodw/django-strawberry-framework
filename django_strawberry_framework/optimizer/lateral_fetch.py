@@ -1196,10 +1196,12 @@ def _order_columns(
     The lateral builder renders plain ``"column ASC/DESC"`` entries (matching
     what Django emits on Postgres for string orderings, so window row numbers
     cannot drift from the windowed body's). An EMPTY order, expression entries,
-    relation traversals, ``"?"``, and names that are not local concrete fields
+    relation traversals, and names that are not local concrete fields
     downgrade to windowed: the lateral branch cannot render ``OVER (ORDER BY
     )`` (or an ``ORDER BY  LIMIT`` page), while the windowed body it mirrors
-    renders a valid orderless window for the same request.
+    renders a valid orderless window for the same request. A random order never
+    arrives: the planner leaves it to the per-parent pipeline
+    (``optimizer/plans.py::has_random_term``).
     """
     if not order_by:
         return None
@@ -1211,7 +1213,7 @@ def _order_columns(
         if parsed is None:
             return None
         name, descending = parsed
-        if name == "?" or "__" in name:
+        if "__" in name:
             return None
         if name == "pk":
             name = child_meta.pk.attname

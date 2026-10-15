@@ -25,6 +25,13 @@ One shape per planner rule, each read off the wire and off the SQL the request e
 - A child default manager no strategy can window: ``AnnotationManager`` returns a
   distinct queryset, so ``PatronProfileType.annotationsConnection`` is left
   unplanned by ``optimizer/nested_planner.py`` and resolves per parent.
+- A random child order the window cannot reproduce: ``Book`` ordered by ``"?"``
+  or ``Random()`` - from a ``BookType.get_queryset`` hook (directly, reversed,
+  under a composition, behind an annotation alias, a transform of one or an ``F``
+  to one, in a ``When`` condition reading one) or from ``Meta.ordering`` - leaves
+  ``GenreType.booksConnection`` unplanned, so each genre's page is one per-parent
+  statement holding one random draw, structured exactly like the same window
+  under a column order.
 - Mixed-case Django names, whose published spelling reverses to a name the model
   lacks: ``Distributor.displayName`` projects its own column, the forward key
   ``Consignment.distributorRef`` plans one ``JOIN``, and its reverse
@@ -38,12 +45,18 @@ One shape per planner rule, each read off the wire and off the SQL the request e
   order off, and its connection pages in primary-key order instead.
 """
 
+from collections.abc import Callable
+
 import pytest
+import strawberry
 from apps.library import models
 from apps.library import schema as library_schema
 from django.db import connection
-from django.test.utils import CaptureQueriesContext
-from graphql_client import assert_graphql_success
+from django.db.models import Case, F, FloatField, Q, QuerySet, Value, When
+from django.db.models.functions import Abs, Random
+from django.test.utils import CaptureQueriesContext, register_lookup
+from graphql_client import JSONObject, assert_graphql_success
+from strawberry.relay.utils import to_base64
 
 from django_strawberry_framework.testing.relay import decode_global_id, global_id_for
 
@@ -623,3 +636,219 @@ def test_reading_lists_connection_honors_a_cleared_default_ordering() -> None:
     assert len(list_sql) == 1, captured.captured_queries
     assert 'ORDER BY "library_readinglist"."id" ASC' in list_sql[0], list_sql[0]
     assert '"library_readinglist"."title" ASC' not in list_sql[0], list_sql[0]
+
+
+#: Each genre's ``booksConnection`` page under one window shape, with every edge cursor
+#: and the full ``pageInfo``: the page STRUCTURE, which no total order changes.
+_SHUFFLED_BOOKS_QUERY = """
+query {
+  allLibraryGenresConnection {
+    edges {
+      node {
+        name
+        booksConnection(%s) {
+          edges { cursor node { title } }
+          pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+        }
+      }
+    }
+  }
+}
+"""
+
+#: The four window shapes a nested page is planned under: forward, reversed, and each
+#: bounded by a cursor.
+_SHUFFLED_BOOKS_WINDOWS = {
+    "first": "first: 2",
+    "last": "last: 2",
+    "first-after": f'first: 2, after: "{to_base64("arrayconnection", 0)}"',
+    "last-before": f'last: 2, before: "{to_base64("arrayconnection", 3)}"',
+}
+
+_BookShuffle = Callable[[QuerySet[models.Book]], QuerySet[models.Book]]
+
+#: A hook-side random order per row: ``"?"`` and the ``Random()`` expression, each
+#: directly and reversed; ``Random()`` under a composition; ``Random()`` behind an
+#: annotation alias - by name, descending, through a transform, under a name holding
+#: ``__``, and through an ``F``; and a ``When`` condition reading ``Random()`` - through
+#: a lookup on an alias, a ``Q`` combination, a negated ``Q`` beside a plain lookup, a
+#: lookup value, and an alias of the ``Case``.
+_RANDOM_BOOK_HOOK_ORDERS: dict[str, _BookShuffle] = {
+    "hook-name": lambda books: books.order_by("?"),
+    "hook-expression": lambda books: books.order_by(Random()),
+    "hook-reversed-name": lambda books: books.order_by("?").reverse(),
+    "hook-reversed-expression": lambda books: books.order_by(Random()).reverse(),
+    "hook-composition": lambda books: books.order_by((Random() + Value(0.0)).asc()),
+    "hook-alias": lambda books: books.annotate(shuffle=Random()).order_by("shuffle"),
+    "hook-alias-descending": lambda books: books.annotate(shuffle=Random()).order_by(
+        "-shuffle",
+    ),
+    "hook-alias-transform": lambda books: books.annotate(shuffle=Random()).order_by(
+        "shuffle__abs",
+    ),
+    "hook-alias-transform-descending": lambda books: books.annotate(
+        shuffle=Random(),
+    ).order_by("-shuffle__abs"),
+    "hook-alias-dunder": lambda books: books.annotate(shuffle__x=Random()).order_by(
+        "shuffle__x",
+    ),
+    "hook-condition": lambda books: books.annotate(coin=Random()).order_by(
+        Case(When(coin__gt=0.5, then=Value(1)), default=Value(0)).asc(),
+    ),
+    "hook-condition-q": lambda books: books.annotate(coin=Random()).order_by(
+        Case(When(Q(coin__gt=0.7) | Q(coin__lt=0.3), then=Value(1)), default=Value(0)),
+    ),
+    "hook-condition-negated": lambda books: books.annotate(coin=Random()).order_by(
+        Case(When(Q(title__gt="") & ~Q(coin__lt=0.3), then=Value(1)), default=Value(0)),
+    ),
+    "hook-condition-value": lambda books: books.order_by(
+        Case(When(id__gt=Random() * 1000, then=Value(1)), default=Value(0)),
+    ),
+    "hook-condition-alias": lambda books: books.annotate(
+        coin=Random(),
+        heads=Case(When(coin__gt=0.5, then=Value(1)), default=Value(0)),
+    ).order_by("heads"),
+    "hook-reference": lambda books: books.annotate(shuffle=Random()).order_by(F("shuffle")),
+    "hook-reference-descending": lambda books: books.annotate(shuffle=Random()).order_by(
+        F("shuffle").desc(),
+    ),
+}
+
+#: A ``Meta.ordering`` random order per row: the ``"?"`` name, the expression, and the
+#: expression wrapped in a direction.
+_RANDOM_BOOK_META_ORDERS: dict[str, tuple[object, ...]] = {
+    "meta-name": ("?",),
+    "meta-expression": (Random(),),
+    "meta-composition": (Random().desc(),),
+}
+
+
+def _seed_shuffled_genres() -> dict[str, set[str]]:
+    """Three genres holding five, one and no books; returns each genre's titles."""
+    branch = models.Branch.objects.create(name="Central", city="Boston")
+    shelf = models.Shelf.objects.create(code="A-1", topic="Fiction", branch=branch)
+    shelved = {"Speculative": 5, "Poetry": 1, "Empty": 0}
+    titles: dict[str, set[str]] = {}
+    for name, count in shelved.items():
+        genre = models.Genre.objects.create(name=name)
+        titles[name] = {f"{name} {index}" for index in range(count)}
+        for title in sorted(titles[name]):
+            genre.books.add(models.Book.objects.create(title=title, shelf=shelf))
+    return titles
+
+
+def _shuffled_books_pages(window: str) -> tuple[dict[str, JSONObject], list[str]]:
+    """Each genre's ``booksConnection`` page under ``window``, and the ``library_book`` SQL."""
+    with CaptureQueriesContext(connection) as captured:
+        data = assert_graphql_success(_SHUFFLED_BOOKS_QUERY % _SHUFFLED_BOOKS_WINDOWS[window])
+    pages = {
+        edge["node"]["name"]: edge["node"]["booksConnection"]
+        for edge in data["allLibraryGenresConnection"]["edges"]
+    }
+    return pages, _sql_from_table(captured, "library_book")
+
+
+def _page_structure(page: JSONObject) -> tuple[list[str], JSONObject]:
+    """The order-independent half of a page: its edge cursors and its ``pageInfo``."""
+    return [edge["cursor"] for edge in page["edges"]], page["pageInfo"]
+
+
+@pytest.mark.parametrize("window", list(_SHUFFLED_BOOKS_WINDOWS))
+@pytest.mark.parametrize("source", [*_RANDOM_BOOK_HOOK_ORDERS, *_RANDOM_BOOK_META_ORDERS])
+@pytest.mark.django_db
+def test_random_book_order_leaves_genre_books_connection_to_the_per_parent_pipeline(
+    source: str,
+    window: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A random child order is served per parent, one random draw per page.
+
+    The nested window evaluates its order more than once in one statement - the
+    row-number window, the reversed window of a ``last:`` page and the outer
+    ``ORDER BY`` - and a random term is a new draw at each, while a bare ``"?"``
+    cannot be a window order term at all. So ``booksConnection`` is left unplanned
+    under every spelling: one ``library_book`` statement per genre (three), none a
+    window, each ordering by the database's random function. Every page is then a
+    slice of ONE permutation, so its edge cursors and ``pageInfo`` are exactly the
+    ones the shipped primary-key order serves through its window first (one
+    windowed statement), and its titles are distinct books of that genre.
+    """
+    titles = _seed_shuffled_genres()
+    planned, planned_sql = _shuffled_books_pages(window)
+    assert [len(planned_sql), "OVER (" in planned_sql[0]] == [1, True], planned_sql
+
+    if source in _RANDOM_BOOK_HOOK_ORDERS:
+        shuffle = _RANDOM_BOOK_HOOK_ORDERS[source]
+        shipped_hook = library_schema.BookType.get_queryset
+
+        def shuffled_hook(
+            _cls: type[library_schema.BookType],
+            queryset: QuerySet[models.Book],
+            info: strawberry.Info[object, object],
+        ) -> QuerySet[models.Book]:
+            return shuffle(shipped_hook(queryset, info))
+
+        monkeypatch.setattr(library_schema.BookType, "get_queryset", classmethod(shuffled_hook))
+    else:
+        monkeypatch.setattr(models.Book._meta, "ordering", _RANDOM_BOOK_META_ORDERS[source])
+    # The transform rows order through ``abs``, which Django registers on no field by default.
+    with register_lookup(FloatField, Abs):
+        shuffled, shuffled_sql = _shuffled_books_pages(window)
+
+    assert len(shuffled_sql) == len(titles), shuffled_sql
+    assert [("OVER (" in sql, "RAND" in sql.upper()) for sql in shuffled_sql] == [
+        (False, True),
+    ] * len(titles), shuffled_sql
+    for name, genre_titles in titles.items():
+        served = [edge["node"]["title"] for edge in shuffled[name]["edges"]]
+        assert len(set(served)) == len(served), (name, served)
+        assert set(served) <= genre_titles, (name, served)
+        assert _page_structure(shuffled[name]) == _page_structure(planned[name]), name
+
+
+#: A ``When`` condition comparing a column to a string literal spelled like a random
+#: order: ``"?"``, and the name of a random annotation. A condition reads a reference
+#: only through ``F``, so neither literal is random.
+_LITERAL_CONDITION_BOOK_ORDERS: dict[str, _BookShuffle] = {
+    "question-mark": lambda books: books.order_by(
+        Case(When(title="?", then=Value(1)), default=Value(0)),
+        "pk",
+    ),
+    "annotation-name": lambda books: books.annotate(shuffle=Random()).order_by(
+        Case(When(title="shuffle", then=Value(1)), default=Value(0)),
+        "pk",
+    ),
+}
+
+
+@pytest.mark.parametrize("window", list(_SHUFFLED_BOOKS_WINDOWS))
+@pytest.mark.parametrize("source", list(_LITERAL_CONDITION_BOOK_ORDERS))
+@pytest.mark.django_db
+def test_string_literal_in_a_book_order_condition_keeps_genre_books_connection_windowed(
+    source: str,
+    window: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A condition's string literal is no random term: the nested window still plans.
+
+    Every book's condition answers the default, so the order is the primary key
+    and each genre's page, cursors and ``pageInfo`` equal the shipped order's,
+    served from one windowed ``library_book`` statement.
+    """
+    _seed_shuffled_genres()
+    planned, _ = _shuffled_books_pages(window)
+    order = _LITERAL_CONDITION_BOOK_ORDERS[source]
+    shipped_hook = library_schema.BookType.get_queryset
+
+    def literal_hook(
+        _cls: type[library_schema.BookType],
+        queryset: QuerySet[models.Book],
+        info: strawberry.Info[object, object],
+    ) -> QuerySet[models.Book]:
+        return order(shipped_hook(queryset, info))
+
+    monkeypatch.setattr(library_schema.BookType, "get_queryset", classmethod(literal_hook))
+    served, served_sql = _shuffled_books_pages(window)
+
+    assert [len(served_sql), "OVER (" in served_sql[0]] == [1, True], served_sql
+    assert served == planned

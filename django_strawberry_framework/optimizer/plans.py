@@ -37,7 +37,10 @@ from typing import TYPE_CHECKING, ClassVar, TypeVar, cast
 
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Count, F, OrderBy, Prefetch, Q, Value, Window
-from django.db.models.functions import RowNumber
+from django.db.models.constants import LOOKUP_SEP
+from django.db.models.expressions import BaseExpression
+from django.db.models.functions import Random, RowNumber
+from django.utils.tree import Node
 from typing_extensions import override
 
 from django_strawberry_framework.exceptions import OptimizerError
@@ -1265,6 +1268,78 @@ def deterministic_order(
     if ends_in_unique_column(effective, model):
         return effective
     return (*effective, model._meta.pk.attname)
+
+
+def has_random_term(order_by: Sequence[object], query: Query) -> bool:
+    """Return whether a connection order draws any of its terms at random.
+
+    Django spells a random order two ways: the ``"?"`` name, which
+    ``django/db/models/sql/compiler.py::SQLCompiler._order_by_pairs`` compiles
+    into ``Random()``, and the ``Random()`` expression itself. Either is a new
+    permutation every time the database evaluates it. A term is read the way
+    the compiler reads it - an expression through its whole source tree, a name
+    through ``query.annotations`` (the whole name, then the head of a transform
+    chain), an ``F`` through the annotation it names, a ``When`` condition (a
+    ``Q`` / ``WhereNode``) through each of its children - a lookup's left side
+    read as a name, its value as an expression, a string value staying the
+    literal it is - so ``Random()`` under a composition, behind an alias or in
+    a ``When`` condition reading one is found as surely as ``"?"`` is.
+
+    The nested window evaluates its order more than once per statement: the
+    ``RowNumber`` window, the reversed window a ``last:`` page adds, and the
+    outer ``ORDER BY`` the rows come back in (``apply_window_pagination``). Each
+    evaluation of a random term is its own draw, so page membership, display
+    order and the row-number cursors would come from different permutations,
+    and a bare ``"?"`` cannot be a ``Window`` order term at all (Django resolves
+    it as a column named ``?``). The per-parent pipeline evaluates the order
+    once per page query, so ``optimizer/nested_planner.py::plan_connection_relation``
+    leaves a relation whose order answers ``True`` here to it.
+
+    Only the forms Django itself names are recognized: an opaque term (raw SQL,
+    a project ``Func``) is not certified either way, and a connection order must
+    evaluate to the same value every time one statement compiles it.
+    """
+    return any(_is_random_term(term, query) for term in order_by)
+
+
+def _is_random_term(term: object, query: Query) -> bool:
+    """Classify one order term for ``has_random_term``."""
+    if isinstance(term, F):
+        # basedpyright: django-stubs omits ``F.name``, the reference ``__init__`` stores
+        name = cast("str", term.name)  # pyright: ignore[reportAttributeAccessIssue]
+        return _is_random_alias(name, query)
+    if isinstance(term, Node):
+        # A ``When`` condition: a ``Q`` / ``WhereNode`` whose children are nested nodes,
+        # expressions, or ``(lookup, value)`` pairs whose lookup names its left side.
+        children = cast("list[object]", term.children)
+        return any(_is_random_condition_child(child, query) for child in children)
+    if isinstance(term, BaseExpression):
+        return isinstance(term, Random) or any(
+            _is_random_term(source, query) for source in term.get_source_expressions()
+        )
+    # Anything else draws nothing unless it is ``"?"`` or an alias of a random term.
+    return term == "?" or (
+        isinstance(term, str) and _is_random_alias(term.removeprefix("-"), query)
+    )
+
+
+def _is_random_condition_child(child: object, query: Query) -> bool:
+    """Classify one child of a ``When`` condition for ``_is_random_term``."""
+    if isinstance(child, tuple):
+        lookup, value = cast("tuple[str, object]", child)
+        # A string value is a literal: a condition reads a reference only through ``F``.
+        return _is_random_alias(lookup, query) or (
+            not isinstance(value, str) and _is_random_term(value, query)
+        )
+    return _is_random_term(child, query)
+
+
+def _is_random_alias(name: str, query: Query) -> bool:
+    """Return whether ``name`` resolves to an annotation that draws at random."""
+    annotation = query.annotations.get(name)
+    if annotation is None:
+        annotation = query.annotations.get(name.split(LOOKUP_SEP, maxsplit=1)[0])
+    return annotation is not None and _is_random_term(annotation, query)
 
 
 def _keyset_order_ref(entry: object) -> tuple[str, str, bool] | None:

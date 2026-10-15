@@ -28,7 +28,12 @@ from typing import TYPE_CHECKING, ClassVar, cast
 
 from django.db.models import Prefetch
 
-from django_strawberry_framework.exceptions import ConfigurationError, _safe_attr, _safe_type_name
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    _safe_attr,
+    _safe_predicate,
+    _safe_type_name,
+)
 from django_strawberry_framework.utils.relations import safe_truthy
 
 # The shared public strategy-selection type (and the validator it feeds) are
@@ -46,7 +51,7 @@ from django_strawberry_framework.utils.relations import safe_truthy
 from .nested_fetch import StrategySelection, resolve_strategy
 
 # ``Prefetch`` is imported at runtime (not under ``TYPE_CHECKING``) because
-# ``_require_prefetch`` performs an ``isinstance(..., Prefetch)`` validation;
+# ``_require_prefetch`` performs a guarded ``isinstance(..., Prefetch)`` validation;
 # the field annotation ``Prefetch | None`` is also string-deferred by
 # ``from __future__ import annotations``, but the runtime check is the
 # load-bearing surface here.
@@ -72,13 +77,20 @@ def _require_prefetch(obj: object) -> _PrefetchAny:
     before ``cls(prefetch_obj=...)`` because ``None`` is the dataclass's
     legitimate "no prefetch object" default - without a factory-side
     check, ``prefetch(None)`` would become a silent no-op.
+
+    The test is ``isinstance``, so a ``Prefetch`` subclass and a lazy proxy of
+    a ``Prefetch`` (``SimpleLazyObject``) pass. It is guarded: a ``__class__``
+    read that raises answers "not a ``Prefetch``", so the rejection stays the
+    typed ``ConfigurationError``.
     """
-    if not isinstance(obj, Prefetch):
+    if not _safe_predicate(isinstance, obj, Prefetch):
         raise ConfigurationError(
             "OptimizerHint.prefetch(obj) requires a django.db.models.Prefetch "
             f"instance; got {_safe_type_name(obj)}.",
         )
-    return obj
+    # The guarded ``isinstance`` above is the ``Prefetch`` proof; a ``bool`` from a
+    # helper carries no narrowing.
+    return cast("_PrefetchAny", obj)
 
 
 def _require_strategy(name: object) -> StrategySelection:
@@ -92,10 +104,12 @@ def _require_strategy(name: object) -> StrategySelection:
     check, ``strategy(None)`` would become a silent no-op.
 
     The typed rejection is unconditional and owned by
-    ``nested_fetch.resolve_strategy`` itself: every dunder its dispatch reads
-    (``__eq__`` through the base ``str`` slot, ``__hash__`` in the registry
-    lookup, ``__repr__`` in the message, the ``plan`` attribute read) is
-    guarded there, so a hostile selection value degrades to the typed
+    ``nested_fetch.resolve_strategy`` itself: every read its dispatch makes of
+    the value is guarded there (the name-or-class test asks the real type and
+    never reads ``__class__``, content equality goes through the base ``str``
+    slot so neither ``__eq__`` nor ``__hash__`` dispatches, ``__repr__`` renders
+    through the guarded message helper, the ``plan`` attribute read absorbs a
+    raising descriptor), so a hostile selection value degrades to the typed
     ``ConfigurationError`` and no raw exception can reach this boundary to
     be contained. This factory check keeps only its own contract: an
     explicit ``None`` must reject here rather than resolve the

@@ -9,7 +9,7 @@ because ``dict``'s slots are invariant, and a bare unbound slot call
 sites spell and states the element types as ``object``, so the narrowed value is
 a container of ``object`` the caller then checks member by member.
 
-Two families of check, kept apart because they answer different questions:
+Two families of container check, kept apart because they answer different questions:
 
 * ``is_dict`` / ``is_list`` / ... are ``isinstance`` checks (subclasses pass) and
   ``TypeIs`` predicates. At runtime each name IS the class's own
@@ -17,6 +17,14 @@ Two families of check, kept apart because they answer different questions:
   input walks that make one per value.
 * ``is_exact_*`` are ``type(value) is C`` checks (subclasses fail) and
   ``TypeGuard`` predicates, since a negative answer says nothing about a subclass.
+
+``is_class`` and ``is_str`` stand apart from both: ``issubclass(type(value), C)``
+checks (subclasses pass) that ask the value's real type. ``isinstance`` falls back
+to a ``__class__`` read when the real type does not match, and a ``__class__``
+property can raise or claim a class the value is not; the real type can do
+neither, so these are the predicates for a value whose answer gates an operation
+that itself checks the real type (``str.__eq__`` refuses a value that is not really
+a ``str``, ``issubclass`` one that is not really a class).
 
 The typed slots (``dict_items``, ``list_iter``, ...) are the builtin base
 methods themselves at runtime, so a subclass override of ``items`` /
@@ -143,6 +151,7 @@ __all__ = (
     "is_memoryview",
     "is_set",
     "is_set_or_frozenset",
+    "is_str",
     "is_text_or_bytes",
     "is_tuple",
     "list_iter",
@@ -186,6 +195,16 @@ def is_class(value: object) -> TypeIs[type[object]]:
     type cannot be restated by a ``__class__`` property on the value.
     """
     return issubclass(type(value), type)
+
+
+def is_str(value: object) -> TypeIs[str]:
+    """Return whether ``value`` IS a ``str`` (subclasses included), asked of its real type.
+
+    ``issubclass(type(value), str)`` rather than ``isinstance(value, str)``: a
+    ``__class__`` property on the value can neither claim ``str`` nor raise, so a
+    ``True`` answer is one the base ``str`` slots accept.
+    """
+    return issubclass(type(value), str)
 
 
 def is_exact_dict(value: object) -> TypeGuard[dict[object, object]]:

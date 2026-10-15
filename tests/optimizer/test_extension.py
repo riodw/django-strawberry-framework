@@ -23,7 +23,7 @@ import uuid
 import warnings
 import weakref
 from collections import OrderedDict
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, NoReturn, TypeGuard
 
@@ -38,6 +38,7 @@ from django.db import connection
 from django.db.models import Manager, Model, Prefetch, QuerySet
 from django.http import HttpRequest, QueryDict
 from django.test.utils import CaptureQueriesContext
+from django.utils.functional import SimpleLazyObject
 from graphql import (
     DefinitionNode,
     DocumentNode,
@@ -2254,6 +2255,64 @@ def test_strictness_hostile_dunder_values_raise_typed_valueerror(hostile: object
         # basedpyright: the non-str strictness is the hostile input under test;
         # DjangoOptimizerExtension types the parameter as str
         DjangoOptimizerExtension(strictness=hostile)  # pyright: ignore[reportArgumentType]
+    assert _END_DETONATION not in str(exc_info.value)
+
+
+def _strictness_raising_class_value(raised: type[BaseException]) -> object:
+    """A strictness value whose ``__class__`` read raises ``raised``."""
+
+    class RaisingClass:
+        @property
+        @override
+        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object
+        # is the guard's input
+        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
+            raise raised(_END_DETONATION)
+
+    return RaisingClass()
+
+
+class _StrictnessClaimsStr:
+    """A non-``str`` strictness value whose ``__class__`` claims ``str``."""
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
+    def __class__(self) -> type[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
+        return str
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: _strictness_raising_class_value(RuntimeError),
+        lambda: _strictness_raising_class_value(TypeError),
+        lambda: _strictness_raising_class_value(KeyboardInterrupt),
+        _StrictnessClaimsStr,
+        lambda: SimpleLazyObject(lambda: "warn"),
+    ],
+    ids=[
+        "class-read-raises-runtime-error",
+        "class-read-raises-type-error",
+        "class-read-raises-base-exception",
+        "class-claims-str",
+        "lazy-str",
+    ],
+)
+def test_strictness_non_str_lookalikes_raise_typed_valueerror(
+    make: Callable[[], object],
+) -> None:
+    """Whether strictness is a ``str`` is asked of its real type, never its ``__class__``.
+
+    A ``__class__`` that raises, or that claims ``str`` for a value the base
+    ``str`` slot then refuses, and a lazy proxy of a mode are all not ``str``, so
+    each is rejected with the typed ``ValueError`` before any comparison.
+    """
+    with pytest.raises(ValueError, match="strictness must be") as exc_info:
+        # basedpyright: the non-str strictness is the hostile input under test;
+        # DjangoOptimizerExtension types the parameter as str
+        _ = DjangoOptimizerExtension(strictness=make())  # pyright: ignore[reportArgumentType]
+    assert str(exc_info.value).startswith("strictness must be 'off', 'warn', or 'raise', got <")
     assert _END_DETONATION not in str(exc_info.value)
 
 

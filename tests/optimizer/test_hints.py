@@ -6,10 +6,13 @@ SKIP identity, factory classmethods, frozen immutability, and invalid-state
 """
 
 import typing
+from collections.abc import Callable
 from typing import NoReturn
+from unittest import mock
 
 import pytest
 from django.db.models import Prefetch
+from django.utils.functional import SimpleLazyObject
 from typing_extensions import override
 
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -20,6 +23,51 @@ from django_strawberry_framework.optimizer.nested_fetch import (
     WindowedPrefetchStrategy,
     resolve_strategy,
 )
+
+_RAISING_CLASS_ERRORS = [RuntimeError, TypeError, KeyboardInterrupt]
+
+
+def _raising_class_value(raised: type[BaseException]) -> object:
+    """A value whose ``__class__`` read raises ``raised`` (so a bare ``isinstance`` raises)."""
+
+    class RaisingClass:
+        @property
+        @override
+        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object
+        # is the guard's input
+        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
+            raise raised("hostile __class__")
+
+    return RaisingClass()
+
+
+class _ClaimsStr:
+    """A non-``str`` value whose ``__class__`` claims ``str``."""
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
+    def __class__(self) -> type[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
+        return str
+
+
+# basedpyright: django-stubs makes Prefetch generic, but the runtime class has no
+# ``__class_getitem__``, so the base cannot be subscripted
+class _PrefetchSubclass(Prefetch):  # pyright: ignore[reportMissingTypeArgument]
+    """A consumer ``Prefetch`` subclass."""
+
+
+def _prefetch_through_factory(obj: object) -> OptimizerHint:
+    """Build a prefetch hint through ``OptimizerHint.prefetch``."""
+    # basedpyright: the non-Prefetch value is the hostile input under test;
+    # OptimizerHint.prefetch types the parameter as a Prefetch
+    return OptimizerHint.prefetch(obj)  # pyright: ignore[reportArgumentType]
+
+
+def _prefetch_through_constructor(obj: object) -> OptimizerHint:
+    """Build a prefetch hint through ``OptimizerHint(prefetch_obj=...)``."""
+    # basedpyright: as above; OptimizerHint types prefetch_obj as a Prefetch
+    return OptimizerHint(prefetch_obj=obj)  # pyright: ignore[reportArgumentType]
 
 
 class TestSkipSentinel:
@@ -102,6 +150,23 @@ class TestPrefetchFactory:
             # basedpyright: the None prefetch is the hostile input under test; OptimizerHint.prefetch
             # types the parameter as a Prefetch
             OptimizerHint.prefetch(None)  # pyright: ignore[reportArgumentType]
+
+    @pytest.mark.parametrize(
+        "make",
+        [
+            lambda: _PrefetchSubclass("items"),
+            lambda: SimpleLazyObject(lambda: Prefetch("items")),
+            lambda: mock.Mock(spec=Prefetch),
+        ],
+        ids=["prefetch-subclass", "lazy-proxy", "spec-mock"],
+    )
+    def test_prefetch_subclass_and_proxies_accepted(self, make: Callable[[], object]) -> None:
+        """The ``Prefetch`` test is ``isinstance``: a subclass and a faithful proxy pass as is."""
+        obj = make()
+        # basedpyright: each object answers isinstance(obj, Prefetch) without being typed as one
+        assert OptimizerHint.prefetch(obj).prefetch_obj is obj  # pyright: ignore[reportArgumentType]
+        # basedpyright: as above, through direct construction
+        assert OptimizerHint(prefetch_obj=obj).prefetch_obj is obj  # pyright: ignore[reportArgumentType]
 
 
 class TestStrategyFactory:
@@ -192,12 +257,12 @@ class TestStrategyFactory:
         """A hostile selection value cannot replace the typed strategy rejection.
 
         The typed contract is owned by ``resolve_strategy`` itself: its
-        dunder reads are guarded (the ``__eq__`` check reads through the
-        base ``str`` slot, the registry lookup absorbs a raising
-        ``__hash__``, the message renders through ``_safe_arg_repr``, and a
-        raising ``plan`` attribute reads as "not a strategy"), so a hostile
-        value degrades to the typed ``ConfigurationError`` raised directly -
-        no raw exception escapes, and the hint boundary needs no containment.
+        reads of the value are guarded (content comparison goes through the
+        base ``str`` slot, so neither ``__eq__`` nor ``__hash__`` runs, the
+        message renders through ``_safe_arg_repr``, and a raising ``plan``
+        attribute reads as "not a strategy"), so a hostile value degrades to
+        the typed ``ConfigurationError`` raised directly - no raw exception
+        escapes, and the hint boundary needs no containment.
         """
 
         class HostileRepr(str):
@@ -264,6 +329,41 @@ class TestStrategyFactory:
         ) as exc_info:
             OptimizerHint.strategy(HostileHash("winowed"))
         assert exc_info.value.__cause__ is None
+
+    @pytest.mark.parametrize(
+        ("make", "type_name"),
+        [
+            (lambda: _raising_class_value(RuntimeError), "RaisingClass"),
+            (lambda: _raising_class_value(KeyboardInterrupt), "RaisingClass"),
+            (_ClaimsStr, "_ClaimsStr"),
+            (lambda: SimpleLazyObject(lambda: "windowed"), "SimpleLazyObject"),
+        ],
+        ids=[
+            "class-read-raises",
+            "class-read-raises-base-exception",
+            "class-claims-str",
+            "lazy-str",
+        ],
+    )
+    def test_strategy_non_str_lookalikes_stay_typed(
+        self,
+        make: Callable[[], object],
+        type_name: str,
+    ) -> None:
+        """A value that is not really a ``str`` (and has no ``plan``) takes the typed rejection."""
+        message = (
+            "nested_connection_strategy must be a strategy name, 'auto', or an object with a "
+            f"plan(request, plan) method; got {type_name}."
+        )
+        with pytest.raises(ConfigurationError) as factory_exc:
+            # basedpyright: the non-str lookalike is the hostile input under test;
+            # OptimizerHint.strategy types the parameter as StrategySelection
+            OptimizerHint.strategy(make())  # pyright: ignore[reportArgumentType]
+        assert str(factory_exc.value) == message
+        with pytest.raises(ConfigurationError) as direct_exc:
+            # basedpyright: as above; OptimizerHint types nested_strategy as StrategySelection
+            OptimizerHint(nested_strategy=make())  # pyright: ignore[reportArgumentType]
+        assert str(direct_exc.value) == message
 
     def test_public_annotations_resolve_at_runtime(self) -> None:
         """``typing.get_type_hints(OptimizerHint)`` resolves ``StrategySelection``.
@@ -392,6 +492,25 @@ class TestInvalidStatesRejected:
             # basedpyright: the non-Prefetch object is the hostile input under test;
             # OptimizerHint.prefetch types the parameter as a Prefetch
             OptimizerHint.prefetch(NotPrefetch())  # pyright: ignore[reportArgumentType]
+
+    @pytest.mark.parametrize("raised", _RAISING_CLASS_ERRORS)
+    @pytest.mark.parametrize(
+        "route",
+        [_prefetch_through_factory, _prefetch_through_constructor],
+        ids=["factory", "direct"],
+    )
+    def test_prefetch_obj_rejects_raising_class_read(
+        self,
+        route: Callable[[object], OptimizerHint],
+        raised: type[BaseException],
+    ) -> None:
+        """A value whose ``__class__`` read raises is not a ``Prefetch``: the rejection stays typed."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            _ = route(_raising_class_value(raised))
+        assert str(exc_info.value) == (
+            "OptimizerHint.prefetch(obj) requires a django.db.models.Prefetch instance; "
+            "got RaisingClass."
+        )
 
 
 class TestSkipPredicate:

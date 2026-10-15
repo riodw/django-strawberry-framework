@@ -5,6 +5,7 @@ Strategy registry identity, ``ConfigurationError`` at construction, and the
 is ``examples/fakeshop/test_query/test_optimizer_auto_api.py``.
 """
 
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import NoReturn
 
@@ -13,6 +14,7 @@ import pytest_django
 from apps.library.models import Book, Genre
 from django.db.models import Prefetch
 from django.db.models.query import ModelIterable
+from django.utils.functional import SimpleLazyObject
 from typing_extensions import override
 
 from django_strawberry_framework import DjangoOptimizerExtension
@@ -163,11 +165,11 @@ def test_resolve_strategy_rejects_hostile_type_and_class_name() -> None:
 def test_resolve_strategy_hostile_str_dunders_stay_typed() -> None:
     """A consumer-supplied str subclass cannot replace the typed rejection.
 
-    Resolving a name dispatches into the selection's dunders while deciding
-    (``__eq__`` for the ``"auto"`` check, ``__hash__`` inside the registry
-    lookup) and while rendering (``__repr__`` in the unknown-name message).
-    Each read is guarded, so a hostile override degrades to the typed
-    ``ConfigurationError`` instead of an arbitrary exception.
+    Deciding never dispatches into the selection's dunders: the ``"auto"`` check
+    and the registry match compare content through the base ``str`` slot, so no
+    ``__eq__`` or ``__hash__`` runs. Rendering the unknown-name message reads
+    ``__repr__`` through a guard. A hostile override therefore degrades to the
+    typed ``ConfigurationError`` instead of an arbitrary exception.
     """
 
     class HostileEq(str):
@@ -219,6 +221,99 @@ def test_resolve_strategy_raising_plan_attribute_is_not_a_strategy() -> None:
         resolve_strategy(RaisingPlan())
 
 
+_NOT_A_STRATEGY = (
+    "nested_connection_strategy must be a strategy name, 'auto', or an object with a "
+    "plan(request, plan) method; got {}."
+)
+
+
+def _raising_class_value(raised: type[BaseException]) -> object:
+    """A value whose ``__class__`` read raises ``raised`` (so a bare ``isinstance`` raises)."""
+
+    class RaisingClass:
+        @property
+        @override
+        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object
+        # is the guard's input
+        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
+            raise raised("hostile __class__")
+
+    return RaisingClass()
+
+
+class _ClaimsStr:
+    """A non-``str`` value whose ``__class__`` claims ``str``."""
+
+    @property
+    @override
+    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
+    def __class__(self) -> type[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
+        return str
+
+
+@pytest.mark.parametrize(
+    ("make", "type_name"),
+    [
+        (lambda: _raising_class_value(RuntimeError), "RaisingClass"),
+        (lambda: _raising_class_value(TypeError), "RaisingClass"),
+        (lambda: _raising_class_value(KeyboardInterrupt), "RaisingClass"),
+        (_ClaimsStr, "_ClaimsStr"),
+        (lambda: SimpleLazyObject(lambda: "windowed"), "SimpleLazyObject"),
+    ],
+    ids=[
+        "class-read-raises-runtime-error",
+        "class-read-raises-type-error",
+        "class-read-raises-base-exception",
+        "class-claims-str",
+        "lazy-str",
+    ],
+)
+def test_resolve_strategy_non_str_lookalikes_stay_typed(
+    make: Callable[[], object],
+    type_name: str,
+) -> None:
+    """Whether a selection is a name is asked of its real type, never its ``__class__``.
+
+    A ``__class__`` that raises, or that claims ``str`` for a value the base ``str``
+    slot then refuses, and a lazy proxy of a name are all not ``str``; none carries
+    a ``plan``, so each takes the typed rejection.
+    """
+    with pytest.raises(ConfigurationError) as exc_info:
+        resolve_strategy(make())
+    assert str(exc_info.value) == _NOT_A_STRATEGY.format(type_name)
+
+
+@pytest.mark.parametrize(
+    "claimed_class",
+    [type, None],
+    ids=["class-claims-type", "class-read-raises"],
+)
+def test_resolve_strategy_class_test_reads_the_real_type(claimed_class: type | None) -> None:
+    """An instance with a callable ``plan`` is a strategy whatever its ``__class__`` claims.
+
+    The class test (a class carries ``plan`` as a plain function, not a bound
+    method) asks the real type, so neither a ``__class__`` claiming ``type`` nor
+    one that raises decides it.
+    """
+
+    class ClassLiarStrategy:
+        name = "class-liar"
+
+        @property
+        @override
+        # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
+        def __class__(self) -> type:  # pyright: ignore[reportIncompatibleMethodOverride]
+            if claimed_class is None:
+                raise RuntimeError("hostile __class__")
+            return claimed_class
+
+        def plan(self, _request: NestedConnectionRequest, _plan: OptimizationPlan) -> bool:
+            return False
+
+    strategy = ClassLiarStrategy()
+    assert resolve_strategy(strategy) is strategy
+
+
 def test_resolve_strategy_lateral_loads_the_lateral_backend() -> None:
     """``"lateral"`` lazily registers and returns the Postgres backend singleton."""
     assert resolve_strategy("lateral") is LATERAL_STRATEGY
@@ -235,6 +330,38 @@ def test_resolve_strategy_none_reads_setting(settings: pytest_django.Settings) -
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"NESTED_CONNECTION_STRATEGY": "nope"}
     with pytest.raises(ConfigurationError, match="Unknown nested_connection_strategy 'nope'"):
         resolve_strategy(None)
+
+
+@pytest.mark.parametrize(
+    "resolve",
+    [lambda: resolve_strategy(None), DjangoOptimizerExtension],
+    ids=["resolve-strategy-none", "extension-construction"],
+)
+@pytest.mark.parametrize(
+    ("make", "type_name"),
+    [
+        (lambda: _raising_class_value(RuntimeError), "RaisingClass"),
+        (_ClaimsStr, "_ClaimsStr"),
+        (lambda: SimpleLazyObject(lambda: "windowed"), "SimpleLazyObject"),
+    ],
+    ids=["class-read-raises", "class-claims-str", "lazy-str"],
+)
+def test_strategy_setting_non_str_lookalikes_stay_typed(
+    settings: pytest_django.Settings,
+    resolve: Callable[[], object],
+    make: Callable[[], object],
+    type_name: str,
+) -> None:
+    """A configured setting that is not really a ``str`` takes the typed rejection.
+
+    ``NESTED_CONNECTION_STRATEGY`` is read when the selection is ``None`` and
+    validated by ``resolve_strategy``, so both the direct call and extension
+    construction reject the value with ``ConfigurationError``.
+    """
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"NESTED_CONNECTION_STRATEGY": make()}
+    with pytest.raises(ConfigurationError) as exc_info:
+        _ = resolve()
+    assert str(exc_info.value) == _NOT_A_STRATEGY.format(type_name)
 
 
 def test_extension_pins_strategy_at_construction() -> None:

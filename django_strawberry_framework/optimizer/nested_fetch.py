@@ -88,6 +88,7 @@ from django_strawberry_framework.exceptions import (
     _safe_attr,
     _safe_type_name,
 )
+from django_strawberry_framework.utils._narrowing import is_class, is_str
 from django_strawberry_framework.utils._queryset_private import (
     chain_queryset,
     super_clone_queryset,
@@ -458,18 +459,22 @@ def resolve_strategy(value: object) -> NestedConnectionStrategy:
     ``NESTED_CONNECTION_STRATEGY`` setting, defaulting to ``"windowed"``.
 
     The rejection never fails on the value it rejects: a selection is
-    consumer-supplied, so every dunder its decision reads is taken through the
-    base ``str`` slot (content equality for both the ``"auto"`` check and the
-    registry match - no ``dict`` lookup, whose hash and reflected
-    comparison would dispatch back into a hostile subclass), the ``plan``
-    attribute read absorbs a raising descriptor, and the message renders
-    through ``_safe_arg_repr``. A hostile ``__eq__`` / ``__hash__`` /
-    ``__repr__`` can neither force a false match nor replace the typed
-    ``ConfigurationError`` with an arbitrary exception.
+    consumer-supplied, so its kind (a name, a class) is asked of its real type
+    (``utils/_narrowing.py::is_str`` / ``is_class``, neither of which reads
+    ``__class__``), every dunder its decision reads is taken through the base ``str``
+    slot (content equality for both the ``"auto"`` check and the registry
+    match - no ``dict`` lookup, whose hash and reflected comparison would
+    dispatch back into a hostile subclass), the ``plan`` attribute read absorbs
+    a raising descriptor, and the message renders through ``_safe_arg_repr``.
+    A hostile ``__class__`` / ``__eq__`` / ``__hash__`` / ``__repr__`` / ``plan``
+    can neither force a false match nor replace the typed
+    ``ConfigurationError`` with an arbitrary exception. A lazy proxy of a name
+    (``SimpleLazyObject``) is not a ``str`` and has no ``plan``, so it takes the
+    typed rejection.
     """
     if value is None:
         value = nested_connection_strategy_setting()
-    if isinstance(value, str):
+    if is_str(value):
         # The base ``str`` slot bypasses a subclass's ``__eq__`` override (the
         # same slot discipline ``exceptions.py``'s renderers document); the
         # C-level content comparison cannot dispatch back into the subclass.
@@ -496,7 +501,7 @@ def resolve_strategy(value: object) -> NestedConnectionStrategy:
     # A raising property (or descriptor) is not a strategy, so the typed rejection
     # below applies.
     plan_callable = _safe_attr(value, "plan")
-    if not isinstance(value, type) and callable(plan_callable):
+    if not is_class(value) and callable(plan_callable):
         # A non-class value with a callable ``plan`` is a consumer strategy.
         return cast("NestedConnectionStrategy", value)
     raise ConfigurationError(

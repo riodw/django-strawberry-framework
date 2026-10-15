@@ -60,6 +60,7 @@ from django_strawberry_framework.utils._narrowing import (
     is_list,
     is_mapping,
     is_set_or_frozenset,
+    is_str,
     is_tuple,
 )
 from django_strawberry_framework.utils.private_state import PrivateAuthority
@@ -190,11 +191,13 @@ def _is_valid_strictness(strictness: object) -> bool:
     The membership read never dispatches into the candidate value's dunders: a
     ``str`` candidate is compared through the base ``str`` slot (content decides,
     the same slot discipline ``nested_fetch.resolve_strategy`` documents), and a
-    non-``str`` candidate is rejected without any equality probe. A hostile
-    ``__eq__`` can therefore neither force a false match nor replace the typed
-    ``ValueError`` with its own exception.
+    non-``str`` candidate is rejected without any equality probe. Whether the
+    candidate is a ``str`` is asked of its real type (``utils/_narrowing.py::is_str``),
+    so a ``__class__`` property can neither claim ``str`` nor raise. A hostile
+    ``__class__`` or ``__eq__`` can therefore neither force a false match nor
+    replace the typed ``ValueError`` with its own exception.
     """
-    if not isinstance(strictness, str):
+    if not is_str(strictness):
         return False
     return any(str.__eq__(strictness, mode) is True for mode in _STRICTNESS_MODES)
 

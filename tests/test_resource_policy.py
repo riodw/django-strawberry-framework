@@ -24,6 +24,10 @@ where they matter. What is left here is the surface a request cannot express:
   hostile or unusual one can (a malformed document IS expressible over the
   wire, so the swallow-the-lexer-error pair lives in the live suite;
   named-operation post-parse charging lives on ``/rp-shape/``);
+- the walk's per-node directive work, which leaves every verdict unchanged and
+  so shows only as the reads of a bare directive's arguments and the directives
+  the walk resolves (live sibling: the argument-less directive rows on
+  ``/rp-values/``);
 - the value walker's IDENTITY contracts, which need constructed object graphs a
   JSON body cannot express: a container referenced twice charged twice, two
   distinct-but-equal containers both charged, and cycles closing onto a parent
@@ -71,7 +75,15 @@ from apps.products.services import seed_data
 from asgiref.sync import sync_to_async
 from django.db.models import F, Func, Manager, Model, QuerySet
 from django.db.models.sql import Query
-from graphql import GraphQLError, GraphQLSchema, StringValueNode, ValueNode, parse
+from graphql import (
+    DirectiveNode,
+    GraphQLDirective,
+    GraphQLError,
+    GraphQLSchema,
+    StringValueNode,
+    ValueNode,
+    parse,
+)
 from graphql.language.token_kind import TokenKind
 from strawberry.extensions import ValidationCache
 from strawberry.extensions.base_extension import SchemaExtension
@@ -2958,6 +2970,45 @@ def test_an_inline_fragment_without_a_type_condition_keeps_its_parent() -> None:
 
 def test_an_inline_fragment_names_its_own_type_condition() -> None:
     _charge("{ ... on Query { echo } }")
+
+
+def test_argument_less_directives_are_read_once_however_often_their_fragment_expands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A directive with no argument is read once, and only a directive with arguments is revisited.
+
+    ``F`` is spread fifty times. Its definition and its field each carry
+    argument-less directives around one ``@include`` value: the value is charged
+    at every expansion (pinned live on ``/rp-values/``), while the argument-less
+    directives charge nothing, so reading them again at each expansion is walk
+    work no budget counts, multiplied by the spreads. The verdict is the same
+    either way, which is why no request can observe it: the reads of each bare
+    directive's arguments and the directives the walk resolves are what say the
+    work is not repeated.
+    """
+    spreads = " ".join("...F" for _ in range(50))
+    document = parse(
+        f"{{ {spreads} }} fragment F on Query @a @include(if: true) @b {{ echo @c @d }}",
+    )
+    reads: list[str] = []
+    slot = DirectiveNode.__dict__["arguments"]
+
+    def read_arguments(directive: DirectiveNode) -> object:
+        reads.append(directive.name.value)
+        return slot.__get__(directive, DirectiveNode)
+
+    resolved: list[str] = []
+    resolve = GraphQLSchema.get_directive
+
+    def spy_get_directive(schema: GraphQLSchema, name: str) -> GraphQLDirective | None:
+        resolved.append(name)
+        return resolve(schema, name)
+
+    monkeypatch.setattr(DirectiveNode, "arguments", property(read_arguments))
+    monkeypatch.setattr(GraphQLSchema, "get_directive", spy_get_directive)
+    charge_document(DEFAULT_RESOURCE_POLICY, _PROBE_SCHEMA._schema, document)
+    assert {name: reads.count(name) for name in "abcd"} == dict.fromkeys("abcd", 1)
+    assert resolved == ["include"] * 50
 
 
 #: Every literal the spy scalar below was asked to parse, in order.

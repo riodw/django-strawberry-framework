@@ -20,7 +20,8 @@ Three passes, in the order a request meets them:
    at every spread site and cycle-guarded by the spread path, so neither a
    fragment nor a directive can hide a selection from accounting; every spread
    and inline fragment the walk enters is counted against ``max_selections`` on
-   a count of its own.
+   a count of its own. A directive with no argument charges nothing, so it is
+   read once per node rather than at every expansion.
 3. **Value budget** (the same walk). Every value validation converts is
    charged before validation runs, because graphql-core's
    ``ValuesOfCorrectTypeRule`` parses each literal through the scalar it is
@@ -158,6 +159,7 @@ if TYPE_CHECKING:
     from graphql import (
         ArgumentNode,
         DocumentNode,
+        ExecutableDefinitionNode,
         GraphQLArgument,
         GraphQLField,
         GraphQLInputField,
@@ -1184,7 +1186,10 @@ class _DocumentWalk:
     selected operations), and a reference there is charged as ``None``: one
     node, nothing below it. ``read`` collects the variables a charged value
     referenced, and is kept only while a default is waiting to be told whether
-    a use site charged it.
+    a use site charged it. ``argumented`` holds, per document node that carries
+    directives, the ones among them that carry arguments, keyed by the node's
+    ``id`` like ``unshaped``: the walk lives inside one ``charge_document`` call,
+    whose document keeps every keyed node alive.
     """
 
     def __init__(
@@ -1200,6 +1205,7 @@ class _DocumentWalk:
         self.values: _ValueBudget = _ValueBudget(policy)
         self.expanded: set[str] = set()
         self.unshaped: set[int] = set()
+        self.argumented: dict[int, tuple[DirectiveNode, ...]] = {}
         self.variables: dict[str, object] | None = None
         self.read: set[str] | None = None
         self.in_mutation: bool = False
@@ -1226,14 +1232,39 @@ class _DocumentWalk:
                 specs=specs,
             )
 
-    def charge_directives(self, directives: Iterable[DirectiveNode] | None) -> None:
-        """Charge every directive's arguments, typed by the directive's definition where one exists."""
-        for directive in directives or ():
-            directive_def = self.graphql_schema.get_directive(directive.name.value)
-            self.charge_arguments(
-                directive.arguments,
-                None if directive_def is None else directive_def.args,
-            )
+    def charge_directive(self, directive: DirectiveNode) -> None:
+        """Charge one directive's arguments, typed by the directive's definition where one exists."""
+        directive_def = self.graphql_schema.get_directive(directive.name.value)
+        self.charge_arguments(
+            directive.arguments,
+            None if directive_def is None else directive_def.args,
+        )
+
+    def charge_directives(
+        self,
+        owner: ExecutableDefinitionNode | SelectionNode | VariableDefinitionNode,
+    ) -> None:
+        """Charge the arguments of every directive ``owner`` carries, once per visit.
+
+        A shape walk visits a node once per expansion of the fragment holding
+        it, and a fragment definition's own directives once per expansion too,
+        because a directive's values are charged per reference. A directive with
+        no argument has no value to charge at any reference, so passing over it
+        again would be walk work no budget counts, multiplied by the
+        expansions: a node's directives are read once, the ones that carry
+        arguments are kept, and only they are visited again. Each later visit
+        charges every argument at least one input node, so what an expansion
+        repeats is bounded by ``max_input_nodes``.
+        """
+        directives = owner.directives
+        if not directives:
+            return
+        argumented = self.argumented.get(id(owner))
+        if argumented is None:
+            argumented = tuple(directive for directive in directives if directive.arguments)
+            self.argumented[id(owner)] = argumented
+        for directive in argumented:
+            self.charge_directive(directive)
 
     def operation(
         self,
@@ -1258,8 +1289,8 @@ class _DocumentWalk:
         self.read = set() if defaulted else None
         self.in_mutation = operation.operation is OperationType.MUTATION
         for var_def in definitions:
-            self.charge_directives(var_def.directives)
-        self.charge_directives(operation.directives)
+            self.charge_directives(var_def)
+        self.charge_directives(operation)
         self.walk(
             operation.selection_set.selections,
             root,
@@ -1286,7 +1317,7 @@ class _DocumentWalk:
         self.variables = None
         self.read = None
         self.in_mutation = condition is not None and condition is self.graphql_schema.mutation_type
-        self.charge_directives(fragment.directives)
+        self.charge_directives(fragment)
         self.walk(
             fragment.selection_set.selections,
             condition,
@@ -1321,7 +1352,7 @@ class _DocumentWalk:
             # A spread's own directives are charged before its fragment
             # resolves: validation converts them whether or not the fragment
             # exists or is already expanding on this path.
-            self.charge_directives(node.directives)
+            self.charge_directives(node)
             if shape and not isinstance(node, FieldNode):
                 self.budget.charge_fragment()
             if isinstance(node, FragmentSpreadNode):
@@ -1333,7 +1364,7 @@ class _DocumentWalk:
                 if not shape or fragment is None or name in path:
                     continue
                 self.expanded.add(name)
-                self.charge_directives(fragment.directives)
+                self.charge_directives(fragment)
                 condition = graphql_schema.get_type(fragment.type_condition.name.value)
                 stack.extend(
                     (
@@ -1447,7 +1478,8 @@ def charge_document(
     the operation, a variable definition, a field, a spread (before its
     fragment resolves), an inline fragment, and a fragment definition once per
     shape-walk expansion - typed by the argument's declared input type,
-    untyped where nothing declares one. In a selected operation a variable
+    untyped where nothing declares one; a directive with no argument has no
+    value, so it is read once per node. In a selected operation a variable
     resolves to the supplied value or, failing that, to its default; anywhere
     else it is charged as ``None``, since graphql-core coerces no variable
     there. A default no use site charged - unused, shadowed by a supplied
@@ -1476,7 +1508,8 @@ def charge_document(
             walk.variables = None
             walk.read = None
             walk.in_mutation = False
-            walk.charge_directives(_type_system_directives(definition))
+            for directive in _type_system_directives(definition):
+                walk.charge_directive(directive)
     # A duplicate name is not the definition a spread expands, so it is a root too.
     for definition in document.definitions:
         if isinstance(definition, FragmentDefinitionNode) and (

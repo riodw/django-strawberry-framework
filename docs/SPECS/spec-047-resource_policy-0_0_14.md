@@ -572,7 +572,11 @@ before anything validates it.
   it enters is charged against `max_selections` on a count of its own, so a document's field
   count is unchanged. A fragment that selects no field still costs a step at every spread: a
   chain of fragments that each spread the next twice would otherwise take `2 ** depth` steps
-  for a document a few hundred bytes long and charge nothing.
+  for a document a few hundred bytes long and charge nothing. A directive with no argument
+  charges nothing either, so the walk reads a node's directives once and revisits, at every
+  expansion, only the ones that carry arguments, each of which charges at least one input
+  node: a fragment carrying a few thousand bare directives would otherwise cost
+  `max_selections` passes over all of them before validation ran.
 - **Before VALIDATION, not merely before execution.** Validation is already work the
   request asked for: graphql-core's `ValuesOfCorrectTypeRule` parses every literal argument
   and every variable-definition default through the scalar it is typed as, which for an
@@ -1353,9 +1357,11 @@ rejected on the bound it is about.
 - **Expanded document**: a fragment charged at every spread site; a fragment chain selecting
   no field charged per fragment entered; a fragment spread only from an unselected operation
   charged once; the subtree of an unknown field walked once however often its fragment
-  expands; `@skip(if: true)` not
-  evading accounting; the same field under many aliases charged per alias; nested
-  collections charged multiplicatively; an explicit small `first:` narrowing the charge.
+  expands; argument-less directives on a fragment and its field charging nothing however often
+  it expands, while the one directive value among them is charged per expansion;
+  `@skip(if: true)` not evading accounting; the same field under many aliases charged per
+  alias; nested collections charged multiplicatively; an explicit small `first:` narrowing the
+  charge.
 - **Values, tiny document / large variable payload**: node ids at and over the bound, with
   `CaptureQueriesContext` proving **zero** queries after a rejection; duplicate ids charged
   positionally; an empty list accepted; membership items at and over; a wide
@@ -1432,7 +1438,9 @@ families with their derivation from the single pair table; the pickle round trip
 `bound` / `limit` / `charged` / `detail` all survive; and the walker's degenerate inputs
 (unnamed operation, missing root type, unknown fragment, fragment cycle, inline fragment
 with and without a type condition, unknown argument charged untyped, leaf parent, untyped container,
-unmeasurable upload). The identity rows are the pointed ones: a container
+unmeasurable upload), and the walk's directive work no verdict shows: a fragment spread fifty
+times reads its own and its field's directives once each and resolves only the directive that
+carries an argument at each expansion. The identity rows are the pointed ones: a container
 referenced twice charged **twice** at a node budget that separates the two contracts, two
 distinct-but-equal containers both charged, a self-referential mapping AND a
 self-referential list terminating, a cycle that closes onto a grandparent rather than a

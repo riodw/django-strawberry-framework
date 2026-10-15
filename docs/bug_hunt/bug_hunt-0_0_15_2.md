@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 85 done, 153 to do.
+Progress: 86 done, 153 to do.
 
 ## Done
 
@@ -252,6 +252,12 @@ Progress: 85 done, 153 to do.
   the backing-model reading and the route for failing a nested item at save time (DRF `ValidationError` in the nested shape,
   keyed `shelves.<i>.code`, shown by the fakeshop nested-shelves `create()`); the save-time key map is one level (it built an
   unread child map against the root model). No package wire key moves; CHANGELOG item 238
+- [x] 70. Robustness, not a defect (no contract row bounds the admission walk's CPU): a shape walk passed over every
+  directive of a node at every fragment expansion, though an argument-less one charges nothing, so 500 spreads of a fragment
+  carrying 1495 bare directives (3999 tokens, default policy) walked 85 ms before validation and were admitted (1.8 s at 4x
+  tokens and selections). A node's directives are now read once and only those carrying arguments are revisited, each
+  charging at least one input node (0.6 ms; 2.5 ms at 4x); no verdict changed across 23,650 differential documents; filed
+  241
 - [x] 188. Re-checked at `8ca6a481`: a nested list whose `get_queryset` returns `union()` / `intersection()` /
   `difference()` no longer raises `NotSupportedError`; the combined result is served as its pk set, optimizer on and off
   (`5c5e32c5`, item 6; `test_combined_visibility_api.py` 199 passed)
@@ -590,9 +596,13 @@ tracker number are recorded there; open remainders and new defects are filed as 
 - [ ] 239. Lead (perf): a relation `isNull: true` on a scoped target walks to `EXISTS(visible related rows AND "U0"."id" IS
   NULL) OR NOT EXISTS(visible related rows)`; the first arm can match no row, on a `ForeignKey` and a `ForeignObject` alike
 
+- [ ] 241. Duplicate input-object field names escape the value budget:
+  `extensions/resource_policy.py::_DocumentWalk.charge_arguments` converts an argument's whole value AST at every reference
+  but charges the converted dict, so an overwritten duplicate field is converted and never charged; 500 spreads of
+  `__typename(a: {k: [1 x2978] k: 1})` walk about 106 ms at the default policy and are admitted, against spec-047
+  Decision 13 ("runs out of node budget first")
 ## To do: holes found re-checking the fixes
 
-- [ ] 70. Argument-less directives are re-walked on every fragment expansion (about 80 ms at the token bound; bounded, robustness)
 
 ## Waiting on you
 

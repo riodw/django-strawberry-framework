@@ -2508,6 +2508,36 @@ def test_fragment_definition_directive_values_are_charged_per_expansion() -> Non
     _assert_over_nodes(_post("/rp-values/", query))
 
 
+def _mixed_directive_spreads(count: int) -> str:
+    """``count`` spreads of a fragment whose argument-less directives surround one value.
+
+    ``@deprecated`` is a directive the schema declares and ``@nope`` one it does not;
+    neither carries an argument, on the definition or on its field. The
+    definition's ``@include(if: true)`` is the one input node each expansion
+    charges.
+    """
+    spreads = " ".join("...F" for _ in range(count))
+    definition = "fragment F on Query @deprecated @include(if: true) @nope"
+    return "{ %s } %s { __typename @deprecated @nope }" % (spreads, definition)
+
+
+def test_argument_less_directives_charge_nothing_however_often_their_fragment_expands() -> None:
+    """``MAX_INPUT_NODES`` expansions charge exactly the ``@include`` values, so the walk admits.
+
+    A directive with no argument carries no value for validation to convert,
+    so it charges no bound at any expansion; what rejects the misplaced and
+    unknown directives is validation, in its own words.
+    """
+    payload = _post("/rp-values/", _mixed_directive_spreads(MAX_INPUT_NODES))
+    _no_rejection(payload)
+    assert any("'@nope'" in error["message"] for error in payload["errors"]), payload
+
+
+def test_a_directive_value_among_argument_less_directives_is_charged_per_expansion() -> None:
+    """One ``@include`` value per expansion, the argument-less directives around it aside."""
+    _assert_over_nodes(_post("/rp-values/", _mixed_directive_spreads(MAX_INPUT_NODES + 1)))
+
+
 def test_a_fragment_spread_only_from_an_unselected_operation_is_charged_once() -> None:
     """Validation parses a fragment's literals once, however many spreads reach it.
 

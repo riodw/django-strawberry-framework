@@ -48,10 +48,12 @@ Each phase finishes completely (every agent it dispatched has reported) before t
    and send the list to the same implementer, then send the delta back to the same verifier. Repeat until LAND.
    A docs-only last fix may be checked by the coordinator instead of a new verifier round.
 8. **Land.** Apply the clone's `git diff HEAD --binary` to the shared checkout; it must apply cleanly and every
-   path it touches must have been clean. Commit the fix (conventional subject, a body that states the new
-   behaviour), then a tracker commit: tick the item with a one-line outcome and the fix hash, update the Progress
-   counts, add out-of-scope questions under "Waiting on you", and add a "CHANGELOG entry for item N" item when
-   consumers can see the change. No push, no branches, no CHANGELOG edit.
+   path it touches must have been clean. Edit the tracker in the same working tree: tick the item with a one-line
+   outcome, update the Progress counts, add out-of-scope questions under "Waiting on you", and add a "CHANGELOG
+   entry for item N" item when consumers can see the change. Then make ONE commit holding the fix and the tracker
+   edit together (conventional subject, a body that states the new behaviour); never a separate tracker commit
+   after the fix. The tick names no hash, because a commit cannot name itself: the commit that ticks an item is
+   its fix (`git log -S '- [x] N.' -- docs/bug_hunt/` finds it). No push, no branches, no CHANGELOG edit.
 9. **Close.** Ask the implementer for `<id>-impl-feedback.md` (helpful / misleading / missing about the brief and the
    standing docs). Delete the item's clones, grids and patches; keep the reports, briefs and feedback. Print three
    lines: what landed, what got filed, what is next.

@@ -23,8 +23,8 @@ item. Never run two items at once. After each item, print three lines in chat an
 
 - Dispatching the agent types FIX.md names, and the targeted, gated test runs FIX.md lists for them (never the full
   suite).
-- Writing the shared checkout only at landing: applying a verified diff, and the item's two commits (the fix, then
-  the tracker update). No `Co-Authored-By` or other attribution footer (AGENTS rule 33), no push, no branches, no
+- Writing the shared checkout only at landing: applying a verified diff and the tracker update, committed together
+  as the item's one commit. No `Co-Authored-By` or other attribution footer (AGENTS rule 33), no push, no branches, no
   stash, no CHANGELOG edit.
 - Deciding open questions that AGENTS.md, START.md or GOAL.md settle. A question they do not settle that changes a
   public contract is the maintainer's: park it under "Waiting on you" with the evidence and move on.

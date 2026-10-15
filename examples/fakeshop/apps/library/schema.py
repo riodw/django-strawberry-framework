@@ -1218,6 +1218,23 @@ class Query:
             queryset = filters.CirculationDeskFilter.apply_sync(filter, queryset, info)
         return queryset
 
+    @strawberry.field(graphql_type=list[ShelfLabelType])
+    def all_library_shelf_labels_filtered(
+        self,
+        info: strawberry.Info,
+        filter: FilterInput[filters.ShelfLabelFilter] | None = None,  # noqa: A002
+    ) -> QuerySet[models.ShelfLabel]:
+        """Acceptance surface for filtering by the multi-column ``ForeignObject`` ``shelf``.
+
+        ``ShelfLabelFilter`` declares ``shelf`` with ``exact`` / ``in`` / ``isnull``: the key
+        takes the shelf's primary key and the null test reads the shelves ``ShelfType``
+        lets the viewer see.
+        """
+        queryset = ShelfLabelType.get_queryset(models.ShelfLabel.objects.order_by("id"), info)
+        if filter is not None:
+            queryset = filters.ShelfLabelFilter.apply_sync(filter, queryset, info)
+        return queryset
+
     @strawberry.field(graphql_type=list[BookType])
     def all_library_books(
         self,

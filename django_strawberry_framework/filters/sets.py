@@ -390,7 +390,12 @@ def _reverse_rel_extra(field: ManyToOneRel | ManyToManyRel) -> dict[str, object]
 # ``dict`` of plain ``dict`` entries referencing stable importable filter classes and
 # the package-owned ``extra`` providers above -- NOT a snapshot of the mutable global.
 # Installed as ``FilterSet.FILTER_DEFAULTS`` (deepcopyable + customizable, restoring
-# django-filter's inherited extension seam).
+# django-filter's inherited extension seam). A relation class upstream's table does not
+# name (a bare ``ForeignObject``, its ``ForeignObjectRel`` reverse, a ``GenericRelation``)
+# gets no entry here either: ``FilterSet.filter_for_lookup`` gives its key the identity
+# filters for ``exact`` / ``in`` and a ``ForeignKey``'s Boolean null test for ``isnull``.
+# A consumer entry for the class still selects the consumer's filter for ``exact`` /
+# ``in``; ``isnull`` follows the ``BooleanField`` selection, as on a ``ForeignKey``.
 _PUBLIC_PACKAGE_FILTER_DEFAULTS: dict[type[ModelField], dict[str, object]] = {
     models.AutoField: {"filter_class": NumberFilter},
     models.CharField: {"filter_class": CharFilter},
@@ -2526,10 +2531,6 @@ class FilterSet(
         # its ``extra`` provider -- a restricted relation queryset, a ``to_field_name``,
         # requiredness), so an ``extra``-only override is caught, not just a
         # ``filter_class`` change.
-        overrides = getattr(cls._meta, "filter_overrides", None)
-        merged_defaults = dict(cls.FILTER_DEFAULTS)
-        if overrides:
-            merged_defaults.update(overrides)
         # ``try_dbfield`` returns the first non-empty ``fn(cls)`` result or None, so each read
         # is one of its mapping's values.
         selected_entry: Mapping[str, object] | None
@@ -2537,12 +2538,58 @@ class FilterSet(
         # basedpyright: typeshed types ``try_dbfield``'s ``fn`` as taking a field instance;
         # upstream calls it with each CLASS on ``field_class``'s MRO. It rejects a class-keyed
         # ``dict.get`` as ``fn`` in both calls
-        selected_entry = try_dbfield(merged_defaults.get, selection_cls)  # pyright: ignore[reportArgumentType]
+        selected_entry = try_dbfield(cls._merged_filter_defaults().get, selection_cls)  # pyright: ignore[reportArgumentType]
         selected_norm = _normalize_policy_entry(selected_entry)
         base_norm = try_dbfield(_PACKAGE_POLICY_BASELINE.get, selection_cls)  # pyright: ignore[reportArgumentType]
         if selected_norm != base_norm:
             return "override_generated"
         return "framework_default"
+
+    @classmethod
+    def _merged_filter_defaults(cls) -> dict[type[ModelField], dict[str, object]]:
+        """Return the map django-filter selects a generated filter's class from.
+
+        ``BaseFilterSet.filter_for_lookup`` copies ``cls.FILTER_DEFAULTS``, updates the
+        copy with ``cls._meta.filter_overrides`` and walks a field class's MRO over the
+        result (``try_dbfield``). The ownership oracle and the relation null test read
+        this same merged map, so neither can drift from upstream's selection.
+        """
+        merged_defaults = dict(cls.FILTER_DEFAULTS)
+        overrides = getattr(cls._meta, "filter_overrides", None)
+        if overrides:
+            merged_defaults.update(overrides)
+        return merged_defaults
+
+    @classmethod
+    def _null_test_filter_for_relation(
+        cls,
+        field: ModelField,
+    ) -> tuple[type[Filter] | None, dict[str, object]]:
+        """Return the ``(filter class, params)`` pair upstream gives a relation key's ``isnull``.
+
+        ``BaseFilterSet.filter_for_lookup`` builds a null test from the
+        ``models.BooleanField`` entry of the merged map (``_merged_filter_defaults``),
+        whatever the field, but only past its early exit for a field class with no
+        entry of its own. A ``ForeignKey`` passes that exit; a relation the table
+        carries no entry for (a forward ``ForeignObject``, the reverse of one, a
+        ``GenericRelation``) does not, so upstream returns ``(None, {})`` for it. This
+        rebuilds the pair upstream's ``isnull`` branch would have built, reading the
+        entry and calling its ``extra`` provider with ``field`` exactly as that branch
+        does, so the null test on such a key matches a ``ForeignKey``'s, consumer
+        ``BooleanField`` override included.
+        """
+        # A map with no ``BooleanField`` entry yields ``(None, {})``: upstream's
+        # unrecognized-field contract, under the set's ``unknown_field_behavior``.
+        # basedpyright: typeshed types ``try_dbfield``'s ``fn`` as taking a field instance;
+        # upstream calls it with each CLASS on the MRO. It rejects a class-keyed ``dict.get``
+        entry: Mapping[str, object] = (
+            try_dbfield(cls._merged_filter_defaults().get, models.BooleanField)  # pyright: ignore[reportArgumentType]
+            or {}
+        )
+        # ``FILTER_DEFAULTS`` entries hold a filter class and an ``extra`` provider.
+        filter_class = cast("type[Filter] | None", entry.get("filter_class"))
+        extra = cast("Callable[[ModelField], dict[str, object]] | None", entry.get("extra"))
+        return filter_class, (extra(field) if extra is not None else {})
 
     @classmethod
     def _is_generation_capable(cls) -> bool:
@@ -2679,17 +2726,25 @@ class FilterSet(
         exposes, maps to the raw-primary-key pair (``RelationPkFilter`` /
         ``RelationPkMultipleFilter``) on the same split.
 
-        Ownership is decided FIRST: a consumer-selected relation override
-        (``Meta.filter_overrides`` or a shadowed ``FILTER_DEFAULTS``) is
-        returned unchanged and is NEVER subject to the wire-shape policy --
-        its class may intentionally implement a nonstandard lookup. The
-        exhaustive lookup classification below applies ONLY to a PROVEN
-        framework default (``_generation_origin_for_field(...) ==
-        "framework_default"``)::
+        A relation ``isnull`` is a null test, never an identity: it keeps the
+        class upstream selects off the ``BooleanField`` entry, consumer
+        ``BooleanField`` override included, and a relation whose class the
+        table does not name (a forward ``ForeignObject``, its reverse, a
+        ``GenericRelation``), for which upstream returns ``(None, {})``, gets
+        the pair upstream builds for a ``ForeignKey``
+        (``_null_test_filter_for_relation``).
+
+        Ownership of every other lookup is decided FIRST: a consumer-selected
+        relation override (``Meta.filter_overrides`` or a shadowed
+        ``FILTER_DEFAULTS``) is returned unchanged and is NEVER subject to the
+        wire-shape policy -- its class may intentionally implement a
+        nonstandard lookup. The exhaustive lookup classification below applies
+        ONLY to a PROVEN framework default (``_generation_origin_for_field(...)
+        == "framework_default"``; a relation class no entry names, on either
+        side, is one)::
 
             exact  -> scalar / list identity class by cardinality
             in     -> list identity class (a list of GlobalIDs or primary keys)
-            isnull -> upstream BooleanFilter (a null test is never an identity)
             other  -> ConfigurationError at generation time
 
         An identity carries no ordering / pattern / range semantics, so any
@@ -2782,6 +2837,22 @@ class FilterSet(
                 # as a raw ``OverflowError``. Sibling of the ``in`` reroute above.
                 return IntegerRangeFilter, params
             return default_class, params
+        if lookup_type == "isnull":
+            # A null test is a Boolean predicate, never an identity, regardless of
+            # relation cardinality or link width, and its class is selected off the
+            # ``BooleanField`` entry (so the ownership oracle keys it there too).
+            # ``super().filter_for_lookup`` already selected that entry for a relation
+            # whose class the table names; converting it would emit an identity-shaped
+            # input for a null test (a LIST input on the multi-valued side) that raises
+            # at bind. A relation the table does not name (a ``ForeignObject``, its
+            # reverse, a ``GenericRelation``) got ``(None, {})`` from upstream's early
+            # exit instead, so build the same Boolean pair here. The branches below
+            # convert only the equality (``exact``) and membership (``in``) wire shapes.
+            # basedpyright: ``None`` for a relation class the table does not name (see the
+            # suppression on this method), so the comparison is live
+            if default_class is None:  # pyright: ignore[reportUnnecessaryComparison]
+                return cls._null_test_filter_for_relation(field)
+            return default_class, params
         # Resolve OWNERSHIP before any identity transformation. A consumer that
         # selected its OWN relation filter -- via ``Meta.filter_overrides`` or a
         # shadowed class-level ``FILTER_DEFAULTS`` -- owns the wire shape under the
@@ -2793,15 +2864,6 @@ class FilterSet(
         # ``override_generated`` on ``filter_for_field``'s ``default``, so it is
         # ineligible). Only the proven framework default is converted below.
         if cls._generation_origin_for_field(field, lookup_type) != "framework_default":
-            return default_class, params
-        if lookup_type == "isnull":
-            # A null test is a Boolean predicate, never an identity, regardless of
-            # relation cardinality. ``super().filter_for_lookup`` already selected the
-            # ``BooleanField`` default for ``isnull``; converting it would emit an
-            # identity-shaped input for a null test (a LIST input on the multi-valued
-            # side) that raises at bind. Mirror the own-PK ``isnull`` pass-through;
-            # the branches below convert only the equality (``exact``) and membership
-            # (``in``) wire shapes.
             return default_class, params
         # The identity a relation key filters by: a GlobalID when the owner-aware
         # target type is a Relay node, otherwise the raw target primary key. The raw

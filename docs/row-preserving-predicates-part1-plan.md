@@ -762,7 +762,10 @@ not routable / no snapshot row
   (ineligible, never a candidate), and keeps ownership of the wire shape. Ownership is
   decided by replicating django-filter's EXACT class selection: one `try_dbfield` MRO
   walk over `dict(cls.FILTER_DEFAULTS)` merged with `cls._meta.filter_overrides` (merge
-  order preserved), then a **normalized-VALUE** comparison of that selected
+  order preserved; the one map
+  `django_strawberry_framework/filters/sets.py::FilterSet._merged_filter_defaults`
+  builds, which the relation null test reads too), then a **normalized-VALUE**
+  comparison of that selected
   entry against the corresponding entry in the **private, immutable, package-authored
   normalized baseline**
   `django_strawberry_framework/filters/sets.py::_PACKAGE_POLICY_BASELINE` — a
@@ -813,7 +816,12 @@ not routable / no snapshot row
   converted to a GlobalID even when framework-owned: a null test is a Boolean
   predicate, so both `filter_for_lookup` and `filter_for_field` pass the upstream
   `BooleanFilter` through unchanged, mirroring the own-PK `isnull` pass-through
-  (spec-027 H1). Only the equality (`exact`) and membership (`in`) wire shapes convert;
+  (spec-027 H1). On a relation class django-filter's table does not name (a forward
+  `ForeignObject` of any link width, its reverse, a `GenericRelation`) upstream returns
+  `(None, {})` before its `isnull` branch, so `filter_for_lookup` builds the pair that
+  branch builds for a `ForeignKey` from the merged `BooleanField` entry
+  (`django_strawberry_framework/filters/sets.py::FilterSet._null_test_filter_for_relation`).
+  Only the equality (`exact`) and membership (`in`) wire shapes convert;
   a GlobalID-shaped input for a null test (a LIST on the multi-valued side) raised
   `ValueError` at bind (round-6 HIGH-2). The Boolean `isnull` leaf stays eligible for
   the correlated-`EXISTS` adapter like any non-Relay to-many `isnull` — the pk-correlated

@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 83 done, 153 to do.
+Progress: 84 done, 154 to do.
 
 ## Done
 
@@ -268,6 +268,13 @@ Progress: 83 done, 153 to do.
   catch in `mutations/resolvers.py::save_or_field_errors` (plus the forced-update and delete wrappers), with no new
   savepoint and no query-count change; a `ValueError` still propagates. The kanban example's hand-written mapping is gone;
   CHANGELOG item 232; filed 230, 231
+- [x] 97. `isnull` declared on a relation key django-filter's table does not name (a forward `ForeignObject` of any link
+  width, its reverse, a `GenericRelation`) raised "unrecognized field type" at class creation (dropped under WARN /
+  IGNORE) while a `ForeignKey` built a `BooleanFilter`; `filters/sets.py::FilterSet.filter_for_lookup` now replays
+  upstream's isnull branch from the merged `BooleanField` selection for those keys (`_null_test_filter_for_relation`),
+  so every relation key's `isNull` is a Boolean null test (carrier columns on the raw path, "no visible related row" on
+  a scoped target, as on a `ForeignKey`); the policy table still mirrors django-filter. Live row: fakeshop
+  `ShelfLabelFilter` `shelf` through the new `allLibraryShelfLabelsFiltered` root; CHANGELOG item 240; filed 239
 
 ## Outside review of the fixes
 
@@ -308,8 +315,6 @@ tracker number are recorded there; open remainders and new defects are filed as 
 
 ## To do: found along the way
 
-- [ ] 97. A `FilterSet` declaring `{"<fo>": ["exact", "isnull"]}` over a forward `ForeignObject` raises django-filter's
-  `AssertionError: unrecognized field type ForeignObject` at class creation, where a `ForeignKey` builds `isnull`
 - [ ] 100. A random `"?"` order (hook `order_by("?")` or `Meta.ordering = ["?"]`) on an optimized nested offset connection
   raises "Cannot resolve keyword '?' into field" (masked), reversed or not, `first:` or `last:`; the root path serves it
 - [ ] 101. `manage.py import_spec_terms --check` fails on spec-020's terms CSV on main (seen at `eb30dd7e`); a later run
@@ -579,6 +584,8 @@ tracker number are recorded there; open remainders and new defects are filed as 
 - [ ] 237. An honest `SimpleLazyObject({...})` `Meta.fields` on an `OrderSet` raises a raw `TypeError` from
   `utils/inputs.py::canonicalize_set_meta_fields` (`is_dict` answers through the proxy, then `dict.items` refuses it) and a
   lazy set is "an unreadable SimpleLazyObject container", while a `FilterSet` accepts both
+- [ ] 239. Lead (perf): a relation `isNull: true` on a scoped target walks to `EXISTS(visible related rows AND "U0"."id" IS
+  NULL) OR NOT EXISTS(visible related rows)`; the first arm can match no row, on a `ForeignKey` and a `ForeignObject` alike
 
 ## To do: holes found re-checking the fixes
 
@@ -779,6 +786,10 @@ tracker number are recorded there; open remainders and new defects are filed as 
   the mutation's own model fields (one level, never a nested path) and that a serializer fails a nested item at save time by
   raising DRF's `ValidationError` in the nested shape (keyed `shelves.<i>.code`); the fakeshop nested-shelves create reports a
   duplicate shelf code at `shelves.<i>.code` instead of the `__all__` constraint error
+- [ ] 240. CHANGELOG entry for item 97: `isNull` on a relation key over a forward `ForeignObject` (any link width), its
+  reverse or a `GenericRelation` now builds a Boolean null test like a `ForeignKey`'s instead of raising django-filter's
+  "unrecognized field type" `AssertionError` at `FilterSet` class creation (0.0.14 raised for every lookup on a
+  `ForeignObject` key); under `unknown_field_behavior` WARN / IGNORE the leaf is now built instead of dropped
 
 ## Hunt not finished in t3
 

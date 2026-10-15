@@ -462,11 +462,21 @@ class DeskProfileFilter(FilterSet):
 
 
 class ShelfLabelFilter(FilterSet):
-    """Shelf-label filterset bound to ``ShelfLabelType`` at finalize phase 2.5."""
+    """Shelf-label filterset bound to ``ShelfLabelType`` at finalize phase 2.5.
+
+    ``shelf`` is the multi-column forward ``ForeignObject``: its key filters by the
+    shelf's primary key (``ShelfType`` is not a Relay node) through both carriers, and
+    its ``isnull`` is the Boolean null test a ``ForeignKey`` key carries, read over the
+    shelves ``ShelfType`` lets the viewer see.
+    """
 
     class Meta:
         model = models.ShelfLabel
-        fields = {"id": ["exact", "in"], "text": ["exact", "icontains"]}
+        fields = {
+            "id": ["exact", "in"],
+            "text": ["exact", "icontains"],
+            "shelf": ["exact", "in", "isnull"],
+        }
 
 
 __all__ = (

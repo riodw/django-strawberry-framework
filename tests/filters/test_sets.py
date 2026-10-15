@@ -9769,6 +9769,291 @@ def test_r6_relation_isnull_filters_correctly_no_500() -> None:
     assert set(result_false.values_list("title", flat=True)) == {"with"}
 
 
+class _ConsumerBooleanFilter(BooleanFilter):
+    """A consumer's ``BooleanField`` override class."""
+
+
+_CONSUMER_NULL_TEST_LABEL = "consumer null test"
+
+
+def _consumer_null_test_extra(field: object) -> dict[str, object]:
+    """A consumer ``BooleanField`` entry's ``extra`` provider: a label for every null test."""
+    del field
+    return {"label": _CONSUMER_NULL_TEST_LABEL}
+
+
+@pytest.mark.parametrize(
+    ("model", "field_name"),
+    [
+        (_link_models.LnkColumnChild, "parent"),
+        (_link_models.LnkSlugObjectChild, "parent"),
+        (_link_models.LnkOptionalPairChild, "parent"),
+        (_link_models.LnkParent, "column_children"),
+        (library_models.Shelf, "shelf_labels"),
+        (library_models.Branch, "tags"),
+    ],
+    ids=[
+        "one_column_fo_pk_target",
+        "one_column_fo_non_pk_target",
+        "nullable_two_column_fo",
+        "reverse_one_column_fo",
+        "reverse_two_column_fo",
+        "generic_relation",
+    ],
+)
+def test_relation_key_with_no_filter_defaults_entry_builds_the_boolean_null_test(
+    model: type[django_models.Model],
+    field_name: str,
+) -> None:
+    """A relation class the table does not name gets a ``ForeignKey``'s ``isnull`` leaf.
+
+    django-filter returns ``(None, {})`` for a ``ForeignObject``, its reverse and a
+    ``GenericRelation`` before its ``isnull`` branch, which failed the class with
+    "unrecognized field type". The key's ``isnull`` is the framework ``BooleanFilter``
+    beside the identity ``exact`` leaf.
+    """
+    probe = type(
+        "NullTestProbe",
+        (FilterSet,),
+        {"Meta": type("Meta", (), {"model": model, "fields": {field_name: ["exact", "isnull"]}})},
+    )
+
+    leaf = probe.get_filters()[f"{field_name}__isnull"]
+
+    assert type(leaf) is BooleanFilter
+    record = filter_generation_provenance(leaf)
+    assert record is not None
+    assert record.origin == "framework_default"
+    assert isinstance(
+        probe.get_filters()[field_name],
+        (RelationPkFilter, RelationPkMultipleFilter),
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "field_name"),
+    [
+        (library_models.Book, "shelf"),
+        (library_models.ShelfLabel, "shelf"),
+        (library_models.Shelf, "shelf_labels"),
+        (library_models.Branch, "tags"),
+    ],
+    ids=[
+        "foreign_key",
+        "forward_foreign_object",
+        "reverse_foreign_object",
+        "generic_relation",
+    ],
+)
+@pytest.mark.parametrize(
+    (
+        "overrides",
+        "isnull_class",
+        "isnull_origin",
+        "isnull_label",
+    ),
+    [
+        (
+            {
+                dj_models.BooleanField: {
+                    "filter_class": _ConsumerBooleanFilter,
+                    "extra": _consumer_null_test_extra,
+                },
+            },
+            _ConsumerBooleanFilter,
+            "override_generated",
+            _CONSUMER_NULL_TEST_LABEL,
+        ),
+        (
+            {dj_models.ForeignObject: {"filter_class": ModelChoiceFilter}},
+            BooleanFilter,
+            "framework_default",
+            None,
+        ),
+    ],
+    ids=["boolean_field_override", "foreign_object_override"],
+)
+def test_relation_key_isnull_follows_the_boolean_field_selection_like_a_foreign_key(
+    *,
+    model: type[django_models.Model],
+    field_name: str,
+    overrides: dict[type[object], dict[str, object]],
+    isnull_class: type[Filter],
+    isnull_origin: str,
+    isnull_label: str | None,
+) -> None:
+    """Every relation key's ``isnull`` is owned as a ``ForeignKey``'s is.
+
+    Upstream selects a relation null test off the ``BooleanField`` entry, so a
+    consumer ``BooleanField`` override owns it on a ``ForeignObject``, its reverse
+    and a ``GenericRelation`` exactly as on the ``ForeignKey`` control, its
+    ``extra`` provider's parameters included, while an override of the relation
+    class owns only ``exact`` and leaves ``isnull`` the framework ``BooleanFilter``.
+    """
+    probe = type(
+        "OwnershipProbe",
+        (FilterSet,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {
+                    "model": model,
+                    "fields": {field_name: ["isnull"]},
+                    "filter_overrides": overrides,
+                },
+            ),
+        },
+    )
+
+    leaf = probe.get_filters()[f"{field_name}__isnull"]
+
+    assert type(leaf) is isnull_class
+    assert (leaf.label == _CONSUMER_NULL_TEST_LABEL) is (isnull_label is not None), leaf.label
+    record = filter_generation_provenance(leaf)
+    assert record is not None
+    assert record.origin == isnull_origin
+
+
+#: The package table without its ``BooleanField`` entry, the class a null test is selected off.
+_FILTER_DEFAULTS_WITHOUT_BOOLEAN = {
+    field_class: entry
+    for field_class, entry in FilterSet.FILTER_DEFAULTS.items()
+    if field_class is not dj_models.BooleanField
+}
+
+
+@pytest.mark.parametrize(
+    ("model", "field_name"),
+    [(library_models.ShelfLabel, "shelf"), (library_models.Branch, "tags")],
+    ids=["forward_foreign_object", "generic_relation"],
+)
+def test_relation_key_isnull_without_a_boolean_field_entry_raises_as_unrecognized(
+    model: type[django_models.Model],
+    field_name: str,
+) -> None:
+    """A table with no ``BooleanField`` entry leaves the key unrecognized under ``RAISE``.
+
+    The null test has no class to be selected off, so the key keeps upstream's
+    unrecognized-field contract: the class statement fails with django-filter's
+    assertion naming the relation class.
+    """
+    with pytest.raises(AssertionError, match=rf"resolved field '{field_name}'.*unrecognized"):
+        type(
+            "NoBooleanProbe",
+            (FilterSet,),
+            {
+                "FILTER_DEFAULTS": _FILTER_DEFAULTS_WITHOUT_BOOLEAN,
+                "Meta": type("Meta", (), {"model": model, "fields": {field_name: ["isnull"]}}),
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ("model", "field_name"),
+    [(library_models.ShelfLabel, "shelf"), (library_models.Branch, "tags")],
+    ids=["forward_foreign_object", "generic_relation"],
+)
+def test_relation_key_isnull_without_a_boolean_field_entry_is_dropped_under_ignore(
+    model: type[django_models.Model],
+    field_name: str,
+) -> None:
+    """Under ``IGNORE`` the same key is dropped and the rest of the set still builds."""
+    probe = type(
+        "NoBooleanIgnoreProbe",
+        (FilterSet,),
+        {
+            "FILTER_DEFAULTS": _FILTER_DEFAULTS_WITHOUT_BOOLEAN,
+            "Meta": type(
+                "Meta",
+                (),
+                {
+                    "model": model,
+                    "fields": {"id": ["exact"], field_name: ["isnull"]},
+                    "unknown_field_behavior": UnknownFieldBehavior.IGNORE,
+                },
+            ),
+        },
+    )
+
+    assert set(probe.get_filters()) == {"id"}
+
+
+def _attachment_isnull_meta(behavior: UnknownFieldBehavior) -> type:
+    """``Meta`` declaring ``isnull`` on ``Item.attachment``, a ``FileField`` the table omits."""
+    return type(
+        "Meta",
+        (),
+        {
+            "model": Item,
+            "fields": {"name": ["exact"], "attachment": ["isnull"]},
+            "unknown_field_behavior": behavior,
+        },
+    )
+
+
+def test_unrecognized_non_relation_column_isnull_still_raises_under_raise() -> None:
+    """Only a relation key gains a null test: a ``FileField``'s ``isnull`` stays unrecognized.
+
+    ``Item.attachment`` has no ``FILTER_DEFAULTS`` entry, so django-filter returns
+    ``(None, {})`` for every lookup on it, ``isnull`` included, and the class
+    statement fails with its assertion.
+    """
+    meta = _attachment_isnull_meta(UnknownFieldBehavior.RAISE)
+
+    with pytest.raises(AssertionError, match=r"'attachment'.*unrecognized field type FileField"):
+        type("AttachmentNullProbe", (FilterSet,), {"Meta": meta})
+
+
+def test_unrecognized_non_relation_column_isnull_is_still_dropped_under_ignore() -> None:
+    """Under ``IGNORE`` the ``FileField`` ``isnull`` leaf is dropped, as upstream drops it."""
+    probe = type(
+        "AttachmentNullProbe",
+        (FilterSet,),
+        {"Meta": _attachment_isnull_meta(UnknownFieldBehavior.IGNORE)},
+    )
+
+    assert set(probe.get_filters()) == {"name"}
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("is_null", "names"),
+    [(True, ["o2", "o3"]), (False, ["o1", "o4"])],
+    ids=["null", "not_null"],
+)
+def test_nullable_two_column_foreign_object_isnull_tests_the_carriers(
+    *,
+    is_null: bool,
+    names: list[str],
+) -> None:
+    """``parent__isnull`` answers as Django does: null when any carrier is ``NULL``.
+
+    ``o2`` has both carriers ``NULL`` and ``o3`` one; ``o4``'s carriers match no
+    parent but are set, so it is not null, as a dangling ``ForeignKey`` column is not.
+    No type registers ``LnkParent``, so the leaf compiles the raw relation.
+    """
+    probe = type(
+        "PairNullProbe",
+        (FilterSet,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": _link_models.LnkOptionalPairChild, "fields": {"parent": ["isnull"]}},
+            ),
+        },
+    )
+
+    with _link_models.link_fixture_tables(connection):
+        kept = probe.apply_sync(
+            {"parent": {"is_null": is_null}},
+            _link_models.LnkOptionalPairChild.objects.order_by("id"),
+            _make_info(),
+        )
+        assert list(kept.values_list("name", flat=True)) == names
+
+
 # ======================================================================
 # The origin oracle replicates upstream's MERGED FILTER_DEFAULTS +
 # ------------------------------------------------------------------------

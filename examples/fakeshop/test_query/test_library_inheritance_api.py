@@ -29,7 +29,10 @@ query shape, off the SQL the request emitted:
   statement, and a label on a shelf ``ShelfType`` hides, or naming no shelf at
   all, stays listed and sorts as one with none; behind the to-many
   ``BranchOrder.shelf_labels`` hop each carrier is aggregated per branch and
-  correlated to the label's own carrier columns.
+  correlated to the label's own carrier columns. ``ShelfLabelFilter`` filters by
+  it: ``exact`` / ``in`` take the shelf's primary key and match both carriers,
+  never a hidden shelf, and ``isNull`` is a Boolean answered over the shelves
+  the viewer sees (a hidden shelf and a missing one alike), in one statement.
 - Write-input requiredness: ``Book.archive_genres`` (``editable=False``) is
   absent from both generated ``Book`` inputs, and ``MediaSpecimen``'s optional
   file columns are optional through the ``blank`` arm and the ``null`` arm
@@ -753,6 +756,155 @@ def test_branches_order_by_label_shelves_aggregate_each_carrier_behind_the_label
     )
     assert branch_sql.count(correlation) == 2, branch_sql
     assert 'JOIN "library_shelf"' not in branch_sql, branch_sql
+
+
+def _filtered_shelf_label_texts(
+    filter_input: str,
+    client: Client | None = None,
+) -> tuple[list[str], list[str]]:
+    """Return the label texts ``filter_input`` keeps and the label statements it ran."""
+    with CaptureQueriesContext(connection) as captured:
+        data = assert_graphql_success(
+            f"{{ allLibraryShelfLabelsFiltered(filter: {filter_input}) {{ text }} }}",
+            client=client,
+        )
+    texts = sorted(row["text"] for row in data["allLibraryShelfLabelsFiltered"])
+    return texts, _sql_from_table(captured, "library_shelflabel")
+
+
+def test_shelf_label_filter_input_publishes_the_foreign_object_key_with_a_boolean_null_test() -> (
+    None
+):
+    """The multi-column ``shelf`` key takes the shelf's primary key and ``isNull`` a Boolean.
+
+    ``ShelfType`` is not a Relay node, so ``exact`` takes one raw ``Int`` primary key
+    and ``in`` a list of them; ``isNull`` is the Boolean null test a ``ForeignKey``
+    key carries, never an identity.
+    """
+    fields = _introspect_input_fields("ShelfLabelFilterShelfFilterInputType")
+
+    assert fields == {
+        "exact": {"kind": "SCALAR", "name": "Int", "ofType": None},
+        "in": {"kind": "LIST", "name": None, "ofType": {"kind": "NON_NULL", "name": None}},
+        "isNull": {"kind": "SCALAR", "name": "Boolean", "ofType": None},
+    }, fields
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("staff", "is_null", "expected"),
+    [
+        (False, True, ["annex-s9", "central-zz"]),
+        (False, False, ["annex-b2", "central-a1", "central-c3"]),
+        (True, True, ["central-zz"]),
+        (
+            True,
+            False,
+            [
+                "annex-b2",
+                "annex-s9",
+                "central-a1",
+                "central-c3",
+            ],
+        ),
+    ],
+    ids=[
+        "anonymous-true",
+        "anonymous-false",
+        "staff-true",
+        "staff-false",
+    ],
+)
+def test_shelf_labels_filter_shelf_isnull_over_the_shelves_the_viewer_sees(
+    *,
+    staff: bool,
+    is_null: bool,
+    expected: list[str],
+) -> None:
+    """``shelf: { isNull }`` asks whether a label reaches a shelf ``ShelfType`` shows the viewer.
+
+    ``central-zz`` names no shelf, so it is null for everyone; anonymous viewers do
+    not see the ``secret`` shelf, so ``annex-s9`` is null for them and not for staff.
+    The answer is one ``library_shelflabel`` statement whose visibility test
+    correlates on both carriers and joins no ``library_shelf``.
+    """
+    create_users(1)
+    _seed_shelf_labels()
+    models.ShelfLabel.objects.create(
+        text="central-zz",
+        branch=models.Branch.objects.get(name="Central"),
+        shelf_code="ZZ",
+    )
+    client = None
+    if staff:
+        client = Client()
+        client.force_login(get_user_model().objects.get(username="staff_1"))
+
+    texts, label_sql = _filtered_shelf_label_texts(
+        f"{{ shelf: {{ isNull: {'true' if is_null else 'false'} }} }}",
+        client,
+    )
+
+    assert texts == expected, texts
+    assert len(label_sql) == 1, label_sql
+    # Django 6 quotes the subquery alias (``"U0"``); 5.2 does not.
+    sql = label_sql[0].replace('"U0"', "U0")
+    assert 'U0."branch_id" = ("library_shelflabel"."branch_id")' in sql, sql
+    assert 'U0."code" = ("library_shelflabel"."shelf_code")' in sql, sql
+    assert "JOIN" not in sql, sql
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("lookup", "shelves", "expected"),
+    [
+        ("exact", ["central_a1"], ["central-a1"]),
+        ("exact", ["annex_a1"], []),
+        ("exact", ["secret"], []),
+        ("in", ["central_a1", "secret"], ["central-a1"]),
+        ("in", ["annex_a1", "central_c3"], ["central-c3"]),
+    ],
+    ids=[
+        "exact-central-a1",
+        "exact-same-code-other-branch",
+        "exact-hidden",
+        "in-visible-and-hidden",
+        "in-same-code-other-branch-and-visible",
+    ],
+)
+def test_shelf_labels_filter_shelf_key_matches_both_carriers_and_never_a_hidden_shelf(
+    *,
+    lookup: str,
+    shelves: list[str],
+    expected: list[str],
+) -> None:
+    """``shelf: { exact }`` / ``{ in }`` match the shelf's ``(branch, code)``, hiding ``secret``.
+
+    ``Annex`` also holds an ``A1`` shelf, which no label names: ``central-a1``
+    matches only ``Central``'s ``A1``. The anonymous viewer's key naming the
+    hidden ``secret`` shelf matches nothing, as a missing shelf would. Each answer
+    is one ``library_shelflabel`` statement.
+    """
+    _seed_shelf_labels()
+    pks = {
+        "annex_a1": models.Shelf.objects.create(
+            branch=models.Branch.objects.get(name="Annex"),
+            code="A1",
+        ).pk,
+        "central_a1": models.Shelf.objects.get(branch__name="Central", code="A1").pk,
+        "central_c3": models.Shelf.objects.get(branch__name="Central", code="C3").pk,
+        "secret": models.Shelf.objects.get(topic="secret").pk,
+    }
+    value = (
+        str(pks[shelves[0]])
+        if lookup == "exact"
+        else "[" + ", ".join(str(pks[name]) for name in shelves) + "]"
+    )
+
+    texts, label_sql = _filtered_shelf_label_texts(f"{{ shelf: {{ {lookup}: {value} }} }}")
+
+    assert texts == expected, texts
+    assert len(label_sql) == 1, label_sql
 
 
 @pytest.mark.parametrize(

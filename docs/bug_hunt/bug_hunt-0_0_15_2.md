@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 72 done, 155 to do.
+Progress: 73 done, 154 to do.
 
 ## Done
 
@@ -198,6 +198,12 @@ Progress: 72 done, 155 to do.
   `sys.maxsize` page cap: a masked unexpected error on root, consumer-resolver and per-parent connections, sync and async.
   `offset_engine_arguments` now hands the engine every forward page ending at most at `sys.maxsize - 1`, so every accepted
   cursor serves the past-the-end page the optimized window serves (`60825338`); CHANGELOG item 218; filed 219
+- [x] 64. Not a defect at HEAD (every malformed offset cursor answered the cursor error), but the decoder's `isascii` term
+  was load-bearing, not redundant: `str.isdigit` admits 128 digits `int()` raises on (U+00B2), which without it escaped as a
+  masked error on every entry point and past the planner's `PaginationArgumentError`-only catch, and no test failed. The
+  decoder now matches the index against `0|[1-9][0-9]*` in full (same accepted set); live rows pin the superscript and the
+  mixed non-ASCII digit on the root, and every malformed cursor on the planned nested `booksConnection` window (the nested
+  field's `errors[].path`, no window statement)
 - [x] 188. Re-checked at `8ca6a481`: a nested list whose `get_queryset` returns `union()` / `intersection()` /
   `difference()` no longer raises `NotSupportedError`; the combined result is served as its pk set, optimizer on and off
   (`5c5e32c5`, item 6; `test_combined_visibility_api.py` 199 passed)
@@ -515,8 +521,6 @@ Expected outcome: most are not real bugs and just get deleted from t3. One check
 
 ## To do: holes found re-checking the fixes
 
-- [ ] 64. Cursor-decoder guards: the `isascii` term in `utils/connections.py::decode_offset_cursor` is redundant behind
-  `str(position) != raw` (drop it or keep it), and no live row pins a malformed nested-window cursor
 - [ ] 66. Index advisory on a multi-table-inheritance child names an order column that lives on the parent table
 - [ ] 67. Nested serializer: a Django error raised in `create()` for a child is keyed to a renamed root input
 - [ ] 70. Argument-less directives are re-walked on every fragment expansion (about 80 ms at the token bound; bounded, robustness)

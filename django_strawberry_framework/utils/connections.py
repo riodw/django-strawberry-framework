@@ -44,6 +44,7 @@ re-exports the same helper for argument-comparison); this helper assumes its
 
 from __future__ import annotations
 
+import re
 import sys
 from dataclasses import dataclass
 from enum import Enum
@@ -695,6 +696,13 @@ class ConnectionWindowBounds:
 #: a longer payload is rejected before ``int()`` converts it.
 _OFFSET_CURSOR_MAX_DIGITS = len(str(sys.maxsize))
 
+#: The canonical index an offset cursor carries: ASCII digits, no sign, no padding
+#: and no leading zero, matched in full. ``[0-9]`` is the ten ASCII digits only:
+#: ``str.isdigit`` also accepts digits ``int()`` raises on (a superscript such as
+#: ``U+00B2``) and Unicode ``\d`` digits ``int()`` reads as a second spelling of
+#: an index (``U+0661`` for ``1``), neither of which a mint writes.
+_OFFSET_CURSOR_INDEX_PATTERN = re.compile(r"0|[1-9][0-9]*")
+
 
 def decode_offset_cursor(value: str | None, *, argument: str, prefix: str) -> int | None:
     """Decode one ``after`` / ``before`` offset cursor into the row index it names.
@@ -713,18 +721,19 @@ def decode_offset_cursor(value: str | None, *, argument: str, prefix: str) -> in
     sets no bound. Otherwise accepts only the form the package and ``ListConnection`` mint:
     ``prefix`` (the connection's edge-class ``CURSOR_PREFIX``, the one both mints write under and
     ``ListConnection`` decodes under), a colon, and a canonical decimal (ASCII digits, no sign, no
-    padding, no leading zero) in ``0 <= index < sys.maxsize``. Both mints are non-negative by
-    construction (``ListConnection`` mints ``start + i``; the window mints the row number minus
-    one), so a negative or non-canonical payload is never a cursor this API issued. The upper bound
-    is the largest index a row can have: no Python sequence is longer than ``sys.maxsize``,
-    ``SliceMetadata`` reserves ``sys.maxsize`` as its unbounded-end sentinel, and ``after`` adds
-    one, so ``sys.maxsize - 1`` is the last index whose start still fits a 64-bit SQL ``OFFSET``
-    (an ordinary past-the-end page under every page argument: ``offset_engine_arguments`` keeps a
-    forward page's end below that sentinel). The length is compared before ``int()`` runs, so an
-    arbitrarily long digit string is never converted. Any other value raises
-    ``PaginationArgumentError`` with Strawberry's own foreign-prefix wording, which the walker
-    reads as malformed pagination and both resolve-time callers let surface as the field's own
-    error.
+    padding, no leading zero: ``_OFFSET_CURSOR_INDEX_PATTERN``, matched in full) in
+    ``0 <= index < sys.maxsize``. Both mints are non-negative by construction (``ListConnection``
+    mints ``start + i``; the window mints the row number minus one), so a negative or non-canonical
+    payload is never a cursor this API issued. The upper bound is the largest index a row can have:
+    no Python sequence is longer than ``sys.maxsize``, ``SliceMetadata`` reserves ``sys.maxsize``
+    as its unbounded-end sentinel, and ``after`` adds one, so ``sys.maxsize - 1`` is the last index
+    whose start still fits a 64-bit SQL ``OFFSET`` (an ordinary past-the-end page under every page
+    argument: ``offset_engine_arguments`` keeps a forward page's end below that sentinel). The
+    pattern and the length are checked before ``int()`` runs, so ``int()`` is handed only ASCII
+    digits it accepts and an arbitrarily long digit string is never converted: no undecodable
+    payload escapes as ``ValueError``. Any other value raises ``PaginationArgumentError`` with
+    Strawberry's own foreign-prefix wording, which the walker reads as malformed pagination and
+    both resolve-time callers let surface as the field's own error.
     """
     if not value:
         return None
@@ -733,12 +742,12 @@ def decode_offset_cursor(value: str | None, *, argument: str, prefix: str) -> in
         cursor_prefix, raw = from_base64(value)
     except ValueError:
         raise rejection from None
-    if cursor_prefix != prefix or not (raw.isascii() and raw.isdigit()):
+    if cursor_prefix != prefix or not _OFFSET_CURSOR_INDEX_PATTERN.fullmatch(raw):
         raise rejection
     if len(raw) > _OFFSET_CURSOR_MAX_DIGITS:
         raise rejection
     position = int(raw)
-    if position >= sys.maxsize or str(position) != raw:
+    if position >= sys.maxsize:
         raise rejection
     return position
 

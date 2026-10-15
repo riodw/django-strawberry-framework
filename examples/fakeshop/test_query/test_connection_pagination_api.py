@@ -67,28 +67,33 @@ Relay window, so an unsealed return would reach all three.
 Offset cursor decoding is pinned last, under the default (``DEBUG=False``)
 error policy so each row reads the exact message a client gets. A correctly
 prefixed cursor naming a negative index, and every non-minted shape (bad
-base64, no colon, foreign prefix, sign, padding, leading zero, underscore,
-non-ASCII digit, a 5000-digit string, an index of ``sys.maxsize``), answers with
-``Argument '<after|before>' contains a non-existing value.`` on every source a
-connection slices: list and tuple consumer resolvers, sync and async, under a
-three-row ``max_page_size`` (where a wrapped negative slice would serve 39 of
-40 rows); a generator resolver; a ``QuerySet`` from an async resolver; and the
-shipped root ``allLibraryGenresConnection``. Index 0, a minted ``endCursor``,
-``after: ""`` (absent) and the largest accepted index ``sys.maxsize - 1`` (an
-ordinary past-the-end page on the root ``QuerySet`` and a list resolver) are the
-positive controls. Every accepted index past the last row is that page under
-``first: N``, ``last: 0`` or no page argument (``first: 0`` / ``2`` / the cap,
-``last: 0``, none; with or without ``before: ""``, which is no bound): the
-largest index, and the index whose page would end on ``SliceMetadata``'s
-``sys.maxsize`` last-only sentinel, each serve the page ``after: 5`` serves, on
-the root ``QuerySet``, the list, tuple and generator resolvers, the async list
-and ``QuerySet`` resolvers and a nested per-parent ``booksConnection``; an
-``after`` + ``before`` interval there pages like ``after: 5, before: 5``; and a
-page bounded only by a ``sys.maxsize`` cap (a module-owned
-``/graphql-cursor-unbounded/`` mount) serves every row with or without a
-cursor. Each ``first`` / ``last`` bound message (negative, over the
-three-row cap) is read exactly on both colours. The test-local resolvers
-are served over module-owned ``/graphql-cursor/`` and ``/graphql-cursor-async/``
+base64, no colon, foreign prefix, sign, padding, leading zero, underscore, a
+non-ASCII decimal digit alone or after an ASCII one, a superscript digit
+``str.isdigit`` accepts and ``int()`` raises on, a 5000-digit string, an index
+of ``sys.maxsize``), answers with ``Argument '<after|before>' contains a
+non-existing value.`` on every source a connection slices: list and tuple
+consumer resolvers, sync and async, under a three-row ``max_page_size`` (where
+a wrapped negative slice would serve 39 of 40 rows); a generator resolver; a
+``QuerySet`` from an async resolver; and the shipped root
+``allLibraryGenresConnection``. Under that root the planned nested
+``booksConnection`` window answers every non-minted shape the same way at the
+nested field's own ``errors[].path``, with no ``library_book`` statement: the
+planner plans no window for a cursor the decoder refuses. Index 0, a minted
+``endCursor``, ``after: ""`` (absent) and the largest accepted index
+``sys.maxsize - 1`` (an ordinary past-the-end page on the root ``QuerySet`` and
+a list resolver) are the positive controls. Every accepted index past the last
+row is that page under ``first: N``, ``last: 0`` or no page argument
+(``first: 0`` / ``2`` / the cap, ``last: 0``, none; with or without
+``before: ""``, which is no bound): the largest index, and the index whose page
+would end on ``SliceMetadata``'s ``sys.maxsize`` last-only sentinel, each serve
+the page ``after: 5`` serves, on the root ``QuerySet``, the list, tuple and
+generator resolvers, the async list and ``QuerySet`` resolvers and a nested
+per-parent ``booksConnection``; an ``after`` + ``before`` interval there pages
+like ``after: 5, before: 5``; and a page bounded only by a ``sys.maxsize`` cap
+(a module-owned ``/graphql-cursor-unbounded/`` mount) serves every row with or
+without a cursor. Each ``first`` / ``last`` bound message (negative, over the
+three-row cap) is read exactly on both colours. The test-local resolvers are
+served over module-owned ``/graphql-cursor/`` and ``/graphql-cursor-async/``
 mounts with no error-policy pass-through.
 
 Only the package's own argument validation speaks to the client. An exception
@@ -1893,6 +1898,8 @@ _MALFORMED_CURSOR_ROWS = [
     ("leading-space", _cursor(" 1")),
     ("underscore", _cursor("1_0")),
     ("non-ascii-digit", _cursor(chr(0x0661))),  # ARABIC-INDIC DIGIT ONE
+    ("digit-then-non-ascii-digit", _cursor("1" + chr(0x0661))),
+    ("superscript-digit", _cursor(chr(0x00B2))),  # SUPERSCRIPT TWO: str.isdigit, not int()
     ("five-thousand-digits", _cursor("9" * 5000)),
 ]
 
@@ -1911,6 +1918,77 @@ def test_malformed_offset_cursor_is_a_cursor_error(argument: str, cursor: str) -
     payload = graphql_payload(_ROOT_GENRE_PAGE_QUERY, variables={argument: cursor})
 
     _assert_cursor_rejected(payload, argument)
+
+
+#: The planned nested window: the shipped schema installs the optimizer, so a
+#: ``booksConnection`` under the root connection is one windowed ``library_book``
+#: prefetch whenever its cursor decodes.
+_NESTED_WINDOW_CURSOR_QUERY = (
+    "query($after: String, $before: String) { allLibraryGenresConnection(first: 2) {"
+    " edges { node { name booksConnection(after: $after, before: $before, first: 2) {"
+    " edges { cursor node { title } } } } } } }"
+)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("argument", ["after", "before"])
+@pytest.mark.parametrize(
+    "cursor",
+    [row[1] for row in _MALFORMED_CURSOR_ROWS],
+    ids=[row[0] for row in _MALFORMED_CURSOR_ROWS],
+)
+def test_malformed_offset_cursor_on_a_planned_nested_window_is_the_nested_fields_error(
+    argument: str,
+    cursor: str,
+) -> None:
+    """A cursor the decoder refuses plans no window and is the nested field's own cursor error.
+
+    The planner declines the window for that argument payload (spec-033
+    Decision 4 step f), so no ``library_book`` statement runs and the root
+    ``library_genre`` page is the only SQL; the per-parent pipeline then raises
+    the cursor error at the nested field's path, not at the root field the
+    planner runs under. A cursor in the minted form pages each parent through
+    the one window statement.
+    """
+    shelf = library_models.Shelf.objects.create(
+        code="A-1",
+        topic="general",
+        branch=library_models.Branch.objects.create(name="Central", city="Boston"),
+    )
+    for name in ("g00", "g01"):
+        genre = library_models.Genre.objects.create(name=name)
+        for title in (f"{name} one", f"{name} two"):
+            library_models.Book.objects.create(title=title, shelf=shelf).genres.add(genre)
+    with CaptureQueriesContext(connection) as control_queries:
+        control = assert_graphql_success(
+            _NESTED_WINDOW_CURSOR_QUERY,
+            variables={argument: _cursor("0" if argument == "after" else "1")},
+        )
+    assert [
+        [book["node"]["title"] for book in edge["node"]["booksConnection"]["edges"]]
+        for edge in control["allLibraryGenresConnection"]["edges"]
+    ] == ([["g00 two"], ["g01 two"]] if argument == "after" else [["g00 one"], ["g01 one"]])
+    control_book_reads = [
+        query for query in control_queries.captured_queries if '"library_book"' in query["sql"]
+    ]
+    assert len(control_book_reads) == 1, control_queries.captured_queries
+
+    with CaptureQueriesContext(connection) as queries:
+        payload = graphql_payload(_NESTED_WINDOW_CURSOR_QUERY, variables={argument: cursor})
+
+    _assert_cursor_rejected(payload, argument)
+    assert [error["path"] for error in payload["errors"]] == [
+        [
+            "allLibraryGenresConnection",
+            "edges",
+            0,
+            "node",
+            "booksConnection",
+        ],
+    ], payload
+    statements = [query["sql"] for query in queries.captured_queries]
+    assert len(statements) == 1, statements
+    assert '"library_genre"' in statements[0], statements
 
 
 def _root_genre_payload(variables: JSONObject) -> JSONObject:

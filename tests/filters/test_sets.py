@@ -476,15 +476,15 @@ def test_filterset_metaclass_none_removal_survives_diamond_inheritance() -> None
             fields = {"code": ["exact"]}
 
     class BaseFilter(FilterSet):
-        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+        # ``None`` in a subclass is the django-filter removal idiom, so the slot admits it.
+        shelves: RelatedFilter | None = RelatedFilter(ShelfFilter, field_name="shelves")
 
         class Meta:
             model = library_models.Branch
             fields = {"name": ["exact"]}
 
     class RemovedFilter(BaseFilter):
-        # basedpyright: the None tombstone is the django-filter removal idiom under test
-        shelves = None  # pyright: ignore[reportIncompatibleUnannotatedOverride]
+        shelves = None
 
     class KeptFilter(BaseFilter):
         pass

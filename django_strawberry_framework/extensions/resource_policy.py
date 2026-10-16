@@ -147,6 +147,7 @@ from django_strawberry_framework.utils.policies import copy_policy
 from django_strawberry_framework.utils.private_state import PrivateAuthority
 from django_strawberry_framework.utils.typing import (
     graphql_type_of,
+    inline_fragment_type_condition,
     is_graphql_list,
     unwrap_non_null,
 )
@@ -1379,11 +1380,9 @@ class _DocumentWalk:
                 continue
             if isinstance(node, InlineFragmentNode):
                 condition = parent
-                # basedpyright: graphql-core types ``InlineFragmentNode.type_condition``
-                # non-optional, but ``Parser.parse_fragment`` stores ``None`` on a typeless
-                # inline fragment (``... @include(if: $x) { ... }``)
-                if node.type_condition is not None:  # pyright: ignore[reportUnnecessaryComparison]
-                    condition = graphql_schema.get_type(node.type_condition.name.value) or parent
+                type_condition = inline_fragment_type_condition(node)
+                if type_condition is not None:
+                    condition = graphql_schema.get_type(type_condition.name.value) or parent
                 stack.extend(
                     (
                         selection,

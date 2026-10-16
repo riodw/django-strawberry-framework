@@ -135,16 +135,18 @@ def test_builder_pins_names_so_digit_boundary_fields_do_not_silently_collide() -
 
     input_cls = build_strawberry_input_class("ProbeDigitBoundaryInput", triples)
 
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        # basedpyright: Strawberry reads this annotation at runtime; the input class is built by
-        # the helper under test
-        def probe(self, inp: input_cls) -> int:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
-            del inp  # Strawberry reads it to put the input class in the SDL under test; never runs
-            return 1
+    def resolve_probe(inp: object) -> int:
+        del inp  # Strawberry reads its annotation to put the input class in the SDL; never runs
+        return 1
 
-    schema = strawberry.Schema(query=Query, config=strawberry_config())
+    # The input class is built by the helper under test, so Strawberry reads it from the
+    # resolver's run-time annotations rather than from a written annotation.
+    resolve_probe.__annotations__ = {"inp": input_cls, "return": int}
+    query = strawberry.type(
+        type("Query", (), {"probe": strawberry.field(resolver=resolve_probe)}),
+    )
+
+    schema = strawberry.Schema(query=query, config=strawberry_config())
     sdl = schema.as_str()
     block = sdl[sdl.index("input ProbeDigitBoundaryInput") :]
     block = block[: block.index("}")]

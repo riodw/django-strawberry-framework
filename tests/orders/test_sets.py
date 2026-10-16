@@ -149,15 +149,15 @@ def test_metaclass_none_removal_survives_diamond_inheritance() -> None:
         pass
 
     class BaseOwner(OrderSet):
-        rel = RelatedOrder(TargetOrder, field_name="rel")
+        # ``None`` in a subclass is the django-filter removal idiom, so the slot admits it.
+        rel: RelatedOrder | None = RelatedOrder(TargetOrder, field_name="rel")
 
         class Meta:
             model = Book
             fields = ["title"]
 
     class RemovedOwner(BaseOwner):
-        # basedpyright: the None tombstone is the django-filter removal idiom under test
-        rel = None  # pyright: ignore[reportIncompatibleUnannotatedOverride]
+        rel = None
 
         # basedpyright: an OrderSet subclass declares its own ``Meta`` (the django-filter idiom),
         # never a subclass of the parent's

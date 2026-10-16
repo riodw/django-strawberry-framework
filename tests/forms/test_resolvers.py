@@ -2299,9 +2299,9 @@ def test_modelform_blank_choice_filled_in_by_model_save_writes() -> None:
         @override
         # basedpyright: verbatim forward to Model.save; object fails its typed params
         def save(self, *args: Any, **kwargs: Any) -> None:  # pyright: ignore[reportExplicitAny]
-            # basedpyright: django-stubs types the column read as its get type (int), but Django
-            # stores an assigned value unconverted, and the form assigned its cleaned "" here
-            if self.pick == "":  # pyright: ignore[reportUnnecessaryComparison]
+            # Django keeps an assigned value unconverted in the instance dict the column's
+            # descriptor reads, so the form's cleaned "" is still "" there.
+            if vars(self)["pick"] == "":
                 self.pick = 2
             super().save(*args, **kwargs)
 

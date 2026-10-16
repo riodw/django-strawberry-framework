@@ -554,8 +554,27 @@ def test_files_placeholder_tuple_arrays_walk_and_map_like_lists() -> None:
     assert body["a.0.c"] is f_mixed
 
 
-@pytest.mark.parametrize("container", [list, tuple])
-def test_files_placeholder_hostile_len_container_fails_closed(container: type) -> None:
+class _HostileLenMixin:
+    def __len__(self) -> int:
+        raise RuntimeError("hostile __len__ detonated")
+
+
+class _HostileLenList(_HostileLenMixin, list[None]):
+    pass
+
+
+class _HostileLenTuple(_HostileLenMixin, tuple[None, ...]):
+    pass
+
+
+@pytest.mark.parametrize(
+    "container",
+    [_HostileLenList, _HostileLenTuple],
+    ids=["list", "tuple"],
+)
+def test_files_placeholder_hostile_len_container_fails_closed(
+    container: type[_HostileLenList] | type[_HostileLenTuple],
+) -> None:
     """A container with an unreadable ``len`` raises the uniform guard, not a raw escape.
 
     The walker reads ``len`` for the index range check and the error message, so
@@ -563,20 +582,13 @@ def test_files_placeholder_hostile_len_container_fails_closed(container: type) -
     escape as a raw ``RuntimeError`` in place of the guard - the same containment
     class the hostile-``repr`` row above pins for the leaf value.
     """
-
-    # basedpyright: parametrized over list and tuple; a class statement cannot take a
-    # union base, so the base is typed only as ``type`` and the checker cannot type it
-    class _HostileLen(container):  # pyright: ignore[reportUntypedBaseClass]
-        def __len__(self) -> int:
-            raise RuntimeError("hostile __len__ detonated")
-
     with pytest.raises(AssertionError, match="unreadable length") as excinfo:
         TestClient().query(
             "mutation($tags: [Upload!]!) { up }",
-            variables={"tags": _HostileLen([None])},
+            variables={"tags": container([None])},
             files={"tags.0": object()},
         )
-    assert not isinstance(excinfo.value, _HostileLen)  # the guard type is uniform
+    assert not isinstance(excinfo.value, _HostileLenMixin)  # the guard type is uniform
     assert "hostile __len__" not in str(excinfo.value)
 
 
@@ -824,10 +836,8 @@ def test_export_surface_is_the_testing_root_not_the_package_root() -> None:
     with pytest.raises(AttributeError):
         getattr(django_strawberry_framework, root_name)
     with pytest.raises(ImportError):
-        # basedpyright: the import statement is the probe; it raises, so the name is never bound
-        from django_strawberry_framework import (  # noqa: PLC0415
-            TestClient,  # noqa: F401  # pyright: ignore[reportUnusedImport]
-        )
+        # The import statement is the probe; it raises, so the name is never bound.
+        from django_strawberry_framework import TestClient as _  # noqa: F401, PLC0415
 
 
 # ---------------------------------------------------------------------------

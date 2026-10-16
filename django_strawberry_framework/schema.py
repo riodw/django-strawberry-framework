@@ -108,7 +108,6 @@ if TYPE_CHECKING:
     from graphql.pyutils import AwaitableOrValue, Path
     from strawberry.extensions.runner import SchemaExtensionsRunner
     from strawberry.schema.config import StrawberryConfig
-    from strawberry.schema.schema import StreamResult
     from strawberry.types import ExecutionContext as StrawberryExecutionContext
     from strawberry.types import ExecutionResult as StrawberryExecutionResult
 
@@ -1204,9 +1203,11 @@ class DjangoSchema(strawberry.Schema):
             )
             return degraded_result(policy)
 
+    # Each frame is a ``DjangoStreamResult`` frame on the pinned graphql-core; the element type is
+    # ``object`` because Strawberry's ``StreamResult`` also names the graphql-core 3.3 frame
+    # classes its import fallback leaves unresolved
     @override
-    # basedpyright: StreamResult names graphql-core 3.3 frame types the <3.3 pin lacks.
-    def _stream(  # pyright: ignore[reportUnknownParameterType]
+    def _stream(
         self,
         execution_context: StrawberryExecutionContext,
         extensions_runner: SchemaExtensionsRunner,
@@ -1214,7 +1215,7 @@ class DjangoSchema(strawberry.Schema):
         *args: Any,  # pyright: ignore[reportExplicitAny]
         # basedpyright: verbatim forward to Schema._stream; uncapped strawberry may add params
         **kwargs: Any,  # pyright: ignore[reportExplicitAny]
-    ) -> StreamResult:
+    ) -> AsyncGenerator[object, None]:
         """Stream the operation's frames with this operation bound in every task.
 
         The narrowest seam that already receives the exact runner and the raw
@@ -1235,9 +1236,9 @@ class DjangoSchema(strawberry.Schema):
         # in an ImportError fallback, so StreamResult carries Unknown
         source = super()._stream(execution_context, extensions_runner, *args, **kwargs)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         if issubclass(type(extensions_runner), DjangoExtensionsRunner):
-            # basedpyright: the exact-type check above is a narrowing it cannot read; the
-            # stream's frame type carries the StreamResult Unknown from Strawberry's alias rebinding
-            return cast("DjangoExtensionsRunner", extensions_runner).resumed_stream(source)  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]
+            # The cast is the exact-type check above, a narrowing the checker cannot read.
+            # basedpyright: ``source`` carries the StreamResult Unknown from Strawberry's alias rebinding
+            return cast("DjangoExtensionsRunner", extensions_runner).resumed_stream(source)  # pyright: ignore[reportUnknownArgumentType]
         # basedpyright: the StreamResult Unknown from Strawberry's alias rebinding, unchanged
         return source  # pyright: ignore[reportUnknownVariableType]
 

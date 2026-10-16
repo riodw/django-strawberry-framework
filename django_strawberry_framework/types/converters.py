@@ -522,9 +522,7 @@ def convert_scalar(
         py_type = convert_choices_to_enum(field, type_name)
     if effective_null:
         # A ``SCALAR_MAP`` value or generated enum is a runtime annotation.
-        # basedpyright: ``TypeForm`` also admits forms with no runtime ``__or__`` (a string
-        # forward reference), which no ``SCALAR_MAP`` entry is
-        py_type = cast("OptionalWidenable", py_type) | None  # pyright: ignore[reportInvalidCast]
+        py_type = cast("OptionalWidenable", py_type) | None
     return py_type
 
 

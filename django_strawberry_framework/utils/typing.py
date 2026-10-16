@@ -53,6 +53,8 @@ if TYPE_CHECKING:
         GraphQLScalarType,
         GraphQLType,
         GraphQLUnionType,
+        InlineFragmentNode,
+        NamedTypeNode,
     )
     from strawberry import Info
     from strawberry.schema.config import StrawberryConfig
@@ -80,15 +82,16 @@ if TYPE_CHECKING:
     #: plan-time graphql-core ``GraphQLResolveInfo``.
     EitherInfo: TypeAlias = Info[object, object] | GraphQLResolveInfo
 
-    class OptionalWidenable(Protocol):
-        """A runtime annotation (a class, ``NewType``, alias, or scalar) that ``| None`` widens.
-
-        What the package's ``T | None`` widening needs of an annotation value, which
-        is cast to it at the widening site: basedpyright rejects ``|`` on
-        ``TypeForm[object]`` and matches no ``NewType`` scalar against this protocol.
-        """
+    class _NoneWidenable(Protocol):
+        """A value whose own ``|`` takes ``None``: an alias or special form (``Annotated[...]``)."""
 
         def __or__(self, other: None, /) -> object: ...
+
+    #: A runtime annotation that ``| None`` widens: a class (``NewType`` scalars included, which
+    #: the checker models as classes) or an alias or special form with its own ``|``. A
+    #: ``TypeForm[object]`` value is cast to it at the widening site; the type forms it leaves
+    #: out (a string forward reference) are no ``SCALAR_MAP`` entry or generated annotation.
+    OptionalWidenable: TypeAlias = type[object] | _NoneWidenable
 
     #: What a ``GraphQLNonNull`` wraps: graphql-core's ``GraphQLNullableType``, with
     #: the list member it leaves bare parametrized by ``GraphQLList``'s own bound.
@@ -106,6 +109,7 @@ __all__ = (
     "MAX_TYPE_WRAPPER_DEPTH",
     "MISSING_ATTRIBUTE",
     "graphql_type_of",
+    "inline_fragment_type_condition",
     "is_async_callable",
     "is_graphql_list",
     "is_marked_coroutine_function",
@@ -350,6 +354,16 @@ def return_type_of(info: "GraphQLResolveInfo") -> "GraphQLType":
     # basedpyright: graphql-core 3.2's GraphQLOutputType union lists the bare generic
     # GraphQLWrappingType, so the attribute reads as partially Unknown
     return info.return_type  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+
+
+def inline_fragment_type_condition(node: "InlineFragmentNode") -> "NamedTypeNode | None":
+    """Return an inline fragment's type condition, ``None`` for a typeless fragment.
+
+    graphql-core 3.2 types ``InlineFragmentNode.type_condition`` as a ``NamedTypeNode``,
+    but ``Parser.parse_fragment`` stores ``None`` on a fragment with no ``on`` clause
+    (``... @include(if: $x) { ... }``); this reads it as the optional node it is.
+    """
+    return node.type_condition
 
 
 def unwrap_non_null(gql_type: _T) -> "_T | _GraphQLNullableType":

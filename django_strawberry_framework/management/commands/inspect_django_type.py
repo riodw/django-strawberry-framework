@@ -37,7 +37,6 @@ converter - required for a cold CLI process and exact schema-specific names.
 
 import datetime
 import decimal
-import types as pytypes
 import typing
 import uuid
 from collections.abc import Callable, Mapping
@@ -52,6 +51,7 @@ from strawberry.types.field import UNRESOLVED
 from strawberry.types.object_type import StrawberryObjectDefinition
 from strawberry.types.scalar import ScalarDefinition
 from strawberry.types.union import StrawberryUnion
+from strawberry.utils.typing import is_union
 from typing_extensions import override
 
 from django_strawberry_framework.management.commands._imports import (
@@ -75,13 +75,6 @@ _GLOBAL_ID_GRAPHQL_TYPE = "GlobalID!"
 _RELAY_PK_CONVERTER = "relay.Node id"
 _DEFAULT_NAME_CONVERTER = NameConverter()
 _ScalarNamer = Callable[[object], str]
-
-# The origins ``typing.get_origin`` reports for a union annotation: ``types.UnionType`` for the
-# ``T | None`` spelling, ``typing.Union`` (read as a value) for ``Optional[T]`` / ``Union[...]``
-# below 3.14; no ``|`` spelling names the latter object
-# basedpyright: ``typing.Union`` is deprecated as a value from 3.14, but it is the one origin
-# the older spellings report
-_UNION_ORIGINS = (typing.Union, pytypes.UnionType)  # pyright: ignore[reportDeprecated]
 
 # Friendly converter-column labels for relation rows, mirroring the spec's
 # illustrative output (``M2M`` / ``forward FK`` / ``reverse FK``); a forward
@@ -498,7 +491,7 @@ def _yes_no(*, value: bool) -> str:
 
 def _annotation_is_optional(annotation: object) -> bool:
     """Return whether ``annotation`` is a ``T | None`` union."""
-    if typing.get_origin(annotation) in _UNION_ORIGINS:
+    if is_union(annotation):
         return type(None) in typing.get_args(annotation)
     return False
 
@@ -683,14 +676,13 @@ def _render_annotation(annotation: object, scalar_namer: _ScalarNamer = _scalar_
     ``Name!``; a ``T | None`` union is ``Name``; a ``list[T]`` is ``[Inner!]!``
     (the many-side list itself is non-null and its elements are non-null).
     """
-    origin = typing.get_origin(annotation)
-    if origin in _UNION_ORIGINS:
+    if is_union(annotation):
         union_args: tuple[object, ...] = typing.get_args(annotation)
         args = [a for a in union_args if a is not type(None)]
         if len(args) == 1:
             return _render_annotation(args[0], scalar_namer).rstrip("!")
         return " | ".join(_render_annotation(a, scalar_namer).rstrip("!") for a in args)
-    if origin is list:
+    if typing.get_origin(annotation) is list:
         inner: object
         (inner,) = typing.get_args(annotation)
         return f"[{_render_annotation(inner, scalar_namer)}]!"

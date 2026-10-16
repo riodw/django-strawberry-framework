@@ -62,7 +62,10 @@ from strawberry.types.nodes import (
     convert_directives,
 )
 
-from django_strawberry_framework.utils.typing import schema_config_from_info
+from django_strawberry_framework.utils.typing import (
+    inline_fragment_type_condition,
+    schema_config_from_info,
+)
 
 from ._context import converted_selections_memo
 
@@ -194,15 +197,13 @@ def ast_to_converted_selections(
         out: list[Selection] = []
         for node in nodes:
             if isinstance(node, InlineFragmentNode):
-                condition = node.type_condition
+                condition = inline_fragment_type_condition(node)
                 out.append(
                     InlineFragment(
-                        # basedpyright: graphql-core types ``InlineFragmentNode.type_condition``
-                        # non-optional, but ``Parser.parse_fragment`` stores ``None`` on a typeless
-                        # inline fragment (``... @include(if: $x) { ... }``), so the comparison is
-                        # live. Strawberry types ``InlineFragment.type_condition`` as ``str``; a
-                        # typeless fragment has no condition to name, so it rejects the ``None`` arm
-                        type_condition=(condition.name.value if condition is not None else None),  # pyright: ignore[reportArgumentType, reportUnnecessaryComparison]
+                        # basedpyright: Strawberry types ``InlineFragment.type_condition`` as
+                        # ``str``; a typeless fragment has no condition to name, so it rejects the
+                        # ``None`` arm
+                        type_condition=(condition.name.value if condition is not None else None),  # pyright: ignore[reportArgumentType]
                         directives=convert_directives(info, node.directives),
                         selections=_convert(ast_child_selections(node)),
                     ),

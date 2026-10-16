@@ -455,18 +455,22 @@ reportDuplicateImport = "error"  # Locked
 reportEmptyAbstractUsage = "error"  # Locked
 reportIgnoreCommentWithoutRule = "error"  # Locked
 reportImplicitAbstractClass = "error"  # Locked
+reportImplicitOverride = "error"  # Locked
 reportImplicitRelativeImport = "error"  # Locked
 reportIncompleteStub = "error"  # Locked
 reportInconsistentConstructor = "error"  # Locked
 reportInconsistentOverload = "error"  # Locked
 reportInvalidAbstractMethod = "error"  # Locked
+reportInvalidCast = "error"  # Locked
 reportInvalidStringEscapeSequence = "error"  # Locked
 reportInvalidStubStatement = "error"  # Locked
+reportInvalidTypeForm = "error"  # Locked
 reportInvalidTypeVarUse = "error"  # Locked
 reportMatchNotExhaustive = "error"  # Locked
 reportMissingImports = "error"  # Locked
 reportMissingModuleSource = "error"  # Locked
 reportMissingParameterType = "error"  # Locked
+reportMissingTypeArgument = "error"  # Locked
 reportMissingTypeStubs = "error"  # Locked
 reportNoOverloadImplementation = "error"  # Locked
 reportOperatorIssue = "error"  # Locked
@@ -487,15 +491,19 @@ reportTypedDictNotRequiredAccess = "error"  # Locked
 reportUnboundVariable = "error"  # Locked
 reportUnhashable = "error"  # Locked
 reportUnknownLambdaType = "error"  # Locked
+reportUnknownParameterType = "error"  # Locked
 reportUnnecessaryCast = "error"  # Locked
+reportUnnecessaryComparison = "error"  # Locked
 reportUnnecessaryContains = "error"  # Locked
 reportUnsupportedDunderAll = "error"  # Locked
+reportUntypedBaseClass = "error"  # Locked
 reportUntypedClassDecorator = "error"  # Locked
 reportUntypedNamedTuple = "error"  # Locked
 reportUnusedClass = "error"  # Locked
 reportUnusedCoroutine = "error"  # Locked
 reportUnusedExcept = "error"  # Locked
 reportUnusedExpression = "error"  # Locked
+reportUnusedImport = "error"  # Locked
 reportUnusedParameter = "error"  # Locked
 reportUnusedVariable = "error"  # Locked
 reportWildcardImportFromLibrary = "error"  # Locked
@@ -592,6 +600,41 @@ root = "examples/fakeshop/apps/scalars/tests"
 [[tool.basedpyright.executionEnvironments]]
 root = "examples/fakeshop"
 reportUnusedCallResult = "error"
+
+# The suppression budget scripts/check_type_suppressions.py holds the tree to: `cast` counts
+# `typing.cast` calls, `ignores` the ignore comments naming each unlocked rule (a rule not
+# listed has none). A count may only fall: one above its budget is a new suppression (fix the
+# diagnostic instead); one below it fails until the budget is lowered to match, and a rule at
+# zero leaves `ignores` (marked `# Locked` above once it is on in every environment).
+[tool.type-suppressions]
+cast = 438
+
+[tool.type-suppressions.ignores]
+reportArgumentType = 306
+reportAssignmentType = 32
+reportAttributeAccessIssue = 142
+reportCallIssue = 15
+reportDeprecated = 2
+reportExplicitAny = 95
+reportFunctionMemberAccess = 6
+reportGeneralTypeIssues = 6
+reportIncompatibleMethodOverride = 59
+reportIncompatibleUnannotatedOverride = 1
+reportIncompatibleVariableOverride = 94
+reportIndexIssue = 10
+reportInvalidTypeArguments = 5
+reportMissingSuperCall = 7
+reportOptionalMemberAccess = 3
+reportPropertyTypeMismatch = 5
+reportReturnType = 26
+reportUndefinedVariable = 7
+reportUnknownArgumentType = 14
+reportUnknownMemberType = 47
+reportUnknownVariableType = 32
+reportUnnecessaryIsInstance = 14
+reportUnreachable = 6
+reportUnsafeMultipleInheritance = 14
+reportUntypedFunctionDecorator = 2
 
 [tool.coverage.run]
 source = ["django_strawberry_framework"]

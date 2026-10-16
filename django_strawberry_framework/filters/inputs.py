@@ -358,9 +358,7 @@ def _scalar_from_model_field(model_field: ModelField | None) -> OptionalWidenabl
         return str
 
     # A ``SCALAR_MAP`` value is a registered runtime annotation (a class or ``NewType``).
-    # basedpyright: ``TypeForm`` also admits forms with no runtime ``__or__`` (a string forward
-    # reference), which no ``SCALAR_MAP`` entry is
-    return cast("OptionalWidenable", scalar_for_field(model_field))  # pyright: ignore[reportInvalidCast]
+    return cast("OptionalWidenable", scalar_for_field(model_field))
 
 
 def _relation_identity_annotation(
@@ -987,9 +985,9 @@ def _build_logic_fields(type_name: str) -> list[tuple[str, object, dict[str, obj
     ``optional_field_kwargs`` -> ``strawberry.field(name=...)`` because the
     wire tokens are Python keywords and cannot be dataclass field names.
     """
-    # basedpyright: it models an ``Annotated[...]`` value as the bare special form, which has
-    # no ``__or__``; the runtime ``Annotated`` alias widens with ``| None`` below.
-    self_ref = cast("OptionalWidenable", Annotated[type_name, strawberry.lazy(INPUTS_MODULE_PATH)])  # pyright: ignore[reportInvalidCast]
+    # The checker reads an ``Annotated[...]`` value as the bare special form, with no ``|``;
+    # the runtime ``Annotated`` alias widens with ``| None`` below.
+    self_ref = cast("OptionalWidenable", Annotated[type_name, strawberry.lazy(INPUTS_MODULE_PATH)])
     list_ref = GenericAlias(list, (self_ref,))
     return [
         (

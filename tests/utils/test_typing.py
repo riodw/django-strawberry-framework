@@ -19,6 +19,9 @@ from graphql import (
     GraphQLNullableType,
     GraphQLScalarType,
     GraphQLString,
+    InlineFragmentNode,
+    OperationDefinitionNode,
+    parse,
 )
 from strawberry.types.base import StrawberryList
 from typing_extensions import Self, override
@@ -27,6 +30,7 @@ import django_strawberry_framework.utils.typing as typing_module
 from django_strawberry_framework.utils.typing import (
     MAX_TYPE_WRAPPER_DEPTH,
     _callable_inspection_target,
+    inline_fragment_type_condition,
     is_async_callable,
     is_marked_coroutine_function,
     schema_config_from_info,
@@ -46,6 +50,7 @@ def test_typing_exports_all() -> None:
         "MAX_TYPE_WRAPPER_DEPTH",
         "MISSING_ATTRIBUTE",
         "graphql_type_of",
+        "inline_fragment_type_condition",
         "is_async_callable",
         "is_graphql_list",
         "is_marked_coroutine_function",
@@ -58,6 +63,20 @@ def test_typing_exports_all() -> None:
         "unwrap_non_null",
         "unwrap_return_type",
     )
+
+
+def test_inline_fragment_type_condition_reads_a_typeless_fragment_as_none() -> None:
+    """A typed inline fragment yields its named type; a typeless one (no ``on``) yields ``None``."""
+    operation = parse("{ ... on Query { a } ... @include(if: true) { a } }").definitions[0]
+    assert isinstance(operation, OperationDefinitionNode)
+    typed, typeless = operation.selection_set.selections
+    assert isinstance(typed, InlineFragmentNode)
+    assert isinstance(typeless, InlineFragmentNode)
+
+    condition = inline_fragment_type_condition(typed)
+    assert condition is not None
+    assert condition.name.value == "Query"
+    assert inline_fragment_type_condition(typeless) is None
 
 
 def test_unwrap_return_type_handles_typing_list() -> None:
@@ -449,10 +468,11 @@ def test_callable_inspection_target_raises_on_cyclic_partial_stack() -> None:
 
 def test_callable_inspection_target_raises_on_cyclic_staticmethod_stack() -> None:
     """A cyclic staticmethod wrapper stack raises RuntimeError instead of hanging."""
+    # ``staticmethod`` is not subscriptable at runtime before Python 3.11 and a class base is
+    # evaluated there, so the parametrized type is carried by an annotated local alias.
+    _StaticMethodBase: type[staticmethod[[], int]] = staticmethod
 
-    # basedpyright: staticmethod is not subscriptable at runtime before Python 3.11, and a
-    # class base is evaluated on the 3.10 floor
-    class CyclicStaticMethod(staticmethod):  # pyright: ignore[reportMissingTypeArgument]
+    class CyclicStaticMethod(_StaticMethodBase):
         @property
         @override
         def __func__(self) -> Self:

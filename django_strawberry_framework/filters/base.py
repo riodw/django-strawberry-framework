@@ -1832,12 +1832,9 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
         - the cookbook's documented auto-derivation contract. An explicit
         queryset is preserved verbatim.
         """
-        queryset = super().get_queryset(request)
-        # basedpyright: ``None`` when no ``queryset=`` was supplied (see the ``override`` note
-        # above), so the comparison is live
-        if queryset is None:  # pyright: ignore[reportUnnecessaryComparison]
+        if self.queryset is None:
             target = self.filterset
             model = getattr(getattr(target, "_meta", None), "model", None)
             if model is not None:
                 return base_queryset(model)
-        return queryset
+        return super().get_queryset(request)

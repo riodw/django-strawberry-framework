@@ -2206,10 +2206,14 @@ def test_field_fingerprint_reads_bytes_through_their_base_buffer() -> None:
     content-addressed and type-insensitive.
     """
 
-    class _RaisingBytes(bytes):
-        # basedpyright: bytes.__bytes__ exists from 3.11; @override fails the 3.10 floor pass
-        def __bytes__(self) -> bytes:  # pyright: ignore[reportImplicitOverride]
+    class _RaisingBytesMixin:
+        # A mixin, not a ``bytes`` body: ``bytes.__bytes__`` exists only from 3.11, so
+        # ``@override`` would fail the 3.10 floor pass while a bare def fails the 3.11 one.
+        def __bytes__(self) -> bytes:
             raise RuntimeError("hostile __bytes__")
+
+    class _RaisingBytes(_RaisingBytesMixin, bytes):
+        pass
 
     class _RaisingBytearray(bytearray):
         def __bytes__(self) -> bytes:

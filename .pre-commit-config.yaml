@@ -76,11 +76,13 @@ repos:
         require_serial: true
 
       - id: check-type-suppressions
-        name: locked type suppressions (no ignore on a locked rule, no file-level pyright directive)
+        name: type suppressions (no ignore on a locked rule, no file-level directive, on budget)
         entry: uv run python scripts/check_type_suppressions.py
         language: system
-        # Checks the staged files; the CI lint step checks every tracked one.
-        types: [python]
+        # Every tracked file, as in CI: the budget counts the whole tree. Fires on any
+        # staged `.py` or the config that holds the locks and the budget.
+        files: ^(.*\.py|pyproject\.toml)$
+        pass_filenames: false
 
       - id: check-public-types
         name: public API type completeness (basedpyright --verifytypes, 100%)

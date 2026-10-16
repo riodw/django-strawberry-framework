@@ -23,37 +23,24 @@ from django_strawberry_framework.optimizer.nested_fetch import (
     WindowedPrefetchStrategy,
     resolve_strategy,
 )
+from tests._idioms import ClaimsClassBase, ClassReadRaisesBase
 
 _RAISING_CLASS_ERRORS = [RuntimeError, TypeError, KeyboardInterrupt]
 
 
-def _raising_class_value(raised: type[BaseException]) -> object:
-    """A value whose ``__class__`` read raises ``raised`` (so a bare ``isinstance`` raises)."""
-
-    class RaisingClass:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object
-        # is the guard's input
-        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise raised("hostile __class__")
-
-    return RaisingClass()
+class RaisingClass(ClassReadRaisesBase):
+    """A value whose ``__class__`` read raises (so a bare ``isinstance`` raises)."""
 
 
-class _ClaimsStr:
+class _ClaimsStr(ClaimsClassBase):
     """A non-``str`` value whose ``__class__`` claims ``str``."""
 
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self) -> type[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return str
+    claimed = str
 
 
-# basedpyright: django-stubs makes Prefetch generic, but the runtime class has no
-# ``__class_getitem__``, so the base cannot be subscripted
-class _PrefetchSubclass(Prefetch):  # pyright: ignore[reportMissingTypeArgument]
+# ``Prefetch[str]`` subscripts at run time through the ``django_stubs_ext.monkeypatch()`` the
+# fakeshop settings make, which hands back ``Prefetch`` itself
+class _PrefetchSubclass(Prefetch[str]):
     """A consumer ``Prefetch`` subclass."""
 
 
@@ -333,8 +320,8 @@ class TestStrategyFactory:
     @pytest.mark.parametrize(
         ("make", "type_name"),
         [
-            (lambda: _raising_class_value(RuntimeError), "RaisingClass"),
-            (lambda: _raising_class_value(KeyboardInterrupt), "RaisingClass"),
+            (lambda: RaisingClass(RuntimeError), "RaisingClass"),
+            (lambda: RaisingClass(KeyboardInterrupt), "RaisingClass"),
             (_ClaimsStr, "_ClaimsStr"),
             (lambda: SimpleLazyObject(lambda: "windowed"), "SimpleLazyObject"),
         ],
@@ -506,7 +493,7 @@ class TestInvalidStatesRejected:
     ) -> None:
         """A value whose ``__class__`` read raises is not a ``Prefetch``: the rejection stays typed."""
         with pytest.raises(ConfigurationError) as exc_info:
-            _ = route(_raising_class_value(raised))
+            _ = route(RaisingClass(raised))
         assert str(exc_info.value) == (
             "OptimizerHint.prefetch(obj) requires a django.db.models.Prefetch instance; "
             "got RaisingClass."

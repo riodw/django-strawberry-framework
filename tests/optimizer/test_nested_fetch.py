@@ -41,6 +41,7 @@ from django_strawberry_framework.optimizer.plans import (
     WINDOW_TOTAL_COUNT,
     OptimizationPlan,
 )
+from tests._idioms import ClaimsClassBase, ClassReadRaisesBase
 from tests.optimizer._builders import nested_connection_request
 
 
@@ -227,36 +228,22 @@ _NOT_A_STRATEGY = (
 )
 
 
-def _raising_class_value(raised: type[BaseException]) -> object:
-    """A value whose ``__class__`` read raises ``raised`` (so a bare ``isinstance`` raises)."""
-
-    class RaisingClass:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object
-        # is the guard's input
-        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise raised("hostile __class__")
-
-    return RaisingClass()
+class RaisingClass(ClassReadRaisesBase):
+    """A value whose ``__class__`` read raises (so a bare ``isinstance`` raises)."""
 
 
-class _ClaimsStr:
+class _ClaimsStr(ClaimsClassBase):
     """A non-``str`` value whose ``__class__`` claims ``str``."""
 
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self) -> type[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return str
+    claimed = str
 
 
 @pytest.mark.parametrize(
     ("make", "type_name"),
     [
-        (lambda: _raising_class_value(RuntimeError), "RaisingClass"),
-        (lambda: _raising_class_value(TypeError), "RaisingClass"),
-        (lambda: _raising_class_value(KeyboardInterrupt), "RaisingClass"),
+        (lambda: RaisingClass(RuntimeError), "RaisingClass"),
+        (lambda: RaisingClass(TypeError), "RaisingClass"),
+        (lambda: RaisingClass(KeyboardInterrupt), "RaisingClass"),
         (_ClaimsStr, "_ClaimsStr"),
         (lambda: SimpleLazyObject(lambda: "windowed"), "SimpleLazyObject"),
     ],
@@ -283,34 +270,38 @@ def test_resolve_strategy_non_str_lookalikes_stay_typed(
     assert str(exc_info.value) == _NOT_A_STRATEGY.format(type_name)
 
 
+class _LiarStrategy:
+    """A strategy instance: its ``plan`` is a bound method whatever ``__class__`` says."""
+
+    name = "class-liar"
+
+    def plan(self, _request: NestedConnectionRequest, _plan: OptimizationPlan) -> bool:
+        return False
+
+
+class _ClaimsTypeStrategy(ClaimsClassBase, _LiarStrategy):
+    """A strategy instance whose ``__class__`` claims ``type``."""
+
+    claimed = type
+
+
+class _ClassReadRaisesStrategy(ClassReadRaisesBase, _LiarStrategy):
+    """A strategy instance whose ``__class__`` read raises."""
+
+
 @pytest.mark.parametrize(
-    "claimed_class",
-    [type, None],
+    "make",
+    [_ClaimsTypeStrategy, _ClassReadRaisesStrategy],
     ids=["class-claims-type", "class-read-raises"],
 )
-def test_resolve_strategy_class_test_reads_the_real_type(claimed_class: type | None) -> None:
+def test_resolve_strategy_class_test_reads_the_real_type(make: Callable[[], object]) -> None:
     """An instance with a callable ``plan`` is a strategy whatever its ``__class__`` claims.
 
     The class test (a class carries ``plan`` as a plain function, not a bound
     method) asks the real type, so neither a ``__class__`` claiming ``type`` nor
     one that raises decides it.
     """
-
-    class ClassLiarStrategy:
-        name = "class-liar"
-
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-        def __class__(self) -> type:  # pyright: ignore[reportIncompatibleMethodOverride]
-            if claimed_class is None:
-                raise RuntimeError("hostile __class__")
-            return claimed_class
-
-        def plan(self, _request: NestedConnectionRequest, _plan: OptimizationPlan) -> bool:
-            return False
-
-    strategy = ClassLiarStrategy()
+    strategy = make()
     assert resolve_strategy(strategy) is strategy
 
 
@@ -345,7 +336,7 @@ def _construct_optimizer() -> object:
 @pytest.mark.parametrize(
     ("make", "type_name"),
     [
-        (lambda: _raising_class_value(RuntimeError), "RaisingClass"),
+        (RaisingClass, "RaisingClass"),
         (_ClaimsStr, "_ClaimsStr"),
         (lambda: SimpleLazyObject(lambda: "windowed"), "SimpleLazyObject"),
     ],

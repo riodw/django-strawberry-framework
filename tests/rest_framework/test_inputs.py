@@ -90,7 +90,12 @@ from django_strawberry_framework.rest_framework.serializer_converter import (
 from django_strawberry_framework.scalars import Upload
 from django_strawberry_framework.types.converters import convert_choices_to_enum
 from django_strawberry_framework.utils.inputs import InputFieldSpec, normalize_field_name_sequence
-from tests._idioms import ModelSerializerBase, bind_unparented, definition_raises
+from tests._idioms import (
+    ClassReadRaises,
+    ModelSerializerBase,
+    bind_unparented,
+    definition_raises,
+)
 
 if TYPE_CHECKING:
     from typing import TypeAlias, TypeVar
@@ -2098,23 +2103,6 @@ def test_normalize_nested_serializer_configs_rejects_non_mapping() -> None:
         normalize_nested_serializer_configs(["invalid"])  # pyright: ignore[reportArgumentType]
 
 
-class _ClassReadRaises:
-    """A value whose ``__class__`` read raises ``escape``: ``isinstance`` falls back to that read."""
-
-    def __init__(self, escape: type[BaseException] = RuntimeError) -> None:
-        self._escape = escape
-
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__`` that raises, the guard's hostile input
-    def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-        raise self._escape("hostile __class__ boom")
-
-    @override
-    def __repr__(self) -> str:
-        return "<ClassReadRaises>"
-
-
 def _require_mapping(value: object) -> object:
     return require_nested_fields_mapping("M", value)
 
@@ -2163,13 +2151,14 @@ def test_nested_config_class_read_that_raises_is_typed(
 ) -> None:
     """A ``__class__`` read that raises (any ``BaseException``) answers "not a mapping" / "not a config"."""
     with pytest.raises(ConfigurationError, match=f"^{re.escape(message)}$"):
-        check(_ClassReadRaises(escape))
+        check(ClassReadRaises(escape, "hostile __class__ boom"))
 
 
 def test_nested_config_normalizer_leaves_an_unreadable_value_for_the_typed_rejection() -> None:
     """The normalizer passes a value it cannot class-test through for the per-entry rejection."""
-    hostile = _ClassReadRaises()
-    # basedpyright: the hostile value is the input under test; the parameter is typed as a mapping
+    hostile = ClassReadRaises(message="hostile __class__ boom")
+    # basedpyright: the hostile entry is the input under test; the parameter is typed as a mapping
+    # of NestedSerializerConfig values
     normalized = normalize_nested_serializer_configs({"child": hostile})  # pyright: ignore[reportArgumentType]
     assert normalized is not None
     assert normalized["child"] is hostile

@@ -99,7 +99,12 @@ from django_strawberry_framework.rest_framework.sets import (
     _validate_serializer_nested_fields,
 )
 from django_strawberry_framework.types import base as types_base
-from tests._idioms import ModelSerializerBase, comparing_metaclass, definition_raises
+from tests._idioms import (
+    ClassReadRaises,
+    ModelSerializerBase,
+    comparing_metaclass,
+    definition_raises,
+)
 from tests._info import unread_info
 
 if TYPE_CHECKING:
@@ -1662,35 +1667,18 @@ def test_schema_hook_invalid_value_with_hostile_repr_is_typed() -> None:
                 return HostileRepr()
 
 
-class _ClassReadRaises:
-    """A value whose ``__class__`` read raises ``escape``: ``isinstance`` falls back to that read."""
-
-    def __init__(self, escape: type[BaseException] = RuntimeError) -> None:
-        self._escape = escape
-
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__`` that raises, the guard's hostile input
-    def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-        raise self._escape("hostile __class__ boom")
-
-    @override
-    def __repr__(self) -> str:
-        return "<ClassReadRaises>"
-
-
 _CLASS_READ_RAISES_ROWS: list[
     tuple[Callable[[dict[str, DRFField], type[BaseException]], object], str]
 ] = [
     (
-        lambda _fields, escape: _ClassReadRaises(escape),
+        lambda _fields, escape: ClassReadRaises(escape, "hostile __class__ boom"),
         (
             "SerializerMutation M.get_serializer_for_schema() must return a mapping of field "
             "name -> DRF serializers.Field; got <ClassReadRaises>."
         ),
     ),
     (
-        lambda _fields, escape: {"name": _ClassReadRaises(escape)},
+        lambda _fields, escape: {"name": ClassReadRaises(escape, "hostile __class__ boom")},
         (
             "SerializerMutation M.get_serializer_for_schema() returned an invalid field map: "
             "field 'name' must be a DRF serializers.Field; got <ClassReadRaises>. Return a "

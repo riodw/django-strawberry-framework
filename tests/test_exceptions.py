@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Callable
-from typing import NoReturn
 
 import pytest
 import strawberry
@@ -50,7 +49,12 @@ from django_strawberry_framework.exceptions import (
 from django_strawberry_framework.types import converters as _converters_module
 from django_strawberry_framework.utils import errors as _errors_module
 from django_strawberry_framework.utils.querysets import SyncMisuseError
-from tests._idioms import module_binding, pickle_roundtrip
+from tests._idioms import (
+    ClassReadRaises,
+    ClassReadRaisesBase,
+    module_binding,
+    pickle_roundtrip,
+)
 
 
 class _Unprintable:
@@ -465,12 +469,8 @@ def test_str_subclass_with_hostile_format_is_stripped_by_helpers() -> None:
 def test_safe_diagnostic_helpers_survive_hostile_class_property() -> None:
     """Diagnostic helpers survive hostile __class__ properties on inputs."""
 
-    class _HostileClass:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises, the guard's hostile input
-        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise RuntimeError("hostile __class__")
+    class _HostileClass(ClassReadRaisesBase):
+        pass
 
     bad = _HostileClass()
     assert _safe_type_name(bad) in {"_HostileClass", "object"}
@@ -484,13 +484,7 @@ def test_safe_diagnostic_helpers_survive_hostile_class_property() -> None:
 def test_safe_class_name_survives_hostile_name_metadata() -> None:
     """_safe_class_name survives a name attribute whose __class__ or __bool__ raises."""
 
-    class _HostileClassAndBool:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises, the guard's hostile input
-        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise RuntimeError("hostile __class__ on name")
-
+    class _HostileClassAndBool(ClassReadRaisesBase):
         def __bool__(self) -> bool:
             raise RuntimeError("hostile __bool__ on name")
 
@@ -501,7 +495,7 @@ def test_safe_class_name_survives_hostile_name_metadata() -> None:
     class _HostileNameObj:
         @property
         def __name__(self) -> object:
-            return _HostileClassAndBool()
+            return _HostileClassAndBool(message="hostile __class__ on name")
 
     assert _safe_class_name(_HostileNameObj()) == "<unprintable _HostileClassAndBool>"
 
@@ -516,20 +510,13 @@ def test_safe_type_name_empty_string_name_falls_back_past_the_class() -> None:
 def test_safe_type_name_survives_isinstance_raising_base_exception() -> None:
     """A ``__name__`` whose ``isinstance(..., str)`` raises is skipped, not propagated."""
 
-    class _HostileClassDunder:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises, the guard's hostile input
-        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise KeyboardInterrupt
-
     class _HostileTypeNameMeta(type):
         @property
         @override
         # basedpyright: the hostile shape under test, a ``__name__`` property answering a hostile
         # object; the checker rejects any property overriding a base class attribute
         def __name__(cls) -> object:  # pyright: ignore[reportIncompatibleVariableOverride]
-            return _HostileClassDunder()
+            return ClassReadRaises(KeyboardInterrupt)
 
     class _HostileType(metaclass=_HostileTypeNameMeta):
         pass

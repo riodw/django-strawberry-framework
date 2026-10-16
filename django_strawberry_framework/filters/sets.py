@@ -189,6 +189,7 @@ else:
     _ManyToManyFieldAny = models.ManyToManyField
 
 _M = TypeVar("_M", bound=models.Model)
+_EntryT = TypeVar("_EntryT")
 
 
 # Process-lifetime memo for ``_lookups_for_field``, keyed by field CLASS.
@@ -484,6 +485,23 @@ _PACKAGE_POLICY_BASELINE: Mapping[type[ModelField], _NormalizedPolicyEntry | Non
         },
     )
 )
+
+
+def _entry_by_mro(
+    table: Mapping[type[ModelField], _EntryT],
+    field_class: type[ModelField],
+) -> _EntryT | None:
+    """Return ``table``'s entry for ``field_class`` as django-filter selects it, or ``None``.
+
+    django-filter's ``try_dbfield`` returns the first non-empty ``fn(cls)`` over
+    ``field_class``'s MRO, so each read is one of ``table``'s values. The one place this
+    module calls it, so the stub's gaps are stated once.
+    """
+    # basedpyright: typeshed types ``try_dbfield``'s ``fn`` as taking a field instance and
+    # ``field_class`` as a ``Field`` subclass; upstream calls ``fn`` with each CLASS on the MRO
+    # and ``filter_for_lookup`` passes it a reverse relation's ``ForeignObjectRel`` class too.
+    # It rejects a class-keyed ``dict.get`` as ``fn`` and a ``ForeignObjectRel`` class
+    return try_dbfield(table.get, field_class)  # pyright: ignore[reportArgumentType]
 
 
 # ======================================================================
@@ -2203,6 +2221,7 @@ class FilterSet(
             (name, f) for name, f in source.items() if name not in deferred or name in named
         )
         try:
+            # basedpyright: typeshed's ``dict`` | ``QueryDict`` ``data``, as in the call above
             super().__init__(data, queryset, request=request, prefix=prefix)  # pyright: ignore[reportArgumentType]
         finally:
             del instance_attrs["base_filters"]
@@ -2232,11 +2251,13 @@ class FilterSet(
     def _copy_filter(self, original: Filter) -> Filter:
         """Return a copy of the class-level ``original`` bound to this instance, as django-filter binds."""
         copied = copy.deepcopy(original)
-        # basedpyright: django-filter's stubs declare neither attribute
-        # ``BaseFilterSet.__init__`` stamps on every copy. It rejects the writes
-        # (``queryset`` is never ``None`` on an instance: the same ``__init__`` defaults it)
-        copied.model = cast("models.QuerySet[models.Model]", self.queryset).model  # pyright: ignore[reportAttributeAccessIssue]
-        copied.parent = self  # pyright: ignore[reportAttributeAccessIssue]
+        # ``BaseFilterSet.__init__`` stamps ``model`` and ``parent`` on every copy as instance
+        # attributes its stubs do not declare, so they are written into the instance dict
+        # (``queryset`` is never ``None`` on an instance: the same ``__init__`` defaults it).
+        vars(copied).update(
+            model=cast("models.QuerySet[models.Model]", self.queryset).model,
+            parent=self,
+        )
         return copied
 
     def _filter_named(self, name: str) -> Filter:
@@ -2665,6 +2686,28 @@ class FilterSet(
     # spec-027 Decision 4 owner-aware Relay-vs-scalar conditional.
     # ------------------------------------------------------------------
 
+    @classmethod
+    def _upstream_filter_for_field(
+        cls,
+        field: ModelField,
+        field_name: str,
+        lookup_expr: str | None,
+    ) -> Filter | None:
+        """Return django-filter's filter for ``field``, or ``None`` for an unrecognized field.
+
+        Typed as the upstream body returns it: ``None`` for a field with no ``FILTER_DEFAULTS``
+        entry under ``Meta.unknown_field_behavior`` ``WARN`` / ``IGNORE``, which typeshed's
+        stub leaves out.
+        """
+        # basedpyright: typeshed narrows ``field`` to ``Field``; upstream ``get_filters`` passes
+        # the ``ForeignObjectRel`` of a reverse relation too. It rejects ``ModelField``'s
+        # ``ForeignObjectRel`` arm
+        return super().filter_for_field(
+            field,  # pyright: ignore[reportArgumentType]
+            field_name,
+            lookup_expr,
+        )
+
     # basedpyright: typeshed types ``filter_for_field`` as never ``None``; upstream returns
     # ``None`` for an unrecognized field under ``WARN`` / ``IGNORE`` (see the first branch below).
     # It rejects the ``None`` arm against the ``Filter`` return
@@ -2701,17 +2744,8 @@ class FilterSet(
         replacement. A fan-out JOIN can otherwise return the same parent
         once per matching child, corrupting list rows and connection counts.
         """
-        # basedpyright: typeshed narrows ``field`` to ``Field``; upstream ``get_filters`` passes
-        # the ``ForeignObjectRel`` of a reverse relation too. It rejects ``ModelField``'s
-        # ``ForeignObjectRel`` arm
-        default = super().filter_for_field(
-            field,  # pyright: ignore[reportArgumentType]
-            field_name,
-            lookup_expr,
-        )
-        # basedpyright: ``None`` for an unrecognized field (see the ``override`` note above), so
-        # the comparison is live
-        if default is None:  # pyright: ignore[reportUnnecessaryComparison]
+        default = cls._upstream_filter_for_field(field, field_name, lookup_expr)
+        if default is None:
             # Upstream's unrecognized-field contract. django-filter's
             # ``filter_for_field`` returns ``None`` for a model field with no
             # ``FILTER_DEFAULTS`` entry (``FileField`` / ``ImageField`` /
@@ -2974,16 +3008,10 @@ class FilterSet(
         # its ``extra`` provider -- a restricted relation queryset, a ``to_field_name``,
         # requiredness), so an ``extra``-only override is caught, not just a
         # ``filter_class`` change.
-        # ``try_dbfield`` returns the first non-empty ``fn(cls)`` result or None, so each read
-        # is one of its mapping's values.
-        selected_entry: Mapping[str, object] | None
-        base_norm: _NormalizedPolicyEntry | None
-        # basedpyright: typeshed types ``try_dbfield``'s ``fn`` as taking a field instance;
-        # upstream calls it with each CLASS on ``field_class``'s MRO. It rejects a class-keyed
-        # ``dict.get`` as ``fn`` in both calls
-        selected_entry = try_dbfield(cls._merged_filter_defaults().get, selection_cls)  # pyright: ignore[reportArgumentType]
+        # ``_entry_by_mro`` is ``try_dbfield``'s walk: each read is one of its mapping's values.
+        selected_entry = _entry_by_mro(cls._merged_filter_defaults(), selection_cls)
         selected_norm = _normalize_policy_entry(selected_entry)
-        base_norm = try_dbfield(_PACKAGE_POLICY_BASELINE.get, selection_cls)  # pyright: ignore[reportArgumentType]
+        base_norm = _entry_by_mro(_PACKAGE_POLICY_BASELINE, selection_cls)
         if selected_norm != base_norm:
             return "override_generated"
         return "framework_default"
@@ -3023,11 +3051,8 @@ class FilterSet(
         """
         # A map with no ``BooleanField`` entry yields ``(None, {})``: upstream's
         # unrecognized-field contract, under the set's ``unknown_field_behavior``.
-        # basedpyright: typeshed types ``try_dbfield``'s ``fn`` as taking a field instance;
-        # upstream calls it with each CLASS on the MRO. It rejects a class-keyed ``dict.get``
         entry: Mapping[str, object] = (
-            try_dbfield(cls._merged_filter_defaults().get, models.BooleanField)  # pyright: ignore[reportArgumentType]
-            or {}
+            _entry_by_mro(cls._merged_filter_defaults(), models.BooleanField) or {}
         )
         # ``FILTER_DEFAULTS`` entries hold a filter class and an ``extra`` provider.
         filter_class = cast("type[Filter] | None", entry.get("filter_class"))
@@ -3164,6 +3189,24 @@ class FilterSet(
         """
         return cls.__init__ is not FilterSet.__init__
 
+    @classmethod
+    def _upstream_filter_for_lookup(
+        cls,
+        field: ModelField,
+        lookup_type: str,
+    ) -> tuple[type[Filter] | None, dict[str, object]]:
+        """Return django-filter's ``(filter class, params)`` pair for ``lookup_type`` on ``field``.
+
+        The pair is typed as the upstream body returns it: the class is ``None`` for a field
+        with no ``FILTER_DEFAULTS`` entry (``(None, {})``), which typeshed's stub leaves out.
+        """
+        # basedpyright: typeshed narrows ``field`` to ``Field`` (see ``filter_for_field``); it
+        # rejects ``ModelField``'s ``ForeignObjectRel`` arm
+        return super().filter_for_lookup(
+            field,  # pyright: ignore[reportArgumentType]
+            lookup_type,
+        )
+
     # basedpyright: typeshed types ``filter_for_lookup``'s class as never ``None``; upstream
     # returns ``(None, {})`` for a field with no ``FILTER_DEFAULTS`` entry. It rejects the ``None``
     # class arm against ``type[Filter]``
@@ -3225,12 +3268,7 @@ class FilterSet(
         ``cls.filter_for_lookup``, so the raise propagates before any leaf is
         built.
         """
-        # basedpyright: typeshed narrows ``field`` to ``Field`` (see ``filter_for_field``); it
-        # rejects ``ModelField``'s ``ForeignObjectRel`` arm
-        default_class, params = super().filter_for_lookup(
-            field,  # pyright: ignore[reportArgumentType]
-            lookup_type,
-        )
+        default_class, params = cls._upstream_filter_for_lookup(field, lookup_type)
         if cls._is_own_pk_under_relay_owner(field):
             if cls._generation_origin_for_field(field, lookup_type) != "framework_default":
                 return default_class, params
@@ -3280,9 +3318,7 @@ class FilterSet(
                 # a restrictive ``in`` to no constraint. Own-PK Relay ``in``
                 # is handled above (GlobalIDMultipleChoiceFilter).
                 return IntegerInFilter, params
-            # basedpyright: ``None`` for an unrecognized field (``filter_for_field``'s WARN /
-            # IGNORE contract), so the comparison is live
-            if lookup_type == "in" and default_class is not None:  # pyright: ignore[reportUnnecessaryComparison]
+            if lookup_type == "in" and default_class is not None:
                 # Every other generated ``in`` gets the package base in front of the class
                 # django-filter built, so an explicit ``[]`` is the empty set (matches no
                 # rows) on every column type, never django-filter's empty-value skip. A
@@ -3317,9 +3353,7 @@ class FilterSet(
             # reverse, a ``GenericRelation``) got ``(None, {})`` from upstream's early
             # exit instead, so build the same Boolean pair here. The branches below
             # convert only the equality (``exact``) and membership (``in``) wire shapes.
-            # basedpyright: ``None`` for a relation class the table does not name (see the
-            # suppression on this method), so the comparison is live
-            if default_class is None:  # pyright: ignore[reportUnnecessaryComparison]
+            if default_class is None:
                 return cls._null_test_filter_for_relation(field)
             return default_class, params
         # Resolve OWNERSHIP before any identity transformation. A consumer that

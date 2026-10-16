@@ -32,6 +32,7 @@ from django_strawberry_framework.utils.input_values import (
     set_traversal_depth_cap,
 )
 from django_strawberry_framework.utils.inputs import GeneratedInputFieldSpec
+from tests._idioms import ClaimsClass, ClassReadRaises
 
 # ---------------------------------------------------------------------------
 # iter_input_items -- dict / dataclass / non-walkable
@@ -459,30 +460,6 @@ def test_field_name_bypasses_hostile_str_subclass_str_override() -> None:
     assert input_field_value({key: "value"}, key) == "value"
 
 
-def _raising_class_value(raised: type[BaseException]) -> object:
-    """A value whose ``__class__`` read raises ``raised`` (so a bare ``isinstance`` raises)."""
-
-    class RaisingClass:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object
-        # is the guard's input
-        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise raised("hostile __class__")
-
-    return RaisingClass()
-
-
-class _ClaimsStr:
-    """A non-``str`` value whose ``__class__`` claims ``str``."""
-
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self) -> type[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return str
-
-
 _FIELD_NAME_REFUSAL = (
     "Set input field names must be strings; received an invalid field name in an input of "
     "type dict."
@@ -492,9 +469,9 @@ _FIELD_NAME_REFUSAL = (
 @pytest.mark.parametrize(
     "key",
     [
-        pytest.param(_raising_class_value(RuntimeError), id="raising-class"),
-        pytest.param(_raising_class_value(KeyboardInterrupt), id="raising-class-interrupt"),
-        pytest.param(_ClaimsStr(), id="claims-str"),
+        pytest.param(ClassReadRaises(RuntimeError), id="raising-class"),
+        pytest.param(ClassReadRaises(KeyboardInterrupt), id="raising-class-interrupt"),
+        pytest.param(ClaimsClass(str), id="claims-str"),
         pytest.param(SimpleLazyObject(lambda: "field_name"), id="lazy-proxy-of-str"),
     ],
 )
@@ -736,7 +713,7 @@ def test_depth_cap_error_label_survives_a_qualname_whose_class_read_raises(
         @override
         def __getattribute__(cls, name: str) -> object:
             if name == "__qualname__":
-                return _raising_class_value(raised)
+                return ClassReadRaises(raised)
             return super().__getattribute__(name)
 
     class _Set(metaclass=_HostileMeta):

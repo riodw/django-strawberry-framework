@@ -88,7 +88,7 @@ from django_strawberry_framework.mutations.inputs import (
 from django_strawberry_framework.mutations.permissions import DenyAll
 from django_strawberry_framework.mutations.sets import iter_mutations
 from django_strawberry_framework.registry import registry
-from tests._idioms import definition_raises
+from tests._idioms import ClassReadRaises, definition_raises
 from tests._info import unread_info
 
 
@@ -1192,20 +1192,6 @@ def test_malformed_get_form_fields_return_is_configuration_error(
         )
 
 
-def _hostile_class_value(raised: type[BaseException]) -> object:
-    """A hook value whose ``__class__`` read raises ``raised`` (so ``isinstance`` raises)."""
-
-    class HostileClass:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object
-        # is the basis guard's input
-        def __class__(self) -> type[object]:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise raised("hostile __class__")
-
-    return HostileClass()
-
-
 @pytest.mark.parametrize("mutation_base", [DjangoFormMutation, DjangoModelFormMutation])
 @pytest.mark.parametrize("raised", [RuntimeError, TypeError, KeyboardInterrupt])
 def test_hostile_class_hook_value_is_configuration_error(
@@ -1227,7 +1213,7 @@ def test_hostile_class_hook_value_is_configuration_error(
 
     def get_hostile_form_fields(cls: type) -> dict[str, object]:
         del cls
-        return {"message": _hostile_class_value(raised)}
+        return {"message": ClassReadRaises(raised)}
 
     with pytest.raises(ConfigurationError) as exc:
         type(

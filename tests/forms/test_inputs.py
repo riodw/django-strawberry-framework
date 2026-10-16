@@ -88,6 +88,7 @@ from django_strawberry_framework.scalars import Upload, strawberry_config
 from django_strawberry_framework.types import converters
 from django_strawberry_framework.types.converters import convert_choices_to_enum
 from django_strawberry_framework.utils.inputs import InputFieldSpec
+from tests._idioms import ClassReadRaises
 
 if TYPE_CHECKING:
     from django.db.models import Model
@@ -232,20 +233,6 @@ def test_corrupted_base_fields_raises_typed_on_default_path() -> None:
 _HOSTILE_CLASS_ERRORS = [RuntimeError, TypeError, KeyboardInterrupt]
 
 
-def _hostile_class_value(raised: type[BaseException]) -> object:
-    """A basis value whose ``__class__`` read raises ``raised`` (so ``isinstance`` raises)."""
-
-    class HostileClass:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object
-        # is the basis guard's input
-        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise raised("hostile __class__")
-
-    return HostileClass()
-
-
 @pytest.mark.parametrize("raised", _HOSTILE_CLASS_ERRORS)
 def test_hostile_class_base_fields_value_raises_typed_on_default_path(
     raised: type[BaseException],
@@ -262,7 +249,7 @@ def test_hostile_class_base_fields_value_raises_typed_on_default_path(
 
     # basedpyright: the hostile base_fields value is the input under test; django-stubs
     # types the slot as a field mapping
-    Corrupt.base_fields = {"x": _hostile_class_value(raised)}  # pyright: ignore[reportAttributeAccessIssue]
+    Corrupt.base_fields = {"x": ClassReadRaises(raised)}  # pyright: ignore[reportAttributeAccessIssue]
     with pytest.raises(ConfigurationError) as exc:
         build_form_inputs(Corrupt)
     assert str(exc.value) == (
@@ -1721,7 +1708,7 @@ def test_basis_diagnostic_typed_for_hostile_class_value(raised: type[BaseExcepti
     ``_form_field_basis`` as the raw exception.
     """
     with pytest.raises(ConfigurationError) as exc:
-        normalize_form_field_basis(_make_empty_form(), {"x": _hostile_class_value(raised)})
+        normalize_form_field_basis(_make_empty_form(), {"x": ClassReadRaises(raised)})
     assert str(exc.value) == (
         "DjangoFormMutation for EmptyForm get_form_fields() must return a mapping of string "
         "names to forms.Field instances; invalid names [], invalid fields ['x']."

@@ -50,7 +50,7 @@ from django_strawberry_framework.auth.sessions import (
 )
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.utils.permissions import ChannelsRequestAdapter
-from tests._idioms import stub_module
+from tests._idioms import ClassReadRaises, stub_module
 from tests._soft_dependency import simulated_absence
 from tests.auth._helpers import _drain_until
 
@@ -753,16 +753,8 @@ async def test_scope_lock_acquire_cancelled_error_propagates() -> None:
 
 
 def test_classify_hostile_class_property_is_contained() -> None:
-    class Hostile:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is
-        # the guard's input
-        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise TypeError("hostile class")
-
     with pytest.raises(ConfigurationError, match="could not classify"):
-        classify_transport(Hostile())
+        classify_transport(ClassReadRaises(TypeError, "hostile class"))
 
 
 def test_classify_hostile_class_property_on_second_isinstance_is_contained(

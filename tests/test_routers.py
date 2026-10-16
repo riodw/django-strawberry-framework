@@ -193,7 +193,13 @@ from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils import sessions as session_store_module
 from django_strawberry_framework.utils.permissions import ChannelsRequestAdapter, request_from_info
-from tests._idioms import is_object_dict, is_object_list, run_capturing, websocket_scope
+from tests._idioms import (
+    ClassReadRaisesBase,
+    is_object_dict,
+    is_object_list,
+    run_capturing,
+    websocket_scope,
+)
 from tests._soft_dependency import blocked_modules, evicted_modules, simulated_absence
 
 if TYPE_CHECKING:
@@ -2203,21 +2209,14 @@ def test_a_factory_returning_a_value_whose_class_cannot_be_read_fails_at_constru
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
 
-    class _ClassReadRaises:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is
-        # the factory result under test
-        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise raised("hostile __class__")
-
+    class _ClassReadRaises(ClassReadRaisesBase):
         @override
         def __repr__(self) -> str:
             return "<hostile result>"
 
     def factory(*, schema: object) -> object:
         del schema  # the router passes schema= by keyword; this factory ignores it
-        return _ClassReadRaises()
+        return _ClassReadRaises(raised)
 
     with pytest.raises(ConfigurationError) as exc_info:
         _router(websocket_consumer_class=factory)

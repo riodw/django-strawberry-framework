@@ -10,10 +10,11 @@ from typing import NoReturn
 
 import pytest
 from django.utils.functional import SimpleLazyObject
-from typing_extensions import Self, override
+from typing_extensions import Self
 
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.utils.directives import validated_field_directives
+from tests._idioms import ClaimsClassBase, ClassReadRaises
 
 
 @pytest.mark.parametrize(
@@ -140,28 +141,10 @@ def test_baseexception_from_iteration_is_not_swallowed() -> None:
         validated_field_directives("DjangoListField", Interrupting())
 
 
-def _raising_class_value(raised: type[BaseException]) -> object:
-    """A value whose ``__class__`` read raises ``raised`` (so a bare ``isinstance`` raises)."""
-
-    class RaisingClass:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object
-        # is the guard's input
-        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise raised("hostile __class__")
-
-    return RaisingClass()
-
-
-class _ClaimsStr:
+class _ClaimsStr(ClaimsClassBase):
     """A non-``str`` value whose ``__class__`` claims ``str``."""
 
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self) -> type[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return str
+    claimed = str
 
 
 @pytest.mark.parametrize("raised", [RuntimeError, ValueError])
@@ -173,7 +156,7 @@ def test_value_whose_class_read_raises_is_the_typed_unreadable_reject(
     Dropping the check from the ``try`` lets the value's own exception escape raw.
     """
     with pytest.raises(ConfigurationError) as exc:
-        validated_field_directives("DjangoListField", _raising_class_value(raised))
+        validated_field_directives("DjangoListField", ClassReadRaises(raised))
     assert str(exc.value) == (f"DjangoListField directives could not be read ({raised.__name__}).")
     assert isinstance(exc.value.__cause__, raised)
 
@@ -185,7 +168,7 @@ def test_interrupt_from_a_class_read_is_not_swallowed(raised: type[BaseException
     Routing the check through ``_safe_predicate`` (``BaseException`` to ``False``) fails here.
     """
     with pytest.raises(raised):
-        validated_field_directives("DjangoListField", _raising_class_value(raised))
+        validated_field_directives("DjangoListField", ClassReadRaises(raised))
 
 
 @pytest.mark.parametrize(

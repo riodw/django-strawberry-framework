@@ -32,7 +32,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from functools import partial
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Literal, NoReturn
+from typing import TYPE_CHECKING, Literal, NoReturn
 
 import pytest
 import strawberry
@@ -114,8 +114,8 @@ def _raise_at(
 ) -> None:
     """Make ``model.clean`` or ``model.save`` raise the cell's Django ``ValidationError``."""
 
-    # basedpyright: a monkeypatched Model.clean / Model.save stand-in; the args are unused
-    def raising(_self: Model, *_args: Any, **_kwargs: Any) -> NoReturn:  # pyright: ignore[reportExplicitAny]
+    # A monkeypatched Model.clean / Model.save stand-in; the arguments are unused.
+    def raising(_self: Model, *_args: object, **_kwargs: object) -> NoReturn:
         raise _django_error(raised)
 
     monkeypatch.setattr(model, seam, raising)
@@ -281,7 +281,7 @@ def _run_modelform(
             fields = ("name", "category", "is_private")
 
         @override
-        def clean(self) -> dict[str, Any] | None:  # pyright: ignore[reportExplicitAny]
+        def clean(self) -> dict[str, object] | None:
             if seam == "clean":
                 raise _django_error(raised)
             return super().clean()
@@ -324,7 +324,7 @@ def _run_plain_form(
         note = forms.CharField(required=False)
 
         @override
-        def clean(self) -> dict[str, Any] | None:  # pyright: ignore[reportExplicitAny]
+        def clean(self) -> dict[str, object] | None:
             if seam == "clean":
                 raise _django_error(raised)
             return super().clean()

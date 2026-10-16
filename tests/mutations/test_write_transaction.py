@@ -101,7 +101,7 @@ from django_strawberry_framework.utils.write_transaction import (
     snapshot_target_state,
     write_pipeline,
 )
-from tests._idioms import definition_raises, is_object_dict
+from tests._idioms import ClaimsClass, ClassReadRaises, definition_raises, is_object_dict
 from tests._info import make_info
 
 if TYPE_CHECKING:
@@ -1811,32 +1811,11 @@ def test_is_read_only_sql_fails_closed_on_a_non_string_statement() -> None:
     assert is_read_only_sql(b"SELECT 1") is False  # bytes SQL is not DB-API either
 
 
-class _SqlClaimsStr:
-    """A non-``str`` statement whose ``__class__`` claims ``str``."""
-
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self) -> type[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return str
-
-
-class _SqlRaisingClass:
-    """A non-``str`` statement whose ``__class__`` read raises."""
-
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is the
-    # guard's input
-    def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-        raise RuntimeError("hostile __class__")
-
-
 @pytest.mark.parametrize(
     "statement",
     [
-        pytest.param(_SqlClaimsStr(), id="claims-str"),
-        pytest.param(_SqlRaisingClass(), id="raising-class"),
+        pytest.param(ClaimsClass(str), id="claims-str"),
+        pytest.param(ClassReadRaises(), id="raising-class"),
         pytest.param(SimpleLazyObject(lambda: "SELECT 1"), id="lazy-proxy-of-str"),
     ],
 )

@@ -57,6 +57,7 @@ from django_strawberry_framework.schema import (
     _refuse_operation_document,
 )
 from django_strawberry_framework.utils.querysets import run_in_one_sync_boundary
+from tests._idioms import ClaimsClassBase, ClassReadRaisesBase
 
 
 def _error_code(error: GraphQLError) -> object:
@@ -95,26 +96,19 @@ class ReversedHybridPolicyExtension(  # pyright: ignore[reportUnsafeMultipleInhe
     """The same class with its bases the other way round, which picks the other hook."""
 
 
-class _ClassClaimingResourcePolicy(DjangoResourcePolicyExtension):
-    """An authority subclass whose instances claim to be a class, which ``isinstance`` believes."""
+class _ClassClaimingResourcePolicy(ClaimsClassBase, DjangoResourcePolicyExtension):
+    """An authority subclass whose instances claim to be a class, which ``isinstance`` believes.
 
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self) -> type:  # pyright: ignore[reportIncompatibleMethodOverride]
-        """Claim ``type``, so an ``isinstance`` classifier sees a class entry."""
-        return type
+    The claim is ``type``, so an ``isinstance`` classifier sees a class entry.
+    """
+
+    claimed = type
 
 
-class _ClassClaimingErrorPolicy(DjangoErrorPolicyExtension):
+class _ClassClaimingErrorPolicy(ClaimsClassBase, DjangoErrorPolicyExtension):
     """The masking-authority subclass making the same claim."""
 
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self) -> type:  # pyright: ignore[reportIncompatibleMethodOverride]
-        """Claim ``type``, so an ``isinstance`` classifier sees a class entry."""
-        return type
+    claimed = type
 
 
 #: Every marker extension that ran, in order, since a test last cleared it.
@@ -219,15 +213,10 @@ def test_an_entry_is_classified_by_its_real_type_whatever_its_class_property_say
     back as the instance's real type.
     """
 
-    class _HostileClass:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is
-        # the guard's input
-        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise TypeError("hostile __class__")
+    class _HostileClass(ClassReadRaisesBase):
+        pass
 
-    assert _entry_type(_HostileClass()) is _HostileClass
+    assert _entry_type(_HostileClass(TypeError)) is _HostileClass
     assert _entry_type(_ClassClaimingResourcePolicy()) is _ClassClaimingResourcePolicy
     assert _entry_type(DjangoResourcePolicyExtension) is DjangoResourcePolicyExtension
 

@@ -734,6 +734,8 @@ def test_order_input_type_accepts_a_lazy_proxy_of_an_orderset() -> None:
         pass
 
     initial = set(_helper_referenced_ordersets)
+    # basedpyright: a lazy proxy is not a ``type[OrderSet]`` to the checker; the proxied class
+    # answering the guard at run time is the behavior under test
     annotation = order_input_type(SimpleLazyObject(lambda: HelperOrderLazy))  # pyright: ignore[reportArgumentType]
     inner = get_args(annotation)[0]
     assert isinstance(inner, ForwardRef)

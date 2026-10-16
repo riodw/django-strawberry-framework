@@ -55,10 +55,17 @@ reads its result as the original type rather than ``Any``.
 it runs ``fn`` and appends whatever it raises to ``errors``, so the main thread asserts the
 list is empty after ``join`` instead of every worker body carrying its own catch-all.
 
-``ClassReadRaises`` / ``ClaimsClass`` are the two hostile values a guard on a consumer-supplied
-value is tested against: one whose ``__class__`` read raises (so a bare ``isinstance`` raises
-with it), and one whose ``__class__`` claims a class its real type is not (so a bare
-``isinstance`` is true and the base slot that follows refuses it). Both render as
+``ClassReadRaisesBase`` / ``ClaimsClassBase`` hold the two hostile ``__class__`` shapes a guard
+on a consumer-supplied value is tested against, so the one override the checker rejects (a
+read-only ``__class__`` property in place of ``object``'s settable attribute) is suppressed once
+per shape. A ``ClassReadRaisesBase`` instance raises ``escape(message)`` from every
+``__class__`` read, so a bare ``isinstance`` raises with it; a ``ClaimsClassBase`` subclass
+sets ``claimed`` and its ``__class__`` answers that class, so a bare ``isinstance`` is true
+while ``type()`` tells the truth. A test subclasses either to give the double its own name,
+``repr`` or other behavior; ``ClaimsClassBase`` has no ``__init__`` and empty ``__slots__``, so
+it also mixes into a real base (a ``list``, a ``Mapping``, an extension class) without changing
+how that base builds its instances. ``ClassReadRaises`` / ``ClaimsClass`` are the ready-made
+instances (``ClaimsClass(claimed)`` takes the claim per instance); both render as
 ``<ClassReadRaises>`` / ``<ClaimsClass>`` so a rejection message that quotes the value is
 deterministic.
 
@@ -245,35 +252,56 @@ def is_object_list(value: object) -> "TypeIs[list[object]]":
     return isinstance(value, list)
 
 
-class ClassReadRaises:
-    """A value whose ``__class__`` read raises ``escape``, so ``isinstance(value, C)`` raises it."""
+class ClassReadRaisesBase:
+    """A value whose ``__class__`` read raises ``escape(message)``, so ``isinstance(value, C)`` does."""
 
-    def __init__(self, escape: type[BaseException] = RuntimeError) -> None:
+    __slots__: tuple[str, ...] = ("_escape", "_message")
+
+    def __init__(
+        self,
+        escape: type[BaseException] = RuntimeError,
+        message: str = "hostile __class__",
+    ) -> None:
         self._escape = escape
+        self._message = message
 
     @property
     @override
-    # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is the
-    # guard's input
+    # basedpyright: object declares ``__class__`` as a settable ``type[Self]``; the hostile double
+    # replaces it with a read-only property that raises, the guard's input under test
     def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-        raise self._escape("hostile __class__")
+        raise self._escape(self._message)
+
+
+class ClaimsClassBase:
+    """A value whose ``__class__`` claims ``claimed``: ``isinstance(value, claimed)`` is true."""
+
+    __slots__ = ()
+
+    #: The class every ``__class__`` read answers; a subclass sets it.
+    claimed: type = object
+
+    @property
+    @override
+    # basedpyright: object declares ``__class__`` as a settable ``type[Self]``; the hostile double
+    # replaces it with a read-only property forging another class, the guard's input under test
+    def __class__(self) -> type:  # pyright: ignore[reportIncompatibleMethodOverride]
+        return self.claimed
+
+
+class ClassReadRaises(ClassReadRaisesBase):
+    """The ready-made ``ClassReadRaisesBase``, rendered ``<ClassReadRaises>``."""
 
     @override
     def __repr__(self) -> str:
         return "<ClassReadRaises>"
 
 
-class ClaimsClass:
-    """A plain object whose ``__class__`` claims ``claimed``: ``isinstance(value, claimed)`` is true."""
+class ClaimsClass(ClaimsClassBase):
+    """The ready-made ``ClaimsClassBase`` claiming ``claimed``, rendered ``<ClaimsClass>``."""
 
     def __init__(self, claimed: type) -> None:
-        self._claimed = claimed
-
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self) -> type:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return self._claimed
+        self.claimed = claimed
 
     @override
     def __repr__(self) -> str:

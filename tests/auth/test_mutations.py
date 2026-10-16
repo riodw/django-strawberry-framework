@@ -114,7 +114,12 @@ from django_strawberry_framework.registry import (
 from django_strawberry_framework.utils.permissions import ChannelsRequestAdapter
 from django_strawberry_framework.utils.querysets import SyncMisuseError
 from django_strawberry_framework.utils.sessions import connection_actor_state
-from tests._idioms import comparing_metaclass, resolver_function
+from tests._idioms import (
+    ClaimsClassBase,
+    ClassReadRaisesBase,
+    comparing_metaclass,
+    resolver_function,
+)
 from tests._info import make_info, unread_info
 from tests.auth._helpers import _drain_until, _session_request
 
@@ -1413,39 +1418,31 @@ class _EqRaisingName(str):
     __hash__ = str.__hash__
 
 
-class _ClaimsStr:
+class _ClaimsStr(ClaimsClassBase):
     """A non-string whose ``__class__`` claims ``str``; only its real type tells it apart."""
 
     __slots__ = ()
 
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self) -> type[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return str
+    claimed = str
 
     @override
     def __repr__(self) -> str:
         return "<claims str>"
 
 
-class _ClaimsList:
+class _ClaimsList(ClaimsClassBase):
     """A non-list whose ``__class__`` claims ``list``; only its real type tells it apart."""
 
     __slots__ = ()
 
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self) -> type[list[str]]:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return list
+    claimed = list
 
     @override
     def __repr__(self) -> str:
         return "<claims list>"
 
 
-class _ClassRaising:
+class _ClassRaising(ClassReadRaisesBase):
     """A value whose ``__class__`` read raises; only its real type answers without running it.
 
     Declared as a ``REQUIRED_FIELDS`` entry: Django's model metaclass reads the
@@ -1454,12 +1451,6 @@ class _ClassRaising:
     """
 
     __slots__ = ()
-
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__`` that raises, the guard's hostile input
-    def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-        raise RuntimeError("hostile __class__ boom")
 
     @override
     def __repr__(self) -> str:
@@ -1603,7 +1594,7 @@ def test_derive_register_fields_reads_str_subclass_names_as_plain_text(
         ),
         (
             "username",
-            [_ClassRaising()],
+            [_ClassRaising(message="hostile __class__ boom")],
             (
                 "register_mutation() needs every PrivilegeRequiredUser.REQUIRED_FIELDS entry to "
                 "be a field name string; got <class raises>."

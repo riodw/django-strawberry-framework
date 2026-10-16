@@ -2,6 +2,15 @@
 
 from django.db import migrations, models
 
+# The field AddField carries, bound to its declared type: django-stubs gives
+# ``ManyToManyField``'s target type no default, so a string ``to`` alone leaves it unsolved.
+# The annotation is a string: the field class has no ``__class_getitem__`` at run time.
+bound_with_field: "models.ManyToManyField[models.Model, models.Model]" = models.ManyToManyField(
+    blank=True,
+    related_name="bound_printings",
+    to="library.edition",
+)
+
 
 class Migration(migrations.Migration):
     dependencies = [
@@ -12,11 +21,6 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="printing",
             name="bound_with",
-            # basedpyright: django-stubs ManyToManyField _To has no default; a string ``to`` cannot bind it
-            field=models.ManyToManyField(  # pyright: ignore[reportUnknownArgumentType]
-                blank=True,
-                related_name="bound_printings",
-                to="library.edition",
-            ),
+            field=bound_with_field,
         ),
     ]

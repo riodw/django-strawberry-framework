@@ -48,6 +48,7 @@ from django_strawberry_framework.utils.errors import (
     validation_error_to_field_errors,
 )
 from django_strawberry_framework.utils.inputs import RELATION_SINGLE, SCALAR, InputFieldSpec
+from tests._idioms import ClassReadRaisesBase
 
 if TYPE_CHECKING:
     from django_strawberry_framework.utils.errors import ErrorKeyMap
@@ -298,14 +299,7 @@ def test_validation_error_mapper_extracts_code_from_leaf_without_error_list() ->
 
 
 def test_field_error_and_join_path_survive_hostile_class_property() -> None:
-    class _HostileClass:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is
-        # the guard's input
-        def __class__(self) -> type:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise RuntimeError("hostile __class__")
-
+    class _HostileClass(ClassReadRaisesBase):
         @override
         def __str__(self) -> str:
             return "hostile_instance"
@@ -322,21 +316,11 @@ def test_field_error_and_join_path_survive_hostile_class_property() -> None:
     assert join_error_path(bad, "child") == "<unprintable _HostileClass>.child"  # pyright: ignore[reportArgumentType]
 
 
-def _raising_class_leaf(raised: type[BaseException]) -> object:
-    """A leaf whose ``__class__`` read raises ``raised`` (so a bare ``isinstance`` raises)."""
+class _RaisingClassLeaf(ClassReadRaisesBase):
+    """A leaf whose ``__class__`` read raises (so a bare ``isinstance`` raises)."""
 
-    class RaisingClassLeaf:
-        messages = ("hostile-leaf message",)
-        code = "hostile_leaf"
-
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object
-        # is the guard's input
-        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise raised("hostile __class__")
-
-    return RaisingClassLeaf()
+    messages = ("hostile-leaf message",)
+    code = "hostile_leaf"
 
 
 @pytest.mark.parametrize("raised", [RuntimeError, KeyboardInterrupt, SystemExit])
@@ -352,7 +336,7 @@ def test_validation_error_mapper_contains_an_error_dict_value_whose_class_read_r
     consumer exception exposing an ``error_dict``; ``post_construction`` is a real
     ``ValidationError`` whose ``error_dict`` was edited after Django flattened it.
     """
-    leaf = _raising_class_leaf(raised)
+    leaf = _RaisingClassLeaf(raised)
     if route == "duck":
 
         class _Duck:

@@ -1307,6 +1307,8 @@ def test_filter_input_type_accepts_a_lazy_proxy_of_a_filterset() -> None:
             model = Category
             fields = {"name": ["exact"]}
 
+    # basedpyright: a lazy proxy is not a ``type[FilterSet]`` to the checker; the proxied class
+    # answering the guard at run time is the behavior under test
     result = filter_input_type(SimpleLazyObject(lambda: MyFilter))  # pyright: ignore[reportArgumentType]
     inner = get_args(result)[0]
     assert isinstance(inner, typing.ForwardRef)

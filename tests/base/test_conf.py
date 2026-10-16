@@ -48,6 +48,7 @@ from django_strawberry_framework.conf import (
 )
 from django_strawberry_framework.conf import settings as bound_settings
 from django_strawberry_framework.exceptions import ConfigurationError
+from tests._idioms import ClaimsClassBase, ClassReadRaises
 
 _PATCH_DEPENDENCIES = sorted(conf.UPSTREAM_PATCH_DEPENDENCIES)
 
@@ -572,16 +573,8 @@ def test_explicit_settings_instance_ignores_django_delattr(
 
 def test_normalize_hostile_isinstance_raises_configurationerror() -> None:
     """``isinstance(value, Mapping)`` raising must be contained as ``ConfigurationError``."""
-
-    class Boom:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises, the guard's hostile input
-        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise RuntimeError("hostile __class__ boom")
-
     with pytest.raises(ConfigurationError, match="must be a mapping"):
-        conf._normalize_user_settings(Boom())
+        conf._normalize_user_settings(ClassReadRaises(message="hostile __class__ boom"))
 
 
 def test_normalize_hostile_iter_raises_configurationerror() -> None:
@@ -662,12 +655,8 @@ def test_settings_getattr_hostile_lookup_becomes_configurationerror() -> None:
 def test_upstream_patches_enabled_liar_bool_is_not_bool() -> None:
     """``__class__``-spoofing liar that passes ``isinstance(..., bool)`` must not disable patches."""
 
-    class LiarMapping(Mapping[str, object]):
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-        def __class__(self) -> type[bool]:  # pyright: ignore[reportIncompatibleMethodOverride]
-            return bool
+    class LiarMapping(ClaimsClassBase, Mapping[str, object]):
+        claimed = bool
 
         @override
         def __getitem__(self, key: str) -> bool:
@@ -693,12 +682,8 @@ def test_upstream_patches_enabled_liar_bool_is_not_bool() -> None:
         # Empty liar mapping -> defensive copy is {} -> defaults to True (not disabled)
         assert upstream_patches_enabled("django") is True
 
-    class LiarScalar:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-        def __class__(self) -> type[bool]:  # pyright: ignore[reportIncompatibleMethodOverride]
-            return bool
+    class LiarScalar(ClaimsClassBase):
+        claimed = bool
 
         def __bool__(self) -> bool:
             return False
@@ -716,15 +701,7 @@ def test_upstream_patches_enabled_liar_bool_is_not_bool() -> None:
 
 def test_upstream_patches_enabled_hostile_isinstance_becomes_configurationerror() -> None:
     """``isinstance(configured, Mapping)`` raising must be contained."""
-
-    class Boom:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises, the guard's hostile input
-        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise RuntimeError("hostile __class__ boom")
-
-    s = Settings({"APPLY_UPSTREAM_PATCHES": Boom()})
+    s = Settings({"APPLY_UPSTREAM_PATCHES": ClassReadRaises(message="hostile __class__ boom")})
 
     with (
         mock.patch.object(conf, "settings", s),
@@ -760,16 +737,8 @@ def test_upstream_patches_enabled_hostile_iter_becomes_configurationerror() -> N
 
 def test_upstream_patches_enabled_hostile_key_isinstance_becomes_configurationerror() -> None:
     """``isinstance(name, str)`` raising on a hostile key must be contained."""
-
-    class HostileKey:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises, the guard's hostile input
-        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise RuntimeError("hostile __class__ boom")
-
     # Need a mapping whose key is hostile; dict() will preserve that key object
-    hostile_key = HostileKey()
+    hostile_key = ClassReadRaises(message="hostile __class__ boom")
 
     class HostileMapping(dict[object, object]):
         def __init__(self) -> None:

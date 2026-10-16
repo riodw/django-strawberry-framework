@@ -134,7 +134,13 @@ from django_strawberry_framework.utils.querysets import (
     wrap_async_queryset_adapter,
 )
 from tests._definition import make_definition
-from tests._idioms import STR_SUBCLASS_KINDS, definition_raises, str_subclass_name
+from tests._idioms import (
+    STR_SUBCLASS_KINDS,
+    ClaimsClassBase,
+    ClassReadRaisesBase,
+    definition_raises,
+    str_subclass_name,
+)
 from tests._info import make_info, response_path
 
 if TYPE_CHECKING:
@@ -2258,36 +2264,18 @@ def test_strictness_hostile_dunder_values_raise_typed_valueerror(hostile: object
     assert _END_DETONATION not in str(exc_info.value)
 
 
-def _strictness_raising_class_value(raised: type[BaseException]) -> object:
-    """A strictness value whose ``__class__`` read raises ``raised``."""
-
-    class RaisingClass:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object
-        # is the guard's input
-        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise raised(_END_DETONATION)
-
-    return RaisingClass()
-
-
-class _StrictnessClaimsStr:
+class _StrictnessClaimsStr(ClaimsClassBase):
     """A non-``str`` strictness value whose ``__class__`` claims ``str``."""
 
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self) -> type[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return str
+    claimed = str
 
 
 @pytest.mark.parametrize(
     "make",
     [
-        lambda: _strictness_raising_class_value(RuntimeError),
-        lambda: _strictness_raising_class_value(TypeError),
-        lambda: _strictness_raising_class_value(KeyboardInterrupt),
+        lambda: ClassReadRaisesBase(RuntimeError, _END_DETONATION),
+        lambda: ClassReadRaisesBase(TypeError, _END_DETONATION),
+        lambda: ClassReadRaisesBase(KeyboardInterrupt, _END_DETONATION),
         _StrictnessClaimsStr,
         lambda: SimpleLazyObject(lambda: "warn"),
     ],

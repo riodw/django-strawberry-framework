@@ -84,7 +84,7 @@ from django_strawberry_framework.types.relay import (
     _resolve_globalid_strategy,
     _validated_globalid_setting,
 )
-from tests._idioms import definition_raises, is_object_dict
+from tests._idioms import ClaimsClass, ClassReadRaisesBase, definition_raises, is_object_dict
 from tests.optimizer import _link_models
 
 CATEGORY_SCALAR_FIELDS = (
@@ -411,36 +411,19 @@ _CLASS_READ_ERRORS = [RuntimeError, KeyboardInterrupt]
 _CLASS_READ_ERROR_IDS = ["RuntimeError", "KeyboardInterrupt"]
 
 
-class _ClassReadRaises:
+class _ClassReadRaises(ClassReadRaisesBase):
     """A value whose ``__class__`` read raises, so a bare ``isinstance`` on it raises."""
 
     def __init__(self, raised: type[BaseException]) -> None:
-        self._raised = raised
-
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile value is the
-    # gate's input
-    def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-        raise self._raised("class read")
+        super().__init__(raised, "class read")
 
     @override
     def __repr__(self) -> str:
         return "<class-read-raises>"
 
 
-class _ClaimsClass:
+class _ClaimsClass(ClaimsClass):
     """A value that is not a ``claimed`` instance whose ``__class__`` says it is one."""
-
-    def __init__(self, claimed: type[object]) -> None:
-        self._claimed = claimed
-
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__`` that forges a type: the forged value is
-    # the gate's input
-    def __class__(self) -> type[object]:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return self._claimed
 
     @override
     def __repr__(self) -> str:

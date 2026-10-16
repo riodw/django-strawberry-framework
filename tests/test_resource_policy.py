@@ -134,7 +134,7 @@ from django_strawberry_framework.utils.operation_lease import OperationLease
 from django_strawberry_framework.utils.querysets import materialized_rows, normalized_row_source
 from tests._django_private import has_apply_rel_filters
 from tests._execution import make_execution_context
-from tests._idioms import ClassReadRaises, pickle_roundtrip
+from tests._idioms import ClaimsClassBase, ClassReadRaises, pickle_roundtrip
 
 _M = TypeVar("_M", bound=Model)
 _QuerySetT = TypeVar("_QuerySetT", bound="QuerySet[Model, object]")
@@ -2200,14 +2200,10 @@ class _UnsealableQuerySet(QuerySet[Category]):
     """A ``QuerySet`` subclass carrying a query the seal cannot faithfully rebuild."""
 
 
-class _ClaimsToBeAQuerySet:
+class _ClaimsToBeAQuerySet(ClaimsClassBase):
     """Not a ``QuerySet``, but ``isinstance`` says it is and its slice returns everything."""
 
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self) -> type[QuerySet[Category]]:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return QuerySet
+    claimed = QuerySet
 
     def __getitem__(self, key: object) -> list[int]:
         return list(range(50))

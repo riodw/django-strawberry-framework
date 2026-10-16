@@ -155,7 +155,12 @@ from tests._django_private import (
     has_filtered_relations,
     has_resolved_condition,
 )
-from tests._idioms import is_object_list, module_binding
+from tests._idioms import (
+    ClaimsClassBase,
+    ClassReadRaisesBase,
+    is_object_list,
+    module_binding,
+)
 
 if TYPE_CHECKING:
     from django.db.models.expressions import Combinable
@@ -983,15 +988,10 @@ def test_a_value_whose_class_property_raises_is_a_typed_seal_defect() -> None:
     defect every other unusable shape is.
     """
 
-    class _RaisingClass:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is
-        # the guard's input
-        def __class__(self) -> type:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise RuntimeError("class bomb")
+    class _RaisingClass(ClassReadRaisesBase):
+        pass
 
-    sealed, defect = _seal_or_defect(_RaisingClass(), Category, None)
+    sealed, defect = _seal_or_defect(_RaisingClass(message="class bomb"), Category, None)
     assert sealed is None
     assert defect == ("type", "_RaisingClass")
 
@@ -999,12 +999,8 @@ def test_a_value_whose_class_property_raises_is_a_typed_seal_defect() -> None:
 def test_a_value_that_only_claims_to_be_a_queryset_is_a_typed_seal_defect() -> None:
     """A ``__class__`` that names ``QuerySet`` does not make a value one."""
 
-    class _ClaimsToBeAQuerySet:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-        def __class__(self) -> type:  # pyright: ignore[reportIncompatibleMethodOverride]
-            return models.QuerySet
+    class _ClaimsToBeAQuerySet(ClaimsClassBase):
+        claimed = models.QuerySet
 
     candidate = _ClaimsToBeAQuerySet()
     assert isinstance(candidate, models.QuerySet)

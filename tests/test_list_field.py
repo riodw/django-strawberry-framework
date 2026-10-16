@@ -145,7 +145,7 @@ from django_strawberry_framework.utils.querysets import (
     unwrap_async_queryset_adapter,
     wrap_async_queryset_adapter,
 )
-from tests._idioms import pickle_roundtrip
+from tests._idioms import ClaimsClassBase, ClassReadRaisesBase, pickle_roundtrip
 from tests._info import make_info
 
 _M = TypeVar("_M", bound=models.Model)
@@ -429,33 +429,18 @@ def test_djangolistfield_definition_read_failure_is_typed_not_raw() -> None:
 _RAISING_CLASS_ERRORS = [RuntimeError, TypeError, KeyboardInterrupt]
 
 
-class _RaisingClassTarget:
+class _RaisingClassTarget(ClassReadRaisesBase):
     """A non-class target whose ``__class__`` read raises (so a bare ``isinstance`` raises)."""
-
-    def __init__(self, raised: type[BaseException]) -> None:
-        self._raised = raised
-
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is the
-    # target guard's input
-    def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-        raise self._raised("hostile __class__")
 
     @override
     def __repr__(self) -> str:
         return "<hostile target>"
 
 
-class _ClaimsTypeTarget:
+class _ClaimsTypeTarget(ClaimsClassBase):
     """A non-class target whose ``__class__`` claims ``type`` (so ``isinstance(x, type)`` is True)."""
 
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__``: the forged type is the target guard's
-    # input
-    def __class__(self) -> type[type]:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return type
+    claimed = type
 
     @override
     def __repr__(self) -> str:

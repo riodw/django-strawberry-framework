@@ -4,8 +4,11 @@ basedpyright runs in `all` mode on every Python file, in two passes (3.11 and th
 rules still switched off and the `# pyright: ignore[...]` comments still in the tree.
 Each item is fixed at the root, gated (both passes 0 errors, full suite in one pass at 100% coverage), then committed.
 A split suite run on a tree other sessions are editing can drop modules from every part, so it is not a coverage gate.
+Locked rules: `scripts/check_type_suppressions.py` (pre-commit and the CI lint job) refuses a `# pyright: ignore[...]`
+naming any rule in its `LOCKED_RULES` (the 54 rules on everywhere with no suppression left) and every file-level
+`# pyright:` directive. A rule whose last ignore is cleared joins the set.
 
-Progress: 24 done, 9 to do. Ignore comments: 881 lines (1897 at the start of 0.0.15's ignore sweep).
+Progress: 24 done, 9 to do. Ignore comments: 890 lines (1897 at the start of 0.0.15's ignore sweep).
 
 ## Pre-commit (`uvx pre-commit run --all-files`, 4ce779e1, clean clone)
 
@@ -158,8 +161,8 @@ strawberry_django does?
 
 ## Ignore breakdown
 
-Lines carrying `# pyright: ignore[...]`: 881 (963 rule hits) in 175 files: tests 624, package 189, examples
-67, scripts 1.
+Lines carrying `# pyright: ignore[...]`: 890 (973 rule hits) in 175 files: tests 635, package 185, examples
+69, scripts 1. The tables below were measured at 881 lines.
 
 ### By cause
 

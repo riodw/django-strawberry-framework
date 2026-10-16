@@ -42,6 +42,7 @@ from django_strawberry_framework.types.definition import (
     _is_framework_relay_id_resolver,
     origin_has_custom_id_resolver,
 )
+from tests._idioms import ClaimsClass, ClassReadRaises
 
 pytestmark = pytest.mark.usefixtures("isolate_global_registry")
 
@@ -312,20 +313,12 @@ def test_custom_id_detection_fails_closed_for_hostile_class_metadata() -> None:
     class _UnreadableMroOrigin(metaclass=_UnreadableMroMeta):
         pass
 
-    class _HostileClassProperty:
-        @property
-        @override
-        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object
-        # is the guard's input
-        def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-            raise RuntimeError("class exploded")
-
     assert origin_has_custom_id_resolver(_HostileMro, "id") is True
     assert origin_has_custom_id_resolver(_HostileDict, "id") is True
     assert origin_has_custom_id_resolver(_UnreadableMroOrigin, "id") is True
     # basedpyright: the object whose __class__ raises is the hostile input under test;
     # origin_has_custom_id_resolver types the parameter as type[object]
-    assert origin_has_custom_id_resolver(_HostileClassProperty(), "id") is True  # pyright: ignore[reportArgumentType]
+    assert origin_has_custom_id_resolver(ClassReadRaises(message="class exploded"), "id") is True  # pyright: ignore[reportArgumentType]
 
 
 def test_custom_id_detection_fails_closed_for_hostile_relay_resolver() -> None:
@@ -348,31 +341,6 @@ def test_custom_id_detection_fails_closed_for_hostile_relay_resolver() -> None:
     assert origin_has_custom_id_resolver(_NonStringNode, "id") is True
 
 
-class _ClassReadRaises:
-    """An id attribute whose ``__class__`` read raises, so a bare ``isinstance`` on it raises."""
-
-    def __init__(self, raised: type[BaseException]) -> None:
-        self._raised = raised
-
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile result is the
-    # guard's input
-    def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-        raise self._raised("class read")
-
-
-class _ClaimsStr:
-    """An id attribute that is not a ``str`` whose ``__class__`` says it is one."""
-
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__`` that forges a type: the forged result
-    # is the guard's input
-    def __class__(self) -> type[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return str
-
-
 class _LoudStr(str):
     """A ``str`` whose own ``__str__`` is consumer code that must never run."""
 
@@ -382,13 +350,17 @@ class _LoudStr(str):
 
 
 _UNREADABLE_ID_ATTRS = [
-    pytest.param(lambda: _ClassReadRaises(RuntimeError), True, id="class-read-raises-runtime"),
     pytest.param(
-        lambda: _ClassReadRaises(KeyboardInterrupt),
+        lambda: ClassReadRaises(RuntimeError, "class read"),
+        True,
+        id="class-read-raises-runtime",
+    ),
+    pytest.param(
+        lambda: ClassReadRaises(KeyboardInterrupt, "class read"),
         True,
         id="class-read-raises-base-exception",
     ),
-    pytest.param(_ClaimsStr, True, id="class-claims-str"),
+    pytest.param(lambda: ClaimsClass(str), True, id="class-claims-str"),
     pytest.param(lambda: SimpleLazyObject(lambda: "id"), True, id="lazy-str"),
     pytest.param(lambda: "id", False, id="pk-name"),
     pytest.param(lambda: "pk", False, id="pk-alias"),

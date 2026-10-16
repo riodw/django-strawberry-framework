@@ -292,6 +292,7 @@ LINT_COMMANDS = (
     "ruff format --check .",
     "basedpyright",
     "basedpyright -p pyrightconfig.floor.json",
+    "python scripts/check_type_suppressions.py",
     "python scripts/check_public_types.py",
     "python scripts/check_trailing_commas.py --check",
     "python scripts/check_citations.py --check",

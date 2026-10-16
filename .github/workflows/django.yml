@@ -56,6 +56,10 @@ jobs:
         # The unneeded-suppression rule is off: a suppression the 3.11 pass needs may be
         # moot at 3.10, and that pass already gates it.
         run: uv run basedpyright -p pyrightconfig.floor.json
+      - name: Locked type suppressions
+        # No `# pyright: ignore[...]` may name a rule in the script's LOCKED_RULES, and no
+        # file-level `# pyright:` directive may lower a rule (pyproject.toml owns rule levels).
+        run: uv run python scripts/check_type_suppressions.py
       - name: Public API type completeness (basedpyright --verifytypes)
         # Installs the package non-editable in a temporary environment and
         # requires a 100% score with no diagnostic outside the script's exact-match

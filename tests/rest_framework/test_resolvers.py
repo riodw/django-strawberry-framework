@@ -135,7 +135,7 @@ from django_strawberry_framework.utils.write_transaction import (
     write_pipeline,
 )
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
-from tests._idioms import ModelSerializerBase, run_capturing
+from tests._idioms import ClaimsClassBase, ClassReadRaises, ModelSerializerBase, run_capturing
 from tests._info import make_info, unread_info
 
 if TYPE_CHECKING:
@@ -180,21 +180,11 @@ def _as_serializer_mutation(stand_in: object) -> type[SerializerMutation]:
     return stand_in  # pyright: ignore[reportReturnType]
 
 
-class _ClassReadRaises:
+class _ClassReadRaises(ClassReadRaises):
     """A value whose ``__class__`` read raises ``escape``: ``isinstance`` falls back to that read."""
 
     def __init__(self, escape: type[BaseException] = RuntimeError) -> None:
-        self._escape = escape
-
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__`` that raises, the guard's hostile input
-    def __class__(self) -> NoReturn:  # pyright: ignore[reportIncompatibleMethodOverride]
-        raise self._escape("hostile __class__ boom")
-
-    @override
-    def __repr__(self) -> str:
-        return "<ClassReadRaises>"
+        super().__init__(escape, "hostile __class__ boom")
 
 
 class _ReprRaises:
@@ -233,34 +223,22 @@ class _CompareRaisesStr(str):
         return str.__hash__(self)
 
 
-class _ClaimsStr:
+class _ClaimsStr(ClaimsClassBase):
     """A mutable object whose ``__class__`` claims ``str``."""
 
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self) -> type[str]:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return str
+    claimed = str
 
 
-class _ClaimsDict:
+class _ClaimsDict(ClaimsClassBase):
     """An object whose ``__class__`` claims ``dict`` but which has no ``items()``."""
 
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self) -> type[dict[object, object]]:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return dict
+    claimed = dict
 
 
-class _ListClaimsDict(list[object]):
+class _ListClaimsDict(ClaimsClassBase, list[object]):
     """A real ``list`` whose ``__class__`` claims ``dict``."""
 
-    @property
-    @override
-    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
-    def __class__(self) -> type[dict[object, object]]:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return dict
+    claimed = dict
 
 
 @runtime_checkable

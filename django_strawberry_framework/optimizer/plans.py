@@ -1305,9 +1305,10 @@ def has_random_term(order_by: Sequence[object], query: Query) -> bool:
 def _is_random_term(term: object, query: Query) -> bool:
     """Classify one order term for ``has_random_term``."""
     if isinstance(term, F):
-        # basedpyright: django-stubs omits ``F.name``, the reference ``__init__`` stores
-        name = cast("str", term.name)  # pyright: ignore[reportAttributeAccessIssue]
-        return _is_random_alias(name, query)
+        # django-stubs omits ``F.name``, the reference ``__init__`` stores, so it is read and
+        # proven a string.
+        name: object = getattr(term, "name", None)
+        return isinstance(name, str) and _is_random_alias(name, query)
     if isinstance(term, Node):
         # A ``When`` condition: a ``Q`` / ``WhereNode`` whose children are nested nodes,
         # expressions, or ``(lookup, value)`` pairs whose lookup names its left side.

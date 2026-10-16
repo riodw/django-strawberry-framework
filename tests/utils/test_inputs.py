@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, ClassVar, NoReturn, cast
 
 import pytest
 import strawberry
-from django.utils.functional import SimpleLazyObject
+from django.utils.functional import LazyObject, SimpleLazyObject
 from typing_extensions import override
 
 from django_strawberry_framework import strawberry_config
@@ -68,6 +68,7 @@ from django_strawberry_framework.utils.inputs import (
     set_input_type_name,
 )
 from tests._idioms import (
+    STR_ENUM,
     STR_SUBCLASS_KINDS,
     ClaimsClass,
     ClassReadRaises,
@@ -578,16 +579,13 @@ def test_meta_fields_canonicalization_passes_a_value_whose_class_read_raises_thr
     assert bag["name"] is hostile
 
 
-def test_meta_fields_canonicalization_keeps_a_lazy_set_a_typed_rejection() -> None:
-    """A lazy proxy of a set is judged by its class (a set) and refused as unreadable, as before.
+def test_read_set_meta_fields_sorts_a_lazy_set_as_the_set_it_stands_for() -> None:
+    """A lazy proxy of a set expands as that set: sorted, never in hash order, never refused."""
 
-    Letting it through would hand the expansion a set in hash order.
-    """
-    with pytest.raises(ConfigurationError) as excinfo:
-        canonicalize_set_meta_fields(SimpleLazyObject(lambda: {"b", "a"}))
-    assert str(excinfo.value) == (
-        "Generated set metadata contains an unreadable SimpleLazyObject container."
-    )
+    class Meta:
+        fields = SimpleLazyObject(lambda: {"b", "a"})
+
+    assert read_set_meta_fields(Meta) == ["a", "b"]
 
 
 @pytest.mark.parametrize("escape", [RuntimeError, KeyboardInterrupt])
@@ -868,6 +866,71 @@ def test_read_set_meta_fields_orders_a_str_subclass_set_as_the_plain_names(kind:
         type("PlainMeta", (), {"fields": {"title", "subtitle", "isbn"}}),
     )
     assert _plain_text_only(names)
+
+
+_LAZY_SHAPES: dict[str, tuple[Callable[[], object], object]] = {
+    "list": (lambda: ["title", "isbn"], ["title", "isbn"]),
+    "tuple": (lambda: ("title", "isbn"), ("title", "isbn")),
+    "set": (lambda: {"title", "isbn"}, {"title", "isbn"}),
+    "frozenset": (lambda: frozenset({"title"}), frozenset({"title"})),
+    "dict": (lambda: {"title": ["exact", "icontains"]}, {"title": ["exact", "icontains"]}),
+    "dict with lazy lookups": (
+        lambda: {"title": SimpleLazyObject(lambda: ["exact"])},
+        {"title": ["exact"]},
+    ),
+    "str-enum member": (lambda: [STR_ENUM("Names", {"TITLE": "title"})["TITLE"]], ["title"]),
+    "top-level __all__": (lambda: "__all__", "__all__"),
+    "nested lazy": (lambda: SimpleLazyObject(lambda: ["title"]), ["title"]),
+}
+
+
+@pytest.mark.parametrize("set_up", [False, True], ids=["unevaluated", "evaluated"])
+@pytest.mark.parametrize("shape", list(_LAZY_SHAPES))
+def test_plain_set_meta_fields_reads_a_lazy_declaration_as_the_object_it_stands_for(
+    shape: str,
+    *,
+    set_up: bool,
+) -> None:
+    """A ``SimpleLazyObject`` declaration comes back as its target's own kind, names as plain text.
+
+    The proxy passes the container ``isinstance`` tests its target passes, but no
+    base slot reads it, so the result is the target (or its plain copy) and never
+    the proxy, whether or not the proxy was evaluated before the read.
+    """
+    target, expected = _LAZY_SHAPES[shape]
+    lazy = SimpleLazyObject(target)
+    if set_up:
+        assert len(lazy) == len(cast("Collection[object]", target()))
+
+    plain = plain_set_meta_fields(lazy)
+
+    assert type(plain) is type(expected)
+    assert plain == expected
+    assert _plain_text_only(plain)
+    if is_dict(plain):
+        assert all(type(lookups) is list for _key, lookups in base_container_values(plain))
+
+
+# The stubs make ``LazyObject`` generic; the runtime class takes no subscript.
+if TYPE_CHECKING:
+    _LazyNamesBase = LazyObject[list[str]]
+else:
+    _LazyNamesBase = LazyObject
+
+
+class _LazyFieldNames(_LazyNamesBase):
+    """A project ``LazyObject`` subclass whose own ``_setup`` builds the declaration."""
+
+    def _setup(self) -> None:
+        self._wrapped = ["title", "isbn"]
+
+
+def test_plain_set_meta_fields_reads_a_custom_lazy_object_as_the_object_it_stands_for() -> None:
+    """Any ``LazyObject`` subclass, not only ``SimpleLazyObject``, is read as its target."""
+    plain = plain_set_meta_fields(_LazyFieldNames())
+
+    assert type(plain) is list
+    assert plain == ["title", "isbn"]
 
 
 def test_make_shape_build_cache_returns_dict_and_clear() -> None:

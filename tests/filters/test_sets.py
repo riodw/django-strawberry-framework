@@ -59,6 +59,7 @@ from django.forms import ModelChoiceField, ModelMultipleChoiceField
 from django.http import HttpRequest, QueryDict
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
+from django.utils.functional import SimpleLazyObject
 from django_filters import (
     AllValuesFilter,
     BaseInFilter,
@@ -2574,6 +2575,63 @@ def test_a_str_enum_class_meta_fields_is_refused_a_declared_filter_like_a_collec
 
     assert _declared_filter_probe_error(names) == _declared_filter_probe_error(
         _FieldNames("name", "custom"),
+    )
+
+
+_Wrap: TypeAlias = Callable[[Callable[[], object]], object]
+
+
+def _lazy_meta_outcome(meta: dict[str, object]) -> object:
+    """The filters a set with a ``custom`` declared filter generates from ``meta``, or its error text."""
+    namespace = {
+        "custom": CharFilter(field_name="name"),
+        "Meta": type("Meta", (), {"model": Category, **meta}),
+        "__module__": __name__,
+    }
+    try:
+        probe = type("LazyMetaProbe", (FilterSet,), namespace)
+    except TypeError as exc:
+        return str(exc)
+    assert issubclass(probe, FilterSet)
+    return {
+        name: (type(fltr).__name__, fltr.field_name, fltr.lookup_expr)
+        for name, fltr in probe.base_filters.items()
+    }
+
+
+_LAZY_FILTER_META: dict[str, Callable[[_Wrap], dict[str, object]]] = {
+    "fields list": lambda w: {"fields": w(lambda: ["name", "custom"])},
+    "fields tuple": lambda w: {"fields": w(lambda: ("name", "custom"))},
+    "fields set": lambda w: {"fields": w(lambda: {"name", "custom"})},
+    "fields frozenset": lambda w: {"fields": w(lambda: frozenset({"name", "custom"}))},
+    "fields set of model names": lambda w: {"fields": w(lambda: {"name", "is_private"})},
+    "fields dict": lambda w: {"fields": w(lambda: {"name": ["exact", "icontains"]})},
+    "fields dict lazy lookups": lambda w: {"fields": {"name": w(lambda: ["exact", "in"])}},
+    "fields str-enum member": lambda w: {
+        "fields": w(lambda: [STR_ENUM("Names", {"NAME": "name"})["NAME"], "custom"]),
+    },
+    "fields nested lazy": lambda w: {"fields": w(lambda: w(lambda: ["name", "custom"]))},
+    "filter_fields alias": lambda w: {"filter_fields": w(lambda: ["name"])},
+    "exclude list": lambda w: {"exclude": w(lambda: ["name"])},
+    "exclude tuple": lambda w: {"exclude": w(lambda: ("name",))},
+    "exclude set": lambda w: {"exclude": w(lambda: {"name"})},
+    "exclude frozenset": lambda w: {"exclude": w(lambda: frozenset({"name"}))},
+}
+
+
+@pytest.mark.parametrize("shape", list(_LAZY_FILTER_META))
+def test_filterset_reads_a_lazy_meta_declaration_as_the_object_it_stands_for(shape: str) -> None:
+    """A ``SimpleLazyObject`` ``Meta.fields`` / ``filter_fields`` / ``Meta.exclude`` is its target.
+
+    Each lazy declaration generates exactly the filters its evaluated twin does,
+    and django-filter's declared-filter allowance (a ``list`` / ``tuple`` may name
+    a declared filter, any other collection may not) answers as it does for the
+    twin.
+    """
+    meta = _LAZY_FILTER_META[shape]
+
+    assert _lazy_meta_outcome(meta(SimpleLazyObject)) == _lazy_meta_outcome(
+        meta(lambda target: target()),
     )
 
 

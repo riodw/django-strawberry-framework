@@ -33,6 +33,7 @@ from asgiref.sync import sync_to_async
 from django.contrib.auth.models import AnonymousUser, User
 from django.db.models import F, Min, Model, QuerySet
 from django.http import HttpRequest
+from django.utils.functional import SimpleLazyObject
 from graphql import GraphQLError
 from strawberry import UNSET
 from typing_extensions import override
@@ -67,6 +68,7 @@ from django_strawberry_framework.utils.relations import (
 )
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
 from tests._idioms import (
+    STR_ENUM,
     STR_SUBCLASS_KINDS,
     ClassReadRaises,
     is_object_list,
@@ -1220,6 +1222,42 @@ def test_orderset_meta_names_a_field_through_a_str_subclass_by_its_text(
     assert calls == []
     assert all(type(name) is str for name in names)
     assert names == list(plain.get_fields())
+    assert "title" in names
+
+
+_LAZY_ORDER_FIELDS: dict[str, Callable[[Callable[[Callable[[], object]], object]], object]] = {
+    "list": lambda w: w(lambda: ["title", "subtitle"]),
+    "tuple": lambda w: w(lambda: ("title", "subtitle")),
+    "set": lambda w: w(lambda: {"title", "subtitle", "circulation_status"}),
+    "frozenset": lambda w: w(lambda: frozenset({"title", "subtitle"})),
+    "dict": lambda w: w(lambda: {"title": ["exact"], "subtitle": ["exact"]}),
+    "str-enum member": lambda w: w(
+        lambda: [STR_ENUM("Names", {"TITLE": "title"})["TITLE"], "subtitle"],
+    ),
+    "nested lazy": lambda w: w(lambda: w(lambda: ["title", "subtitle"])),
+}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("shape", list(_LAZY_ORDER_FIELDS))
+def test_orderset_reads_a_lazy_meta_fields_as_the_object_it_stands_for(shape: str) -> None:
+    """A ``SimpleLazyObject`` ``Meta.fields`` expands exactly as its evaluated twin does.
+
+    A ``set`` sorts as the twin would, a lookup-bag ``dict`` degrades to its keys,
+    and every name is plain ``str``.
+    """
+    declare = _LAZY_ORDER_FIELDS[shape]
+    meta = type("Meta", (), {"model": Book, "fields": declare(SimpleLazyObject)})
+    twin_meta = type("Meta", (), {"model": Book, "fields": declare(lambda target: target())})
+
+    probe = type("LazyOrder", (OrderSet,), {"Meta": meta, "__module__": __name__})
+    twin = type("TwinOrder", (OrderSet,), {"Meta": twin_meta, "__module__": __name__})
+    assert issubclass(probe, OrderSet)
+    assert issubclass(twin, OrderSet)
+    names = list(probe.get_fields())
+
+    assert names == list(twin.get_fields())
+    assert all(type(name) is str for name in names)
     assert "title" in names
 
 

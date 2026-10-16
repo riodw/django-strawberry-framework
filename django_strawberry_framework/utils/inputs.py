@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Generic, TypeVar, cast, final
 
 import strawberry
+from django.utils.functional import LazyObject, empty
 from typing_extensions import override
 
 from django_strawberry_framework.exceptions import (
@@ -614,6 +615,27 @@ def _is_member_container(value: object) -> bool:
     return is_list(value) or is_tuple(value) or is_set_or_frozenset(value)
 
 
+def _lazy_target(value: object) -> object:
+    """Return the object a Django ``LazyObject`` proxy (a ``SimpleLazyObject``) stands for.
+
+    Any other value comes back unchanged, and a proxy whose target is itself a
+    proxy is followed to the first object that is not one. The test reads the
+    real type, which the proxy cannot answer for (it forwards ``__class__``), and
+    each target is set up once the way Django sets it up on first use. A proxy
+    passes every ``isinstance`` test its target passes, yet a base slot
+    (``list.__iter__``, ``dict.items``) refuses it, so a reader that branches on
+    the container kind and then reads through the base slot reads the target
+    instead.
+    """
+    while issubclass(type(value), LazyObject):
+        lazy = cast("LazyObject[object]", value)
+        # ``_wrapped`` / ``_setup`` are Django's own unwrap protocol (``empty`` until first use).
+        if lazy._wrapped is empty:
+            lazy._setup()
+        value = cast("object", lazy._wrapped)
+    return value
+
+
 def _plain_name(value: object) -> object:
     """Return a ``str`` subclass as the plain base ``str`` it spells; any other value unchanged.
 
@@ -676,7 +698,13 @@ def plain_set_meta_fields(fields: object) -> object:
     django-filter's declared-filter allowance for those two kinds does not newly
     apply) nor a ``set`` (so the canonical sort does not newly apply). Members
     that are not ``str`` pass through for each family's own typed rejection.
+
+    A lazy declaration (a ``SimpleLazyObject`` around any of these shapes, at the
+    top or as a lookup list) is read as the object it stands for
+    (``_lazy_target``) and comes back as that object or its plain copy, so every
+    later reader sees the real container kind.
     """
+    fields = _lazy_target(fields)
     if _safe_predicate(is_dict, fields):
         pairs = base_container_values(cast("dict[object, object]", fields))
         plain_pairs = tuple(

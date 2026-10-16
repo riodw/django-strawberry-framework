@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 140 done, 112 to do.
+Progress: 141 done, 111 to do.
 
 ## Done
 
@@ -428,6 +428,11 @@ Progress: 140 done, 112 to do.
   not a defect (infeasible): `StrEnum` entries work, and the argument is trusted application Python
 - [x] 250. A set-family `Meta.fields` / `Meta.exclude` whose `__class__` claims `dict`: duplicate of 237: the feasible
   shape, a `SimpleLazyObject` declaration, is 237's regression from `53001bdd`; a crafted `__class__` is infeasible
+- [x] 237. A `SimpleLazyObject` `Meta.fields` / `Meta.exclude` raised a raw `TypeError` on both set families: fixed,
+  `utils/inputs.py::plain_set_meta_fields` reads a lazy declaration (list, tuple, set, frozenset, dict, lazy lookup list,
+  a nested proxy) as the object it stands for, so `FilterSet` and `OrderSet` accept every lazy declaration their
+  evaluated twin accepts and django-filter's list/tuple declared-filter allowance answers as for the target; 250 is its
+  duplicate
 
 ## Outside review of the fixes
 
@@ -566,10 +571,6 @@ tracker number are recorded there; open remainders and new defects are filed as 
   model already declares (a `GenericRelation` to a proxy)
 - [ ] 235. Two comments in `optimizer/nested_planner.py` label a guard "the P2-3 defect" / "the P2-3 false-coverage defect",
   a review label START "No process provenance" bans; restate each as the invariant it guards
-- [ ] 237. An honest `SimpleLazyObject({...})` `Meta.fields` on an `OrderSet` raises a raw `TypeError` from
-  `utils/inputs.py::canonicalize_set_meta_fields` (`is_dict` answers through the proxy, then `dict.items` refuses it) and a
-  lazy set is "an unreadable SimpleLazyObject container", while a `FilterSet` accepts both
-
 - [ ] 241. Duplicate input-object field names escape the value budget:
   `extensions/resource_policy.py::_DocumentWalk.charge_arguments` converts an argument's whole value AST at every reference
   but charges the converted dict, so an overwritten duplicate field is converted and never charged by any value bound (the

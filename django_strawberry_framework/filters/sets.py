@@ -2588,11 +2588,12 @@ class FilterSet(
         # calls it inside ``__new__`` to build ``base_filters``), so the plain-text copy is
         # written back here, onto the options object django-filter built for this class alone
         # (the consumer's ``Meta`` is never touched). The write is idempotent: a declaration
-        # already plain comes back as the same object, so every later expansion reads the
-        # same value. The ``cast`` restates django-filter's stub type for the slot; the plain
-        # copy keeps the declaration's container kind (a collection with no built-in kind
-        # becomes one that is still no ``list`` / ``tuple``), so django-filter takes the same
-        # branches for it that it takes for the declaration.
+        # already plain comes back as the same object (a ``SimpleLazyObject`` as the object it
+        # stands for), so every later expansion reads the same value. The ``cast`` restates
+        # django-filter's stub type for the slot; the plain copy keeps the declaration's
+        # container kind (a collection with no built-in kind becomes one that is still no
+        # ``list`` / ``tuple``), so django-filter takes the same branches for it that it takes
+        # for the declaration.
         options = cls._meta
         options.fields = cast(
             "Sequence[str] | dict[str, Sequence[str]] | str | None",

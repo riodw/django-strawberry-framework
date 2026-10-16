@@ -441,7 +441,64 @@ failOnWarnings = true
 # The one suppression is a rule-scoped `# pyright: ignore[<rule>]`; `# type: ignore`
 # is not read, and a suppression the run does not need is an error.
 enableTypeIgnoreComments = false
-reportUnnecessaryTypeIgnoreComment = "error"
+reportUnnecessaryTypeIgnoreComment = "error"  # Locked
+# Locked: on in every environment with no suppression left, so a diagnostic is fixed at
+# the root. `all` already turns each one on; a `# Locked` marker is what
+# scripts/check_type_suppressions.py reads, refusing any `# pyright: ignore[...]` that
+# names the rule. A rule whose last suppression is cleared gains the marker.
+reportAbstractUsage = "error"  # Locked
+reportAssertAlwaysTrue = "error"  # Locked
+reportAssertTypeFailure = "error"  # Locked
+reportCallInDefaultInitializer = "error"  # Locked
+reportConstantRedefinition = "error"  # Locked
+reportDuplicateImport = "error"  # Locked
+reportEmptyAbstractUsage = "error"  # Locked
+reportIgnoreCommentWithoutRule = "error"  # Locked
+reportImplicitAbstractClass = "error"  # Locked
+reportImplicitRelativeImport = "error"  # Locked
+reportIncompleteStub = "error"  # Locked
+reportInconsistentConstructor = "error"  # Locked
+reportInconsistentOverload = "error"  # Locked
+reportInvalidAbstractMethod = "error"  # Locked
+reportInvalidStringEscapeSequence = "error"  # Locked
+reportInvalidStubStatement = "error"  # Locked
+reportInvalidTypeVarUse = "error"  # Locked
+reportMatchNotExhaustive = "error"  # Locked
+reportMissingImports = "error"  # Locked
+reportMissingModuleSource = "error"  # Locked
+reportMissingParameterType = "error"  # Locked
+reportMissingTypeStubs = "error"  # Locked
+reportNoOverloadImplementation = "error"  # Locked
+reportOperatorIssue = "error"  # Locked
+reportOptionalCall = "error"  # Locked
+reportOptionalContextManager = "error"  # Locked
+reportOptionalIterable = "error"  # Locked
+reportOptionalOperand = "error"  # Locked
+reportOptionalSubscript = "error"  # Locked
+reportOverlappingOverload = "error"  # Locked
+reportPossiblyUnboundVariable = "error"  # Locked
+reportPrivateImportUsage = "error"  # Locked
+reportPrivateLocalImportUsage = "error"  # Locked
+reportRedeclaration = "error"  # Locked
+reportSelfClsDefault = "error"  # Locked
+reportSelfClsParameterName = "error"  # Locked
+reportTypeCommentUsage = "error"  # Locked
+reportTypedDictNotRequiredAccess = "error"  # Locked
+reportUnboundVariable = "error"  # Locked
+reportUnhashable = "error"  # Locked
+reportUnknownLambdaType = "error"  # Locked
+reportUnnecessaryCast = "error"  # Locked
+reportUnnecessaryContains = "error"  # Locked
+reportUnsupportedDunderAll = "error"  # Locked
+reportUntypedClassDecorator = "error"  # Locked
+reportUntypedNamedTuple = "error"  # Locked
+reportUnusedClass = "error"  # Locked
+reportUnusedCoroutine = "error"  # Locked
+reportUnusedExcept = "error"  # Locked
+reportUnusedExpression = "error"  # Locked
+reportUnusedParameter = "error"  # Locked
+reportUnusedVariable = "error"  # Locked
+reportWildcardImportFromLibrary = "error"  # Locked
 # Off by design: the formatter's multi-line strings are implicit concatenation (ruff bans
 # only `+`, ISC003); a private helper another package module imports reads as unused in
 # its own; import cycles are broken by local imports; metaclass, descriptor and Django

@@ -94,6 +94,23 @@ def test_main_exits_two_when_a_file_cannot_be_read(
     assert cts.main(["missing.py"]) == 2
 
 
+def test_locked_rules_are_the_marked_basedpyright_lines(tmp_path: Path) -> None:
+    """Only ``# Locked`` lines inside ``[tool.basedpyright]`` lock a rule."""
+    pyproject = tmp_path / "pyproject.toml"
+    _ = pyproject.write_text(
+        "[tool.other]\n"
+        'reportOutside = "error"  # Locked\n'
+        "\n[tool.basedpyright]\n"
+        'reportRedeclaration = "error"  # Locked\n'
+        'reportAny = "none"\n'
+        "\n[[tool.basedpyright.executionEnvironments]]\n"
+        'reportAfter = "error"  # Locked\n',
+    )
+
+    assert cts.locked_rules(pyproject) == {"reportRedeclaration"}
+    assert {"reportUnusedVariable", "reportUnnecessaryTypeIgnoreComment"} <= cts.LOCKED_RULES
+
+
 def test_the_tracked_tree_has_no_locked_suppression() -> None:
     """Every git-tracked ``.py`` file passes, as the CI lint step requires."""
     assert cts.main([]) == 0

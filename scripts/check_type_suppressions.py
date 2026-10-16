@@ -4,9 +4,9 @@ basedpyright can only be told whether ``# pyright: ignore[...]`` comments are re
 all; it has no per-rule switch, and a file-level ``# pyright:`` comment can lower any
 rule for a whole file. This gate closes both:
 
-1. a ``# pyright: ignore[...]`` naming a rule in ``LOCKED_RULES``. Each locked rule
-   is on and has no suppression in the tree, so its diagnostics are fixed at the
-   root, never silenced. A rule leaves the set only by a deliberate edit here;
+1. a ``# pyright: ignore[...]`` naming a rule ``pyproject.toml`` marks ``# Locked``
+   in ``[tool.basedpyright]``. Each locked rule is on and has no suppression in the
+   tree, so its diagnostics are fixed at the root, never silenced;
 2. any file-level ``# pyright:`` directive (``# pyright: basic``,
    ``# pyright: reportFoo=false``, ...). ``[tool.basedpyright]`` in
    ``pyproject.toml`` owns every rule's level, file by file through its execution
@@ -20,7 +20,8 @@ Usage::
     uv run python scripts/check_type_suppressions.py [paths ...]
 
 With no paths it checks every git-tracked ``.py`` file. Exit code ``1`` (each
-violation listed) on any violation, ``2`` when a file cannot be read or tokenized.
+violation listed) on any violation, ``2`` when a file cannot be read or tokenized or
+``pyproject.toml`` locks no rule.
 """
 
 from __future__ import annotations
@@ -39,66 +40,21 @@ if TYPE_CHECKING:
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+#: ``report<Rule> = "<level>"  # Locked`` in ``[tool.basedpyright]``.
+_LOCKED_LINE = re.compile(r'^(report\w+)\s*=\s*"\w+"\s*#\s*Locked\b', re.MULTILINE)
+
+
+def locked_rules(pyproject: Path) -> frozenset[str]:
+    """Return the rules ``pyproject``'s ``[tool.basedpyright]`` table marks ``# Locked``."""
+    text = pyproject.read_text(encoding="utf-8")
+    start = text.index("\n[tool.basedpyright]\n")
+    end = text.find("\n[", start + 1)
+    return frozenset(_LOCKED_LINE.findall(text[start : end if end != -1 else None]))
+
+
 #: Rules no ``# pyright: ignore[...]`` may name: switched on in every execution
 #: environment and fixed at the root everywhere they fire.
-LOCKED_RULES = frozenset(
-    {
-        "reportAbstractUsage",
-        "reportAssertAlwaysTrue",
-        "reportAssertTypeFailure",
-        "reportCallInDefaultInitializer",
-        "reportConstantRedefinition",
-        "reportDuplicateImport",
-        "reportEmptyAbstractUsage",
-        "reportIgnoreCommentWithoutRule",
-        "reportImplicitAbstractClass",
-        "reportImplicitRelativeImport",
-        "reportIncompleteStub",
-        "reportInconsistentConstructor",
-        "reportInconsistentOverload",
-        "reportInvalidAbstractMethod",
-        "reportInvalidStringEscapeSequence",
-        "reportInvalidStubStatement",
-        "reportInvalidTypeVarUse",
-        "reportMatchNotExhaustive",
-        "reportMissingImports",
-        "reportMissingModuleSource",
-        "reportMissingParameterType",
-        "reportMissingTypeStubs",
-        "reportNoOverloadImplementation",
-        "reportOperatorIssue",
-        "reportOptionalCall",
-        "reportOptionalContextManager",
-        "reportOptionalIterable",
-        "reportOptionalOperand",
-        "reportOptionalSubscript",
-        "reportOverlappingOverload",
-        "reportPossiblyUnboundVariable",
-        "reportPrivateImportUsage",
-        "reportPrivateLocalImportUsage",
-        "reportRedeclaration",
-        "reportSelfClsDefault",
-        "reportSelfClsParameterName",
-        "reportTypeCommentUsage",
-        "reportTypedDictNotRequiredAccess",
-        "reportUnboundVariable",
-        "reportUnhashable",
-        "reportUnknownLambdaType",
-        "reportUnnecessaryCast",
-        "reportUnnecessaryContains",
-        "reportUnnecessaryTypeIgnoreComment",
-        "reportUnsupportedDunderAll",
-        "reportUntypedClassDecorator",
-        "reportUntypedNamedTuple",
-        "reportUnusedClass",
-        "reportUnusedCoroutine",
-        "reportUnusedExcept",
-        "reportUnusedExpression",
-        "reportUnusedParameter",
-        "reportUnusedVariable",
-        "reportWildcardImportFromLibrary",
-    },
-)
+LOCKED_RULES = locked_rules(REPO_ROOT / "pyproject.toml")
 
 # basedpyright reads a ``pyright:`` comment at the start of a comment or after a
 # further ``#`` inside one (a ruff suppression, then ``# pyright: ignore[...]``).
@@ -168,6 +124,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         paths = [path for path in arguments.paths if path.endswith(".py")]
     else:
         paths = tracked_python_files()
+    if not LOCKED_RULES:
+        print("pyproject.toml marks no basedpyright rule `# Locked`", file=sys.stderr)
+        return 2
     violations: list[Violation] = []
     for path in paths:
         try:

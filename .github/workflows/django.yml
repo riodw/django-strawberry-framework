@@ -57,7 +57,7 @@ jobs:
         # moot at 3.10, and that pass already gates it.
         run: uv run basedpyright -p pyrightconfig.floor.json
       - name: Locked type suppressions
-        # No `# pyright: ignore[...]` may name a rule in the script's LOCKED_RULES, and no
+        # No `# pyright: ignore[...]` may name a rule pyproject.toml marks `# Locked`, and no
         # file-level `# pyright:` directive may lower a rule (pyproject.toml owns rule levels).
         run: uv run python scripts/check_type_suppressions.py
       - name: Public API type completeness (basedpyright --verifytypes)

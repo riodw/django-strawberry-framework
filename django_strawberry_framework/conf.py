@@ -104,12 +104,27 @@ SINGLE_PARENT_FAST_PATH_KEY = "SINGLE_PARENT_FAST_PATH"
 TESTING_ENDPOINT_KEY = "TESTING_ENDPOINT"
 
 # Whether generated filter inputs hide the flat relational traversal fields
-# (``categoryName``, deep ``entriesPropertyCategoryName``, ...) in favor of
-# the nested ``RelatedFilter`` branches alone (see
-# ``filters/inputs.py::_build_input_fields``). Defaults to ``False`` - both
-# shapes emitted (graphene-django parity; matches
-# ``django-graphene-filters``'s default).
+# (``categoryName``, deep ``entriesPropertyCategoryName``, ...: the
+# ``RelatedFilter``-expanded copies) in favor of the nested ``RelatedFilter``
+# branches alone (see ``filters/inputs.py::_build_input_fields``). Defaults to
+# ``False`` - both shapes emitted. The name and default match
+# ``django-graphene-filters``'s key, which hides that package's flat connection
+# arguments; neither those arguments nor its ``filter`` input ever carry the
+# expanded copies, so publishing them is this package's own surface. Hiding them
+# changes only the schema: the expansion (and ``MAX_FLAT_FILTERS``) still runs,
+# since a form-data client can still send a flat key.
 HIDE_FLAT_FILTERS_KEY = "HIDE_FLAT_FILTERS"
+
+# The most flat filters one ``FilterSet``'s ``RelatedFilter`` expansion may
+# publish (``filters/sets.py::FilterSet._expand_along``); a set past it fails
+# its build with a ``ConfigurationError`` naming the set, the declaration and
+# the path that crossed it, and the walk stops there. The expansion follows
+# every path of ``RelatedFilter`` declarations until it returns to a set already
+# on it, so a dense graph of mutually related sets grows factorially in its
+# size. A non-negative ``int`` (validated by
+# ``filters/sets.py::_flat_filter_limit``); there is no spelling that disables
+# it. Defaults to ``10_000``.
+MAX_FLAT_FILTERS_KEY = "MAX_FLAT_FILTERS"
 
 # Schema-wide default GlobalID type-name-slot strategy for Relay-Node-shaped
 # types without a per-type ``Meta.globalid_strategy`` (spec-031 Decision 5;
@@ -561,6 +576,18 @@ def hide_flat_filters_setting() -> object:
     paths remain reachable through their nested ``RelatedFilter`` branch).
     """
     return getattr(settings, HIDE_FLAT_FILTERS_KEY, False)
+
+
+def max_flat_filters_setting() -> object:
+    """Return the most flat filters one filter set's ``RelatedFilter`` expansion may publish.
+
+    Reads ``DJANGO_STRAWBERRY_FRAMEWORK["MAX_FLAT_FILTERS"]``, defaulting to
+    ``10_000`` when the key (or the whole settings dict) is absent. Read once
+    per expansion build by ``filters/sets.py::_flat_filter_limit``, which also
+    validates it - ``conf.py`` stays a thin reader that does not validate domain
+    values.
+    """
+    return getattr(settings, MAX_FLAT_FILTERS_KEY, 10_000)
 
 
 def relay_globalid_strategy_setting() -> object:

@@ -30,7 +30,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Literal, NamedTuple, NoReturn, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Literal, NamedTuple, NoReturn, TypeAlias, TypeVar, cast
 from unittest import mock
 
 import django_filters
@@ -46,6 +46,7 @@ from apps.products import services
 from apps.products.models import Category, Item
 from apps.scalars import models as scalar_models
 from asgiref.sync import sync_to_async
+from django import forms
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldError
@@ -56,7 +57,10 @@ from django.db.models import Lookup, Q, QuerySet
 from django.db.models.fields.related import ManyToManyRel, ManyToOneRel, OneToOneRel
 from django.forms import ModelChoiceField, ModelMultipleChoiceField
 from django.http import HttpRequest, QueryDict
+from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from django_filters import (
+    AllValuesFilter,
     BaseInFilter,
     BaseRangeFilter,
     BooleanFilter,
@@ -1057,6 +1061,1097 @@ def test_a_related_filter_target_off_the_path_contributes_its_own_get_filters() 
         "shelves__code",
         "shelves__extra",
     }
+
+
+# ---------------------------------------------------------------------------
+# MAX_FLAT_FILTERS: the flat-filter limit on one set's expansion
+# ---------------------------------------------------------------------------
+
+
+def _flat_limit_message(
+    root: type[FilterSet],
+    crossing: str,
+    trail: str,
+    limit: int,
+) -> str:
+    """The ``ConfigurationError`` a set's expansion raises past ``MAX_FLAT_FILTERS``."""
+    return (
+        f"FilterSet {root.__qualname__}: its RelatedFilter expansion publishes more than "
+        f"{limit} flat filters, crossed expanding {crossing} along {trail}. Raise "
+        "DJANGO_STRAWBERRY_FRAMEWORK['MAX_FLAT_FILTERS'], or declare fewer RelatedFilter "
+        "edges in the cycle."
+    )
+
+
+@pytest.mark.parametrize("hide_flat_filters", [False, True])
+@pytest.mark.parametrize(
+    ("limit", "crossing"),
+    [
+        (8, None),
+        (7, ("branch", "desks", ("branch",))),
+        (5, ("desk", "shelf", ("branch", "desk"))),
+    ],
+    ids=["at-the-limit", "one-past-at-the-root", "past-on-an-inner-path"],
+)
+def test_a_set_whose_expansion_passes_max_flat_filters_fails_its_build(
+    limit: int,
+    crossing: tuple[str, str, tuple[str, ...]] | None,
+    hide_flat_filters: bool,  # noqa: FBT001
+) -> None:
+    """A set publishes up to ``MAX_FLAT_FILTERS`` flat filters; one more fails its build.
+
+    Every ring set publishes eight flat filters. Past the limit, the walk stops at
+    the first path whose flat filters pass it: a path's filters are copied onto
+    every set before it, so an inner path past the limit names the root, the
+    declaration being expanded and the path. ``HIDE_FLAT_FILTERS`` hides the flat
+    fields from the schema only, so the limit holds under it too.
+    """
+    ring = _desk_ring()
+    with override_settings(
+        DJANGO_STRAWBERRY_FRAMEWORK={
+            "MAX_FLAT_FILTERS": limit,
+            "HIDE_FLAT_FILTERS": hide_flat_filters,
+        },
+    ):
+        if crossing is None:
+            surfaces = {name: set(fs.get_filters()) for name, fs in ring.items()}
+            assert surfaces == _DESK_RING_FILTERS
+            return
+        owner, declaration, path = crossing
+        with pytest.raises(ConfigurationError) as excinfo:
+            ring["branch"].get_filters()
+
+    assert str(excinfo.value) == _flat_limit_message(
+        ring["branch"],
+        f"{ring[owner].__qualname__}.{declaration}",
+        " -> ".join(ring[name].__qualname__ for name in path),
+        limit,
+    )
+    # A failed build publishes nothing; the set builds once the limit admits it.
+    assert ring["branch"].__dict__.get("_expanded_filters") is None
+    assert set(ring["branch"].get_filters()) == _DESK_RING_FILTERS["branch"]
+
+
+def test_max_flat_filters_zero_admits_a_set_that_publishes_no_flat_filter() -> None:
+    """``MAX_FLAT_FILTERS = 0`` refuses any flat copy and admits a set with none."""
+
+    class LoneShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    with override_settings(DJANGO_STRAWBERRY_FRAMEWORK={"MAX_FLAT_FILTERS": 0}):
+        assert list(LoneShelfFilter.get_filters()) == ["code"]
+
+
+@pytest.mark.parametrize(
+    ("value", "rendered"),
+    [
+        (True, "bool True"),
+        (False, "bool False"),
+        (-1, "int -1"),
+        (-10_000, "int -10000"),
+        (1.5, "float 1.5"),
+        ("10", "str '10'"),
+        (None, "NoneType None"),
+    ],
+    ids=[
+        "true",
+        "false",
+        "negative",
+        "large-negative",
+        "float",
+        "str",
+        "none",
+    ],
+)
+def test_max_flat_filters_must_be_a_non_negative_int(value: object, rendered: str) -> None:
+    """A ``bool``, a negative or a non-``int`` ``MAX_FLAT_FILTERS`` fails the build, naming the key.
+
+    There is no spelling that disables the limit: ``None`` is refused like any
+    other non-``int``.
+    """
+    ring = _desk_ring()
+    with (
+        override_settings(DJANGO_STRAWBERRY_FRAMEWORK={"MAX_FLAT_FILTERS": value}),
+        pytest.raises(ConfigurationError) as excinfo,
+    ):
+        ring["branch"].get_filters()
+
+    assert str(excinfo.value) == (
+        f"DJANGO_STRAWBERRY_FRAMEWORK['MAX_FLAT_FILTERS'] must be a non-negative int; "
+        f"got {rendered}."
+    )
+
+
+def _dense_library_filtersets() -> dict[str, type[FilterSet]]:
+    """Six library filter sets, each declaring a ``RelatedFilter`` over every relation between them.
+
+    Several cycles share sets (``shelf`` <-> ``desk``, ``branch`` -> ``shelf`` and
+    ``branch`` -> ``desk``), so one set is reached along many paths through the same
+    sets in different orders.
+    """
+
+    class DenseBranchFilter(FilterSet):
+        shelves = RelatedFilter(lambda: DenseShelfFilter, field_name="shelves")
+        desks = RelatedFilter(lambda: DenseDeskFilter, field_name="circulation_desks")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    class DenseShelfFilter(FilterSet):
+        branch = RelatedFilter(lambda: DenseBranchFilter, field_name="branch")
+        books = RelatedFilter(lambda: DenseBookFilter, field_name="books")
+        desk = RelatedFilter(lambda: DenseDeskFilter, field_name="circulation_desk")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class DenseDeskFilter(FilterSet):
+        branch = RelatedFilter(lambda: DenseBranchFilter, field_name="branch")
+        shelf = RelatedFilter(lambda: DenseShelfFilter, field_name="shelf")
+
+        class Meta:
+            model = library_models.CirculationDesk
+            fields = {"name": ["exact"]}
+
+    class DenseBookFilter(FilterSet):
+        shelf = RelatedFilter(lambda: DenseShelfFilter, field_name="shelf")
+        loans = RelatedFilter(lambda: DenseLoanFilter, field_name="loans")
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    class DenseLoanFilter(FilterSet):
+        book = RelatedFilter(lambda: DenseBookFilter, field_name="book")
+        patron = RelatedFilter(lambda: DensePatronFilter, field_name="patron")
+
+        class Meta:
+            model = library_models.Loan
+            fields = {"note": ["exact"]}
+
+    class DensePatronFilter(FilterSet):
+        loans = RelatedFilter(lambda: DenseLoanFilter, field_name="loans")
+
+        class Meta:
+            model = library_models.Patron
+            fields = {"email": ["exact"]}
+
+    return {
+        "branch": DenseBranchFilter,
+        "shelf": DenseShelfFilter,
+        "desk": DenseDeskFilter,
+        "book": DenseBookFilter,
+        "loan": DenseLoanFilter,
+        "patron": DensePatronFilter,
+    }
+
+
+def _path_walk(filterset: type[FilterSet], path: tuple[type[FilterSet], ...] = ()) -> list[str]:
+    """The flat surface by the cycle rule alone, walking every path afresh.
+
+    Each declaration copies its target's names along the path; a target already on
+    the path contributes its own names unexpanded. A name copied twice keeps its
+    first position, as ``dict.update`` does.
+    """
+    path = (*path, filterset)
+    names = dict.fromkeys(filterset._unexpanded_filters())
+    declarations: Mapping[str, RelatedFilter] = filterset.__dict__["related_filters"]
+    for declaration_name, declaration in declarations.items():
+        target = declaration.filterset
+        assert target is not None
+        child = (
+            list(target._unexpanded_filters())
+            if any(visited is target for visited in path)
+            else _path_walk(target, path)
+        )
+        names.update(dict.fromkeys(f"{declaration_name}__{name}" for name in child))
+    return list(names)
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        "branch",
+        "shelf",
+        "desk",
+        "book",
+        "loan",
+        "patron",
+    ],
+)
+def test_a_dense_related_filter_graph_publishes_the_fresh_path_walk_whichever_set_builds_first(
+    first: str,
+) -> None:
+    """Every set's surface, in order, is the walk that expands every path afresh.
+
+    One build keeps each inner path's expansion by the set and the sets on its
+    path and serves it to every other path through the same sets; the published
+    surface is the one a walk recomputing every path yields, whichever set builds
+    first.
+    """
+    dense = _dense_library_filtersets()
+    _ = dense[first].get_filters()
+
+    surfaces = {name: list(fs.get_filters()) for name, fs in dense.items()}
+    expected = {name: _path_walk(fs) for name, fs in dense.items()}
+    assert surfaces == expected
+    assert {name: len(names) for name, names in surfaces.items()} == {
+        "branch": 72,
+        "shelf": 56,
+        "desk": 72,
+        "book": 55,
+        "loan": 55,
+        "patron": 54,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Per-request copies: the flat copies a request names, the rest when read
+# ---------------------------------------------------------------------------
+
+
+_FS = TypeVar("_FS", bound=FilterSet)
+
+
+def _pipeline_instance(
+    filterset_class: type[_FS],
+    *,
+    data: Mapping[str, object] | None = None,
+    queryset: QuerySet[django_models.Model] | None = None,
+    request: HttpRequest | None = None,
+    prefix: str | None = None,
+) -> _FS:
+    """Construct ``filterset_class`` as the package's request pipeline does, deferring flat copies."""
+    with sets_module._pipeline_built():
+        return filterset_class(data=data, queryset=queryset, request=request, prefix=prefix)
+
+
+def _seed_desk_ring_rows() -> dict[str, int]:
+    """Three branches, each with one shelf and one desk on it; returns the branch pks by name."""
+    north = library_models.Branch.objects.create(name="North", city="Oslo")
+    south = library_models.Branch.objects.create(name="South", city="Rome")
+    east = library_models.Branch.objects.create(name="East", city="Kyiv")
+    north_shelf = library_models.Shelf.objects.create(branch=north, code="N-1", topic="maps")
+    south_shelf = library_models.Shelf.objects.create(branch=south, code="S-1", topic="law")
+    east_shelf = library_models.Shelf.objects.create(branch=east, code="E-1", topic="art")
+    library_models.CirculationDesk.objects.create(branch=north, shelf=north_shelf, name="Front")
+    library_models.CirculationDesk.objects.create(branch=south, shelf=south_shelf, name="Back")
+    library_models.CirculationDesk.objects.create(branch=east, shelf=east_shelf, name="Side")
+    # Each hop's target needs a registered type; ``fields`` keeps the desk's
+    # generic foreign key, which maps to no single GraphQL type, off it.
+    for model in (library_models.Branch, library_models.CirculationDesk, library_models.Shelf):
+        meta = {"model": model, "fields": ("id",)}
+        type(f"Ring{model.__name__}Type", (DjangoType,), {"Meta": type("Meta", (), meta)})
+    return {"North": north.pk, "South": south.pk, "East": east.pk}
+
+
+def test_a_request_copies_the_sets_own_filters_and_the_flat_copies_its_data_names() -> None:
+    """An instance copies its own filters and the named flat copies; reading ``filters`` copies all.
+
+    The named copy is bound like every copy django-filter makes, and the copies
+    already made are the ones ``filters`` returns, in the class's order.
+    """
+    branch = _desk_ring()["branch"]
+    flat = sorted(set(branch.get_filters()) - {"name", "city", "desks"})
+    assert _snapshot(branch).deferred_copies == frozenset(flat)
+
+    instance = _pipeline_instance(
+        branch,
+        data={"desks__shelf__code": "N-1"},
+        queryset=library_models.Branch.objects.all(),
+    )
+    copied = dict(instance._copied_filters)
+    assert list(copied) == [
+        "name",
+        "city",
+        "desks",
+        "desks__shelf__code",
+    ]
+    named = copied["desks__shelf__code"]
+    assert named is not branch.base_filters["desks__shelf__code"]
+    assert vars(named)["parent"] is instance
+    assert vars(named)["model"] is library_models.Branch
+
+    filters = instance.filters
+    assert list(filters) == list(branch.base_filters)
+    assert filters["desks__shelf__code"] is named
+    assert all(filters[name] is copied[name] for name in copied)
+    for name, original in branch.base_filters.items():
+        assert filters[name] is not original
+        assert vars(filters[name])["parent"] is instance
+    assert instance.filters is filters
+
+
+def test_a_flat_copy_read_by_name_is_copied_alone_and_kept() -> None:
+    """A package read by name copies that one deferred filter; reading ``filters`` keeps it."""
+    branch = _desk_ring()["branch"]
+    branch.get_filters()
+    instance = _pipeline_instance(
+        branch,
+        data={"name": "North"},
+        queryset=library_models.Branch.objects.all(),
+    )
+
+    read = instance._filter_named("desks__shelf__branch__city")
+
+    assert list(instance._copied_filters) == [
+        "name",
+        "city",
+        "desks",
+        "desks__shelf__branch__city",
+    ]
+    assert vars(read)["parent"] is instance
+    assert instance.filters["desks__shelf__branch__city"] is read
+    assert list(instance.filters) == list(branch.base_filters)
+
+
+@pytest.mark.parametrize(
+    ("member", "data", "copied"),
+    [
+        (
+            "branch",
+            {"desks__shelf__code": "N-1", "name": "North"},
+            [
+                "name",
+                "city",
+                "desks",
+                "desks__shelf__code",
+            ],
+        ),
+        (
+            "shelf",
+            {"branch__desks__name": "Front"},
+            [
+                "code",
+                "topic",
+                "branch",
+                "branch__desks__name",
+            ],
+        ),
+    ],
+)
+def test_a_bound_form_holds_the_copied_filters_and_an_unbound_one_every_filter(
+    member: str,
+    data: dict[str, object],
+    copied: list[str],
+) -> None:
+    """A bound request's form holds what it copied, in the class's order; an unbound form all."""
+    filterset = _desk_ring()[member]
+    filterset.get_filters()
+    model = filterset._meta.model
+    assert model is not None
+
+    bound = _pipeline_instance(filterset, data=data, queryset=model._default_manager.all())
+    unbound = _pipeline_instance(filterset, queryset=model._default_manager.all())
+
+    assert list(bound.form.fields) == copied
+    assert list(unbound.form.fields) == list(filterset.base_filters)
+
+
+@pytest.mark.parametrize(
+    ("data", "prefix", "expected"),
+    [
+        ({"p-desks__shelf__code": "N-1"}, "p", ["desks__shelf__code"]),
+        ({"desks__shelf__code": "N-1"}, "p", []),
+        ({"desks__name_min": "A", "desks__name": "B"}, None, ["desks__name"]),
+        ({"other": "x", "desks__shelf__code_0": "N"}, None, ["desks__shelf__code"]),
+        ({"desks__shelf__code": "N-1"}, None, ["desks__shelf__code"]),
+    ],
+    ids=[
+        "prefixed",
+        "unprefixed-under-a-prefix",
+        "widget-suffix",
+        "multi-value-suffix",
+        "relation-path",
+    ],
+)
+def test_the_flat_copies_a_request_names_are_read_off_its_form_keys(
+    data: dict[str, object],
+    prefix: str | None,
+    expected: list[str],
+) -> None:
+    """A form key names a flat copy by the copy's name after the form prefix, or by a suffixed name.
+
+    A multi-value widget reads ``<name><suffix>``, the suffix opening on one
+    underscore, so the part of a key before one names a copy too; the relation
+    heads a ``__`` path passes through are not named.
+    """
+    deferred = frozenset(
+        {
+            "desks",
+            "desks__name",
+            "desks__shelf",
+            "desks__shelf__code",
+        },
+    )
+    assert sorted(set(sets_module._named_flat_copies(data, deferred, prefix))) == expected
+
+
+@pytest.mark.django_db
+def test_a_prefixed_request_filters_on_the_flat_copy_its_prefixed_key_names() -> None:
+    """A prefixed form reads ``<prefix>-<name>``; the named flat copy is copied and filters."""
+    pks = _seed_desk_ring_rows()
+    branch = _desk_ring()["branch"]
+    branch.get_filters()
+
+    instance = _pipeline_instance(
+        branch,
+        data={"p-desks__shelf__code": "S-1"},
+        queryset=library_models.Branch.objects.order_by("pk"),
+        prefix="p",
+    )
+
+    assert list(instance.qs.values_list("pk", flat=True)) == [pks["South"]]
+    assert "desks__shelf__code" in instance._copied_filters
+
+
+_DEFERRED_EQUIVALENCE_INPUTS: dict[str, tuple[dict[str, object], list[str], int]] = {
+    "own-leaf": ({"name": {"exact": "North"}}, ["North"], 1),
+    "flat": ({"desks__shelf__code": {"exact": "S-1"}}, ["South"], 1),
+    "deep-flat": ({"desks__shelf__branch__city": {"exact": "Oslo"}}, ["North"], 1),
+    "nested": ({"desks": {"shelf": {"code": {"exact": "N-1"}}}}, ["North"], 1),
+    "or-of-flat": (
+        {
+            "or_": [
+                {"desks__name": {"exact": "Back"}},
+                {"desks__shelf__topic": {"exact": "maps"}},
+            ],
+        },
+        ["North", "South"],
+        1,
+    ),
+}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("case", sorted(_DEFERRED_EQUIVALENCE_INPUTS))
+def test_a_request_deferring_flat_copies_filters_as_one_copying_every_filter(
+    case: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The deferred copies change no result and no query: a set deferring none answers the same.
+
+    The comparison set's snapshot defers nothing, so its instances copy every
+    filter up front, as django-filter's own constructor does.
+    """
+    filter_input, expected_names, expected_queries = _DEFERRED_EQUIVALENCE_INPUTS[case]
+    pks = _seed_desk_ring_rows()
+    branch = _desk_ring()["branch"]
+    branch.get_filters()
+
+    def run() -> tuple[list[int], int]:
+        with CaptureQueriesContext(connection) as ctx:
+            rows = list(
+                branch.apply_sync(
+                    filter_input,
+                    library_models.Branch.objects.order_by("pk"),
+                    _make_info(),
+                ).values_list("pk", flat=True),
+            )
+        return rows, len(ctx.captured_queries)
+
+    deferring = run()
+    monkeypatch.setattr(
+        branch,
+        "_expanded_snapshot",
+        dataclasses.replace(_snapshot(branch), deferred_copies=frozenset()),
+    )
+    copying_all = run()
+
+    assert deferring == copying_all == ([pks[name] for name in expected_names], expected_queries)
+
+
+@pytest.mark.django_db
+def test_a_subclass_init_editing_a_deferred_flat_copy_edits_the_copy_the_request_runs() -> None:
+    """A consumer ``__init__`` reading ``self.filters`` edits the copy the request filters with.
+
+    Reading ``filters`` copies every deferred filter, so the edit lands on the
+    instance's copy, not on a class-level filter or a throwaway one.
+    """
+    pks = _seed_desk_ring_rows()
+    base_branch = _desk_ring()["branch"]
+
+    class CaseFoldingBranchFilter(base_branch):
+        def __init__(
+            self,
+            data: Mapping[str, object] | None = None,
+            queryset: QuerySet[django_models.Model] | None = None,
+            *,
+            request: HttpRequest | None = None,
+            prefix: str | None = None,
+        ) -> None:
+            super().__init__(data, queryset, request=request, prefix=prefix)
+            self.filters["desks__shelf__code"].lookup_expr = "iexact"
+
+    CaseFoldingBranchFilter.get_filters()
+    instance = _pipeline_instance(
+        CaseFoldingBranchFilter,
+        data={"desks__shelf__code": "s-1"},
+        queryset=library_models.Branch.objects.order_by("pk"),
+    )
+
+    assert list(instance.qs.values_list("pk", flat=True)) == [pks["South"]]
+    assert CaseFoldingBranchFilter.base_filters["desks__shelf__code"].lookup_expr == "exact"
+
+
+@pytest.mark.parametrize("method", [None, "filter_code"], ids=["rebound", "projected"])
+def test_a_required_flat_copy_is_copied_by_every_request_and_fails_the_form_when_absent(
+    method: str | None,
+) -> None:
+    """A child's ``required`` filter copied flat stays required on the parent's form.
+
+    A required copy is never deferred, rebound or projected (a ``method=`` filter
+    runs inside the child), so a request that does not name it fails the parent's
+    form on it, as a copy of every filter would.
+    """
+
+    class RequiredCodeShelfFilter(FilterSet):
+        code_required = CharFilter(field_name="code", required=True, method=method)
+
+        def filter_code(
+            self,
+            queryset: QuerySet[library_models.Shelf],
+            name: str,
+            value: str,
+        ) -> QuerySet[library_models.Shelf]:
+            return queryset.filter(**{name: value})
+
+        class Meta:
+            model = library_models.Shelf
+            fields = {"topic": ["exact"]}
+
+    class RequiredChildBranchFilter(FilterSet):
+        shelves = RelatedFilter(RequiredCodeShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    RequiredChildBranchFilter.get_filters()
+    assert _snapshot(RequiredChildBranchFilter).deferred_copies == frozenset({"shelves__topic"})
+
+    instance = _pipeline_instance(
+        RequiredChildBranchFilter,
+        data={"name": "North"},
+        queryset=library_models.Branch.objects.all(),
+    )
+
+    assert "shelves__code_required" in instance._copied_filters
+    assert instance.form.errors.get_json_data() == {
+        "shelves__code_required": [{"message": "This field is required.", "code": "required"}],
+    }
+
+
+class _OpenIssuesOnlyFilter(CharFilter):
+    """A consumer filter that constrains the rows even when its value is empty."""
+
+    @override
+    def filter(self, qs: QuerySet[_M], value: object) -> QuerySet[_M]:
+        return qs.filter(embargoed=False)
+
+
+class _UnembargoedOnlyFilter(BooleanFilter):
+    """A consumer boolean filter that keeps only unembargoed rows whatever its value."""
+
+    @override
+    def filter(self, qs: QuerySet[_M], value: object) -> QuerySet[_M]:
+        return qs.filter(embargoed=False)
+
+
+class _AlwaysUnembargoedWidget(forms.NullBooleanSelect):
+    """A consumer widget that reads every request as ``embargoed: false``, named or not."""
+
+    @override
+    def value_from_datadict(
+        self,
+        data: Mapping[str, object],
+        files: object,
+        name: str,
+    ) -> bool | None:
+        return False
+
+
+def _issue_filter_whose_absence_filters(shape: str) -> type[FilterSet]:
+    """An ``Issue`` filter set with one filter that constrains the rows when its key is absent."""
+    absent_constrains: dict[str, Filter] = {
+        # An absent checkbox key reads as ``False``, which is no empty value.
+        "checkbox": BooleanFilter(field_name="embargoed", widget=forms.CheckboxInput),
+        # A disabled field cleans to its ``initial`` whatever the data says.
+        "disabled": BooleanFilter(field_name="embargoed", disabled=True, initial=False),
+        "disabled-text": CharFilter(field_name="title", disabled=True, initial="B"),
+        # Its ``filter`` is consumer code, which may act on an empty value.
+        "consumer-filter": _OpenIssuesOnlyFilter(field_name="title"),
+        "consumer-boolean-filter": _UnembargoedOnlyFilter(field_name="embargoed"),
+        # A ``null_value`` equal to the absent key's cleaned value runs ``IS NULL``.
+        "null-choice": ChoiceFilter(field_name="title", choices=[("B", "B")], null_value=""),
+        "null-model-choice": ModelChoiceFilter(
+            field_name="periodical",
+            queryset=library_models.Periodical.objects.all(),
+            null_value=None,
+        ),
+        # A consumer widget reads the data its own way.
+        "consumer-widget": BooleanFilter(
+            field_name="embargoed",
+            widget=_AlwaysUnembargoedWidget,
+        ),
+    }
+    return type(
+        "AbsenceIssueFilter",
+        (FilterSet,),
+        {
+            "open_only": absent_constrains[shape],
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": library_models.Issue, "fields": {"title": ["exact"]}},
+            ),
+        },
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("shape", "expected"),
+    [
+        ("checkbox", ["Open Review"]),
+        ("disabled", ["Open Review"]),
+        ("disabled-text", ["Open Review"]),
+        ("consumer-filter", ["Open Review"]),
+        ("consumer-boolean-filter", ["Open Review"]),
+        ("null-choice", []),
+        ("null-model-choice", []),
+        ("consumer-widget", ["Open Review"]),
+    ],
+)
+def test_a_flat_copy_whose_absence_constrains_is_copied_by_every_request(
+    shape: str,
+    expected: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A flat copy that filters even when the request does not name it is never deferred.
+
+    Such a copy constrained every request when django-filter copied every filter,
+    so a pipeline-built request still copies it and the parent answers as one
+    copying every filter does.
+    """
+    issue_filter = _issue_filter_whose_absence_filters(shape)
+    periodical_filter = type(
+        "AbsencePeriodicalFilter",
+        (FilterSet,),
+        {
+            "issues": RelatedFilter(issue_filter, field_name="issues"),
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": library_models.Periodical, "fields": {"name": ["exact"]}},
+            ),
+        },
+    )
+    closed = library_models.Periodical.objects.create(name="Closed Review")
+    library_models.Issue.objects.create(periodical=closed, number=1, title="A", embargoed=True)
+    open_ = library_models.Periodical.objects.create(name="Open Review")
+    library_models.Issue.objects.create(periodical=open_, number=1, title="B", embargoed=False)
+    _register_plain_types(library_models.Issue)
+    periodical_filter.get_filters()
+    snapshot = _snapshot(periodical_filter)
+    assert "issues__open_only" not in snapshot.deferred_copies
+    assert "issues__title" in snapshot.deferred_copies
+
+    def names() -> list[str]:
+        instance = _pipeline_instance(
+            periodical_filter,
+            data={"unrelated": "x"},
+            queryset=library_models.Periodical.objects.order_by("pk"),
+            request=HttpRequest(),
+        )
+        return list(instance.qs.values_list("name", flat=True))
+
+    deferring = names()
+    monkeypatch.setattr(
+        periodical_filter,
+        "_expanded_snapshot",
+        dataclasses.replace(snapshot, deferred_copies=frozenset()),
+    )
+    assert deferring == names() == expected
+
+
+@pytest.mark.parametrize("member", ["branch", "shelf"])
+def test_a_set_with_its_own_form_class_defers_no_flat_copy(member: str) -> None:
+    """A consumer ``Meta.form`` may read any cleaned key, so its set copies every filter up front."""
+
+    class ReadingForm(forms.Form):
+        pass
+
+    ring_member = _desk_ring()[member]
+    ring_member.get_filters()
+    assert _snapshot(ring_member).deferred_copies
+    meta = {
+        "model": ring_member._meta.model,
+        "fields": ring_member._meta.fields,
+        "form": ReadingForm,
+    }
+
+    own_form = type("OwnFormFilter", (ring_member,), {"Meta": type("Meta", (), meta)})
+    own_form.get_filters()
+    assert _snapshot(own_form).deferred_copies == frozenset()
+
+
+class _TypedChoiceFilter(ChoiceFilter):
+    """A ``ChoiceFilter`` whose field is a typed choice field."""
+
+    field_class = forms.TypedChoiceField
+
+
+@pytest.mark.parametrize(
+    ("make", "runs_null_branch"),
+    [
+        (lambda: ChoiceFilter(field_name="title", null_value=""), True),
+        (lambda: ChoiceFilter(field_name="title"), False),
+        (lambda: ChoiceFilter(field_name="title", null_value=None), False),
+        (lambda: ChoiceFilter(field_name="title", null_value=0), True),
+        (lambda: ModelChoiceFilter(field_name="periodical", null_value=None), True),
+        (lambda: ModelChoiceFilter(field_name="periodical", null_value=""), False),
+        (lambda: _TypedChoiceFilter(field_name="number", null_value="", empty_value=""), True),
+        (lambda: _TypedChoiceFilter(field_name="number", null_value="x", empty_value=""), False),
+        (lambda: _TypedChoiceFilter(field_name="number", null_value="", empty_value=0), True),
+    ],
+    ids=[
+        "choice-empty",
+        "choice-default",
+        "choice-none",
+        "choice-int",
+        "model-choice-none",
+        "model-choice-empty",
+        "typed-empty",
+        "typed-other",
+        "typed-int-empty-value",
+    ],
+)
+def test_a_choice_filter_whose_null_value_is_the_absent_value_runs_its_null_branch(
+    make: Callable[[], ChoiceFilter],
+    runs_null_branch: bool,  # noqa: FBT001
+) -> None:
+    """A ``null_value`` equal to what the field cleans an absent key to keeps the copy up front.
+
+    A choice field cleans an absent key to ``""``, a model-choice field to ``None``, a
+    typed one to its ``empty_value``; a value that is neither ``None`` nor a plain
+    ``str`` is never compared and counts as matching.
+    """
+    choice_filter = make()
+    assert sets_module._null_value_is_absent(choice_filter) is runs_null_branch
+
+
+class _NeedsArgumentWidget(forms.TextInput):
+    """A widget class that cannot be built without an argument."""
+
+    def __init__(self, required: str) -> None:
+        super().__init__(attrs={"data-required": required})
+
+
+class _ReadingWidget(forms.TextInput):
+    """A consumer widget that reads the data its own way."""
+
+    @override
+    def value_omitted_from_data(
+        self,
+        data: Mapping[str, object],
+        files: object,
+        name: str,
+    ) -> bool:
+        return name not in data
+
+
+class _DunderSuffixWidget(forms.MultiWidget):
+    """A multi-widget whose second sub-key reads like a relation path."""
+
+    def __init__(self) -> None:
+        super().__init__(widgets={"": forms.TextInput, "__end": forms.TextInput})
+
+    @override
+    def decompress(self, value: object) -> list[object]:
+        return [value, None]
+
+
+@pytest.mark.parametrize(
+    ("widget", "omitted"),
+    [
+        (forms.TextInput, True),
+        (forms.TextInput(), True),
+        (_NeedsArgumentWidget, False),
+        (_ReadingWidget, False),
+        (_ReadingWidget(), False),
+        (_DunderSuffixWidget, False),
+        (_DunderSuffixWidget(), False),
+        (forms.CheckboxInput, False),
+        (forms.SelectMultiple(), False),
+    ],
+    ids=[
+        "django-class",
+        "django-instance",
+        "unbuildable",
+        "consumer-reader-class",
+        "consumer-reader-instance",
+        "dunder-suffix-class",
+        "dunder-suffix-instance",
+        "checkbox",
+        "select-multiple",
+    ],
+)
+def test_a_widget_that_reads_data_its_own_way_keeps_its_copy_up_front(
+    widget: forms.Widget | type[forms.Widget],
+    omitted: bool,  # noqa: FBT001
+) -> None:
+    """Only a widget of Django's, django-filter's or the package's that can be asked defers its copy.
+
+    A widget class that cannot be built, a consumer widget reading the data its own
+    way, and a multi-widget with a ``__`` sub-key suffix (which the named-key scan
+    reads as a relation path) keep their copies up front.
+    """
+    deferred = sets_module._absence_filters_nothing(
+        "issues__title",
+        CharFilter(field_name="title", widget=widget),
+        {},
+    )
+    assert deferred is omitted
+
+
+@pytest.mark.parametrize(
+    "seam",
+    [
+        "filter_queryset",
+        "qs",
+        "form",
+        "get_form_class",
+        "errors",
+        "is_valid",
+        "meta-form",
+    ],
+)
+def test_a_set_reading_its_form_its_own_way_defers_no_flat_copy(seam: str) -> None:
+    """A set that may read a cleaned key it was not sent copies every filter up front.
+
+    An override of a seam that reads ``self.form`` / ``cleaned_data``, or its own
+    ``Meta.form``, may read any flat copy's key, so the set defers none.
+    """
+
+    class ReadingForm(forms.Form):
+        pass
+
+    branch = _desk_ring()["branch"]
+    branch.get_filters()
+    assert _snapshot(branch).deferred_copies
+    meta: dict[str, object] = {"model": library_models.Branch, "fields": branch._meta.fields}
+    namespace: dict[str, object] = {}
+    if seam == "meta-form":
+        meta["form"] = ReadingForm
+    else:
+        namespace[seam] = getattr(FilterSet, seam)
+        if callable(namespace[seam]):
+            original = cast("Callable[..., object]", namespace[seam])
+
+            def overridden(self: FilterSet, *args: object) -> object:
+                return original(self, *args)
+
+            namespace[seam] = overridden
+        else:
+            namespace[seam] = property(cast("property", namespace[seam]).fget)
+    namespace["Meta"] = type("Meta", (), meta)
+
+    reading = type("ReadingBranchFilter", (branch,), namespace)
+    reading.get_filters()
+    assert _snapshot(reading).deferred_copies == frozenset()
+
+
+@pytest.mark.django_db
+def test_a_flat_filter_queryset_reading_an_unsent_cleaned_key_finds_it() -> None:
+    """A consumer ``filter_queryset`` reading a flat key the request did not send gets its value."""
+    _seed_desk_ring_rows()
+    base_branch = _desk_ring()["branch"]
+    seen: list[object] = []
+
+    class ReadingBranchFilter(base_branch):
+        @override
+        def filter_queryset(self, queryset: QuerySet[_M]) -> QuerySet[_M]:
+            seen.append(self.form.cleaned_data["desks__shelf__code"])
+            return super().filter_queryset(queryset)
+
+    ReadingBranchFilter.get_filters()
+    instance = _pipeline_instance(
+        ReadingBranchFilter,
+        data={"name": "North"},
+        queryset=library_models.Branch.objects.order_by("pk"),
+        request=HttpRequest(),
+    )
+
+    assert list(instance.qs.values_list("name", flat=True)) == ["North"]
+    assert seen == [""]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("member", "own", "flat"),
+    [
+        ("branch", ["name", "city", "desks"], "desks__shelf__code"),
+        ("shelf", ["code", "topic", "branch"], "branch__desks__name"),
+    ],
+)
+def test_a_set_built_outside_the_package_pipeline_copies_and_renders_every_filter(
+    member: str,
+    own: list[str],
+    flat: str,
+) -> None:
+    """A direct construction (a django-filter view, DRF's backend) copies every filter.
+
+    Its form, bound or unbound, holds and renders every flat field, as django-filter's
+    own constructor makes it; only an instance the package's request pipeline builds
+    defers.
+    """
+    filterset = _desk_ring()[member]
+    filterset.get_filters()
+    model = filterset._meta.model
+    assert model is not None
+
+    bound = filterset(data=QueryDict(""), queryset=model._default_manager.all())
+    unbound = filterset(queryset=model._default_manager.all())
+    deferring = _pipeline_instance(
+        filterset,
+        data=QueryDict(""),
+        queryset=model._default_manager.all(),
+    )
+
+    assert list(bound.form.fields) == list(filterset.base_filters)
+    assert list(unbound.form.fields) == list(filterset.base_filters)
+    assert f'name="{flat}"' in bound.form.as_p()
+    assert list(deferring.form.fields) == own
+
+
+def _customizing_issue_filter(edit: str) -> type[FilterSet]:
+    """An ``Issue`` filter set whose ``__init__`` edits a filter so its absence constrains."""
+
+    class CustomizingIssueFilter(FilterSet):
+        open_only = BooleanFilter(field_name="embargoed")
+        title_required = CharFilter(field_name="title")
+
+        class Meta:
+            model = library_models.Issue
+            fields = {"title": ["exact"]}
+
+        def __init__(
+            self,
+            data: Mapping[str, object] | None = None,
+            queryset: QuerySet[django_models.Model] | None = None,
+            *,
+            request: HttpRequest | None = None,
+            prefix: str | None = None,
+        ) -> None:
+            super().__init__(data, queryset, request=request, prefix=prefix)
+            if edit == "required":
+                self.filters["title_required"].extra["required"] = True
+            else:
+                self.filters["open_only"].extra["widget"] = forms.CheckboxInput
+
+    return CustomizingIssueFilter
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("edit", ["required", "checkbox"])
+def test_a_projected_copy_of_a_child_that_edits_its_filters_is_copied_by_every_request(
+    edit: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A child set whose ``__init__`` edits a filter keeps its projected copies up front.
+
+    The projected copy's field is the edited child instance's, which may act on an
+    absent key, so a pipeline-built parent answers as one copying every filter.
+    """
+    issue_filter = _customizing_issue_filter(edit)
+
+    class EditedPeriodicalFilter(FilterSet):
+        issues = RelatedFilter(issue_filter, field_name="issues")
+
+        class Meta:
+            model = library_models.Periodical
+            fields = {"name": ["exact"]}
+
+    closed = library_models.Periodical.objects.create(name="Closed Review")
+    library_models.Issue.objects.create(periodical=closed, number=1, title="A", embargoed=True)
+    open_ = library_models.Periodical.objects.create(name="Open Review")
+    library_models.Issue.objects.create(periodical=open_, number=1, title="B", embargoed=False)
+    _register_plain_types(library_models.Issue)
+    EditedPeriodicalFilter.get_filters()
+    snapshot = _snapshot(EditedPeriodicalFilter)
+    edited = "issues__title_required" if edit == "required" else "issues__open_only"
+    assert edited not in snapshot.deferred_copies
+
+    def answer() -> tuple[bool, list[str]]:
+        instance = _pipeline_instance(
+            EditedPeriodicalFilter,
+            data={"unrelated": "x"},
+            queryset=library_models.Periodical.objects.order_by("pk"),
+            request=HttpRequest(),
+        )
+        if not instance.form.is_valid():
+            return False, sorted(instance.form.errors)
+        return True, list(instance.qs.values_list("name", flat=True))
+
+    deferring = answer()
+    monkeypatch.setattr(
+        EditedPeriodicalFilter,
+        "_expanded_snapshot",
+        dataclasses.replace(snapshot, deferred_copies=frozenset()),
+    )
+    expected = (False, [edited]) if edit == "required" else (True, ["Open Review"])
+    assert deferring == answer() == expected
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("read", ["by-name", "settled"])
+def test_a_deferred_copy_copied_later_is_bound_to_the_instance_model(read: str) -> None:
+    """A deferred copy copied on a later read runs over the instance's model, as django-filter binds.
+
+    An ``AllValuesFilter`` builds its choices from its model's rows, so a copy left
+    unbound, or bound to another model, cannot build its field.
+    """
+
+    class TitlesIssueFilter(FilterSet):
+        any_title = AllValuesFilter(field_name="title")
+
+        class Meta:
+            model = library_models.Issue
+            fields = {"number": ["exact"]}
+
+    class TitlesPeriodicalFilter(FilterSet):
+        issues = RelatedFilter(TitlesIssueFilter, field_name="issues")
+
+        class Meta:
+            model = library_models.Periodical
+            fields = {"name": ["exact"]}
+
+    review = library_models.Periodical.objects.create(name="Review")
+    library_models.Issue.objects.create(periodical=review, number=1, title="B", embargoed=False)
+    library_models.Issue.objects.create(periodical=review, number=2, title="A", embargoed=False)
+    TitlesPeriodicalFilter.get_filters()
+    assert "issues__any_title" in _snapshot(TitlesPeriodicalFilter).deferred_copies
+    instance = _pipeline_instance(
+        TitlesPeriodicalFilter,
+        data={"name": "Review"},
+        queryset=library_models.Periodical.objects.all(),
+    )
+
+    copy_ = (
+        instance._filter_named("issues__any_title")
+        if read == "by-name"
+        else instance.filters["issues__any_title"]
+    )
+
+    assert vars(copy_)["model"] is library_models.Periodical
+    field = cast("forms.ChoiceField", copy_.field)
+    choices = cast("Iterable[tuple[str, str]]", field.choices)
+    assert list(choices) == [("", "---------"), ("A", "A"), ("B", "B")]
 
 
 # ---------------------------------------------------------------------------
@@ -5530,7 +6625,7 @@ def test_apply_sync_passes_constrained_queryset_to_filterset_instance() -> None:
 
     def spy_init(
         self: FilterSet,
-        data: QueryDict | dict[str, object] | None = None,
+        data: Mapping[str, object] | None = None,
         queryset: QuerySet[django_models.Model] | None = None,
         *,
         request: HttpRequest | None = None,
@@ -10584,8 +11679,9 @@ def test_in_lookup_inherited_as_a_non_base_in_filter_fails_at_build() -> None:
 
     # basedpyright: ``FilterSet`` narrows ``filter_for_field`` / ``filter_for_lookup`` /
     # ``get_fields`` / ``FILTER_DEFAULTS`` against the stubs, which the plain mixin keeps; the
-    # clash is the shape under test
-    class _ScalarInFilterSet(FilterSet, _ScalarInDefaults):  # pyright: ignore[reportIncompatibleMethodOverride, reportIncompatibleVariableOverride]
+    # clash is the shape under test. The mixin defines no ``__init__``, so ``FilterSet``'s
+    # cooperative one runs ``BaseFilterSet``'s
+    class _ScalarInFilterSet(FilterSet, _ScalarInDefaults):  # pyright: ignore[reportIncompatibleMethodOverride, reportIncompatibleVariableOverride, reportUnsafeMultipleInheritance]
         pass
 
     with pytest.raises(
@@ -11261,6 +12357,51 @@ def test_projected_leaf_reprojects_at_the_next_hop_and_stays_its_own_predicate()
     assert _titles({"loans__patron__email": "p1@x", "loans__note": "beta"}) == ["Two loans"]
     # An empty value is django-filter's skip at every hop: the loan-less book stays.
     assert _titles({"loans__patron__email": ""}) == ["Two loans", "Unloaned"]
+
+
+@pytest.mark.django_db
+def test_a_projection_child_copies_the_deferred_flat_copy_its_leaf_runs() -> None:
+    """The child instance a projected leaf runs in copies the deferred copy the leaf names.
+
+    ``LoanChild``'s ``patron__email`` is itself a flat copy, so the unbound child
+    instance defers it until the grandparent's leaf reads it by name; the copy it
+    makes is the child's own, bound to the child, never the class-level filter.
+    """
+    patron_child = _patron_child_with_method_string()
+
+    class LoanChild(FilterSet):
+        patron = RelatedFilter(patron_child, field_name="patron")
+
+        class Meta:
+            model = library_models.Loan
+            fields = {"note": ["exact"]}
+
+    class BookParent(FilterSet):
+        loans = RelatedFilter(LoanChild, field_name="loans")
+
+        class Meta:
+            model = library_models.Book
+            fields = []
+
+    _register_plain_types(library_models.Loan, library_models.Patron)
+    BookParent.get_filters()
+    assert "patron__email" in _snapshot(LoanChild).deferred_copies
+    _seed_loans_for_two_patrons()
+
+    instance = BookParent(
+        data={"loans__patron__email": "p1@x"},
+        queryset=library_models.Book.objects.all(),
+        request=HttpRequest(),
+    )
+
+    assert list(instance.qs.values_list("title", flat=True)) == ["Two loans"]
+    children = instance._projection_children
+    assert children is not None
+    child = children[LoanChild]
+    copied = child._copied_filters
+    assert list(copied) == ["note", "patron", "patron__email"]
+    assert copied["patron__email"] is not LoanChild.base_filters["patron__email"]
+    assert vars(copied["patron__email"])["parent"] is child
 
 
 def test_projected_leaf_gets_no_candidate_row() -> None:

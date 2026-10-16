@@ -5,7 +5,8 @@ directly (not via the importer, so assertions stay independent of how the real
 ``KANBAN.md`` evolves) and drives the kanban schema end to end:
 
 * ``RelatedFilter`` on a lookup ``key`` (the FK-dense filter surface) -- the
-  central showcase of this app;
+  central showcase of this app -- and its flat relation keys (``statusKey``),
+  which answer as the nested branch does in one query;
 * own-PK Relay ``GlobalID`` filtering (``id: { in: [...] }``) on ``CardType``;
 * plain-integer ``id: { in: [...] }`` on the non-Relay ``CardItemType``;
 * M2M-through filtering + selection (``parity`` / ``parityClaims``);
@@ -256,6 +257,50 @@ def test_filter_cards_by_status_key_via_related_filter() -> None:
         """,
         {"allCards": [{"title": "Filtering subsystem"}]},
     )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("flat", "nested", "titles"),
+    [
+        (
+            'statusKey: { exact: "done" }',
+            'status: { key: { exact: "done" } }',
+            ["Filtering subsystem"],
+        ),
+        (
+            'outgoingReferencesKindKey: { exact: "dependency" }',
+            'outgoingReferences: { kind: { key: { exact: "dependency" } } }',
+            ["DjangoConnectionField"],
+        ),
+        (
+            'or: [{ statusKey: { exact: "wip" } }, { parityKey: { exact: "graphene_django" } }]',
+            (
+                'or: [{ status: { key: { exact: "wip" } } }, '
+                '{ parity: { key: { exact: "graphene_django" } } }]'
+            ),
+            ["Filtering subsystem"],
+        ),
+    ],
+    ids=["one-hop", "two-hop", "or-arms"],
+)
+def test_a_flat_relation_filter_answers_as_its_nested_branch_in_one_query(
+    flat: str,
+    nested: str,
+    titles: list[str],
+) -> None:
+    """A flat relation key on ``allCards(filter:)`` matches the cards its nested branch matches.
+
+    ``CardFilter`` publishes about 1,500 flat filters; a request copies the set's
+    own filters and the flat ones it names, and either spelling answers in one query.
+    """
+    _seed_board()
+    expected = {"allCards": [{"title": title} for title in titles]}
+    for spelling in (flat, nested):
+        with CaptureQueriesContext(connection) as ctx:
+            data = _graphql_data("query { allCards(filter: { " + spelling + " }) { title } }")
+        assert data == expected
+        assert len(ctx.captured_queries) == 1
 
 
 @pytest.mark.django_db

@@ -238,7 +238,8 @@ def describe_value(value: object) -> str:
     window (``consumers.py``), and the router's three factory / consumer
     rejections (``routers.py``) - and so do the schema-construction policy
     rejections whose argument is equally deployment-supplied (``error_policy.py``,
-    ``resource_policy.py``, ``extensions/debug.py``). Those are the rejections
+    ``resource_policy.py``, ``extensions/debug.py``, the ``MAX_FLAT_FILTERS``
+    limit in ``filters/sets.py``). Those are the rejections
     whose argument is a value a hostile or fat-fingered deployment hands the
     package directly, which is where a message that raises while being formatted
     destroys the typed contract. Dozens of other ``got {...}`` tails elsewhere in

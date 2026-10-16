@@ -17,16 +17,20 @@ from __future__ import annotations
 
 import copy
 from collections import OrderedDict
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Literal, NoReturn, SupportsIndex, TypeVar, cast
 
 import django_filters
+from django import forms
 from django.db import models
 from django.db.models import Exists, Q
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.fields.related import ManyToManyRel, ManyToOneRel, OneToOneRel
+from django.utils.datastructures import MultiValueDict
 from django_filters import (
     BaseInFilter,
     BaseRangeFilter,
@@ -52,10 +56,12 @@ from graphql import GraphQLError
 from strawberry import UNSET
 from typing_extensions import override
 
+from django_strawberry_framework.conf import max_flat_filters_setting
 from django_strawberry_framework.exceptions import (
     ConfigurationError,
     _safe_arg_repr,
     _safe_predicate,
+    describe_value,
 )
 from django_strawberry_framework.optimizer.predicates import (
     attach_exists,
@@ -158,11 +164,12 @@ from .inputs import (
 _LOGIC_PYTHON_ATTRS: frozenset[str] = frozenset(op.python_attr for op in LOGIC_OPERATORS)
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Mapping, Sequence
+    from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
     from types import MethodType
     from typing import TypeAlias
 
     from django.forms import Field as FormField
+    from django.http import HttpRequest
     from django_filters.filterset import FilterSetOptions
     from typing_extensions import Self
 
@@ -1015,6 +1022,15 @@ class ExpansionSnapshot:
       ``CandidateFilterMetadata`` for EVERY direct framework-generated leaf. Names
       of declared / override / unstamped leaves and of ``RelatedFilter``
       expansions are absent.
+    - ``deferred_copies`` -- the names of ``filters`` an instance copies only
+      when it reads them (``FilterSet.__init__``): every ``RelatedFilter``-expanded
+      copy whose absence from the request filters nothing
+      (``_absence_filters_nothing``, decided once here). Any other copy (a
+      ``required`` one, a checkbox, a consumer ``filter``) would still act on a
+      request that does not name it, so every instance copies it up front, as it
+      does the set's own filters; a set that reads its form its own way
+      (``FilterSet._reads_its_form_its_own_way``) defers none. Only an instance
+      the package's request pipeline builds defers (``_pipeline_built``).
 
     The read-only mapping keeps a snapshot HOLDER from rewriting the published
     classification; it is not a claim that the filter objects themselves are frozen.
@@ -1032,6 +1048,159 @@ class ExpansionSnapshot:
 
     filters: Mapping[str, Filter]
     candidates: Mapping[str, CandidateFilterMetadata]
+    deferred_copies: frozenset[str] = frozenset()
+
+
+def _named_flat_copies(
+    data: Mapping[str, object],
+    deferred: frozenset[str],
+    prefix: str | None,
+) -> list[str]:
+    """Return the deferred copies a request's form data names, by key or by a widget-suffixed key.
+
+    A form field reads the key ``<prefix>-<name>`` (``<name>`` without a
+    prefix), and a multi-value widget reads ``<name><suffix>`` with a suffix
+    opening on one underscore (``_0`` / ``_1``, ``_min`` / ``_max``, ``_after`` /
+    ``_before``, ``_lookup``), so the part of a key before such an underscore
+    counts too; a ``__`` is a relation separator, never a suffix. A name the data
+    turns out not to carry only adds a form field that cleans to an empty value.
+    """
+    lead = f"{prefix}-" if prefix else ""
+    named: list[str] = []
+    for raw in data:
+        if not raw.startswith(lead):
+            continue
+        key = raw[len(lead) :]
+        heads = [
+            key[:end]
+            for end, char in enumerate(key)
+            if char == "_" and key[end - 1 : end] != "_" and key[end + 1 : end + 2] != "_"
+        ]
+        named.extend(head for head in (key, *heads) if head in deferred)
+    return named
+
+
+# The modules whose ``Filter.filter`` implementations skip an empty value
+# (django-filter's ``EMPTY_VALUES`` rule, or the package's ``None`` rule).
+_EMPTY_SKIPPING_FILTER_MODULES: tuple[str, ...] = (
+    "django_filters.",
+    "django_strawberry_framework.",
+)
+
+
+def _absence_filters_nothing(
+    name: str,
+    filter_instance: Filter,
+    omitted_by_widget: dict[type[forms.Widget], bool],
+) -> bool:
+    """Whether a request that does not name this flat copy would get nothing from copying it.
+
+    Decided once per copy when the expansion is published; a copy for which this
+    is ``False`` is copied by every request, as django-filter copies every filter.
+    Absence is a no-op only when every link holds:
+
+    - the filter is not ``required`` (the form would refuse the absent key) and
+      not ``disabled`` (a disabled field cleans to its ``initial``);
+    - its ``filter`` is django-filter's or the package's, which skip an empty
+      value (a ``method=`` filter runs through django-filter's ``FilterMethod``);
+      a projected copy is judged by the child filter it runs, and runs inside a
+      child instance, so a child set that edits its instances' filters
+      (``FilterSet._customizes_instances``) keeps the copy up front;
+    - a ``ChoiceFilter`` whose ``null_value`` is the value its form field cleans
+      an absent key to would run its ``IS NULL`` branch before any empty skip;
+    - its widget is Django's, django-filter's or the package's, reports the key
+      omitted from empty data (``Widget.value_omitted_from_data``: a
+      ``CheckboxInput`` reads an absent key as ``False``, a ``SelectMultiple``
+      cannot tell absent from empty) and names no sub-key with a ``__`` suffix,
+      which ``_named_flat_copies`` reads as a relation path; a widget that
+      cannot be built or asked counts as not omitted.
+    """
+    extra = filter_instance.extra
+    if extra.get("required") or extra.get("disabled"):
+        return False
+    if (
+        isinstance(
+            filter_instance,
+            ProjectedChildFilter,
+        )
+        and filter_instance._projection.filterset._customizes_instances()
+    ):
+        return False
+    filter_class: type[object] = getattr(filter_instance, "_projected_from", type(filter_instance))
+    if not _defined_in(getattr(filter_class, "filter", None), _EMPTY_SKIPPING_FILTER_MODULES):
+        return False
+    if isinstance(filter_instance, ChoiceFilter) and _null_value_is_absent(filter_instance):
+        return False
+    # The widget the copy's form field builds: the declared one, else its field class's.
+    widget = cast(
+        "forms.Widget | type[forms.Widget]",
+        extra.get("widget") or getattr(filter_instance, "field_class", forms.Field).widget,
+    )
+    if isinstance(widget, type):
+        cached = omitted_by_widget.get(widget)
+        if cached is None:
+            cached = omitted_by_widget[widget] = _widget_reports_omitted(widget, name)
+        return cached
+    return _widget_reports_omitted(widget, name)
+
+
+# The modules whose widgets read form data the way ``_named_flat_copies`` names it.
+_DATA_READING_WIDGET_MODULES: tuple[str, ...] = ("django.forms.", *_EMPTY_SKIPPING_FILTER_MODULES)
+
+
+def _defined_in(member: object, modules: tuple[str, ...]) -> bool:
+    """Whether ``member`` is a function defined in one of ``modules`` (a module name prefix)."""
+    module = getattr(member, "__module__", None)
+    return isinstance(module, str) and module.startswith(modules)
+
+
+def _null_value_is_absent(filter_instance: ChoiceFilter) -> bool:
+    """Whether ``filter_instance``'s ``null_value`` is what its form field cleans an absent key to.
+
+    ``ChoiceFilter.filter`` compares the value with ``null_value`` before any
+    empty skip. A model-choice field cleans an absent key to ``None``, a typed
+    choice field to its ``empty_value``, any other choice field to ``""``. A
+    ``null_value`` or absent value that is neither ``None`` nor a plain ``str``
+    counts as matching: comparing it would run its own ``__eq__``.
+    """
+    null_value = cast("object", filter_instance.null_value)
+    field_class = cast("type[forms.Field]", filter_instance.field_class)
+    absent: object = ""
+    if issubclass(field_class, forms.ModelChoiceField):
+        absent = None
+    elif issubclass(field_class, forms.TypedChoiceField):
+        absent = filter_instance.extra.get("empty_value", "")
+    if null_value is None or absent is None:
+        return null_value is absent
+    if type(null_value) is not str or type(absent) is not str:
+        return True
+    return null_value == absent
+
+
+def _widget_reports_omitted(widget: forms.Widget | type[forms.Widget], name: str) -> bool:
+    """Whether ``widget`` (built when a class) reads form data as ``_named_flat_copies`` names it.
+
+    Its data-reading methods are Django's, django-filter's or the package's,
+    ``value_omitted_from_data({}, {}, name)`` is ``True``, and a multi-widget
+    names no sub-key with a ``__`` suffix; ``False`` on a raise.
+    """
+    widget_class = widget if isinstance(widget, type) else type(widget)
+    if not (
+        _defined_in(widget_class.value_from_datadict, _DATA_READING_WIDGET_MODULES)
+        and _defined_in(widget_class.value_omitted_from_data, _DATA_READING_WIDGET_MODULES)
+    ):
+        return False
+    try:
+        built = widget() if isinstance(widget, type) else widget
+        # django-stubs declare no ``widgets_names``; ``MultiWidget.__init__`` sets it.
+        suffixes = cast("list[str]", getattr(built, "widgets_names", []))
+        if isinstance(built, forms.MultiWidget) and any(
+            suffix.startswith("__") for suffix in suffixes
+        ):
+            return False
+        return built.value_omitted_from_data({}, MultiValueDict(), name) is True
+    except Exception:  # noqa: BLE001 - consumer widget code may raise anything; fails closed
+        return False
 
 
 def _candidate_metadata_for(
@@ -1299,7 +1468,7 @@ class ProjectedChildFilter(Filter):
         projection = self._projection
         if getattr(self, "parent", None) is None:
             return projection.filterset.base_filters[projection.name].field
-        return self._child().filters[projection.name].field
+        return self._child()._filter_named(projection.name).field
 
     @override
     def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
@@ -1651,30 +1820,109 @@ def _filter_paths(filterset: type[object]) -> Iterator[str]:
             yield _bound_field_name(filter_instance)
 
 
-def _reachable_filtersets(filterset: type[FilterSet]) -> set[type[FilterSet]]:
-    """Return ``filterset`` and every filter set its ``RelatedFilter`` declarations reach, transitively.
+@dataclass
+class _ExpansionScope:
+    """State shared by every expansion one outermost ``get_filters`` build runs.
 
-    Follows each set's own ``related_filters``, as ``FilterSet._expand_along``
-    does, skipping the ``None`` placeholder. A set declaring no ``Meta.model`` is
-    refused as a target (``_require_correlated_target``) before it is expanded.
+    ``surfaces`` holds each ``FilterSet._expand_along`` result by the set and the
+    sets on its path (the result depends on nothing else), so a set reached along
+    many paths through the same sets is expanded once; ``reached`` holds each
+    set's ``_reachable_filtersets`` id set; ``limit`` is the flat-filter limit,
+    read once per build. Keys are object ids: every class on a key stays alive
+    for the scope, and an id never consults a consumer metaclass ``__eq__``.
     """
-    reached: set[type[FilterSet]] = {filterset}
+
+    limit: int
+    surfaces: dict[tuple[int, frozenset[int]], OrderedDict[str, Filter]]
+    reached: dict[int, frozenset[int]]
+
+
+# Whether the ``FilterSet`` being constructed is one the package's own request
+# pipeline builds (``_pipeline_built``), the only instances that defer flat
+# copies. ``FilterSet.__init__`` clears it on entry, so a set a consumer
+# ``__init__`` constructs in turn is built as a direct use is.
+_pipeline_build_var: ContextVar[bool] = ContextVar("_pipeline_build_var", default=False)
+
+
+@contextmanager
+def _pipeline_built() -> Generator[None, None, None]:
+    """Mark the ``FilterSet`` constructed inside as built by the package's request pipeline."""
+    token = _pipeline_build_var.set(True)
+    try:
+        yield
+    finally:
+        _pipeline_build_var.reset(token)
+
+
+_expansion_scope_var: ContextVar[_ExpansionScope | None] = ContextVar(
+    "_expansion_scope_var",
+    default=None,
+)
+
+
+@contextmanager
+def _expansion_scope() -> Generator[_ExpansionScope, None, None]:
+    """Enter the outermost build's ``_ExpansionScope``, or reuse the one already entered."""
+    scope = _expansion_scope_var.get()
+    if scope is not None:
+        yield scope
+        return
+    scope = _ExpansionScope(limit=_flat_filter_limit(), surfaces={}, reached={})
+    token = _expansion_scope_var.set(scope)
+    try:
+        yield scope
+    finally:
+        _expansion_scope_var.reset(token)
+
+
+def _flat_filter_limit() -> int:
+    """Return ``MAX_FLAT_FILTERS``: the most flat filters one filter set's expansion may publish.
+
+    The type gate admits the built-in ``int`` exactly, never ``bool`` or another
+    subclass, so the ``< 0`` comparison runs no consumer code; the ``got`` tail
+    renders through ``describe_value``, which never raises on the value.
+    """
+    limit = max_flat_filters_setting()
+    if type(limit) is not int or limit < 0:
+        raise ConfigurationError(
+            "DJANGO_STRAWBERRY_FRAMEWORK['MAX_FLAT_FILTERS'] must be a non-negative int; "
+            f"got {describe_value(limit)}.",
+        )
+    return limit
+
+
+def _reachable_filtersets(filterset: type[FilterSet], scope: _ExpansionScope) -> frozenset[int]:
+    """Return the ids of ``filterset`` and every filter set its ``RelatedFilter`` declarations reach.
+
+    Follows each set's own ``related_filters``, transitively, as
+    ``FilterSet._expand_along`` does, skipping the ``None`` placeholder. A set
+    declaring no ``Meta.model`` is refused as a target
+    (``_require_correlated_target``) before it is expanded. Ids, so the
+    membership tests never consult a consumer metaclass ``__eq__``; each set's
+    answer is kept in ``scope`` for the rest of the build.
+    """
+    cached = scope.reached.get(id(filterset))
+    if cached is not None:
+        return cached
+    reached: dict[int, type[FilterSet]] = {id(filterset): filterset}
     pending = [filterset]
     while pending:
         current = pending.pop()
         declarations: Mapping[str, RelatedFilter] = current.__dict__.get("related_filters", {})
         for declaration in declarations.values():
             target = declaration.filterset
-            if target is not None and target not in reached:
-                reached.add(target)
+            if target is not None and id(target) not in reached:
+                reached[id(target)] = target
                 pending.append(target)
-    return reached
+    result = scope.reached[id(filterset)] = frozenset(reached)
+    return result
 
 
 def _expand_related_filter(
     filter_name: str,
     f: RelatedFilter,
     path: tuple[type[FilterSet], ...],
+    scope: _ExpansionScope,
 ) -> OrderedDict[str, Filter]:
     """Expand `f` against the filters its target filterset exposes along ``path``.
 
@@ -1695,7 +1943,7 @@ def _expand_related_filter(
     target_filterset = f.filterset
     if not target_filterset:
         return expanded
-    target_filters = target_filterset._filters_along(path)
+    target_filters = target_filterset._filters_along(path, scope)
     relation = _bound_field_name(f)
     for child_name, field in target_filters.items():
         new_name = f"{filter_name}__{child_name}"
@@ -1898,6 +2146,117 @@ class FilterSet(
     # names ``inputs.py`` produced inline before the naming rule was shared.
     _field_type_suffix: str = "FilterInputType"
 
+    # The filters this instance has copied, by name (``filters``' storage).
+    # While ``_filters_settled`` is ``False`` it holds the set's own filters, its
+    # copies whose absence acts and the flat copies the data names, in class order,
+    # plus any other copy read since by name (``_filter_named``), and
+    # ``_copy_source`` is the class's ``base_filters`` the rest are copied from.
+    _copied_filters: OrderedDict[str, Filter]
+    _copy_source: Mapping[str, Filter]
+    _filters_settled: bool = True
+
+    def __init__(
+        self,
+        data: Mapping[str, object] | None = None,
+        queryset: models.QuerySet[models.Model] | None = None,
+        *,
+        request: HttpRequest | None = None,
+        prefix: str | None = None,
+    ) -> None:
+        """Copy the set's own filters and the flat copies ``data`` names; the rest when read.
+
+        django-filter deep-copies every ``base_filters`` entry into
+        ``self.filters`` per instance, so a request would pay for the whole flat
+        surface (every path a ``RelatedFilter`` graph reaches) whatever it
+        filters on. An instance the package's request pipeline builds
+        (``_pipeline_built``: the apply pipeline's instances and the child a
+        projected leaf runs in) defers; any other construction (a django-filter
+        view, DRF's ``DjangoFilterBackend``, a consumer's own call) copies every
+        filter as django-filter does, so its form renders every field. On a
+        deferring instance the deep copy covers the set's own filters, the copies
+        whose absence would still act (``ExpansionSnapshot.deferred_copies`` leaves
+        them out) and the deferred copies the data names
+        (``_named_flat_copies``); reading ``filters`` copies the rest, in the
+        class's order, and a package read by name copies only that one
+        (``_filter_named``). A bound form holds only what was copied: an absent
+        deferred copy cleans to an empty value, which filters nothing. A subclass
+        ``__init__`` editing ``self.filters`` reads every filter copied, so its
+        edits land on the copies the request runs.
+        """
+        cls = type(self)
+        snapshot = cls._expansion_snapshot()
+        pipeline_built = _pipeline_build_var.get()
+        _ = _pipeline_build_var.set(False)
+        deferred = frozenset[str]() if snapshot is None else snapshot.deferred_copies
+        if not deferred or not pipeline_built:
+            # basedpyright: typeshed types ``data`` as a ``dict`` or ``QueryDict``; upstream
+            # stores the mapping and its form reads it as one. It rejects a ``Mapping``
+            super().__init__(data, queryset, request=request, prefix=prefix)  # pyright: ignore[reportArgumentType]
+            return
+        source = cls.base_filters
+        named = frozenset(_named_flat_copies(data, deferred, prefix) if data else ())
+        # ``BaseFilterSet.__init__`` deep-copies ``self.base_filters`` into
+        # ``self.filters`` and binds each copy; an instance attribute shadows the
+        # class's for that one read.
+        instance_attrs = vars(self)
+        instance_attrs["base_filters"] = OrderedDict(
+            (name, f) for name, f in source.items() if name not in deferred or name in named
+        )
+        try:
+            super().__init__(data, queryset, request=request, prefix=prefix)  # pyright: ignore[reportArgumentType]
+        finally:
+            del instance_attrs["base_filters"]
+        self._copy_source = source
+        self._filters_settled = False
+
+    @property
+    @override
+    def filters(self) -> OrderedDict[str, Filter]:
+        """Every filter this instance runs, by name, in the class's order."""
+        if not self._filters_settled:
+            copied = self._copied_filters
+            self._copied_filters = OrderedDict(
+                (name, copied[name] if name in copied else self._copy_filter(original))
+                for name, original in self._copy_source.items()
+            )
+            self._filters_settled = True
+        return self._copied_filters
+
+    # basedpyright: django-filter's stubs declare ``filters`` a plain attribute; the property
+    # keeps its read and write. It rejects a property for the attribute
+    @filters.setter
+    def filters(self, value: OrderedDict[str, Filter]) -> None:  # pyright: ignore[reportIncompatibleVariableOverride]
+        self._copied_filters = value
+        self._filters_settled = True
+
+    def _copy_filter(self, original: Filter) -> Filter:
+        """Return a copy of the class-level ``original`` bound to this instance, as django-filter binds."""
+        copied = copy.deepcopy(original)
+        # basedpyright: django-filter's stubs declare neither attribute
+        # ``BaseFilterSet.__init__`` stamps on every copy. It rejects the writes
+        # (``queryset`` is never ``None`` on an instance: the same ``__init__`` defaults it)
+        copied.model = cast("models.QuerySet[models.Model]", self.queryset).model  # pyright: ignore[reportAttributeAccessIssue]
+        copied.parent = self  # pyright: ignore[reportAttributeAccessIssue]
+        return copied
+
+    def _filter_named(self, name: str) -> Filter:
+        """Return the filter ``name`` this instance runs, copying only that one if it is deferred."""
+        copied = self._copied_filters
+        if not self._filters_settled and name not in copied:
+            copied[name] = self._copy_filter(self._copy_source[name])
+        return copied[name]
+
+    @override
+    def get_form_class(self) -> type[forms.Form]:
+        """django-filter's form class; a bound one holds only the filters this instance copied."""
+        if self._filters_settled or not self.is_bound:
+            return super().get_form_class()
+        copied = self._copied_filters
+        fields = OrderedDict(
+            (name, copied[name].field) for name in self._copy_source if name in copied
+        )
+        return type(f"{type(self).__name__}Form", (self._meta.form,), fields)
+
     # ------------------------------------------------------------------
     # Layer 4 - cycle-safe filter expansion (cookbook port).
     # ------------------------------------------------------------------
@@ -1927,6 +2286,12 @@ class FilterSet(
         captured-branch check whose target reaches back here, or a second
         thread) returns the same surface, built again and not published
         (``expanded_once``'s ``on_reentry``).
+
+        The surface grows with the number of paths, factorially in a dense
+        graph of mutually related sets, so the walk stops with a
+        ``ConfigurationError`` at the first path whose flat filters pass
+        ``MAX_FLAT_FILTERS`` (``_flat_filter_limit``), naming this set, the
+        declaration being expanded and the path.
         """
         # An abstract model has no default manager, which django-filter reads to resolve
         # every generated lookup (and no primary key for ``get_fields`` to add).
@@ -1938,9 +2303,16 @@ class FilterSet(
             )
 
         def _surface() -> OrderedDict[str, Filter]:
-            return cls._expand_along((cls,))
+            with _expansion_scope() as scope:
+                return cls._expand_along((cls,), scope)
 
+        # The whole build shares one scope: the targets it builds and the
+        # captured-branch check below expand inside it too.
         def _build() -> OrderedDict[str, Filter]:
+            with _expansion_scope():
+                return _build_in_scope()
+
+        def _build_in_scope() -> OrderedDict[str, Filter]:
             all_filters = _surface()
             model = cls._meta.model
             candidates: dict[str, CandidateFilterMetadata] = {}
@@ -2024,12 +2396,24 @@ class FilterSet(
                 target_slot="_filterset",
             ):
                 cls._expanded_filters = all_filters
+                own = cls._unexpanded_filters()
+                omitted_by_widget: dict[type[forms.Widget], bool] = {}
                 cls._expanded_snapshot = ExpansionSnapshot(
                     # The snapshot exposes a READ-ONLY view of the filter map;
                     # the mutable ``all_filters`` is what django-filter needs on
                     # ``base_filters`` / the ``_expanded_filters`` cache.
                     filters=MappingProxyType(all_filters),
                     candidates=MappingProxyType(candidates),
+                    # A set that reads its form its own way may read any cleaned
+                    # key, so it defers nothing (``_reads_its_form_its_own_way``).
+                    deferred_copies=frozenset(
+                        name
+                        for name, filter_instance in all_filters.items()
+                        if name not in own
+                        and _absence_filters_nothing(name, filter_instance, omitted_by_widget)
+                    )
+                    if not cls._reads_its_form_its_own_way()
+                    else frozenset(),
                 )
                 cls.base_filters = all_filters
             return all_filters
@@ -2056,14 +2440,26 @@ class FilterSet(
         return super().get_filters()
 
     @classmethod
-    def _expand_along(cls, path: tuple[type[FilterSet], ...]) -> OrderedDict[str, Filter]:
+    def _expand_along(
+        cls,
+        path: tuple[type[FilterSet], ...],
+        scope: _ExpansionScope,
+    ) -> OrderedDict[str, Filter]:
         """Return this set's filters with every ``RelatedFilter`` expanded along ``path``.
 
         ``path`` is the chain of filter sets expanding from the root, this set
         last. Each declaration is checked (``_require_relation_path`` /
         ``_require_correlated_target``) and its target's filters along ``path``
-        copied on under the declaration's name (``_expand_related_filter``).
+        copied on under the declaration's name (``_expand_related_filter``). The
+        result depends on this set and the sets on ``path`` alone, so an inner
+        path's result is kept in ``scope`` for every other path through the same
+        sets; a root (a one-set path) is published by its own build and never
+        re-read here. A path whose flat filters pass ``scope.limit`` raises.
         """
+        key = (id(cls), frozenset(id(visited) for visited in path)) if path[1:] else None
+        kept = None if key is None else scope.surfaces.get(key)
+        if kept is not None:
+            return kept
         filters = cls._unexpanded_filters()
         if cls._meta.model is None:
             return filters
@@ -2075,14 +2471,34 @@ class FilterSet(
             "related_filters",
             OrderedDict(),
         )
+        own = len(filters)
         for filter_name, f in declarations.items():
             _require_relation_path(cls, filter_name, f)
             _require_correlated_target(cls, filter_name, f)
-            filters.update(_expand_related_filter(filter_name, f, path))
+            filters.update(_expand_related_filter(filter_name, f, path, scope))
+            # A path's flat filters are all copied onto every set before it, so
+            # the root publishes at least as many as any path below it: the walk
+            # stops at the first path past the limit, never enumerating the rest.
+            if len(filters) - own > scope.limit:
+                root = path[0]
+                trail = " -> ".join(visited.__qualname__ for visited in path)
+                raise ConfigurationError(
+                    f"FilterSet {root.__qualname__}: its RelatedFilter expansion publishes "
+                    f"more than {scope.limit} flat filters, crossed expanding "
+                    f"{cls.__qualname__}.{filter_name} along {trail}. Raise "
+                    "DJANGO_STRAWBERRY_FRAMEWORK['MAX_FLAT_FILTERS'], or declare fewer "
+                    "RelatedFilter edges in the cycle.",
+                )
+        if key is not None:
+            scope.surfaces[key] = filters
         return filters
 
     @classmethod
-    def _filters_along(cls, path: tuple[type[FilterSet], ...]) -> OrderedDict[str, Filter]:
+    def _filters_along(
+        cls,
+        path: tuple[type[FilterSet], ...],
+        scope: _ExpansionScope,
+    ) -> OrderedDict[str, Filter]:
         """Return the filters this set contributes as the target of the last set on ``path``.
 
         The cycle rule of the flat surface. A set already on ``path`` (by identity,
@@ -2097,9 +2513,9 @@ class FilterSet(
         # ``tuple.__contains__`` would dispatch a consumer metaclass ``__eq__``.
         if any(visited is cls for visited in path):
             return cls._unexpanded_filters()
-        if _reachable_filtersets(cls).isdisjoint(path):
+        if _reachable_filtersets(cls, scope).isdisjoint(id(visited) for visited in path):
             return cls.get_filters()
-        return cls._expand_along((*path, cls))
+        return cls._expand_along((*path, cls), scope)
 
     @classmethod
     def _expansion_snapshot(cls) -> ExpansionSnapshot | None:
@@ -2696,13 +3112,40 @@ class FilterSet(
             child_model = cast("type[models.Model]", filterset_cls._meta.model)
             # Never ``None`` on an instance (see ``ProjectedChildFilter.filter``).
             parent_qs = cast("models.QuerySet[models.Model]", self.queryset)
-            child = filterset_cls(
-                queryset=base_queryset(child_model, using=parent_qs.db),
-                request=self.request,
-            )
+            with _pipeline_built():
+                child = filterset_cls(
+                    queryset=base_queryset(child_model, using=parent_qs.db),
+                    request=self.request,
+                )
             child._projection_owner = self
             children[filterset_cls] = child
         return child
+
+    # The request seams a consumer may override to read ``self.form`` /
+    # ``cleaned_data`` / ``self.filters`` by key (``_reads_its_form_its_own_way``).
+    _FORM_READING_SEAMS: ClassVar[tuple[str, ...]] = (
+        "filter_queryset",
+        "qs",
+        "form",
+        "get_form_class",
+        "errors",
+        "is_valid",
+    )
+
+    @classmethod
+    def _reads_its_form_its_own_way(cls) -> bool:
+        """Whether this class may read a flat copy's cleaned value a request did not name.
+
+        True when it declares its own ``Meta.form`` (whose ``clean`` may read any
+        key) or overrides one of ``_FORM_READING_SEAMS`` (compared by identity with
+        ``FilterSet``'s). Such a class defers no flat copy, so every key its code
+        reads is present as django-filter would make it.
+        """
+        if cls._meta.form is not forms.Form:
+            return True
+        return any(
+            getattr(cls, seam) is not getattr(FilterSet, seam) for seam in cls._FORM_READING_SEAMS
+        )
 
     @classmethod
     def _customizes_instances(cls) -> bool:
@@ -2715,9 +3158,8 @@ class FilterSet(
         what such a class's instances run, which is why the optimizer declines
         to route its leaves (``_is_generation_capable``) and why
         ``_expand_related_filter`` projects them through a child instance rather
-        than rebinding a copy (``_owner_bound_child``). ``__init__`` is compared
-        by identity: an unmodified subclass inherits ``FilterSet.__init__``
-        (``FilterSet`` defines none, so this is ``filterset.BaseFilterSet.__init__``).
+        than rebinding a copy (``_owner_bound_child``). ``__init__`` is compared by
+        identity: an unmodified subclass inherits ``FilterSet.__init__``.
         """
         return cls.__init__ is not FilterSet.__init__
 
@@ -4391,7 +4833,7 @@ class FilterSet(
             projection = filter_instance._projection
             hop = type(self)._projection_hop(projection)
             child = self._projection_child(projection.filterset)
-            child_filter = child.filters[projection.name]
+            child_filter = child._filter_named(projection.name)
             inner = child._leaf_chain(child_filter)
             if inner is None:
                 return _LeafChain((hop,), child_filter)
@@ -4641,7 +5083,7 @@ class FilterSet(
         cleaned_data: Mapping[str, object] = self.form.cleaned_data
         for name, value in cleaned_data.items():
             candidate = candidates.get(name)
-            filter_instance = self.filters[name]
+            filter_instance = self._filter_named(name)
             if type(self)._flat_leaf_walk(filter_instance) is not None:
                 queryset = self._apply_relation_leaf(queryset, filter_instance, value)
                 continue
@@ -5022,11 +5464,12 @@ class FilterSet(
         # basedpyright: typeshed narrows ``request`` to ``HttpRequest``; upstream only stores it,
         # and the context request need not be a Django one. It rejects ``object`` for
         # ``HttpRequest | None``
-        instance = cls(
-            data=data,
-            queryset=constrained,
-            request=request,  # pyright: ignore[reportArgumentType]
-        )
+        with _pipeline_built():
+            instance = cls(
+                data=data,
+                queryset=constrained,
+                request=request,  # pyright: ignore[reportArgumentType]
+            )
         instance._apply_info = info
         instance._nested_qs_by_branch_id = nested_qs_by_branch_id
         instance._flat_hop_visibility = flat_hop_visibility

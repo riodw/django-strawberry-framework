@@ -14,6 +14,8 @@ cap, a non-mapping project dict on GET, ``None`` as empty settings,
 which outranks ``ERROR_POLICY`` / ``RESOURCE_POLICY``; those settings keys
 have no live pin. Constructor precedence lives in
 ``tests/test_error_policy.py`` and ``tests/test_resource_policy.py``.
+``MAX_FLAT_FILTERS`` is read when a filter set's expansion builds, not per
+request; its limit and validation rows live in ``tests/filters/test_sets.py``.
 """
 
 import builtins
@@ -34,6 +36,7 @@ from django_strawberry_framework.conf import (
     Settings,
     error_policy_setting,
     hide_flat_filters_setting,
+    max_flat_filters_setting,
     max_request_body_bytes_setting,
     nested_connection_strategy_setting,
     relay_globalid_strategy_setting,
@@ -443,6 +446,7 @@ def test_delattr_clears_stale_cache_and_restores_defaults(
         "HIDE_FLAT_FILTERS": True,
         "RELAY_GLOBALID_STRATEGY": "type",
         "MAX_REQUEST_BODY_BYTES": 4096,
+        "MAX_FLAT_FILTERS": 25,
         "RESOURCE_POLICY": {"max_query_depth": 5},
         "ERROR_POLICY": {"enabled": False},
     }
@@ -454,6 +458,7 @@ def test_delattr_clears_stale_cache_and_restores_defaults(
     assert hide_flat_filters_setting() is True
     assert relay_globalid_strategy_setting() == "type"
     assert max_request_body_bytes_setting() == 4096
+    assert max_flat_filters_setting() == 25
     assert resource_policy_setting() == {"max_query_depth": 5}
     assert error_policy_setting() == {"enabled": False}
 
@@ -469,6 +474,7 @@ def test_delattr_clears_stale_cache_and_restores_defaults(
     assert hide_flat_filters_setting() is False
     assert relay_globalid_strategy_setting() is None
     assert max_request_body_bytes_setting() == 1_048_576
+    assert max_flat_filters_setting() == 10_000
     assert resource_policy_setting() is None
     assert error_policy_setting() is None
 
@@ -484,6 +490,7 @@ def test_setting_reader_helpers_default_and_override_values(
     assert hide_flat_filters_setting() is False
     assert relay_globalid_strategy_setting() is None
     assert max_request_body_bytes_setting() == 1_048_576
+    assert max_flat_filters_setting() == 10_000
     assert resource_policy_setting() is None
     assert error_policy_setting() is None
 
@@ -494,6 +501,7 @@ def test_setting_reader_helpers_default_and_override_values(
         "HIDE_FLAT_FILTERS": True,
         "RELAY_GLOBALID_STRATEGY": "type+model",
         "MAX_REQUEST_BODY_BYTES": 8192,
+        "MAX_FLAT_FILTERS": 50,
         "RESOURCE_POLICY": {"max_page_size": 20},
         "ERROR_POLICY": {"enabled": True},
     }
@@ -503,6 +511,7 @@ def test_setting_reader_helpers_default_and_override_values(
     assert hide_flat_filters_setting() is True
     assert relay_globalid_strategy_setting() == "type+model"
     assert max_request_body_bytes_setting() == 8192
+    assert max_flat_filters_setting() == 50
     assert resource_policy_setting() == {"max_page_size": 20}
     assert error_policy_setting() == {"enabled": True}
 

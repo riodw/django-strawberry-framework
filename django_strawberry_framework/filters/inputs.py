@@ -1155,17 +1155,19 @@ def _build_input_fields(
     related_filters = filterset_cls.related_filters
     lookup_table = filter_lookup_table(filterset_cls)
 
-    # ``HIDE_FLAT_FILTERS`` (default ``False`` -- matches
-    # ``django-graphene-filters``'s ``conf.py`` default) controls whether the
+    # ``HIDE_FLAT_FILTERS`` (default ``False``, the default of
+    # ``django-graphene-filters``'s key of the same name) controls whether the
     # flat relational traversal fields (``categoryName``, deep
     # ``entriesPropertyCategoryName``, ...) are emitted. When hidden, the
     # relation is filtered only through its nested ``RelatedFilter`` branch
     # (``category: { name: { ... } }``) -- the strawberry-django shape. When
-    # shown, BOTH the flat and nested shapes appear (graphene-django parity).
-    # Upstream achieves this with a throwaway trimmed-subclass + a separate
-    # flat-args merge on the connection field
-    # (``django_graphene_filters/connection_field.py::_get_trimmed_filterset_class``);
-    # because this package emits a single Strawberry input type here, the same
+    # shown, BOTH the flat and nested shapes appear, a surface this package
+    # adds: upstream never publishes the expanded copies (its ``filter`` input
+    # renders a ``RelatedFilter`` as a reference to the target's input, and its
+    # flat connection arguments, the ones its key hides, drop every expanded
+    # child through the ``is_expanded_child`` test in
+    # ``django_graphene_filters/connection_field.py::_get_trimmed_filterset_class``).
+    # Because this package emits a single Strawberry input type here, the same
     # ``is_expanded_child`` rule is just a skip in this loop, so the hidden
     # operator-bag classes are never built in the first place. The key is read
     # through its ``conf.py`` named reader; truthiness coercion is this
@@ -1179,8 +1181,8 @@ def _build_input_fields(
         ``entries__property__category__name``) is an "expanded child" of a
         declared ``RelatedFilter`` - its first path segment names the relation.
         Such paths are reachable through the nested branch already; hide them
-        when ``HIDE_FLAT_FILTERS`` is set -- the same ``is_expanded_child``
-        skip upstream applies inside
+        when ``HIDE_FLAT_FILTERS`` is set -- the ``is_expanded_child`` skip
+        upstream applies to its flat connection arguments unconditionally inside
         ``django_graphene_filters/connection_field.py::_get_trimmed_filterset_class``.
         This pre-filter stays filter-family semantics, BEFORE the shared
         emission scaffold.

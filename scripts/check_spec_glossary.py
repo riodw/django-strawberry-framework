@@ -1,5 +1,11 @@
 r"""Validate that a spec's project-specific terms are glossary-anchored.
 
+The companion ``*-terms.csv`` carries one row per anchor: a second row
+naming an anchor already used fails the run, since
+``manage.py import_spec_terms`` keys each done card's glossary rows by
+anchor and refuses the CSV. Variant spellings of one symbol share the
+anchor's single row (its ``notes`` cell can name them).
+
 Two checks per term in the spec's companion ``*-terms.csv``:
 
 1. ``docs/GLOSSARY.md`` has a ``## <heading>`` whose GitHub auto-anchor
@@ -13,8 +19,8 @@ Two checks per term in the spec's companion ``*-terms.csv``:
      the body whose matching ``[ref-id]: ...GLOSSARY.md#<anchor>`` def
      lives in the unified link-definitions block at the bottom.
 
-Exits 0 when every term passes both checks, 1 when any term fails, and 2
-on a CLI / file-not-found error.
+Exits 0 when every term passes both checks and no anchor repeats, 1 when
+any term fails or an anchor repeats, and 2 on a CLI / file-not-found error.
 
 Usage::
 
@@ -159,6 +165,17 @@ def spec_link_anchors(spec_path: Path) -> set[str]:
             if anchor_match:
                 anchors.add(anchor_match.group(1))
     return anchors
+
+
+def duplicate_anchor_rows(terms: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Return every ``(term, anchor)`` row whose anchor an earlier row already carries."""
+    seen: set[str] = set()
+    duplicates: list[tuple[str, str]] = []
+    for term, anchor in terms:
+        if anchor in seen:
+            duplicates.append((term, anchor))
+        seen.add(anchor)
+    return duplicates
 
 
 def check_terms(
@@ -451,7 +468,15 @@ def main(argv: list[str] | None = None) -> int:
             "or reference-style `[text][glossary-...]` (with matching def in the link-definitions block)",
         )
 
-    if missing_glossary or missing_links:
+    duplicates = duplicate_anchor_rows(terms)
+    if duplicates:
+        _print_section(
+            f"Rows repeating an anchor in {args.terms}:",
+            duplicates,
+            "fold this term into the first `{anchor}` row; the CSV carries one row per anchor",
+        )
+
+    if missing_glossary or missing_links or duplicates:
         return 1
 
     print(f"OK: {len(terms)} terms - all have glossary entries and at least one spec link.")

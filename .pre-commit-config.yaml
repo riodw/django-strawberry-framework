@@ -98,6 +98,21 @@ repos:
         pass_filenames: false
         require_serial: true
 
+      - id: import-spec-terms-check
+        name: done-card glossary rows equal their spec terms CSVs
+        entry: uv run python examples/fakeshop/manage.py import_spec_terms --check --skip-checks
+        language: system
+        # `always_run` + `pass_filenames: false` because the inputs are the board DB
+        # and every done card's terms CSV, and a spec archive (`git mv` of the spec
+        # and its companions) or a card flipped done changes the pairing with no
+        # staged-file list naming every row involved. Fails when the writing
+        # `manage.py import_spec_terms` would change a row; writes nothing.
+        # `--skip-checks` drops Django's system checks, which import the whole
+        # fakeshop schema and read nothing this gate compares.
+        always_run: true
+        pass_filenames: false
+        require_serial: true
+
       - id: check-citations
         name: citations resolve (AGENTS.md rule 27 path::Symbol refs)
         entry: uv run python scripts/check_citations.py

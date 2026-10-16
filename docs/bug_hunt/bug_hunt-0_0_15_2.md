@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 141 done, 111 to do.
+Progress: 142 done, 112 to do.
 
 ## Done
 
@@ -325,6 +325,12 @@ Progress: 141 done, 111 to do.
   path served both; `optimizer/plans.py::has_random_term` now leaves such a relation to the per-parent pipeline
   (strictness-visible, a keyset target keeps its own error and its `cursor_field` window), a condition's string value
   stays a literal; spec-033 lists the arm
+- [x] 101. `manage.py import_spec_terms --check` was red: spec sweeps rewrote terms CSVs without the writing importer
+  (14 extra / 5 missing rows on 8 done cards, 119 order shifts, 462 stale `notes`), and `--check` compared anchors only,
+  stopped at the first card and missed orphans; it now passes exactly when the writing run writes nothing (every
+  written column, every card and planning error in one run, orphan mentions reaped, no restamp of unchanged rows), a
+  pre-commit hook and the CI lint step run it, `check_spec_glossary.py` refuses a repeated anchor, the DB is re-synced
+  and card 056 / 053 board text it falsified is corrected
 - [x] 110. The item-56 alias message labelling an owner `'category_id' (source 'category_id')`: not a defect (cosmetic,
   no contract row): the label comes from `rest_framework/inputs.py::raise_writable_source_ownership_errors` and the
   refusal stays the typed `ConfigurationError`
@@ -473,8 +479,6 @@ tracker number are recorded there; open remainders and new defects are filed as 
 
 ## To do: found along the way
 
-- [ ] 101. `manage.py import_spec_terms --check` fails on spec-020's terms CSV on main (seen at `eb30dd7e`); a later run
-  reported eight specs failing (020, 027, 028, 032, 036, 037, 043 and one more)
 - [ ] 107. A writable primary-key relation (OneToOne `primary_key=True`) in an update input fails at request time
   instead of at class creation (The MTI half is not a defect: an auto-created parent link such as `venue_ptr` is not
   published as a writable input.)
@@ -589,6 +593,11 @@ tracker number are recorded there; open remainders and new defects are filed as 
 - [ ] 254. `rest_framework/inputs.py::serializer_schema_fingerprint`'s docstring says "This captures EVERY axis the
   generated input / SDL / reverse map depends on", but `_fingerprint_converter_extra` records only a `ListField`'s direct
   child; retract the sentence to what the fingerprint covers (no code change)
+- [ ] 255. `docs/SPECS/spec-058-graph_substrate-0_1_1-terms.csv` and
+  `docs/SPECS/spec-068-structural_templates-0_1_6-terms.csv` sit beside their archived specs instead of in
+  `docs/SPECS/appx/` (the importer and `check_spec_glossary.py` still find them through the sibling lookup)
+- [ ] 256. Nothing runs `scripts/check_spec_glossary.py` over every terms CSV (all 57 pass today); its repeated-anchor
+  refusal and term / anchor checks bite only when a cycle runs it by hand
 ## To do: holes found re-checking the fixes
 
 

@@ -6,7 +6,7 @@ term,anchor,notes
 `DjangoNodeField`,djangonodefield,Relay refetch parity surface
 `DjangoNodesField`,djangonodesfield,Relay batch refetch parity surface
 `DjangoListField`,djangolistfield,non-Relay list parity surface
-Relay Node integration,relay-node-integration,parity-audit surface family
+Relay Node integration,relay-node-integration,parity-audit surface family; one row also covers `GlobalID` (the model-anchored default named in the Decision 7 wire-break callout)
 `FilterSet`,filterset,query-side sidecar counted toward parity
 `OrderSet`,orderset,query-side sidecar counted toward parity
 `DjangoMutation`,djangomutation,write flavor 1
@@ -46,4 +46,3 @@ Cross-subsystem invariants,cross-subsystem-invariants,1.0.0-scoped goals the bet
 `Meta.choice_enum_names`,metachoice_enum_names,beta-line 0.1.4 key kept planned
 `ConfigurationError`,configurationerror,raise type of surviving constraints
 `BigInt`,bigint-scalar,named in the Decision 7 wire-break callout
-`GlobalID`,relay-node-integration,model-anchored default named in the Decision 7 wire-break callout

@@ -283,6 +283,7 @@ TRACKED_FILE_PATHS: tuple[str, ...] = (
     "tests/test_census_test_models.py",
     "tests/test_check_citations.py",
     "tests/test_check_public_types.py",
+    "tests/test_check_spec_glossary.py",
     "tests/test_check_trailing_commas.py",
     "tests/test_ci_governance.py",
     "tests/test_clean_up.py",

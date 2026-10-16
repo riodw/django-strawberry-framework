@@ -88,6 +88,13 @@ jobs:
         # glossary DB; writes nothing.
         run: uv run python scripts/check_kanban_anchors.py
 
+      - name: Done-card glossary rows equal their spec terms CSVs
+        # Parity with the `import-spec-terms-check` pre-commit hook: the backstop for
+        # a terms-CSV edit or spec archive committed without the writing
+        # `manage.py import_spec_terms`. Names every row the writing run would
+        # change; reads the committed DB and CSVs, writes nothing.
+        run: uv run python examples/fakeshop/manage.py import_spec_terms --check --skip-checks
+
       - name: Generated docs match their generators
         # Every one of these files is script-rendered from the fakeshop DB or
         # from module docstrings, and hand edits to them are silently discarded

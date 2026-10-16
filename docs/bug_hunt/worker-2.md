@@ -14,7 +14,8 @@ needs. Worker-1's diagnosis and report only after step 1 below is written.
 ## Job
 
 1. Write the expected behavior from the contract row and the reproducer into the verification
-   record before reading the diagnosis.
+   record before reading the diagnosis, and judge the reproducer by the same `HUNT.md`
+   feasibility gate Worker-1 filed under; a failing shape or input is `revision-needed`.
 2. Replay the reproducer through `workspace.py run` at your address; prove the pre-fix behavior
    was wrong by reverting the production hunk inside that copy (`workspace.py path`) only.
 3. Attack the fix with other inputs, orderings, repeated calls, state boundaries, failure paths,

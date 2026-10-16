@@ -20,21 +20,29 @@ Each phase finishes completely (every agent it dispatched has reported) before t
 
 1. **Pick.** The first unchecked item in this order: "To do: found along the way", "To do: holes found re-checking
    the fixes", "To do: t3 robustness rows" (one area per item). Skip "Waiting on you" and everything below it.
-   Check `git status` (other sessions work in this tree concurrently) and note `HEAD`.
+   Check `git status` (other sessions work in this tree concurrently) and note `HEAD`. Then gate the item on AGENTS
+   rule 37 and GOAL "Trust boundary" before any agent runs: it must name the contract row it breaks, a feasible
+   project shape under supported public API, and the wire or configuration input that reaches it. Feasible: a
+   `StrEnum` or `TextChoices` member, a lazy translation string, `SimpleLazyObject`, a project `QuerySet` subclass.
+   Not feasible unless a real library or Django feature produces it: a `str` subclass whose `__eq__` or `__hash__`
+   lies or raises, a lying `__class__`, a container whose `__iter__` raises. An item that fails the gate goes
+   straight to the phase 4 "not a defect" outcome.
 2. **Fact finding.** Write a shared rules file (template below), then dispatch `sonnet-high` agents in parallel,
    usually three: **repro** (does it happen on main, how widely: a probe grid over every shape it can reach),
    **history** (which commit, spec, doc or test claims what; is a test pinning the current behaviour), **upstream**
    (what Django, strawberry-django, graphene-django, django-graphene-filters, DRF / django-filter do). Add a repro agent
-   per sub-claim when one item bundles several. Wait for all of them.
+   per sub-claim when one item bundles several. Wait for all of them. A repro grid holds only shapes that pass the
+   phase 1 gate; an infeasible shape is never a row to fix.
 3. **Research.** Hand every report to one `opus-high` agent: find the more elegant or more upstream-aligned fix
    nobody thought of, prototype it in its own clone, measure it against the repro grid, and list numbered
-   decisions (D1, D2, ...) each with a recommendation.
+   decisions (D1, D2, ...) each with a recommendation. Its census of affected sites passes the same gate.
 4. **Rules check.** The coordinator rereads [AGENTS.md][agents], [START.md][start] and [GOAL.md][goal] and answers
    every open decision the rules settle (rule 37 / GOAL "Trust boundary" for "is it a defect", the north star and
    success criterion 7 for "which behaviour", AGENTS rule 5 for "same change or later", START for upstream audits,
    doc homes, test placement, exported surface).
    - Not a defect under rule 37: tick it in the tracker with the verdict and the evidence, no code. If it hides a
-     real contract question, file that under "Waiting on you". Next item.
+     real contract question, file that under "Waiting on you". When a docstring or spec promises to contain an
+     infeasible shape, the fix is retracting that sentence, never hardening code. Next item.
    - A decision only the maintainer can make (the rules do not settle it and the choice changes a public contract): move the
      item under "Waiting on you" with the question and the evidence. Next item.
 5. **Plan.** Write the plan to the scratchpad (`<id>-plan.md`) and print it in chat: the defect, the decisions with
@@ -46,14 +54,16 @@ Each phase finishes completely (every agent it dispatched has reported) before t
    evidence and sends the ruling to the same agent (`SendMessage`), never a new one.
 7. **Verify.** Dispatch one `opus-high` verifier with its own brief (template below). On FIX, rule on each finding
    and send the list to the same implementer, then send the delta back to the same verifier. Repeat until LAND.
+   A change that narrows what worked at the parent commit for a feasible shape is a FIX finding, never a LAND.
    A docs-only last fix may be checked by the coordinator instead of a new verifier round.
 8. **Land.** Apply the clone's `git diff HEAD --binary` to the shared checkout; it must apply cleanly and every
    path it touches must have been clean. Edit the tracker in the same working tree: tick the item with a one-line
-   outcome, update the Progress counts, add out-of-scope questions under "Waiting on you", and add a "CHANGELOG
-   entry for item N" item when consumers can see the change. Then make ONE commit holding the fix and the tracker
-   edit together (conventional subject, a body that states the new behaviour); never a separate tracker commit
-   after the fix. The tick names no hash, because a commit cannot name itself: the commit that ticks an item is
-   its fix (`git log -S '- [x] N.' -- docs/bug_hunt/` finds it). No push, no branches, no CHANGELOG edit.
+   outcome, update the Progress counts, add out-of-scope questions under "Waiting on you" (an out-of-scope finding
+   becomes a new item only if it passes the phase 1 gate; otherwise it is a robustness row or a new card), and add
+   a "CHANGELOG entry for item N" item when consumers can see the change. Then make ONE commit holding the fix and
+   the tracker edit together (conventional subject, a body that states the new behaviour); never a separate tracker
+   commit after the fix. The tick names no hash, because a commit cannot name itself: the commit that ticks an item
+   is its fix (`git log -S '- [x] N.' -- docs/bug_hunt/` finds it). No push, no branches, no CHANGELOG edit.
 9. **Close.** Ask the implementer for `<id>-impl-feedback.md` (helpful / misleading / missing about the brief and the
    standing docs). Delete the item's clones, grids and patches; keep the reports, briefs and feedback. Print three
    lines: what landed, what got filed, what is next.
@@ -98,9 +108,10 @@ Each phase finishes completely (every agent it dispatched has reported) before t
   each targeted test file alone, coverage of changed modules at 100%, the repro grid, `scripts/prove_failability.py`
   per fix, basedpyright main + floor, `check_public_types`, the Python 3.10 floor run last); the report format.
 - **Verifier brief:** the clone is read-only (mutate a copy); write expectations from the implementer brief BEFORE
-  reading the diff or the report; check every decision, try shapes the tests miss, rerun the grid, reproduce two
-  mutations, judge every moved expectation, docs vs code, simplicity; verdict LAND / FIX / BLOCK with
-  severity-ranked findings and minimal fixes.
+  reading the diff or the report; check every decision, try shapes the tests miss, rerun the grid, run the parent
+  commit and the change side by side on the feasible shapes next to the change (`SimpleLazyObject`, `StrEnum`,
+  project subclasses of `list` / `dict`), reproduce two mutations, judge every moved expectation, docs vs code,
+  simplicity; verdict LAND / FIX / BLOCK with severity-ranked findings and minimal fixes.
 
 <!-- LINK DEFINITIONS -->
 

@@ -21,8 +21,9 @@ the current source.
    for is reported `Blocked`, never fixed.
 3. Break things inside the workspace; discharge every axis of the mandatory matrix with a probe or
    a one-line reason; keep the evidence record for every claim.
-4. Confirm each candidate against its contract row with Defect, Evidence, Impact, Severity and
-   Proof; try to disprove it first.
+4. Confirm each candidate against its contract row and the `HUNT.md` feasibility gate with Defect,
+   Reach, Evidence, Impact, Severity and Proof; try to disprove it first. A shape that fails the
+   gate is never filed as a defect.
 5. Implement the root-cause fix at the owner in the shared tree, attributing every hunk of a dirty
    path to the ledger or the cycle baseline first; add the permanent test in the same change; run
    only focused `uv run pytest <path> --no-cov`, then `uv run ruff check --fix .` and
